@@ -543,3 +543,58 @@ class TestAutoCompress:
         assert len(uncompressed_after) == 0
 
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# Backfill instinct perceptual fields (Task 7)
+# ---------------------------------------------------------------------------
+
+class TestBackfill:
+    def test_backfill_instinct_notice_implication(self, server_env):
+        """Existing instincts without notice/implication should get backfilled."""
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        sem_id = str(uuid.uuid4())
+        emb = embeddings.embed(["test"])[0]
+        storage.add_semantic(id=sem_id, content="test", kind="preference",
+                             confidence=0.5, embedding=emb, source_episode_ids=[])
+        storage.add_instinct(
+            id="old-inst", trigger="preference",
+            action="Prefer terse, direct communication.",
+            source_semantic_ids=[sem_id],
+            embedding=emb,
+        )
+        # Verify no notice/implication yet
+        inst = storage.get_instinct("old-inst")
+        assert inst["notice"] is None
+
+        from server import _backfill_instinct_perceptual
+        count = _backfill_instinct_perceptual(storage, embeddings)
+        assert count == 1
+
+        inst = storage.get_instinct("old-inst")
+        assert inst["notice"] is not None
+        assert inst["implication"] is not None
+
+    def test_backfill_skips_already_populated(self, server_env):
+        """Instincts that already have notice/implication should be skipped."""
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        sem_id = str(uuid.uuid4())
+        emb = embeddings.embed(["test"])[0]
+        storage.add_semantic(id=sem_id, content="test", kind="preference",
+                             confidence=0.5, embedding=emb, source_episode_ids=[])
+        storage.add_instinct(
+            id="new-inst", trigger="preference",
+            action="be terse",
+            source_semantic_ids=[sem_id],
+            embedding=emb,
+            notice="when building code",
+            implication="keep communication focused",
+        )
+
+        from server import _backfill_instinct_perceptual
+        count = _backfill_instinct_perceptual(storage, embeddings)
+        assert count == 0

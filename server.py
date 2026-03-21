@@ -18,6 +18,75 @@ logger = logging.getLogger("engram.server")
 
 mcp = FastMCP("engram")
 
+
+def _generate_perceptual_framing(content: str, kind: str) -> tuple[str, str]:
+    """Generate notice/implication from instinct action text.
+
+    Mirrors Compressor._generate_perceptual_framing for backfill use.
+    """
+    if not content:
+        return (f"when: {kind}", content)
+
+    lower = content.lower()
+
+    if lower.startswith("always "):
+        rest = content[len("always "):].strip()
+        return (f"when making choices about: {rest}", content)
+    elif lower.startswith("never "):
+        rest = content[len("never "):].strip()
+        return (f"when considering: {rest}", content)
+    elif lower.startswith("prefer "):
+        rest = content[len("prefer "):].strip()
+        return (f"when deciding on: {rest}", content)
+    elif lower.startswith("avoid "):
+        rest = content[len("avoid "):].strip()
+        return (f"when considering: {rest}", content)
+    elif " when " in lower:
+        idx = lower.index(" when ")
+        implication = content[:idx].strip()
+        notice = f"when {content[idx + 6:].strip()}"
+        return (notice, implication)
+    elif kind == "preference":
+        return (f"when making choices about: {content[:80]}", content)
+    else:
+        return (f"when: {content[:80]}", content)
+
+
+def _backfill_instinct_perceptual(storage, embeddings):
+    """Backfill notice/implication for existing instincts that lack them."""
+    instincts = storage.get_all_instincts()
+    backfilled = 0
+    for inst in instincts:
+        if inst.get("notice") is not None:
+            continue
+
+        action = inst.get("action", "")
+        trigger = inst.get("trigger", "preference")
+        notice, implication = _generate_perceptual_framing(action, trigger)
+
+        storage.conn.execute(
+            "UPDATE instincts SET notice = ?, implication = ? WHERE id = ?",
+            (notice, implication, inst["id"]),
+        )
+
+        # Store context vector
+        ctx_emb = embeddings.embed([notice], prefix="search_document")[0]
+        if ctx_emb is not None:
+            # Check if context vector already exists
+            has_ctx = storage.conn.execute(
+                "SELECT 1 FROM instinct_context_vectors WHERE id = ?", (inst["id"],)
+            ).fetchone()
+            if not has_ctx:
+                storage.add_instinct_context_vector(inst["id"], ctx_emb)
+
+        backfilled += 1
+
+    if backfilled:
+        storage.conn.commit()
+        logger.info("Backfilled notice/implication for %d instincts", backfilled)
+
+    return backfilled
+
 # Engram home is fixed — same memories regardless of which project you're in
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram"))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -164,6 +233,9 @@ def _init():
         if backfilled:
             _storage.conn.commit()
             logger.info("Backfilled vectors for %d instincts", backfilled)
+
+        # 6. Backfill notice/implication for pre-existing instincts
+        _backfill_instinct_perceptual(_storage, _embeddings)
     except Exception:
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
 
