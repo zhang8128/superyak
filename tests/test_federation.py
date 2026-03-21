@@ -308,3 +308,34 @@ def test_genome_sync(tmp_path):
 
     genome.close()
     instance.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 7: process_inbox tests
+# ---------------------------------------------------------------------------
+
+def test_process_inbox(tmp_path):
+    from federation import SignalBus, process_inbox
+    from storage import Storage
+
+    bus = SignalBus(tmp_path / "signals.db")
+    bus.send("agi", "blocks", "instinct_formed", "prefer simple decomposition")
+    bus.send("why", None, "semantic_promoted", "governance tick runs weekly")
+
+    inst = Storage(str(tmp_path / "graph.db"))
+    processed = process_inbox(bus, "blocks", inst)
+    assert processed == 2
+
+    rows = inst.conn.execute(
+        "SELECT content, source FROM episodes WHERE source LIKE 'signal/%'"
+    ).fetchall()
+    assert len(rows) == 2
+    sources = {r["source"] for r in rows}
+    assert "signal/agi" in sources
+    assert "signal/why" in sources
+
+    # Inbox should now be empty
+    assert len(bus.inbox("blocks")) == 0
+
+    bus.close()
+    inst.close()

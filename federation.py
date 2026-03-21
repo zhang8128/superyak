@@ -173,3 +173,25 @@ def sync_genome(genome_path: str, instance_storage) -> int:
     instance_storage.conn.commit()
     genome_conn.close()
     return synced
+
+
+def process_inbox(bus: SignalBus, instance_name: str, storage) -> int:
+    """Process unseen messages for this instance. Returns count processed."""
+    messages = bus.inbox(instance_name)
+    processed = 0
+
+    for msg in messages:
+        ep_id = str(uuid.uuid4())
+        source_tag = f"signal/{msg['from_instance']}"
+        content = f"[{msg['type']}] {msg['content']}"
+
+        storage.add_episode(
+            id=ep_id, session_id=None,
+            content=content, episode_type="signal",
+        )
+        storage.set_episode_source(ep_id, source_tag)
+        bus.mark_seen(msg["id"], instance_name)
+        processed += 1
+
+    storage.conn.commit()
+    return processed
