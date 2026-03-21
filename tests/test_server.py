@@ -192,6 +192,124 @@ class TestRecall:
         found = any(r["id"] == inst_id for r in result["results"])
         assert found, f"Conceptual match not found; got: {[r.get('content', r.get('action', ''))[:50] for r in result['results']]}"
 
+    def test_recall_instincts_filtered_by_context(self, server_env):
+        """Instinct recall should return instincts relevant to the query context."""
+        srv = server_env["server"]
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        # Create two instincts with different context vectors
+        emb_build = embeddings.embed(["building code and implementing features"])[0]
+        emb_reflect = embeddings.embed(["reflecting on design and philosophy"])[0]
+        sem_id1 = str(uuid.uuid4())
+        sem_id2 = str(uuid.uuid4())
+        storage.add_semantic(id=sem_id1, content="s1", kind="preference",
+                             confidence=0.5, embedding=emb_build, source_episode_ids=[])
+        storage.add_semantic(id=sem_id2, content="s2", kind="preference",
+                             confidence=0.5, embedding=emb_reflect, source_episode_ids=[])
+        storage.add_instinct(
+            id="inst-build", trigger="preference", action="be terse",
+            source_semantic_ids=[sem_id1], embedding=emb_build,
+            notice="when building code", implication="keep communication terse",
+        )
+        storage.add_instinct(
+            id="inst-reflect", trigger="preference", action="explore deeply",
+            source_semantic_ids=[sem_id2], embedding=emb_reflect,
+            notice="when reflecting on design", implication="expand on reasoning",
+        )
+        # Add context vectors for both
+        from storage import _pack_embedding
+        storage.add_instinct_context_vector("inst-build", emb_build)
+        storage.add_instinct_context_vector("inst-reflect", emb_reflect)
+
+        # Query in a building context — context-aware search should return results
+        result = srv.recall(query="implementing a new feature", layer="instinct")
+        assert len(result["results"]) >= 1
+        # Both instincts should appear (context vectors exist for both)
+        ids = [r["id"] for r in result["results"]]
+        assert "inst-build" in ids or "inst-reflect" in ids
+        # If both are ranked, build instinct should score >= reflect (fake embeddings may tie)
+        if "inst-build" in ids and "inst-reflect" in ids:
+            build_score = next(r["score"] for r in result["results"] if r["id"] == "inst-build")
+            reflect_score = next(r["score"] for r in result["results"] if r["id"] == "inst-reflect")
+            assert build_score >= reflect_score
+
+    def test_recall_instinct_includes_notice_implication(self, server_env):
+        """Instinct recall with layer='instinct' should include notice and implication fields."""
+        srv = server_env["server"]
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        emb = embeddings.embed(["test instinct content"])[0]
+        sem_id = str(uuid.uuid4())
+        storage.add_semantic(id=sem_id, content="test", kind="preference",
+                             confidence=0.5, embedding=emb, source_episode_ids=[])
+        inst_id = str(uuid.uuid4())
+        storage.add_instinct(
+            id=inst_id, trigger="preference", action="be concise",
+            source_semantic_ids=[sem_id], embedding=emb,
+            notice="when writing documentation", implication="avoid verbosity",
+        )
+        # Add context vector so it's found
+        storage.add_instinct_context_vector(inst_id, emb)
+
+        result = srv.recall(query="writing docs", layer="instinct")
+        assert len(result["results"]) >= 1
+        found = next((r for r in result["results"] if r["id"] == inst_id), None)
+        assert found is not None
+        assert found.get("notice") == "when writing documentation"
+        assert found.get("implication") == "avoid verbosity"
+
+
+class TestInstinctFeedback:
+    def test_instinct_feedback_basic(self, server_env):
+        """instinct_feedback without context should still update strength."""
+        srv = server_env["server"]
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        sem_id = str(uuid.uuid4())
+        emb = embeddings.embed(["test"])[0]
+        storage.add_semantic(id=sem_id, content="test", kind="preference",
+                             confidence=0.5, embedding=emb, source_episode_ids=[])
+        inst_id = str(uuid.uuid4())
+        storage.add_instinct(
+            id=inst_id, trigger="preference", action="be terse",
+            source_semantic_ids=[sem_id], embedding=emb,
+        )
+
+        result = srv.instinct_feedback(instinct_id=inst_id, followed=True)
+        assert result["followed"] is True
+        assert result["new_strength"] is not None
+        assert "context_recorded" not in result
+
+    def test_instinct_feedback_with_context(self, server_env):
+        """instinct_feedback with context should store context feedback."""
+        srv = server_env["server"]
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        sem_id = str(uuid.uuid4())
+        emb = embeddings.embed(["test"])[0]
+        storage.add_semantic(id=sem_id, content="test", kind="preference",
+                             confidence=0.5, embedding=emb, source_episode_ids=[])
+        inst_id = str(uuid.uuid4())
+        storage.add_instinct(
+            id=inst_id, trigger="preference", action="be terse",
+            source_semantic_ids=[sem_id], embedding=emb,
+        )
+
+        result = srv.instinct_feedback(
+            instinct_id=inst_id, followed=True, context="building code"
+        )
+        assert result["followed"] is True
+        assert result.get("context_recorded") is True
+
+        # Verify context feedback was stored
+        feedback = storage.get_instinct_context_feedback(inst_id)
+        assert len(feedback) == 1
+        assert feedback[0]["context_text"] == "building code"
+
 
 class TestLogOutcome:
     def test_log_outcome_updates_recall(self, server_env):
