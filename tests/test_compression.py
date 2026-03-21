@@ -385,6 +385,45 @@ def test_dedup_unavailable_falls_back_to_embeddings(tmp_db, embedder):
     assert stats["instincts_created"] == 1
 
 
+def test_dedup_considers_notice_not_just_action(tmp_db, embedder):
+    """Two instincts with similar action but different notice should NOT be deduped."""
+    dedup = FakeDeduplicator(equivalences=[
+        ("keep communication focused", "keep error messages focused"),
+    ])
+    compressor = Compressor(tmp_db, embedder, config=None, deduplicator=dedup)
+
+    sem_id1 = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id1, content="keep communication focused", kind="preference",
+        confidence=0.85, embedding=embedder.embed(["keep communication focused"])[0],
+        source_episode_ids=[],
+    )
+    tmp_db.add_instinct(
+        id="inst-comm", trigger="preference",
+        action="keep communication focused",
+        source_semantic_ids=[sem_id1],
+        notice="when building code",
+        implication="keep communication focused",
+        embedding=embedder.embed(["keep communication focused"])[0],
+    )
+
+    # Different semantic, different notice context
+    sem_id2 = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id2, content="keep error messages focused", kind="preference",
+        confidence=0.85, embedding=embedder.embed(["keep error messages focused"])[0],
+        source_episode_ids=[],
+    )
+
+    _add_episode(tmp_db, "filler-dedup", embedder.embed(["filler-dedup"])[0])
+    result = compressor.cluster_episodes()
+    summaries = [{"content": "filler-dedup", "kind": "fact", "action": "new"}]
+    stats = compressor.commit(result["compress_id"], summaries)
+
+    # Should create the second instinct because notices differ
+    assert stats["instincts_created"] == 1
+
+
 def test_instinct_created_with_notice_implication(tmp_db, compressor, embedder):
     """High-confidence preference semantic should create instinct with notice/implication."""
     text = "always use type hints in function signatures"

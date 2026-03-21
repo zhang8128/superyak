@@ -382,7 +382,7 @@ class Compressor:
                     continue
 
                 # Dedup: check if an existing instinct says the same thing
-                if self._instinct_already_exists(sem["content"]):
+                if self._instinct_already_exists(sem["content"], kind=kind):
                     logger.info("Skipping duplicate instinct for semantic %s", sem["id"])
                     continue
 
@@ -416,22 +416,40 @@ class Compressor:
 
         return created
 
-    def _instinct_already_exists(self, content: str) -> bool:
+    def _instinct_already_exists(self, content: str, kind: str = "preference") -> bool:
         """Check if an existing instinct expresses the same thing.
 
         Two-tier check:
         1. LLM dedup (if available) — detects pragmatic equivalence
         2. Embedding similarity fallback — catches obvious duplicates
+
+        Considers both the action content and the perceptual notice to avoid
+        false dedup of instincts with different contexts.
         """
         existing = self._storage.get_all_instincts()
         if not existing:
             return False
 
+        # Generate notice for the new content to compare
+        new_notice, _new_implication = self._generate_perceptual_framing(content, kind)
+
         # Tier 1: LLM-based pragmatic equivalence
         if self._dedup is not None and self._dedup.is_available():
             for inst in existing:
                 action = inst.get("action", "")
+                # Check if actions are equivalent
                 if self._dedup.is_equivalent(content, action):
+                    # If the existing instinct has a notice, also check notice similarity
+                    # (same action but different context = different instinct)
+                    existing_notice = inst.get("notice")
+                    if existing_notice and new_notice:
+                        # Both have notices — check if they're also equivalent
+                        if self._dedup.is_equivalent(new_notice, existing_notice):
+                            logger.info("LLM dedup: '%s' ≡ '%s'", content[:50], action[:50])
+                            return True
+                        # Same action, different notice = NOT a duplicate
+                        continue
+                    # Legacy instinct without notice — action match is enough
                     logger.info("LLM dedup: '%s' ≡ '%s'", content[:50], action[:50])
                     return True
             return False
