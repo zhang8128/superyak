@@ -9,9 +9,13 @@ logger = logging.getLogger("engram.reflection")
 
 
 class Reflector:
-    def __init__(self, storage, staleness_days=30):
+    def __init__(self, storage, staleness_days=30,
+                 genome_db_path: str | None = None,
+                 signals_db_path: str | None = None):
         self._storage = storage
         self._staleness_days = staleness_days
+        self._genome_db_path = genome_db_path
+        self._signals_db_path = signals_db_path
 
     def analyze_usage(self) -> dict:
         """Most/least accessed episodes and semantics."""
@@ -173,6 +177,46 @@ class Reflector:
             "health_metrics": health_metrics,
             "recent_activity": recent_activity,
         }
+
+    def detect_genome_drift(self) -> list[dict]:
+        """Compare local instincts against genome instincts. Returns drift observations."""
+        if not self._genome_db_path:
+            return []
+        import sqlite3
+        genome_conn = sqlite3.connect(self._genome_db_path)
+        genome_conn.row_factory = sqlite3.Row
+        genome_instincts = genome_conn.execute(
+            "SELECT action, strength FROM instincts WHERE strength > 0.1"
+        ).fetchall()
+        local_instincts = self._storage.get_all_instincts()
+        genome_conn.close()
+
+        drift = []
+        for gi in genome_instincts:
+            for li in local_instincts:
+                g_words = set(gi["action"].lower().split())
+                l_words = set(li["action"].lower().split())
+                overlap = g_words & l_words
+                if len(overlap) > 2 and gi["action"] != li["action"]:
+                    drift.append({
+                        "type": "potential_drift",
+                        "genome_instinct": gi["action"],
+                        "genome_strength": gi["strength"],
+                        "local_instinct": li["action"],
+                        "local_strength": li["strength"],
+                    })
+        return drift
+
+    def signal_health(self) -> dict | None:
+        """Analyze signal responsiveness."""
+        if not self._signals_db_path:
+            return None
+        import sqlite3
+        conn = sqlite3.connect(self._signals_db_path)
+        conn.row_factory = sqlite3.Row
+        total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        conn.close()
+        return {"total_messages": total}
 
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""

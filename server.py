@@ -65,9 +65,13 @@ def _init():
     )
 
     from reflection import Reflector
+    _genome_db_path = ENGRAM_HOME / ".engram" / "genome" / "graph.db"
+    _signals_db_path = ENGRAM_HOME / ".engram" / "signals.db"
     _reflector = Reflector(
         _storage,
         _config.reflection.staleness_days if _config else 30,
+        genome_db_path=str(_genome_db_path) if _genome_db_path and _genome_db_path.exists() else None,
+        signals_db_path=str(_signals_db_path) if _signals_db_path and _signals_db_path.exists() else None,
     )
 
     # Watcher is created but NOT started — lazy-started on first code search

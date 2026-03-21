@@ -100,3 +100,51 @@ def test_unobserved_instinct_recommendation(tmp_db):
     assert len(health) == 1
     assert health[0]["recommendation"] == "unobserved"
     assert health[0]["reliability"] == 0.0
+
+
+def test_reflect_detects_genome_drift(tmp_db, tmp_path):
+    """Drift detection finds overlapping but diverged instinct actions."""
+    import sqlite3
+
+    genome_db = tmp_path / "genome.db"
+    conn = sqlite3.connect(str(genome_db))
+    conn.execute("CREATE TABLE instincts (action TEXT, strength REAL)")
+    conn.execute("INSERT INTO instincts VALUES ('prefer simple direct clear approaches always', 0.8)")
+    conn.commit()
+    conn.close()
+
+    tmp_db.add_instinct(
+        id="i1", trigger="complexity", action="prefer complex direct clear decomposition always",
+        source_semantic_ids=[]
+    )
+
+    r = Reflector(tmp_db, genome_db_path=str(genome_db))
+    drift = r.detect_genome_drift()
+    assert len(drift) == 1
+    assert drift[0]["type"] == "potential_drift"
+    assert "prefer simple" in drift[0]["genome_instinct"]
+    assert "prefer complex" in drift[0]["local_instinct"]
+
+
+def test_reflect_no_genome_returns_empty(tmp_db):
+    """Reflector without genome path returns empty drift list."""
+    r = Reflector(tmp_db)
+    assert r.detect_genome_drift() == []
+
+
+def test_signal_health(tmp_path, tmp_db):
+    """signal_health returns message count from signals db."""
+    import sqlite3
+
+    signals_db = tmp_path / "signals.db"
+    conn = sqlite3.connect(str(signals_db))
+    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+    conn.execute("INSERT INTO messages (body) VALUES ('hello')")
+    conn.execute("INSERT INTO messages (body) VALUES ('world')")
+    conn.commit()
+    conn.close()
+
+    r = Reflector(tmp_db, signals_db_path=str(signals_db))
+    health = r.signal_health()
+    assert health is not None
+    assert health["total_messages"] == 2
