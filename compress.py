@@ -1,0 +1,468 @@
+"""Engram compression — clustering, centroid selection, LLM dedup, instinct creation."""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import TYPE_CHECKING
+
+import numpy as np
+from scipy.cluster.hierarchy import fclusterdata
+
+from storage import vec0_distance_to_similarity
+
+if TYPE_CHECKING:
+    from config import CompressionConfig
+    from dedup import Deduplicator
+    from storage import Storage
+
+logger = logging.getLogger("engram.compression")
+
+
+class Compressor:
+    """Compression pipeline: episodes → semantics → instincts.
+
+    Two paths:
+    - Manual: cluster_episodes() → (AI writes summaries) → commit()
+    - Auto: auto_compress() — centroid selection, no AI needed
+    """
+
+    def __init__(
+        self,
+        storage: Storage,
+        embedding_provider,
+        config: CompressionConfig | None = None,
+        deduplicator: Deduplicator | None = None,
+    ):
+        self._storage = storage
+        self._embeddings = embedding_provider
+        self._config = config
+        self._dedup = deduplicator
+        self._pending: dict[str, dict] = {}  # compress_id -> cluster state
+
+    @property
+    def _cluster_similarity(self) -> float:
+        return self._config.cluster_similarity if self._config else 0.75
+
+    @property
+    def _reinforce_threshold(self) -> float:
+        return self._config.reinforce_threshold if self._config else 0.85
+
+    @property
+    def _instinct_confidence(self) -> float:
+        return self._config.instinct_confidence if self._config else 0.8
+
+    def cluster_episodes(self, scope: str = "recent") -> dict:
+        """Phase 1: cluster uncompressed episodes, check for semantic matches.
+
+        Returns: {clusters: [{episodes, centroid, match, action}], compress_id}
+        """
+        if scope == "full":
+            self._reset_all()
+        elif scope == "refine":
+            return self._refine_clusters()
+
+        episodes = self._storage.get_uncompressed_episodes()
+        if not episodes:
+            return {"clusters": [], "compress_id": None}
+
+        # Use clustering prefix for better grouping of same-concept episodes
+        texts = [ep["content"] for ep in episodes]
+        embeddings = self._embeddings.embed(texts, prefix="clustering")
+
+        # Filter out episodes with None embeddings
+        valid = [(ep, emb) for ep, emb in zip(episodes, embeddings) if emb is not None]
+        if not valid:
+            return {"clusters": [], "compress_id": None}
+
+        valid_episodes, valid_embeddings = zip(*valid)
+        valid_episodes = list(valid_episodes)
+        valid_embeddings = list(valid_embeddings)
+
+        embeddings_matrix = np.array(valid_embeddings)
+
+        if len(embeddings_matrix) == 1:
+            cluster_labels = [1]
+        else:
+            cluster_labels = fclusterdata(
+                embeddings_matrix,
+                t=self._cluster_similarity,
+                metric="cosine",
+                criterion="distance",
+            )
+
+        # Group episodes by cluster label
+        cluster_groups: dict[int, list[tuple[dict, list[float]]]] = {}
+        for label, ep, emb in zip(cluster_labels, valid_episodes, valid_embeddings):
+            label_int = int(label)
+            if label_int not in cluster_groups:
+                cluster_groups[label_int] = []
+            cluster_groups[label_int].append((ep, emb))
+
+        clusters = []
+        for label, members in cluster_groups.items():
+            eps = [m[0] for m in members]
+            embs = [m[1] for m in members]
+            centroid = np.mean(embs, axis=0).tolist()
+
+            # Check for existing semantic match
+            action, match = self._find_semantic_match(centroid)
+
+            clusters.append({
+                "episodes": eps,
+                "centroid": centroid,
+                "match": match,
+                "action": action,
+            })
+
+        compress_id = str(uuid.uuid4())
+        self._pending[compress_id] = {
+            "clusters": clusters,
+        }
+
+        return {"clusters": clusters, "compress_id": compress_id}
+
+    def commit(self, compress_id: str, summaries: list[dict]) -> dict:
+        """Phase 2: store semantics from AI-provided summaries.
+
+        Each summary should have: {content, kind, action, semantic_id (if reinforce)}
+
+        Returns: {episodes_processed, semantics_created, semantics_reinforced, instincts_created}
+        """
+        state = self._pending.pop(compress_id, None)
+        if state is None:
+            raise ValueError(f"Unknown compress_id: {compress_id}")
+
+        clusters = state["clusters"]
+        episodes_processed = 0
+        semantics_created = 0
+        semantics_reinforced = 0
+
+        for i, cluster in enumerate(clusters):
+            if i >= len(summaries):
+                break
+
+            summary = summaries[i]
+            episode_ids = [ep["id"] for ep in cluster["episodes"]]
+            centroid = cluster["centroid"]
+            action = summary.get("action", cluster["action"])
+
+            if action == "reinforce":
+                semantic_id = summary.get("semantic_id") or (cluster["match"] or {}).get("id")
+                if semantic_id:
+                    self._storage.reinforce_semantic(semantic_id, episode_ids)
+                    semantics_reinforced += 1
+            else:
+                # New semantic
+                new_id = str(uuid.uuid4())
+                n_episodes = len(cluster["episodes"])
+                confidence = min(0.9, 0.5 + 0.1 * (n_episodes - 1))
+                self._storage.add_semantic(
+                    id=new_id,
+                    content=summary.get("content", ""),
+                    kind=summary.get("kind", "fact"),
+                    confidence=confidence,
+                    embedding=centroid,
+                    source_episode_ids=episode_ids,
+                    auto_generated=bool(summary.get("auto_generated", False)),
+                )
+                semantics_created += 1
+
+            self._storage.mark_episodes_compressed(episode_ids)
+            episodes_processed += len(episode_ids)
+
+        # Log compression event
+        self._storage.add_log_entry(
+            id=str(uuid.uuid4()),
+            event_type="compression",
+            layer="semantic",
+            target_ids=[],
+            context={
+                "compress_id": compress_id,
+                "episodes_processed": episodes_processed,
+                "semantics_created": semantics_created,
+                "semantics_reinforced": semantics_reinforced,
+            },
+        )
+
+        instincts_created = self._check_instinct_creation()
+
+        return {
+            "episodes_processed": episodes_processed,
+            "semantics_created": semantics_created,
+            "semantics_reinforced": semantics_reinforced,
+            "instincts_created": instincts_created,
+        }
+
+    def auto_compress(self) -> dict:
+        """Automatic compression using centroid selection (no AI needed).
+
+        For each cluster, picks the most representative episode(s) instead
+        of concatenating everything. Uses MMR for clusters with 4+ episodes
+        to select diverse representatives.
+        """
+        result = self.cluster_episodes()
+        clusters = result.get("clusters", [])
+        compress_id = result.get("compress_id")
+
+        if not clusters or compress_id is None:
+            return {
+                "episodes_processed": 0,
+                "semantics_created": 0,
+                "semantics_reinforced": 0,
+                "instincts_created": 0,
+            }
+
+        summaries = []
+        for cluster in clusters:
+            episodes = cluster["episodes"]
+            centroid = cluster["centroid"]
+
+            if len(episodes) == 1:
+                content = episodes[0]["content"]
+            elif len(episodes) < 4:
+                # Small cluster: pick centroid-nearest episode
+                content = self._select_centroid_nearest(episodes, centroid)
+            else:
+                # Larger cluster: MMR for diverse representatives
+                representatives = self._select_mmr(episodes, centroid, k=3)
+                content = " --- ".join(representatives)
+
+            summaries.append({
+                "content": content,
+                "kind": "fact",
+                "action": cluster["action"],
+                "auto_generated": True,
+                "semantic_id": (cluster["match"] or {}).get("id") if cluster["match"] else None,
+            })
+
+        return self.commit(compress_id, summaries)
+
+    def _select_centroid_nearest(self, episodes: list[dict], centroid: list[float]) -> str:
+        """Select the episode closest to the cluster centroid."""
+        texts = [ep["content"] for ep in episodes]
+        embeddings = self._embeddings.embed(texts, prefix="clustering")
+
+        centroid_arr = np.array(centroid)
+        best_idx = 0
+        best_sim = -1.0
+
+        for i, emb in enumerate(embeddings):
+            if emb is None:
+                continue
+            emb_arr = np.array(emb)
+            # Cosine similarity
+            dot = np.dot(centroid_arr, emb_arr)
+            norm = np.linalg.norm(centroid_arr) * np.linalg.norm(emb_arr)
+            sim = dot / norm if norm > 0 else 0.0
+            if sim > best_sim:
+                best_sim = sim
+                best_idx = i
+
+        return texts[best_idx]
+
+    def _select_mmr(
+        self, episodes: list[dict], centroid: list[float], k: int = 3, lambda_: float = 0.7,
+    ) -> list[str]:
+        """Maximal Marginal Relevance: select k diverse, relevant episodes.
+
+        Iteratively picks episodes that are both relevant (close to centroid)
+        and novel (dissimilar to already-selected episodes).
+        """
+        texts = [ep["content"] for ep in episodes]
+        embeddings = self._embeddings.embed(texts, prefix="clustering")
+
+        # Filter valid embeddings
+        valid = [(i, np.array(emb)) for i, emb in enumerate(embeddings) if emb is not None]
+        if not valid:
+            return texts[:k]
+
+        centroid_arr = np.array(centroid)
+        selected: list[int] = []
+        remaining = list(range(len(valid)))
+
+        for _ in range(min(k, len(valid))):
+            best_idx = -1
+            best_score = -float("inf")
+
+            for r in remaining:
+                orig_idx, emb = valid[r]
+
+                # Relevance: cosine similarity to centroid
+                dot_c = np.dot(centroid_arr, emb)
+                norm_c = np.linalg.norm(centroid_arr) * np.linalg.norm(emb)
+                relevance = dot_c / norm_c if norm_c > 0 else 0.0
+
+                # Redundancy: max cosine similarity to any already-selected
+                if selected:
+                    redundancy = max(
+                        np.dot(emb, valid[s][1]) / (np.linalg.norm(emb) * np.linalg.norm(valid[s][1]))
+                        for s in selected
+                    )
+                else:
+                    redundancy = 0.0
+
+                score = lambda_ * relevance - (1 - lambda_) * redundancy
+                if score > best_score:
+                    best_score = score
+                    best_idx = r
+
+            if best_idx >= 0:
+                selected.append(best_idx)
+                remaining.remove(best_idx)
+
+        return [texts[valid[s][0]] for s in selected]
+
+    def _check_instinct_creation(self) -> int:
+        """Check for semantics qualifying for instinct creation.
+
+        Uses LLM dedup (if available) to prevent duplicate instincts that
+        express the same preference in different words.
+        """
+        created = 0
+
+        for kind in ("preference", "constraint"):
+            semantics = self._storage.get_active_semantics(kind=kind)
+            for sem in semantics:
+                if sem["confidence"] < self._instinct_confidence:
+                    continue
+
+                # Check if instinct already exists for this semantic
+                row = self._storage.conn.execute(
+                    "SELECT 1 FROM instinct_sources WHERE semantic_id = ? LIMIT 1",
+                    (sem["id"],),
+                ).fetchone()
+                if row is not None:
+                    continue
+
+                # Dedup: check if an existing instinct says the same thing
+                if self._instinct_already_exists(sem["content"]):
+                    logger.info("Skipping duplicate instinct for semantic %s", sem["id"])
+                    continue
+
+                instinct_id = str(uuid.uuid4())
+                instinct_embedding = self._embeddings.embed(
+                    [sem["content"]], prefix="search_document"
+                )[0]
+                self._storage.add_instinct(
+                    id=instinct_id,
+                    trigger=kind,
+                    action=sem["content"],
+                    source_semantic_ids=[sem["id"]],
+                    strength=0.5,
+                    embedding=instinct_embedding,
+                )
+                created += 1
+                logger.info("Instinct created: %s from semantic %s", instinct_id, sem["id"])
+
+        return created
+
+    def _instinct_already_exists(self, content: str) -> bool:
+        """Check if an existing instinct expresses the same thing.
+
+        Two-tier check:
+        1. LLM dedup (if available) — detects pragmatic equivalence
+        2. Embedding similarity fallback — catches obvious duplicates
+        """
+        existing = self._storage.get_all_instincts()
+        if not existing:
+            return False
+
+        # Tier 1: LLM-based pragmatic equivalence
+        if self._dedup is not None and self._dedup.is_available():
+            for inst in existing:
+                action = inst.get("action", "")
+                if self._dedup.is_equivalent(content, action):
+                    logger.info("LLM dedup: '%s' ≡ '%s'", content[:50], action[:50])
+                    return True
+            return False
+
+        # Tier 2: Embedding similarity fallback
+        try:
+            embedding = self._embeddings.embed([content], prefix="clustering")[0]
+            if embedding is None:
+                return False
+            actions = [inst.get("action", "") for inst in existing]
+            action_embeddings = self._embeddings.embed(actions, prefix="clustering")
+            content_arr = np.array(embedding)
+            for action_emb in action_embeddings:
+                if action_emb is None:
+                    continue
+                action_arr = np.array(action_emb)
+                dot = np.dot(content_arr, action_arr)
+                norm = np.linalg.norm(content_arr) * np.linalg.norm(action_arr)
+                if norm > 0 and dot / norm >= self._reinforce_threshold:
+                    return True
+        except Exception:
+            logger.debug("Instinct dedup check failed", exc_info=True)
+        return False
+
+    def _find_semantic_match(self, centroid: list[float]) -> tuple[str, dict | None]:
+        """Search for existing semantic matching this centroid.
+
+        Returns (action, match_info) where action is 'reinforce' or 'new'.
+        """
+        try:
+            results = self._storage.search_vectors("semantic", centroid, k=1)
+            if results:
+                sem_id, distance = results[0]
+                similarity = vec0_distance_to_similarity(distance)
+                if similarity >= self._reinforce_threshold:
+                    sem = self._storage.get_semantic(sem_id)
+                    if sem:
+                        return "reinforce", {"id": sem_id, "similarity": similarity, "content": sem["content"]}
+        except Exception:
+            logger.debug("Semantic vector search failed (table may be empty)")
+
+        return "new", None
+
+    def _reset_all(self) -> None:
+        """Reset all episodes to uncompressed and delete all semantics and instincts."""
+        self._storage.conn.execute("UPDATE episodes SET compressed=0")
+        self._storage.conn.execute("DELETE FROM instinct_sources")
+        self._storage.conn.execute("DELETE FROM instincts")
+        self._storage.conn.execute("DELETE FROM semantic_sources")
+        self._storage.conn.execute(
+            "DELETE FROM semantic_vectors WHERE id IN (SELECT id FROM semantics)"
+        )
+        self._storage.conn.execute("DELETE FROM semantics")
+        self._storage.conn.commit()
+
+    def _refine_clusters(self) -> dict:
+        """Find auto-generated semantics (containing ' --- ') for re-summarization."""
+        rows = self._storage.conn.execute(
+            "SELECT * FROM semantics WHERE content LIKE '%--- %' AND contradicted_by IS NULL"
+        ).fetchall()
+
+        if not rows:
+            return {"clusters": [], "compress_id": None}
+
+        clusters = []
+        for row in rows:
+            sem = dict(row)
+            source_rows = self._storage.conn.execute(
+                "SELECT episode_id FROM semantic_sources WHERE semantic_id = ?",
+                (sem["id"],),
+            ).fetchall()
+            episode_ids = [r[0] for r in source_rows]
+
+            episodes = []
+            for eid in episode_ids:
+                ep_row = self._storage.conn.execute(
+                    "SELECT * FROM episodes WHERE id = ?", (eid,)
+                ).fetchone()
+                if ep_row:
+                    episodes.append(dict(ep_row))
+
+            if episodes:
+                clusters.append({
+                    "episodes": episodes,
+                    "centroid": None,
+                    "match": {"id": sem["id"], "content": sem["content"]},
+                    "action": "reinforce",
+                })
+
+        compress_id = str(uuid.uuid4())
+        self._pending[compress_id] = {"clusters": clusters}
+
+        return {"clusters": clusters, "compress_id": compress_id}

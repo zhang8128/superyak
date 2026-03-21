@@ -1,0 +1,10 @@
+{
+  "name": "engram",
+  "version": "0.2.0",
+  "description": "Layered memory — episodes, semantics, and instincts that evolve across sessions",
+  "author": {
+    "name": "kairos"
+  },
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

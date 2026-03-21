@@ -1,0 +1,494 @@
+"""Tests for engram storage layer — 12 cases covering CRUD, vectors, FTS, CTE, cascades."""
+
+from __future__ import annotations
+
+import pytest
+from datetime import datetime, timezone
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class TestSchemaAndPragmas:
+    def test_schema_created(self, tmp_db):
+        """All expected tables exist after init."""
+        cur = tmp_db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger') ORDER BY name"
+        )
+        names = {row[0] for row in cur.fetchall()}
+        for expected in [
+            "entities", "relationships", "episodes", "episode_entities",
+            "schema_version", "meta", "entity_fts",
+        ]:
+            assert expected in names, f"missing table: {expected}"
+
+    def test_pragmas_set(self, tmp_db):
+        """WAL mode, foreign_keys ON, busy_timeout 5000."""
+        journal = tmp_db.conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert journal == "wal"
+        fk = tmp_db.conn.execute("PRAGMA foreign_keys").fetchone()[0]
+        assert fk == 1
+        bt = tmp_db.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert bt == 5000
+
+
+class TestEntityCRUD:
+    def test_add_get_entity(self, tmp_db, sample_entity, fake_embedding):
+        """Round-trip add + get."""
+        emb = fake_embedding()
+        tmp_db.add_entity(**sample_entity, embedding=emb)
+        got = tmp_db.get_entity(sample_entity["id"])
+        assert got is not None
+        assert got["name"] == "Storage"
+        assert got["entity_type"] == "class"
+        assert got["description"] == sample_entity["description"]
+
+    def test_delete_entity_cascades(self, tmp_db, fake_embedding):
+        """Deleting an entity removes its relationships and episode links."""
+        emb = fake_embedding()
+        tmp_db.add_entity("a", "A", "class", embedding=emb)
+        tmp_db.add_entity("b", "B", "class", embedding=fake_embedding())
+        tmp_db.add_relationship("r1", "a", "b", "calls", valid_from=_now())
+        tmp_db.add_episode("ep1", "sess", "content", "conversation", fake_embedding(), ["a"])
+
+        tmp_db.delete_entity("a")
+
+        assert tmp_db.get_entity("a") is None
+        rels = tmp_db.get_relationships("a")
+        assert len(rels) == 0
+        links = tmp_db.conn.execute(
+            "SELECT * FROM episode_entities WHERE entity_id = 'a'"
+        ).fetchall()
+        assert len(links) == 0
+
+
+class TestRelationships:
+    def test_add_relationship_with_validity(self, tmp_db, fake_embedding):
+        """Add a relationship with valid_from, retrievable."""
+        tmp_db.add_entity("a", "A", "func", embedding=fake_embedding())
+        tmp_db.add_entity("b", "B", "func", embedding=fake_embedding())
+        now = _now()
+        tmp_db.add_relationship("r1", "a", "b", "calls", valid_from=now, weight=0.8)
+
+        rels = tmp_db.get_relationships("a")
+        assert len(rels) == 1
+        assert rels[0]["rel_type"] == "calls"
+        assert rels[0]["weight"] == 0.8
+
+    def test_invalidate_relationship(self, tmp_db, fake_embedding):
+        """Invalidated relationship excluded by valid_only filter."""
+        tmp_db.add_entity("a", "A", "func", embedding=fake_embedding())
+        tmp_db.add_entity("b", "B", "func", embedding=fake_embedding())
+        tmp_db.add_relationship("r1", "a", "b", "calls", valid_from=_now())
+
+        tmp_db.invalidate_relationship("r1")
+
+        valid = tmp_db.get_relationships("a", valid_only=True)
+        assert len(valid) == 0
+        all_rels = tmp_db.get_relationships("a", valid_only=False)
+        assert len(all_rels) == 1
+
+
+class TestEpisodes:
+    def test_add_episode_with_entity_links(self, tmp_db, fake_embedding):
+        """Episode linked to entities via junction table."""
+        tmp_db.add_entity("e1", "Foo", "class", embedding=fake_embedding())
+        tmp_db.add_entity("e2", "Bar", "class", embedding=fake_embedding())
+        tmp_db.add_episode("ep1", "s1", "discussed Foo and Bar", "conversation",
+                           fake_embedding(), ["e1", "e2"])
+
+        links = tmp_db.conn.execute(
+            "SELECT entity_id FROM episode_entities WHERE episode_id = 'ep1' ORDER BY entity_id"
+        ).fetchall()
+        assert [r[0] for r in links] == ["e1", "e2"]
+
+
+class TestVectorSearch:
+    def test_search_vectors(self, tmp_db, fake_embedding):
+        """Add entities with embeddings, search returns nearest."""
+        # Use a known embedding for the query target
+        target = [0.0] * 768
+        target[0] = 1.0
+        near = list(target)  # identical
+        far = [0.0] * 768
+        far[1] = 1.0  # orthogonal
+
+        tmp_db.add_entity("near", "Near", "class", embedding=near)
+        tmp_db.add_entity("far", "Far", "class", embedding=far)
+
+        results = tmp_db.search_vectors("entity", target, k=2)
+        assert len(results) >= 1
+        # Nearest should be "near"
+        assert results[0][0] == "near"
+
+
+class TestFTS:
+    def test_search_fts(self, tmp_db, fake_embedding):
+        """FTS MATCH query works via triggers."""
+        tmp_db.add_entity("e1", "StorageManager", "class",
+                          description="Manages SQLite storage", embedding=fake_embedding())
+        tmp_db.add_entity("e2", "NetworkClient", "class",
+                          description="HTTP client wrapper", embedding=fake_embedding())
+
+        results = tmp_db.search_fts("storage")
+        assert "e1" in results  # search_fts returns entity IDs
+
+
+class TestTraversal:
+    def test_traverse_bidirectional(self, tmp_db, fake_embedding):
+        """A->B->C: traverse from B finds both A and C."""
+        for nid in ("a", "b", "c"):
+            tmp_db.add_entity(nid, nid.upper(), "node", embedding=fake_embedding())
+        now = _now()
+        tmp_db.add_relationship("r1", "a", "b", "links", valid_from=now)
+        tmp_db.add_relationship("r2", "b", "c", "links", valid_from=now)
+
+        found = tmp_db.traverse("b", max_depth=2)
+        found_ids = {e["id"] for e in found}
+        assert "a" in found_ids
+        assert "c" in found_ids
+
+    def test_traverse_respects_validity(self, tmp_db, fake_embedding):
+        """Invalid relationships excluded from traversal."""
+        for nid in ("a", "b", "c"):
+            tmp_db.add_entity(nid, nid.upper(), "node", embedding=fake_embedding())
+        now = _now()
+        tmp_db.add_relationship("r1", "a", "b", "links", valid_from=now)
+        tmp_db.add_relationship("r2", "b", "c", "links", valid_from=now)
+        tmp_db.invalidate_relationship("r2")
+
+        found = tmp_db.traverse("b", max_depth=2)
+        found_ids = {e["id"] for e in found}
+        assert "a" in found_ids
+        assert "c" not in found_ids
+
+
+class TestMigration:
+    def test_migration_versioning(self, tmp_db):
+        """schema_version tracks applied migrations."""
+        row = tmp_db.conn.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert row[0] >= 1
+
+
+def test_v3_migration_creates_tables(tmp_db):
+    """v3 migration creates semantics, instincts, memory_log tables."""
+    tables = {r[0] for r in tmp_db.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    assert "semantics" in tables
+    assert "instincts" in tables
+    assert "memory_log" in tables
+    assert "semantic_sources" in tables
+    assert "instinct_sources" in tables
+
+
+def test_v3_migration_adds_episode_columns(tmp_db):
+    """v3 migration adds context, accessed_count, compressed columns to episodes."""
+    cols = {r[1] for r in tmp_db.conn.execute("PRAGMA table_info(episodes)").fetchall()}
+    assert "context" in cols
+    assert "accessed_count" in cols
+    assert "compressed" in cols
+    assert "last_accessed" in cols
+
+
+def test_add_episode_v3(tmp_db, fake_embedding):
+    """Episode with context and embedding stores and retrieves correctly."""
+    emb = fake_embedding()
+    tmp_db.add_episode(
+        id="ep-1", session_id="s1", content="learned about SQLite WAL mode",
+        embedding=emb, context={"tool_context": "reading docs", "branch": "main"},
+    )
+    row = tmp_db.conn.execute("SELECT * FROM episodes WHERE id='ep-1'").fetchone()
+    assert dict(row)["compressed"] == 0
+    assert dict(row)["accessed_count"] == 0
+    import json
+    ctx = json.loads(dict(row)["context"])
+    assert ctx["branch"] == "main"
+
+
+def test_mark_episodes_compressed(tmp_db, fake_embedding):
+    tmp_db.add_episode(id="ep-1", session_id="s1", content="a", embedding=fake_embedding())
+    tmp_db.add_episode(id="ep-2", session_id="s1", content="b", embedding=fake_embedding())
+    tmp_db.mark_episodes_compressed(["ep-1", "ep-2"])
+    rows = tmp_db.conn.execute(
+        "SELECT id, compressed FROM episodes WHERE compressed=1"
+    ).fetchall()
+    assert len(rows) == 2
+
+
+def test_get_uncompressed_episodes(tmp_db, fake_embedding):
+    tmp_db.add_episode(id="ep-1", session_id="s1", content="a", embedding=fake_embedding())
+    tmp_db.add_episode(id="ep-2", session_id="s1", content="b", embedding=fake_embedding())
+    tmp_db.mark_episodes_compressed(["ep-1"])
+    uncompressed = tmp_db.get_uncompressed_episodes()
+    assert len(uncompressed) == 1
+    assert uncompressed[0]["id"] == "ep-2"
+
+
+def test_increment_episode_access(tmp_db, fake_embedding):
+    tmp_db.add_episode(id="ep-1", session_id="s1", content="a", embedding=fake_embedding())
+    tmp_db.increment_episode_access("ep-1")
+    row = tmp_db.conn.execute("SELECT accessed_count FROM episodes WHERE id='ep-1'").fetchone()
+    assert row[0] == 1
+
+
+def test_episode_fts_sync(tmp_db, fake_embedding):
+    """FTS trigger should auto-index episode content."""
+    tmp_db.add_episode(id="ep-1", session_id="s1", content="SQLite WAL mode is important",
+                       embedding=fake_embedding())
+    results = tmp_db.search_episode_fts("SQLite")
+    assert "ep-1" in results
+
+
+def test_add_semantic(tmp_db, fake_embedding):
+    emb = fake_embedding()
+    tmp_db.add_episode(id="ep-1", session_id="s1", content="test", embedding=emb)
+    tmp_db.add_semantic(
+        id="sem-1", content="project uses SQLite", kind="fact",
+        confidence=0.5, embedding=emb, source_episode_ids=["ep-1"],
+    )
+    row = tmp_db.get_semantic("sem-1")
+    assert row is not None
+    assert row["kind"] == "fact"
+    assert row["confidence"] == 0.5
+    assert "ep-1" in row["source_episode_ids"]
+
+
+def test_reinforce_semantic(tmp_db, fake_embedding):
+    tmp_db.add_semantic(
+        id="sem-1", content="project uses SQLite", kind="fact",
+        confidence=0.5, embedding=fake_embedding(), source_episode_ids=[],
+    )
+    tmp_db.add_episode(id="ep-2", session_id="s1", content="test", embedding=fake_embedding())
+    tmp_db.reinforce_semantic("sem-1", additional_episode_ids=["ep-2"])
+    row = tmp_db.get_semantic("sem-1")
+    assert row["reinforced_count"] == 1
+    assert row["confidence"] == pytest.approx(0.6)  # 0.5 + 0.1
+
+
+def test_contradict_semantic(tmp_db, fake_embedding):
+    tmp_db.add_semantic(
+        id="sem-1", content="old fact", kind="fact",
+        confidence=0.7, embedding=fake_embedding(), source_episode_ids=[],
+    )
+    tmp_db.add_semantic(
+        id="sem-2", content="new fact", kind="fact",
+        confidence=0.9, embedding=fake_embedding(), source_episode_ids=[],
+    )
+    tmp_db.contradict_semantic("sem-1", contradicted_by="sem-2")
+    row = tmp_db.get_semantic("sem-1")
+    assert row["contradicted_by"] == "sem-2"
+
+
+def test_semantic_fts_sync(tmp_db, fake_embedding):
+    """FTS trigger should auto-index semantic content."""
+    tmp_db.add_semantic(
+        id="sem-1", content="SQLite is used for storage", kind="fact",
+        confidence=0.5, embedding=fake_embedding(), source_episode_ids=[],
+    )
+    results = tmp_db.search_semantic_fts("SQLite")
+    assert "sem-1" in results
+
+
+def test_search_semantic_vectors(tmp_db, fake_embedding):
+    emb = fake_embedding()
+    tmp_db.add_semantic(
+        id="sem-1", content="test", kind="fact",
+        confidence=0.5, embedding=emb, source_episode_ids=[],
+    )
+    results = tmp_db.search_vectors("semantic", emb, k=5)
+    assert len(results) >= 1
+    assert results[0][0] == "sem-1"
+
+
+def test_get_active_semantics(tmp_db, fake_embedding):
+    tmp_db.add_semantic(id="s1", content="active", kind="fact", confidence=0.7,
+                        embedding=fake_embedding(), source_episode_ids=[])
+    tmp_db.add_semantic(id="s2", content="contradicted", kind="fact", confidence=0.5,
+                        embedding=fake_embedding(), source_episode_ids=[])
+    tmp_db.contradict_semantic("s2", contradicted_by="s1")
+    active = tmp_db.get_active_semantics()
+    assert len(active) == 1
+    assert active[0]["id"] == "s1"
+
+
+def test_add_instinct(tmp_db):
+    tmp_db.add_instinct(
+        id="inst-1", trigger="editing MCP server files",
+        action="remind about restart", source_semantic_ids=["sem-1"],
+    )
+    row = tmp_db.get_instinct("inst-1")
+    assert row is not None
+    assert row["strength"] == 0.5
+    assert row["fired_count"] == 0
+
+
+def test_update_instinct_strength(tmp_db):
+    tmp_db.add_instinct(id="inst-1", trigger="t", action="a", source_semantic_ids=[])
+    tmp_db.update_instinct_followed("inst-1")  # +0.05
+    row = tmp_db.get_instinct("inst-1")
+    assert row["strength"] == pytest.approx(0.55)
+    assert row["followed_count"] == 1
+
+    tmp_db.update_instinct_overridden("inst-1")  # -0.05 (symmetric with follow)
+    row = tmp_db.get_instinct("inst-1")
+    assert row["strength"] == pytest.approx(0.50)
+    assert row["overridden_count"] == 1
+
+
+def test_get_all_instincts(tmp_db):
+    tmp_db.add_instinct(id="i1", trigger="t1", action="a1", source_semantic_ids=[])
+    tmp_db.add_instinct(id="i2", trigger="t2", action="a2", source_semantic_ids=[])
+    instincts = tmp_db.get_all_instincts()
+    assert len(instincts) == 2
+
+
+def test_add_log_entry(tmp_db):
+    tmp_db.add_log_entry(
+        id="log-1", event_type="remember", layer="episode",
+        target_ids=["ep-1"], context={"session_id": "s1"},
+    )
+    rows = tmp_db.conn.execute("SELECT * FROM memory_log").fetchall()
+    assert len(rows) == 1
+
+
+def test_get_log_entries(tmp_db):
+    tmp_db.add_log_entry(id="l1", event_type="remember", layer="episode", target_ids=["ep-1"])
+    tmp_db.add_log_entry(id="l2", event_type="recall", layer="episode", target_ids=["ep-1"])
+    tmp_db.add_log_entry(id="l3", event_type="recall", layer="semantic", target_ids=["sem-1"])
+    entries = tmp_db.get_log_entries(event_type="recall")
+    assert len(entries) == 2
+
+
+def test_update_log_outcome(tmp_db):
+    tmp_db.add_log_entry(
+        id="l1", event_type="recall", layer="episode",
+        target_ids=["ep-1"], context={"recall_id": "r1"},
+    )
+    tmp_db.update_log_outcome("r1", "used")
+    row = tmp_db.conn.execute("SELECT outcome FROM memory_log WHERE id='l1'").fetchone()
+    assert row[0] == "used"
+
+
+def test_fts_sanitizes_special_characters(tmp_db, fake_embedding):
+    """FTS queries with special characters should not crash."""
+    tmp_db.add_episode(
+        id="ep-fts", session_id="s1", content="user prefers dark mode",
+        embedding=fake_embedding(),
+    )
+    # Queries with FTS5 special chars should not raise
+    for query in ["dark AND mode", 'user "prefers"', "NOT dark", "mode*", "(dark)"]:
+        results = tmp_db.search_episode_fts(query)
+        # Should return results or empty list, never raise
+        assert isinstance(results, list)
+
+
+def test_fts_finds_matching_content(tmp_db, fake_embedding):
+    """FTS should find episodes matching query terms."""
+    tmp_db.add_episode(
+        id="ep-fts2", session_id="s1", content="python decorators are useful",
+        embedding=fake_embedding(),
+    )
+    results = tmp_db.search_episode_fts("python decorators")
+    assert "ep-fts2" in results
+
+
+def test_semantic_auto_generated_flag(tmp_db, fake_embedding):
+    """Semantics can be flagged as auto-generated."""
+    emb = fake_embedding()
+    tmp_db.add_semantic(
+        id="s-auto", content="auto content", kind="fact",
+        confidence=0.5, embedding=emb, source_episode_ids=[],
+        auto_generated=True,
+    )
+    tmp_db.add_semantic(
+        id="s-human", content="human content", kind="fact",
+        confidence=0.5, embedding=emb, source_episode_ids=[],
+        auto_generated=False,
+    )
+    auto = tmp_db.get_semantic("s-auto")
+    human = tmp_db.get_semantic("s-human")
+    assert auto["auto_generated"] == 1
+    assert human["auto_generated"] == 0
+
+
+def test_instinct_override_symmetric(tmp_db):
+    """Override penalty should be -0.05, same magnitude as follow bonus."""
+    tmp_db.add_instinct(id="i-sym", trigger="t", action="a", source_semantic_ids=[])
+    tmp_db.update_instinct_overridden("i-sym")
+    row = tmp_db.get_instinct("i-sym")
+    assert row["strength"] == pytest.approx(0.45)
+
+
+# --- Decay and forgetting ---
+
+def test_apply_decay(tmp_db, fake_embedding):
+    """Decay should reduce all episode strengths by the factor."""
+    tmp_db.add_episode(id="ep-d1", session_id="s1", content="a", embedding=fake_embedding())
+    tmp_db.add_episode(id="ep-d2", session_id="s1", content="b", embedding=fake_embedding())
+
+    affected = tmp_db.apply_decay(factor=0.5)
+    assert affected == 2
+
+    row1 = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-d1'").fetchone()
+    assert row1[0] == pytest.approx(0.5)
+
+
+def test_decay_skips_near_zero(tmp_db, fake_embedding):
+    """Episodes with strength < 0.01 should not be updated (already dead)."""
+    tmp_db.add_episode(id="ep-dead", session_id="s1", content="dead", embedding=fake_embedding())
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.005 WHERE id = 'ep-dead'")
+    tmp_db.conn.commit()
+
+    affected = tmp_db.apply_decay(factor=0.9)
+    assert affected == 0
+
+
+def test_prune_decayed(tmp_db, fake_embedding):
+    """Pruning should remove compressed episodes below threshold."""
+    tmp_db.add_episode(id="ep-weak", session_id="s1", content="weak", embedding=fake_embedding())
+    tmp_db.mark_episodes_compressed(["ep-weak"])
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.01 WHERE id = 'ep-weak'")
+    tmp_db.conn.commit()
+
+    pruned = tmp_db.prune_decayed(threshold=0.05)
+    assert pruned == 1
+    assert tmp_db.get_episode("ep-weak") is None
+
+
+def test_prune_preserves_uncompressed(tmp_db, fake_embedding):
+    """Uncompressed episodes should never be pruned, even if decayed."""
+    tmp_db.add_episode(id="ep-unc", session_id="s1", content="uncompressed", embedding=fake_embedding())
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.001 WHERE id = 'ep-unc'")
+    tmp_db.conn.commit()
+
+    pruned = tmp_db.prune_decayed(threshold=0.05)
+    assert pruned == 0
+    assert tmp_db.get_episode("ep-unc") is not None
+
+
+def test_access_boosts_decay_strength(tmp_db, fake_embedding):
+    """Accessing an episode should boost its decay strength."""
+    tmp_db.add_episode(id="ep-boost", session_id="s1", content="test", embedding=fake_embedding())
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.5 WHERE id = 'ep-boost'")
+    tmp_db.conn.commit()
+
+    tmp_db.increment_episode_access("ep-boost")
+
+    row = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-boost'").fetchone()
+    assert row[0] == pytest.approx(0.6)  # 0.5 + 0.1 boost
+
+
+def test_decay_strength_caps_at_one(tmp_db, fake_embedding):
+    """Decay strength should not exceed 1.0 even with many accesses."""
+    tmp_db.add_episode(id="ep-cap", session_id="s1", content="test", embedding=fake_embedding())
+
+    for _ in range(20):
+        tmp_db.increment_episode_access("ep-cap")
+
+    row = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-cap'").fetchone()
+    assert row[0] == pytest.approx(1.0)
