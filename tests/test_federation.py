@@ -339,3 +339,87 @@ def test_process_inbox(tmp_path):
 
     bus.close()
     inst.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 12: Full federation lifecycle integration test
+# ---------------------------------------------------------------------------
+
+def test_full_federation_lifecycle(tmp_path):
+    """End-to-end: create genome → fork instances → remember with genome=True →
+    sync → send signals → process inbox → verify drift detection."""
+    from storage import Storage
+    from federation import SignalBus, InstanceRegistry, sync_genome, process_inbox
+    from cli import fork_instance
+
+    engram_dir = tmp_path / ".engram"
+    engram_dir.mkdir()
+
+    # 1. Create genome with initial knowledge
+    genome_dir = engram_dir / "genome"
+    genome_dir.mkdir()
+    genome = Storage(str(genome_dir / "graph.db"))
+    genome.add_episode(
+        id="gep1", session_id="s1", content="user is a mathematician in healthcare",
+        episode_type="observation",
+    )
+    genome.mark_core("gep1", tier=2)
+    genome.conn.commit()
+    genome.close()
+
+    # 2. Fork two instances
+    fork_instance("agi", engram_dir)
+    fork_instance("blocks", engram_dir)
+
+    # 3. Both instances should have the genome episode
+    agi = Storage(str(engram_dir / "instances" / "agi" / "graph.db"))
+    blocks = Storage(str(engram_dir / "instances" / "blocks" / "graph.db"))
+    assert len(agi.get_core_episodes()) == 1
+    assert len(blocks.get_core_episodes()) == 1
+
+    # 4. Add local knowledge to agi (not shared)
+    agi.add_episode(
+        id="aep1", session_id="s2", content="arena fitness improves with diversity",
+        episode_type="observation",
+    )
+    agi.conn.commit()
+
+    # 5. Send signal from agi to blocks
+    bus = SignalBus(engram_dir / "signals.db")
+    bus.send("agi", "blocks", "instinct_formed", "prefer diverse strategy selection")
+
+    # 6. Process blocks inbox
+    processed = process_inbox(bus, "blocks", blocks)
+    assert processed == 1
+
+    # 7. Blocks should have the signal as a local episode
+    signal_eps = blocks.conn.execute(
+        "SELECT content, source FROM episodes WHERE source LIKE 'signal/%'"
+    ).fetchall()
+    assert len(signal_eps) == 1
+    assert signal_eps[0]["source"] == "signal/agi"
+
+    # 8. Agi's local episode should NOT be in blocks
+    agi_only = blocks.conn.execute(
+        "SELECT 1 FROM episodes WHERE content = 'arena fitness improves with diversity'"
+    ).fetchone()
+    assert agi_only is None
+
+    # 9. Add new genome-core episode
+    genome2 = Storage(str(genome_dir / "graph.db"))
+    genome2.add_episode(
+        id="gep2", session_id="s3", content="system goal is bridging digital and biological",
+        episode_type="observation",
+    )
+    genome2.mark_core("gep2", tier=2)
+    genome2.conn.commit()
+    genome2.close()
+
+    # 10. Sync agi — should pick up new genome episode
+    synced = sync_genome(str(genome_dir / "graph.db"), agi)
+    assert synced == 1
+    assert len(agi.get_core_episodes()) == 2
+
+    bus.close()
+    agi.close()
+    blocks.close()
