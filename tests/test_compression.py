@@ -383,3 +383,63 @@ def test_dedup_unavailable_falls_back_to_embeddings(tmp_db, embedder):
     stats = compressor.commit(result["compress_id"], summaries)
 
     assert stats["instincts_created"] == 1
+
+
+def test_instinct_created_with_notice_implication(tmp_db, compressor, embedder):
+    """High-confidence preference semantic should create instinct with notice/implication."""
+    text = "always use type hints in function signatures"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="preference",
+        confidence=0.85, embedding=emb, source_episode_ids=[],
+    )
+    _add_episode(tmp_db, "filler", embedder.embed(["filler"])[0])
+    result = compressor.cluster_episodes()
+    summaries = [{"content": "filler", "kind": "fact", "action": "new"}]
+    stats = compressor.commit(result["compress_id"], summaries)
+
+    assert stats["instincts_created"] == 1
+    instincts = tmp_db.get_all_instincts()
+    inst = instincts[0]
+    assert inst["notice"] is not None
+    assert inst["implication"] is not None
+    assert inst["notice"] != inst["action"]  # notice should be different from raw action
+
+
+def test_perceptual_framing_always(tmp_db, compressor, embedder):
+    """Semantic starting with 'always' should produce notice about when to attend."""
+    text = "always write tests first"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="preference",
+        confidence=0.85, embedding=emb, source_episode_ids=[],
+    )
+    _add_episode(tmp_db, "filler2", embedder.embed(["filler2"])[0])
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "filler2", "kind": "fact", "action": "new"}])
+
+    inst = tmp_db.get_all_instincts()[0]
+    assert "when" in inst["notice"].lower()
+    assert inst["implication"] == text
+
+
+def test_perceptual_framing_with_when(tmp_db, compressor, embedder):
+    """Semantic containing 'when' should split into notice/implication."""
+    text = "use portable hashing when writing shell scripts"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="constraint",
+        confidence=0.85, embedding=emb, source_episode_ids=[],
+    )
+    _add_episode(tmp_db, "filler3", embedder.embed(["filler3"])[0])
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "filler3", "kind": "fact", "action": "new"}])
+
+    inst = tmp_db.get_all_instincts()[0]
+    assert "writing shell scripts" in inst["notice"].lower()
+    assert "portable hashing" in inst["implication"].lower()

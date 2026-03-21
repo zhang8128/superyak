@@ -153,7 +153,9 @@ class Compressor:
                     self._storage.reinforce_semantic(semantic_id, episode_ids)
                     semantics_reinforced += 1
             else:
-                # New semantic
+                # New semantic — these source episodes become core because
+                # they're the evidence for a new conclusion. Reinforcement
+                # episodes don't need this: the pattern is already captured.
                 new_id = str(uuid.uuid4())
                 n_episodes = len(cluster["episodes"])
                 confidence = min(0.9, 0.5 + 0.1 * (n_episodes - 1))
@@ -167,6 +169,7 @@ class Compressor:
                     auto_generated=bool(summary.get("auto_generated", False)),
                 )
                 semantics_created += 1
+                self._storage.mark_core_batch(episode_ids)
 
             self._storage.mark_episodes_compressed(episode_ids)
             episodes_processed += len(episode_ids)
@@ -313,6 +316,49 @@ class Compressor:
 
         return [texts[valid[s][0]] for s in selected]
 
+    def _generate_perceptual_framing(self, content: str, kind: str) -> tuple[str, str]:
+        """Generate notice/implication fields from semantic content.
+
+        Returns (notice, implication) where:
+        - notice: describes when/where the instinct applies (perceptual cue)
+        - implication: what should happen (the behavioral response)
+        """
+        if not content:
+            return (f"when: {kind}", content)
+
+        lower = content.lower()
+
+        if lower.startswith("always "):
+            rest = content[len("always "):].strip()
+            notice = f"when making choices about: {rest}"
+            implication = content
+        elif lower.startswith("never "):
+            rest = content[len("never "):].strip()
+            notice = f"when considering: {rest}"
+            implication = content
+        elif lower.startswith("prefer "):
+            rest = content[len("prefer "):].strip()
+            notice = f"when deciding on: {rest}"
+            implication = content
+        elif lower.startswith("avoid "):
+            rest = content[len("avoid "):].strip()
+            notice = f"when considering: {rest}"
+            implication = content
+        elif " when " in content:
+            idx = content.index(" when ")
+            before = content[:idx].strip()
+            after = content[idx + len(" when "):].strip()
+            notice = f"when {after}"
+            implication = before
+        elif kind == "preference":
+            notice = f"when making choices about: {content[:80]}"
+            implication = content
+        else:
+            notice = f"when: {content[:80]}"
+            implication = content
+
+        return (notice, implication)
+
     def _check_instinct_creation(self) -> int:
         """Check for semantics qualifying for instinct creation.
 
@@ -344,6 +390,12 @@ class Compressor:
                 instinct_embedding = self._embeddings.embed(
                     [sem["content"]], prefix="search_document"
                 )[0]
+
+                notice, implication = self._generate_perceptual_framing(sem["content"], kind)
+
+                # Context vector: embed the notice (describes when instinct applies)
+                context_embedding = self._embeddings.embed([notice], prefix="search_document")[0]
+
                 self._storage.add_instinct(
                     id=instinct_id,
                     trigger=kind,
@@ -351,7 +403,14 @@ class Compressor:
                     source_semantic_ids=[sem["id"]],
                     strength=0.5,
                     embedding=instinct_embedding,
+                    notice=notice,
+                    implication=implication,
                 )
+
+                # Store context vector separately
+                if context_embedding is not None:
+                    self._storage.add_instinct_context_vector(instinct_id, context_embedding)
+
                 created += 1
                 logger.info("Instinct created: %s from semantic %s", instinct_id, sem["id"])
 
