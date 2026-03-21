@@ -134,3 +134,42 @@ class InstanceRegistry:
 
     def get(self, name: str) -> dict | None:
         return self._data.get(name)
+
+
+def sync_genome(genome_path: str, instance_storage) -> int:
+    """Pull genome-core episodes not yet present in instance. Returns count synced.
+
+    Note: Synced episodes are inserted without embeddings. The existing
+    backfill_vectors step in server.py _init() runs after sync_genome and
+    will embed any orphaned episodes (those without vectors).
+    """
+    genome_conn = sqlite3.connect(genome_path)
+    genome_conn.row_factory = sqlite3.Row
+
+    genome_rows = genome_conn.execute(
+        "SELECT id, content, content_hash, source, created_at "
+        "FROM episodes WHERE core >= 2"
+    ).fetchall()
+
+    synced = 0
+    for row in genome_rows:
+        existing = instance_storage.conn.execute(
+            "SELECT 1 FROM episodes WHERE content_hash = ?",
+            (row["content_hash"],)
+        ).fetchone()
+        if existing:
+            continue
+
+        local_id = str(uuid.uuid4())
+        instance_storage.add_episode(
+            id=local_id, session_id=None,
+            content=row["content"], episode_type="genome_sync",
+        )
+        instance_storage.mark_core(local_id, tier=2)
+        if row["source"]:
+            instance_storage.set_episode_source(local_id, row["source"])
+        synced += 1
+
+    instance_storage.conn.commit()
+    genome_conn.close()
+    return synced

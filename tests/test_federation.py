@@ -263,3 +263,48 @@ def test_instance_registry(tmp_path):
     assert instances["agi"]["forked_from"] == "genome"
     reg.remove("blocks")
     assert "blocks" not in reg.list()
+
+
+# ---------------------------------------------------------------------------
+# Task 6: sync_genome tests
+# ---------------------------------------------------------------------------
+
+def test_genome_sync(tmp_path):
+    import hashlib
+    from federation import sync_genome
+    from storage import Storage
+
+    # Set up genome DB with a genome-core episode
+    genome_dir = tmp_path / "genome"
+    genome_dir.mkdir()
+    genome = Storage(str(genome_dir / "graph.db"))
+    genome.add_episode(
+        id="gep1", session_id="s1", content="user is a mathematician",
+        episode_type="observation",
+    )
+    genome.mark_core("gep1", tier=2)
+    genome.conn.commit()
+
+    # Set up instance DB — empty
+    inst_dir = tmp_path / "instance"
+    inst_dir.mkdir()
+    instance = Storage(str(inst_dir / "graph.db"))
+
+    # Sync
+    synced = sync_genome(genome_path=str(genome_dir / "graph.db"), instance_storage=instance)
+    assert synced == 1
+
+    # Episode should exist locally with core=2
+    row = instance.conn.execute(
+        "SELECT core, content FROM episodes WHERE content_hash = ?",
+        (hashlib.sha256("user is a mathematician".encode()).hexdigest(),)
+    ).fetchone()
+    assert row is not None
+    assert row["core"] == 2
+
+    # Second sync should be idempotent
+    synced2 = sync_genome(genome_path=str(genome_dir / "graph.db"), instance_storage=instance)
+    assert synced2 == 0
+
+    genome.close()
+    instance.close()
