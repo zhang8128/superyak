@@ -155,3 +155,26 @@ class TestWake:
         output = _run_wake(str(tmp_path), project_root=str(project_root))
         msg = output["systemMessage"]
         assert "unread signal" in msg
+
+    def test_wake_displays_notice_implication(self, tmp_path):
+        """Wake output should show perceptual format when notice/implication present."""
+        from storage import Storage
+        db_path = tmp_path / ".engram" / "graph.db"
+        db_path.parent.mkdir(parents=True)
+        store = Storage(str(db_path), migrations_dir=MIGRATIONS_DIR)
+        sem_id = str(uuid.uuid4())
+        store.add_semantic(id=sem_id, content="test", kind="preference",
+                           confidence=0.5, embedding=[0.1]*768, source_episode_ids=[])
+        store.add_instinct(
+            id="inst-1", trigger="preference", action="be terse",
+            source_semantic_ids=[sem_id],
+            notice="when building code and implementing features",
+            implication="keep communication focused and direct",
+        )
+        store.close()
+
+        output = _run_wake(str(tmp_path))
+        msg = output.get("systemMessage", "")
+        # Should display perceptual format
+        assert "Attend to:" in msg
+        assert "when building code" in msg
