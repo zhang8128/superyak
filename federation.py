@@ -97,3 +97,40 @@ class SignalBus:
 
     def close(self):
         self.conn.close()
+
+
+class InstanceRegistry:
+    """Manages ~/.engram/instances.json with atomic writes."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self._data = self._load()
+
+    def _load(self) -> dict:
+        if self.path.exists():
+            return json.loads(self.path.read_text())
+        return {}
+
+    def _save(self):
+        """Atomic write — temp file + rename."""
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._data, indent=2))
+        tmp.rename(self.path)
+
+    def register(self, name: str, db_path: Path, forked_from: str) -> None:
+        self._data[name] = {
+            "path": str(db_path),
+            "forked_from": forked_from,
+            "forked_at": _now_iso(),
+        }
+        self._save()
+
+    def remove(self, name: str) -> None:
+        self._data.pop(name, None)
+        self._save()
+
+    def list(self) -> dict:
+        return dict(self._data)
+
+    def get(self, name: str) -> dict | None:
+        return self._data.get(name)

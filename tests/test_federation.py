@@ -246,3 +246,20 @@ def test_mark_seen_and_threading(signal_bus):
     reply_msgs = [m for m in engram_inbox if m["id"] == reply_id]
     assert len(reply_msgs) == 1
     assert reply_msgs[0]["in_reply_to"] == q_id
+
+
+# ---------------------------------------------------------------------------
+# Task 5: InstanceRegistry tests
+# ---------------------------------------------------------------------------
+
+def test_instance_registry(tmp_path):
+    from federation import InstanceRegistry
+    reg = InstanceRegistry(tmp_path / "instances.json")
+    reg.register("agi", tmp_path / "agi" / "graph.db", forked_from="genome")
+    reg.register("blocks", tmp_path / "blocks" / "graph.db", forked_from="genome")
+    instances = reg.list()
+    assert "agi" in instances
+    assert "blocks" in instances
+    assert instances["agi"]["forked_from"] == "genome"
+    reg.remove("blocks")
+    assert "blocks" not in reg.list()
