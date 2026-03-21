@@ -18,6 +18,75 @@ logger = logging.getLogger("engram.server")
 
 mcp = FastMCP("engram")
 
+
+def _generate_perceptual_framing(content: str, kind: str) -> tuple[str, str]:
+    """Generate notice/implication from instinct action text.
+
+    Mirrors Compressor._generate_perceptual_framing for backfill use.
+    """
+    if not content:
+        return (f"when: {kind}", content)
+
+    lower = content.lower()
+
+    if lower.startswith("always "):
+        rest = content[len("always "):].strip()
+        return (f"when making choices about: {rest}", content)
+    elif lower.startswith("never "):
+        rest = content[len("never "):].strip()
+        return (f"when considering: {rest}", content)
+    elif lower.startswith("prefer "):
+        rest = content[len("prefer "):].strip()
+        return (f"when deciding on: {rest}", content)
+    elif lower.startswith("avoid "):
+        rest = content[len("avoid "):].strip()
+        return (f"when considering: {rest}", content)
+    elif " when " in lower:
+        idx = lower.index(" when ")
+        implication = content[:idx].strip()
+        notice = f"when {content[idx + 6:].strip()}"
+        return (notice, implication)
+    elif kind == "preference":
+        return (f"when making choices about: {content[:80]}", content)
+    else:
+        return (f"when: {content[:80]}", content)
+
+
+def _backfill_instinct_perceptual(storage, embeddings):
+    """Backfill notice/implication for existing instincts that lack them."""
+    instincts = storage.get_all_instincts()
+    backfilled = 0
+    for inst in instincts:
+        if inst.get("notice") is not None:
+            continue
+
+        action = inst.get("action", "")
+        trigger = inst.get("trigger", "preference")
+        notice, implication = _generate_perceptual_framing(action, trigger)
+
+        storage.conn.execute(
+            "UPDATE instincts SET notice = ?, implication = ? WHERE id = ?",
+            (notice, implication, inst["id"]),
+        )
+
+        # Store context vector
+        ctx_emb = embeddings.embed([notice], prefix="search_document")[0]
+        if ctx_emb is not None:
+            # Check if context vector already exists
+            has_ctx = storage.conn.execute(
+                "SELECT 1 FROM instinct_context_vectors WHERE id = ?", (inst["id"],)
+            ).fetchone()
+            if not has_ctx:
+                storage.add_instinct_context_vector(inst["id"], ctx_emb)
+
+        backfilled += 1
+
+    if backfilled:
+        storage.conn.commit()
+        logger.info("Backfilled notice/implication for %d instincts", backfilled)
+
+    return backfilled
+
 # Engram home is fixed — same memories regardless of which project you're in
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram"))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -164,6 +233,9 @@ def _init():
         if backfilled:
             _storage.conn.commit()
             logger.info("Backfilled vectors for %d instincts", backfilled)
+
+        # 6. Backfill notice/implication for pre-existing instincts
+        _backfill_instinct_perceptual(_storage, _embeddings)
     except Exception:
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
 
@@ -287,30 +359,68 @@ def recall(
     logger.info("Tool called: recall(query=%r, layer=%s, max_results=%d)",
                 query[:80], layer, max_results)
 
-    # Special case: instinct layer
+    # Special case: instinct layer — context-aware vector search
     if layer == "instinct":
-        instincts = _storage.get_all_instincts()
+        embedding = _embeddings.embed([query], prefix="search_query")[0]
+
+        # Try context vector search first
+        instinct_results = []
+        try:
+            ctx_results = _storage.search_vectors("instinct_context", embedding, k=max_results)
+            for iid, distance in ctx_results:
+                ctx_sim = vec0_distance_to_similarity(distance)
+                inst = _storage.get_instinct(iid)
+                if inst is None:
+                    continue
+                # Also get content similarity
+                content_sim = 0.5  # default
+                try:
+                    content_results = _storage.search_vectors("instinct", embedding, k=max_results * 2)
+                    for cid, cdist in content_results:
+                        if cid == iid:
+                            content_sim = vec0_distance_to_similarity(cdist)
+                            break
+                except Exception:
+                    pass
+                strength = inst.get("strength", 0.5)
+                score = ctx_sim * 0.5 + content_sim * 0.2 + strength * 0.3
+                instinct_results.append((iid, inst, score))
+        except Exception:
+            logger.warning("Context vector search failed, falling back to all instincts", exc_info=True)
+
+        # Fallback: if no context vectors yet, return all instincts (backward compat)
+        if not instinct_results:
+            instincts = _storage.get_all_instincts()
+            for inst in instincts:
+                instinct_results.append((inst["id"], inst, inst.get("strength", 0.5)))
+
+        # Sort by score descending
+        instinct_results.sort(key=lambda x: x[2], reverse=True)
+
         recall_id = str(uuid.uuid4())
+        results = []
+        for iid, inst, score in instinct_results[:max_results]:
+            result = {
+                "id": iid,
+                "content": inst.get("action", ""),
+                "layer": "instinct",
+                "score": score,
+                "trigger": inst.get("trigger", ""),
+            }
+            if inst.get("notice"):
+                result["notice"] = inst["notice"]
+            if inst.get("implication"):
+                result["implication"] = inst["implication"]
+            results.append(result)
+
         _storage.add_log_entry(
             id=str(uuid.uuid4()),
             event_type="recall",
             layer="instinct",
-            target_ids=[i["id"] for i in instincts],
+            target_ids=[r["id"] for r in results],
             context={"recall_id": recall_id, "query": query},
         )
-        return {
-            "results": [
-                {
-                    "id": i["id"],
-                    "content": i.get("action", ""),
-                    "layer": "instinct",
-                    "score": i.get("strength", 0.5),
-                    "trigger": i.get("trigger", ""),
-                }
-                for i in instincts
-            ],
-            "recall_id": recall_id,
-        }
+        return {"results": results, "recall_id": recall_id}
 
     embedding = _embeddings.embed([query], prefix="search_query")[0]
     now = datetime.now(timezone.utc)
@@ -433,6 +543,8 @@ def recall(
             created_at = inst.get("created_at")
             info["content"] = inst.get("action", "")
             info["trigger"] = inst.get("trigger", "")
+            info["notice"] = inst.get("notice")
+            info["implication"] = inst.get("implication")
 
         # Compute recency
         if created_at:
@@ -465,6 +577,10 @@ def recall(
             result["context"] = info.get("context")
         if info["layer"] == "instinct":
             result["trigger"] = info.get("trigger")
+            if info.get("notice"):
+                result["notice"] = info["notice"]
+            if info.get("implication"):
+                result["implication"] = info["implication"]
 
         scored.append(result)
 
@@ -540,10 +656,13 @@ def log_outcome(recall_id: str, used: bool, note: str | None = None) -> dict:
 
 
 @mcp.tool()
-def instinct_feedback(instinct_id: str, followed: bool) -> dict:
-    """Report whether you followed or overrode an instinct. Adjusts instinct strength."""
+def instinct_feedback(instinct_id: str, followed: bool, context: str | None = None) -> dict:
+    """Report whether you followed or overrode an instinct. Adjusts instinct strength.
+
+    Optionally provide context describing the situation for context-aware learning."""
     _init()
-    logger.info("Tool called: instinct_feedback(instinct_id=%s, followed=%s)", instinct_id, followed)
+    logger.info("Tool called: instinct_feedback(instinct_id=%s, followed=%s, context=%s)",
+                instinct_id, followed, context[:50] if context else None)
 
     inst = _storage.get_instinct(instinct_id)
     if inst is None:
@@ -554,13 +673,26 @@ def instinct_feedback(instinct_id: str, followed: bool) -> dict:
     else:
         _storage.update_instinct_overridden(instinct_id)
 
+    # Store context feedback if context provided
+    if context:
+        context_embedding = _embeddings.embed([context], prefix="search_document")[0]
+        _storage.add_instinct_context_feedback(
+            instinct_id=instinct_id,
+            context_text=context,
+            context_embedding=_pack_embedding(context_embedding),
+            followed=followed,
+        )
+
     updated = _storage.get_instinct(instinct_id)
-    return {
+    result = {
         "instinct_id": instinct_id,
         "followed": followed,
         "new_strength": updated["strength"] if updated else None,
         "fired_count": updated["fired_count"] if updated else None,
     }
+    if context:
+        result["context_recorded"] = True
+    return result
 
 
 def _safe_count(table: str) -> int | None:

@@ -639,7 +639,7 @@ class Storage:
 
     # --- Vector search ---
 
-    _VECTOR_TABLES = frozenset({"entity", "episode", "semantic", "instinct"})
+    _VECTOR_TABLES = frozenset({"entity", "episode", "semantic", "instinct", "instinct_context"})
 
     def search_vectors(self, table_name: str, embedding: list[float], k: int = 10) -> list[tuple[str, float]]:
         """KNN search on a vec0 virtual table. table_name: 'entity', 'episode', or 'semantic'."""
@@ -702,13 +702,15 @@ class Storage:
         source_semantic_ids: list[str],
         strength: float = 0.5,
         embedding: list[float] | None = None,
+        notice: str | None = None,
+        implication: str | None = None,
     ) -> str:
         now = _now_iso()
         content_hash = hashlib.sha256(action.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO instincts (id, trigger, action, strength, created_at, fired_count, followed_count, overridden_count, content_hash) "
-            "VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?)",
-            (id, trigger, action, strength, now, content_hash),
+            "INSERT INTO instincts (id, trigger, action, strength, created_at, fired_count, followed_count, overridden_count, content_hash, notice, implication) "
+            "VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?)",
+            (id, trigger, action, strength, now, content_hash, notice, implication),
         )
         if embedding is not None:
             self.conn.execute(
@@ -750,6 +752,55 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def add_instinct_context_feedback(
+        self,
+        instinct_id: str,
+        context_text: str,
+        context_embedding: bytes | None,
+        followed: bool,
+    ) -> str:
+        """Store context-specific feedback for an instinct."""
+        import uuid as _uuid
+        id = str(_uuid.uuid4())
+        now = _now_iso()
+        self.conn.execute(
+            "INSERT INTO instinct_context_feedback (id, instinct_id, context_text, context_embedding, followed, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (id, instinct_id, context_text, context_embedding, followed, now),
+        )
+        self.conn.commit()
+        logger.debug("Context feedback stored: instinct=%s followed=%s", instinct_id, followed)
+        return id
+
+    def get_instinct_context_feedback(self, instinct_id: str) -> list[dict]:
+        """Get all context feedback entries for an instinct."""
+        rows = self.conn.execute(
+            "SELECT * FROM instinct_context_feedback WHERE instinct_id = ? ORDER BY timestamp",
+            (instinct_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_context_follow_ratio(self, instinct_id: str, context_text: str) -> float:
+        """Get the followed/total ratio for feedback matching a context."""
+        rows = self.conn.execute(
+            "SELECT followed FROM instinct_context_feedback WHERE instinct_id = ? AND context_text = ?",
+            (instinct_id, context_text),
+        ).fetchall()
+        if not rows:
+            return 0.0
+        total = len(rows)
+        followed_count = sum(1 for r in rows if r[0])
+        return followed_count / total
+
+    def add_instinct_context_vector(self, id: str, embedding: list[float]) -> None:
+        """Store a context vector for an instinct."""
+        self.conn.execute(
+            "INSERT INTO instinct_context_vectors (id, embedding) VALUES (?, ?)",
+            (id, _pack_embedding(embedding)),
+        )
+        self.conn.commit()
+        logger.debug("Instinct context vector stored: %s", id)
+
     def update_instinct_followed(self, id: str) -> None:
         self.conn.execute(
             "UPDATE instincts SET strength = MIN(1.0, strength + 0.05), "
@@ -785,6 +836,12 @@ class Storage:
         placeholders = ", ".join("?" * len(ids))
         self.conn.execute(f"DELETE FROM instinct_vectors WHERE id IN ({placeholders})", ids)
         self.conn.execute(f"DELETE FROM instinct_sources WHERE instinct_id IN ({placeholders})", ids)
+        # Clean up context vectors (vec0 doesn't cascade)
+        for iid in ids:
+            self.conn.execute("DELETE FROM instinct_context_vectors WHERE id = ?", (iid,))
+        # Clean up context feedback
+        for iid in ids:
+            self.conn.execute("DELETE FROM instinct_context_feedback WHERE instinct_id = ?", (iid,))
         self.conn.execute(f"DELETE FROM instincts WHERE id IN ({placeholders})", ids)
         self.conn.commit()
         logger.info("Pruned %d weak instincts (threshold=%.2f)", len(ids), strength_threshold)

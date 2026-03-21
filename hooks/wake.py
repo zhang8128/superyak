@@ -60,7 +60,7 @@ def wake():
         # Filter by session_context when configured
         if session_context:
             instincts = conn.execute(
-                "SELECT id, trigger, action, strength, fired_count, followed_count "
+                "SELECT id, trigger, action, strength, fired_count, followed_count, notice, implication "
                 "FROM instincts WHERE strength > 0.1 "
                 "AND (context IS NULL OR context = ?) "
                 "ORDER BY strength DESC LIMIT 15",
@@ -68,7 +68,7 @@ def wake():
             ).fetchall()
         else:
             instincts = conn.execute(
-                "SELECT id, trigger, action, strength, fired_count, followed_count "
+                "SELECT id, trigger, action, strength, fired_count, followed_count, notice, implication "
                 "FROM instincts WHERE strength > 0.1 "
                 "ORDER BY strength DESC LIMIT 15"
             ).fetchall()
@@ -109,7 +109,12 @@ def wake():
                 status = f"strength={strength:.2f}"
                 if fired > 0:
                     status += f", fired={fired}, followed={followed}"
-                lines.append(f"- **[{inst['trigger']}]** {inst['action']}")
+
+                if inst["notice"] and inst["implication"]:
+                    lines.append(f"- **Attend to:** {inst['notice']}")
+                    lines.append(f"  *{inst['implication']}*")
+                else:
+                    lines.append(f"- **[{inst['trigger']}]** {inst['action']}")
                 lines.append(f"  ({status})")
                 lines.append("")
 

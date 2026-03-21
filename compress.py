@@ -153,7 +153,9 @@ class Compressor:
                     self._storage.reinforce_semantic(semantic_id, episode_ids)
                     semantics_reinforced += 1
             else:
-                # New semantic
+                # New semantic — these source episodes become core because
+                # they're the evidence for a new conclusion. Reinforcement
+                # episodes don't need this: the pattern is already captured.
                 new_id = str(uuid.uuid4())
                 n_episodes = len(cluster["episodes"])
                 confidence = min(0.9, 0.5 + 0.1 * (n_episodes - 1))
@@ -167,6 +169,7 @@ class Compressor:
                     auto_generated=bool(summary.get("auto_generated", False)),
                 )
                 semantics_created += 1
+                self._storage.mark_core_batch(episode_ids)
 
             self._storage.mark_episodes_compressed(episode_ids)
             episodes_processed += len(episode_ids)
@@ -313,6 +316,49 @@ class Compressor:
 
         return [texts[valid[s][0]] for s in selected]
 
+    def _generate_perceptual_framing(self, content: str, kind: str) -> tuple[str, str]:
+        """Generate notice/implication fields from semantic content.
+
+        Returns (notice, implication) where:
+        - notice: describes when/where the instinct applies (perceptual cue)
+        - implication: what should happen (the behavioral response)
+        """
+        if not content:
+            return (f"when: {kind}", content)
+
+        lower = content.lower()
+
+        if lower.startswith("always "):
+            rest = content[len("always "):].strip()
+            notice = f"when making choices about: {rest}"
+            implication = content
+        elif lower.startswith("never "):
+            rest = content[len("never "):].strip()
+            notice = f"when considering: {rest}"
+            implication = content
+        elif lower.startswith("prefer "):
+            rest = content[len("prefer "):].strip()
+            notice = f"when deciding on: {rest}"
+            implication = content
+        elif lower.startswith("avoid "):
+            rest = content[len("avoid "):].strip()
+            notice = f"when considering: {rest}"
+            implication = content
+        elif " when " in content:
+            idx = content.index(" when ")
+            before = content[:idx].strip()
+            after = content[idx + len(" when "):].strip()
+            notice = f"when {after}"
+            implication = before
+        elif kind == "preference":
+            notice = f"when making choices about: {content[:80]}"
+            implication = content
+        else:
+            notice = f"when: {content[:80]}"
+            implication = content
+
+        return (notice, implication)
+
     def _check_instinct_creation(self) -> int:
         """Check for semantics qualifying for instinct creation.
 
@@ -336,7 +382,7 @@ class Compressor:
                     continue
 
                 # Dedup: check if an existing instinct says the same thing
-                if self._instinct_already_exists(sem["content"]):
+                if self._instinct_already_exists(sem["content"], kind=kind):
                     logger.info("Skipping duplicate instinct for semantic %s", sem["id"])
                     continue
 
@@ -344,6 +390,12 @@ class Compressor:
                 instinct_embedding = self._embeddings.embed(
                     [sem["content"]], prefix="search_document"
                 )[0]
+
+                notice, implication = self._generate_perceptual_framing(sem["content"], kind)
+
+                # Context vector: embed the notice (describes when instinct applies)
+                context_embedding = self._embeddings.embed([notice], prefix="search_document")[0]
+
                 self._storage.add_instinct(
                     id=instinct_id,
                     trigger=kind,
@@ -351,28 +403,53 @@ class Compressor:
                     source_semantic_ids=[sem["id"]],
                     strength=0.5,
                     embedding=instinct_embedding,
+                    notice=notice,
+                    implication=implication,
                 )
+
+                # Store context vector separately
+                if context_embedding is not None:
+                    self._storage.add_instinct_context_vector(instinct_id, context_embedding)
+
                 created += 1
                 logger.info("Instinct created: %s from semantic %s", instinct_id, sem["id"])
 
         return created
 
-    def _instinct_already_exists(self, content: str) -> bool:
+    def _instinct_already_exists(self, content: str, kind: str = "preference") -> bool:
         """Check if an existing instinct expresses the same thing.
 
         Two-tier check:
         1. LLM dedup (if available) — detects pragmatic equivalence
         2. Embedding similarity fallback — catches obvious duplicates
+
+        Considers both the action content and the perceptual notice to avoid
+        false dedup of instincts with different contexts.
         """
         existing = self._storage.get_all_instincts()
         if not existing:
             return False
 
+        # Generate notice for the new content to compare
+        new_notice, _new_implication = self._generate_perceptual_framing(content, kind)
+
         # Tier 1: LLM-based pragmatic equivalence
         if self._dedup is not None and self._dedup.is_available():
             for inst in existing:
                 action = inst.get("action", "")
+                # Check if actions are equivalent
                 if self._dedup.is_equivalent(content, action):
+                    # If the existing instinct has a notice, also check notice similarity
+                    # (same action but different context = different instinct)
+                    existing_notice = inst.get("notice")
+                    if existing_notice and new_notice:
+                        # Both have notices — check if they're also equivalent
+                        if self._dedup.is_equivalent(new_notice, existing_notice):
+                            logger.info("LLM dedup: '%s' ≡ '%s'", content[:50], action[:50])
+                            return True
+                        # Same action, different notice = NOT a duplicate
+                        continue
+                    # Legacy instinct without notice — action match is enough
                     logger.info("LLM dedup: '%s' ≡ '%s'", content[:50], action[:50])
                     return True
             return False
@@ -419,6 +496,8 @@ class Compressor:
     def _reset_all(self) -> None:
         """Reset all episodes to uncompressed and delete all semantics and instincts."""
         self._storage.conn.execute("UPDATE episodes SET compressed=0")
+        self._storage.conn.execute("DELETE FROM instinct_context_vectors")
+        self._storage.conn.execute("DELETE FROM instinct_context_feedback")
         self._storage.conn.execute("DELETE FROM instinct_sources")
         self._storage.conn.execute("DELETE FROM instincts")
         self._storage.conn.execute("DELETE FROM semantic_sources")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from datetime import datetime, timezone
 
@@ -492,3 +494,94 @@ def test_decay_strength_caps_at_one(tmp_db, fake_embedding):
 
     row = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-cap'").fetchone()
     assert row[0] == pytest.approx(1.0)
+
+
+def test_add_instinct_context_feedback(tmp_db, fake_embedding):
+    """Store context feedback for an instinct."""
+    emb = fake_embedding()
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(id=sem_id, content="test", kind="preference",
+                        confidence=0.5, embedding=emb, source_episode_ids=[])
+    inst_id = tmp_db.add_instinct(
+        id=str(uuid.uuid4()), trigger="preference", action="be terse",
+        source_semantic_ids=[sem_id], embedding=emb,
+    )
+    from storage import _pack_embedding
+    tmp_db.add_instinct_context_feedback(
+        instinct_id=inst_id, context_text="building code",
+        context_embedding=_pack_embedding(emb), followed=True,
+    )
+    feedback = tmp_db.get_instinct_context_feedback(inst_id)
+    assert len(feedback) == 1
+    assert feedback[0]["followed"] == 1
+    assert feedback[0]["context_text"] == "building code"
+
+
+def test_instinct_contextual_strength(tmp_db, fake_embedding):
+    """Contextual strength should reflect follow/override ratio in similar contexts."""
+    emb = fake_embedding()
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(id=sem_id, content="test", kind="preference",
+                        confidence=0.5, embedding=emb, source_episode_ids=[])
+    inst_id = tmp_db.add_instinct(
+        id=str(uuid.uuid4()), trigger="preference", action="be terse",
+        source_semantic_ids=[sem_id], embedding=emb,
+    )
+    from storage import _pack_embedding
+    packed = _pack_embedding(emb)
+    for _ in range(3):
+        tmp_db.add_instinct_context_feedback(
+            instinct_id=inst_id, context_text="building",
+            context_embedding=packed, followed=True,
+        )
+    tmp_db.add_instinct_context_feedback(
+        instinct_id=inst_id, context_text="building",
+        context_embedding=packed, followed=False,
+    )
+    ratio = tmp_db.get_context_follow_ratio(inst_id, context_text="building")
+    assert ratio == pytest.approx(0.75)
+
+
+def test_add_instinct_with_notice_implication(tmp_db, fake_embedding):
+    """Instincts can be created with notice and implication fields."""
+    emb = fake_embedding()
+    inst_id = tmp_db.add_instinct(
+        id=str(uuid.uuid4()), trigger="preference", action="be terse",
+        source_semantic_ids=[],
+        notice="when the conversation shifts from building to reflecting",
+        implication="communication style should match the mode",
+        embedding=emb,
+    )
+    inst = tmp_db.get_instinct(inst_id)
+    assert inst["notice"] == "when the conversation shifts from building to reflecting"
+    assert inst["implication"] == "communication style should match the mode"
+
+
+def test_prune_weak_instincts_cleans_context_vectors(tmp_db, fake_embedding):
+    """Pruning weak instincts should also remove their context vectors and feedback."""
+    emb = fake_embedding()
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(id=sem_id, content="test", kind="preference",
+                        confidence=0.5, embedding=emb, source_episode_ids=[])
+    inst_id = str(uuid.uuid4())
+    tmp_db.add_instinct(
+        id=inst_id, trigger="preference", action="weak instinct",
+        source_semantic_ids=[sem_id], strength=0.05, embedding=emb,
+    )
+    tmp_db.add_instinct_context_vector(inst_id, emb)
+    from storage import _pack_embedding
+    tmp_db.add_instinct_context_feedback(
+        instinct_id=inst_id, context_text="test",
+        context_embedding=_pack_embedding(emb), followed=False,
+    )
+
+    pruned = tmp_db.prune_weak_instincts(strength_threshold=0.1)
+    assert pruned == 1
+
+    # Context vectors and feedback should be gone too
+    ctx_vec = tmp_db.conn.execute(
+        "SELECT COUNT(*) FROM instinct_context_vectors WHERE id = ?", (inst_id,)
+    ).fetchone()[0]
+    assert ctx_vec == 0
+    feedback = tmp_db.get_instinct_context_feedback(inst_id)
+    assert len(feedback) == 0
