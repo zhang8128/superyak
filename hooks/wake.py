@@ -13,13 +13,32 @@ import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_DIR = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
-DB_PATH = Path(PROJECT_DIR) / ".engram" / "graph.db"
+ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
+DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
+
+# PROJECT_ROOT is the working directory (for config reading), consistent with server.py
+PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
+
+
+def _load_instance_config():
+    """Load instance config from project root .engram/config.toml if present."""
+    config_path = PROJECT_ROOT / ".engram" / "config.toml"
+    if not config_path.exists():
+        return None, None
+    try:
+        import tomllib
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+        return config.get("instance"), config.get("session_context")
+    except Exception:
+        return None, None
 
 
 def wake():
     if not DB_PATH.exists():
         return  # No memory yet — nothing to wake into
+
+    instance_name, session_context = _load_instance_config()
 
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
@@ -30,11 +49,22 @@ def wake():
         semantics = conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0]
         instincts_count = conn.execute("SELECT COUNT(*) FROM instincts").fetchone()[0]
 
-        # All instincts — they're few enough to load entirely
-        instincts = conn.execute(
-            "SELECT id, trigger, action, strength, fired_count, followed_count "
-            "FROM instincts ORDER BY strength DESC"
-        ).fetchall()
+        # Instincts above minimum strength — pruned ones don't enter context
+        # Filter by session_context when configured
+        if session_context:
+            instincts = conn.execute(
+                "SELECT id, trigger, action, strength, fired_count, followed_count "
+                "FROM instincts WHERE strength > 0.1 "
+                "AND (context IS NULL OR context = ?) "
+                "ORDER BY strength DESC LIMIT 15",
+                (session_context,)
+            ).fetchall()
+        else:
+            instincts = conn.execute(
+                "SELECT id, trigger, action, strength, fired_count, followed_count "
+                "FROM instincts WHERE strength > 0.1 "
+                "ORDER BY strength DESC LIMIT 15"
+            ).fetchall()
 
         # Recent semantics — exclude those already shown as instincts
         instinct_actions = {inst["action"] for inst in instincts}
@@ -48,7 +78,10 @@ def wake():
 
         # Build orientation text
         lines = []
-        lines.append("# Engram — Memory Orientation")
+        if instance_name:
+            lines.append(f"# Engram ({instance_name}) — Memory Orientation")
+        else:
+            lines.append("# Engram — Memory Orientation")
         lines.append("")
         lines.append(f"You have {episodes} episodes, {semantics} semantics, {instincts_count} instincts.")
         lines.append("")
@@ -79,6 +112,25 @@ def wake():
             for sem in recent_semantics:
                 lines.append(f"- [{sem['kind']}, confidence={sem['confidence']:.2f}] {sem['content']}")
             lines.append("")
+
+        # Show inbox count when instance is configured
+        if instance_name:
+            signals_db = ENGRAM_HOME / ".engram" / "signals.db"
+            if signals_db.exists():
+                try:
+                    sig_conn = sqlite3.connect(str(signals_db))
+                    unread = sig_conn.execute(
+                        "SELECT COUNT(*) FROM messages "
+                        "WHERE (to_instance = ? OR to_instance IS NULL) "
+                        "AND from_instance != ? "
+                        "AND seen_by NOT LIKE ?",
+                        (instance_name, instance_name, f'%"{instance_name}"%')
+                    ).fetchone()[0]
+                    sig_conn.close()
+                    if unread > 0:
+                        lines.append(f"\n📬 {unread} unread signal(s)")
+                except Exception:
+                    pass  # inbox count is non-fatal
 
         lines.append("---")
         lines.append("Use `recall()` for deeper retrieval. Use `remember()` as you work.")

@@ -15,9 +15,11 @@ HOOK_SCRIPT = Path(__file__).parent.parent / "hooks" / "wake.py"
 MIGRATIONS_DIR = str(Path(__file__).parent.parent / "migrations")
 
 
-def _run_wake(project_dir: str) -> dict:
+def _run_wake(project_dir: str, project_root: str | None = None) -> dict:
     """Run wake.py as a subprocess and parse JSON output."""
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": project_dir}
+    env = {**os.environ, "ENGRAM_HOME": project_dir}
+    if project_root is not None:
+        env["ENGRAM_PROJECT_ROOT"] = project_root
     result = subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
         capture_output=True, text=True, env=env, timeout=10,
@@ -100,3 +102,56 @@ class TestWake:
         output = _run_wake(str(tmp_path))
         msg = output.get("systemMessage", "")
         assert "wake failed" in msg.lower() or output == {}
+
+    def test_wake_shows_instance_identity(self, tmp_path):
+        """When config.toml has instance = 'agi', header should show Engram (agi)."""
+        from storage import Storage
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+
+        # Create a separate project root dir with config.toml
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        (project_root / ".engram").mkdir()
+        (project_root / ".engram" / "config.toml").write_text(
+            'instance = "agi"\n'
+        )
+
+        output = _run_wake(str(tmp_path), project_root=str(project_root))
+        msg = output["systemMessage"]
+        assert "Engram (agi)" in msg
+
+    def test_wake_shows_inbox_count(self, tmp_path):
+        """Unread messages in signals.db should appear in orientation."""
+        from storage import Storage
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+
+        # Create signals.db with an unread message for this instance
+        import sqlite3 as _sqlite3
+        sig_conn = _sqlite3.connect(str(db_dir / "signals.db"))
+        sig_conn.execute(
+            "CREATE TABLE messages ("
+            "id TEXT PRIMARY KEY, from_instance TEXT, to_instance TEXT, "
+            "payload TEXT, seen_by TEXT DEFAULT '[]')"
+        )
+        sig_conn.execute(
+            "INSERT INTO messages (id, from_instance, to_instance, payload, seen_by) "
+            "VALUES ('msg1', 'other', 'agi', '{}', '[]')"
+        )
+        sig_conn.commit()
+        sig_conn.close()
+
+        # Config in project root
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        (project_root / ".engram").mkdir()
+        (project_root / ".engram" / "config.toml").write_text(
+            'instance = "agi"\n'
+        )
+
+        output = _run_wake(str(tmp_path), project_root=str(project_root))
+        msg = output["systemMessage"]
+        assert "unread signal" in msg

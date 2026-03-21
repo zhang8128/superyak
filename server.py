@@ -18,8 +18,11 @@ logger = logging.getLogger("engram.server")
 
 mcp = FastMCP("engram")
 
+# Engram home is fixed — same memories regardless of which project you're in
+ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram"))
+DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
+# PROJECT_ROOT is the working directory (for code indexing), ENGRAM_HOME is where memories live
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
-DB_PATH = PROJECT_ROOT / ".engram" / "graph.db"
 
 _storage = None
 _embeddings = None
@@ -29,10 +32,13 @@ _reflector = None
 _watcher = None
 _session_id = None
 _session_episode_count = 0
+_instance_name = None
+_genome_db_path = None
+_signals_db_path = None
 
 
 def _init():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path
     if _storage is not None:
         return
     from embeddings import NomicEmbedProvider
@@ -59,9 +65,13 @@ def _init():
     )
 
     from reflection import Reflector
+    _genome_db_path = ENGRAM_HOME / ".engram" / "genome" / "graph.db"
+    _signals_db_path = ENGRAM_HOME / ".engram" / "signals.db"
     _reflector = Reflector(
         _storage,
         _config.reflection.staleness_days if _config else 30,
+        genome_db_path=str(_genome_db_path) if _genome_db_path and _genome_db_path.exists() else None,
+        signals_db_path=str(_signals_db_path) if _signals_db_path and _signals_db_path.exists() else None,
     )
 
     # Watcher is created but NOT started — lazy-started on first code search
@@ -70,6 +80,28 @@ def _init():
     import atexit
     atexit.register(lambda: _watcher.stop() if _watcher else None)
     atexit.register(lambda: _storage.close() if _storage else None)
+
+    # Federation: genome sync + inbox processing
+    if _config and _config.instance:
+        _instance_name = _config.instance
+        _genome_db_path = ENGRAM_HOME / ".engram" / "genome" / "graph.db"
+        _signals_db_path = ENGRAM_HOME / ".engram" / "signals.db"
+        try:
+            from federation import sync_genome, process_inbox, SignalBus
+
+            if _genome_db_path.exists():
+                synced = sync_genome(str(_genome_db_path), _storage)
+                if synced:
+                    logger.info("Synced %d genome items", synced)
+
+            if _signals_db_path.exists():
+                bus = SignalBus(_signals_db_path)
+                processed = process_inbox(bus, _instance_name, _storage)
+                if processed:
+                    logger.info("Processed %d inbox messages", processed)
+                bus.close()
+        except Exception:
+            logger.warning("Federation sync failed — continuing without", exc_info=True)
 
     # Sleep-time maintenance on init: decay → prune → compress
     # This is engram's "consolidation during sleep" — runs between sessions.
@@ -84,12 +116,29 @@ def _init():
         if pruned:
             logger.info("Pruned %d decayed episodes", pruned)
 
+        # 2b. Prune weak instincts (overridden enough to drop below threshold)
+        pruned_instincts = _storage.prune_weak_instincts(strength_threshold=0.1)
+        if pruned_instincts:
+            logger.info("Pruned %d weak instincts", pruned_instincts)
+
         # 3. Auto-compress uncompressed episodes (crash recovery + consolidation)
         uncompressed = _storage.get_uncompressed_episodes()
         if uncompressed:
             logger.info("Auto-compressing %d uncompressed episodes on init", len(uncompressed))
             _compressor.auto_compress()
-        # 4. Backfill: embed any instincts that lack vectors (pre-existing instincts)
+        # 4. Backfill: embed any episodes that lost vectors (WAL corruption recovery)
+        orphaned = _storage.get_orphaned_episodes()
+        if orphaned:
+            for ep in orphaned:
+                emb = _embeddings.embed([ep["content"]], prefix="search_document")[0]
+                _storage.conn.execute(
+                    "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                    (ep["id"], _pack_embedding(emb)),
+                )
+            _storage.conn.commit()
+            logger.info("Backfilled vectors for %d orphaned episodes", len(orphaned))
+
+        # 5. Backfill: embed any instincts that lack vectors (pre-existing instincts)
         instincts = _storage.get_all_instincts()
         backfilled = 0
         for inst in instincts:
@@ -134,11 +183,25 @@ def _ensure_indexed():
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-def remember(content: str, context: dict | None = None) -> dict:
-    """Store an episode in memory. Returns episode_id and layer."""
+def remember(
+    content: str,
+    context: dict | None = None,
+    core: bool = False,
+    genome: bool = False,
+    source: str | None = None,
+) -> dict:
+    """Store an episode in memory. Returns episode_id and layer.
+
+    Args:
+        content: The episode content to store.
+        context: Optional metadata dict.
+        core: If True, this episode is exempt from decay (formative memory).
+        genome: If True, this is a genome-level memory (tier 2 core, replicated to all instances).
+        source: Cross-system provenance tag (e.g. 'claw/atlas', 'agi/arena').
+    """
     global _session_episode_count
     _init()
-    logger.info("Tool called: remember(content_len=%d)", len(content))
+    logger.info("Tool called: remember(content_len=%d, core=%s, source=%s)", len(content), core, source)
 
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]
@@ -150,6 +213,33 @@ def remember(content: str, context: dict | None = None) -> dict:
         embedding=embedding,
         context=context,
     )
+
+    if genome:
+        _storage.mark_core(episode_id, tier=2)
+        # Write to genome DB
+        if _genome_db_path and _genome_db_path.exists():
+            from storage import Storage
+            genome_episode_id = str(uuid.uuid4())
+            genome_store = Storage(str(_genome_db_path))
+            genome_store.add_episode(
+                id=genome_episode_id, session_id=_session_id,
+                content=content, episode_type="genome_write",
+            )
+            genome_store.mark_core(genome_episode_id, tier=2)
+            if source:
+                genome_store.set_episode_source(genome_episode_id, source)
+            genome_store.conn.commit()
+            genome_store.close()
+        # Signal other instances
+        if _instance_name and _signals_db_path:
+            from federation import SignalBus
+            bus = SignalBus(_signals_db_path)
+            bus.send(_instance_name, None, "genome_updated", content)
+            bus.close()
+    elif core:
+        _storage.mark_core(episode_id)
+    if source:
+        _storage.set_episode_source(episode_id, source)
 
     # Log remember event
     _storage.add_log_entry(
@@ -481,16 +571,49 @@ def status() -> dict:
 
     watcher_alive = _watcher is not None and _watcher.is_alive()
 
-    return {
+    # Health checks
+    orphaned = len(_storage.get_orphaned_episodes())
+    min_decay = None
+    try:
+        row = _storage.conn.execute(
+            "SELECT MIN(decay_strength) FROM episodes"
+        ).fetchone()
+        if row and row[0] is not None:
+            min_decay = round(row[0], 4)
+    except Exception:
+        pass
+
+    # Core episode count
+    core_count = 0
+    try:
+        row = _storage.conn.execute("SELECT count(*) FROM episodes WHERE core >= 1").fetchone()
+        if row:
+            core_count = row[0]
+    except Exception:
+        pass
+
+    result = {
         "session_id": _session_id,
         "layers": {
             "episodes": _safe_count("episodes"),
+            "core_episodes": core_count,
             "semantics": _safe_count("semantics"),
             "instincts": _safe_count("instincts"),
         },
         "log_entries": _safe_count("memory_log"),
         "watcher_alive": watcher_alive,
     }
+
+    # Only include health warnings if there are problems
+    health = {}
+    if orphaned > 0:
+        health["orphaned_episodes"] = orphaned
+    if min_decay is not None and min_decay < 0.1:
+        health["min_decay_strength"] = min_decay
+    if health:
+        result["health_warnings"] = health
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +655,36 @@ def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
                 compress_id, len(summaries))
 
     return _compressor.commit(compress_id, summaries)
+
+
+# ---------------------------------------------------------------------------
+# Core Memory Tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def mark_core(episode_id: str, tier: int = 1) -> dict:
+    """Mark an episode as a core memory — exempt from decay, preserved indefinitely.
+
+    Core memories are formative: they changed what the system does or believes.
+    They preserve evidence alongside the conclusions built on them.
+
+    Args:
+        episode_id: The episode to mark.
+        tier: Core tier (1 = instance core, 2 = genome-level).
+    """
+    _init()
+    logger.info("Tool called: mark_core(episode_id=%s, tier=%d)", episode_id, tier)
+    _storage.mark_core(episode_id, tier=tier)
+    return {"marked": episode_id, "core": True, "tier": tier}
+
+
+@mcp.tool()
+def core_memories() -> dict:
+    """List all core memories — the formative episodes that don't decay."""
+    _init()
+    logger.info("Tool called: core_memories()")
+    episodes = _storage.get_core_episodes()
+    return {"count": len(episodes), "episodes": episodes}
 
 
 # ---------------------------------------------------------------------------
