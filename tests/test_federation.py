@@ -118,3 +118,131 @@ def test_get_core_episodes_both_tiers(tmp_db, fake_embedding):
     assert "ep-gc-t1" in core_ids
     assert "ep-gc-t2" in core_ids
     assert "ep-gc-regular" not in core_ids
+
+
+# ---------------------------------------------------------------------------
+# Task 4: SignalBus tests
+# ---------------------------------------------------------------------------
+
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from federation import SignalBus
+
+
+@pytest.fixture
+def signal_bus(tmp_path):
+    bus = SignalBus(tmp_path / "signals.db")
+    yield bus
+    bus.close()
+
+
+def test_signals_db_creation(signal_bus):
+    """Create SignalBus, send a message, verify inbox for another instance returns it."""
+    bus = signal_bus
+    msg_id = bus.send(
+        from_instance="agi",
+        to_instance="engram",
+        msg_type="ping",
+        content="hello from agi",
+    )
+
+    inbox = bus.inbox("engram")
+    assert len(inbox) == 1
+    msg = inbox[0]
+    assert msg["id"] == msg_id
+    assert msg["from_instance"] == "agi"
+    assert msg["to_instance"] == "engram"
+    assert msg["type"] == "ping"
+    assert msg["content"] == "hello from agi"
+
+
+def test_broadcast_vs_directed(signal_bus):
+    """Send broadcast + 2 directed messages; verify each instance sees the right messages."""
+    bus = signal_bus
+
+    # Broadcast from agi — should reach blocks and why, but NOT agi itself
+    broadcast_id = bus.send(
+        from_instance="agi",
+        to_instance=None,
+        msg_type="announce",
+        content="broadcast to all",
+    )
+
+    # Directed to blocks only
+    blocks_id = bus.send(
+        from_instance="agi",
+        to_instance="blocks",
+        msg_type="task",
+        content="task for blocks",
+    )
+
+    # Directed to why only
+    why_id = bus.send(
+        from_instance="agi",
+        to_instance="why",
+        msg_type="question",
+        content="question for why",
+    )
+
+    # agi's own inbox: excludes self-sent, so gets nothing
+    agi_inbox = bus.inbox("agi")
+    agi_ids = {m["id"] for m in agi_inbox}
+    assert broadcast_id not in agi_ids
+    assert blocks_id not in agi_ids
+    assert why_id not in agi_ids
+
+    # blocks inbox: broadcast + directed-to-blocks
+    blocks_inbox = bus.inbox("blocks")
+    blocks_ids = {m["id"] for m in blocks_inbox}
+    assert broadcast_id in blocks_ids
+    assert blocks_id in blocks_ids
+    assert why_id not in blocks_ids
+
+    # why inbox: broadcast + directed-to-why
+    why_inbox = bus.inbox("why")
+    why_ids = {m["id"] for m in why_inbox}
+    assert broadcast_id in why_ids
+    assert why_id in why_ids
+    assert blocks_id not in why_ids
+
+
+def test_mark_seen_and_threading(signal_bus):
+    """Mark a message seen removes it from inbox; reply with in_reply_to threads correctly."""
+    bus = signal_bus
+
+    # engram sends a question to agi
+    q_id = bus.send(
+        from_instance="engram",
+        to_instance="agi",
+        msg_type="query",
+        content="what is the current task?",
+    )
+
+    # agi's inbox should contain the question
+    inbox_before = bus.inbox("agi")
+    assert any(m["id"] == q_id for m in inbox_before)
+
+    # agi marks the question as seen
+    bus.mark_seen(q_id, "agi")
+
+    # agi's inbox should no longer contain the question
+    inbox_after = bus.inbox("agi")
+    assert not any(m["id"] == q_id for m in inbox_after)
+
+    # agi replies, threading back to the original question
+    reply_id = bus.send(
+        from_instance="agi",
+        to_instance="engram",
+        msg_type="reply",
+        content="the current task is federation",
+        in_reply_to=q_id,
+    )
+
+    # engram's inbox should contain the reply
+    engram_inbox = bus.inbox("engram")
+    reply_msgs = [m for m in engram_inbox if m["id"] == reply_id]
+    assert len(reply_msgs) == 1
+    assert reply_msgs[0]["in_reply_to"] == q_id
