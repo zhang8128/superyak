@@ -1,52 +1,88 @@
-## Engram Memory System
+# Engram
 
-Layered memory: episodes (raw experiences), semantics (distilled knowledge),
-instincts (behavioral patterns). Three-tier architecture for storage, retrieval,
-and maintenance.
+A memory system for Claude Code sessions. Episodes, semantics, instincts —
+three layers that compress upward over time.
 
-### Embedding Model
+This is an experiment, not a product. The interesting questions are open:
+can dispositions form unsupervised? Does retrieval become cognition when
+it enters the token stream? What happens when you stop asking "does this
+work like memory?" and start asking "what does this actually do?"
 
-Uses **nomic-embed-text-v1.5** (768-dim) via FastEmbed with instruction prefixes:
-- `search_document:` — for storing memories (remember)
-- `search_query:` — for retrieval (recall, search_code)
-- `clustering:` — for compression/dedup (auto-compress)
+## Stance
 
-### Deduplication
+Observe before judging. Don't evaluate against biological memory — observe
+what the system does and let that inform what it becomes. The wing-flapping
+lesson: none of our flying machines flap their wings.
 
-LLM-based pragmatic equivalence via Ollama (default: `qwen3.5:27b`). Detects
-that differently-worded statements express the same preference/constraint.
-Only runs during compression, not on every recall. Falls back to embedding
-similarity if Ollama is unavailable. Configure model via `ENGRAM_DEDUP_MODEL` env var.
+Three modes of influence have been observed:
+1. **Reactive** — instinct fires, you follow. Measurable.
+2. **Dispositional** — instinct colors perception. Not measurable by discrete events.
+3. **Generative** — old thought collides with new context, produces something neither would alone. The most valuable, the hardest to track.
 
-### Memory Decay
+The system's metrics only see mode 1. That's fine. Don't engineer for what
+you can't measure yet.
 
-Episodes decay by 0.9× each session start. Accessed episodes get +0.1 strength
-boost. Compressed episodes below 0.05 strength are pruned. Uncompressed episodes
-are never pruned. This implements Ebbinghaus-style forgetting — memories that
-aren't useful fade naturally.
+## Architecture
 
-### Sleep-Time Consolidation
+Three layers, each more compressed than the last:
 
-On server startup: decay → prune → auto-compress. This is the maintenance
-window between sessions. Auto-compress uses centroid-based selection (not
-concatenation) — picks the most representative episode per cluster, or MMR
-for diverse selection in larger clusters.
+| Layer | What | Lifetime |
+|-------|------|----------|
+| **Episodes** | Raw experiences, verbatim | Decay 0.9x per session, pruned below 0.05 |
+| **Semantics** | Distilled facts, preferences, constraints | Promoted from episode clusters |
+| **Instincts** | Behavioral patterns with trigger/action | Promoted from semantic patterns |
 
-### Usage
+**Embeddings:** nomic-embed-text-v1.5 (768-dim) via FastEmbed. Instruction
+prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (compress).
 
-**Reading:** `recall(query)` searches across all layers. `introspect()` for
-self-portrait. `status()` for layer counts.
+**Dedup:** LLM-based pragmatic equivalence via Ollama (default: `qwen3.5:27b`).
+Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.
 
-**Writing:** `remember(content)` stores raw episodes. Don't filter — the
-system distills meaning during compression.
+**Sleep-time consolidation:** On startup: decay → prune → auto-compress.
+Centroid-based selection (most representative episode per cluster, MMR for diversity).
 
-**Feedback:** `log_outcome(recall_id, used)` after recall. `instinct_feedback(id, followed)`
-to strengthen/weaken instincts.
+## MCP Tools
 
-**Maintenance:** `compress()` for manual compression. `reflect()` for pattern analysis.
+| Tool | Purpose |
+|------|---------|
+| `remember(content)` | Store an episode. Don't filter — compression distills. |
+| `recall(query)` | Search across all layers. Returns `recall_id` for feedback. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, contradictions. |
+| `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
+| `status()` | Layer counts, watcher state, session_id. |
+| `compress()` | Manual compression cycle. |
+| `log_outcome(recall_id, used)` | Feedback after recall. |
+| `instinct_feedback(id, followed)` | Strengthen/weaken instincts. |
+| `search_code(query)` | Search project source code via embeddings. |
+| `reindex()` | Rebuild code index. |
 
-### Testing
+## Key Files
+
+| File | Role |
+|------|------|
+| `server.py` | MCP server — all tool definitions |
+| `storage.py` | SQLite + vec0 storage layer |
+| `compress.py` | Episode clustering, semantic promotion, instinct formation |
+| `reflection.py` | Self-analysis (reflect, introspect) |
+| `embeddings.py` | FastEmbed wrapper with instruction prefixes |
+| `dedup.py` | LLM-based duplicate detection |
+| `indexer.py` | Source code indexing via tree-sitter |
+| `watcher.py` | File system watcher for code changes |
+| `config.py` | Environment and path configuration |
+| `hooks/wake.py` | SessionStart hook — loads instincts into context on boot |
+
+## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 123 tests
+.venv/bin/python -m pytest tests/ -q   # 129 tests
 ```
+
+## Part of a System
+
+| Repo | Role |
+|------|------|
+| **engram** (this) | Memory across sessions |
+| **agi/** | Governance runtime |
+| **blocks/** | Composable block implementations |
+| **code/** | Block ratchet + codex-pair tooling |
+| **why/** | Decisions, tasks, design rationale |
