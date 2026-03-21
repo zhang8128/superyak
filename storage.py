@@ -836,6 +836,12 @@ class Storage:
         placeholders = ", ".join("?" * len(ids))
         self.conn.execute(f"DELETE FROM instinct_vectors WHERE id IN ({placeholders})", ids)
         self.conn.execute(f"DELETE FROM instinct_sources WHERE instinct_id IN ({placeholders})", ids)
+        # Clean up context vectors (vec0 doesn't cascade)
+        for iid in ids:
+            self.conn.execute("DELETE FROM instinct_context_vectors WHERE id = ?", (iid,))
+        # Clean up context feedback
+        for iid in ids:
+            self.conn.execute("DELETE FROM instinct_context_feedback WHERE instinct_id = ?", (iid,))
         self.conn.execute(f"DELETE FROM instincts WHERE id IN ({placeholders})", ids)
         self.conn.commit()
         logger.info("Pruned %d weak instincts (threshold=%.2f)", len(ids), strength_threshold)

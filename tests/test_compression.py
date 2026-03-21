@@ -482,3 +482,31 @@ def test_perceptual_framing_with_when(tmp_db, compressor, embedder):
     inst = tmp_db.get_all_instincts()[0]
     assert "writing shell scripts" in inst["notice"].lower()
     assert "portable hashing" in inst["implication"].lower()
+
+
+def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
+    """scope=full should also delete context vectors and feedback."""
+    text = "test instinct"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(id=sem_id, content=text, kind="preference",
+                        confidence=0.85, embedding=emb, source_episode_ids=[])
+    inst_id = str(uuid.uuid4())
+    tmp_db.add_instinct(
+        id=inst_id, trigger="preference", action=text,
+        source_semantic_ids=[sem_id], embedding=emb,
+    )
+    tmp_db.add_instinct_context_vector(inst_id, emb)
+    from storage import _pack_embedding
+    tmp_db.add_instinct_context_feedback(
+        instinct_id=inst_id, context_text="test",
+        context_embedding=_pack_embedding(emb), followed=True,
+    )
+
+    compressor.cluster_episodes("full")
+
+    # All context data should be gone
+    ctx_count = tmp_db.conn.execute("SELECT COUNT(*) FROM instinct_context_vectors").fetchone()[0]
+    assert ctx_count == 0
+    fb_count = tmp_db.conn.execute("SELECT COUNT(*) FROM instinct_context_feedback").fetchone()[0]
+    assert fb_count == 0

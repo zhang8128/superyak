@@ -496,6 +496,8 @@ class Compressor:
     def _reset_all(self) -> None:
         """Reset all episodes to uncompressed and delete all semantics and instincts."""
         self._storage.conn.execute("UPDATE episodes SET compressed=0")
+        self._storage.conn.execute("DELETE FROM instinct_context_vectors")
+        self._storage.conn.execute("DELETE FROM instinct_context_feedback")
         self._storage.conn.execute("DELETE FROM instinct_sources")
         self._storage.conn.execute("DELETE FROM instincts")
         self._storage.conn.execute("DELETE FROM semantic_sources")
