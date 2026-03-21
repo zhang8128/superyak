@@ -215,6 +215,71 @@ def test_vec0_corruption_recovery(tmp_path, embeddings):
     store2.close()
 
 
+def test_contextual_instinct_lifecycle(storage, embeddings, compressor):
+    """Full lifecycle: create semantic → instinct with notice/implication →
+    contextual recall → context feedback → reflection shows per-context health."""
+    # 1. Create high-confidence semantic
+    sem_id = str(uuid.uuid4())
+    storage.add_semantic(
+        id=sem_id, content="prefer concise output when coding",
+        kind="preference", confidence=0.85,
+        embedding=embeddings.embed(["prefer concise output when coding"])[0],
+        source_episode_ids=[],
+    )
+
+    # 2. Trigger instinct creation via compression
+    ep_id = str(uuid.uuid4())
+    storage.add_episode(id=ep_id, session_id="test",
+                        content="filler episode for compression",
+                        embedding=embeddings.embed(["filler episode for compression"])[0])
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "filler episode", "kind": "fact", "action": "new"}])
+    assert stats["instincts_created"] == 1
+
+    # 3. Verify instinct has notice/implication
+    instincts = storage.get_all_instincts()
+    inst = instincts[-1]  # Most recently created
+    assert inst["notice"] is not None
+    assert inst["implication"] is not None
+    assert "when" in inst["notice"].lower()
+
+    # 4. Store context feedback in different contexts
+    from storage import _pack_embedding
+    build_emb = embeddings.embed(["building code"])[0]
+    reflect_emb = embeddings.embed(["reflecting on design"])[0]
+
+    # Follow in building context (3 times)
+    for _ in range(3):
+        storage.add_instinct_context_feedback(
+            instinct_id=inst["id"], context_text="building",
+            context_embedding=_pack_embedding(build_emb), followed=True,
+        )
+    # Override in reflecting context
+    storage.add_instinct_context_feedback(
+        instinct_id=inst["id"], context_text="reflecting",
+        context_embedding=_pack_embedding(reflect_emb), followed=False,
+    )
+
+    # 5. Per-context health should show the difference
+    from reflection import Reflector
+    reflector = Reflector(storage)
+    health = reflector.instinct_context_health()
+
+    # Find our instinct's health
+    inst_health = [h for h in health if h["id"] == inst["id"]]
+    assert len(inst_health) == 1
+    contexts = {c["context"]: c["follow_ratio"] for c in inst_health[0]["contexts"]}
+    assert contexts["building"] == 1.0
+    assert contexts["reflecting"] == 0.0
+
+    # 6. Verify context follow ratio
+    build_ratio = storage.get_context_follow_ratio(inst["id"], "building")
+    assert build_ratio == 1.0
+    reflect_ratio = storage.get_context_follow_ratio(inst["id"], "reflecting")
+    assert reflect_ratio == 0.0
+
+
 def test_wal_checkpoint_on_close(tmp_path):
     """close() checkpoints WAL, leaving no -wal file."""
     db_path = str(tmp_path / "test.db")
