@@ -86,7 +86,17 @@ It is a reference database that instances sync from. Think of it as the germ lin
 ### Teardown
 
 `engram drop <name>` removes an instance. Local knowledge is lost. Genome-core material
-survives in the genome. Pending messages are marked undeliverable.
+survives in the genome. Cleanup: the dropped instance is removed from `seen_by` tracking
+on all active messages in signals.db, and removed from `instances.json`. Broadcast
+messages are "seen by all" when all *currently registered* instances have seen them.
+
+### CLI entry points
+
+Add `cli.py` with argparse. Entry point: `engram`. Subcommands: `fork`, `drop`, `list`.
+The MCP server continues to be launched via `mcp.run()` in `server.py` as today.
+Fork and drop are administrative operations, not AI-invocable tools.
+
+`instances.json` writes use atomic file operations (write to temp, `os.rename`).
 
 ---
 
@@ -106,12 +116,22 @@ cross-system), it becomes `core=3` with no migration.
 ### API changes
 
 ```python
-remember(content, core=False, genome=False, source=None)
+remember(content, context=None, core=False, genome=False, source=None)
 ```
 
+- `context` parameter preserved from current API for backward compatibility.
 - `genome=True` implies core. Episode is written to both local instance DB and genome DB.
+  Genome writes use a short-lived `Storage` instance against `~/.engram/genome/graph.db`,
+  including vector embedding, then close the connection.
 - `core=True` without `genome=True` creates local core as today.
-- `mark_core(episode_id)` gains an optional `genome=False` parameter.
+- `mark_core(episode_id, tier=1)` gains an optional `tier` parameter. `tier=2` promotes
+  to genome-core and writes to genome DB.
+
+### Decay exemption
+
+Decay applies to `core = 0` only. Both local-core (`core=1`) and genome-core (`core=2`)
+are exempt. The existing `WHERE core = 0` filter in `apply_decay` handles this correctly
+for the tri-state. Queries for core episodes use `WHERE core >= 1` to capture both tiers.
 
 ---
 
@@ -132,6 +152,19 @@ CREATE TABLE messages (
     created_at TEXT NOT NULL
 );
 ```
+
+### Concurrency model
+
+signals.db is shared across multiple MCP server processes. Concurrency strategy:
+
+- **WAL mode** enabled at creation. Reads never block under WAL.
+- **`busy_timeout=10000`** (10s) — generous, since writes are rare.
+- **Short write transactions** — insert one message, commit immediately. No batching.
+- **Expected contention pattern:** low. Writes happen during compression (instinct_formed,
+  semantic_promoted) and explicit genome updates — infrequent events. Most access is
+  reads during wake inbox processing.
+- **No connection pooling.** Each instance opens signals.db on demand (wake, send_signal),
+  performs the operation, and closes. No long-lived connections.
 
 ### Behaviors
 
@@ -181,7 +214,8 @@ sync_genome → process_inbox → apply_decay → prune_decayed → prune_weak_i
 ### sync_genome
 
 1. Open genome DB read-only
-2. Query genome-core episodes, semantics, instincts not present locally (by content hash)
+2. Query genome-core episodes, semantics, instincts not present locally (matched by
+   `content_hash` — SHA-256 of content text, computed on insert, stored on all three tables)
 3. Insert new items with `core=2`
 4. Embed new items (backfill vectors)
 5. Idempotent — running twice changes nothing
@@ -206,11 +240,12 @@ Genome sync: 2h ago | 3 unread signals (2 from blocks, 1 broadcast)
 
 ### Context compaction resilience
 
-Add a `PreCompact` hook that re-injects active instincts and unresolved signals
-into the compacted context. Engram state is load-bearing, not summarizable.
+MVP approach: keep wake injection small enough to survive compaction naturally.
+This argues for a small, stable genome and filtered instinct loading (see Section 5).
 
-Alternatively: keep wake injection small enough to survive compaction naturally.
-This argues for a small, stable genome.
+Future: if Claude Code exposes a `PreCompact` hook, use it to re-inject active
+instincts and unresolved signals. Until then, the small-injection approach is the
+implementable path.
 
 ---
 
@@ -222,7 +257,8 @@ operational. The instinct system needs to adapt.
 ### Context field on instincts
 
 Add `context TEXT` to the instincts table. Values: `"building"`, `"analysis"`,
-`"exploring"`, `"operational"`, or `NULL` (always active).
+`"exploring"`, `"operational"`, or `NULL` (always active). Existing instincts receive
+`NULL` via migration (`ALTER TABLE instincts ADD COLUMN context TEXT`).
 
 During instinct formation, the compressor tags the instinct based on the episodes
 that produced it (episodes carry session context in their metadata).
@@ -285,9 +321,16 @@ Genome instinct "use portable hashing" — followed: 0, overridden: 0 (5 session
 → Unobserved. May be dispositional or irrelevant to this scope.
 ```
 
+### Reflect plumbing
+
+`Reflector.__init__` gains optional `genome_db_path` and `signals_db_path` parameters.
+When present, it opens read-only connections for genome comparison and signal health
+analysis. When absent (non-federated mode), these features are omitted — reflect
+behaves exactly as today.
+
 ### Principles
 
-- Reflect does NOT read other instances' databases directly
+- Reflect does NOT read other instances' databases directly (only genome and signals)
 - Drift is information, not a bug
 - No auto-resolution of contradictions
 - No genome change recommendations (that's human or convergence detection, deferred)
@@ -321,12 +364,13 @@ Items explicitly deferred from this design:
 
 ## Migration Path
 
-1. Existing single-database behavior is the default. No `instance` config = no federation.
-2. `engram fork` creates the genome from the current database (all existing core episodes
-   become genome-core, all others stay as-is in the first instance).
-3. Additional instances are forked from the genome.
-4. Each repo opts in by adding `instance = "name"` to its config.toml.
-5. No data loss, no breaking changes, fully incremental.
+1. Migration adds `content_hash`, `context` columns. Backfills content_hash for existing rows.
+2. Existing single-database behavior is the default. No `instance` config = no federation.
+3. `engram fork` creates the genome from the current database (all existing `core=1`
+   episodes become genome-core `core=2`, all others stay as-is in the first instance).
+4. Additional instances are forked from the genome.
+5. Each repo opts in by adding `instance = "name"` to its config.toml.
+6. No data loss. The `context` parameter on `remember()` is preserved. Fully incremental.
 
 ---
 
@@ -334,15 +378,30 @@ Items explicitly deferred from this design:
 
 ### episodes table
 - `core` column: existing, semantics expand from 0/1 to 0/1/2
+- Add `content_hash TEXT` — SHA-256 of content, computed on insert, used for genome sync
+
+### semantics table
+- Add `content_hash TEXT` — SHA-256 of content, computed on insert
 
 ### instincts table
-- Add `context TEXT` — session context filter (nullable)
+- Add `content_hash TEXT` — SHA-256 of content (action field), computed on insert
+- Add `context TEXT` — session context filter (nullable, existing instincts get NULL)
+
+### mark_core / get_core_episodes
+- `mark_core(episode_id, tier=1)` — accepts tier parameter
+- `get_core_episodes()` queries `WHERE core >= 1` to capture both tiers
+
+### genome database
+- Same schema as graph.db. The `meta` table stores `instance_name = "genome"`.
 
 ### New: signals.db
-- `messages` table (see Section 3)
+- `messages` table (see Section 3), WAL mode enabled at creation
 
 ### New: ~/.engram/instances.json
-- Instance registry (see Section 1)
+- Instance registry (see Section 1), atomic writes via temp + rename
+
+### New: cli.py
+- Entry point `engram` with subcommands: `fork`, `drop`, `list`
 
 ### config.toml additions
 - `instance = "name"` — instance binding
