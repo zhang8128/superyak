@@ -490,31 +490,39 @@ class Storage:
         ).fetchall()
         return [{"id": r[0], "content": r[1]} for r in rows]
 
-    def mark_core(self, episode_id: str) -> None:
-        """Mark an episode as core — exempt from decay, preserved indefinitely."""
+    def mark_core(self, episode_id: str, tier: int = 1) -> None:
+        """Mark an episode as core — exempt from decay, preserved indefinitely.
+
+        tier=1: local core (no decay)
+        tier=2: genome core (no decay, replicates)
+        """
         self.conn.execute(
-            "UPDATE episodes SET core = 1, decay_strength = 1.0 WHERE id = ?",
-            (episode_id,),
+            "UPDATE episodes SET core = ?, decay_strength = 1.0 WHERE id = ?",
+            (tier, episode_id),
         )
         self.conn.commit()
 
-    def mark_core_batch(self, episode_ids: list[str]) -> int:
-        """Mark multiple episodes as core. Returns count updated."""
+    def mark_core_batch(self, episode_ids: list[str], tier: int = 1) -> int:
+        """Mark multiple episodes as core. Returns count updated.
+
+        tier=1: local core (no decay)
+        tier=2: genome core (no decay, replicates)
+        """
         if not episode_ids:
             return 0
         placeholders = ", ".join("?" * len(episode_ids))
         cursor = self.conn.execute(
-            f"UPDATE episodes SET core = 1, decay_strength = 1.0 "
+            f"UPDATE episodes SET core = ?, decay_strength = 1.0 "
             f"WHERE id IN ({placeholders})",
-            episode_ids,
+            [tier, *episode_ids],
         )
         self.conn.commit()
         return cursor.rowcount
 
     def get_core_episodes(self) -> list[dict]:
-        """Return all core episodes."""
+        """Return all core episodes (tier 1 and tier 2)."""
         rows = self.conn.execute(
-            "SELECT id, content, source, created_at FROM episodes WHERE core = 1 "
+            "SELECT id, content, source, created_at FROM episodes WHERE core >= 1 "
             "ORDER BY created_at"
         ).fetchall()
         return [{"id": r[0], "content": r[1], "source": r[2], "created_at": r[3]} for r in rows]
