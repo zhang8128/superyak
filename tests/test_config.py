@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from config import EngramConfig, load_config
+from config import EngramConfig, SignalsConfig, load_config
 
 
 def test_config_has_watcher_defaults():
@@ -70,3 +70,22 @@ def test_v3_config_sections(tmp_path):
     assert config.reflection.staleness_days == 30
     assert config.memory.similarity_weight == 0.6
     assert config.memory.recency_weight == 0.4
+
+
+def test_federation_config_defaults(tmp_path):
+    cfg = load_config(tmp_path)
+    assert cfg.instance is None
+    assert cfg.session_context is None
+    assert cfg.signals.retention_days == 30
+
+
+def test_federation_config_with_instance(tmp_path):
+    engram_dir = tmp_path / ".engram"
+    engram_dir.mkdir()
+    (engram_dir / "config.toml").write_text(
+        'instance = "agi"\nsession_context = "building"\n\n[signals]\nretention_days = 60\n'
+    )
+    cfg = load_config(tmp_path)
+    assert cfg.instance == "agi"
+    assert cfg.session_context == "building"
+    assert cfg.signals.retention_days == 60

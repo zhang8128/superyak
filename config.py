@@ -84,6 +84,11 @@ class RankingConfig:
 
 
 @dataclass
+class SignalsConfig:
+    retention_days: int = 30
+
+
+@dataclass
 class EngramConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
@@ -95,6 +100,9 @@ class EngramConfig:
     ranking: RankingConfig = field(default_factory=RankingConfig)
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
+    signals: SignalsConfig = field(default_factory=SignalsConfig)
+    instance: str | None = None
+    session_context: str | None = None
 
 
 _DEFAULT_TOML = """\
@@ -147,6 +155,9 @@ instinct_confidence = 0.5
 enabled = true
 log_retention_days = 90
 staleness_days = 30
+
+[signals]
+retention_days = 30
 """
 
 
@@ -175,4 +186,7 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         ranking=RankingConfig(**raw.get("ranking", {})),
         compression=CompressionConfig(**raw.get("compression", {})),
         reflection=ReflectionConfig(**raw.get("reflection", {})),
+        signals=SignalsConfig(**raw.get("signals", {})),
+        instance=raw.get("instance"),
+        session_context=raw.get("session_context"),
     )
