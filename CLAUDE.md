@@ -28,9 +28,10 @@ Three layers, each more compressed than the last:
 
 | Layer | What | Lifetime |
 |-------|------|----------|
-| **Episodes** | Raw experiences, verbatim | Decay 0.9x per session, pruned below 0.05 |
+| **Episodes** | Raw experiences, verbatim | Decay 0.9x per session (rate-limited), pruned below 0.05 |
+| **Core episodes** | Formative memories, exempt from decay | Auto-promoted when episodes spawn semantics |
 | **Semantics** | Distilled facts, preferences, constraints | Promoted from episode clusters |
-| **Instincts** | Behavioral patterns with trigger/action | Promoted from semantic patterns |
+| **Instincts** | Perceptual attention directives (notice/implication) | Promoted from semantic patterns, context-gated |
 
 **Embeddings:** nomic-embed-text-v1.5 (768-dim) via FastEmbed. Instruction
 prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (compress).
@@ -38,21 +39,31 @@ prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (c
 **Dedup:** LLM-based pragmatic equivalence via Ollama (default: `qwen3.5:27b`).
 Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.
 
-**Sleep-time consolidation:** On startup: decay → prune → auto-compress.
+**Sleep-time consolidation:** On startup: decay → backfill orphaned vectors → prune → auto-compress.
+Decay is rate-limited (30min minimum between applications). Core episodes are exempt.
 Centroid-based selection (most representative episode per cluster, MMR for diversity).
+
+**Contextual instincts:** Instincts have dual vectors — a content vector (what it's
+about) and a context vector (when it applies). Recall uses context vectors to surface
+situationally relevant instincts. Feedback is per-context: followed/overridden in
+"building" doesn't cancel out followed/overridden in "reflecting." Instincts are
+framed as perceptual attention directives (`notice`: what to attend to, `implication`:
+what follows) rather than behavioral rules.
 
 ## MCP Tools
 
 | Tool | Purpose |
 |------|---------|
-| `remember(content)` | Store an episode. Don't filter — compression distills. |
+| `remember(content, core?, source?)` | Store an episode. `core=True` for formative memories, `source` for provenance. |
+| `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
+| `core_memories()` | List all core episodes. |
 | `recall(query)` | Search across all layers. Returns `recall_id` for feedback. |
-| `reflect(focus?)` | Self-observation: usage, gaps, instincts, contradictions. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, contradictions. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
 | `compress()` | Manual compression cycle. |
 | `log_outcome(recall_id, used)` | Feedback after recall. |
-| `instinct_feedback(id, followed)` | Strengthen/weaken instincts. |
+| `instinct_feedback(id, followed, context?)` | Strengthen/weaken instincts. `context` for situational learning. |
 | `search_code(query)` | Search project source code via embeddings. |
 | `reindex()` | Rebuild code index. |
 
@@ -74,7 +85,7 @@ Centroid-based selection (most representative episode per cluster, MMR for diver
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 129 tests
+.venv/bin/python -m pytest tests/ -q   # 179 tests
 ```
 
 ## Part of a System
