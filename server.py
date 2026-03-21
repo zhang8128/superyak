@@ -45,9 +45,18 @@ def _init():
     from storage import Storage
 
     setup_logging(os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     _config = load_config(PROJECT_ROOT)
-    _storage = Storage(str(DB_PATH))
+
+    # Federation: use instance DB when configured, otherwise default
+    db_path = DB_PATH
+    if _config and _config.instance:
+        instance_db = ENGRAM_HOME / ".engram" / "instances" / _config.instance / "graph.db"
+        if instance_db.exists():
+            db_path = instance_db
+            logger.info("Using instance DB: %s", _config.instance)
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _storage = Storage(str(db_path))
     _embeddings = NomicEmbedProvider()
 
     _session_id = str(uuid.uuid4())
