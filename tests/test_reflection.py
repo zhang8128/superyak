@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from datetime import datetime, timezone, timedelta
 from reflection import Reflector
@@ -148,3 +149,44 @@ def test_signal_health(tmp_path, tmp_db):
     health = r.signal_health()
     assert health is not None
     assert health["total_messages"] == 2
+
+
+def test_instinct_context_health(tmp_db):
+    """Per-context health should show follow/override ratio per context."""
+    sem_id = str(uuid.uuid4())
+    emb = [0.1] * 768
+    tmp_db.add_semantic(id=sem_id, content="test", kind="preference",
+                        confidence=0.5, embedding=emb, source_episode_ids=[])
+    tmp_db.add_instinct(
+        id="inst-ctx", trigger="preference", action="be terse",
+        source_semantic_ids=[sem_id],
+    )
+    from storage import _pack_embedding
+    packed = _pack_embedding(emb)
+    for _ in range(3):
+        tmp_db.add_instinct_context_feedback(
+            instinct_id="inst-ctx", context_text="building",
+            context_embedding=packed, followed=True,
+        )
+    tmp_db.add_instinct_context_feedback(
+        instinct_id="inst-ctx", context_text="reflecting",
+        context_embedding=packed, followed=False,
+    )
+
+    from reflection import Reflector
+    reflector = Reflector(tmp_db)
+    health = reflector.instinct_context_health()
+    assert len(health) >= 1
+    inst_health = [h for h in health if h["id"] == "inst-ctx"][0]
+    assert "contexts" in inst_health
+    contexts = {c["context"]: c["follow_ratio"] for c in inst_health["contexts"]}
+    assert contexts["building"] == 1.0
+    assert contexts["reflecting"] == 0.0
+
+
+def test_reflect_instinct_contexts_focus(tmp_db):
+    """reflect(focus='instinct_contexts') should return context health."""
+    from reflection import Reflector
+    reflector = Reflector(tmp_db)
+    result = reflector.reflect("instinct_contexts")
+    assert "instinct_contexts" in result

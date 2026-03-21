@@ -218,6 +218,49 @@ class Reflector:
         conn.close()
         return {"total_messages": total}
 
+    def instinct_context_health(self) -> list[dict]:
+        """Per-context instinct health: follow/override ratio broken down by context."""
+        instincts = self._storage.get_all_instincts()
+        results = []
+        for inst in instincts:
+            feedback = self._storage.get_instinct_context_feedback(inst["id"])
+            if not feedback:
+                results.append({
+                    "id": inst["id"],
+                    "action": inst.get("action", ""),
+                    "notice": inst.get("notice"),
+                    "implication": inst.get("implication"),
+                    "contexts": [],
+                })
+                continue
+
+            # Group by context_text
+            context_groups: dict[str, list[bool]] = {}
+            for fb in feedback:
+                ctx = fb["context_text"]
+                if ctx not in context_groups:
+                    context_groups[ctx] = []
+                context_groups[ctx].append(bool(fb["followed"]))
+
+            contexts = []
+            for ctx, follows in context_groups.items():
+                count = len(follows)
+                follow_ratio = sum(follows) / count
+                contexts.append({
+                    "context": ctx,
+                    "follow_ratio": follow_ratio,
+                    "count": count,
+                })
+
+            results.append({
+                "id": inst["id"],
+                "action": inst.get("action", ""),
+                "notice": inst.get("notice"),
+                "implication": inst.get("implication"),
+                "contexts": contexts,
+            })
+        return results
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -230,6 +273,8 @@ class Reflector:
             return {"contradictions": self.detect_contradictions()}
         elif focus == "staleness":
             return {"staleness": self.detect_staleness()}
+        elif focus == "instinct_contexts":
+            return {"instinct_contexts": self.instinct_context_health()}
         else:
             return {
                 "usage": self.analyze_usage(),
@@ -237,4 +282,5 @@ class Reflector:
                 "instincts": self.instinct_health(),
                 "contradictions": self.detect_contradictions(),
                 "staleness": self.detect_staleness(),
+                "instinct_contexts": self.instinct_context_health(),
             }
