@@ -35,12 +35,19 @@ def _load_instance_config():
 
 
 def wake():
-    if not DB_PATH.exists():
-        return  # No memory yet — nothing to wake into
-
     instance_name, session_context = _load_instance_config()
 
-    conn = sqlite3.connect(str(DB_PATH))
+    # Resolve DB path: use instance DB when configured, otherwise default
+    db_path = DB_PATH
+    if instance_name:
+        instance_db = ENGRAM_HOME / ".engram" / "instances" / instance_name / "graph.db"
+        if instance_db.exists():
+            db_path = instance_db
+
+    if not db_path.exists():
+        return  # No memory yet — nothing to wake into
+
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
     try:
