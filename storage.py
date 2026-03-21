@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -111,6 +112,27 @@ class Storage:
             )
             self.conn.commit()
             logger.info("Migration %d applied: %s", ver, path.name)
+            if ver == 7:
+                self._backfill_content_hashes()
+
+    def _backfill_content_hashes(self) -> None:
+        """One-time backfill of content_hash for pre-federation rows."""
+        for table, col in [("episodes", "content"), ("semantics", "content"), ("instincts", "action")]:
+            # Guard against tables that don't exist yet on a fresh DB
+            exists = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if not exists:
+                continue
+            rows = self.conn.execute(
+                f"SELECT id, {col} FROM {table} WHERE content_hash IS NULL"
+            ).fetchall()
+            for row in rows:
+                h = hashlib.sha256(row[col].encode()).hexdigest()
+                self.conn.execute(
+                    f"UPDATE {table} SET content_hash = ? WHERE id = ?", (h, row["id"])
+                )
+        self.conn.commit()
 
     _VEC0_TABLES = ("entity_vectors", "episode_vectors", "semantic_vectors", "instinct_vectors")
 
@@ -330,9 +352,10 @@ class Storage:
         context: dict | None = None,
     ) -> str:
         now = _now_iso()
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO episodes (id, session_id, content, episode_type, context, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (id, session_id, content, episode_type, json.dumps(context) if context is not None else None, now),
+            "INSERT INTO episodes (id, session_id, content, episode_type, context, created_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, session_id, content, episode_type, json.dumps(context) if context is not None else None, now, content_hash),
         )
         if embedding is not None:
             self.conn.execute(
@@ -385,16 +408,37 @@ class Storage:
         )
         self.conn.commit()
 
-    def apply_decay(self, factor: float = 0.9) -> int:
+    def apply_decay(self, factor: float = 0.9, min_interval_minutes: int = 30) -> int:
         """Apply global decay to all episode strengths. Returns count affected.
 
         Implements Ebbinghaus-style forgetting: episodes that aren't accessed
         weaken over time. Episodes accessed during recall get boosted by
         increment_episode_access().
+
+        Rate-limited: skips decay if the last session_start was less than
+        min_interval_minutes ago, preventing rapid session restarts from
+        compounding decay into accidental erasure.
         """
+        # Rate-limit: check last session_start timestamp
+        row = self.conn.execute(
+            "SELECT timestamp FROM memory_log "
+            "WHERE event_type = 'session_start' "
+            "ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            from datetime import datetime, timezone
+            last_start = datetime.fromisoformat(row[0])
+            elapsed = (datetime.now(timezone.utc) - last_start).total_seconds()
+            if elapsed < min_interval_minutes * 60:
+                logger.info(
+                    "Decay skipped — last session was %d seconds ago (minimum %d minutes)",
+                    int(elapsed), min_interval_minutes,
+                )
+                return 0
+
         cursor = self.conn.execute(
             "UPDATE episodes SET decay_strength = MAX(0.0, decay_strength * ?) "
-            "WHERE decay_strength > 0.01",
+            "WHERE decay_strength > 0.01 AND core = 0",
             (factor,),
         )
         self.conn.commit()
@@ -410,7 +454,7 @@ class Storage:
         """
         # Get IDs first for vec0 cleanup
         rows = self.conn.execute(
-            "SELECT id FROM episodes WHERE decay_strength < ? AND compressed = 1",
+            "SELECT id FROM episodes WHERE decay_strength < ? AND compressed = 1 AND core = 0",
             (threshold,),
         ).fetchall()
         ids = [r[0] for r in rows]
@@ -434,6 +478,52 @@ class Storage:
         self.conn.execute(
             "UPDATE episodes SET decay_strength = MIN(1.0, decay_strength + ?) WHERE id = ?",
             (boost, id),
+        )
+        self.conn.commit()
+
+    def get_orphaned_episodes(self) -> list[dict]:
+        """Find episodes that have no vector embedding (invisible to search)."""
+        rows = self.conn.execute(
+            "SELECT e.id, e.content FROM episodes e "
+            "LEFT JOIN episode_vectors v ON e.id = v.id "
+            "WHERE v.id IS NULL"
+        ).fetchall()
+        return [{"id": r[0], "content": r[1]} for r in rows]
+
+    def mark_core(self, episode_id: str) -> None:
+        """Mark an episode as core — exempt from decay, preserved indefinitely."""
+        self.conn.execute(
+            "UPDATE episodes SET core = 1, decay_strength = 1.0 WHERE id = ?",
+            (episode_id,),
+        )
+        self.conn.commit()
+
+    def mark_core_batch(self, episode_ids: list[str]) -> int:
+        """Mark multiple episodes as core. Returns count updated."""
+        if not episode_ids:
+            return 0
+        placeholders = ", ".join("?" * len(episode_ids))
+        cursor = self.conn.execute(
+            f"UPDATE episodes SET core = 1, decay_strength = 1.0 "
+            f"WHERE id IN ({placeholders})",
+            episode_ids,
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def get_core_episodes(self) -> list[dict]:
+        """Return all core episodes."""
+        rows = self.conn.execute(
+            "SELECT id, content, source, created_at FROM episodes WHERE core = 1 "
+            "ORDER BY created_at"
+        ).fetchall()
+        return [{"id": r[0], "content": r[1], "source": r[2], "created_at": r[3]} for r in rows]
+
+    def set_episode_source(self, episode_id: str, source: str) -> None:
+        """Tag an episode with its cross-system provenance."""
+        self.conn.execute(
+            "UPDATE episodes SET source = ? WHERE id = ?",
+            (source, episode_id),
         )
         self.conn.commit()
 
@@ -461,9 +551,10 @@ class Storage:
         auto_generated: bool = False,
     ) -> str:
         now = _now_iso()
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated) VALUES (?, ?, ?, ?, ?, ?)",
-            (id, content, kind, confidence, now, 1 if auto_generated else 0),
+            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash),
         )
         self.conn.execute(
             "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
@@ -605,10 +696,11 @@ class Storage:
         embedding: list[float] | None = None,
     ) -> str:
         now = _now_iso()
+        content_hash = hashlib.sha256(action.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO instincts (id, trigger, action, strength, created_at, fired_count, followed_count, overridden_count) "
-            "VALUES (?, ?, ?, ?, ?, 0, 0, 0)",
-            (id, trigger, action, strength, now),
+            "INSERT INTO instincts (id, trigger, action, strength, created_at, fired_count, followed_count, overridden_count, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?)",
+            (id, trigger, action, strength, now, content_hash),
         )
         if embedding is not None:
             self.conn.execute(
@@ -667,6 +759,28 @@ class Storage:
             (id,),
         )
         self.conn.commit()
+
+    def prune_weak_instincts(self, strength_threshold: float = 0.1) -> int:
+        """Remove instincts that have weakened below threshold.
+
+        Instincts start at 0.5 and lose 0.05 per override. An instinct
+        at 0.1 has been overridden ~8 times — it's not serving the system.
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM instincts WHERE strength <= ?",
+            (strength_threshold,),
+        ).fetchall()
+        ids = [r[0] for r in rows]
+        if not ids:
+            return 0
+
+        placeholders = ", ".join("?" * len(ids))
+        self.conn.execute(f"DELETE FROM instinct_vectors WHERE id IN ({placeholders})", ids)
+        self.conn.execute(f"DELETE FROM instinct_sources WHERE instinct_id IN ({placeholders})", ids)
+        self.conn.execute(f"DELETE FROM instincts WHERE id IN ({placeholders})", ids)
+        self.conn.commit()
+        logger.info("Pruned %d weak instincts (threshold=%.2f)", len(ids), strength_threshold)
+        return len(ids)
 
     # --- Memory Log ---
 
