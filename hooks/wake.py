@@ -144,9 +144,26 @@ def wake():
                 except Exception:
                     pass  # inbox count is non-fatal
 
+        # Active task context — working memory, separate from identity
+        try:
+            task_ctx = conn.execute(
+                "SELECT name, content, updated_at FROM task_contexts "
+                "WHERE status = 'active' ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+            if task_ctx:
+                lines.append("## Active task context")
+                lines.append("")
+                lines.append(f"**{task_ctx['name']}** (updated {task_ctx['updated_at'][:10]})")
+                lines.append("")
+                lines.append(task_ctx["content"])
+                lines.append("")
+        except Exception:
+            pass  # table may not exist yet — non-fatal
+
         lines.append("---")
         lines.append("Use `recall()` for deeper retrieval. Use `remember()` as you work.")
         lines.append("Use `instinct_feedback()` when you notice an instinct influencing you.")
+        lines.append("Use `task_focus(name, content)` to set your working context for a task.")
 
         orientation = "\n".join(lines)
 

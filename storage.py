@@ -929,3 +929,60 @@ class Storage:
             (key, value),
         )
         self.conn.commit()
+
+    # --- Task Contexts ---
+
+    def get_active_task_context(self) -> dict | None:
+        """Return the currently active task context, or None."""
+        row = self.conn.execute(
+            "SELECT * FROM task_contexts WHERE status = 'active' ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_task_context(self, id: str, name: str, content: str) -> None:
+        """Create or update a task context, making it active. Archives any other active context."""
+        now = _now_iso()
+        # Archive any currently active context
+        self.conn.execute(
+            "UPDATE task_contexts SET status = 'archived', updated_at = ? WHERE status = 'active'",
+            (now,),
+        )
+        # Upsert the new one
+        self.conn.execute(
+            "INSERT INTO task_contexts (id, name, content, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'active', ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "content = excluded.content, status = 'active', updated_at = excluded.updated_at",
+            (id, name, content, now, now),
+        )
+        self.conn.commit()
+
+    def update_task_context(self, content: str) -> dict | None:
+        """Update the active task context's content. Returns updated context or None."""
+        now = _now_iso()
+        self.conn.execute(
+            "UPDATE task_contexts SET content = ?, updated_at = ? WHERE status = 'active'",
+            (content, now),
+        )
+        self.conn.commit()
+        return self.get_active_task_context()
+
+    def archive_task_context(self) -> dict | None:
+        """Archive the active task context. Returns it before archiving, or None."""
+        ctx = self.get_active_task_context()
+        if ctx:
+            now = _now_iso()
+            self.conn.execute(
+                "UPDATE task_contexts SET status = 'archived', updated_at = ? WHERE id = ?",
+                (now, ctx["id"]),
+            )
+            self.conn.commit()
+        return ctx
+
+    def get_task_context_by_name(self, name: str) -> dict | None:
+        """Find a task context by name (most recent first)."""
+        row = self.conn.execute(
+            "SELECT * FROM task_contexts WHERE name = ? ORDER BY updated_at DESC LIMIT 1",
+            (name,),
+        ).fetchone()
+        return dict(row) if row else None

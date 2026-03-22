@@ -921,5 +921,70 @@ def reindex(full: bool = False) -> dict:
         return {"reindexed": count, "mode": "incremental"}
 
 
+# --- Task Contexts ---
+
+
+@mcp.tool()
+def task_focus(name: str, content: str | None = None) -> dict:
+    """Start or resume a task context. This is your working memory — the current scope,
+    plan state, what's built, what's next. Separate from identity memory (episodes/instincts).
+
+    If a context with this name exists, it becomes active (resuming where you left off).
+    If content is provided, it replaces the existing content.
+    Any previously active context is archived automatically.
+
+    Args:
+        name: Short name for the task (e.g. "governor-build", "engram-redesign")
+        content: Markdown describing current scope, plan state, progress. Optional when resuming.
+    """
+    _init()
+    import uuid
+
+    existing = _storage.get_task_context_by_name(name)
+    if existing:
+        ctx_id = existing["id"]
+        ctx_content = content if content is not None else existing["content"]
+    else:
+        ctx_id = str(uuid.uuid4())
+        ctx_content = content or f"# {name}\n\nNew task context."
+
+    _storage.set_task_context(ctx_id, name, ctx_content)
+    ctx = _storage.get_active_task_context()
+    logger.info("task_focus: %s (%s)", name, "resumed" if existing else "created")
+    return {"task_context": ctx, "action": "resumed" if existing else "created"}
+
+
+@mcp.tool()
+def task_update(content: str) -> dict:
+    """Update the active task context with new content.
+
+    Use this as you work to keep the task context current — what's done, what's next,
+    what you've learned about the task. This is scratchpad, not memory.
+
+    Args:
+        content: Updated markdown content for the task context.
+    """
+    _init()
+    ctx = _storage.update_task_context(content)
+    if ctx is None:
+        return {"error": "No active task context"}
+    logger.info("task_update: %s", ctx["name"])
+    return {"task_context": ctx}
+
+
+@mcp.tool()
+def task_done() -> dict:
+    """Archive the active task context. Call when the task is complete or abandoned.
+
+    The context is preserved (searchable) but no longer loaded at session start.
+    """
+    _init()
+    ctx = _storage.archive_task_context()
+    if ctx is None:
+        return {"error": "No active task context"}
+    logger.info("task_done: %s", ctx["name"])
+    return {"archived": ctx["name"], "id": ctx["id"]}
+
+
 if __name__ == "__main__":
     mcp.run()

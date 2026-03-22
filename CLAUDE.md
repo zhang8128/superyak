@@ -50,6 +50,12 @@ situationally relevant instincts. Feedback is per-context: followed/overridden i
 framed as perceptual attention directives (`notice`: what to attend to, `implication`:
 what follows) rather than behavioral rules.
 
+**Task contexts:** Swappable working memory, separate from identity. A task context
+holds the current scope, plan state, what's built, what's next. It gets loaded at
+session start alongside instincts but in its own section. Task contexts don't decay
+or compress into instincts — they just get archived when done. This separation
+ensures task facts don't drown out identity-level memories during recall.
+
 ## MCP Tools
 
 | Tool | Purpose |
@@ -64,6 +70,9 @@ what follows) rather than behavioral rules.
 | `compress()` | Manual compression cycle. |
 | `log_outcome(recall_id, used)` | Feedback after recall. |
 | `instinct_feedback(id, followed, context?)` | Strengthen/weaken instincts. `context` for situational learning. |
+| `task_focus(name, content?)` | Start or resume a task context. Archives any previous active context. |
+| `task_update(content)` | Update the active task context. |
+| `task_done()` | Archive the active task context. |
 | `search_code(query)` | Search project source code via embeddings. |
 | `reindex()` | Rebuild code index. |
 
