@@ -1,5 +1,7 @@
 # Kairos Platform: Bus + Ledger — Implementation Plan
 
+> **Status:** ✅ Complete (2026-03-22). 11 bus + 8 ledger + 7 bridge = 26 tests passing. Added middleware hooks (`bus.use()`) and BusLedgerBridge for auto-audit of all bus messages to hash-chained ledger.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Port the event bus (from blocks) and hash-chained ledger (from agi/claw) into the kairos monorepo as `kplatform/bus` and `kplatform/ledger` — the communication and audit infrastructure.

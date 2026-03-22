@@ -1,5 +1,7 @@
 # Kairos Platform: LLM + Sandbox — Implementation Plan
 
+> **Status:** ✅ Complete (2026-03-22). 16 LLM + 12 sandbox = 28 tests passing. Added shared HttpClient with retry/exponential backoff, availability TTL cache, transient error handling. Cleaned up dead `_BLOCKED_URL_PATTERNS` code.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create the LLM provider abstraction (Ollama + OpenAI-compat) and Sandbox (path isolation + capability enforcement) as `kplatform/llm` and `kplatform/sandbox`.
