@@ -353,11 +353,19 @@ def recall(
     query: str,
     layer: str | None = None,
     max_results: int = 20,
+    uninvited: int = 3,
 ) -> dict:
-    """Search memory across layers. Returns ranked results with recall_id for feedback."""
+    """Search memory across layers. Returns ranked results with recall_id for feedback.
+
+    Args:
+        query: Search query.
+        layer: Filter to a specific layer (episode, semantic, instinct).
+        max_results: Maximum matched results.
+        uninvited: Number of random distant memories to append (0 to disable).
+    """
     _init()
-    logger.info("Tool called: recall(query=%r, layer=%s, max_results=%d)",
-                query[:80], layer, max_results)
+    logger.info("Tool called: recall(query=%r, layer=%s, max_results=%d, uninvited=%d)",
+                query[:80], layer, max_results, uninvited)
 
     # Special case: instinct layer — context-aware vector search
     if layer == "instinct":
@@ -411,6 +419,18 @@ def recall(
                 result["notice"] = inst["notice"]
             if inst.get("implication"):
                 result["implication"] = inst["implication"]
+            # Provenance lineage
+            source_sem_ids = inst.get("source_semantic_ids", [])
+            source_ep_count = 0
+            for sid in source_sem_ids:
+                ep_rows = _storage.conn.execute(
+                    "SELECT COUNT(*) FROM semantic_sources WHERE semantic_id = ?",
+                    (sid,),
+                ).fetchone()
+                source_ep_count += ep_rows[0] if ep_rows else 0
+            result["source_semantic_count"] = len(source_sem_ids)
+            result["source_episode_count"] = source_ep_count
+            result["origin"] = "organic" if source_sem_ids else "direct"
             results.append(result)
 
         _storage.add_log_entry(
@@ -527,6 +547,7 @@ def recall(
             created_at = row.get("created_at")
             info["content"] = row.get("content", "")
             info["context"] = row.get("context")
+            info["source"] = row.get("source")
         elif info["layer"] == "semantic":
             row = _storage.get_semantic(cid)
             if row is None:
@@ -536,6 +557,7 @@ def recall(
             info["confidence"] = row.get("confidence")
             info["kind"] = row.get("kind")
             info["auto_generated"] = bool(row.get("auto_generated", 0))
+            info["source_episode_ids"] = row.get("source_episode_ids", [])
         elif info["layer"] == "instinct":
             inst = _storage.get_instinct(cid)
             if inst is None:
@@ -545,6 +567,7 @@ def recall(
             info["trigger"] = inst.get("trigger", "")
             info["notice"] = inst.get("notice")
             info["implication"] = inst.get("implication")
+            info["source_semantic_ids"] = inst.get("source_semantic_ids", [])
 
         # Compute recency
         if created_at:
@@ -573,14 +596,37 @@ def recall(
         if info["layer"] == "semantic":
             result["confidence"] = info.get("confidence")
             result["kind"] = info.get("kind")
+            # Provenance: how many episodes fed this semantic
+            source_ep_ids = info.get("source_episode_ids", [])
+            result["source_episode_count"] = len(source_ep_ids)
+            result["origin"] = "organic" if source_ep_ids else "direct"
         if info["layer"] == "episode":
             result["context"] = info.get("context")
+            # Provenance: cross-system source tag
+            ep_source = info.get("source")
+            if ep_source:
+                result["origin"] = "external"
+                result["source"] = ep_source
+            else:
+                result["origin"] = "lived"
         if info["layer"] == "instinct":
             result["trigger"] = info.get("trigger")
             if info.get("notice"):
                 result["notice"] = info["notice"]
             if info.get("implication"):
                 result["implication"] = info["implication"]
+            # Provenance: trace full lineage
+            source_sem_ids = info.get("source_semantic_ids", [])
+            source_ep_count = 0
+            for sid in source_sem_ids:
+                ep_rows = _storage.conn.execute(
+                    "SELECT COUNT(*) FROM semantic_sources WHERE semantic_id = ?",
+                    (sid,),
+                ).fetchone()
+                source_ep_count += ep_rows[0] if ep_rows else 0
+            result["source_semantic_count"] = len(source_sem_ids)
+            result["source_episode_count"] = source_ep_count
+            result["origin"] = "organic" if source_sem_ids else "direct"
 
         scored.append(result)
 
@@ -633,6 +679,47 @@ def recall(
     for r in results:
         if r["layer"] == "episode":
             _storage.increment_episode_access(r["id"])
+
+    # Uninvited memories: random distant samples for generative collisions
+    if uninvited > 0:
+        matched_ids = {r["id"] for r in results}
+        try:
+            uninvited_layers = (layer,) if layer else None
+            distant = _storage.sample_distant_memories(
+                embedding, matched_ids, k=uninvited, layers=uninvited_layers,
+            )
+            for did, dlayer, ddist in distant:
+                uninvited_result = {
+                    "id": did,
+                    "layer": dlayer,
+                    "score": vec0_distance_to_similarity(ddist),
+                    "uninvited": True,
+                }
+                # Hydrate with content based on layer
+                if dlayer == "episode":
+                    row = _storage.get_episode(did)
+                    if row:
+                        uninvited_result["content"] = row.get("content", "")
+                        uninvited_result["context"] = row.get("context")
+                        uninvited_result["origin"] = "lived"
+                        _storage.increment_episode_access(did)
+                elif dlayer == "semantic":
+                    row = _storage.get_semantic(did)
+                    if row:
+                        uninvited_result["content"] = row.get("content", "")
+                        uninvited_result["confidence"] = row.get("confidence")
+                        uninvited_result["kind"] = row.get("kind")
+                        uninvited_result["origin"] = "organic"
+                elif dlayer == "instinct":
+                    inst = _storage.get_instinct(did)
+                    if inst:
+                        uninvited_result["content"] = inst.get("action", "")
+                        uninvited_result["trigger"] = inst.get("trigger", "")
+                        uninvited_result["origin"] = "organic"
+                results.append(uninvited_result)
+                result_ids.append(did)
+        except Exception:
+            logger.warning("Uninvited memory selection failed", exc_info=True)
 
     response = {"results": results, "recall_id": recall_id}
     if search_errors:

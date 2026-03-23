@@ -652,6 +652,45 @@ class Storage:
         logger.debug("Vector search on %s_vectors: k=%d, found=%d", table_name, k, len(rows))
         return [(row[0], row[1]) for row in rows]
 
+    def sample_distant_memories(
+        self,
+        query_embedding: list[float],
+        exclude_ids: set[str],
+        k: int = 3,
+        layers: tuple[str, ...] | None = None,
+    ) -> list[tuple[str, str, float]]:
+        """Sample k random memories from the bottom 50% by similarity to query.
+
+        Searches episode, semantic, and instinct vector tables (or subset via layers).
+        Returns list of (id, layer, distance) tuples.
+        """
+        import random
+
+        search_layers = layers or ("episode", "semantic", "instinct")
+        # Gather candidates from memory layers with large k
+        all_candidates: list[tuple[str, str, float]] = []  # (id, layer, distance)
+        for layer in search_layers:
+            try:
+                results = self.search_vectors(layer, query_embedding, k=200)
+                for rid, dist in results:
+                    if rid not in exclude_ids:
+                        all_candidates.append((rid, layer, dist))
+            except Exception:
+                logger.warning("Distant sample: %s vector search failed", layer, exc_info=True)
+
+        if not all_candidates:
+            return []
+
+        # Sort by distance descending (most distant first)
+        all_candidates.sort(key=lambda x: x[2], reverse=True)
+
+        # Take the top 50% (most distant half)
+        distant_pool = all_candidates[: max(1, len(all_candidates) // 2)]
+
+        # Random sample
+        sample_size = min(k, len(distant_pool))
+        return random.sample(distant_pool, sample_size)
+
     # --- FTS ---
 
     def search_fts(self, query: str) -> list[str]:
@@ -744,13 +783,27 @@ class Storage:
         ).fetchone()
         if row is None:
             return None
-        return dict(row)
+        result = dict(row)
+        source_rows = self.conn.execute(
+            "SELECT semantic_id FROM instinct_sources WHERE instinct_id = ?", (id,)
+        ).fetchall()
+        result["source_semantic_ids"] = [r[0] for r in source_rows]
+        return result
 
     def get_all_instincts(self) -> list[dict]:
         rows = self.conn.execute(
             "SELECT * FROM instincts ORDER BY strength DESC"
         ).fetchall()
-        return [dict(r) for r in rows]
+        results = []
+        for r in rows:
+            inst = dict(r)
+            source_rows = self.conn.execute(
+                "SELECT semantic_id FROM instinct_sources WHERE instinct_id = ?",
+                (inst["id"],),
+            ).fetchall()
+            inst["source_semantic_ids"] = [sr[0] for sr in source_rows]
+            results.append(inst)
+        return results
 
     def add_instinct_context_feedback(
         self,

@@ -598,3 +598,100 @@ class TestBackfill:
         from server import _backfill_instinct_perceptual
         count = _backfill_instinct_perceptual(storage, embeddings)
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Uninvited Memories
+# ---------------------------------------------------------------------------
+
+class TestUninvitedMemories:
+    def _seed_diverse_memories(self, srv):
+        """Store enough diverse memories to have a meaningful distant pool."""
+        topics = [
+            "The architecture uses SQLite with vec0 for vector search",
+            "Compression clusters episodes into semantics over time",
+            "The user prefers terse communication and direct action",
+            "Conway's Game of Life demonstrates emergent complexity",
+            "Ostrom's commons framework governs shared resources",
+            "Instincts are perceptual attention directives not rules",
+            "The wake hook loads instincts at session start",
+            "Decay rate is 0.9x per session with 30min rate limiting",
+            "Cross-system provenance tags where observations came from",
+            "The mirror experiment ran memories through local models",
+        ]
+        for t in topics:
+            srv.remember(content=t)
+
+    def test_uninvited_results_appear(self, server_env):
+        """recall() with uninvited>0 appends uninvited results."""
+        srv = server_env["server"]
+        self._seed_diverse_memories(srv)
+
+        result = srv.recall(query="SQLite vector search", uninvited=3)
+        uninvited_results = [r for r in result["results"] if r.get("uninvited")]
+        assert len(uninvited_results) > 0
+        assert len(uninvited_results) <= 3
+
+    def test_uninvited_results_marked(self, server_env):
+        """Uninvited results have uninvited=True flag."""
+        srv = server_env["server"]
+        self._seed_diverse_memories(srv)
+
+        result = srv.recall(query="compression clustering", uninvited=2)
+        for r in result["results"]:
+            if r.get("uninvited"):
+                assert r["uninvited"] is True
+
+    def test_uninvited_no_duplicates(self, server_env):
+        """Uninvited results don't duplicate matched results."""
+        srv = server_env["server"]
+        self._seed_diverse_memories(srv)
+
+        result = srv.recall(query="SQLite architecture", uninvited=3)
+        matched_ids = {r["id"] for r in result["results"] if not r.get("uninvited")}
+        uninvited_ids = {r["id"] for r in result["results"] if r.get("uninvited")}
+        assert matched_ids.isdisjoint(uninvited_ids)
+
+    def test_uninvited_disabled(self, server_env):
+        """uninvited=0 disables the feature."""
+        srv = server_env["server"]
+        self._seed_diverse_memories(srv)
+
+        result = srv.recall(query="SQLite architecture", uninvited=0)
+        uninvited_results = [r for r in result["results"] if r.get("uninvited")]
+        assert len(uninvited_results) == 0
+
+    def test_uninvited_few_memories(self, server_env):
+        """Works when total memories < K."""
+        srv = server_env["server"]
+        srv.remember(content="Only one memory exists")
+
+        # Should not crash, may return 0 uninvited (matched result excluded)
+        result = srv.recall(query="one memory", uninvited=3)
+        assert "results" in result
+
+    def test_uninvited_have_content(self, server_env):
+        """Uninvited results are hydrated with content."""
+        srv = server_env["server"]
+        self._seed_diverse_memories(srv)
+
+        result = srv.recall(query="compression", uninvited=3)
+        for r in result["results"]:
+            if r.get("uninvited"):
+                assert "content" in r
+                assert len(r["content"]) > 0
+
+    def test_uninvited_are_distant(self, server_env):
+        """Uninvited results should have lower similarity than the top match."""
+        srv = server_env["server"]
+        self._seed_diverse_memories(srv)
+
+        result = srv.recall(query="SQLite vec0 vector search architecture", uninvited=3)
+        matched = [r for r in result["results"] if not r.get("uninvited")]
+        uninvited = [r for r in result["results"] if r.get("uninvited")]
+
+        if matched and uninvited:
+            best_matched_score = max(r["score"] for r in matched)
+            avg_uninvited_score = sum(r["score"] for r in uninvited) / len(uninvited)
+            # Uninvited should generally score lower than the best match
+            assert avg_uninvited_score < best_matched_score
