@@ -80,7 +80,7 @@ services:
       - SIGNALS_DB=/sandbox/shared/signals.db
     volumes:
       - emma-data:/sandbox/emma              # Her persistent home (engram, reader, books)
-      - shared-signals:/sandbox/shared       # Shared signal bus (rw)
+      - ${HOME}/.engram/shared:/sandbox/shared  # Shared signal bus (bind mount, host-accessible)
       - ../engram:/opt/engram:ro             # Engram library code
       - ../reader:/opt/reader:ro             # Reader library code
       - ./books:/sandbox/seed-books:ro       # Seed books (copied in on first boot)
@@ -102,17 +102,16 @@ services:
 
 volumes:
   emma-data:
-  shared-signals:       # Mount this same volume in any container that needs the signal bus
+  # shared-signals removed — using bind mount to ${HOME}/.engram/shared instead
   fastembed-cache:       # Persists the nomic-embed-text-v1.5 ONNX model across rebuilds
 ```
 
 **Volume notes:**
 - `emma-data` — Her engram DB, reader DB, and downloaded books all live here.
   Gutenberg downloads go to `/sandbox/emma/books/` (writable).
-- `shared-signals` — The signal bus SQLite file. Mounted rw in Emma's container
-  and accessible from the host (or other containers) for Koan to read/write.
-  On the host, Koan's engram sessions access this via a bind mount or symlink
-  to `~/.engram/signals.db`.
+- `~/.engram/shared` — Bind-mounted to `/sandbox/shared`. Contains `signals.db`
+  and `wake-koan.trigger`. Directly accessible from both the container and host.
+  Koan's engram sessions read/write the same `signals.db` file.
 - `fastembed-cache` — The nomic-embed-text-v1.5 ONNX model (~500MB). Downloaded
   once on first boot, persisted across container rebuilds.
 - Memory raised to 6GB limit / 2GB reservation to accommodate FastEmbed model
