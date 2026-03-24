@@ -213,3 +213,38 @@ def test_prune_cleans_up_resonances(seeded):
     seeded.prune_decayed(threshold=0.05)
     rows = seeded.conn.execute("SELECT count(*) FROM resonances").fetchone()
     assert rows[0] == 0
+
+
+def test_get_recall_cooccurrences_empty(store):
+    """No recall logs = empty co-occurrences."""
+    result = store.get_recall_cooccurrences()
+    assert result == {}
+
+
+def test_get_recall_cooccurrences(store):
+    """Two recalls with overlapping target_ids produce co-occurrences."""
+    store.add_log_entry(id="r1", event_type="recall", layer="all",
+                        target_ids=["a", "b", "c"],
+                        context={"recall_id": "r1", "query": "test"})
+    store.add_log_entry(id="r2", event_type="recall", layer="all",
+                        target_ids=["a", "b", "d"],
+                        context={"recall_id": "r2", "query": "test2"})
+    result = store.get_recall_cooccurrences()
+    pair_ab = result.get(("a", "b"), 0)
+    assert pair_ab == 2
+    pair_ac = result.get(("a", "c"), 0)
+    assert pair_ac == 1
+    pair_ad = result.get(("a", "d"), 0)
+    assert pair_ad == 1
+
+
+def test_get_memory_recall_frequency(store):
+    """Count how many recalls each memory appears in."""
+    store.add_log_entry(id="r1", event_type="recall", layer="all",
+                        target_ids=["a", "b"], context={})
+    store.add_log_entry(id="r2", event_type="recall", layer="all",
+                        target_ids=["a", "c"], context={})
+    freq = store.get_memory_recall_frequency()
+    assert freq["a"] == 2
+    assert freq["b"] == 1
+    assert freq["c"] == 1

@@ -1155,6 +1155,48 @@ class Storage:
         )
         self.conn.commit()
 
+    def get_recall_cooccurrences(self) -> dict[tuple[str, str], int]:
+        """Count how many recall events each pair of memories co-occurred in.
+
+        Reads memory_log entries with event_type='recall', extracts target_ids,
+        and counts pairwise co-occurrences. Returns {(id_a, id_b): count} with
+        canonical ordering (id_a < id_b).
+        """
+        import json as _json
+        rows = self.conn.execute(
+            "SELECT target_ids FROM memory_log WHERE event_type = 'recall'"
+        ).fetchall()
+        counts: dict[tuple[str, str], int] = {}
+        for row in rows:
+            raw = row[0] if not hasattr(row, 'keys') else row["target_ids"]
+            try:
+                ids = _json.loads(raw) if isinstance(raw, str) else (raw or [])
+            except (TypeError, ValueError):
+                continue
+            ids = sorted(set(ids))
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    pair = (ids[i], ids[j])
+                    counts[pair] = counts.get(pair, 0) + 1
+        return counts
+
+    def get_memory_recall_frequency(self) -> dict[str, int]:
+        """Count how many recall events each memory appears in."""
+        import json as _json
+        rows = self.conn.execute(
+            "SELECT target_ids FROM memory_log WHERE event_type = 'recall'"
+        ).fetchall()
+        freq: dict[str, int] = {}
+        for row in rows:
+            raw = row[0] if not hasattr(row, 'keys') else row["target_ids"]
+            try:
+                ids = _json.loads(raw) if isinstance(raw, str) else (raw or [])
+            except (TypeError, ValueError):
+                continue
+            for mid in set(ids):
+                freq[mid] = freq.get(mid, 0) + 1
+        return freq
+
     # --- Vector Access ---
 
     _LAYER_VECTOR_TABLE = {
