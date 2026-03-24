@@ -490,6 +490,15 @@ class Storage:
         ).fetchall()
         return [{"id": r[0], "content": r[1]} for r in rows]
 
+    def get_orphaned_semantics(self) -> list[dict]:
+        """Find semantics that have no vector embedding (invisible to search)."""
+        rows = self.conn.execute(
+            "SELECT s.id, s.content FROM semantics s "
+            "LEFT JOIN semantic_vectors v ON s.id = v.id "
+            "WHERE v.id IS NULL"
+        ).fetchall()
+        return [{"id": r[0], "content": r[1]} for r in rows]
+
     def mark_core(self, episode_id: str, tier: int = 1) -> None:
         """Mark an episode as core — exempt from decay, preserved indefinitely.
 
@@ -501,6 +510,26 @@ class Storage:
             (tier, episode_id),
         )
         self.conn.commit()
+
+    def unmark_core(self, episode_id: str) -> None:
+        """Demote a core episode back to normal — re-enables decay."""
+        self.conn.execute(
+            "UPDATE episodes SET core = 0 WHERE id = ?",
+            (episode_id,),
+        )
+        self.conn.commit()
+
+    def unmark_core_batch(self, episode_ids: list[str]) -> int:
+        """Demote multiple core episodes. Returns count updated."""
+        if not episode_ids:
+            return 0
+        placeholders = ", ".join("?" * len(episode_ids))
+        cursor = self.conn.execute(
+            f"UPDATE episodes SET core = 0 WHERE id IN ({placeholders})",
+            episode_ids,
+        )
+        self.conn.commit()
+        return cursor.rowcount
 
     def mark_core_batch(self, episode_ids: list[str], tier: int = 1) -> int:
         """Mark multiple episodes as core. Returns count updated.
@@ -1039,3 +1068,112 @@ class Storage:
             (name,),
         ).fetchone()
         return dict(row) if row else None
+
+    # --- Resonances ---
+
+    def add_resonance(
+        self,
+        id_a: str,
+        layer_a: str,
+        id_b: str,
+        layer_b: str,
+        similarity: float,
+        weight: float,
+    ) -> str:
+        """Add or update a lateral resonance between two memories.
+
+        Canonical ordering: memory_a < memory_b lexicographically.
+        On conflict (pair already exists): increment co_occurrences and
+        update last_seen. Weight is a birth trait and never changes.
+        Returns the resonance ID.
+        """
+        import uuid as _uuid
+
+        # Canonical ordering
+        if id_a > id_b:
+            id_a, layer_a, id_b, layer_b = id_b, layer_b, id_a, layer_a
+
+        now = _now_iso()
+        rid = str(_uuid.uuid4())
+
+        self.conn.execute(
+            """
+            INSERT INTO resonances
+                (id, memory_a, layer_a, memory_b, layer_b, similarity, weight,
+                 strength, co_occurrences, created_at, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0.5, 1, ?, ?)
+            ON CONFLICT(memory_a, memory_b) DO UPDATE SET
+                co_occurrences = co_occurrences + 1,
+                last_seen = excluded.last_seen
+            """,
+            (rid, id_a, layer_a, id_b, layer_b, similarity, weight, now, now),
+        )
+        self.conn.commit()
+
+        # Return the actual ID (may be the existing one on conflict)
+        row = self.conn.execute(
+            "SELECT id FROM resonances WHERE memory_a = ? AND memory_b = ?",
+            (id_a, id_b),
+        ).fetchone()
+        return row[0]
+
+    def get_resonances_for(self, memory_id: str) -> list[dict]:
+        """Return all resonances involving the given memory ID."""
+        rows = self.conn.execute(
+            "SELECT * FROM resonances WHERE memory_a = ? OR memory_b = ?",
+            (memory_id, memory_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def strengthen_resonance(self, resonance_id: str, delta: float = 0.1) -> None:
+        """Increase resonance strength, capped at 1.0."""
+        self.conn.execute(
+            "UPDATE resonances SET strength = MIN(1.0, strength + ?) WHERE id = ?",
+            (delta, resonance_id),
+        )
+        self.conn.commit()
+
+    def weaken_resonance(self, resonance_id: str, delta: float = 0.05) -> None:
+        """Decrease resonance strength, floored at 0.05."""
+        self.conn.execute(
+            "UPDATE resonances SET strength = MAX(0.05, strength - ?) WHERE id = ?",
+            (delta, resonance_id),
+        )
+        self.conn.commit()
+
+    def cleanup_resonances(self, pruned_ids: list[str]) -> None:
+        """Delete resonances where either memory has been pruned."""
+        if not pruned_ids:
+            return
+        placeholders = ", ".join("?" * len(pruned_ids))
+        self.conn.execute(
+            f"DELETE FROM resonances WHERE memory_a IN ({placeholders}) "
+            f"OR memory_b IN ({placeholders})",
+            pruned_ids + pruned_ids,
+        )
+        self.conn.commit()
+
+    # --- Vector Access ---
+
+    _LAYER_VECTOR_TABLE = {
+        "episode": "episode_vectors",
+        "semantic": "semantic_vectors",
+        "instinct": "instinct_vectors",
+    }
+
+    def get_vector(self, layer: str, id: str) -> list[float] | None:
+        """Fetch and unpack the embedding for a given layer and ID.
+
+        Returns None if the layer is unknown or the ID is not found.
+        """
+        table = self._LAYER_VECTOR_TABLE.get(layer)
+        if table is None:
+            return None
+        row = self.conn.execute(
+            f"SELECT embedding FROM {table} WHERE id = ?", (id,)
+        ).fetchone()
+        if row is None:
+            return None
+        blob = row[0]
+        n = len(blob) // 4
+        return list(struct.unpack(f"<{n}f", blob))

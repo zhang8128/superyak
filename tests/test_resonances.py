@@ -1,0 +1,124 @@
+"""Tests for lateral resonance associations."""
+import pytest
+from storage import Storage
+
+
+@pytest.fixture
+def store():
+    return Storage(":memory:")
+
+
+@pytest.fixture
+def seeded(store):
+    """Store with episodes for resonance testing."""
+    store.add_episode(id="ep-1", session_id="s1", content="cats are great",
+                      embedding=[0.1] * 768)
+    store.add_episode(id="ep-2", session_id="s1", content="dogs are great",
+                      embedding=[0.2] * 768)
+    store.add_episode(id="ep-3", session_id="s1", content="fish are great",
+                      embedding=[0.3] * 768)
+    return store
+
+
+def test_add_resonance(seeded):
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.65, weight=0.5)
+    assert rid is not None
+
+
+def test_canonical_ordering(seeded):
+    """memory_a < memory_b lexicographically, regardless of arg order."""
+    rid = seeded.add_resonance("ep-2", "episode", "ep-1", "episode",
+                               similarity=0.65, weight=0.5)
+    row = seeded.conn.execute("SELECT memory_a, memory_b FROM resonances WHERE id=?",
+                              (rid,)).fetchone()
+    assert row[0] == "ep-1"
+    assert row[1] == "ep-2"
+
+
+def test_update_existing_resonance(seeded):
+    """Second add to same pair increments co_occurrences, preserves weight."""
+    seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                         similarity=0.65, weight=0.5)
+    seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                         similarity=0.66, weight=0.7)
+    row = seeded.conn.execute("SELECT co_occurrences, weight FROM resonances").fetchone()
+    assert row[0] == 2
+    assert row[1] == pytest.approx(0.5)  # weight is a birth trait, never changes
+
+
+def test_get_resonances_for(seeded):
+    seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                         similarity=0.65, weight=0.5)
+    seeded.add_resonance("ep-1", "episode", "ep-3", "episode",
+                         similarity=0.60, weight=0.4)
+    results = seeded.get_resonances_for("ep-1")
+    assert len(results) == 2
+
+
+def test_get_resonances_for_other_side(seeded):
+    """Querying by memory_b also returns the resonance."""
+    seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                         similarity=0.65, weight=0.5)
+    results = seeded.get_resonances_for("ep-2")
+    assert len(results) == 1
+
+
+def test_strengthen_resonance(seeded):
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.65, weight=0.5)
+    seeded.strengthen_resonance(rid, delta=0.1)
+    row = seeded.conn.execute("SELECT strength FROM resonances WHERE id=?",
+                              (rid,)).fetchone()
+    assert row[0] == pytest.approx(0.6)
+
+
+def test_strengthen_capped_at_1(seeded):
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.65, weight=0.5)
+    seeded.strengthen_resonance(rid, delta=0.9)
+    row = seeded.conn.execute("SELECT strength FROM resonances WHERE id=?",
+                              (rid,)).fetchone()
+    assert row[0] == 1.0
+
+
+def test_weaken_resonance(seeded):
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.65, weight=0.5)
+    seeded.weaken_resonance(rid, delta=0.05)
+    row = seeded.conn.execute("SELECT strength FROM resonances WHERE id=?",
+                              (rid,)).fetchone()
+    assert row[0] == pytest.approx(0.45)
+
+
+def test_weaken_floored_at_005(seeded):
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.65, weight=0.5)
+    seeded.weaken_resonance(rid, delta=0.9)
+    row = seeded.conn.execute("SELECT strength FROM resonances WHERE id=?",
+                              (rid,)).fetchone()
+    assert row[0] == 0.05
+
+
+def test_cleanup_removes_orphans(seeded):
+    seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                         similarity=0.65, weight=0.5)
+    seeded.cleanup_resonances(["ep-1"])
+    rows = seeded.conn.execute("SELECT count(*) FROM resonances").fetchone()
+    assert rows[0] == 0
+
+
+def test_get_vector_episode(seeded):
+    vec = seeded.get_vector("episode", "ep-1")
+    assert vec is not None
+    assert len(vec) == 768
+
+
+def test_get_vector_missing(seeded):
+    vec = seeded.get_vector("episode", "nonexistent")
+    assert vec is None
+
+
+def test_get_vector_unknown_layer(seeded):
+    vec = seeded.get_vector("unknown_layer", "ep-1")
+    assert vec is None
