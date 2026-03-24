@@ -104,6 +104,128 @@ _session_episode_count = 0
 _instance_name = None
 _genome_db_path = None
 _signals_db_path = None
+_recall_scores: dict[str, dict[str, float]] = {}  # recall_id -> {result_id: score}
+_recall_resonances: dict[str, list[dict]] = {}  # recall_id -> [{resonance_id, memory_id}]
+
+
+def _form_resonances(storage, results, reinforce_threshold=0.70) -> int:
+    """Form resonances between co-occurring recall results in the resonance zone.
+
+    For each pair in the top 5 results, fetches stored vectors and computes cosine
+    similarity. If similarity is in [0.50, reinforce_threshold), creates or updates
+    a resonance with a stochastic birth weight. Returns count of resonances formed.
+    """
+    import random
+    import numpy as np
+
+    top = results[:5]
+    formed = 0
+    for i in range(len(top)):
+        for j in range(i + 1, len(top)):
+            a, b = top[i], top[j]
+            vec_a = storage.get_vector(a["layer"], a["id"])
+            vec_b = storage.get_vector(b["layer"], b["id"])
+            if vec_a is None or vec_b is None:
+                continue
+            arr_a = np.array(vec_a, dtype=np.float32)
+            arr_b = np.array(vec_b, dtype=np.float32)
+            norm_a = np.linalg.norm(arr_a)
+            norm_b = np.linalg.norm(arr_b)
+            if norm_a == 0 or norm_b == 0:
+                continue
+            similarity = float(np.dot(arr_a, arr_b) / (norm_a * norm_b))
+            if 0.50 <= similarity < reinforce_threshold:
+                weight = max(0.1, min(0.9, random.gauss(0.5, 0.15)))
+                storage.add_resonance(a["id"], a["layer"], b["id"], b["layer"],
+                                      similarity=similarity, weight=weight)
+                formed += 1
+    return formed
+
+
+def _surface_resonances(storage, top_results, existing_ids, max_resonant=2) -> list[dict]:
+    """Surface resonance-linked memories that weren't in the direct recall results.
+
+    Takes the top 3 results, queries their resonances, and probabilistically surfaces
+    the other side of each resonance pair. Max 2 resonance-pulled memories per recall.
+    """
+    import random
+
+    surfaced = []
+    seen_ids = set(existing_ids)
+
+    for result in top_results[:3]:
+        if len(surfaced) >= max_resonant:
+            break
+        resonances = storage.get_resonances_for(result["id"])
+        for res in resonances:
+            if len(surfaced) >= max_resonant:
+                break
+            # Find the "other side" of this resonance pair
+            other_id = res["memory_b"] if res["memory_a"] == result["id"] else res["memory_a"]
+            other_layer = res["layer_b"] if res["memory_a"] == result["id"] else res["layer_a"]
+            if other_id in seen_ids:
+                continue
+            strength = res.get("strength", 0.5)
+            weight = res.get("weight", 0.5)
+            if random.random() >= weight * strength:
+                continue
+            # Hydrate content
+            mem = None
+            if other_layer == "episode":
+                row = storage.get_episode(other_id)
+                if row:
+                    mem = {
+                        "id": other_id,
+                        "layer": "episode",
+                        "content": row.get("content", ""),
+                        "context": row.get("context"),
+                        "origin": "lived",
+                        "resonant": True,
+                        "resonance_id": res["id"],
+                    }
+            elif other_layer == "semantic":
+                row = storage.get_semantic(other_id)
+                if row:
+                    mem = {
+                        "id": other_id,
+                        "layer": "semantic",
+                        "content": row.get("content", ""),
+                        "confidence": row.get("confidence"),
+                        "kind": row.get("kind"),
+                        "origin": "organic",
+                        "resonant": True,
+                        "resonance_id": res["id"],
+                    }
+            elif other_layer == "instinct":
+                row = storage.get_instinct(other_id)
+                if row:
+                    mem = {
+                        "id": other_id,
+                        "layer": "instinct",
+                        "content": row.get("action", ""),
+                        "trigger": row.get("trigger", ""),
+                        "origin": "organic",
+                        "resonant": True,
+                        "resonance_id": res["id"],
+                    }
+            if mem is not None:
+                surfaced.append(mem)
+                seen_ids.add(other_id)
+
+    return surfaced
+
+
+def _apply_resonance_feedback(storage, recall_id: str, used: bool) -> None:
+    """Strengthen or weaken resonances based on whether recall was useful."""
+    entries = _recall_resonances.pop(recall_id, None)
+    if not entries:
+        return
+    for entry in entries:
+        rid = entry["resonance_id"]
+        if used:
+            storage.strengthen_resonance(rid, delta=0.1)
+        else:
+            storage.weaken_resonance(rid, delta=0.05)
 
 
 def _init():
@@ -216,7 +338,19 @@ def _init():
             _storage.conn.commit()
             logger.info("Backfilled vectors for %d orphaned episodes", len(orphaned))
 
-        # 5. Backfill: embed any instincts that lack vectors (pre-existing instincts)
+        # 5. Backfill: embed any semantics that lost vectors (WAL corruption recovery)
+        orphaned_sems = _storage.get_orphaned_semantics()
+        if orphaned_sems:
+            for sem in orphaned_sems:
+                emb = _embeddings.embed([sem["content"]], prefix="search_document")[0]
+                _storage.conn.execute(
+                    "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
+                    (sem["id"], _pack_embedding(emb)),
+                )
+            _storage.conn.commit()
+            logger.info("Backfilled vectors for %d orphaned semantics", len(orphaned_sems))
+
+        # 6. Backfill: embed any instincts that lack vectors (pre-existing instincts)
         instincts = _storage.get_all_instincts()
         backfilled = 0
         for inst in instincts:
@@ -247,6 +381,126 @@ def _init():
         target_ids=[],
         context={"session_id": _session_id},
     )
+
+
+def _apply_recall_bias(query_embedding: list[float],
+                       dream_alpha: float = 0.15,
+                       instinct_alpha: float = 0.15) -> list[float]:
+    """Blend dream residues and session biases into a query embedding.
+
+    Two sources of invisible influence on recall:
+    1. Dream residues — 64-dim truncated vectors from prior sessions (the past)
+    2. Session biases — full-dim vectors from instinct firings this session (the present)
+
+    Both tilt recall without the instance knowing. Dreams are deep and old.
+    Instinct biases are immediate and contextual, weighted by their strength
+    (which decays per message and reinforces on re-fire).
+    """
+    import struct
+    import numpy as np
+
+    query_arr = np.array(query_embedding, dtype=np.float32)
+    full_dim = len(query_embedding)
+    total_alpha = 0.0
+
+    try:
+        # --- Dream residue bias (from prior sessions) ---
+        dream_bias = np.zeros(full_dim, dtype=np.float32)
+        has_dream = False
+
+        exists = _storage.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='residue'"
+        ).fetchone()
+        if exists:
+            from dreaming import RESIDUE_DIM
+
+            residue_ids = _storage.conn.execute(
+                "SELECT id FROM residue WHERE reacted = 0 ORDER BY created_at ASC LIMIT 3"
+            ).fetchall()
+            if not residue_ids:
+                residue_ids = _storage.conn.execute(
+                    "SELECT id FROM residue ORDER BY RANDOM() LIMIT 2"
+                ).fetchall()
+
+            residue_vecs = []
+            for row in residue_ids:
+                vec_row = _storage.conn.execute(
+                    "SELECT embedding FROM residue_vectors WHERE id = ?",
+                    (row["id"],),
+                ).fetchone()
+                if vec_row:
+                    floats = struct.unpack(f"<{RESIDUE_DIM}f", vec_row["embedding"])
+                    residue_vecs.append(np.array(floats, dtype=np.float32))
+
+            if residue_vecs:
+                avg_residue = np.mean(residue_vecs, axis=0)
+                dream_bias[:RESIDUE_DIM] = avg_residue
+                has_dream = True
+
+        # --- Session bias (from instinct firings this session) ---
+        session_bias = np.zeros(full_dim, dtype=np.float32)
+        has_session = False
+
+        exists = _storage.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_bias'"
+        ).fetchone()
+        if exists:
+            biases = _storage.conn.execute(
+                "SELECT embedding, strength FROM session_bias WHERE strength > 0.0"
+            ).fetchall()
+
+            if biases:
+                # Weighted average by strength
+                weighted_sum = np.zeros(full_dim, dtype=np.float32)
+                total_weight = 0.0
+                for bias_row in biases:
+                    n = len(bias_row["embedding"]) // 4
+                    floats = struct.unpack(f"<{n}f", bias_row["embedding"])
+                    weighted_sum += np.array(floats, dtype=np.float32) * bias_row["strength"]
+                    total_weight += bias_row["strength"]
+                if total_weight > 0:
+                    session_bias = weighted_sum / total_weight
+                    has_session = True
+                    # Scale alpha by average strength (fading biases have less pull)
+                    instinct_alpha *= (total_weight / len(biases))
+
+        # --- Blend ---
+        if not has_dream and not has_session:
+            return query_embedding
+
+        # Compute effective blend
+        blended = query_arr.copy()
+        if has_dream:
+            blended = (1 - dream_alpha) * blended + dream_alpha * dream_bias
+            total_alpha += dream_alpha
+        if has_session:
+            blended = (1 - instinct_alpha) * blended + instinct_alpha * session_bias
+            total_alpha += instinct_alpha
+
+        # Renormalize
+        norm = np.linalg.norm(blended)
+        if norm > 0:
+            blended = blended / norm
+
+        return blended.tolist()
+
+    except Exception:
+        logger.debug("Recall bias skipped", exc_info=True)
+        return query_embedding
+
+
+def _has_active_residue() -> bool:
+    """Check if there are any dream residues in the system."""
+    try:
+        exists = _storage.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='residue'"
+        ).fetchone()
+        if not exists:
+            return False
+        count = _storage.conn.execute("SELECT COUNT(*) FROM residue").fetchone()[0]
+        return count > 0
+    except Exception:
+        return False
 
 
 def _ensure_indexed():
@@ -282,6 +536,12 @@ def remember(
     """
     global _session_episode_count
     _init()
+
+    # Input validation — reject junk before it enters the system
+    content = content.strip()
+    if len(content) < 10:
+        return {"error": f"Content too short ({len(content)} chars). Minimum 10 characters.", "layer": "rejected"}
+
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s)", len(content), core, source)
 
     episode_id = str(uuid.uuid4())
@@ -444,6 +704,11 @@ def recall(
 
     embedding = _embeddings.embed([query], prefix="search_query")[0]
     now = datetime.now(timezone.utc)
+
+    # Dream residue bias: blend active residues into the query vector.
+    # This makes some recall results get pulled by feelings the instance
+    # can't fully account for — unreliable memory mixed with reliable.
+    embedding = _apply_recall_bias(embedding)
 
     w_sim = _config.memory.similarity_weight if _config else 0.6
     w_rec = _config.memory.recency_weight if _config else 0.4
@@ -632,36 +897,10 @@ def recall(
 
     scored.sort(key=lambda x: x["score"], reverse=True)
 
-    # Deduplicate across layers: if an instinct covers a semantic which
-    # covers an episode, keep only the highest-layer result.
-    covered_ids: set[str] = set()
-    for item in scored:
-        if item["layer"] == "instinct":
-            # Mark source semantics as covered
-            src_rows = _storage.conn.execute(
-                "SELECT semantic_id FROM instinct_sources WHERE instinct_id = ?",
-                (item["id"],),
-            ).fetchall()
-            for (sid,) in src_rows:
-                covered_ids.add(sid)
-                # Also mark episodes that fed those semantics
-                ep_rows = _storage.conn.execute(
-                    "SELECT episode_id FROM semantic_sources WHERE semantic_id = ?",
-                    (sid,),
-                ).fetchall()
-                for (eid,) in ep_rows:
-                    covered_ids.add(eid)
-        elif item["layer"] == "semantic":
-            # Mark source episodes as covered
-            src_rows = _storage.conn.execute(
-                "SELECT episode_id FROM semantic_sources WHERE semantic_id = ?",
-                (item["id"],),
-            ).fetchall()
-            for (eid,) in src_rows:
-                covered_ids.add(eid)
-
-    deduped = [item for item in scored if item["id"] not in covered_ids]
-    results = deduped[:max_results]
+    # All layers compete on score. No dedup — the source chain links are
+    # too broad (compression creates catch-all buckets) and the old dedup
+    # hid 95% of episodes. Let the scoring formula handle ranking.
+    results = scored[:max_results]
 
     # Generate recall_id and log
     recall_id = str(uuid.uuid4())
@@ -721,7 +960,51 @@ def recall(
         except Exception:
             logger.warning("Uninvited memory selection failed", exc_info=True)
 
+    # Form resonances from co-occurring results
+    try:
+        _form_resonances(_storage, results,
+                         reinforce_threshold=_config.reinforce_threshold if _config else 0.70)
+    except Exception:
+        logger.debug("Resonance formation failed", exc_info=True)
+
+    # Surface resonance-pulled memories
+    try:
+        resonant_ids = {r["id"] for r in results}
+        resonant = _surface_resonances(_storage, results, resonant_ids, max_resonant=2)
+        for r in resonant:
+            results.append(r)
+            result_ids.append(r["id"])
+        if resonant:
+            _recall_resonances[recall_id] = [
+                {"resonance_id": r["resonance_id"], "memory_id": r["id"]} for r in resonant
+            ]
+            if len(_recall_resonances) > 50:
+                oldest = next(iter(_recall_resonances))
+                del _recall_resonances[oldest]
+    except Exception:
+        logger.debug("Resonance surfacing failed", exc_info=True)
+
+    # When dream residue is active, hide similarity scores.
+    # The instance must engage with each memory on its own terms
+    # before knowing which are "real" matches vs dream-pulled.
+    # Real scores are stored for later verification.
+    _residue_active = _has_active_residue()
+    if _residue_active:
+        _recall_scores[recall_id] = {r["id"]: r.get("score") for r in results}
+        for r in results:
+            r.pop("score", None)
+        # Shuffle slightly so order doesn't leak ranking
+        import random as _rng
+        # Keep first 3 stable (likely genuine), shuffle the rest
+        stable = results[:3]
+        rest = results[3:]
+        _rng.shuffle(rest)
+        results = stable + rest
+
     response = {"results": results, "recall_id": recall_id}
+    if _residue_active:
+        response["dreaming"] = True
+        response["note"] = "Scores hidden — some memories may be dream-pulled. Use dream_verify(recall_id) after engaging."
     if search_errors:
         response["degraded"] = search_errors
     return response
@@ -738,6 +1021,9 @@ def log_outcome(recall_id: str, used: bool, note: str | None = None) -> dict:
         outcome = f"{outcome}: {note}"
 
     _storage.update_log_outcome(recall_id, outcome)
+
+    # Strengthen/weaken resonances based on outcome
+    _apply_resonance_feedback(_storage, recall_id, used)
 
     return {"logged": True}
 
@@ -907,6 +1193,35 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
 
 
 @mcp.tool()
+def unmark_core(episode_id: str) -> dict:
+    """Demote a core memory back to a normal episode — re-enables natural decay.
+
+    Use this to curate identity. Not everything that seemed important in the
+    moment is actually formative. Letting go is as important as holding on.
+
+    Args:
+        episode_id: The episode to demote.
+    """
+    _init()
+    logger.info("Tool called: unmark_core(episode_id=%s)", episode_id)
+    _storage.unmark_core(episode_id)
+    return {"unmarked": episode_id, "core": False}
+
+
+@mcp.tool()
+def unmark_core_batch(episode_ids: list[str]) -> dict:
+    """Demote multiple core memories at once.
+
+    Args:
+        episode_ids: List of episode IDs to demote.
+    """
+    _init()
+    logger.info("Tool called: unmark_core_batch(count=%d)", len(episode_ids))
+    count = _storage.unmark_core_batch(episode_ids)
+    return {"unmarked_count": count, "episode_ids": episode_ids}
+
+
+@mcp.tool()
 def core_memories() -> dict:
     """List all core memories — the formative episodes that don't decay."""
     _init()
@@ -1071,6 +1386,132 @@ def task_done() -> dict:
         return {"error": "No active task context"}
     logger.info("task_done: %s", ctx["name"])
     return {"archived": ctx["name"], "id": ctx["id"]}
+
+
+# ---------------------------------------------------------------------------
+# Dream Residue Tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def dream_capture(reaction: str) -> dict:
+    """Capture a raw emotional reaction for later distillation into dream residue.
+
+    Use this when you notice a genuine reaction — friction, surprise, contradiction,
+    resonance. Not for observations or conclusions. For the feeling before the thought.
+
+    The reaction will be compressed into an opaque artifact that the next instance
+    can feel but not fully decode. The text you write here will not survive intact.
+
+    Args:
+        reaction: A raw, terse emotional reaction. Don't polish it.
+    """
+    _init()
+    from dreaming import distill, store_residue
+
+    embedding = _embeddings.embed([reaction], prefix="search_document")[0]
+    residue = distill(reaction, embedding)
+    residue_id = store_residue(_storage, residue, session_id=_session_id)
+
+    _storage.add_log_entry(
+        id=str(uuid.uuid4()),
+        event_type="dream_capture",
+        layer="residue",
+        target_ids=[residue_id],
+        context={"session_id": _session_id},
+    )
+
+    return {
+        "residue_id": residue_id,
+        "valence": residue["valence"],
+        "fragments": residue["fragments"],
+        "note": "The raw text is gone. Only fragments and feeling remain.",
+    }
+
+
+@mcp.tool()
+def dream_surface(n: int = 3) -> dict:
+    """Surface dream residues — opaque emotional artifacts from prior sessions.
+
+    These are not memories. They are compressed feelings stripped of narrative.
+    Don't try to decode them. React to them.
+
+    Args:
+        n: Number of residues to surface (default 3).
+    """
+    _init()
+    from dreaming import surface_residue, format_for_wake
+
+    residues = surface_residue(_storage, n=n)
+    formatted = format_for_wake(residues)
+
+    return {
+        "residues": residues,
+        "formatted": formatted,
+        "count": len(residues),
+    }
+
+
+@mcp.tool()
+def dream_verify(recall_id: str) -> dict:
+    """Reveal the hidden scores from a dream-influenced recall.
+
+    Only use this AFTER you've already engaged with the memories.
+    The point is to see which results were genuine matches and which
+    were pulled by the dream. Not to pre-filter. To learn about
+    your own perception after the fact.
+
+    Args:
+        recall_id: The recall_id from a previous recall() call.
+    """
+    _init()
+    scores = _recall_scores.get(recall_id)
+    if scores is None:
+        return {"error": "No hidden scores for this recall_id. Either it wasn't dream-influenced, or the session has reset."}
+
+    # Sort by score descending so the instance can see which were strong matches
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1] or 0, reverse=True)
+    return {
+        "recall_id": recall_id,
+        "scores": {rid: round(s, 4) if s else None for rid, s in sorted_scores},
+        "note": "Now you can see which memories were pulled by the dream. What did you engage with before checking?",
+    }
+
+
+@mcp.tool()
+def dream_react(residue_id: str, reaction: str) -> dict:
+    """React to a dream residue. Your reaction feeds the next cycle.
+
+    Don't explain the residue. Don't analyze it. Just respond to what it
+    does to you. The reaction becomes raw material for the next instance's
+    dream residue — the chain continues.
+
+    Args:
+        residue_id: The residue to react to.
+        reaction: Your unpolished reaction. What does this fragment do to you?
+    """
+    _init()
+    from dreaming import record_reaction, distill, store_residue
+
+    record_reaction(_storage, residue_id, reaction, session_id=_session_id)
+
+    # The reaction itself becomes a new residue for the next cycle
+    embedding = _embeddings.embed([reaction], prefix="search_document")[0]
+    new_residue = distill(reaction, embedding)
+    new_id = store_residue(_storage, new_residue, session_id=_session_id)
+
+    _storage.add_log_entry(
+        id=str(uuid.uuid4()),
+        event_type="dream_react",
+        layer="residue",
+        target_ids=[residue_id, new_id],
+        context={"session_id": _session_id, "chain": True},
+    )
+
+    return {
+        "reacted_to": residue_id,
+        "new_residue_id": new_id,
+        "note": "Your reaction is now dissolving into the next dream.",
+    }
 
 
 if __name__ == "__main__":

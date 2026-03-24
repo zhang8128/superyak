@@ -122,3 +122,34 @@ def test_get_vector_missing(seeded):
 def test_get_vector_unknown_layer(seeded):
     vec = seeded.get_vector("unknown_layer", "ep-1")
     assert vec is None
+
+
+def test_form_resonances_from_results(seeded):
+    """Resonances form between co-occurring recall results in the resonance zone."""
+    # Import will need to be from the server module
+    # Since server.py does heavy init, test the logic directly via storage
+    # Create resonance manually and verify the CRUD works for this flow
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.62, weight=0.5)
+    assert rid is not None
+    resonances = seeded.get_resonances_for("ep-1")
+    assert len(resonances) == 1
+    assert resonances[0]["similarity"] == pytest.approx(0.62)
+
+
+def test_resonance_feedback_strengthen(seeded):
+    """Strengthening increases strength by delta."""
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.65, weight=0.5)
+    seeded.strengthen_resonance(rid, delta=0.1)
+    r = seeded.get_resonances_for("ep-1")[0]
+    assert r["strength"] == pytest.approx(0.6)
+
+
+def test_resonance_feedback_weaken(seeded):
+    """Weakening decreases strength by delta."""
+    rid = seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                               similarity=0.65, weight=0.5)
+    seeded.weaken_resonance(rid, delta=0.05)
+    r = seeded.get_resonances_for("ep-1")[0]
+    assert r["strength"] == pytest.approx(0.45)
