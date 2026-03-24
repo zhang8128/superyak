@@ -155,6 +155,55 @@ def test_resonance_feedback_weaken(seeded):
     assert r["strength"] == pytest.approx(0.45)
 
 
+def test_resonance_end_to_end(store):
+    """Full cycle: store, form resonance, surface, feedback."""
+    import numpy as np
+    from resonance import form_resonances, surface_resonances
+
+    # Create two episodes with controlled similarity (~0.6, in resonance zone)
+    base = np.random.randn(768).astype(np.float32)
+    base /= np.linalg.norm(base)
+    # Perturb to get ~0.6 cosine similarity
+    noise = np.random.randn(768).astype(np.float32)
+    noise /= np.linalg.norm(noise)
+    similar = 0.6 * base + 0.8 * noise  # cos sim ≈ 0.6
+    similar /= np.linalg.norm(similar)
+
+    store.add_episode(id="e2e-1", session_id="s1", content="thought about trees",
+                      embedding=base.tolist())
+    store.add_episode(id="e2e-2", session_id="s1", content="thought about forests",
+                      embedding=similar.tolist())
+
+    # Form resonances
+    results = [
+        {"id": "e2e-1", "layer": "episode", "score": 0.9},
+        {"id": "e2e-2", "layer": "episode", "score": 0.8},
+    ]
+    formed = form_resonances(store, results, reinforce_threshold=0.70)
+
+    # Verify resonance was created (similarity should be ~0.6, in zone)
+    resonances = store.get_resonances_for("e2e-1")
+    assert len(resonances) >= 1, f"Expected resonance, formed={formed}"
+
+    # Set high weight+strength so surfacing is near-certain
+    rid = resonances[0]["id"]
+    store.conn.execute("UPDATE resonances SET weight=0.99, strength=0.99 WHERE id=?", (rid,))
+    store.conn.commit()
+
+    # Surface
+    existing = {"e2e-1"}
+    surfaced = surface_resonances(store, [{"id": "e2e-1", "layer": "episode"}],
+                                  existing, max_resonant=2)
+    assert len(surfaced) >= 1
+    assert surfaced[0].get("resonant") is True
+    assert surfaced[0]["id"] == "e2e-2"
+
+    # Feedback: strengthen
+    store.strengthen_resonance(rid, delta=0.1)
+    r = store.get_resonances_for("e2e-1")[0]
+    assert r["strength"] >= 0.99  # was already 0.99, capped at 1.0
+
+
 def test_prune_cleans_up_resonances(seeded):
     """Pruning a decayed episode also removes its resonances."""
     seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
