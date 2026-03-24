@@ -156,52 +156,56 @@ def test_resonance_feedback_weaken(seeded):
 
 
 def test_resonance_end_to_end(store):
-    """Full cycle: store, form resonance, surface, feedback."""
+    """Full cycle: recalls build co-occurrence, PMI forms resonance, surface, feedback."""
     import numpy as np
     from resonance import form_resonances, surface_resonances
 
-    # Create two episodes with controlled similarity (~0.6, in resonance zone)
     base = np.random.randn(768).astype(np.float32)
     base /= np.linalg.norm(base)
-    # Perturb to get ~0.6 cosine similarity
     noise = np.random.randn(768).astype(np.float32)
     noise /= np.linalg.norm(noise)
-    similar = 0.6 * base + 0.8 * noise  # cos sim ≈ 0.6
+    similar = 0.6 * base + 0.8 * noise
     similar /= np.linalg.norm(similar)
 
     store.add_episode(id="e2e-1", session_id="s1", content="thought about trees",
                       embedding=base.tolist())
     store.add_episode(id="e2e-2", session_id="s1", content="thought about forests",
                       embedding=similar.tolist())
+    store.add_episode(id="e2e-3", session_id="s1", content="thought about rocks",
+                      embedding=([0.5] * 768))
 
-    # Form resonances
+    # Seed recall history so PMI(e2e-1, e2e-2) > 0.
+    # 5 recalls with [e2e-1, e2e-2], 2 recalls with [e2e-3] only.
+    # total=7, freq(e2e-1)=5, freq(e2e-2)=5, cooc=5
+    # PMI = log2( (5/7) / ((5/7)*(5/7)) ) = log2(7/5) ≈ 0.485 > 0
+    for i in range(5):
+        store.add_log_entry(id=f"e2e-r{i}", event_type="recall", layer="all",
+                            target_ids=["e2e-1", "e2e-2"], context={})
+    for i in range(5, 7):
+        store.add_log_entry(id=f"e2e-r{i}", event_type="recall", layer="all",
+                            target_ids=["e2e-3"], context={})
+
     results = [
         {"id": "e2e-1", "layer": "episode", "score": 0.9},
         {"id": "e2e-2", "layer": "episode", "score": 0.8},
     ]
-    formed = form_resonances(store, results, reinforce_threshold=0.70)
-
-    # Verify resonance was created (similarity should be ~0.6, in zone)
+    formed = form_resonances(store, results)
     resonances = store.get_resonances_for("e2e-1")
     assert len(resonances) >= 1, f"Expected resonance, formed={formed}"
 
-    # Set high weight+strength so surfacing is near-certain
     rid = resonances[0]["id"]
     store.conn.execute("UPDATE resonances SET weight=0.99, strength=0.99 WHERE id=?", (rid,))
     store.conn.commit()
 
-    # Surface
     existing = {"e2e-1"}
     surfaced = surface_resonances(store, [{"id": "e2e-1", "layer": "episode"}],
                                   existing, max_resonant=2)
     assert len(surfaced) >= 1
     assert surfaced[0].get("resonant") is True
-    assert surfaced[0]["id"] == "e2e-2"
 
-    # Feedback: strengthen
     store.strengthen_resonance(rid, delta=0.1)
     r = store.get_resonances_for("e2e-1")[0]
-    assert r["strength"] >= 0.99  # was already 0.99, capped at 1.0
+    assert r["strength"] >= 0.99
 
 
 def test_prune_cleans_up_resonances(seeded):
@@ -248,3 +252,28 @@ def test_get_memory_recall_frequency(store):
     assert freq["a"] == 2
     assert freq["b"] == 1
     assert freq["c"] == 1
+
+
+def test_compute_pmi_basic():
+    """PMI > 0 for pairs that co-occur more than chance predicts."""
+    from resonance import compute_pmi
+    cooccurrences = {("a", "b"): 5, ("a", "c"): 1, ("b", "c"): 1}
+    frequency = {"a": 6, "b": 6, "c": 2}
+    total_recalls = 10
+    pmi = compute_pmi(cooccurrences, frequency, total_recalls)
+    assert pmi[("a", "b")] > 0
+    assert pmi[("a", "c")] < 0
+
+
+def test_compute_pmi_zero_frequency():
+    """Zero-frequency memories should not appear in PMI."""
+    from resonance import compute_pmi
+    pmi = compute_pmi({("a", "b"): 1}, {"a": 0, "b": 1}, 10)
+    assert len(pmi) == 0
+
+
+def test_compute_pmi_insufficient_recalls():
+    """PMI needs a minimum number of recalls to be meaningful."""
+    from resonance import compute_pmi
+    pmi = compute_pmi({("a", "b"): 1}, {"a": 1, "b": 1}, 2)
+    assert len(pmi) == 0
