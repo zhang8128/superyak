@@ -594,7 +594,7 @@ def recall(
             event_type="recall",
             layer="instinct",
             target_ids=[r["id"] for r in results],
-            context={"recall_id": recall_id, "query": query},
+            context={"recall_id": recall_id, "query": query, "session_id": _session_id},
         )
         return {"results": results, "recall_id": recall_id}
 
@@ -807,7 +807,7 @@ def recall(
         event_type="recall",
         layer=layer or "all",
         target_ids=result_ids,
-        context={"recall_id": recall_id, "query": query},
+        context={"recall_id": recall_id, "query": query, "session_id": _session_id},
     )
 
     # Increment access count for episode results
