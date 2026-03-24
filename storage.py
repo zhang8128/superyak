@@ -469,6 +469,8 @@ class Storage:
         self.conn.execute(
             f"DELETE FROM episodes WHERE id IN ({placeholders})", ids
         )
+        # Clean up resonances referencing pruned episodes
+        self.cleanup_resonances(ids)
         self.conn.commit()
         logger.info("Pruned %d decayed episodes (threshold=%.3f)", len(ids), threshold)
         return len(ids)

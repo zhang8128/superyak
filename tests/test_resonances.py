@@ -153,3 +153,14 @@ def test_resonance_feedback_weaken(seeded):
     seeded.weaken_resonance(rid, delta=0.05)
     r = seeded.get_resonances_for("ep-1")[0]
     assert r["strength"] == pytest.approx(0.45)
+
+
+def test_prune_cleans_up_resonances(seeded):
+    """Pruning a decayed episode also removes its resonances."""
+    seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
+                         similarity=0.65, weight=0.5)
+    seeded.conn.execute("UPDATE episodes SET decay_strength=0.01, compressed=1 WHERE id='ep-1'")
+    seeded.conn.commit()
+    seeded.prune_decayed(threshold=0.05)
+    rows = seeded.conn.execute("SELECT count(*) FROM resonances").fetchone()
+    assert rows[0] == 0

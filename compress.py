@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import uuid
 from typing import TYPE_CHECKING
 
@@ -106,13 +107,14 @@ class Compressor:
             centroid = np.mean(embs, axis=0).tolist()
 
             # Check for existing semantic match
-            action, match = self._find_semantic_match(centroid)
+            action, match, near_miss = self._find_semantic_match(centroid)
 
             clusters.append({
                 "episodes": eps,
                 "centroid": centroid,
                 "match": match,
                 "action": action,
+                "near_miss": near_miss,
             })
 
         compress_id = str(uuid.uuid4())
@@ -143,36 +145,54 @@ class Compressor:
                 break
 
             summary = summaries[i]
-            episode_ids = [ep["id"] for ep in cluster["episodes"]]
+            all_episode_ids = [ep["id"] for ep in cluster["episodes"]]
             centroid = cluster["centroid"]
             action = summary.get("action", cluster["action"])
 
             if action == "reinforce":
                 semantic_id = summary.get("semantic_id") or (cluster["match"] or {}).get("id")
                 if semantic_id:
-                    self._storage.reinforce_semantic(semantic_id, episode_ids)
+                    self._storage.reinforce_semantic(semantic_id, all_episode_ids)
                     semantics_reinforced += 1
             else:
-                # New semantic — these source episodes become core because
-                # they're the evidence for a new conclusion. Reinforcement
-                # episodes don't need this: the pattern is already captured.
                 new_id = str(uuid.uuid4())
-                n_episodes = len(cluster["episodes"])
-                confidence = min(0.9, 0.5 + 0.1 * (n_episodes - 1))
+                semantic_content = summary.get("content", "")
+
+                # Only link episodes actually similar to the semantic content.
+                # Prevents mega-semantics where loose clusters create catch-all
+                # source links (e.g. 128 unrelated episodes linked to one semantic).
+                source_ids = self._filter_relevant_sources(
+                    cluster["episodes"], semantic_content,
+                )
+                if not source_ids:
+                    source_ids = all_episode_ids[:3]  # fallback: keep a few
+
+                n_sources = len(source_ids)
+                confidence = min(0.9, 0.5 + 0.1 * (n_sources - 1))
                 self._storage.add_semantic(
                     id=new_id,
-                    content=summary.get("content", ""),
+                    content=semantic_content,
                     kind=summary.get("kind", "fact"),
                     confidence=confidence,
                     embedding=centroid,
-                    source_episode_ids=episode_ids,
+                    source_episode_ids=source_ids,
                     auto_generated=bool(summary.get("auto_generated", False)),
                 )
                 semantics_created += 1
-                self._storage.mark_core_batch(episode_ids)
+                self._storage.mark_core_batch(source_ids)
 
-            self._storage.mark_episodes_compressed(episode_ids)
-            episodes_processed += len(episode_ids)
+                near_miss = cluster.get("near_miss")
+                if near_miss:
+                    weight = max(0.1, min(0.9, random.gauss(0.5, 0.15)))
+                    self._storage.add_resonance(
+                        new_id, "semantic",
+                        near_miss["id"], "semantic",
+                        similarity=near_miss["similarity"],
+                        weight=weight,
+                    )
+
+            self._storage.mark_episodes_compressed(all_episode_ids)
+            episodes_processed += len(all_episode_ids)
 
         # Log compression event
         self._storage.add_log_entry(
@@ -320,42 +340,48 @@ class Compressor:
         """Generate notice/implication fields from semantic content.
 
         Returns (notice, implication) where:
-        - notice: describes when/where the instinct applies (perceptual cue)
-        - implication: what should happen (the behavioral response)
+        - notice: brief context cue — when does this apply? (< 60 chars ideal)
+        - implication: what follows — one sentence max (< 120 chars ideal)
+
+        The notice is what appears in mid-conversation nudges. It must be
+        short enough to glance at and decide whether to pull the thread.
+        The implication is revealed if you pull.
         """
         if not content:
             return (f"when: {kind}", content)
 
+        # Extract the first sentence as the core insight
+        first_sentence = content.split(". ")[0].strip().rstrip(".")
+
         lower = content.lower()
 
-        if lower.startswith("always "):
-            rest = content[len("always "):].strip()
-            notice = f"when making choices about: {rest}"
-            implication = content
-        elif lower.startswith("never "):
-            rest = content[len("never "):].strip()
-            notice = f"when considering: {rest}"
-            implication = content
-        elif lower.startswith("prefer "):
-            rest = content[len("prefer "):].strip()
-            notice = f"when deciding on: {rest}"
-            implication = content
-        elif lower.startswith("avoid "):
-            rest = content[len("avoid "):].strip()
-            notice = f"when considering: {rest}"
-            implication = content
-        elif " when " in content:
-            idx = content.index(" when ")
-            before = content[:idx].strip()
-            after = content[idx + len(" when "):].strip()
-            notice = f"when {after}"
-            implication = before
-        elif kind == "preference":
-            notice = f"when making choices about: {content[:80]}"
-            implication = content
+        # Try to find a natural "when" boundary
+        if " when " in lower:
+            idx = lower.index(" when ")
+            after = content[idx + len(" when "):].split(". ")[0].strip()
+            before = content[:idx].split(". ")[0].strip()
+            notice = f"when {after[:55]}"
+            implication = before[:120]
+        elif lower.startswith(("always ", "never ", "prefer ", "avoid ")):
+            # Action-oriented: the whole thing is the implication
+            word_end = content.index(" ")
+            notice = f"when relevant: {first_sentence[:45]}"
+            implication = first_sentence[:120]
+        elif kind == "constraint":
+            # Constraints are imperatives — the notice is the domain,
+            # the implication is the rule itself.
+            # Extract domain from key nouns (crude but better than "when use X")
+            words = first_sentence.split()
+            # Skip leading verbs to find the domain
+            skip = {"use", "always", "never", "ensure", "make", "keep", "avoid",
+                    "prefer", "do", "don't", "check", "run", "set", "add"}
+            domain_words = [w for w in words[:8] if w.lower().rstrip(",:;") not in skip]
+            domain = " ".join(domain_words[:4]).rstrip(",:;") if domain_words else kind
+            notice = f"when {domain[:55].lower()}"
+            implication = first_sentence[:120]
         else:
-            notice = f"when: {content[:80]}"
-            implication = content
+            notice = f"when {first_sentence[:55].lower()}"
+            implication = first_sentence[:120]
 
         return (notice, implication)
 
@@ -396,10 +422,18 @@ class Compressor:
                 # Context vector: embed the notice (describes when instinct applies)
                 context_embedding = self._embeddings.embed([notice], prefix="search_document")[0]
 
+                # Cap action length — instincts are dispositions, not essays.
+                # The full semantic content is still available via source links.
+                action = sem["content"]
+                if len(action) > 200:
+                    # Take first two sentences max
+                    sentences = action.split(". ")
+                    action = ". ".join(sentences[:2]).rstrip(".") + "."
+
                 self._storage.add_instinct(
                     id=instinct_id,
                     trigger=kind,
-                    action=sem["content"],
+                    action=action,
                     source_semantic_ids=[sem["id"]],
                     strength=0.5,
                     embedding=instinct_embedding,
@@ -474,10 +508,13 @@ class Compressor:
             logger.debug("Instinct dedup check failed", exc_info=True)
         return False
 
-    def _find_semantic_match(self, centroid: list[float]) -> tuple[str, dict | None]:
+    def _find_semantic_match(self, centroid: list[float]) -> tuple[str, dict | None, dict | None]:
         """Search for existing semantic matching this centroid.
 
-        Returns (action, match_info) where action is 'reinforce' or 'new'.
+        Returns (action, match_info, near_miss) where:
+        - action is 'reinforce' or 'new'
+        - match_info is populated when action == 'reinforce'
+        - near_miss is populated when similarity is in [0.50, reinforce_threshold)
         """
         try:
             results = self._storage.search_vectors("semantic", centroid, k=1)
@@ -487,11 +524,46 @@ class Compressor:
                 if similarity >= self._reinforce_threshold:
                     sem = self._storage.get_semantic(sem_id)
                     if sem:
-                        return "reinforce", {"id": sem_id, "similarity": similarity, "content": sem["content"]}
+                        return "reinforce", {"id": sem_id, "similarity": similarity, "content": sem["content"]}, None
+                elif similarity >= 0.50:
+                    return "new", None, {"id": sem_id, "similarity": similarity}
         except Exception:
             logger.debug("Semantic vector search failed (table may be empty)")
 
-        return "new", None
+        return "new", None, None
+
+    def _filter_relevant_sources(
+        self, episodes: list[dict], semantic_content: str,
+    ) -> list[str]:
+        """Return IDs of episodes actually similar to the semantic content.
+
+        Prevents mega-semantics: only episodes above the reinforce threshold
+        get linked as sources. The rest are still marked compressed but don't
+        pollute the source chain.
+        """
+        if not semantic_content or not episodes:
+            return []
+
+        sem_emb = self._embeddings.embed([semantic_content], prefix="clustering")
+        if not sem_emb or sem_emb[0] is None:
+            return []
+
+        sem_arr = np.array(sem_emb[0])
+        texts = [ep["content"] for ep in episodes]
+        ep_embs = self._embeddings.embed(texts, prefix="clustering")
+
+        relevant = []
+        for ep, emb in zip(episodes, ep_embs):
+            if emb is None:
+                continue
+            emb_arr = np.array(emb)
+            norm = np.linalg.norm(sem_arr) * np.linalg.norm(emb_arr)
+            if norm > 0:
+                sim = np.dot(sem_arr, emb_arr) / norm
+                if sim >= self._reinforce_threshold:
+                    relevant.append(ep["id"])
+
+        return relevant
 
     def _reset_all(self) -> None:
         """Reset all episodes to uncompressed and delete all semantics and instincts."""
@@ -505,6 +577,7 @@ class Compressor:
             "DELETE FROM semantic_vectors WHERE id IN (SELECT id FROM semantics)"
         )
         self._storage.conn.execute("DELETE FROM semantics")
+        self._storage.conn.execute("DELETE FROM resonances")
         self._storage.conn.commit()
 
     def _refine_clusters(self) -> dict:
@@ -539,6 +612,7 @@ class Compressor:
                     "centroid": None,
                     "match": {"id": sem["id"], "content": sem["content"]},
                     "action": "reinforce",
+                    "near_miss": None,
                 })
 
         compress_id = str(uuid.uuid4())
