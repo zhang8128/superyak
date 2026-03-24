@@ -277,3 +277,63 @@ def test_compute_pmi_insufficient_recalls():
     from resonance import compute_pmi
     pmi = compute_pmi({("a", "b"): 1}, {"a": 1, "b": 1}, 2)
     assert len(pmi) == 0
+
+
+def test_pmi_resonance_end_to_end(store):
+    """Full cycle: multiple recalls build co-occurrence, PMI forms resonance."""
+    store.add_episode(id="pmi-1", session_id="s1", content="about trees",
+                      embedding=[0.1] * 768)
+    store.add_episode(id="pmi-2", session_id="s1", content="about forests",
+                      embedding=[0.2] * 768)
+    store.add_episode(id="pmi-3", session_id="s1", content="about oceans",
+                      embedding=[0.3] * 768)
+
+    # Simulate 7 recalls: pmi-1 and pmi-2 co-occur in 5 recalls,
+    # pmi-3 appears alone in 2 recalls.
+    # Total: pmi-1 freq=5, pmi-2 freq=5, pmi-3 freq=2, cooc(1,2)=5
+    # PMI(1,2) = log2((5/7) / ((5/7)*(5/7))) = log2(7/5) > 0
+    for i in range(5):
+        store.add_log_entry(
+            id=f"recall-{i}", event_type="recall", layer="all",
+            target_ids=["pmi-1", "pmi-2"], context={"recall_id": f"recall-{i}", "query": f"q{i}"},
+        )
+    for i in range(5, 7):
+        store.add_log_entry(
+            id=f"recall-{i}", event_type="recall", layer="all",
+            target_ids=["pmi-3"], context={"recall_id": f"recall-{i}", "query": f"q{i}"},
+        )
+
+    from resonance import form_resonances
+    results = [
+        {"id": "pmi-1", "layer": "episode"},
+        {"id": "pmi-2", "layer": "episode"},
+        {"id": "pmi-3", "layer": "episode"},
+    ]
+    formed = form_resonances(store, results)
+
+    # pmi-1 and pmi-2 co-occur more than chance predicts — should have positive PMI
+    r12 = store.get_resonances_for("pmi-1")
+    pair_with_2 = [r for r in r12 if r["memory_b"] == "pmi-2" or r["memory_a"] == "pmi-2"]
+    assert len(pair_with_2) >= 1, f"Expected pmi-1/pmi-2 resonance, formed={formed}"
+
+
+def test_pmi_no_resonance_below_threshold(store):
+    """Pairs that co-occur at chance level don't form resonances."""
+    store.add_episode(id="n-1", session_id="s1", content="a", embedding=[0.1] * 768)
+    store.add_episode(id="n-2", session_id="s1", content="b", embedding=[0.2] * 768)
+
+    # Both appear in every recall — PMI ≈ 0
+    for i in range(6):
+        store.add_log_entry(
+            id=f"nr-{i}", event_type="recall", layer="all",
+            target_ids=["n-1", "n-2"],
+            context={"recall_id": f"nr-{i}", "query": f"q{i}"},
+        )
+
+    from resonance import form_resonances
+    results = [{"id": "n-1", "layer": "episode"}, {"id": "n-2", "layer": "episode"}]
+    formed = form_resonances(store, results)
+
+    # Both appear in ALL recalls, so P(a,b) = P(a)*P(b), PMI = 0
+    resonances = store.get_resonances_for("n-1")
+    assert len(resonances) == 0, "Expected no resonance for chance-level co-occurrence"
