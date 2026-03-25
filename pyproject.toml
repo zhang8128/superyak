@@ -26,7 +26,7 @@ dev = ["pytest>=9.0"]
 llm = ["anthropic"]
 
 [tool.setuptools]
-py-modules = ["server", "storage", "embeddings", "compress", "reflection", "indexer", "config", "logging_config", "watcher", "dedup"]
+py-modules = ["server", "storage", "embeddings", "compress", "reflection", "indexer", "config", "logging_config", "watcher", "dedup", "knowledge"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
