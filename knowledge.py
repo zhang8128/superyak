@@ -1,0 +1,230 @@
+"""Graphiti knowledge graph bridge.
+
+Owns all interaction with Graphiti — init, episode feeding, search.
+Engram's identity layers (episodes, semantics, instincts, dreams)
+are unchanged. This module adds applied knowledge: entities,
+relationships, and temporal facts.
+
+Graphiti uses Kuzu (embedded) for storage and Ollama for extraction.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from config import GraphConfig
+
+logger = logging.getLogger("engram.knowledge")
+
+
+def _fmt_dt(dt) -> str | None:
+    """Format a datetime to ISO string, or None."""
+    if dt is None:
+        return None
+    if hasattr(dt, "isoformat"):
+        return dt.isoformat()
+    return str(dt)
+
+
+class KnowledgeGraph:
+    """Bridge between engram and Graphiti.
+
+    Two integration points:
+    - feed(): called during compression to send episodes for extraction
+    - search(): called during recall to get entities and facts
+    """
+
+    def __init__(self, config: GraphConfig):
+        self._config = config
+        self._graphiti = None
+        self._executor = None
+
+        if not config.enabled:
+            logger.info("Knowledge graph disabled")
+            return
+
+        try:
+            self._init_graphiti()
+        except Exception:
+            logger.warning("Knowledge graph init failed — continuing without", exc_info=True)
+            self._config.enabled = False
+
+    @property
+    def enabled(self) -> bool:
+        return self._config.enabled
+
+    def _init_graphiti(self):
+        """Initialize Graphiti with Kuzu backend and Ollama LLM."""
+        from graphiti_core import Graphiti
+        from graphiti_core.driver.kuzu_driver import KuzuDriver
+        from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+        from graphiti_core.llm_client.config import LLMConfig
+
+        db_path = self._config.db_path
+        if not db_path:
+            home = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram"))
+            db_path = str(home / ".engram" / "knowledge.kuzu")
+
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        driver = KuzuDriver(db=db_path)
+
+        # Ollama exposes an OpenAI-compatible API
+        model = os.environ.get("ENGRAM_GRAPH_MODEL", self._config.model)
+        ollama_url = self._config.ollama_url
+
+        llm_client = OpenAIGenericClient(
+            base_url=f"{ollama_url}/v1",
+            api_key="ollama",  # Ollama doesn't need a real key
+            config=LLMConfig(model=model, small_model=model),
+        )
+
+        self._graphiti = Graphiti(
+            graph_driver=driver,
+            llm_client=llm_client,
+        )
+
+        # Build indices
+        self._run_async(self._graphiti.build_indices_and_constraints())
+        logger.info("Knowledge graph initialized (kuzu: %s, model: %s)", db_path, model)
+
+    def _run_async(self, coro):
+        """Run an async coroutine synchronously.
+
+        Graphiti's API is async. Engram's MCP tools are sync.
+        This bridges the gap.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            if self._executor is None:
+                self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            return self._executor.submit(asyncio.run, coro).result()
+        else:
+            return asyncio.run(coro)
+
+    def feed(
+        self,
+        episodes: list[dict],
+        semantic_content: str = "",
+    ) -> dict | None:
+        """Feed episode cluster to Graphiti for entity/relationship extraction.
+
+        Called during compression after a semantic is created.
+        Each episode becomes a Graphiti episode with extraction.
+
+        Args:
+            episodes: List of engram episode dicts (id, content, created_at).
+            semantic_content: The semantic summary, used as source_description.
+
+        Returns:
+            Summary of extracted entities/relationships, or None if disabled.
+        """
+        if not self.enabled or not self._graphiti or not episodes:
+            return None
+
+        from graphiti_core.nodes import EpisodeType
+
+        total_nodes = 0
+        total_edges = 0
+
+        for ep in episodes:
+            created_at = ep.get("created_at", "")
+            try:
+                ref_time = datetime.fromisoformat(created_at)
+                if ref_time.tzinfo is None:
+                    ref_time = ref_time.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                ref_time = datetime.now(timezone.utc)
+
+            try:
+                result = self._run_async(
+                    self._graphiti.add_episode(
+                        name=f"engram-{ep['id']}",
+                        episode_body=ep.get("content", ""),
+                        source_description=semantic_content or "engram compression",
+                        reference_time=ref_time,
+                        source=EpisodeType.text,
+                    )
+                )
+                total_nodes += len(result.nodes)
+                total_edges += len(result.edges)
+            except Exception:
+                logger.warning("Failed to feed episode %s to knowledge graph", ep["id"], exc_info=True)
+
+        logger.info(
+            "Fed %d episodes to knowledge graph: %d entities, %d relationships",
+            len(episodes), total_nodes, total_edges,
+        )
+
+        return {
+            "episodes_fed": len(episodes),
+            "entities_extracted": total_nodes,
+            "relationships_extracted": total_edges,
+        }
+
+    def search(self, query: str, num_results: int = 10) -> dict | None:
+        """Search the knowledge graph for entities and facts.
+
+        Called during recall to enrich memory results with structured knowledge.
+
+        Args:
+            query: Search query string.
+            num_results: Max results to return.
+
+        Returns:
+            Dict with 'facts' (current) and 'historical' (invalidated), or None if disabled.
+        """
+        if not self.enabled or not self._graphiti:
+            return None
+
+        try:
+            edges = self._run_async(
+                self._graphiti.search(query=query, num_results=num_results)
+            )
+        except Exception:
+            logger.warning("Knowledge graph search failed", exc_info=True)
+            return {"facts": [], "historical": []}
+
+        facts = []
+        historical = []
+
+        for edge in edges:
+            entry = {
+                "id": str(getattr(edge, "uuid", "")),
+                "relationship": getattr(edge, "name", ""),
+                "fact": getattr(edge, "fact", ""),
+                "source": getattr(edge, "source_node_name", ""),
+                "target": getattr(edge, "target_node_name", ""),
+                "valid_at": _fmt_dt(getattr(edge, "valid_at", None)),
+            }
+
+            invalid_at = getattr(edge, "invalid_at", None)
+            if invalid_at is not None:
+                entry["invalid_at"] = _fmt_dt(invalid_at)
+                historical.append(entry)
+            else:
+                facts.append(entry)
+
+        return {"facts": facts, "historical": historical}
+
+    def close(self):
+        """Clean up Graphiti resources."""
+        if self._graphiti is not None:
+            try:
+                self._run_async(self._graphiti.close())
+            except Exception:
+                logger.debug("Knowledge graph close failed", exc_info=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None

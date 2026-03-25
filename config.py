@@ -89,6 +89,14 @@ class SignalsConfig:
 
 
 @dataclass
+class GraphConfig:
+    enabled: bool = True
+    model: str = "nemotron-nano"
+    ollama_url: str = "http://localhost:11434"
+    db_path: str = ""  # set at runtime based on ENGRAM_HOME
+
+
+@dataclass
 class EngramConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
@@ -101,6 +109,7 @@ class EngramConfig:
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     signals: SignalsConfig = field(default_factory=SignalsConfig)
+    graph: GraphConfig = field(default_factory=GraphConfig)
     instance: str | None = None
     session_context: str | None = None
 
@@ -158,6 +167,11 @@ staleness_days = 30
 
 [signals]
 retention_days = 30
+
+[graph]
+enabled = true
+model = "nemotron-nano"
+ollama_url = "http://localhost:11434"
 """
 
 
@@ -187,6 +201,7 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         compression=CompressionConfig(**raw.get("compression", {})),
         reflection=ReflectionConfig(**raw.get("reflection", {})),
         signals=SignalsConfig(**raw.get("signals", {})),
+        graph=GraphConfig(**raw.get("graph", {})),
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),
     )
