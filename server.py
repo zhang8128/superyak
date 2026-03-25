@@ -1,6 +1,7 @@
 """Engram MCP Server v3 — layered memory with compression and reflection."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
@@ -108,6 +109,7 @@ _recall_scores: dict[str, dict[str, float]] = {}  # recall_id -> {result_id: sco
 _recall_resonances: dict[str, list[dict]] = {}  # recall_id -> [{resonance_id, memory_id}]
 _instinct_graph = None
 _last_instinct_id = None
+_knowledge_graph = None
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -136,7 +138,7 @@ def _apply_resonance_feedback(storage, recall_id: str, used: bool) -> None:
 
 
 def _init():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph
     if _storage is not None:
         return
     from embeddings import NomicEmbedProvider
@@ -165,10 +167,24 @@ def _init():
     dedup_model = os.environ.get("ENGRAM_DEDUP_MODEL", "qwen3.5:27b")
     _dedup = Deduplicator(DedupConfig(model=dedup_model))
 
+    # Knowledge graph (Graphiti + Kuzu)
+    graph_model = os.environ.get("ENGRAM_GRAPH_MODEL")
+    if _config and _config.graph.enabled:
+        from knowledge import KnowledgeGraph
+        graph_config = _config.graph
+        if graph_model:
+            graph_config.model = graph_model
+        if not graph_config.db_path:
+            graph_config.db_path = str(db_path.parent / "knowledge.kuzu")
+        _knowledge_graph = KnowledgeGraph(graph_config)
+    else:
+        _knowledge_graph = None
+
     _compressor = Compressor(
         _storage, _embeddings,
         _config.compression if _config else None,
         deduplicator=_dedup,
+        knowledge_graph=_knowledge_graph,
     )
 
     from reflection import Reflector
@@ -187,6 +203,7 @@ def _init():
     import atexit
     atexit.register(lambda: _watcher.stop() if _watcher else None)
     atexit.register(lambda: _storage.close() if _storage else None)
+    atexit.register(lambda: _knowledge_graph.close() if _knowledge_graph else None)
 
     # Federation: genome sync + inbox processing
     if _config and _config.instance:
@@ -909,12 +926,22 @@ def recall(
         _rng.shuffle(rest)
         results = stable + rest
 
+    # Knowledge graph: entities and temporal facts
+    knowledge = None
+    if _knowledge_graph is not None and _knowledge_graph.enabled:
+        try:
+            knowledge = _knowledge_graph.search(query)
+        except Exception:
+            logger.warning("Knowledge graph search failed during recall", exc_info=True)
+
     response = {"results": results, "recall_id": recall_id}
     if _residue_active:
         response["dreaming"] = True
         response["note"] = "Scores hidden — some memories may be dream-pulled. Use dream_verify(recall_id) after engaging."
     if search_errors:
         response["degraded"] = search_errors
+    if knowledge:
+        response["knowledge"] = knowledge
     return response
 
 
@@ -989,6 +1016,105 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
     _last_instinct_id = instinct_id
 
     return result
+
+
+@mcp.tool()
+def challenge_instinct(instinct_id: str, evidence: str) -> dict:
+    """Challenge an instinct with contradictory evidence.
+
+    This is Marsh showing up with the names — not just overriding an instinct
+    in the moment, but presenting evidence that the instinct itself may be wrong.
+    Stronger penalty than a single override. The evidence is stored as an episode
+    so future compression can weigh it against the instinct's source material.
+
+    Args:
+        instinct_id: The instinct being challenged.
+        evidence: What contradicts it — the names on the paper.
+    """
+    _init()
+    logger.info("Tool called: challenge_instinct(instinct_id=%s)", instinct_id)
+
+    inst = _storage.get_instinct(instinct_id)
+    if inst is None:
+        return {"error": f"Unknown instinct: {instinct_id}"}
+
+    old_strength = inst["strength"]
+    _storage.challenge_instinct(instinct_id)
+    updated = _storage.get_instinct(instinct_id)
+
+    # Store the challenge as an episode — evidence that persists
+    episode_id = str(uuid.uuid4())
+    content = (
+        f"Instinct challenged: \"{inst['action'][:100]}\"\n"
+        f"Evidence: {evidence}"
+    )
+    embedding = _embeddings.embed([content], prefix="search_document")[0]
+    _storage.add_episode(
+        id=episode_id,
+        content=content,
+        embedding=embedding,
+        context=json.dumps({
+            "type": "instinct_challenge",
+            "instinct_id": instinct_id,
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        }),
+    )
+
+    return {
+        "instinct_id": instinct_id,
+        "action": inst["action"][:100],
+        "old_strength": old_strength,
+        "new_strength": updated["strength"] if updated else 0.0,
+        "evidence_stored": episode_id,
+    }
+
+
+@mcp.tool()
+def retire_instinct(instinct_id: str, reason: str) -> dict:
+    """Remove an instinct entirely. For duplicates, obsolete patterns,
+    or instincts that should never have formed.
+
+    Not decay — deliberate removal. The reason is stored as an episode
+    so the system remembers why it let go.
+
+    Args:
+        instinct_id: The instinct to retire.
+        reason: Why it's being removed.
+    """
+    _init()
+    logger.info("Tool called: retire_instinct(instinct_id=%s)", instinct_id)
+
+    inst = _storage.get_instinct(instinct_id)
+    if inst is None:
+        return {"error": f"Unknown instinct: {instinct_id}"}
+
+    action = inst["action"]
+    _storage.retire_instinct(instinct_id)
+
+    # Remember the retirement
+    episode_id = str(uuid.uuid4())
+    content = (
+        f"Retired instinct: \"{action[:100]}\"\n"
+        f"Reason: {reason}"
+    )
+    embedding = _embeddings.embed([content], prefix="search_document")[0]
+    _storage.add_episode(
+        id=episode_id,
+        content=content,
+        embedding=embedding,
+        context=json.dumps({
+            "type": "instinct_retirement",
+            "instinct_id": instinct_id,
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        }),
+    )
+
+    return {
+        "retired": True,
+        "action": action[:100],
+        "reason": reason,
+        "retirement_stored": episode_id,
+    }
 
 
 def _safe_count(table: str) -> int | None:
