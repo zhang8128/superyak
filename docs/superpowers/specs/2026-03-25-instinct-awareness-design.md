@@ -112,49 +112,22 @@ Pattern observations (e.g., "instinct X is consistently grounded in dialogue
 but projects in descriptive passages") → stored as episodes in engram with
 `source="instinct_review"`.
 
-### Review Triggers: Random → Signal
+### Review Trigger: Every 10 Notes
 
-Deep reviews should happen when they feel natural. Start with randomness,
-let signal emerge.
+Simple: every 10 unreviewed instinct notes, the review runs. No
+probability, no signal scoring, no randomness.
 
-**Random baseline (scaffolding):**
-- ~15% chance when `chapter_title` changes between current and previous
-  passage (detected via a DB lookup comparing current chunk's chapter_title
-  to the prior chunk's)
-- ~5% chance every 20 passages (checked via `chunk_position % 20 == 0`)
-- Random triggers are **non-advisory** — if they fire, the review runs
-  automatically. This prevents epistemic closure where the reader
-  indefinitely declines to examine its own instincts.
+When `react()` stores an instinct note and the unreviewed count hits 10,
+the return value includes `review_due: True`. The reader stops reading
+and runs `review_instincts()` before continuing. This is mandatory, not
+advisory — it's a natural pause point that also lets the reading partner
+catch up to the reading pace.
 
-**Signal triggers (emerge over time, advisory):**
-- **Note density** — ≥5 unreviewed instinct notes in the last 10 passages.
-  Computed from the `instinct_notes` table: `SELECT COUNT(*) FROM
-  instinct_notes WHERE book_id=? AND chunk_position > ? AND reviewed=0`.
-- **Instinct repetition** — same `instinct_id` appears in ≥3 of the last
-  5 instinct notes. Computed from `instinct_ids` JSON arrays.
-  Suggests the instinct is dominating rather than illuminating.
+The count is a simple query: `SELECT COUNT(*) FROM instinct_notes WHERE
+book_id=? AND reviewed=0`.
 
-Signal triggers return `review_suggested: True` in the react() response.
-The reader decides whether to act. The two dropped triggers from v1
-(contradiction detection, correction events) required capabilities the
-system doesn't have — semantic comparison of free text and external event
-detection respectively. They can be added later if the structured
-`instinct_ids` field enables them.
-
-**Signal score:**
-
-```python
-signal_score = 0.0
-if unreviewed_note_density >= 5:
-    signal_score += 0.4
-if any instinct_id appears in >= 3 of last 5 notes:
-    signal_score += 0.4
-# signal_score caps at 0.8 — always some chance of not triggering
-```
-
-```python
-review_probability = max(random_baseline, min(signal_score, 0.8))
-```
+`review_instincts()` can also be called manually at any time — the 10-note
+trigger is a floor, not a ceiling.
 
 ### Review Storage
 
@@ -177,16 +150,13 @@ After a review, all covered instinct_notes have `reviewed=1` set.
 **reader/server.py:**
 - `react()` gains optional `instinct_notes: str` and `instinct_ids: list[str]`
 - `review_instincts()` new tool — runs deep review on demand or when triggered
-- `react()` return value gains optional `review_suggested` and `review_reason`
-  fields (for signal triggers) or runs review automatically (for random triggers)
+- `react()` return value gains `review_due: True` when 10 unreviewed notes accumulate
 
 **reader/store.py:**
 - New `instinct_notes` table
 - New `instinct_reviews` table
 - Methods: `store_instinct_note()`, `get_unreviewed_notes(limit=10)`,
-  `store_review()`, `mark_notes_reviewed()`, `get_chapter_title(book_id, position)`,
-  `count_recent_notes(book_id, since_position)`,
-  `get_recent_instinct_ids(book_id, last_n)`
+  `count_unreviewed_notes()`, `store_review()`, `mark_notes_reviewed()`
 
 **reader/reviewer.py:**
 - New file. Skeptical second-opinion engine.
