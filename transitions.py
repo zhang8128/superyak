@@ -7,7 +7,8 @@ Only stdlib + sqlite3.
 import hashlib
 import sqlite3
 from datetime import datetime, timezone
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 WEIGHT_CAP = 10.0
 
@@ -35,8 +36,8 @@ class TransitionGraph:
     - Weight cap: no edge weight exceeds WEIGHT_CAP.
     """
 
-    def __init__(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path)
+    def __init__(self, db_path: Union[str, Path]) -> None:
+        self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._ensure_schema()
 
