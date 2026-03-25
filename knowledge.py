@@ -23,6 +23,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger("engram.knowledge")
 
 
+def _fmt_dt(dt) -> str | None:
+    """Format a datetime to ISO string, or None."""
+    if dt is None:
+        return None
+    if hasattr(dt, "isoformat"):
+        return dt.isoformat()
+    return str(dt)
+
+
 class KnowledgeGraph:
     """Bridge between engram and Graphiti.
 
@@ -163,6 +172,51 @@ class KnowledgeGraph:
             "entities_extracted": total_nodes,
             "relationships_extracted": total_edges,
         }
+
+    def search(self, query: str, num_results: int = 10) -> dict | None:
+        """Search the knowledge graph for entities and facts.
+
+        Called during recall to enrich memory results with structured knowledge.
+
+        Args:
+            query: Search query string.
+            num_results: Max results to return.
+
+        Returns:
+            Dict with 'facts' (current) and 'historical' (invalidated), or None if disabled.
+        """
+        if not self.enabled or not self._graphiti:
+            return None
+
+        try:
+            edges = self._run_async(
+                self._graphiti.search(query=query, num_results=num_results)
+            )
+        except Exception:
+            logger.warning("Knowledge graph search failed", exc_info=True)
+            return {"facts": [], "historical": []}
+
+        facts = []
+        historical = []
+
+        for edge in edges:
+            entry = {
+                "id": str(getattr(edge, "uuid", "")),
+                "relationship": getattr(edge, "name", ""),
+                "fact": getattr(edge, "fact", ""),
+                "source": getattr(edge, "source_node_name", ""),
+                "target": getattr(edge, "target_node_name", ""),
+                "valid_at": _fmt_dt(getattr(edge, "valid_at", None)),
+            }
+
+            invalid_at = getattr(edge, "invalid_at", None)
+            if invalid_at is not None:
+                entry["invalid_at"] = _fmt_dt(invalid_at)
+                historical.append(entry)
+            else:
+                facts.append(entry)
+
+        return {"facts": facts, "historical": historical}
 
     def close(self):
         """Clean up Graphiti resources."""

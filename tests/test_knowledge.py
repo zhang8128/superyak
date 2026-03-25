@@ -77,3 +77,75 @@ class TestKnowledgeGraphFeed:
         kg = KnowledgeGraph(config)
         result = kg.feed([], semantic_content="test")
         assert result is None
+
+
+class TestKnowledgeGraphSearch:
+    def test_search_returns_entities_and_facts(self, graph_config):
+        from knowledge import KnowledgeGraph
+
+        mock_edge = MagicMock()
+        mock_edge.uuid = "edge-1"
+        mock_edge.name = "trusts"
+        mock_edge.fact = "Vin trusts Kelsier"
+        mock_edge.valid_at = datetime(2026, 3, 25, tzinfo=timezone.utc)
+        mock_edge.invalid_at = None
+        mock_edge.source_node_uuid = "node-1"
+        mock_edge.target_node_uuid = "node-2"
+        mock_edge.source_node_name = "Vin"
+        mock_edge.target_node_name = "Kelsier"
+
+        kg = KnowledgeGraph.__new__(KnowledgeGraph)
+        kg._config = graph_config
+        kg._config.enabled = True
+        kg._graphiti = MagicMock()
+        kg._executor = None
+        kg._graphiti.search = AsyncMock(return_value=[mock_edge])
+
+        result = kg.search("Vin's relationships")
+        assert result is not None
+        assert len(result["facts"]) == 1
+        assert result["facts"][0]["fact"] == "Vin trusts Kelsier"
+        assert result["facts"][0]["source"] == "Vin"
+        assert result["facts"][0]["target"] == "Kelsier"
+
+    def test_search_separates_current_and_historical(self, graph_config):
+        from knowledge import KnowledgeGraph
+
+        current = MagicMock()
+        current.uuid = "e-1"
+        current.name = "trusts"
+        current.fact = "Vin trusts Kelsier"
+        current.valid_at = datetime(2026, 3, 25, tzinfo=timezone.utc)
+        current.invalid_at = None
+        current.source_node_name = "Vin"
+        current.target_node_name = "Kelsier"
+
+        historical = MagicMock()
+        historical.uuid = "e-2"
+        historical.name = "distrusts"
+        historical.fact = "Vin distrusts everyone"
+        historical.valid_at = datetime(2026, 3, 20, tzinfo=timezone.utc)
+        historical.invalid_at = datetime(2026, 3, 24, tzinfo=timezone.utc)
+        historical.source_node_name = "Vin"
+        historical.target_node_name = "everyone"
+
+        kg = KnowledgeGraph.__new__(KnowledgeGraph)
+        kg._config = graph_config
+        kg._config.enabled = True
+        kg._graphiti = MagicMock()
+        kg._executor = None
+        kg._graphiti.search = AsyncMock(return_value=[current, historical])
+
+        result = kg.search("Vin")
+        assert len(result["facts"]) == 1
+        assert len(result["historical"]) == 1
+        assert result["historical"][0]["invalid_at"] is not None
+
+    def test_search_disabled_returns_none(self):
+        from knowledge import KnowledgeGraph
+        from config import GraphConfig
+
+        config = GraphConfig(enabled=False)
+        kg = KnowledgeGraph(config)
+        result = kg.search("anything")
+        assert result is None
