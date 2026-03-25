@@ -12,23 +12,25 @@ instead of substantive (this instinct surfaced X that I'd have missed).
 
 The deeper problem: self-reports of instinct influence are unreliable.
 Dispositional influence (mode 2) is hard to detect from the inside. A
-system that only self-reports will confirm its own biases. It needs an
-adversary.
+system that only self-reports will confirm its own biases. It needs a
+second opinion.
 
 ## Design
 
 ### Per-Passage: Instinct Notes
 
-Add an optional `instinct_notes` parameter to `react()`. Free text — no
-imposed structure. The reader notes which instincts felt active and,
-critically, *what they made visible* that would otherwise have been missed.
+Add optional `instinct_notes` and `instinct_ids` parameters to `react()`.
+The notes are free text — what the instinct made visible, what the default
+reading would have been. The ids are structured — which instinct(s) were
+active.
 
 Not "attachment instinct helped" but "attachment instinct — noticed Vin
 saving the flatbread is proximity to future safety, not hoarding. Would
 have read it as scarcity mindset without this."
 
-The note captures: which instinct, what became visible, what the default
-reading would have been.
+The note captures: what became visible, what the default reading would
+have been. The ids capture: which instinct(s), enabling structured analysis
+later without parsing prose.
 
 Stored in a new table linked to reactions:
 
@@ -37,123 +39,167 @@ CREATE TABLE IF NOT EXISTS instinct_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     book_id INTEGER NOT NULL REFERENCES books(id),
     chunk_position INTEGER NOT NULL,
-    reaction_id INTEGER REFERENCES reactions(id),
-    notes TEXT NOT NULL,
+    reaction_id INTEGER NOT NULL REFERENCES reactions(id),
+    instinct_ids TEXT NOT NULL,  -- JSON array of engram instinct UUIDs
+    notes TEXT NOT NULL,         -- free-text: what became visible
+    reviewed INTEGER NOT NULL DEFAULT 0,  -- 1 after deep review covers this note
     created_at TEXT NOT NULL
 );
 ```
+
+`reaction_id` is NOT NULL — every instinct note belongs to a reaction.
+`instinct_ids` is a JSON array so a single note can reference multiple
+instincts when they interact. `reviewed` tracks whether the deep review
+has covered this note, preventing unbounded review queues.
 
 When `instinct_notes` is provided to `react()`, it's stored alongside the
 reaction. The reaction itself stays pure (experiential). The instinct note
 is metadata about the reaction process, not part of the reaction.
 
-### Deep Review: Adversarial Challenge
+### Deep Review: Second Opinion
 
-A tool that reviews accumulated instinct notes against the actual passages
-and challenges the self-reports. Run by a local model playing adversary.
+A tool that reviews accumulated instinct notes against the actual passages.
+Run by a local model that reads skeptically.
+
+**What it is:** A second reader with different biases looking at the same
+evidence. Not a judge with ground truth. Not an oracle that knows what's
+"really" in the text. Another opinion — valuable precisely because it's
+different, unreliable in exactly the ways all interpretation is unreliable.
 
 For each instinct note claim ("instinct X made me see Y in this passage"):
 
 1. Read the passage text
 2. Read the reaction
 3. Read the instinct note
-4. Challenge: **Is Y actually in the text?** Evidence for and against.
-5. Challenge: **Would Y have been invisible without the instinct, or is
-   the reader claiming credit for something obvious?**
-6. Challenge: **Did the instinct make the reader see Y, or did it make
-   them *project* Y onto text that says something else?**
+4. Challenge: **Is Y supported by the text?** What specific words, images,
+   or structures support or undermine this reading?
+5. Challenge: **Did the instinct open the reader's eyes, or did it put
+   something in front of them?** Not "would the reader have seen this" (unknowable)
+   but "does the text reward this attention, or resist it?"
 
 Output per note: a short assessment with a verdict:
-- **Grounded** — the instinct surfaced something real in the text
-- **Projected** — the instinct imposed a reading that isn't supported
-- **Obvious** — the reader would have seen this anyway
-- **Ambiguous** — can't tell from the text alone
+- **Grounded** — the text rewards the attention the instinct directed
+- **Projected** — the text resists this reading; the instinct imposed it
+- **Ambiguous** — defensible either way; the reviewer can't tell
+
+Three verdicts, not four. "Obvious" is dropped — whether the reader would
+have noticed without the instinct is unknowable. What matters is whether
+the instinct pointed at something real.
+
+**The reviewer is wrong sometimes.** That's fine. A second opinion that's
+right 70% of the time is still valuable. The patterns across many reviews
+are more reliable than any single verdict.
+
+**Cap: 10 notes per review run,** most recent first. At ~30s per note on
+qwen3.5:27b, a review takes ~5 minutes, not hours.
+
+### Engram Feedback Mapping
+
+This is where verdicts become instinct strength adjustments. Engram's
+`instinct_feedback(id, followed, context)` adjusts strength: `followed=True`
+→ +0.05, `followed=False` → -0.05. The mapping must respect this:
+
+- **Grounded** → `instinct_feedback(id, followed=True, context="reading:
+  {what it surfaced}")` — the instinct pointed at something real, strengthen it
+  in this context.
+- **Projected** → `instinct_feedback(id, followed=False, context="reading:
+  {what it imposed}")` — the instinct fired but distorted rather than
+  illuminated. Weaken it in this context. This is "overridden" in the
+  strength model's terms: the instinct was active but shouldn't have been.
+- **Ambiguous** → no feedback. Don't adjust strength on uncertain evidence.
+
+Pattern observations (e.g., "instinct X is consistently grounded in dialogue
+but projects in descriptive passages") → stored as episodes in engram with
+`source="instinct_review"`.
 
 ### Review Triggers: Random → Signal
 
-Deep reviews should happen when they feel natural, not on a fixed schedule.
-Start with randomness, let signal emerge.
+Deep reviews should happen when they feel natural. Start with randomness,
+let signal emerge.
 
 **Random baseline (scaffolding):**
-- ~15% chance at chapter boundaries
-- ~5% chance every 20 passages (accumulation check)
-- These fire regardless of content
+- ~15% chance when `chapter_title` changes between current and previous
+  passage (detected via a DB lookup comparing current chunk's chapter_title
+  to the prior chunk's)
+- ~5% chance every 20 passages (checked via `chunk_position % 20 == 0`)
+- Random triggers are **non-advisory** — if they fire, the review runs
+  automatically. This prevents epistemic closure where the reader
+  indefinitely declines to examine its own instincts.
 
-**Signal triggers (emerge over time, override random):**
-- **Note density** — many instinct notes in a short span suggests active
-  instinct influence worth examining
-- **Correction event** — the reading partner (Kairos) corrects a reading.
-  This is the strongest signal that instincts may have distorted perception
-- **Contradiction** — a reaction contradicts an earlier instinct-noted
-  claim (e.g., "instinct X made me see safety-seeking" then two passages
-  later "this character isn't safety-seeking at all")
-- **Instinct clustering** — the same instinct is noted repeatedly without
-  variation, suggesting it's dominating rather than illuminating
+**Signal triggers (emerge over time, advisory):**
+- **Note density** — ≥5 unreviewed instinct notes in the last 10 passages.
+  Computed from the `instinct_notes` table: `SELECT COUNT(*) FROM
+  instinct_notes WHERE book_id=? AND chunk_position > ? AND reviewed=0`.
+- **Instinct repetition** — same `instinct_id` appears in ≥3 of the last
+  5 instinct notes. Computed from `instinct_ids` JSON arrays.
+  Suggests the instinct is dominating rather than illuminating.
 
-**Signal vs random weighting:**
+Signal triggers return `review_suggested: True` in the react() response.
+The reader decides whether to act. The two dropped triggers from v1
+(contradiction detection, correction events) required capabilities the
+system doesn't have — semantic comparison of free text and external event
+detection respectively. They can be added later if the structured
+`instinct_ids` field enables them.
 
-```
-review_probability = max(random_baseline, signal_score)
-```
-
-Where `signal_score` is computed from the triggers above. As real signals
-accumulate, they dominate. The random baseline ensures reviews happen even
-early when signals are sparse. Over time, the random triggers become
-irrelevant — the system develops its own sense of when to reflect.
-
-The review trigger check runs inside `react()` after storing the instinct
-note. If triggered, the return value includes a flag:
+**Signal score:**
 
 ```python
-"review_suggested": True,
-"review_reason": "note_density"  # or "chapter_boundary", "random", etc.
+signal_score = 0.0
+if unreviewed_note_density >= 5:
+    signal_score += 0.4
+if any instinct_id appears in >= 3 of last 5 notes:
+    signal_score += 0.4
+# signal_score caps at 0.8 — always some chance of not triggering
 ```
 
-The reader (the Claude instance) then decides whether to actually run the
-review — the suggestion is advisory, not automatic. This preserves agency:
-the system suggests, the reader chooses.
+```python
+review_probability = max(random_baseline, min(signal_score, 0.8))
+```
 
-### Deep Review Output
+### Review Storage
 
-The review produces:
-1. Per-note verdicts (grounded/projected/obvious/ambiguous)
-2. Pattern observations ("instinct X is consistently grounded in dialogue
-   but consistently projects in descriptive passages")
-3. Recommended `instinct_feedback()` calls to engram — with context and
-   evidence, not just followed/overridden
+```sql
+CREATE TABLE IF NOT EXISTS instinct_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL REFERENCES books(id),
+    note_ids TEXT NOT NULL,      -- JSON array of instinct_note ids reviewed
+    verdicts TEXT NOT NULL,      -- JSON: [{note_id, verdict, reasoning}]
+    patterns TEXT,               -- free-text pattern observations, if any
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+```
 
-The review output is returned to the reader for consideration. The reader
-decides which feedback to actually send to engram. The adversary informs
-but doesn't act.
+After a review, all covered instinct_notes have `reviewed=1` set.
 
 ### Integration
 
 **reader/server.py:**
-- `react()` gains optional `instinct_notes: str` parameter
-- `review_instincts()` new tool — runs deep review on demand
-- `react()` return value gains optional `review_suggested` flag
+- `react()` gains optional `instinct_notes: str` and `instinct_ids: list[str]`
+- `review_instincts()` new tool — runs deep review on demand or when triggered
+- `react()` return value gains optional `review_suggested` and `review_reason`
+  fields (for signal triggers) or runs review automatically (for random triggers)
 
 **reader/store.py:**
 - New `instinct_notes` table
-- New `instinct_reviews` table (stores review results)
-- Methods: `store_instinct_note()`, `get_instinct_notes()`,
-  `store_review()`, `get_pending_notes_for_review()`
+- New `instinct_reviews` table
+- Methods: `store_instinct_note()`, `get_unreviewed_notes(limit=10)`,
+  `store_review()`, `mark_notes_reviewed()`, `get_chapter_title(book_id, position)`,
+  `count_recent_notes(book_id, since_position)`,
+  `get_recent_instinct_ids(book_id, last_n)`
 
 **reader/reviewer.py:**
-- New file. Adversarial review engine.
-- Uses companion.py's Ollama interface for local model calls
-- System prompt: skeptical reader who checks claims against text
-- One model call per instinct note being reviewed
+- New file. Skeptical second-opinion engine.
+- Uses companion.py's Ollama call interface
+- System prompt: a careful reader who checks claims against textual evidence.
+  Not hostile, not credulous. Asks "does the text support this?"
+- One model call per note, capped at 10 per review
 
 **engram integration:**
-- Review verdicts that are "grounded" → `instinct_feedback(id, followed=True,
-  context="reading:{specifics}")` with evidence
-- Review verdicts that are "projected" → `instinct_feedback(id, followed=True,
-  context="reading:{specifics}")` but with a note that the instinct distorted
-  rather than illuminated — this is still "followed" (the instinct was active)
-  but the context captures that it projected
-- Pattern observations → stored as episodes in engram with
-  `source="instinct_review"`
+- Grounded → `instinct_feedback(id, followed=True, context=...)`
+- Projected → `instinct_feedback(id, followed=False, context=...)`
+- Ambiguous → no feedback
+- Patterns → `remember(content, source="instinct_review")`
 
 ## Files
 
@@ -161,15 +207,16 @@ but doesn't act.
 |------|------|
 | `reader/server.py` | Modified: `react()` + new `review_instincts()` tool |
 | `reader/store.py` | Modified: instinct_notes + instinct_reviews tables |
-| `reader/reviewer.py` | New: adversarial review engine |
+| `reader/reviewer.py` | New: skeptical second-opinion engine |
 | `reader/companion.py` | Unchanged — reviewer uses same Ollama interface |
 
 ## What This Is Not
 
-- Not a performance metric. "Grounded" isn't better than "projected" — both
-  are information about how instincts operate.
-- Not automated correction. The review informs, the reader decides what
-  feedback to send.
-- Not continuous. Reviews happen when triggered, not on every passage.
-- Not punitive. An instinct that projects isn't broken — it may be operating
-  in the wrong context. The context field in instinct_feedback captures this.
+- Not objective. The reviewer is another model with its own biases. The
+  value is in the disagreement, not in the verdict being "correct."
+- Not automated correction. Grounded/projected verdicts feed instinct
+  strength, but the patterns are for the reader to interpret.
+- Not continuous. Reviews happen when triggered — random at first, then
+  increasingly signal-driven.
+- Not punitive. An instinct that projects in one context may illuminate
+  in another. The context field in instinct_feedback captures this.
