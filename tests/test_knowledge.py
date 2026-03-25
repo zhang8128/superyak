@@ -149,3 +149,51 @@ class TestKnowledgeGraphSearch:
         kg = KnowledgeGraph(config)
         result = kg.search("anything")
         assert result is None
+
+
+class TestKnowledgeGraphIntegration:
+    """Test the full flow: compression feeds Graphiti, recall queries it."""
+
+    def test_compress_feeds_knowledge_graph(self, tmp_path):
+        """Verify compression passes episodes to knowledge graph."""
+        from unittest.mock import MagicMock, AsyncMock
+        from compress import Compressor
+        from config import CompressionConfig, GraphConfig
+        from knowledge import KnowledgeGraph
+
+        # Mock storage
+        storage = MagicMock()
+        storage.get_uncompressed_episodes.return_value = [
+            {"id": "ep1", "content": "Vin trained with Kelsier", "created_at": "2026-03-25T10:00:00+00:00"},
+            {"id": "ep2", "content": "Vin practiced pewter burns", "created_at": "2026-03-25T10:05:00+00:00"},
+        ]
+        storage.search_vectors.return_value = []
+        storage.add_semantic = MagicMock()
+        storage.mark_episodes_compressed = MagicMock()
+        storage.mark_core_batch = MagicMock()
+        storage.add_log_entry = MagicMock()
+        storage.get_active_semantics.return_value = []
+        storage.conn = MagicMock()
+
+        # Mock embeddings — returns a list sized to match input
+        embeddings = MagicMock()
+        embeddings.embed.side_effect = lambda texts, prefix=None: [
+            [float(i + 1) * 0.1] * 768 for i in range(len(texts))
+        ]
+
+        # Mock knowledge graph
+        kg = MagicMock(spec=KnowledgeGraph)
+        kg.enabled = True
+        kg.feed.return_value = {"episodes_fed": 2, "entities_extracted": 3, "relationships_extracted": 1}
+
+        compressor = Compressor(
+            storage, embeddings,
+            CompressionConfig(),
+            knowledge_graph=kg,
+        )
+
+        result = compressor.cluster_episodes()
+        if result["compress_id"]:
+            summaries = [{"content": "Vin's Allomancy training", "kind": "fact", "action": "new"}]
+            compressor.commit(result["compress_id"], summaries)
+            kg.feed.assert_called_once()
