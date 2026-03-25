@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -102,6 +103,66 @@ class KnowledgeGraph:
             return self._executor.submit(asyncio.run, coro).result()
         else:
             return asyncio.run(coro)
+
+    def feed(
+        self,
+        episodes: list[dict],
+        semantic_content: str = "",
+    ) -> dict | None:
+        """Feed episode cluster to Graphiti for entity/relationship extraction.
+
+        Called during compression after a semantic is created.
+        Each episode becomes a Graphiti episode with extraction.
+
+        Args:
+            episodes: List of engram episode dicts (id, content, created_at).
+            semantic_content: The semantic summary, used as source_description.
+
+        Returns:
+            Summary of extracted entities/relationships, or None if disabled.
+        """
+        if not self.enabled or not self._graphiti or not episodes:
+            return None
+
+        from graphiti_core.nodes import EpisodeType
+
+        total_nodes = 0
+        total_edges = 0
+
+        for ep in episodes:
+            created_at = ep.get("created_at", "")
+            try:
+                ref_time = datetime.fromisoformat(created_at)
+                if ref_time.tzinfo is None:
+                    ref_time = ref_time.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                ref_time = datetime.now(timezone.utc)
+
+            try:
+                result = self._run_async(
+                    self._graphiti.add_episode(
+                        name=f"engram-{ep['id']}",
+                        episode_body=ep.get("content", ""),
+                        source_description=semantic_content or "engram compression",
+                        reference_time=ref_time,
+                        source=EpisodeType.text,
+                    )
+                )
+                total_nodes += len(result.nodes)
+                total_edges += len(result.edges)
+            except Exception:
+                logger.warning("Failed to feed episode %s to knowledge graph", ep["id"], exc_info=True)
+
+        logger.info(
+            "Fed %d episodes to knowledge graph: %d entities, %d relationships",
+            len(episodes), total_nodes, total_edges,
+        )
+
+        return {
+            "episodes_fed": len(episodes),
+            "entities_extracted": total_nodes,
+            "relationships_extracted": total_edges,
+        }
 
     def close(self):
         """Clean up Graphiti resources."""

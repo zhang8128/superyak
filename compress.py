@@ -34,11 +34,13 @@ class Compressor:
         embedding_provider,
         config: CompressionConfig | None = None,
         deduplicator: Deduplicator | None = None,
+        knowledge_graph=None,
     ):
         self._storage = storage
         self._embeddings = embedding_provider
         self._config = config
         self._dedup = deduplicator
+        self._knowledge_graph = knowledge_graph
         self._pending: dict[str, dict] = {}  # compress_id -> cluster state
 
     @property
@@ -190,6 +192,16 @@ class Compressor:
                         similarity=near_miss["similarity"],
                         weight=weight,
                     )
+
+                # Feed episode cluster to knowledge graph for entity extraction
+                if self._knowledge_graph is not None:
+                    try:
+                        self._knowledge_graph.feed(
+                            cluster["episodes"],
+                            semantic_content=semantic_content,
+                        )
+                    except Exception:
+                        logger.warning("Knowledge graph feed failed", exc_info=True)
 
             self._storage.mark_episodes_compressed(all_episode_ids)
             episodes_processed += len(all_episode_ids)
