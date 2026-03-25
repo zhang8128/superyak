@@ -86,13 +86,22 @@ class KnowledgeGraph:
             config=LLMConfig(model=model, small_model=model),
         )
 
-        self._graphiti = Graphiti(
+        graphiti = Graphiti(
             graph_driver=driver,
             llm_client=llm_client,
         )
 
-        # Build indices
-        self._run_async(self._graphiti.build_indices_and_constraints())
+        # Build indices — if this fails, close the driver before re-raising
+        try:
+            self._run_async(graphiti.build_indices_and_constraints())
+        except Exception:
+            try:
+                self._run_async(graphiti.close())
+            except Exception:
+                pass
+            raise
+
+        self._graphiti = graphiti
         logger.info("Knowledge graph initialized (kuzu: %s, model: %s)", db_path, model)
 
     def _run_async(self, coro):
@@ -191,7 +200,8 @@ class KnowledgeGraph:
             num_results: Max results to return.
 
         Returns:
-            Dict with 'facts' (current) and 'historical' (invalidated), or None if disabled.
+            Dict with 'facts' (current) and 'historical' (invalidated),
+            or None if disabled/unavailable/failed.
         """
         if not self.enabled or not self._graphiti:
             return None
@@ -202,7 +212,7 @@ class KnowledgeGraph:
             )
         except Exception:
             logger.warning("Knowledge graph search failed", exc_info=True)
-            return {"facts": [], "historical": []}
+            return None
 
         facts = []
         historical = []
