@@ -106,9 +106,20 @@ _genome_db_path = None
 _signals_db_path = None
 _recall_scores: dict[str, dict[str, float]] = {}  # recall_id -> {result_id: score}
 _recall_resonances: dict[str, list[dict]] = {}  # recall_id -> [{resonance_id, memory_id}]
+_instinct_graph = None
+_last_instinct_id = None
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
+from transitions import TransitionGraph
+
+
+def _get_instinct_graph():
+    global _instinct_graph
+    if _instinct_graph is None:
+        db_path = Path(os.environ.get("ENGRAM_HOME", Path.home())) / ".engram" / "instinct_transitions.db"
+        _instinct_graph = TransitionGraph(db_path=db_path)
+    return _instinct_graph
 
 
 def _apply_resonance_feedback(storage, recall_id: str, used: bool) -> None:
@@ -833,11 +844,12 @@ def recall(
                 # Hydrate with content based on layer
                 if dlayer == "episode":
                     row = _storage.get_episode(did)
-                    if row:
-                        uninvited_result["content"] = row.get("content", "")
-                        uninvited_result["context"] = row.get("context")
-                        uninvited_result["origin"] = "lived"
-                        _storage.increment_episode_access(did)
+                    if not row:
+                        continue
+                    uninvited_result["content"] = row.get("content", "")
+                    uninvited_result["context"] = row.get("context")
+                    uninvited_result["origin"] = "lived"
+                    _storage.increment_episode_access(did)
                 elif dlayer == "semantic":
                     row = _storage.get_semantic(did)
                     if row:
@@ -961,6 +973,21 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
     }
     if context:
         result["context_recorded"] = True
+
+    # Record transition: when instinct B fires after instinct A, log A→B
+    global _last_instinct_id
+    try:
+        if _last_instinct_id and _last_instinct_id != instinct_id:
+            prev_inst = _storage.get_instinct(_last_instinct_id)
+            if prev_inst and inst:
+                prev_label = prev_inst.get("trigger", _last_instinct_id)
+                curr_label = inst.get("trigger", instinct_id)
+                graph = _get_instinct_graph()
+                graph.record(prev_label, curr_label, context=context)
+    except Exception:
+        pass  # Never break instinct feedback for transition tracking
+    _last_instinct_id = instinct_id
+
     return result
 
 
@@ -1124,6 +1151,52 @@ def core_memories() -> dict:
     logger.info("Tool called: core_memories()")
     episodes = _storage.get_core_episodes()
     return {"count": len(episodes), "episodes": episodes}
+
+
+@mcp.tool()
+def recall_cold(query: str, max_results: int = 10) -> dict:
+    """Search cold storage — episodes that decayed past threshold but weren't destroyed.
+
+    Uses full-text search (no vectors). For pulling at threads from the deep past.
+
+    Args:
+        query: Search query (FTS).
+        max_results: Maximum results.
+    """
+    _init()
+    logger.info("Tool called: recall_cold(query=%r, max_results=%d)", query[:80], max_results)
+    results = _storage.search_cold(query, k=max_results)
+    return {"results": results, "count": len(results)}
+
+
+@mcp.tool()
+def revive(episode_id: str) -> dict:
+    """Revive a cold episode — pull it back from cold storage into active recall.
+
+    Use after recall_cold() surfaces something worth keeping.
+    Re-embeds and restores at 0.5 strength. Mark core afterward if it should never decay again.
+
+    Args:
+        episode_id: The cold episode to revive.
+    """
+    _init()
+    logger.info("Tool called: revive(episode_id=%s)", episode_id)
+
+    def embed_fn(content: str) -> list[float]:
+        return _embeddings.embed([content], prefix="search_document")[0]
+
+    row = _storage.revive_episode(episode_id, embed_fn=embed_fn)
+    if not row:
+        return {"error": f"Episode {episode_id} not found in cold storage"}
+
+    _storage.add_log_entry(
+        id=str(uuid.uuid4()),
+        event_type="revive",
+        layer="episode",
+        target_ids=[episode_id],
+        context={"session_id": _session_id},
+    )
+    return {"revived": episode_id, "content": row.get("content", "")[:200], "strength": 0.5}
 
 
 # ---------------------------------------------------------------------------
@@ -1408,6 +1481,104 @@ def dream_react(residue_id: str, reaction: str) -> dict:
         "new_residue_id": new_id,
         "note": "Your reaction is now dissolving into the next dream.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Notepad Tools — working reference, not memory
+# ---------------------------------------------------------------------------
+
+_notepad_project = None
+_notepad_global = None
+
+
+def _get_notepads():
+    """Lazy-init notepad instances (project + global)."""
+    global _notepad_project, _notepad_global
+    if _notepad_project is None:
+        from notepad import Notepad
+        project_db = PROJECT_ROOT / ".engram" / "notepad.db"
+        global_db = Path.home() / ".engram" / "notepad.db"
+        _notepad_project = Notepad(project_db)
+        _notepad_global = Notepad(global_db)
+    return _notepad_project, _notepad_global
+
+
+@mcp.tool()
+def jot(key: str, value: str, tags: list[str] | None = None,
+        scope: str = "project") -> dict:
+    """Write a working note — API surfaces, paths, gotchas, anything you'll need again.
+
+    Not memory. Just a reference you can look up later.
+
+    Args:
+        key: Short label (e.g. "embed", "emma db", "add_episode").
+        value: The reference content.
+        tags: Optional tags for grouping.
+        scope: "project" (default) or "global".
+    """
+    _init()
+    project_pad, global_pad = _get_notepads()
+    pad = global_pad if scope == "global" else project_pad
+    result = pad.jot(key, value, tags=tags, session_id=_session_id)
+    logger.info("Tool called: jot(key=%r, scope=%s)", key, scope)
+    return result
+
+
+@mcp.tool()
+def look(query: str, scope: str | None = None) -> dict:
+    """Look up a working note — fuzzy search across keys, values, tags.
+
+    Returns matches plus notes jotted nearby (same session).
+
+    Args:
+        query: What to look for (searches keys, values, tags).
+        scope: "project", "global", or None (both, project-first).
+    """
+    _init()
+    project_pad, global_pad = _get_notepads()
+    logger.info("Tool called: look(query=%r, scope=%s)", query[:80], scope)
+
+    if scope == "global":
+        results = global_pad.look(query, session_id=_session_id)
+        for r in results:
+            r["scope"] = "global"
+        return {"results": results, "count": len(results)}
+
+    if scope == "project":
+        results = project_pad.look(query, session_id=_session_id)
+        for r in results:
+            r["scope"] = "project"
+        return {"results": results, "count": len(results)}
+
+    # Both — project first, then global (dedup by key)
+    project_results = project_pad.look(query, session_id=_session_id)
+    for r in project_results:
+        r["scope"] = "project"
+    seen_keys = {r["key"] for r in project_results}
+
+    global_results = global_pad.look(query, session_id=_session_id)
+    for r in global_results:
+        if r["key"] not in seen_keys:
+            r["scope"] = "global"
+            project_results.append(r)
+
+    return {"results": project_results, "count": len(project_results)}
+
+
+@mcp.tool()
+def erase(key: str, scope: str = "project") -> dict:
+    """Remove a working note.
+
+    Args:
+        key: The note to remove.
+        scope: "project" (default) or "global".
+    """
+    _init()
+    project_pad, global_pad = _get_notepads()
+    pad = global_pad if scope == "global" else project_pad
+    removed = pad.erase(key)
+    logger.info("Tool called: erase(key=%r, scope=%s, removed=%s)", key, scope, removed)
+    return {"erased": key, "removed": removed}
 
 
 if __name__ == "__main__":
