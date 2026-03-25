@@ -53,6 +53,7 @@ class KnowledgeGraph:
             self._init_graphiti()
         except Exception:
             logger.warning("Knowledge graph init failed — continuing without", exc_info=True)
+            self._graphiti = None
             self._config.enabled = False
 
     @property
@@ -137,12 +138,16 @@ class KnowledgeGraph:
 
         total_nodes = 0
         total_edges = 0
+        fed = 0
+        failed = 0
 
         for ep in episodes:
+            ep_id = ep.get("id", "unknown")
             created_at = ep.get("created_at", "")
             try:
                 ref_time = datetime.fromisoformat(created_at)
                 if ref_time.tzinfo is None:
+                    # Engram stores UTC; treat naive timestamps as UTC
                     ref_time = ref_time.replace(tzinfo=timezone.utc)
             except (ValueError, TypeError):
                 ref_time = datetime.now(timezone.utc)
@@ -150,7 +155,7 @@ class KnowledgeGraph:
             try:
                 result = self._run_async(
                     self._graphiti.add_episode(
-                        name=f"engram-{ep['id']}",
+                        name=f"engram-{ep_id}",
                         episode_body=ep.get("content", ""),
                         source_description=semantic_content or "engram compression",
                         reference_time=ref_time,
@@ -159,16 +164,19 @@ class KnowledgeGraph:
                 )
                 total_nodes += len(result.nodes)
                 total_edges += len(result.edges)
+                fed += 1
             except Exception:
-                logger.warning("Failed to feed episode %s to knowledge graph", ep["id"], exc_info=True)
+                failed += 1
+                logger.warning("Failed to feed episode %s to knowledge graph", ep_id, exc_info=True)
 
         logger.info(
-            "Fed %d episodes to knowledge graph: %d entities, %d relationships",
-            len(episodes), total_nodes, total_edges,
+            "Knowledge graph feed: %d/%d succeeded, %d entities, %d relationships",
+            fed, len(episodes), total_nodes, total_edges,
         )
 
         return {
-            "episodes_fed": len(episodes),
+            "episodes_fed": fed,
+            "episodes_failed": failed,
             "entities_extracted": total_nodes,
             "relationships_extracted": total_edges,
         }

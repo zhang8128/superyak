@@ -1,9 +1,6 @@
 """Tests for the Graphiti knowledge graph bridge."""
 
-import asyncio
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -68,6 +65,30 @@ class TestKnowledgeGraphFeed:
         assert result is not None
         assert result["episodes_fed"] == 2
         assert kg._graphiti.add_episode.call_count == 2
+
+    def test_feed_tracks_partial_failure(self, graph_config):
+        from knowledge import KnowledgeGraph
+
+        kg = KnowledgeGraph.__new__(KnowledgeGraph)
+        kg._config = graph_config
+        kg._config.enabled = True
+        kg._graphiti = MagicMock()
+        kg._executor = None
+
+        # First episode succeeds, second fails
+        success = MagicMock(nodes=[MagicMock()], edges=[MagicMock(), MagicMock()])
+        kg._graphiti.add_episode = AsyncMock(side_effect=[success, Exception("LLM timeout")])
+
+        episodes = [
+            {"id": "ep-1", "content": "First", "created_at": "2026-03-25T10:00:00+00:00"},
+            {"id": "ep-2", "content": "Second", "created_at": "2026-03-25T10:05:00+00:00"},
+        ]
+
+        result = kg.feed(episodes)
+        assert result["episodes_fed"] == 1  # not 2
+        assert result["episodes_failed"] == 1
+        assert result["entities_extracted"] == 1
+        assert result["relationships_extracted"] == 2
 
     def test_feed_disabled_is_noop(self):
         from knowledge import KnowledgeGraph
@@ -149,6 +170,52 @@ class TestKnowledgeGraphSearch:
         kg = KnowledgeGraph(config)
         result = kg.search("anything")
         assert result is None
+
+
+class TestKnowledgeGraphRoundTrip:
+    """Test that what goes into feed() can come back from search()."""
+
+    def test_feed_then_search_returns_extracted_facts(self, graph_config):
+        """Feed episodes, then search — verify the data path is connected."""
+        from knowledge import KnowledgeGraph
+
+        # Mock edge that Graphiti would return after extraction
+        mock_edge = MagicMock()
+        mock_edge.uuid = "edge-1"
+        mock_edge.name = "trained_with"
+        mock_edge.fact = "Vin trained with Kelsier"
+        mock_edge.valid_at = datetime(2026, 3, 25, tzinfo=timezone.utc)
+        mock_edge.invalid_at = None
+        mock_edge.source_node_name = "Vin"
+        mock_edge.target_node_name = "Kelsier"
+
+        kg = KnowledgeGraph.__new__(KnowledgeGraph)
+        kg._config = graph_config
+        kg._config.enabled = True
+        kg._executor = None
+        kg._graphiti = MagicMock()
+        kg._graphiti.add_episode = AsyncMock(return_value=MagicMock(
+            nodes=[MagicMock()], edges=[mock_edge]
+        ))
+        kg._graphiti.search = AsyncMock(return_value=[mock_edge])
+
+        # Feed
+        episodes = [{"id": "ep-1", "content": "Vin trained with Kelsier", "created_at": "2026-03-25T10:00:00+00:00"}]
+        feed_result = kg.feed(episodes, semantic_content="Allomancy training")
+        assert feed_result["episodes_fed"] == 1
+        assert feed_result["entities_extracted"] == 1
+        assert feed_result["relationships_extracted"] == 1
+
+        # Search — should find what was fed
+        search_result = kg.search("Vin training")
+        assert len(search_result["facts"]) == 1
+        assert search_result["facts"][0]["fact"] == "Vin trained with Kelsier"
+        assert search_result["facts"][0]["source"] == "Vin"
+        assert search_result["facts"][0]["target"] == "Kelsier"
+
+        # Verify Graphiti was actually called for both operations
+        kg._graphiti.add_episode.assert_called_once()
+        kg._graphiti.search.assert_called_once()
 
 
 class TestKnowledgeGraphIntegration:
