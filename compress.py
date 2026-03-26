@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import random
 import uuid
@@ -18,6 +19,65 @@ if TYPE_CHECKING:
     from storage import Storage
 
 logger = logging.getLogger("engram.compression")
+
+_KNOWN_NAMES = {"andy", "kairos", "vaughn", "emma", "koan", "vin", "kelsier"}
+
+
+def classify_episode_kind(episode: dict) -> list[str]:
+    """Classify an episode into one or more kinds based on metadata and content.
+
+    Returns sorted list of kinds. An episode can belong to multiple types.
+    """
+    kinds: set[str] = set()
+    content = (episode.get("content") or "").lower()
+    source = (episode.get("source") or "").lower()
+    context_raw = episode.get("context")
+
+    # Parse context JSON if present
+    context_str = ""
+    if context_raw:
+        if isinstance(context_raw, str):
+            try:
+                ctx = _json.loads(context_raw)
+                context_str = _json.dumps(ctx).lower()
+            except (ValueError, TypeError):
+                context_str = context_raw.lower()
+        elif isinstance(context_raw, dict):
+            context_str = _json.dumps(context_raw).lower()
+
+    # Reading: source tag or passage/chapter references
+    if source == "reading" or "passage" in context_str or "chapter" in context_str:
+        kinds.add("reading")
+
+    # Design: built/architecture/design/commit references
+    design_signals = ("design", "architecture", "built", "commit", "implement", "branch")
+    if any(s in context_str for s in design_signals) or any(s in content[:100] for s in ("built ", "session 20")):
+        kinds.add("design")
+
+    # Observation: self-observation, pattern-noticed
+    obs_signals = ("self-observation", "observation", "pattern", "noticed")
+    if any(s in context_str for s in obs_signals) or "pattern noticed" in content:
+        kinds.add("observation")
+
+    # Relational: mentions known people
+    content_words = set(content.split())
+    if content_words & _KNOWN_NAMES:
+        kinds.add("relational")
+
+    # Factual: session summaries, build logs
+    if content.startswith(("session 20", "completed ", "implemented ", "built ")):
+        kinds.add("factual")
+
+    # Reflection: recursive, philosophical
+    refl_signals = ("reflection", "recursive", "philosophical", "self-reflection")
+    if any(s in context_str for s in refl_signals) or "recursive" in content:
+        kinds.add("reflection")
+
+    # Default: if nothing matched, it's factual
+    if not kinds:
+        kinds.add("factual")
+
+    return sorted(kinds)
 
 
 class Compressor:

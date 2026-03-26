@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from compress import Compressor
+from compress import Compressor, classify_episode_kind
 
 
 class FakeEmbeddingProvider:
@@ -535,6 +535,54 @@ def test_get_semantic_neighbors_empty_when_no_shared_episodes(tmp_db, embedder):
 
     neighbors = tmp_db.get_semantic_neighbors(sem_id)
     assert neighbors == []
+
+
+class TestEpisodeTyping:
+    def test_reading_from_source(self):
+        ep = {"content": "some reading reaction", "source": "reading", "context": None}
+        kinds = classify_episode_kind(ep)
+        assert "reading" in kinds
+
+    def test_reading_from_context(self):
+        ep = {"content": "passage 42", "source": None, "context": '{"topic": "passage-reading"}'}
+        kinds = classify_episode_kind(ep)
+        assert "reading" in kinds
+
+    def test_design_from_context(self):
+        ep = {"content": "built the lens system", "source": None, "context": '{"topic": "design-session"}'}
+        kinds = classify_episode_kind(ep)
+        assert "design" in kinds
+
+    def test_observation_from_context(self):
+        ep = {"content": "pattern noticed", "source": None, "context": '{"kind": "self-observation"}'}
+        kinds = classify_episode_kind(ep)
+        assert "observation" in kinds
+
+    def test_relational_from_names(self):
+        ep = {"content": "Kairos said something important", "source": None, "context": None}
+        kinds = classify_episode_kind(ep)
+        assert "relational" in kinds
+
+    def test_factual_from_build_summary(self):
+        ep = {"content": "Session 2026-03-25. Built three things: ...", "source": None, "context": None}
+        kinds = classify_episode_kind(ep)
+        assert "factual" in kinds
+
+    def test_reflection_from_context(self):
+        ep = {"content": "recursive self-reflection", "source": None, "context": '{"topic": "reflection"}'}
+        kinds = classify_episode_kind(ep)
+        assert "reflection" in kinds
+
+    def test_multi_type(self):
+        ep = {"content": "Pattern noticed while reading Mistborn with Andy", "source": "reading", "context": None}
+        kinds = classify_episode_kind(ep)
+        assert "reading" in kinds
+        assert "relational" in kinds
+
+    def test_unknown_defaults_to_factual(self):
+        ep = {"content": "something", "source": None, "context": None}
+        kinds = classify_episode_kind(ep)
+        assert "factual" in kinds
 
 
 def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
