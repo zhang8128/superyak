@@ -1631,22 +1631,25 @@ def _get_notepads():
 
 @mcp.tool()
 def jot(key: str, value: str, tags: list[str] | None = None,
-        scope: str = "project") -> dict:
-    """Write a working note — API surfaces, paths, gotchas, anything you'll need again.
-
-    Not memory. Just a reference you can look up later.
+        scope: str = "project", status: str = "open",
+        depends_on: str | None = None, due: str | None = None) -> dict:
+    """Write a working note or plan item.
 
     Args:
-        key: Short label (e.g. "embed", "emma db", "add_episode").
-        value: The reference content.
+        key: Short label.
+        value: The content.
         tags: Optional tags for grouping.
         scope: "project" (default) or "global".
+        status: "open" (default), "deferred", or "done".
+        depends_on: Optional key of a note that blocks this one.
+        due: Optional due date (ISO format).
     """
     _init()
     project_pad, global_pad = _get_notepads()
     pad = global_pad if scope == "global" else project_pad
-    result = pad.jot(key, value, tags=tags, session_id=_session_id)
-    logger.info("Tool called: jot(key=%r, scope=%s)", key, scope)
+    result = pad.jot(key, value, tags=tags, session_id=_session_id,
+                     status=status, depends_on=depends_on, due=due)
+    logger.info("Tool called: jot(key=%r, scope=%s, status=%s)", key, scope, status)
     return result
 
 
