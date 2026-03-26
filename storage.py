@@ -758,6 +758,21 @@ class Storage:
             )
         self.conn.commit()
 
+    def get_semantic_neighbors(self, semantic_id: str) -> list[dict]:
+        """Find semantics that share episodes with this one, weighted by co-occurrence."""
+        rows = self.conn.execute(
+            """
+            SELECT s2.semantic_id, COUNT(*) as shared_count, AVG(s2.similarity) as avg_similarity
+            FROM semantic_sources s1
+            JOIN semantic_sources s2 ON s1.episode_id = s2.episode_id
+            WHERE s1.semantic_id = ? AND s2.semantic_id != s1.semantic_id
+            GROUP BY s2.semantic_id
+            ORDER BY shared_count DESC
+            """,
+            (semantic_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def contradict_semantic(self, id: str, contradicted_by: str) -> None:
         self.conn.execute(
             "UPDATE semantics SET contradicted_by = ? WHERE id = ?",

@@ -484,6 +484,59 @@ def test_perceptual_framing_with_when(tmp_db, compressor, embedder):
     assert "portable hashing" in inst["implication"].lower()
 
 
+def test_get_semantic_neighbors_shared_episode(tmp_db, embedder):
+    """Two semantics sharing an episode should appear as neighbors of each other."""
+    emb = embedder.embed(["shared episode"])[0]
+    ep_id = str(uuid.uuid4())
+    tmp_db.add_episode(id=ep_id, session_id=None, content="shared episode", embedding=emb)
+
+    sem_a = str(uuid.uuid4())
+    sem_b = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_a, content="semantic A", kind="fact",
+        confidence=0.6, embedding=emb, source_episode_ids=[],
+    )
+    tmp_db.add_semantic(
+        id=sem_b, content="semantic B", kind="fact",
+        confidence=0.6, embedding=emb, source_episode_ids=[],
+    )
+
+    # Link both semantics to the same episode with explicit similarity values
+    tmp_db.conn.execute(
+        "INSERT INTO semantic_sources (semantic_id, episode_id, similarity) VALUES (?, ?, ?)",
+        (sem_a, ep_id, 0.9),
+    )
+    tmp_db.conn.execute(
+        "INSERT INTO semantic_sources (semantic_id, episode_id, similarity) VALUES (?, ?, ?)",
+        (sem_b, ep_id, 0.8),
+    )
+    tmp_db.conn.commit()
+
+    neighbors_a = tmp_db.get_semantic_neighbors(sem_a)
+    assert len(neighbors_a) == 1
+    assert neighbors_a[0]["semantic_id"] == sem_b
+    assert neighbors_a[0]["shared_count"] == 1
+    assert neighbors_a[0]["avg_similarity"] == pytest.approx(0.8, abs=0.01)
+
+    neighbors_b = tmp_db.get_semantic_neighbors(sem_b)
+    assert len(neighbors_b) == 1
+    assert neighbors_b[0]["semantic_id"] == sem_a
+    assert neighbors_b[0]["avg_similarity"] == pytest.approx(0.9, abs=0.01)
+
+
+def test_get_semantic_neighbors_empty_when_no_shared_episodes(tmp_db, embedder):
+    """A semantic with no shared episode links should return empty neighbors."""
+    emb = embedder.embed(["isolated semantic"])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content="isolated semantic", kind="fact",
+        confidence=0.6, embedding=emb, source_episode_ids=[],
+    )
+
+    neighbors = tmp_db.get_semantic_neighbors(sem_id)
+    assert neighbors == []
+
+
 def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
     """scope=full should also delete context vectors and feedback."""
     text = "test instinct"
