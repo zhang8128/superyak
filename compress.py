@@ -281,6 +281,18 @@ class Compressor:
             self._storage.mark_episodes_compressed(all_episode_ids)
             episodes_processed += len(all_episode_ids)
 
+        # Multi-link: connect episodes to all matching semantics
+        all_processed_episodes = []
+        cluster_semantic_ids = []
+        for i, cluster in enumerate(clusters):
+            all_processed_episodes.extend(cluster["episodes"])
+            if i < len(summaries):
+                sid = summaries[i].get("semantic_id")
+                if sid:
+                    cluster_semantic_ids.append(sid)
+
+        multi_links = self._multi_link_episodes(all_processed_episodes, cluster_semantic_ids)
+
         # Log compression event
         self._storage.add_log_entry(
             id=str(uuid.uuid4()),
@@ -292,6 +304,7 @@ class Compressor:
                 "episodes_processed": episodes_processed,
                 "semantics_created": semantics_created,
                 "semantics_reinforced": semantics_reinforced,
+                "multi_links": multi_links,
             },
         )
 
@@ -302,6 +315,7 @@ class Compressor:
             "semantics_created": semantics_created,
             "semantics_reinforced": semantics_reinforced,
             "instincts_created": instincts_created,
+            "multi_links": multi_links,
         }
 
     def auto_compress(self) -> dict:
@@ -594,6 +608,67 @@ class Compressor:
         except Exception:
             logger.debug("Instinct dedup check failed", exc_info=True)
         return False
+
+    def _multi_link_episodes(
+        self,
+        episodes: list[dict],
+        exclude_semantic_ids: list[str],
+    ) -> int:
+        """Link episodes to all matching semantics above threshold.
+
+        Compares each episode's embedding against all semantic embeddings.
+        Adds source links with similarity scores for matches above reinforce_threshold.
+        Skips semantic IDs in exclude_semantic_ids (already linked by the cluster step).
+
+        Returns number of new links created.
+        """
+        all_semantics = self._storage.get_active_semantics(limit=500)
+        if not all_semantics:
+            return 0
+
+        sem_ids = [s["id"] for s in all_semantics]
+        sem_texts = [s["content"] for s in all_semantics]
+        sem_embeddings = self._embeddings.embed(sem_texts, prefix="clustering")
+
+        sem_emb_map: dict[str, np.ndarray] = {}
+        for sid, emb in zip(sem_ids, sem_embeddings):
+            if emb is not None:
+                sem_emb_map[sid] = np.array(emb)
+
+        ep_texts = [ep["content"] for ep in episodes]
+        ep_embeddings = self._embeddings.embed(ep_texts, prefix="clustering")
+
+        links_created = 0
+        for ep, ep_emb in zip(episodes, ep_embeddings):
+            if ep_emb is None:
+                continue
+            ep_arr = np.array(ep_emb)
+            ep_norm = np.linalg.norm(ep_arr)
+            if ep_norm == 0:
+                continue
+
+            for sid, sem_arr in sem_emb_map.items():
+                if sid in exclude_semantic_ids:
+                    continue
+                sem_norm = np.linalg.norm(sem_arr)
+                if sem_norm == 0:
+                    continue
+                sim = float(np.dot(ep_arr, sem_arr) / (ep_norm * sem_norm))
+                if sim >= self._reinforce_threshold:
+                    existing = self._storage.conn.execute(
+                        "SELECT 1 FROM semantic_sources WHERE semantic_id = ? AND episode_id = ?",
+                        (sid, ep["id"]),
+                    ).fetchone()
+                    if existing is None:
+                        self._storage.conn.execute(
+                            "INSERT INTO semantic_sources (semantic_id, episode_id, similarity) VALUES (?, ?, ?)",
+                            (sid, ep["id"], sim),
+                        )
+                        links_created += 1
+
+        if links_created:
+            self._storage.conn.commit()
+        return links_created
 
     def _find_semantic_match(self, centroid: list[float]) -> tuple[str, dict | None, dict | None]:
         """Search for existing semantic matching this centroid.

@@ -620,6 +620,80 @@ class TestTypedClustering:
         assert len(kinds) >= 2
 
 
+class TestMultiMembership:
+    @pytest.fixture
+    def storage(self, tmp_db):
+        return tmp_db
+
+    @pytest.fixture
+    def embeddings(self):
+        return FakeEmbeddingProvider()
+
+    def test_episode_links_to_matching_semantic(self, storage, embeddings):
+        """An episode similar to an existing semantic should get linked."""
+        # Create a semantic with a known embedding
+        emb = [0.5] * 768
+        embeddings.override_map["Topic A insight"] = emb
+        storage.add_semantic("sem-a", "Topic A insight", "fact", 0.7, emb, [])
+
+        # Create an episode with the SAME embedding (similarity = 1.0)
+        embeddings.override_map["episode about topic A"] = emb
+        storage.add_episode("ep-1", None, "episode about topic A", embedding=emb)
+
+        compressor = Compressor(storage, embeddings)
+        links = compressor._multi_link_episodes(
+            [{"id": "ep-1", "content": "episode about topic A"}],
+            exclude_semantic_ids=[],
+        )
+        assert links >= 1
+
+        rows = storage.conn.execute(
+            "SELECT semantic_id, similarity FROM semantic_sources WHERE episode_id = 'ep-1'"
+        ).fetchall()
+        assert len(rows) >= 1
+        assert any(r[0] == "sem-a" for r in rows)
+        # Similarity should be stored
+        sims = [r[1] for r in rows if r[1] is not None]
+        assert len(sims) > 0
+
+    def test_excludes_specified_semantics(self, storage, embeddings):
+        """Excluded semantic IDs should not get new links."""
+        emb = [0.5] * 768
+        embeddings.override_map["Topic A"] = emb
+        storage.add_semantic("sem-a", "Topic A", "fact", 0.7, emb, [])
+
+        embeddings.override_map["ep content"] = emb
+        storage.add_episode("ep-1", None, "ep content", embedding=emb)
+
+        compressor = Compressor(storage, embeddings)
+        links = compressor._multi_link_episodes(
+            [{"id": "ep-1", "content": "ep content"}],
+            exclude_semantic_ids=["sem-a"],
+        )
+        assert links == 0
+
+    def test_no_duplicate_links(self, storage, embeddings):
+        """Should not create duplicate source links."""
+        emb = [0.5] * 768
+        embeddings.override_map["Topic A"] = emb
+        # Add episode first (foreign key constraint)
+        storage.add_episode("ep-1", None, "existing ep", embedding=emb)
+        storage.add_semantic("sem-a", "Topic A", "fact", 0.7, emb, ["ep-1"])
+
+        compressor = Compressor(storage, embeddings)
+        links = compressor._multi_link_episodes(
+            [{"id": "ep-1", "content": "existing ep"}],
+            exclude_semantic_ids=[],
+        )
+        # ep-1 is already linked to sem-a, so no new link
+        assert links == 0
+
+        count = storage.conn.execute(
+            "SELECT COUNT(*) FROM semantic_sources WHERE episode_id = 'ep-1' AND semantic_id = 'sem-a'"
+        ).fetchone()[0]
+        assert count == 1
+
+
 def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
     """scope=full should also delete context vectors and feedback."""
     text = "test instinct"
