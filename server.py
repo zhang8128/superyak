@@ -532,6 +532,52 @@ def remember(
     return result
 
 
+def _get_reading_gap_domains() -> list[str]:
+    """Read the prism reading transition graph and find gap domains.
+
+    Returns lens names with zero or lowest total weight — the perspectives
+    attention never reaches.
+    """
+    import os
+    db_path = os.environ.get(
+        "PRISM_READING_TRANSITIONS_DB",
+        str(Path.home() / ".prism" / "reading-transitions.db"),
+    )
+    if not Path(db_path).exists():
+        return []
+
+    try:
+        from transitions import TransitionGraph
+        graph = TransitionGraph(db_path)
+        transitions = graph.all_transitions()
+        graph.close()
+
+        if not transitions:
+            return []
+
+        # Collect all known labels and their total outgoing weight
+        all_labels = set()
+        outgoing_weight: dict[str, float] = {}
+        for t in transitions:
+            all_labels.add(t["from_label"])
+            all_labels.add(t["to_label"])
+            outgoing_weight[t["from_label"]] = (
+                outgoing_weight.get(t["from_label"], 0.0) + t["weight"]
+            )
+
+        # Labels with zero outgoing weight are the deepest gaps
+        # Then sort the rest by ascending weight
+        scored = [(label, outgoing_weight.get(label, 0.0)) for label in all_labels]
+        scored.sort(key=lambda x: x[1])
+
+        # Return bottom 3
+        return [name for name, _ in scored[:3]]
+
+    except Exception:
+        logger.debug("Reading gap detection failed", exc_info=True)
+        return []
+
+
 @mcp.tool()
 def recall(
     query: str,
@@ -843,14 +889,40 @@ def recall(
         if r["layer"] == "episode":
             _storage.increment_episode_access(r["id"])
 
-    # Uninvited memories: random distant samples for generative collisions
+    # Uninvited memories: gap-biased + pure random for generative collisions
     if uninvited > 0:
         matched_ids = {r["id"] for r in results}
         try:
             uninvited_layers = (layer,) if layer else None
-            distant = _storage.sample_distant_memories(
-                embedding, matched_ids, k=uninvited, layers=uninvited_layers,
-            )
+
+            # Check for reading gap domains
+            gap_domains = _get_reading_gap_domains()
+            if gap_domains and uninvited > 1:
+                # N-1 gap-biased, 1 pure random
+                gap_query = " ".join(gap_domains)
+                gap_embedding = _embeddings.embed([gap_query], prefix="search_query")[0]
+                if gap_embedding:
+                    # Blend gap embedding with original query (alpha=0.3)
+                    import numpy as np
+                    blended = np.array(embedding) * 0.7 + np.array(gap_embedding) * 0.3
+                    blended = (blended / np.linalg.norm(blended)).tolist()
+
+                    gap_distant = _storage.sample_distant_memories(
+                        blended, matched_ids, k=uninvited - 1, layers=uninvited_layers,
+                    )
+                    pure_random = _storage.sample_distant_memories(
+                        embedding, matched_ids | {d[0] for d in gap_distant},
+                        k=1, layers=uninvited_layers,
+                    )
+                    distant = gap_distant + pure_random
+                else:
+                    distant = _storage.sample_distant_memories(
+                        embedding, matched_ids, k=uninvited, layers=uninvited_layers,
+                    )
+            else:
+                distant = _storage.sample_distant_memories(
+                    embedding, matched_ids, k=uninvited, layers=uninvited_layers,
+                )
             for did, dlayer, ddist in distant:
                 uninvited_result = {
                     "id": did,
