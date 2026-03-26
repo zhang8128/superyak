@@ -255,3 +255,25 @@ class TestAutoWalk:
         trail = _auto_walk(db, "ep-alone", max_steps=5, density_threshold=5,
                            knowledge_graph=None, visit_counts={})
         assert trail == []
+
+
+class TestWanderEdgeCases:
+
+    def test_nonexistent_start_id(self, db):
+        """Starting from a nonexistent ID returns empty neighbors."""
+        neighbors = db.get_neighbors("does-not-exist")
+        assert neighbors == []
+
+    def test_mixed_layer_neighbors(self, db, fake_embedding):
+        """A memory can have neighbors from different layers."""
+        emb = fake_embedding()
+        db.add_episode("ep-1", "sess-1", "experience", embedding=emb)
+        db.add_episode("ep-2", "sess-1", "related experience", embedding=emb)
+        db.add_semantic("sem-1", "distilled from ep-1", "fact", 0.8, emb,
+                        source_episode_ids=["ep-1"])
+        db.add_resonance("ep-1", "episode", "ep-2", "episode", similarity=0.8, weight=0.6)
+
+        neighbors = db.get_neighbors("ep-1")
+        layers = {n["layer"] for n in neighbors}
+        assert "episode" in layers  # resonance to ep-2
+        assert "semantic" in layers  # provenance to sem-1
