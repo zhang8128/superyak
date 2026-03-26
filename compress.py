@@ -129,62 +129,77 @@ class Compressor:
         if not episodes:
             return {"clusters": [], "compress_id": None}
 
-        # Use clustering prefix for better grouping of same-concept episodes
-        texts = [ep["content"] for ep in episodes]
-        embeddings = self._embeddings.embed(texts, prefix="clustering")
+        # Step 1: Classify episodes by kind — an episode can appear in multiple type pools
+        typed_groups: dict[str, list[dict]] = {}
+        for ep in episodes:
+            kinds = classify_episode_kind(ep)
+            for kind in kinds:
+                typed_groups.setdefault(kind, []).append(ep)
 
-        # Filter out episodes with None embeddings
-        valid = [(ep, emb) for ep, emb in zip(episodes, embeddings) if emb is not None]
-        if not valid:
-            return {"clusters": [], "compress_id": None}
+        # Step 2: Cluster within each type
+        all_clusters = []
+        seen_episode_ids: set[str] = set()  # Deduplicate episodes that appear in multiple types
 
-        valid_episodes, valid_embeddings = zip(*valid)
-        valid_episodes = list(valid_episodes)
-        valid_embeddings = list(valid_embeddings)
+        for kind, kind_episodes in typed_groups.items():
+            # Deduplicate within this type group (same episode from multiple kinds)
+            unique_episodes = []
+            for ep in kind_episodes:
+                if ep["id"] not in seen_episode_ids:
+                    unique_episodes.append(ep)
+            if not unique_episodes:
+                continue
 
-        embeddings_matrix = np.array(valid_embeddings)
+            texts = [ep["content"] for ep in unique_episodes]
+            embeddings = self._embeddings.embed(texts, prefix="clustering")
 
-        if len(embeddings_matrix) == 1:
-            cluster_labels = [1]
-        else:
-            cluster_labels = fclusterdata(
-                embeddings_matrix,
-                t=self._cluster_similarity,
-                metric="cosine",
-                criterion="distance",
-            )
+            valid = [(ep, emb) for ep, emb in zip(unique_episodes, embeddings) if emb is not None]
+            if not valid:
+                continue
 
-        # Group episodes by cluster label
-        cluster_groups: dict[int, list[tuple[dict, list[float]]]] = {}
-        for label, ep, emb in zip(cluster_labels, valid_episodes, valid_embeddings):
-            label_int = int(label)
-            if label_int not in cluster_groups:
-                cluster_groups[label_int] = []
-            cluster_groups[label_int].append((ep, emb))
+            valid_episodes, valid_embeddings = zip(*valid)
+            valid_episodes = list(valid_episodes)
+            valid_embeddings = list(valid_embeddings)
+            embeddings_matrix = np.array(valid_embeddings)
 
-        clusters = []
-        for label, members in cluster_groups.items():
-            eps = [m[0] for m in members]
-            embs = [m[1] for m in members]
-            centroid = np.mean(embs, axis=0).tolist()
+            if len(embeddings_matrix) == 1:
+                cluster_labels = [1]
+            else:
+                cluster_labels = fclusterdata(
+                    embeddings_matrix,
+                    t=self._cluster_similarity,
+                    metric="cosine",
+                    criterion="distance",
+                )
 
-            # Check for existing semantic match
-            action, match, near_miss = self._find_semantic_match(centroid)
+            cluster_groups: dict[int, list[tuple[dict, list[float]]]] = {}
+            for label, ep, emb in zip(cluster_labels, valid_episodes, valid_embeddings):
+                label_int = int(label)
+                if label_int not in cluster_groups:
+                    cluster_groups[label_int] = []
+                cluster_groups[label_int].append((ep, emb))
 
-            clusters.append({
-                "episodes": eps,
-                "centroid": centroid,
-                "match": match,
-                "action": action,
-                "near_miss": near_miss,
-            })
+            for label, members in cluster_groups.items():
+                eps = [m[0] for m in members]
+                embs = [m[1] for m in members]
+                centroid = np.mean(embs, axis=0).tolist()
+                action, match, near_miss = self._find_semantic_match(centroid)
+
+                # Track which episodes we've placed in clusters
+                for ep in eps:
+                    seen_episode_ids.add(ep["id"])
+
+                all_clusters.append({
+                    "episodes": eps,
+                    "centroid": centroid,
+                    "match": match,
+                    "action": action,
+                    "near_miss": near_miss,
+                    "kind": kind,
+                })
 
         compress_id = str(uuid.uuid4())
-        self._pending[compress_id] = {
-            "clusters": clusters,
-        }
-
-        return {"clusters": clusters, "compress_id": compress_id}
+        self._pending[compress_id] = {"clusters": all_clusters}
+        return {"clusters": all_clusters, "compress_id": compress_id}
 
     def commit(self, compress_id: str, summaries: list[dict]) -> dict:
         """Phase 2: store semantics from AI-provided summaries.

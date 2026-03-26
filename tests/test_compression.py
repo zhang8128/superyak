@@ -585,6 +585,41 @@ class TestEpisodeTyping:
         assert "factual" in kinds
 
 
+class TestTypedClustering:
+    def test_different_types_get_kind_label(self, tmp_db, embedder):
+        """Clusters should carry a 'kind' field from the episode type."""
+        emb = [0.5] * 768
+        embedder.override_map["Reading reaction about trust"] = emb
+        tmp_db.add_episode("ep-r", None, "Reading reaction about trust",
+                           embedding=emb, context={"topic": "passage-reading"})
+
+        compressor = Compressor(tmp_db, embedder)
+        result = compressor.cluster_episodes()
+        assert len(result["clusters"]) >= 1
+        kinds = {c.get("kind") for c in result["clusters"]}
+        assert "reading" in kinds
+
+    def test_two_types_produce_separate_clusters(self, tmp_db, embedder):
+        """Episodes of different types with similar embeddings should still
+        produce separate clusters."""
+        emb_a = [0.5] * 768
+        emb_b = [x + 0.001 for x in emb_a]  # Very similar embedding
+        embedder.override_map["Reading Mistborn: trust earned slowly"] = emb_a
+        embedder.override_map["Built trust anchors in system boundaries"] = emb_b
+
+        tmp_db.add_episode("ep-read", None, "Reading Mistborn: trust earned slowly",
+                           embedding=emb_a, context={"topic": "passage-reading"})
+        tmp_db.add_episode("ep-design", None, "Built trust anchors in system boundaries",
+                           embedding=emb_b, context={"topic": "design-session"})
+
+        compressor = Compressor(tmp_db, embedder)
+        result = compressor.cluster_episodes()
+
+        # Should have clusters from at least 2 different kinds
+        kinds = {c.get("kind") for c in result["clusters"]}
+        assert len(kinds) >= 2
+
+
 def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
     """scope=full should also delete context vectors and feedback."""
     text = "test instinct"
