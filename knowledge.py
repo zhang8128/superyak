@@ -236,6 +236,45 @@ class KnowledgeGraph:
 
         return {"facts": facts, "historical": historical}
 
+    def get_entity_neighbors(self, memory_content: str, exclude_id: str, num_results: int = 10) -> list[dict]:
+        """Find memories that share entities with the given content.
+
+        Searches the knowledge graph for edges whose source or target nodes
+        relate to the given content. Returns lightweight dicts suitable for
+        passing as entity_neighbors to Storage.get_neighbors().
+
+        Returns empty list if knowledge graph is disabled or errors.
+        """
+        if not self.enabled or not self._graphiti:
+            return []
+        try:
+            edges = self._run_async(
+                self._graphiti.search(query=memory_content, num_results=num_results)
+            )
+            neighbors = []
+            seen: set[str] = set()
+            for edge in (edges or []):
+                edge_id = str(getattr(edge, "uuid", ""))
+                if edge_id and edge_id != exclude_id and edge_id not in seen:
+                    seen.add(edge_id)
+                    source = getattr(edge, "source_node_name", "") or ""
+                    target = getattr(edge, "target_node_name", "") or ""
+                    fact = getattr(edge, "fact", "") or ""
+                    relationship = getattr(edge, "name", "") or ""
+                    # Build a readable content string from the edge fact
+                    content = fact or f"{source} {relationship} {target}"
+                    entity_name = source or target or relationship
+                    neighbors.append({
+                        "id": edge_id,
+                        "content": content,
+                        "layer": "entity",
+                        "entity_name": entity_name,
+                    })
+            return neighbors[:num_results]
+        except Exception:
+            logger.debug("get_entity_neighbors failed", exc_info=True)
+            return []
+
     def close(self):
         """Clean up Graphiti resources."""
         if self._graphiti is not None:

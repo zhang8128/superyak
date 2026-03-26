@@ -1287,13 +1287,17 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_neighbors(self, memory_id: str) -> list[dict]:
-        """Return all neighbors of a memory via resonance and provenance axes.
+    def get_neighbors(self, memory_id: str, entity_neighbors: list[dict] | None = None) -> list[dict]:
+        """Return all neighbors of a memory via resonance, provenance, and entity axes.
 
         Each neighbor is a dict with:
             id, content (truncated to 300 chars), layer, connection_type, connection_strength
 
-        connection_type is one of: "resonance", "provenance"
+        connection_type is one of: "resonance", "provenance", "entity"
+
+        entity_neighbors: pre-fetched knowledge graph neighbors (caller supplies these,
+            storage does not call the knowledge graph directly). Each dict has:
+            {id, content, layer, entity_name}.
         """
         neighbors = []
 
@@ -1385,6 +1389,17 @@ class Storage:
                     "connection_type": "provenance",
                     "connection_strength": sem.get("confidence", 0.5),
                 })
+
+        # --- Entity links (from knowledge graph) ---
+        for en in (entity_neighbors or []):
+            neighbors.append({
+                "id": en["id"],
+                "content": en["content"][:300],
+                "layer": en["layer"],
+                "connection_type": "entity",
+                "connection_strength": 1.0,
+                "entity_name": en.get("entity_name"),
+            })
 
         return neighbors
 

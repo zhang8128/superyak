@@ -105,3 +105,93 @@ class TestGetNeighbors:
 
         neighbors = db.get_neighbors("ep-1")
         assert len(neighbors[0]["content"]) <= 300
+
+
+class TestEntityNeighbors:
+    """Test entity neighbor injection into get_neighbors()."""
+
+    def test_entity_neighbors_appear_with_correct_connection_type(self, db, fake_embedding):
+        """Entity neighbors passed to get_neighbors appear with connection_type='entity'."""
+        db.add_episode("ep-1", "sess-1", "base memory", embedding=fake_embedding())
+
+        entity_neighbors = [
+            {
+                "id": "node-uuid-1",
+                "content": "Alice is a software engineer",
+                "layer": "entity",
+                "entity_name": "Alice",
+            }
+        ]
+
+        neighbors = db.get_neighbors("ep-1", entity_neighbors=entity_neighbors)
+        entity_ns = [n for n in neighbors if n["connection_type"] == "entity"]
+        assert len(entity_ns) == 1
+        assert entity_ns[0]["id"] == "node-uuid-1"
+
+    def test_entity_neighbors_include_entity_name(self, db, fake_embedding):
+        """Entity neighbors include the entity_name field."""
+        db.add_episode("ep-1", "sess-1", "base memory", embedding=fake_embedding())
+
+        entity_neighbors = [
+            {
+                "id": "node-uuid-2",
+                "content": "Bob works at ACME",
+                "layer": "entity",
+                "entity_name": "Bob",
+            }
+        ]
+
+        neighbors = db.get_neighbors("ep-1", entity_neighbors=entity_neighbors)
+        entity_ns = [n for n in neighbors if n["connection_type"] == "entity"]
+        assert len(entity_ns) == 1
+        assert entity_ns[0]["entity_name"] == "Bob"
+
+    def test_entity_neighbors_combined_with_resonances(self, db, fake_embedding):
+        """Entity neighbors coexist with resonance and provenance neighbors."""
+        emb_a, emb_b = fake_embedding(), fake_embedding()
+        db.add_episode("ep-1", "sess-1", "first memory", embedding=emb_a)
+        db.add_episode("ep-2", "sess-1", "second memory", embedding=emb_b)
+        db.add_resonance("ep-1", "episode", "ep-2", "episode", similarity=0.8, weight=0.6)
+
+        entity_neighbors = [
+            {
+                "id": "node-uuid-3",
+                "content": "Carol is a researcher",
+                "layer": "entity",
+                "entity_name": "Carol",
+            }
+        ]
+
+        neighbors = db.get_neighbors("ep-1", entity_neighbors=entity_neighbors)
+        types = {n["connection_type"] for n in neighbors}
+        assert "resonance" in types
+        assert "entity" in types
+
+    def test_none_entity_neighbors_leaves_results_unchanged(self, db, fake_embedding):
+        """Passing entity_neighbors=None (default) doesn't change behavior."""
+        emb_a, emb_b = fake_embedding(), fake_embedding()
+        db.add_episode("ep-1", "sess-1", "first", embedding=emb_a)
+        db.add_episode("ep-2", "sess-1", "second", embedding=emb_b)
+        db.add_resonance("ep-1", "episode", "ep-2", "episode", similarity=0.8, weight=0.6)
+
+        neighbors_default = db.get_neighbors("ep-1")
+        neighbors_explicit_none = db.get_neighbors("ep-1", entity_neighbors=None)
+        assert neighbors_default == neighbors_explicit_none
+
+    def test_entity_neighbor_content_truncated(self, db, fake_embedding):
+        """Entity neighbor content is truncated to 300 chars."""
+        db.add_episode("ep-1", "sess-1", "base", embedding=fake_embedding())
+
+        long_content = "y" * 500
+        entity_neighbors = [
+            {
+                "id": "node-uuid-4",
+                "content": long_content,
+                "layer": "entity",
+                "entity_name": "LongEntity",
+            }
+        ]
+
+        neighbors = db.get_neighbors("ep-1", entity_neighbors=entity_neighbors)
+        entity_ns = [n for n in neighbors if n["connection_type"] == "entity"]
+        assert len(entity_ns[0]["content"]) <= 300
