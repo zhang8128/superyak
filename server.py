@@ -110,6 +110,7 @@ _recall_resonances: dict[str, list[dict]] = {}  # recall_id -> [{resonance_id, m
 _instinct_graph = None
 _last_instinct_id = None
 _knowledge_graph = None
+_wander_visits: dict[str, int] = {}  # memory_id -> visit count this session
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -122,6 +123,83 @@ def _get_instinct_graph():
         db_path = Path(os.environ.get("ENGRAM_HOME", Path.home())) / ".engram" / "instinct_transitions.db"
         _instinct_graph = TransitionGraph(db_path=db_path)
     return _instinct_graph
+
+
+def _detect_layer(storage, memory_id: str) -> str | None:
+    """Determine which layer a memory belongs to.
+
+    Tries episode, semantic, instinct in order. Returns the layer name or None.
+    """
+    if storage.get_episode(memory_id) is not None:
+        return "episode"
+    if storage.get_semantic(memory_id) is not None:
+        return "semantic"
+    if storage.get_instinct(memory_id) is not None:
+        return "instinct"
+    return None
+
+
+def _auto_walk(storage, start_id: str, max_steps: int, density_threshold: int,
+               knowledge_graph, visit_counts: dict[str, int]) -> list[dict]:
+    """Walk the memory graph from start_id using weighted random selection.
+
+    At each step:
+    1. Get all neighbors of current node (including entity neighbors if kg enabled)
+    2. If current node has >= density_threshold total neighbors AND we've taken >= 1 step, stop
+    3. Filter out already-visited nodes
+    4. If no candidates, stop (dead end)
+    5. Pick next node via weighted random (weight = connection_strength / (1 + visit_count))
+
+    Returns a list of trail steps (neighbor dicts, not including start_id).
+    """
+    import random
+
+    visited: set[str] = {start_id}
+    trail: list[dict] = []
+    current_id = start_id
+
+    for step_num in range(max_steps):
+        # Fetch entity neighbors if knowledge graph is available
+        entity_neighbors = None
+        if knowledge_graph is not None:
+            try:
+                layer = _detect_layer(storage, current_id)
+                if layer is not None:
+                    content = storage._get_memory_content(current_id, layer)
+                    if content:
+                        entity_neighbors = knowledge_graph.get_entity_neighbors(
+                            content, exclude_id=current_id, num_results=10
+                        )
+            except Exception:
+                pass
+
+        neighbors = storage.get_neighbors(current_id, entity_neighbors=entity_neighbors)
+
+        # Check density — stop if we've moved at least once and hit a dense cluster
+        if step_num >= 1 and len(neighbors) >= density_threshold:
+            break
+
+        # Filter already-visited nodes
+        candidates = [n for n in neighbors if n["id"] not in visited]
+
+        if not candidates:
+            break
+
+        # Weighted random selection: base weight = connection_strength,
+        # penalized by how many times this node has been visited this session
+        weights = []
+        for n in candidates:
+            base = n.get("connection_strength", 0.5)
+            visits = visit_counts.get(n["id"], 0)
+            w = base * (1.0 / (1 + visits))
+            weights.append(max(w, 1e-9))
+
+        chosen = random.choices(candidates, weights=weights, k=1)[0]
+        visited.add(chosen["id"])
+        trail.append(chosen)
+        current_id = chosen["id"]
+
+    return trail
 
 
 def _apply_resonance_feedback(storage, recall_id: str, used: bool) -> None:
@@ -1780,6 +1858,100 @@ def erase(key: str, scope: str = "project") -> dict:
     removed = pad.erase(key)
     logger.info("Tool called: erase(key=%r, scope=%s, removed=%s)", key, scope, removed)
     return {"erased": key, "removed": removed}
+
+
+@mcp.tool()
+def wander(start_id: str, max_steps: int = 1) -> dict:
+    """Traverse the memory graph starting from a known memory node.
+
+    With max_steps=1, returns all immediate neighbors of start_id.
+    With max_steps>1, performs an auto-walk: follows edges via weighted random
+    selection, stopping at dense clusters, dead ends, or when max_steps is reached.
+
+    Visit counts are tracked per session to penalize repeatedly-visited nodes,
+    encouraging exploration of less-traveled paths.
+
+    Args:
+        start_id: ID of the memory to start from (episode, semantic, or instinct).
+        max_steps: Number of steps to walk. 1 = single step (all neighbors).
+                   >1 = auto-walk with trail.
+    """
+    global _wander_visits
+    _init()
+    logger.info("Tool called: wander(start_id=%s, max_steps=%d)", start_id, max_steps)
+
+    density_threshold = 5
+
+    if max_steps <= 1:
+        # Single step: return all neighbors of start_id
+        entity_neighbors = None
+        if _knowledge_graph is not None:
+            try:
+                layer = _detect_layer(_storage, start_id)
+                if layer is not None:
+                    content = _storage._get_memory_content(start_id, layer)
+                    if content:
+                        entity_neighbors = _knowledge_graph.get_entity_neighbors(
+                            content, exclude_id=start_id, num_results=10
+                        )
+            except Exception:
+                pass
+
+        neighbors = _storage.get_neighbors(start_id, entity_neighbors=entity_neighbors)
+        _wander_visits[start_id] = _wander_visits.get(start_id, 0) + 1
+        return {"start": start_id, "neighbors": neighbors, "count": len(neighbors)}
+
+    # Auto-walk
+    trail = _auto_walk(
+        _storage, start_id,
+        max_steps=max_steps,
+        density_threshold=density_threshold,
+        knowledge_graph=_knowledge_graph,
+        visit_counts=_wander_visits,
+    )
+
+    # Update visit counts
+    _wander_visits[start_id] = _wander_visits.get(start_id, 0) + 1
+    for step in trail:
+        sid = step["id"]
+        _wander_visits[sid] = _wander_visits.get(sid, 0) + 1
+
+    # Determine stopped_reason and final neighbors
+    stopped_at = trail[-1]["id"] if trail else start_id
+
+    # Get final node neighbors to determine reason and return them
+    entity_neighbors_final = None
+    if _knowledge_graph is not None:
+        try:
+            layer = _detect_layer(_storage, stopped_at)
+            if layer is not None:
+                content = _storage._get_memory_content(stopped_at, layer)
+                if content:
+                    entity_neighbors_final = _knowledge_graph.get_entity_neighbors(
+                        content, exclude_id=stopped_at, num_results=10
+                    )
+        except Exception:
+            pass
+
+    final_neighbors = _storage.get_neighbors(stopped_at, entity_neighbors=entity_neighbors_final)
+
+    if not trail:
+        stopped_reason = "dead_end"
+    elif len(final_neighbors) >= density_threshold:
+        stopped_reason = "dense_cluster"
+    elif len(trail) >= max_steps:
+        stopped_reason = "max_steps"
+    else:
+        stopped_reason = "dead_end"
+
+    return {
+        "start": start_id,
+        "trail": trail,
+        "steps": len(trail),
+        "stopped_at": stopped_at,
+        "stopped_reason": stopped_reason,
+        "final_neighbors": final_neighbors,
+    }
 
 
 if __name__ == "__main__":

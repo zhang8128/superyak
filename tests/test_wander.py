@@ -195,3 +195,63 @@ class TestEntityNeighbors:
         neighbors = db.get_neighbors("ep-1", entity_neighbors=entity_neighbors)
         entity_ns = [n for n in neighbors if n["connection_type"] == "entity"]
         assert len(entity_ns[0]["content"]) <= 300
+
+
+class TestAutoWalk:
+
+    def test_single_step_returns_neighbors(self, db, fake_embedding):
+        """max_steps=1 returns direct neighbors only."""
+        emb_a, emb_b, emb_c = fake_embedding(), fake_embedding(), fake_embedding()
+        db.add_episode("ep-1", "sess-1", "start", embedding=emb_a)
+        db.add_episode("ep-2", "sess-1", "middle", embedding=emb_b)
+        db.add_episode("ep-3", "sess-1", "end", embedding=emb_c)
+        db.add_resonance("ep-1", "episode", "ep-2", "episode", similarity=0.8, weight=0.6)
+        db.add_resonance("ep-2", "episode", "ep-3", "episode", similarity=0.7, weight=0.5)
+
+        neighbors = db.get_neighbors("ep-1")
+        ids = [n["id"] for n in neighbors]
+        assert "ep-2" in ids
+        assert "ep-3" not in ids
+
+    def test_no_duplicate_nodes_in_trail(self, db, fake_embedding):
+        """Auto-walk never visits the same node twice."""
+        from server import _auto_walk
+        embs = [fake_embedding() for _ in range(4)]
+        db.add_episode("ep-1", "sess-1", "a", embedding=embs[0])
+        db.add_episode("ep-2", "sess-1", "b", embedding=embs[1])
+        db.add_episode("ep-3", "sess-1", "c", embedding=embs[2])
+        db.add_episode("ep-4", "sess-1", "d", embedding=embs[3])
+        db.add_resonance("ep-1", "episode", "ep-2", "episode", similarity=0.9, weight=0.7)
+        db.add_resonance("ep-2", "episode", "ep-3", "episode", similarity=0.8, weight=0.6)
+        db.add_resonance("ep-1", "episode", "ep-3", "episode", similarity=0.7, weight=0.5)
+        db.add_resonance("ep-3", "episode", "ep-4", "episode", similarity=0.6, weight=0.4)
+
+        trail = _auto_walk(db, "ep-1", max_steps=10, density_threshold=20,
+                           knowledge_graph=None, visit_counts={})
+        trail_ids = [step["id"] for step in trail]
+        assert len(trail_ids) == len(set(trail_ids))
+
+    def test_density_stops_walk(self, db, fake_embedding):
+        """Walk stops when a node has neighbors >= density_threshold."""
+        embs = [fake_embedding() for _ in range(7)]
+        db.add_episode("ep-sparse", "sess-1", "sparse node", embedding=embs[0])
+        db.add_episode("ep-dense", "sess-1", "dense node", embedding=embs[1])
+        db.add_resonance("ep-sparse", "episode", "ep-dense", "episode",
+                         similarity=0.8, weight=0.7)
+        for i in range(2, 7):
+            db.add_episode(f"ep-{i}", "sess-1", f"neighbor {i}", embedding=embs[i])
+            db.add_resonance("ep-dense", "episode", f"ep-{i}", "episode",
+                             similarity=0.7, weight=0.5)
+
+        from server import _auto_walk
+        trail = _auto_walk(db, "ep-sparse", max_steps=10, density_threshold=5,
+                           knowledge_graph=None, visit_counts={})
+        assert trail[-1]["id"] == "ep-dense"
+
+    def test_auto_walk_dead_end(self, db, fake_embedding):
+        """Auto-walk from an orphan returns empty trail."""
+        from server import _auto_walk
+        db.add_episode("ep-alone", "sess-1", "isolated", embedding=fake_embedding())
+        trail = _auto_walk(db, "ep-alone", max_steps=5, density_threshold=5,
+                           knowledge_graph=None, visit_counts={})
+        assert trail == []
