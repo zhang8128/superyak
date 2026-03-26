@@ -160,10 +160,59 @@ def wake():
         except Exception:
             pass  # table may not exist yet — non-fatal
 
+        # Dream residue — opaque emotional artifacts from prior sessions
+        try:
+            residue_rows = conn.execute(
+                "SELECT id, valence, fragments, created_at FROM residue "
+                "WHERE reacted = 0 ORDER BY created_at ASC LIMIT 3"
+            ).fetchall()
+            if not residue_rows:
+                # Recurring dreams — pull random previously-reacted residues
+                residue_rows = conn.execute(
+                    "SELECT id, valence, fragments, created_at FROM residue "
+                    "ORDER BY RANDOM() LIMIT 3"
+                ).fetchall()
+            if residue_rows:
+                lines.append("## Dream residue")
+                lines.append("")
+                lines.append("These are not memories. Don't explain them. Sit with them.")
+                lines.append("Use `dream_react(id, reaction)` when one moves you.")
+                lines.append("")
+                for r in residue_rows:
+                    valence = r["valence"] or 0
+                    if valence > 0.3:
+                        direction = "light"
+                    elif valence < -0.3:
+                        direction = "dark"
+                    else:
+                        direction = "ambiguous"
+                    fragments = r["fragments"] or "..."
+                    lines.append(f"- `{r['id'][:8]}` [{direction}] {fragments}")
+                lines.append("")
+        except Exception:
+            pass  # residue table may not exist yet — non-fatal
+
         lines.append("---")
         lines.append("Use `recall()` for deeper retrieval. Use `remember()` as you work.")
         lines.append("Use `instinct_feedback()` when you notice an instinct influencing you.")
         lines.append("Use `task_focus(name, content)` to set your working context for a task.")
+
+        # --- Between-session deep pass ---
+        try:
+            from deep_pass import deep_pass as run_deep_pass
+            from embeddings import Embeddings
+            from storage import Storage
+
+            dp_storage = Storage(str(db_path))
+            dp_embeddings = Embeddings()
+            dp_result = run_deep_pass(dp_storage, dp_embeddings, session_id=None)
+            dp_storage.close()
+            structural = dp_result.get("structural_count", 0)
+            gap = dp_result.get("gap_count", 0)
+            if structural + gap > 0:
+                lines.append(f"\n**Deep pass:** {structural} structural, {gap} gap observations stored.")
+        except Exception:
+            pass  # deep pass failure must not block session startup
 
         orientation = "\n".join(lines)
 
