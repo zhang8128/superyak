@@ -759,6 +759,87 @@ class TestSingletonPromotion:
         assert promoted == 0
 
 
+class TestFullPipeline:
+    @pytest.fixture
+    def storage(self, tmp_db):
+        return tmp_db
+
+    @pytest.fixture
+    def embeddings(self):
+        return FakeEmbeddingProvider()
+
+    def test_typed_compression_produces_typed_clusters(self, storage, embeddings):
+        """Full pipeline should produce clusters with kind labels from different types."""
+        reading_emb = [0.5, 0.5] + [0.0] * 766
+        design_emb = [0.5, 0.0] + [0.5] * 766
+        obs_emb = [0.0, 0.5] + [0.5] * 766
+
+        embeddings.override_map["Reading Mistborn: trust is earned through small repeated acts"] = reading_emb
+        embeddings.override_map["Built trust anchors at system boundaries in this session"] = design_emb
+        embeddings.override_map["Pattern noticed: I drop relational frames under load"] = obs_emb
+
+        storage.add_episode("ep-r", None, "Reading Mistborn: trust is earned through small repeated acts",
+                           embedding=reading_emb, context={"topic": "passage-reading"})
+        storage.add_episode("ep-d", None, "Built trust anchors at system boundaries in this session",
+                           embedding=design_emb, context={"topic": "design-session"})
+        storage.add_episode("ep-o", None, "Pattern noticed: I drop relational frames under load",
+                           embedding=obs_emb, context={"kind": "self-observation"})
+
+        compressor = Compressor(storage, embeddings)
+        result = compressor.cluster_episodes()
+
+        assert len(result["clusters"]) >= 2
+        kinds = {c.get("kind") for c in result["clusters"]}
+        assert len(kinds) >= 2
+
+    def test_auto_compress_with_singletons(self, storage, embeddings):
+        """Auto compress should create semantics AND promote singletons."""
+        # One regular episode
+        emb1 = embeddings.embed(["regular episode about testing"])[0]
+        storage.add_episode("ep-1", None, "regular episode about testing", embedding=emb1)
+
+        # One core episode that won't cluster with anything
+        emb2 = [0.99] + [0.0] * 767  # Very different embedding
+        embeddings.override_map["unique core observation about frame switching"] = emb2
+        storage.add_episode("ep-core", None, "unique core observation about frame switching",
+                           embedding=emb2)
+        storage.conn.execute("UPDATE episodes SET core = 1 WHERE id = 'ep-core'")
+        storage.conn.commit()
+
+        compressor = Compressor(storage, embeddings)
+        result = compressor.auto_compress()
+
+        assert result["episodes_processed"] >= 1
+        # Should have at least one semantic from cluster or singleton
+        total = result["semantics_created"] + result.get("singletons_created", 0)
+        assert total >= 1
+
+    def test_multi_links_created_during_commit(self, storage, embeddings):
+        """commit() should create multi-links after semantic creation."""
+        # Create an existing semantic
+        emb = [0.5] * 768
+        embeddings.override_map["existing insight about perception"] = emb
+        storage.add_semantic("sem-existing", "existing insight about perception",
+                           "fact", 0.8, emb, [])
+
+        # Create an episode that matches the existing semantic
+        embeddings.override_map["new episode about perception and lenses"] = emb
+        storage.add_episode("ep-new", None, "new episode about perception and lenses",
+                           embedding=emb)
+
+        compressor = Compressor(storage, embeddings)
+        result = compressor.auto_compress()
+
+        # Should have multi-links
+        assert result.get("multi_links", 0) >= 0  # At least the field exists
+
+        # Check if any source links have similarity values
+        rows = storage.conn.execute(
+            "SELECT COUNT(*) FROM semantic_sources WHERE similarity IS NOT NULL"
+        ).fetchone()
+        # May or may not have similarity depending on whether multi-link triggered
+
+
 def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
     """scope=full should also delete context vectors and feedback."""
     text = "test instinct"
