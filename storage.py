@@ -447,33 +447,157 @@ class Storage:
         return count
 
     def prune_decayed(self, threshold: float = 0.05) -> int:
-        """Delete episodes that have decayed below threshold.
+        """Move decayed episodes to cold storage.
 
-        Only prunes episodes that are already compressed — uncompressed
-        episodes are preserved regardless of decay.
+        Compressed episodes below threshold get moved to a sibling cold.db:
+        text and metadata preserved, vectors stripped. The main db stays lean.
         """
-        # Get IDs first for vec0 cleanup
         rows = self.conn.execute(
-            "SELECT id FROM episodes WHERE decay_strength < ? AND compressed = 1 AND core = 0",
+            "SELECT * FROM episodes "
+            "WHERE decay_strength < ? AND compressed = 1 AND core = 0 AND dormant = 0",
             (threshold,),
         ).fetchall()
-        ids = [r[0] for r in rows]
-        if not ids:
+        if not rows:
             return 0
 
+        episodes = [dict(r) for r in rows]
+        ids = [e["id"] for e in episodes]
+
+        # Move to cold storage
+        cold = self._cold_storage()
+        for ep in episodes:
+            cold.execute(
+                "INSERT OR REPLACE INTO episodes "
+                "(id, session_id, content, episode_type, created_at, context, "
+                " accessed_count, last_accessed, compressed, decay_strength, "
+                " core, source, content_hash, dormant) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                (ep["id"], ep.get("session_id"), ep["content"],
+                 ep.get("episode_type"), ep["created_at"], ep.get("context"),
+                 ep.get("accessed_count", 0), ep.get("last_accessed"),
+                 ep.get("compressed", 0), ep.get("decay_strength", 0),
+                 ep.get("core", 0), ep.get("source"), ep.get("content_hash")),
+            )
+        cold.commit()
+
+        # Remove from main db (vectors, FTS triggers handle cascade)
         placeholders = ", ".join("?" * len(ids))
-        # Clean up vectors, FTS handled by trigger
         self.conn.execute(
             f"DELETE FROM episode_vectors WHERE id IN ({placeholders})", ids
         )
         self.conn.execute(
             f"DELETE FROM episodes WHERE id IN ({placeholders})", ids
         )
-        # Clean up resonances referencing pruned episodes
         self.cleanup_resonances(ids)
         self.conn.commit()
-        logger.info("Pruned %d decayed episodes (threshold=%.3f)", len(ids), threshold)
+        logger.info("Moved %d decayed episodes to cold storage (threshold=%.3f)", len(ids), threshold)
         return len(ids)
+
+    def _cold_storage(self):
+        """Get or create the cold storage database (sibling of main db)."""
+        if not hasattr(self, "_cold_conn") or self._cold_conn is None:
+            from pathlib import Path
+            cold_path = Path(self.db_path).with_name("cold.db")
+            self._cold_conn = sqlite3.connect(str(cold_path))
+            self._cold_conn.row_factory = sqlite3.Row
+            self._cold_conn.execute("""
+                CREATE TABLE IF NOT EXISTS episodes (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    content TEXT NOT NULL,
+                    episode_type TEXT,
+                    created_at TEXT NOT NULL,
+                    context JSON,
+                    accessed_count INTEGER DEFAULT 0,
+                    last_accessed TEXT,
+                    compressed INTEGER DEFAULT 0,
+                    decay_strength REAL DEFAULT 0.0,
+                    core INTEGER NOT NULL DEFAULT 0,
+                    source TEXT,
+                    content_hash TEXT,
+                    dormant INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            self._cold_conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS cold_fts USING fts5(
+                    content, content=episodes, content_rowid=rowid
+                )
+            """)
+            # Sync triggers for FTS
+            self._cold_conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS cold_fts_insert AFTER INSERT ON episodes BEGIN
+                    INSERT INTO cold_fts(rowid, content) VALUES (new.rowid, new.content);
+                END
+            """)
+            self._cold_conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS cold_fts_delete AFTER DELETE ON episodes BEGIN
+                    INSERT INTO cold_fts(cold_fts, rowid, content)
+                    VALUES ('delete', old.rowid, old.content);
+                END
+            """)
+            self._cold_conn.commit()
+        return self._cold_conn
+
+    def search_cold(self, query: str, k: int = 10) -> list[dict]:
+        """FTS search over cold storage. No vectors — text matching only."""
+        cold = self._cold_storage()
+        safe_query = _sanitize_fts_query(query)
+        if not safe_query:
+            return []
+        rows = cold.execute(
+            "SELECT e.* FROM cold_fts f JOIN episodes e ON f.rowid = e.rowid "
+            "WHERE cold_fts MATCH ? LIMIT ?",
+            (safe_query, k),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def revive_episode(self, episode_id: str, embed_fn,
+                       strength: float = 0.5) -> dict | None:
+        """Revive a cold episode — move it back to main db with a fresh vector.
+
+        Args:
+            episode_id: ID of the cold episode.
+            embed_fn: Callable(content: str) -> list[float], generates embedding.
+            strength: Decay strength to restore at.
+        """
+        cold = self._cold_storage()
+        row = cold.execute(
+            "SELECT * FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()
+        if not row:
+            return None
+        ep = dict(row)
+
+        embedding = embed_fn(ep["content"])
+
+        # Insert directly — context is already JSON text from cold storage
+        content_hash = hashlib.sha256(ep["content"].encode()).hexdigest()
+        self.conn.execute(
+            "INSERT INTO episodes "
+            "(id, session_id, content, episode_type, context, created_at, "
+            " content_hash, decay_strength, compressed, accessed_count, "
+            " dormant, core, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+            (ep["id"], ep.get("session_id"), ep["content"],
+             ep.get("episode_type"), ep.get("context"),  # already JSON
+             ep["created_at"], content_hash,
+             strength, ep.get("compressed", 0), ep.get("accessed_count", 0),
+             ep.get("core", 0), ep.get("source")),
+        )
+        self.conn.execute(
+            "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+            (ep["id"], _pack_embedding(embedding)),
+        )
+        self.conn.commit()
+
+        # Remove from cold
+        cold.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
+        cold.commit()
+
+        result = self.conn.execute(
+            "SELECT * FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()
+        return dict(result) if result else None
 
     def boost_episode_strength(self, id: str, boost: float = 0.1) -> None:
         """Boost an episode's decay strength on access (counteracts decay)."""
@@ -931,6 +1055,42 @@ class Storage:
         logger.info("Pruned %d weak instincts (threshold=%.2f)", len(ids), strength_threshold)
         return len(ids)
 
+    def challenge_instinct(self, id: str, strength_penalty: float = 0.1) -> bool:
+        """Lower an instinct's strength due to contradictory evidence.
+
+        Stronger than a single override (0.05) — a challenge is deliberate
+        confrontation, not just choosing differently. Returns False if not found.
+        """
+        inst = self.get_instinct(id)
+        if not inst:
+            return False
+        new_strength = max(0.0, inst["strength"] - strength_penalty)
+        self.conn.execute(
+            "UPDATE instincts SET strength = ? WHERE id = ?",
+            (new_strength, id),
+        )
+        self.conn.commit()
+        logger.info("Instinct challenged: %s (%.2f → %.2f)", id, inst["strength"], new_strength)
+        return True
+
+    def retire_instinct(self, id: str) -> bool:
+        """Remove an instinct entirely. For duplicates, obsolete patterns,
+        or instincts that should never have formed.
+
+        This is Marsh with the names — not decay, but deliberate removal.
+        """
+        inst = self.get_instinct(id)
+        if not inst:
+            return False
+        self.conn.execute("DELETE FROM instinct_vectors WHERE id = ?", (id,))
+        self.conn.execute("DELETE FROM instinct_sources WHERE instinct_id = ?", (id,))
+        self.conn.execute("DELETE FROM instinct_context_vectors WHERE id = ?", (id,))
+        self.conn.execute("DELETE FROM instinct_context_feedback WHERE instinct_id = ?", (id,))
+        self.conn.execute("DELETE FROM instincts WHERE id = ?", (id,))
+        self.conn.commit()
+        logger.info("Instinct retired: %s (%s)", id, inst["action"][:60])
+        return True
+
     # --- Memory Log ---
 
     def add_log_entry(
@@ -1126,6 +1286,122 @@ class Storage:
             (memory_id, memory_id),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_neighbors(self, memory_id: str) -> list[dict]:
+        """Return all neighbors of a memory via resonance and provenance axes.
+
+        Each neighbor is a dict with:
+            id, content (truncated to 300 chars), layer, connection_type, connection_strength
+
+        connection_type is one of: "resonance", "provenance"
+        """
+        neighbors = []
+
+        # --- Resonances (bidirectional) ---
+        rows = self.conn.execute(
+            """
+            SELECT r.memory_a, r.layer_a, r.memory_b, r.layer_b,
+                   r.similarity, r.strength
+            FROM resonances r
+            WHERE r.memory_a = ? OR r.memory_b = ?
+            """,
+            (memory_id, memory_id),
+        ).fetchall()
+        for row in rows:
+            if row[0] == memory_id:
+                peer_id, peer_layer = row[2], row[3]
+            else:
+                peer_id, peer_layer = row[0], row[1]
+            content = self._get_memory_content(peer_id, peer_layer)
+            if content is not None:
+                neighbors.append({
+                    "id": peer_id,
+                    "content": content[:300],
+                    "layer": peer_layer,
+                    "connection_type": "resonance",
+                    "connection_strength": row[5],
+                })
+
+        # --- Provenance: episode -> semantics built from it ---
+        sem_children = self.conn.execute(
+            "SELECT semantic_id FROM semantic_sources WHERE episode_id = ?",
+            (memory_id,),
+        ).fetchall()
+        for (sem_id,) in sem_children:
+            sem = self.get_semantic(sem_id)
+            if sem:
+                neighbors.append({
+                    "id": sem_id,
+                    "content": sem["content"][:300],
+                    "layer": "semantic",
+                    "connection_type": "provenance",
+                    "connection_strength": sem.get("confidence", 0.5),
+                })
+
+        # --- Provenance: semantic -> source episodes ---
+        ep_parents = self.conn.execute(
+            "SELECT episode_id FROM semantic_sources WHERE semantic_id = ?",
+            (memory_id,),
+        ).fetchall()
+        for (ep_id,) in ep_parents:
+            ep = self.get_episode(ep_id)
+            if ep:
+                neighbors.append({
+                    "id": ep_id,
+                    "content": ep["content"][:300],
+                    "layer": "episode",
+                    "connection_type": "provenance",
+                    "connection_strength": ep.get("decay_strength", 0.5),
+                })
+
+        # --- Provenance: semantic -> instincts built from it ---
+        ins_children = self.conn.execute(
+            "SELECT instinct_id FROM instinct_sources WHERE semantic_id = ?",
+            (memory_id,),
+        ).fetchall()
+        for (ins_id,) in ins_children:
+            ins = self.get_instinct(ins_id)
+            if ins:
+                neighbors.append({
+                    "id": ins_id,
+                    "content": f"[{ins.get('notice', '')}] {ins.get('implication', '')}",
+                    "layer": "instinct",
+                    "connection_type": "provenance",
+                    "connection_strength": ins.get("strength", 0.5),
+                })
+
+        # --- Provenance: instinct -> source semantics ---
+        sem_parents = self.conn.execute(
+            "SELECT semantic_id FROM instinct_sources WHERE instinct_id = ?",
+            (memory_id,),
+        ).fetchall()
+        for (sem_id,) in sem_parents:
+            sem = self.get_semantic(sem_id)
+            if sem:
+                neighbors.append({
+                    "id": sem_id,
+                    "content": sem["content"][:300],
+                    "layer": "semantic",
+                    "connection_type": "provenance",
+                    "connection_strength": sem.get("confidence", 0.5),
+                })
+
+        return neighbors
+
+    def _get_memory_content(self, memory_id: str, layer: str) -> str | None:
+        """Fetch content string for a memory by layer."""
+        if layer == "episode":
+            ep = self.get_episode(memory_id)
+            return ep["content"] if ep else None
+        elif layer == "semantic":
+            sem = self.get_semantic(memory_id)
+            return sem["content"] if sem else None
+        elif layer == "instinct":
+            ins = self.get_instinct(memory_id)
+            if ins:
+                return f"[{ins.get('notice', '')}] {ins.get('implication', '')}"
+            return None
+        return None
 
     def strengthen_resonance(self, resonance_id: str, delta: float = 0.1) -> None:
         """Increase resonance strength, capped at 1.0."""
