@@ -293,6 +293,8 @@ class Compressor:
 
         multi_links = self._multi_link_episodes(all_processed_episodes, cluster_semantic_ids)
 
+        singletons_created = self._promote_singletons()
+
         # Log compression event
         self._storage.add_log_entry(
             id=str(uuid.uuid4()),
@@ -305,6 +307,7 @@ class Compressor:
                 "semantics_created": semantics_created,
                 "semantics_reinforced": semantics_reinforced,
                 "multi_links": multi_links,
+                "singletons_created": singletons_created,
             },
         )
 
@@ -316,6 +319,7 @@ class Compressor:
             "semantics_reinforced": semantics_reinforced,
             "instincts_created": instincts_created,
             "multi_links": multi_links,
+            "singletons_created": singletons_created,
         }
 
     def auto_compress(self) -> dict:
@@ -608,6 +612,68 @@ class Compressor:
         except Exception:
             logger.debug("Instinct dedup check failed", exc_info=True)
         return False
+
+    def _promote_singletons(self) -> int:
+        """Promote core episodes with no semantic links to singleton semantics.
+
+        Candidates: core episodes not in semantic_sources.
+        Each gets its own semantic at confidence 0.5.
+        Returns number of singletons created.
+        """
+        rows = self._storage.conn.execute(
+            """
+            SELECT e.id, e.content, e.context, e.source FROM episodes e
+            WHERE e.core = 1
+            AND e.id NOT IN (SELECT episode_id FROM semantic_sources)
+            """
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        created = 0
+        for row in rows:
+            ep_id = row[0]
+            content = row[1]
+            if not content or len(content.strip()) < 10:
+                continue
+
+            sem_id = str(uuid.uuid4())
+            embedding = self._embeddings.embed([content], prefix="search_document")[0]
+            if embedding is None:
+                continue
+
+            # Classify kind from episode data
+            ep_dict = {"content": content, "source": row[3], "context": row[2]}
+            kinds = classify_episode_kind(ep_dict)
+            kind_to_semantic = {
+                "reading": "preference",
+                "design": "fact",
+                "observation": "preference",
+                "relational": "fact",
+                "factual": "fact",
+                "reflection": "preference",
+            }
+            semantic_kind = kind_to_semantic.get(kinds[0], "fact")
+
+            self._storage.add_semantic(
+                id=sem_id,
+                content=content,
+                kind=semantic_kind,
+                confidence=0.5,
+                embedding=embedding,
+                source_episode_ids=[ep_id],
+                auto_generated=True,
+            )
+            # Update the source link with similarity = 1.0 (exact match)
+            self._storage.conn.execute(
+                "UPDATE semantic_sources SET similarity = 1.0 WHERE semantic_id = ? AND episode_id = ?",
+                (sem_id, ep_id),
+            )
+            self._storage.conn.commit()
+            created += 1
+
+        return created
 
     def _multi_link_episodes(
         self,

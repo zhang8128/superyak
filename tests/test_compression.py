@@ -694,6 +694,71 @@ class TestMultiMembership:
         assert count == 1
 
 
+class TestSingletonPromotion:
+    @pytest.fixture
+    def storage(self, tmp_db):
+        return tmp_db
+
+    @pytest.fixture
+    def embeddings(self):
+        return FakeEmbeddingProvider()
+
+    def test_core_episode_gets_singleton(self, storage, embeddings):
+        """A core episode with no semantic link should get its own semantic."""
+        emb = embeddings.embed(["unique core memory"])[0]
+        storage.add_episode("ep-core", None, "unique core memory", embedding=emb)
+        # Mark as core
+        storage.conn.execute("UPDATE episodes SET core = 1 WHERE id = 'ep-core'")
+        storage.conn.commit()
+
+        compressor = Compressor(storage, embeddings)
+        promoted = compressor._promote_singletons()
+        assert promoted >= 1
+
+        rows = storage.conn.execute(
+            "SELECT semantic_id FROM semantic_sources WHERE episode_id = 'ep-core'"
+        ).fetchall()
+        assert len(rows) >= 1
+
+    def test_linked_episode_not_promoted(self, storage, embeddings):
+        """An episode already linked to a semantic should not get a singleton."""
+        emb = embeddings.embed(["linked episode"])[0]
+        storage.add_episode("ep-linked", None, "linked episode", embedding=emb)
+        storage.conn.execute("UPDATE episodes SET core = 1 WHERE id = 'ep-linked'")
+        storage.add_semantic("sem-x", "existing semantic", "fact", 0.7, emb, ["ep-linked"])
+
+        compressor = Compressor(storage, embeddings)
+        promoted = compressor._promote_singletons()
+        assert promoted == 0
+
+    def test_singleton_confidence_is_baseline(self, storage, embeddings):
+        """Singleton semantics should start at confidence 0.5."""
+        emb = embeddings.embed(["another unique memory"])[0]
+        storage.add_episode("ep-solo", None, "another unique memory", embedding=emb)
+        storage.conn.execute("UPDATE episodes SET core = 1 WHERE id = 'ep-solo'")
+        storage.conn.commit()
+
+        compressor = Compressor(storage, embeddings)
+        compressor._promote_singletons()
+
+        rows = storage.conn.execute(
+            "SELECT semantic_id FROM semantic_sources WHERE episode_id = 'ep-solo'"
+        ).fetchall()
+        sem_id = rows[0][0]
+        sem = storage.get_semantic(sem_id)
+        assert sem["confidence"] == 0.5
+
+    def test_non_core_episode_not_promoted(self, storage, embeddings):
+        """A non-core episode should not be promoted even if unlinked."""
+        emb = embeddings.embed(["non-core episode"])[0]
+        storage.add_episode("ep-noncore", None, "non-core episode", embedding=emb)
+        # core defaults to 0, don't mark it
+
+        compressor = Compressor(storage, embeddings)
+        promoted = compressor._promote_singletons()
+        assert promoted == 0
+
+
 def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
     """scope=full should also delete context vectors and feedback."""
     text = "test instinct"
