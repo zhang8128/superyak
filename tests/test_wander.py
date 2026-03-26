@@ -95,3 +95,13 @@ class TestGetNeighbors:
         assert "layer" in n
         assert "connection_type" in n
         assert "connection_strength" in n
+
+    def test_content_truncation(self, db, fake_embedding):
+        """Long content is truncated to 300 chars in neighbors."""
+        long_content = "x" * 500
+        db.add_episode("ep-1", "sess-1", "start", embedding=fake_embedding())
+        db.add_episode("ep-2", "sess-1", long_content, embedding=fake_embedding())
+        db.add_resonance("ep-1", "episode", "ep-2", "episode", similarity=0.8, weight=0.6)
+
+        neighbors = db.get_neighbors("ep-1")
+        assert len(neighbors[0]["content"]) <= 300

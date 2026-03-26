@@ -1364,7 +1364,7 @@ class Storage:
             if ins:
                 neighbors.append({
                     "id": ins_id,
-                    "content": f"[{ins.get('notice', '')}] {ins.get('implication', '')}",
+                    "content": f"[{ins.get('notice', '')}] {ins.get('implication', '')}"[:300],
                     "layer": "instinct",
                     "connection_type": "provenance",
                     "connection_strength": ins.get("strength", 0.5),
@@ -1399,7 +1399,7 @@ class Storage:
         elif layer == "instinct":
             ins = self.get_instinct(memory_id)
             if ins:
-                return f"[{ins.get('notice', '')}] {ins.get('implication', '')}"
+                return f"[{ins.get('notice', '')}] {ins.get('implication', '')}"[:300]
             return None
         return None
 
