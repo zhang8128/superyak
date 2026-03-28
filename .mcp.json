@@ -2,9 +2,16 @@
   "mcpServers": {
     "engram": {
       "command": "uv",
-      "args": ["run", "--directory", "${CLAUDE_PLUGIN_ROOT}", "python", "server.py"],
+      "args": ["run", "--directory", "/Users/kairos/Projects/engram", "python", "server.py"],
       "env": {
-        "ENGRAM_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}"
+        "ENGRAM_HOME": "/Users/kairos/Projects/engram"
+      }
+    },
+    "reader": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/kairos/Projects/reader", "python", "server.py"],
+      "env": {
+        "READER_HOME": "/Users/kairos/Projects/reader"
       }
     }
   }

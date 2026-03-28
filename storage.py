@@ -398,27 +398,37 @@ class Storage:
         return dict(row)
 
     def increment_episode_access(self, id: str) -> None:
-        """Increment accessed_count, update last_accessed, and boost decay strength."""
+        """Increment accessed_count and update last_accessed.
+
+        The power-law decay function in apply_decay() uses these fields
+        to compute strength — no ad-hoc boost needed.
+        """
         self.conn.execute(
             "UPDATE episodes SET accessed_count = accessed_count + 1, "
-            "last_accessed = ?, "
-            "decay_strength = MIN(1.0, decay_strength + 0.1) "
+            "last_accessed = ? "
             "WHERE id = ?",
             (_now_iso(), id),
         )
         self.conn.commit()
 
-    def apply_decay(self, factor: float = 0.9, min_interval_minutes: int = 30) -> int:
-        """Apply global decay to all episode strengths. Returns count affected.
+    def apply_decay(self, decay_exponent: float = 0.5, min_interval_minutes: int = 30) -> int:
+        """Recompute episode strengths using ACT-R power-law decay.
 
-        Implements Ebbinghaus-style forgetting: episodes that aren't accessed
-        weaken over time. Episodes accessed during recall get boosted by
-        increment_episode_access().
+        Base-level activation: B = ln(1 + n * t^(-d))
+        where n = access_count + 1 (creation counts), t = hours since last
+        access (or creation), d = decay exponent (0.5 default per ACT-R).
 
-        Rate-limited: skips decay if the last session_start was less than
-        min_interval_minutes ago, preventing rapid session restarts from
-        compounding decay into accidental erasure.
+        Clamped to [0, 1] — fresh/frequently accessed episodes stay near 1,
+        old untouched episodes decay toward 0 following a power law (slower
+        than exponential for recent memories, faster for old ones).
+
+        Rate-limited: skips if the last session_start was less than
+        min_interval_minutes ago, preventing rapid restarts from recomputing
+        needlessly.
         """
+        import math
+        from datetime import datetime, timezone
+
         # Rate-limit: check last session_start timestamp
         row = self.conn.execute(
             "SELECT timestamp FROM memory_log "
@@ -426,7 +436,6 @@ class Storage:
             "ORDER BY timestamp DESC LIMIT 1"
         ).fetchone()
         if row:
-            from datetime import datetime, timezone
             last_start = datetime.fromisoformat(row[0])
             elapsed = (datetime.now(timezone.utc) - last_start).total_seconds()
             if elapsed < min_interval_minutes * 60:
@@ -436,14 +445,44 @@ class Storage:
                 )
                 return 0
 
-        cursor = self.conn.execute(
-            "UPDATE episodes SET decay_strength = MAX(0.0, decay_strength * ?) "
-            "WHERE decay_strength > 0.01 AND core = 0",
-            (factor,),
-        )
+        now = datetime.now(timezone.utc)
+
+        rows = self.conn.execute(
+            "SELECT id, created_at, last_accessed, accessed_count "
+            "FROM episodes WHERE decay_strength > 0.01 AND core = 0"
+        ).fetchall()
+
+        count = 0
+        for ep in rows:
+            # Time since last interaction (hours), minimum 0.1 to avoid division issues
+            last_touch = ep["last_accessed"] or ep["created_at"]
+            try:
+                t_hours = max(0.1, (now - datetime.fromisoformat(last_touch)).total_seconds() / 3600)
+            except (ValueError, TypeError):
+                t_hours = 24.0  # fallback: assume 1 day
+
+            n = (ep["accessed_count"] or 0) + 1  # creation counts as an access
+            activation = math.log(1 + n * t_hours ** (-decay_exponent))
+
+            # Normalize: ln(1 + n*0.1^-0.5) ≈ ln(1 + 3.16*n) is roughly the max
+            # for a freshly-touched episode. We use a soft normalization that
+            # keeps fresh episodes near 1.0 and lets old ones approach 0.
+            # ln(2) ≈ 0.693 is the baseline for a single-access, 1-hour-old episode.
+            strength = min(1.0, activation / math.log(2 + n))
+
+            old_strength = self.conn.execute(
+                "SELECT decay_strength FROM episodes WHERE id = ?", (ep["id"],)
+            ).fetchone()[0]
+
+            if abs(old_strength - strength) > 0.001:
+                self.conn.execute(
+                    "UPDATE episodes SET decay_strength = ? WHERE id = ?",
+                    (strength, ep["id"]),
+                )
+                count += 1
+
         self.conn.commit()
-        count = cursor.rowcount
-        logger.debug("Decay applied (factor=%.2f): %d episodes affected", factor, count)
+        logger.debug("Decay recomputed (d=%.2f): %d episodes updated", decay_exponent, count)
         return count
 
     def prune_decayed(self, threshold: float = 0.05) -> int:

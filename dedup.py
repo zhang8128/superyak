@@ -43,9 +43,14 @@ class Deduplicator:
         self._available: bool | None = None  # lazy-checked
 
     def is_available(self) -> bool:
-        """Check if Ollama is reachable and the model is loaded."""
-        if self._available is not None:
-            return self._available
+        """Check if Ollama is reachable and the model is loaded.
+
+        Retries on each call if previously unavailable — Ollama may
+        come online mid-session.
+        """
+        # Only cache positive results; retry if previously unavailable
+        if self._available is True:
+            return True
         try:
             req = urllib.request.Request(
                 self._config.ollama_url.replace("/api/generate", "/api/tags"),

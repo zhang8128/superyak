@@ -209,7 +209,7 @@ def test_resonance_end_to_end(store):
 
 
 def test_prune_cleans_up_resonances(seeded):
-    """Pruning a decayed episode also removes its resonances."""
+    """Moving an episode to cold storage cleans up its resonances."""
     seeded.add_resonance("ep-1", "episode", "ep-2", "episode",
                          similarity=0.65, weight=0.5)
     seeded.conn.execute("UPDATE episodes SET decay_strength=0.01, compressed=1 WHERE id='ep-1'")

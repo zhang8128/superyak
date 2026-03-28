@@ -428,16 +428,37 @@ def test_instinct_override_symmetric(tmp_db):
 
 # --- Decay and forgetting ---
 
-def test_apply_decay(tmp_db, fake_embedding):
-    """Decay should reduce all episode strengths by the factor."""
-    tmp_db.add_episode(id="ep-d1", session_id="s1", content="a", embedding=fake_embedding())
-    tmp_db.add_episode(id="ep-d2", session_id="s1", content="b", embedding=fake_embedding())
+def test_apply_decay_power_law(tmp_db, fake_embedding):
+    """Power-law decay: old untouched episodes weaken, recently accessed stay strong."""
+    from datetime import datetime, timezone, timedelta
 
-    affected = tmp_db.apply_decay(factor=0.5)
+    # Episode created 7 days ago, never accessed
+    tmp_db.add_episode(id="ep-old", session_id="s1", content="old memory", embedding=fake_embedding())
+    old_time = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    tmp_db.conn.execute(
+        "UPDATE episodes SET created_at = ?, last_accessed = NULL, accessed_count = 0 WHERE id = 'ep-old'",
+        (old_time,),
+    )
+
+    # Episode created 7 days ago but accessed 1 hour ago, 10 times
+    tmp_db.add_episode(id="ep-active", session_id="s1", content="active memory", embedding=fake_embedding())
+    recent_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    tmp_db.conn.execute(
+        "UPDATE episodes SET created_at = ?, last_accessed = ?, accessed_count = 10 WHERE id = 'ep-active'",
+        (old_time, recent_time),
+    )
+    tmp_db.conn.commit()
+
+    affected = tmp_db.apply_decay()
     assert affected == 2
 
-    row1 = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-d1'").fetchone()
-    assert row1[0] == pytest.approx(0.5)
+    old_strength = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-old'").fetchone()[0]
+    active_strength = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-active'").fetchone()[0]
+
+    # Active episode should be much stronger than old untouched one
+    assert active_strength > old_strength
+    assert active_strength > 0.5  # recently accessed stays strong
+    assert old_strength < 0.5    # old untouched episode has decayed
 
 
 def test_decay_skips_near_zero(tmp_db, fake_embedding):
@@ -446,20 +467,60 @@ def test_decay_skips_near_zero(tmp_db, fake_embedding):
     tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.005 WHERE id = 'ep-dead'")
     tmp_db.conn.commit()
 
-    affected = tmp_db.apply_decay(factor=0.9)
+    affected = tmp_db.apply_decay()
     assert affected == 0
 
 
 def test_prune_decayed(tmp_db, fake_embedding):
-    """Pruning should remove compressed episodes below threshold."""
-    tmp_db.add_episode(id="ep-weak", session_id="s1", content="weak", embedding=fake_embedding())
+    """Pruning should move compressed episodes below threshold to cold storage."""
+    tmp_db.add_episode(id="ep-weak", session_id="s1", content="weak episode text", embedding=fake_embedding())
     tmp_db.mark_episodes_compressed(["ep-weak"])
     tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.01 WHERE id = 'ep-weak'")
     tmp_db.conn.commit()
 
     pruned = tmp_db.prune_decayed(threshold=0.05)
     assert pruned == 1
+    # Gone from main db
     assert tmp_db.get_episode("ep-weak") is None
+    # Exists in cold storage
+    cold = tmp_db._cold_storage()
+    row = cold.execute("SELECT * FROM episodes WHERE id = 'ep-weak'").fetchone()
+    assert row is not None
+    assert row["content"] == "weak episode text"
+
+
+def test_search_cold(tmp_db, fake_embedding):
+    """Cold storage is searchable via FTS."""
+    tmp_db.add_episode(id="ep-cold", session_id="s1", content="memories of the old garden", embedding=fake_embedding())
+    tmp_db.mark_episodes_compressed(["ep-cold"])
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.01 WHERE id = 'ep-cold'")
+    tmp_db.conn.commit()
+    tmp_db.prune_decayed(threshold=0.05)
+
+    results = tmp_db.search_cold("garden")
+    assert len(results) == 1
+    assert results[0]["content"] == "memories of the old garden"
+
+
+def test_revive_episode(tmp_db, fake_embedding):
+    """Reviving a cold episode restores it to main db with a fresh vector."""
+    emb = fake_embedding()
+    tmp_db.add_episode(id="ep-revive", session_id="s1", content="revivable memory", embedding=emb)
+    tmp_db.mark_episodes_compressed(["ep-revive"])
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.01 WHERE id = 'ep-revive'")
+    tmp_db.conn.commit()
+    tmp_db.prune_decayed(threshold=0.05)
+    assert tmp_db.get_episode("ep-revive") is None
+
+    row = tmp_db.revive_episode("ep-revive", embed_fn=lambda content: emb)
+    assert row is not None
+    assert row["dormant"] == 0
+    assert row["decay_strength"] == 0.5
+    # Back in main db
+    assert tmp_db.get_episode("ep-revive") is not None
+    # Gone from cold
+    cold = tmp_db._cold_storage()
+    assert cold.execute("SELECT * FROM episodes WHERE id = 'ep-revive'").fetchone() is None
 
 
 def test_prune_preserves_uncompressed(tmp_db, fake_embedding):
@@ -473,27 +534,45 @@ def test_prune_preserves_uncompressed(tmp_db, fake_embedding):
     assert tmp_db.get_episode("ep-unc") is not None
 
 
-def test_access_boosts_decay_strength(tmp_db, fake_embedding):
-    """Accessing an episode should boost its decay strength."""
+def test_access_updates_metadata(tmp_db, fake_embedding):
+    """Accessing an episode should update accessed_count and last_accessed."""
     tmp_db.add_episode(id="ep-boost", session_id="s1", content="test", embedding=fake_embedding())
-    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.5 WHERE id = 'ep-boost'")
-    tmp_db.conn.commit()
 
     tmp_db.increment_episode_access("ep-boost")
 
-    row = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-boost'").fetchone()
-    assert row[0] == pytest.approx(0.6)  # 0.5 + 0.1 boost
+    row = tmp_db.conn.execute(
+        "SELECT accessed_count, last_accessed FROM episodes WHERE id='ep-boost'"
+    ).fetchone()
+    assert row[0] == 1
+    assert row[1] is not None  # last_accessed was set
 
 
-def test_decay_strength_caps_at_one(tmp_db, fake_embedding):
-    """Decay strength should not exceed 1.0 even with many accesses."""
-    tmp_db.add_episode(id="ep-cap", session_id="s1", content="test", embedding=fake_embedding())
+def test_power_law_rewards_frequent_access(tmp_db, fake_embedding):
+    """Frequently accessed episodes should score higher under power-law decay."""
+    from datetime import datetime, timezone, timedelta
 
-    for _ in range(20):
-        tmp_db.increment_episode_access("ep-cap")
+    # Both created same time, one accessed heavily
+    old_time = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    recent = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
 
-    row = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-cap'").fetchone()
-    assert row[0] == pytest.approx(1.0)
+    tmp_db.add_episode(id="ep-idle", session_id="s1", content="idle", embedding=fake_embedding())
+    tmp_db.conn.execute(
+        "UPDATE episodes SET created_at = ?, accessed_count = 0 WHERE id = 'ep-idle'",
+        (old_time,),
+    )
+
+    tmp_db.add_episode(id="ep-busy", session_id="s1", content="busy", embedding=fake_embedding())
+    tmp_db.conn.execute(
+        "UPDATE episodes SET created_at = ?, last_accessed = ?, accessed_count = 20 WHERE id = 'ep-busy'",
+        (old_time, recent),
+    )
+    tmp_db.conn.commit()
+
+    tmp_db.apply_decay()
+
+    idle = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-idle'").fetchone()[0]
+    busy = tmp_db.conn.execute("SELECT decay_strength FROM episodes WHERE id='ep-busy'").fetchone()[0]
+    assert busy > idle
 
 
 def test_add_instinct_context_feedback(tmp_db, fake_embedding):
@@ -585,3 +664,56 @@ def test_prune_weak_instincts_cleans_context_vectors(tmp_db, fake_embedding):
     assert ctx_vec == 0
     feedback = tmp_db.get_instinct_context_feedback(inst_id)
     assert len(feedback) == 0
+
+
+def test_challenge_instinct(tmp_db):
+    """Challenge lowers strength more than a single override."""
+    tmp_db.add_instinct(id="inst-c", trigger="t", action="a", source_semantic_ids=[])
+    assert tmp_db.get_instinct("inst-c")["strength"] == pytest.approx(0.5)
+
+    result = tmp_db.challenge_instinct("inst-c", strength_penalty=0.1)
+    assert result is True
+    assert tmp_db.get_instinct("inst-c")["strength"] == pytest.approx(0.4)
+
+    # Challenge doesn't go below zero
+    for _ in range(10):
+        tmp_db.challenge_instinct("inst-c", strength_penalty=0.1)
+    assert tmp_db.get_instinct("inst-c")["strength"] == pytest.approx(0.0)
+
+
+def test_challenge_instinct_not_found(tmp_db):
+    assert tmp_db.challenge_instinct("nonexistent") is False
+
+
+def test_retire_instinct(tmp_db, fake_embedding):
+    """Retire removes instinct and all associated data."""
+    emb = fake_embedding()
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(id=sem_id, content="test", kind="preference",
+                        confidence=0.5, embedding=emb, source_episode_ids=[])
+    inst_id = str(uuid.uuid4())
+    tmp_db.add_instinct(
+        id=inst_id, trigger="preference", action="to be retired",
+        source_semantic_ids=[sem_id], strength=0.5, embedding=emb,
+    )
+    tmp_db.add_instinct_context_vector(inst_id, emb)
+    from storage import _pack_embedding
+    tmp_db.add_instinct_context_feedback(
+        instinct_id=inst_id, context_text="ctx",
+        context_embedding=_pack_embedding(emb), followed=True,
+    )
+
+    result = tmp_db.retire_instinct(inst_id)
+    assert result is True
+
+    # Everything should be gone
+    assert tmp_db.get_instinct(inst_id) is None
+    ctx_vec = tmp_db.conn.execute(
+        "SELECT COUNT(*) FROM instinct_context_vectors WHERE id = ?", (inst_id,)
+    ).fetchone()[0]
+    assert ctx_vec == 0
+    assert len(tmp_db.get_instinct_context_feedback(inst_id)) == 0
+
+
+def test_retire_instinct_not_found(tmp_db):
+    assert tmp_db.retire_instinct("nonexistent") is False

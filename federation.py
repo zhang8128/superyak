@@ -19,7 +19,9 @@ class SignalBus:
         self.db_path = str(db_path)
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL")
+        # Always use DELETE journal — this db is shared across Docker bind
+        # mounts where WAL silently breaks (shm mapping fails without error).
+        self.conn.execute("PRAGMA journal_mode=DELETE")
         self.conn.execute("PRAGMA busy_timeout=10000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self._create_schema()

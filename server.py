@@ -103,6 +103,7 @@ _watcher = None
 _session_id = None
 _session_episode_count = 0
 _instance_name = None
+_initialized = False
 _genome_db_path = None
 _signals_db_path = None
 _recall_scores: dict[str, dict[str, float]] = {}  # recall_id -> {result_id: score}
@@ -216,8 +217,8 @@ def _apply_resonance_feedback(storage, recall_id: str, used: bool) -> None:
 
 
 def _init():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph
-    if _storage is not None:
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized
+    if _initialized:
         return
     from embeddings import NomicEmbedProvider
     from storage import Storage
@@ -245,18 +246,20 @@ def _init():
     dedup_model = os.environ.get("ENGRAM_DEDUP_MODEL", "qwen3.5:27b")
     _dedup = Deduplicator(DedupConfig(model=dedup_model))
 
-    # Knowledge graph (Graphiti + Kuzu)
+    # Knowledge graph (Graphiti + Kuzu) — optional, don't block init on failure
     graph_model = os.environ.get("ENGRAM_GRAPH_MODEL")
+    _knowledge_graph = None
     if _config and _config.graph.enabled:
-        from knowledge import KnowledgeGraph
-        graph_config = _config.graph
-        if graph_model:
-            graph_config.model = graph_model
-        if not graph_config.db_path:
-            graph_config.db_path = str(db_path.parent / "knowledge.kuzu")
-        _knowledge_graph = KnowledgeGraph(graph_config)
-    else:
-        _knowledge_graph = None
+        try:
+            from knowledge import KnowledgeGraph
+            graph_config = _config.graph
+            if graph_model:
+                graph_config.model = graph_model
+            if not graph_config.db_path:
+                graph_config.db_path = str(db_path.parent / "knowledge.kuzu")
+            _knowledge_graph = KnowledgeGraph(graph_config)
+        except Exception as e:
+            logger.warning("Knowledge graph init failed (non-fatal): %s", e)
 
     _compressor = Compressor(
         _storage, _embeddings,
@@ -308,10 +311,10 @@ def _init():
     # Sleep-time maintenance on init: decay → prune → compress
     # This is engram's "consolidation during sleep" — runs between sessions.
     try:
-        # 1. Apply decay: weaken memories that weren't accessed last session
-        decayed = _storage.apply_decay(factor=0.9)
+        # 1. Recompute decay: power-law activation based on access history
+        decayed = _storage.apply_decay(decay_exponent=0.5)
         if decayed:
-            logger.info("Decay applied to %d episodes", decayed)
+            logger.info("Decay recomputed for %d episodes", decayed)
 
         # 2. Prune: delete compressed episodes that have decayed past threshold
         pruned = _storage.prune_decayed(threshold=0.05)
@@ -383,6 +386,8 @@ def _init():
         target_ids=[],
         context={"session_id": _session_id},
     )
+
+    _initialized = True
 
 
 def _apply_recall_bias(query_embedding: list[float],

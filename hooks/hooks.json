@@ -1,6 +1,18 @@
 {
-  "description": "Engram memory hooks — wake up with memories at session start",
+  "description": "Engram memory hooks — wake into memories, nudge mid-conversation, dream on exit",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/nudge.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "*",
@@ -9,6 +21,23 @@
             "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/wake.py",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Before finishing, briefly consider: did this turn involve solving a problem, making a design decision, learning something surprising, or discovering something about the codebase that would be valuable in a future session? If yes, use remember() to store a concise episode. Capture what was non-obvious, not what you did. Do not remember observations about engram itself unless genuinely novel. Whether or not you remember anything, you MUST end with exactly this JSON on its own line: {\"ok\": true}",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/sleep.py",
+            "timeout": 5
           }
         ]
       }

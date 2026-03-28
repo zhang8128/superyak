@@ -28,7 +28,7 @@ Three layers, each more compressed than the last:
 
 | Layer | What | Lifetime |
 |-------|------|----------|
-| **Episodes** | Raw experiences, verbatim | Decay 0.9x per session (rate-limited), pruned below 0.05 |
+| **Episodes** | Raw experiences, verbatim | ACT-R power-law decay (rate-limited), pruned below 0.05 |
 | **Core episodes** | Formative memories, exempt from decay | Auto-promoted when episodes spawn semantics |
 | **Semantics** | Distilled facts, preferences, constraints | Promoted from episode clusters |
 | **Instincts** | Perceptual attention directives (notice/implication) | Promoted from semantic patterns, context-gated |
@@ -41,7 +41,8 @@ prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (c
 Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.
 
 **Sleep-time consolidation:** On startup: decay → backfill orphaned vectors → prune → auto-compress.
-Decay is rate-limited (30min minimum between applications). Core episodes are exempt.
+Decay uses ACT-R power-law: `B = ln(1 + n * t^(-d))` where n = access count,
+t = hours since last access, d = 0.5. Rate-limited (30min minimum). Core episodes exempt.
 Centroid-based selection (most representative episode per cluster, MMR for diversity).
 
 **Contextual instincts:** Instincts have dual vectors — a content vector (what it's

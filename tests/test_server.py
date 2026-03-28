@@ -627,7 +627,9 @@ class TestUninvitedMemories:
         srv = server_env["server"]
         self._seed_diverse_memories(srv)
 
-        result = srv.recall(query="SQLite vector search", uninvited=3)
+        # Use small max_results so not all episodes are matched — leaves room
+        # for uninvited sampling from the unmatched pool.
+        result = srv.recall(query="SQLite vector search", max_results=3, uninvited=3)
         uninvited_results = [r for r in result["results"] if r.get("uninvited")]
         assert len(uninvited_results) > 0
         assert len(uninvited_results) <= 3
