@@ -113,7 +113,7 @@ class Compressor:
 
     @property
     def _instinct_confidence(self) -> float:
-        return self._config.instinct_confidence if self._config else 0.8
+        return self._config.instinct_confidence if self._config else 0.75
 
     def cluster_episodes(self, scope: str = "recent") -> dict:
         """Phase 1: cluster uncompressed episodes, check for semantic matches.

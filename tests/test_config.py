@@ -64,7 +64,7 @@ def test_v3_config_sections(tmp_path):
     assert config.compression.auto_threshold == 10
     assert config.compression.cluster_similarity == 0.75
     assert config.compression.reinforce_threshold == 0.70
-    assert config.compression.instinct_confidence == 0.5
+    assert config.compression.instinct_confidence == 0.75
     assert config.reflection.enabled is True
     assert config.reflection.log_retention_days == 90
     assert config.reflection.staleness_days == 30

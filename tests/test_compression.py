@@ -866,3 +866,45 @@ def test_reset_all_cleans_context_tables(tmp_db, compressor, embedder):
     assert ctx_count == 0
     fb_count = tmp_db.conn.execute("SELECT COUNT(*) FROM instinct_context_feedback").fetchone()[0]
     assert fb_count == 0
+
+
+def test_instinct_not_created_below_confidence_threshold(tmp_db, embedder):
+    """A preference semantic at 0.5 confidence should not create an instinct (threshold is 0.75)."""
+    from config import CompressionConfig
+    config = CompressionConfig(instinct_confidence=0.75)
+    compressor = Compressor(tmp_db, embedder, config=config)
+
+    text = "prefer descriptive variable names"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="preference",
+        confidence=0.5, embedding=emb, source_episode_ids=[],
+    )
+
+    created = compressor._check_instinct_creation()
+
+    assert created == 0
+    assert tmp_db.get_all_instincts() == []
+
+
+def test_instinct_created_at_confidence_threshold(tmp_db, embedder):
+    """A preference semantic at exactly 0.75 confidence should create an instinct."""
+    from config import CompressionConfig
+    config = CompressionConfig(instinct_confidence=0.75)
+    compressor = Compressor(tmp_db, embedder, config=config)
+
+    text = "prefer descriptive variable names"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="preference",
+        confidence=0.75, embedding=emb, source_episode_ids=[],
+    )
+
+    created = compressor._check_instinct_creation()
+
+    assert created == 1
+    instincts = tmp_db.get_all_instincts()
+    assert len(instincts) == 1
+    assert instincts[0]["trigger"] == "preference"

@@ -41,7 +41,7 @@ class CompressionConfig:
     auto_threshold: int = 10
     cluster_similarity: float = 0.75
     reinforce_threshold: float = 0.70
-    instinct_confidence: float = 0.5
+    instinct_confidence: float = 0.75
 
 
 @dataclass
@@ -158,7 +158,7 @@ degree_weight = 0.2
 auto_threshold = 10
 cluster_similarity = 0.75
 reinforce_threshold = 0.70
-instinct_confidence = 0.5
+instinct_confidence = 0.75
 
 [reflection]
 enabled = true
