@@ -136,23 +136,17 @@ class Compressor:
             for kind in kinds:
                 typed_groups.setdefault(kind, []).append(ep)
 
-        # Step 2: Cluster within each type
+        # Step 2: Cluster within each type independently
         all_clusters = []
-        seen_episode_ids: set[str] = set()  # Deduplicate episodes that appear in multiple types
 
         for kind, kind_episodes in typed_groups.items():
-            # Deduplicate within this type group (same episode from multiple kinds)
-            unique_episodes = []
-            for ep in kind_episodes:
-                if ep["id"] not in seen_episode_ids:
-                    unique_episodes.append(ep)
-            if not unique_episodes:
+            if not kind_episodes:
                 continue
 
-            texts = [ep["content"] for ep in unique_episodes]
+            texts = [ep["content"] for ep in kind_episodes]
             embeddings = self._embeddings.embed(texts, prefix="clustering")
 
-            valid = [(ep, emb) for ep, emb in zip(unique_episodes, embeddings) if emb is not None]
+            valid = [(ep, emb) for ep, emb in zip(kind_episodes, embeddings) if emb is not None]
             if not valid:
                 continue
 
@@ -183,10 +177,6 @@ class Compressor:
                 embs = [m[1] for m in members]
                 centroid = np.mean(embs, axis=0).tolist()
                 action, match, near_miss = self._find_semantic_match(centroid)
-
-                # Track which episodes we've placed in clusters
-                for ep in eps:
-                    seen_episode_ids.add(ep["id"])
 
                 all_clusters.append({
                     "episodes": eps,

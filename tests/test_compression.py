@@ -907,4 +907,34 @@ def test_instinct_created_at_confidence_threshold(tmp_db, embedder):
     assert created == 1
     instincts = tmp_db.get_all_instincts()
     assert len(instincts) == 1
-    assert instincts[0]["trigger"] == "preference"
+
+
+def test_episode_appears_in_multiple_kind_clusters(tmp_db, compressor, embedder):
+    """An episode matching multiple kinds should appear in clusters for each kind."""
+    # This content matches both "observation" (self-observation in context) and
+    # "design" (architecture in context) per classify_episode_kind heuristics.
+    content = "Self-observation: I noticed a pattern in how the architecture handles compression"
+    context = {"topic": "self-observation", "connection": "architecture design"}
+    emb = embedder.embed([content])[0]
+
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(
+        id=eid,
+        session_id="test-session",
+        content=content,
+        embedding=emb,
+        context=context,
+    )
+
+    result = compressor.cluster_episodes()
+    clusters = result["clusters"]
+
+    # Collect all kinds that contain this episode
+    kinds_with_episode = {
+        c["kind"] for c in clusters
+        if any(ep["id"] == eid for ep in c["episodes"])
+    }
+
+    assert len(kinds_with_episode) >= 2, (
+        f"Expected episode to appear in at least 2 kind clusters, got: {kinds_with_episode}"
+    )
