@@ -261,6 +261,80 @@ class Reflector:
             })
         return results
 
+    def analyze_classifications(self) -> dict:
+        """Show recent episode classifications for review."""
+        rows = self._storage.conn.execute(
+            "SELECT id, content, context, created_at FROM episodes "
+            "ORDER BY created_at DESC LIMIT 20"
+        ).fetchall()
+
+        classified = []
+        for row in rows:
+            ep = dict(row)
+            context_raw = ep.get("context")
+            suggested = None
+            if context_raw:
+                try:
+                    ctx = json.loads(context_raw) if isinstance(context_raw, str) else context_raw
+                    suggested = ctx.get("suggested_kinds")
+                except (ValueError, TypeError):
+                    pass
+
+            from compress import classify_episode_kind
+            heuristic = classify_episode_kind(ep)
+
+            classified.append({
+                "id": ep["id"],
+                "content": ep["content"][:100] if ep.get("content") else "",
+                "heuristic_kinds": heuristic,
+                "model_suggested": suggested,
+                "created_at": ep.get("created_at"),
+            })
+
+        return {"recent_episodes": classified}
+
+    def analyze_resonances(self) -> dict:
+        """Show the associative resonance network."""
+        rows = self._storage.conn.execute(
+            "SELECT * FROM resonances ORDER BY strength DESC LIMIT 30"
+        ).fetchall()
+
+        network = []
+        orphan_count = 0
+        for row in rows:
+            r = dict(row)
+            a_content = self._get_memory_preview(r["memory_a"], r["layer_a"])
+            b_content = self._get_memory_preview(r["memory_b"], r["layer_b"])
+
+            if a_content is None:
+                orphan_count += 1
+            if b_content is None:
+                orphan_count += 1
+
+            network.append({
+                "id": r["id"],
+                "a": {"id": r["memory_a"], "layer": r["layer_a"], "preview": a_content},
+                "b": {"id": r["memory_b"], "layer": r["layer_b"], "preview": b_content},
+                "weight": r["weight"],
+                "strength": r["strength"],
+                "co_occurrences": r["co_occurrences"],
+            })
+
+        return {"network": network, "total": len(rows), "orphans": orphan_count}
+
+    def _get_memory_preview(self, memory_id: str, layer: str) -> str | None:
+        """Get a short content preview for a memory by layer."""
+        if layer == "episode":
+            row = self._storage.get_episode(memory_id)
+            return row["content"][:80] if row and row.get("content") else None
+        elif layer == "semantic":
+            row = self._storage.get_semantic(memory_id)
+            return row["content"][:80] if row and row.get("content") else None
+        elif layer == "instinct":
+            row = self._storage.get_instinct(memory_id)
+            return row["action"][:80] if row and row.get("action") else None
+        return None
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -275,6 +349,10 @@ class Reflector:
             return {"staleness": self.detect_staleness()}
         elif focus == "instinct_contexts":
             return {"instinct_contexts": self.instinct_context_health()}
+        elif focus == "classifications":
+            return {"classifications": self.analyze_classifications()}
+        elif focus == "resonances":
+            return {"resonances": self.analyze_resonances()}
         else:
             return {
                 "usage": self.analyze_usage(),

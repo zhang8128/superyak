@@ -190,3 +190,53 @@ def test_reflect_instinct_contexts_focus(tmp_db):
     reflector = Reflector(tmp_db)
     result = reflector.reflect("instinct_contexts")
     assert "instinct_contexts" in result
+
+
+def test_reflect_classifications(tmp_db, fake_embedding):
+    """reflect(focus='classifications') should return recent episode classifications."""
+    tmp_db.add_episode(id="ep-cls-1", session_id="s1", content="I prefer verbose explanations", embedding=fake_embedding())
+    tmp_db.add_episode(id="ep-cls-2", session_id="s1", content="Remember to use async/await", embedding=fake_embedding())
+
+    from reflection import Reflector
+    reflector = Reflector(tmp_db)
+    result = reflector.reflect(focus="classifications")
+
+    assert "classifications" in result
+    assert "recent_episodes" in result["classifications"]
+    episodes = result["classifications"]["recent_episodes"]
+    assert len(episodes) >= 2
+    ids = [ep["id"] for ep in episodes]
+    assert "ep-cls-1" in ids
+    assert "ep-cls-2" in ids
+    for ep in episodes:
+        assert "heuristic_kinds" in ep
+        assert "model_suggested" in ep
+        assert "content" in ep
+
+
+def test_reflect_resonances(tmp_db, fake_embedding):
+    """reflect(focus='resonances') should return the resonance network."""
+    emb = fake_embedding()
+    tmp_db.add_episode(id="ep-res-1", session_id="s1", content="episode one", embedding=emb)
+    tmp_db.add_episode(id="ep-res-2", session_id="s1", content="episode two", embedding=emb)
+    tmp_db.add_resonance(
+        id_a="ep-res-1", layer_a="episode",
+        id_b="ep-res-2", layer_b="episode",
+        similarity=0.9, weight=1.0,
+    )
+
+    from reflection import Reflector
+    reflector = Reflector(tmp_db)
+    result = reflector.reflect(focus="resonances")
+
+    assert "resonances" in result
+    assert "network" in result["resonances"]
+    assert "total" in result["resonances"]
+    assert "orphans" in result["resonances"]
+    network = result["resonances"]["network"]
+    assert len(network) >= 1
+    entry = network[0]
+    assert "a" in entry
+    assert "b" in entry
+    assert "strength" in entry
+    assert "co_occurrences" in entry
