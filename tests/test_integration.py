@@ -292,3 +292,39 @@ def test_wal_checkpoint_on_close(tmp_path):
     # After TRUNCATE checkpoint, WAL file should be empty or absent
     if wal_path.exists():
         assert wal_path.stat().st_size == 0
+
+
+def test_disposition_pipeline_end_to_end(compressor, storage, embeddings):
+    """Full pipeline: observation episodes → disposition semantic → resonances."""
+    corrections = [
+        "Kairos caught me crystallizing again — I said Shale's ellipsis was existential dread when it might just be concern",
+        "Same pattern as Spook — I narrativized over the simple explanation and built three layers of confident interpretation",
+        "I was reading Sophie's motivation as self-awareness when it could equally be performance. The information can be accurate while the interpretation is wrong",
+    ]
+    for i, content in enumerate(corrections):
+        emb = embeddings.embed([content])[0]
+        storage.add_episode(
+            id=f"ep-corr-{i}",
+            session_id="test-disposition",
+            content=content,
+            context={"topic": "self-observation", "connection": "reading-correction"},
+            embedding=emb,
+        )
+
+    # Auto-compress should create at least one semantic
+    result = compressor.auto_compress()
+    assert result["semantics_created"] >= 1
+
+    # Verify a disposition semantic exists
+    semantics = storage.get_active_semantics()
+    dispositions = [s for s in semantics if s["kind"] == "disposition"]
+    assert len(dispositions) >= 1, (
+        f"Expected disposition semantic, got kinds: {[s['kind'] for s in semantics]}"
+    )
+
+    # Verify resonance links from each disposition to source episodes
+    for disp in dispositions:
+        resonances = storage.get_resonances_for(disp["id"])
+        assert len(resonances) > 0, (
+            f"Disposition {disp['id']} should have resonance links to source episodes"
+        )
