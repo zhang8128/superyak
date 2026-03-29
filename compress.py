@@ -324,6 +324,17 @@ class Compressor:
                 semantics_created += 1
                 self._storage.mark_core_batch(source_ids)
 
+                # Disposition semantics get resonance links to source episodes
+                # so specific correction moments surface alongside the pattern
+                if summary.get("kind") == "disposition":
+                    for src_id in source_ids:
+                        self._storage.add_resonance(
+                            new_id, "semantic",
+                            src_id, "episode",
+                            similarity=0.0,  # provenance-based, not similarity-based
+                            weight=max(0.1, min(0.9, random.gauss(0.6, 0.1))),
+                        )
+
                 near_miss = cluster.get("near_miss")
                 if near_miss:
                     weight = max(0.1, min(0.9, random.gauss(0.5, 0.15)))

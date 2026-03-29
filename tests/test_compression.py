@@ -1072,3 +1072,48 @@ def test_auto_compress_propagates_kind(tmp_db, compressor, embedder):
     kinds = {tmp_db.get_semantic(s["id"])["kind"] for s in semantics}
     # Specifically: reading episodes should produce preference semantics, not "fact"
     assert "preference" in kinds, f"Expected 'preference' in kinds, got: {kinds}"
+
+
+def test_disposition_creates_resonances_to_source_episodes(tmp_db, compressor, embedder):
+    """Disposition semantics created during auto_compress should have resonance links
+    back to the source episodes that formed the pattern."""
+    dim = 768
+    # Use a shared base vector so all 3 episodes cluster together
+    base = [0.5] * dim
+    ep_ids = []
+    for i in range(3):
+        vec = list(base)
+        vec[i] = 0.6  # slight variation, still very similar
+        content = f"self-observation: I noticed pattern {i} in how I handle corrections"
+        context = {"topic": "self-observation"}
+        eid = str(uuid.uuid4())
+        ep_ids.append(eid)
+        embedder.override_map[content] = vec
+        tmp_db.add_episode(
+            id=eid,
+            session_id="test-session",
+            content=content,
+            embedding=vec,
+            context=context,
+        )
+
+    compressor.auto_compress()
+
+    # Find disposition semantics
+    semantics = tmp_db.get_active_semantics()
+    disposition_semantics = [
+        s for s in semantics
+        if tmp_db.get_semantic(s["id"])["kind"] == "disposition"
+    ]
+
+    assert len(disposition_semantics) >= 1, (
+        f"Expected at least one disposition semantic, got kinds: "
+        f"{[tmp_db.get_semantic(s['id'])['kind'] for s in semantics]}"
+    )
+
+    # Each disposition semantic should have resonance links to source episodes
+    for disp in disposition_semantics:
+        resonances = tmp_db.get_resonances_for(disp["id"])
+        assert len(resonances) > 0, (
+            f"Disposition semantic {disp['id']} has no resonance links to source episodes"
+        )
