@@ -118,6 +118,25 @@ def wake():
                 lines.append(f"  ({status})")
                 lines.append("")
 
+        # Disposition semantics — behavioral patterns to notice
+        try:
+            dispositions = conn.execute(
+                "SELECT content, confidence, reinforced_count FROM semantics "
+                "WHERE kind = 'disposition' AND contradicted_by IS NULL "
+                "ORDER BY confidence DESC LIMIT 5"
+            ).fetchall()
+            if dispositions:
+                lines.append("## Dispositions")
+                lines.append("")
+                lines.append("Patterns observed across sessions. Not rules — tendencies to notice.")
+                lines.append("")
+                for disp in dispositions:
+                    reinforced = disp["reinforced_count"] or 0
+                    lines.append(f"- {disp['content']} (observed {reinforced + 1}x, confidence={disp['confidence']:.2f})")
+                lines.append("")
+        except Exception:
+            pass  # table may not have disposition kind yet
+
         if recent_semantics:
             lines.append("## What you know")
             lines.append("")
