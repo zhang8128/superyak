@@ -801,3 +801,77 @@ def test_get_co_firing_neighbors(tmp_db):
     neighbor_ids = {n["instinct_id"] for n in neighbors}
     assert neighbor_ids == {"n1", "n2"}
     assert "isolated" not in neighbor_ids
+
+
+def test_create_and_get_cluster(tmp_db):
+    storage = tmp_db
+    storage.create_cluster("c1", maturity="seeded", temperament=0.5)
+    cluster = storage.get_cluster("c1")
+    assert cluster is not None
+    assert cluster["maturity"] == "seeded"
+    assert cluster["temperament"] == 0.5
+
+
+def test_add_instinct_to_cluster(tmp_db):
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "test", [], embedding=emb)
+    storage.create_cluster("c1")
+    storage.add_to_cluster("i1", "c1", strength=0.7)
+    members = storage.get_cluster_members("c1")
+    assert len(members) == 1
+    assert members[0]["instinct_id"] == "i1"
+    assert members[0]["strength"] == 0.7
+
+
+def test_get_instinct_cluster_strengths(tmp_db):
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "test", [], embedding=emb)
+    storage.create_cluster("c1")
+    storage.create_cluster("c2")
+    storage.add_to_cluster("i1", "c1", strength=0.8)
+    storage.add_to_cluster("i1", "c2", strength=0.3)
+    strengths = storage.get_instinct_cluster_strengths("i1")
+    assert len(strengths) == 2
+    by_cluster = {s["cluster_id"]: s["strength"] for s in strengths}
+    assert by_cluster["c1"] == 0.8
+    assert by_cluster["c2"] == 0.3
+
+
+def test_update_cluster_member_strength(tmp_db):
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "test", [], embedding=emb)
+    storage.create_cluster("c1")
+    storage.add_to_cluster("i1", "c1", strength=0.5)
+    storage.update_cluster_member_strength("i1", "c1", 0.75)
+    members = storage.get_cluster_members("c1")
+    assert members[0]["strength"] == 0.75
+
+
+def test_update_cluster_temperament(tmp_db):
+    storage = tmp_db
+    storage.create_cluster("c1", temperament=0.5)
+    storage.update_cluster("c1", temperament=0.2)
+    cluster = storage.get_cluster("c1")
+    assert cluster["temperament"] == 0.2
+
+
+def test_get_all_clusters(tmp_db):
+    storage = tmp_db
+    storage.create_cluster("c1")
+    storage.create_cluster("c2")
+    clusters = storage.get_all_clusters()
+    assert len(clusters) == 2
+
+
+def test_delete_cluster_cascades(tmp_db):
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "test", [], embedding=emb)
+    storage.create_cluster("c1")
+    storage.add_to_cluster("i1", "c1")
+    storage.delete_cluster("c1")
+    assert storage.get_cluster("c1") is None
+    assert storage.get_instinct_cluster_strengths("i1") == []

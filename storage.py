@@ -1211,6 +1211,88 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    # --- Instinct clusters ---
+
+    def create_cluster(
+        self, id: str, maturity: str = "seeded", temperament: float = 0.5
+    ) -> str:
+        now = _now_iso()
+        self.conn.execute(
+            "INSERT INTO instinct_clusters (id, maturity, temperament, last_active, member_count) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (id, maturity, temperament, now),
+        )
+        self.conn.commit()
+        return id
+
+    def get_cluster(self, id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM instinct_clusters WHERE id = ?", (id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_all_clusters(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM instinct_clusters ORDER BY last_active DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_cluster(self, id: str, **fields) -> None:
+        allowed = {"maturity", "temperament", "last_active", "member_count"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        self.conn.execute(
+            f"UPDATE instinct_clusters SET {set_clause} WHERE id = ?",
+            (*updates.values(), id),
+        )
+        self.conn.commit()
+
+    def delete_cluster(self, id: str) -> None:
+        self.conn.execute("DELETE FROM instinct_clusters WHERE id = ?", (id,))
+        self.conn.commit()
+
+    def add_to_cluster(
+        self, instinct_id: str, cluster_id: str, strength: float = 0.5
+    ) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO instinct_cluster_members "
+            "(instinct_id, cluster_id, strength) VALUES (?, ?, ?)",
+            (instinct_id, cluster_id, strength),
+        )
+        self.conn.execute(
+            "UPDATE instinct_clusters SET member_count = "
+            "(SELECT COUNT(*) FROM instinct_cluster_members WHERE cluster_id = ?) "
+            "WHERE id = ?",
+            (cluster_id, cluster_id),
+        )
+        self.conn.commit()
+
+    def get_cluster_members(self, cluster_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM instinct_cluster_members WHERE cluster_id = ?",
+            (cluster_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_instinct_cluster_strengths(self, instinct_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM instinct_cluster_members WHERE instinct_id = ?",
+            (instinct_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_cluster_member_strength(
+        self, instinct_id: str, cluster_id: str, strength: float
+    ) -> None:
+        self.conn.execute(
+            "UPDATE instinct_cluster_members SET strength = ? "
+            "WHERE instinct_id = ? AND cluster_id = ?",
+            (strength, instinct_id, cluster_id),
+        )
+        self.conn.commit()
+
     # --- Memory Log ---
 
     def add_log_entry(
