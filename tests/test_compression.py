@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,7 @@ from compress import (
     classify_episode_kind_with_model,
     derive_semantic_kind,
 )
+from storage import Storage
 
 
 class FakeEmbeddingProvider:
@@ -1117,3 +1119,30 @@ def test_disposition_creates_resonances_to_source_episodes(tmp_db, compressor, e
         assert len(resonances) > 0, (
             f"Disposition semantic {disp['id']} has no resonance links to source episodes"
         )
+
+
+def test_compression_triggers_cluster_assignment(tmp_path):
+    """New instincts created during compression get assigned to clusters."""
+    _migrations = str(Path(__file__).resolve().parent.parent / "migrations")
+    db = tmp_path / "test.db"
+    storage = Storage(str(db), migrations_dir=_migrations)
+    embeddings = FakeEmbeddingProvider()
+    compressor = Compressor(storage, embeddings)
+
+    sem_id = str(uuid.uuid4())
+    emb = embeddings.embed(["always restart MCP server after changes"])[0]
+    storage.add_semantic(
+        sem_id, "always restart MCP server after changes",
+        kind="constraint", confidence=0.9, embedding=emb,
+        source_episode_ids=[],
+    )
+
+    created = compressor._check_instinct_creation()
+    assert created >= 1
+
+    instincts = storage.get_all_instincts()
+    for inst in instincts:
+        strengths = storage.get_instinct_cluster_strengths(inst["id"])
+        assert len(strengths) >= 1, f"Instinct {inst['id']} has no cluster assignment"
+
+    storage.close()

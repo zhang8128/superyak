@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.cluster.hierarchy import fclusterdata
 
+from clusters import ClusterEngine
 from storage import vec0_distance_to_similarity
 
 if TYPE_CHECKING:
@@ -236,7 +237,7 @@ class Compressor:
             else:
                 cluster_labels = fclusterdata(
                     embeddings_matrix,
-                    t=self._cluster_similarity,
+                    t=1.0 - self._cluster_similarity,
                     metric="cosine",
                     criterion="distance",
                 )
@@ -626,6 +627,10 @@ class Compressor:
                 # Store context vector separately
                 if context_embedding is not None:
                     self._storage.add_instinct_context_vector(instinct_id, context_embedding)
+
+                # Assign to nearest cluster (or create singleton)
+                cluster_engine = ClusterEngine(self._storage, self._embeddings)
+                cluster_engine.assign_new_instinct(instinct_id)
 
                 created += 1
                 logger.info("Instinct created: %s from semantic %s", instinct_id, sem["id"])
