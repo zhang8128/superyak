@@ -1152,6 +1152,13 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
     else:
         _storage.update_instinct_overridden(instinct_id)
 
+    # Update co-firing edges for recently co-fired instincts
+    neighbors = _storage.get_co_firing_neighbors(instinct_id)
+    for neighbor in neighbors:
+        _storage.record_co_fire(
+            instinct_id, neighbor["instinct_id"], followed=followed
+        )
+
     # Store context feedback if context provided
     if context:
         context_embedding = _embeddings.embed([context], prefix="search_document")[0]
