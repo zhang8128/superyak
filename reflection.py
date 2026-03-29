@@ -335,6 +335,54 @@ class Reflector:
             return row["action"][:80] if row and row.get("action") else None
         return None
 
+    def analyze_instinct_clusters(self) -> list[dict]:
+        """Analyze instinct cluster structure, membership, and temperament."""
+        clusters = self._storage.get_all_clusters()
+        result = []
+
+        for cluster in clusters:
+            cid = cluster["id"]
+            members = self._storage.get_cluster_members(cid)
+
+            member_details = []
+            for m in members:
+                inst = self._storage.get_instinct(m["instinct_id"])
+                if inst:
+                    member_details.append({
+                        "id": m["instinct_id"],
+                        "action": inst["action"][:100],
+                        "notice": inst.get("notice", ""),
+                        "cluster_strength": m["strength"],
+                        "global_strength": inst["strength"],
+                    })
+
+            # Gather internal co-firing stats
+            member_ids = {m["instinct_id"] for m in members}
+            internal_edges = []
+            for mid in member_ids:
+                neighbors = self._storage.get_co_firing_neighbors(mid)
+                for n in neighbors:
+                    if n["instinct_id"] in member_ids:
+                        internal_edges.append(n)
+
+            total_co_fires = sum(e["co_fire_count"] for e in internal_edges) // 2
+            total_follows = sum(e["co_follow_count"] for e in internal_edges) // 2
+            total_overrides = sum(e["co_override_count"] for e in internal_edges) // 2
+
+            result.append({
+                "id": cid,
+                "maturity": cluster["maturity"],
+                "temperament": cluster["temperament"],
+                "member_count": len(member_details),
+                "members": member_details,
+                "internal_co_fires": total_co_fires,
+                "internal_follows": total_follows,
+                "internal_overrides": total_overrides,
+                "last_active": cluster.get("last_active"),
+            })
+
+        return result
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -353,6 +401,8 @@ class Reflector:
             return {"classifications": self.analyze_classifications()}
         elif focus == "resonances":
             return {"resonances": self.analyze_resonances()}
+        elif focus == "instinct_clusters":
+            return {"instinct_clusters": self.analyze_instinct_clusters()}
         else:
             return {
                 "usage": self.analyze_usage(),

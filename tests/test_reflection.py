@@ -240,3 +240,33 @@ def test_reflect_resonances(tmp_db, fake_embedding):
     assert "b" in entry
     assert "strength" in entry
     assert "co_occurrences" in entry
+
+
+def test_reflect_instinct_clusters(tmp_db):
+    """reflect(focus='instinct_clusters') shows cluster structure."""
+    from reflection import Reflector
+
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "coding instinct", [], embedding=emb)
+    storage.add_instinct("i2", "preference", "also coding", [], embedding=emb)
+    storage.create_cluster("c1", maturity="confirmed", temperament=0.3)
+    storage.add_to_cluster("i1", "c1", strength=0.8)
+    storage.add_to_cluster("i2", "c1", strength=0.6)
+
+    storage.record_co_fire("i1", "i2", followed=True)
+    storage.record_co_fire("i1", "i2", followed=True)
+    storage.record_co_fire("i1", "i2", followed=False)
+
+    reflector = Reflector(storage)
+    result = reflector.reflect(focus="instinct_clusters")
+    assert "instinct_clusters" in result
+
+    clusters = result["instinct_clusters"]
+    assert len(clusters) >= 1
+
+    c = clusters[0]
+    assert "members" in c
+    assert "temperament" in c
+    assert "maturity" in c
+    assert len(c["members"]) == 2
