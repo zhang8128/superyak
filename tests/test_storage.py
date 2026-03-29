@@ -717,3 +717,17 @@ def test_retire_instinct(tmp_db, fake_embedding):
 
 def test_retire_instinct_not_found(tmp_db):
     assert tmp_db.retire_instinct("nonexistent") is False
+
+
+def test_co_firing_tables_exist(tmp_db):
+    """Migration 016 creates co-firing and cluster tables."""
+    tables = {
+        row[0]
+        for row in tmp_db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert "instinct_co_firing" in tables
+    assert "instinct_clusters" in tables
+    assert "instinct_cluster_members" in tables
+    assert "lens_cluster_affinity" in tables
