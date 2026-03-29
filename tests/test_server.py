@@ -260,6 +260,60 @@ class TestRecall:
         assert found.get("notice") == "when writing documentation"
         assert found.get("implication") == "avoid verbosity"
 
+    def test_recall_includes_resonant_memories(self, server_env, monkeypatch):
+        """Resonance-linked memories not in direct results appear under 'resonant' key."""
+        import resonance as res_module
+
+        srv = server_env["server"]
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        # Episode 1: the only episode — guaranteed to be top result for any query
+        ep1_id = str(uuid.uuid4())
+        ep1_emb = embeddings.embed(["cats are excellent companions"], prefix="search_document")[0]
+        storage.add_episode(
+            id=ep1_id, session_id="s-test",
+            content="cats are excellent companions",
+            embedding=ep1_emb,
+        )
+
+        # Episode 2: stored without a vector so it won't appear in primary results,
+        # but _hydrate can still fetch it by ID for resonance surfacing.
+        ep2_id = str(uuid.uuid4())
+        storage.conn.execute(
+            "INSERT INTO episodes (id, session_id, content, created_at, decay_strength) "
+            "VALUES (?, 's-test', 'database schema migrations', datetime('now'), 0.8)",
+            (ep2_id,),
+        )
+        storage.conn.commit()
+
+        # Create resonance between the two episodes
+        storage.add_resonance(ep1_id, "episode", ep2_id, "episode",
+                              similarity=0.7, weight=0.9)
+        # Boost resonance strength to 1.0 so probabilistic gate always fires
+        storage.conn.execute(
+            "UPDATE resonances SET strength = 1.0 WHERE memory_a = ? OR memory_b = ?",
+            (ep1_id, ep1_id),
+        )
+        storage.conn.commit()
+
+        # Mock random.random to 0.0 — ensures weight*strength gate never skips
+        monkeypatch.setattr(res_module.random, "random", lambda: 0.0)
+
+        result = srv.recall(query="cats companions")
+
+        # Primary result should include ep1
+        assert any(r["id"] == ep1_id for r in result["results"]), (
+            f"ep1 not in primary results: {[r['id'] for r in result['results']]}"
+        )
+        # Resonant result should include ep2 under the 'resonant' key
+        assert "resonant" in result, (
+            f"Response missing 'resonant' key; keys: {list(result.keys())}"
+        )
+        assert any(r["id"] == ep2_id for r in result["resonant"]), (
+            f"ep2 not in resonant results: {result['resonant']}"
+        )
+
 
 class TestInstinctFeedback:
     def test_instinct_feedback_basic(self, server_env):

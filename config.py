@@ -96,6 +96,11 @@ class SignalsConfig:
 
 
 @dataclass
+class ResonanceConfig:
+    max_in_recall: int = 3
+
+
+@dataclass
 class GraphConfig:
     enabled: bool = True
     model: str = "nemotron-nano"
@@ -117,6 +122,7 @@ class EngramConfig:
     classification: ClassificationConfig = field(default_factory=ClassificationConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     signals: SignalsConfig = field(default_factory=SignalsConfig)
+    resonance: ResonanceConfig = field(default_factory=ResonanceConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
     instance: str | None = None
     session_context: str | None = None
@@ -181,6 +187,9 @@ staleness_days = 30
 [signals]
 retention_days = 30
 
+[resonance]
+max_in_recall = 3
+
 [graph]
 enabled = true
 model = "nemotron-nano"
@@ -215,6 +224,7 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         classification=ClassificationConfig(**raw.get("classification", {})),
         reflection=ReflectionConfig(**raw.get("reflection", {})),
         signals=SignalsConfig(**raw.get("signals", {})),
+        resonance=ResonanceConfig(**raw.get("resonance", {})),
         graph=GraphConfig(**raw.get("graph", {})),
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),

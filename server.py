@@ -1048,12 +1048,14 @@ def recall(
         logger.debug("Resonance formation failed", exc_info=True)
 
     # Surface resonance-pulled memories
+    resonant_results: list[dict] = []
     try:
+        max_resonant = _config.resonance.max_in_recall if _config else 3
         resonant_ids = {r["id"] for r in results}
-        resonant = _surface_resonances(_storage, results, resonant_ids, max_resonant=2)
+        resonant = _surface_resonances(_storage, results, resonant_ids, max_resonant=max_resonant)
         for r in resonant:
-            results.append(r)
             result_ids.append(r["id"])
+            resonant_results.append(r)
         if resonant:
             _recall_resonances[recall_id] = [
                 {"resonance_id": r["resonance_id"], "memory_id": r["id"]} for r in resonant
@@ -1090,6 +1092,8 @@ def recall(
             logger.warning("Knowledge graph search failed during recall", exc_info=True)
 
     response = {"results": results, "recall_id": recall_id}
+    if resonant_results:
+        response["resonant"] = resonant_results
     if _residue_active:
         response["dreaming"] = True
         response["note"] = "Scores hidden — some memories may be dream-pulled. Use dream_verify(recall_id) after engaging."
