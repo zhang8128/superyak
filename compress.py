@@ -488,7 +488,7 @@ class Compressor:
         """
         created = 0
 
-        for kind in ("preference", "constraint"):
+        for kind in ("preference", "constraint", "disposition"):
             semantics = self._storage.get_active_semantics(kind=kind)
             for sem in semantics:
                 if sem["confidence"] < self._instinct_confidence:

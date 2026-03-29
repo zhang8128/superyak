@@ -484,6 +484,54 @@ def test_perceptual_framing_with_when(tmp_db, compressor, embedder):
     assert "portable hashing" in inst["implication"].lower()
 
 
+def test_disposition_semantic_creation(tmp_db, embedder):
+    """Create a semantic with kind='disposition', verify it can be retrieved with correct kind."""
+    emb = embedder.embed(["I crystallize interpretations prematurely"])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id,
+        content="I crystallize interpretations prematurely",
+        kind="disposition",
+        confidence=0.80,
+        embedding=emb,
+        source_episode_ids=[],
+    )
+
+    sem = tmp_db.get_semantic(sem_id)
+    assert sem is not None
+    assert sem["kind"] == "disposition"
+    assert sem["content"] == "I crystallize interpretations prematurely"
+    assert sem["confidence"] == pytest.approx(0.80, abs=0.01)
+
+
+def test_disposition_instinct_framing(tmp_db, compressor, embedder):
+    """A disposition semantic at confidence 0.80 (above 0.75 threshold) should produce an instinct
+    with trigger='disposition'."""
+    text = "I crystallize interpretations prematurely"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id,
+        content=text,
+        kind="disposition",
+        confidence=0.80,
+        embedding=emb,
+        source_episode_ids=[],
+    )
+
+    # Trigger the instinct creation check via a commit cycle
+    _add_episode(tmp_db, "unrelated filler episode", embedder.embed(["unrelated filler episode"])[0])
+    result = compressor.cluster_episodes()
+    summaries = [{"content": "filler", "kind": "fact", "action": "new"}]
+    stats = compressor.commit(result["compress_id"], summaries)
+
+    assert stats["instincts_created"] == 1
+
+    instincts = tmp_db.get_all_instincts()
+    assert len(instincts) == 1
+    assert instincts[0]["trigger"] == "disposition"
+
+
 def test_get_semantic_neighbors_shared_episode(tmp_db, embedder):
     """Two semantics sharing an episode should appear as neighbors of each other."""
     emb = embedder.embed(["shared episode"])[0]
