@@ -45,6 +45,13 @@ class CompressionConfig:
 
 
 @dataclass
+class ClassificationConfig:
+    model: str = "qwen3.5:27b"
+    prompt_path: str = "prompts/classify.txt"
+    fallback: str = "heuristic"
+
+
+@dataclass
 class ReflectionConfig:
     enabled: bool = True
     log_retention_days: int = 90
@@ -107,6 +114,7 @@ class EngramConfig:
     communities: CommunityConfig = field(default_factory=CommunityConfig)
     ranking: RankingConfig = field(default_factory=RankingConfig)
     compression: CompressionConfig = field(default_factory=CompressionConfig)
+    classification: ClassificationConfig = field(default_factory=ClassificationConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     signals: SignalsConfig = field(default_factory=SignalsConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
@@ -160,6 +168,11 @@ cluster_similarity = 0.75
 reinforce_threshold = 0.70
 instinct_confidence = 0.75
 
+[classification]
+model = "qwen3.5:27b"
+prompt_path = "prompts/classify.txt"
+fallback = "heuristic"
+
 [reflection]
 enabled = true
 log_retention_days = 90
@@ -199,6 +212,7 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         communities=CommunityConfig(**raw.get("communities", {})),
         ranking=RankingConfig(**raw.get("ranking", {})),
         compression=CompressionConfig(**raw.get("compression", {})),
+        classification=ClassificationConfig(**raw.get("classification", {})),
         reflection=ReflectionConfig(**raw.get("reflection", {})),
         signals=SignalsConfig(**raw.get("signals", {})),
         graph=GraphConfig(**raw.get("graph", {})),

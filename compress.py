@@ -23,11 +23,27 @@ logger = logging.getLogger("engram.compression")
 _KNOWN_NAMES = {"andy", "kairos", "vaughn", "emma", "koan", "vin", "kelsier"}
 
 
-def classify_episode_kind(episode: dict) -> list[str]:
+def classify_episode_kind(
+    episode: dict,
+    model: str | None = None,
+    prompt_path: str | None = None,
+) -> list[str]:
     """Classify an episode into one or more kinds based on metadata and content.
+
+    If model is provided, attempts model-assisted classification first and falls
+    back to the heuristic if the model is unavailable or returns no valid kinds.
 
     Returns sorted list of kinds. An episode can belong to multiple types.
     """
+    if model:
+        model_kinds = classify_episode_kind_with_model(
+            episode,
+            model=model,
+            prompt_path=prompt_path or "prompts/classify.txt",
+        )
+        if model_kinds:
+            return model_kinds
+
     kinds: set[str] = set()
     content = (episode.get("content") or "").lower()
     source = (episode.get("source") or "").lower()
@@ -80,6 +96,46 @@ def classify_episode_kind(episode: dict) -> list[str]:
     return sorted(kinds)
 
 
+def classify_episode_kind_with_model(
+    episode: dict,
+    model: str = "qwen3.5:27b",
+    prompt_path: str = "prompts/classify.txt",
+) -> list[str] | None:
+    """Classify episode using a local LLM. Returns None if model unavailable."""
+    from pathlib import Path
+    import os
+
+    template_file = Path(prompt_path)
+    if not template_file.exists():
+        engram_home = Path(os.environ.get("ENGRAM_HOME", Path(__file__).parent))
+        template_file = engram_home / prompt_path
+    if not template_file.exists():
+        return None
+
+    template = template_file.read_text()
+    content = episode.get("content", "")
+    context = episode.get("context", "")
+    prompt = template.replace("{content}", content).replace("{context}", str(context))
+
+    try:
+        import requests
+        ollama_url = os.environ.get("ENGRAM_OLLAMA_URL", "http://localhost:11434")
+        resp = requests.post(
+            f"{ollama_url}/api/generate",
+            json={"model": model, "prompt": prompt, "stream": False},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        raw = resp.json().get("response", "").strip().lower()
+        valid_kinds = {"reading", "design", "observation", "disposition", "relational", "factual", "reflection"}
+        kinds = [k.strip() for k in raw.split(",") if k.strip() in valid_kinds]
+        return kinds if kinds else None
+    except Exception:
+        logger.debug("Model classification unavailable", exc_info=True)
+        return None
+
+
 # Episode kind → semantic kind mapping
 _EPISODE_TO_SEMANTIC_KIND = {
     "reading": "preference",
@@ -111,12 +167,14 @@ class Compressor:
         config: CompressionConfig | None = None,
         deduplicator: Deduplicator | None = None,
         knowledge_graph=None,
+        classification_config=None,
     ):
         self._storage = storage
         self._embeddings = embedding_provider
         self._config = config
         self._dedup = deduplicator
         self._knowledge_graph = knowledge_graph
+        self._classification_config = classification_config
         self._pending: dict[str, dict] = {}  # compress_id -> cluster state
 
     @property
@@ -148,7 +206,9 @@ class Compressor:
         # Step 1: Classify episodes by kind — an episode can appear in multiple type pools
         typed_groups: dict[str, list[dict]] = {}
         for ep in episodes:
-            kinds = classify_episode_kind(ep)
+            model = self._classification_config.model if self._classification_config else None
+            prompt_path = self._classification_config.prompt_path if self._classification_config else None
+            kinds = classify_episode_kind(ep, model=model, prompt_path=prompt_path)
             for kind in kinds:
                 typed_groups.setdefault(kind, []).append(ep)
 

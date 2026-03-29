@@ -7,7 +7,12 @@ import uuid
 
 import pytest
 
-from compress import Compressor, classify_episode_kind, derive_semantic_kind
+from compress import (
+    Compressor,
+    classify_episode_kind,
+    classify_episode_kind_with_model,
+    derive_semantic_kind,
+)
 
 
 class FakeEmbeddingProvider:
@@ -740,6 +745,44 @@ class TestMultiMembership:
             "SELECT COUNT(*) FROM semantic_sources WHERE episode_id = 'ep-1' AND semantic_id = 'sem-a'"
         ).fetchone()[0]
         assert count == 1
+
+
+class TestModelAssistedClassification:
+    def test_classify_with_model_fallback(self):
+        """When model=None, classification still works via heuristic."""
+        ep = {"content": "pattern noticed while working", "source": None, "context": '{"kind": "self-observation"}'}
+        kinds = classify_episode_kind(ep, model=None, prompt_path=None)
+        assert isinstance(kinds, list)
+        assert len(kinds) >= 1
+        assert "observation" in kinds
+
+    def test_classify_model_unavailable_falls_back(self, tmp_path):
+        """classify_episode_kind_with_model returns None when model/URL is unreachable."""
+        import os
+        # Write a minimal prompt file so path resolution doesn't short-circuit
+        prompt_file = tmp_path / "classify.txt"
+        prompt_file.write_text(
+            "Classify this episode. Return kinds as comma-separated list.\n"
+            "Episode content:\n{content}\nEpisode context:\n{context}\n"
+        )
+        ep = {"content": "some episode content", "context": "{}"}
+        result = classify_episode_kind_with_model(
+            ep,
+            model="nonexistent-model-xyz",
+            prompt_path=str(prompt_file),
+        )
+        # Should return None (not raise) when the model is unavailable
+        assert result is None
+
+    def test_classify_prompt_file_missing(self):
+        """classify_episode_kind_with_model returns None when prompt file doesn't exist."""
+        ep = {"content": "some episode content", "context": "{}"}
+        result = classify_episode_kind_with_model(
+            ep,
+            model="qwen3.5:27b",
+            prompt_path="/nonexistent/path/classify.txt",
+        )
+        assert result is None
 
 
 class TestSingletonPromotion:
