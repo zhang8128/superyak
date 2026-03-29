@@ -80,6 +80,22 @@ def classify_episode_kind(episode: dict) -> list[str]:
     return sorted(kinds)
 
 
+# Episode kind → semantic kind mapping
+_EPISODE_TO_SEMANTIC_KIND = {
+    "reading": "preference",
+    "observation": "disposition",
+    "reflection": "disposition",
+    "relational": "relationship",
+    "design": "fact",
+    "factual": "fact",
+}
+
+
+def derive_semantic_kind(cluster_kind: str) -> str:
+    """Map a cluster's episode kind to the appropriate semantic kind."""
+    return _EPISODE_TO_SEMANTIC_KIND.get(cluster_kind, "fact")
+
+
 class Compressor:
     """Compression pipeline: episodes → semantics → instincts.
 
@@ -348,7 +364,7 @@ class Compressor:
 
             summaries.append({
                 "content": content,
-                "kind": "fact",
+                "kind": derive_semantic_kind(cluster["kind"]),
                 "action": cluster["action"],
                 "auto_generated": True,
                 "semantic_id": (cluster["match"] or {}).get("id") if cluster["match"] else None,
@@ -639,10 +655,10 @@ class Compressor:
             kind_to_semantic = {
                 "reading": "preference",
                 "design": "fact",
-                "observation": "preference",
+                "observation": "disposition",
                 "relational": "fact",
                 "factual": "fact",
-                "reflection": "preference",
+                "reflection": "disposition",
             }
             semantic_kind = kind_to_semantic.get(kinds[0], "fact")
 

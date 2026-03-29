@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from compress import Compressor, classify_episode_kind
+from compress import Compressor, classify_episode_kind, derive_semantic_kind
 
 
 class FakeEmbeddingProvider:
@@ -986,3 +986,46 @@ def test_episode_appears_in_multiple_kind_clusters(tmp_db, compressor, embedder)
     assert len(kinds_with_episode) >= 2, (
         f"Expected episode to appear in at least 2 kind clusters, got: {kinds_with_episode}"
     )
+
+
+def test_derive_semantic_kind():
+    """Unit test the derive_semantic_kind mapping for all known episode kinds."""
+    assert derive_semantic_kind("reading") == "preference"
+    assert derive_semantic_kind("observation") == "disposition"
+    assert derive_semantic_kind("reflection") == "disposition"
+    assert derive_semantic_kind("relational") == "relationship"
+    assert derive_semantic_kind("design") == "fact"
+    assert derive_semantic_kind("factual") == "fact"
+    # Unknown kinds default to "fact"
+    assert derive_semantic_kind("unknown") == "fact"
+    assert derive_semantic_kind("") == "fact"
+
+
+def test_auto_compress_propagates_kind(tmp_db, compressor, embedder):
+    """auto_compress should create semantics with kind derived from episode classification,
+    not hardcoded 'fact'."""
+    # Add reading episodes — context with "passage" causes classify_episode_kind to return ["reading"]
+    # which should map to "preference" via derive_semantic_kind
+    ep_ids = []
+    for i in range(3):
+        content = f"reading reaction {i}: passage about trust and cooperation"
+        emb = embedder.embed([content])[0]
+        eid = str(uuid.uuid4())
+        ep_ids.append(eid)
+        tmp_db.add_episode(
+            id=eid,
+            session_id="test-session",
+            content=content,
+            embedding=emb,
+            context={"topic": "passage-reading"},
+        )
+        # Tag with source so classify_episode_kind detects "reading"
+        tmp_db.set_episode_source(eid, "reading")
+
+    compressor.auto_compress()
+
+    semantics = tmp_db.get_active_semantics()
+    assert len(semantics) >= 1
+    kinds = {tmp_db.get_semantic(s["id"])["kind"] for s in semantics}
+    # Specifically: reading episodes should produce preference semantics, not "fact"
+    assert "preference" in kinds, f"Expected 'preference' in kinds, got: {kinds}"
