@@ -136,11 +136,69 @@ def nudge():
             (packed_query,)
         ).fetchall()
 
-        # Filter by threshold and collect fired instincts
+        # --- Cluster-aware instinct gating ---
+        has_clusters = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='instinct_cluster_members'"
+        ).fetchone()
+
+        # Get active instincts in co-fire window
+        active_window_ids = set()
+        has_window = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='nudge_co_fire_window'"
+        ).fetchone()
+        if has_window:
+            # Get current message index
+            idx_row = conn.execute(
+                "SELECT COALESCE(MAX(message_index), 0) AS idx FROM nudge_co_fire_window"
+            ).fetchone()
+            current_idx = idx_row["idx"] if idx_row else 0
+            CO_FIRE_WINDOW = 15
+
+            recent_window = conn.execute(
+                "SELECT DISTINCT instinct_id FROM nudge_co_fire_window "
+                "WHERE message_index >= ?",
+                (max(1, current_idx - CO_FIRE_WINDOW),),
+            ).fetchall()
+            active_window_ids = {r["instinct_id"] for r in recent_window}
+
+        def _get_cluster_prime(instinct_id):
+            """Check if this instinct's cluster has active members."""
+            if not has_clusters:
+                return 0.0
+            clusters = conn.execute(
+                "SELECT cluster_id, strength FROM instinct_cluster_members "
+                "WHERE instinct_id = ?",
+                (instinct_id,),
+            ).fetchall()
+            max_prime = 0.0
+            for c in clusters:
+                members = conn.execute(
+                    "SELECT instinct_id FROM instinct_cluster_members "
+                    "WHERE cluster_id = ? AND instinct_id != ?",
+                    (c["cluster_id"], instinct_id),
+                ).fetchall()
+                active_count = sum(
+                    1 for m in members if m["instinct_id"] in active_window_ids
+                )
+                if active_count > 0:
+                    cluster = conn.execute(
+                        "SELECT temperament FROM instinct_clusters WHERE id = ?",
+                        (c["cluster_id"],),
+                    ).fetchone()
+                    temp = cluster["temperament"] if cluster else 0.5
+                    # Conservative clusters prime more strongly
+                    prime_strength = (1.0 - temp) * 0.15
+                    max_prime = max(max_prime, prime_strength)
+            return max_prime
+
+        # Filter by threshold with cluster priming
         fired = []
         for row in results:
             sim = _distance_to_similarity(row["distance"])
-            if sim >= FIRE_THRESHOLD:
+            cluster_prime = _get_cluster_prime(row["id"])
+            effective_threshold = max(0.2, FIRE_THRESHOLD - cluster_prime)
+
+            if sim >= effective_threshold:
                 inst = conn.execute(
                     "SELECT id, notice, implication, action FROM instincts WHERE id = ?",
                     (row["id"],)
