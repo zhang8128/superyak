@@ -391,6 +391,17 @@ class Compressor:
 
         instincts_created = self._check_instinct_creation()
 
+        # Re-derive clusters if we have co-firing data
+        edges = self._storage.get_all_co_firing_edges()
+        if edges:
+            cluster_engine = ClusterEngine(self._storage, self._embeddings)
+            cluster_engine.derive_clusters()
+            logger.info("Clusters re-derived from co-firing graph")
+        elif self._storage.get_all_instincts():
+            cluster_engine = ClusterEngine(self._storage, self._embeddings)
+            cluster_engine.seed_clusters()
+            logger.info("Clusters seeded from embedding proximity")
+
         return {
             "episodes_processed": episodes_processed,
             "semantics_created": semantics_created,

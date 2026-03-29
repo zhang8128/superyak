@@ -1146,3 +1146,33 @@ def test_compression_triggers_cluster_assignment(tmp_path):
         assert len(strengths) >= 1, f"Instinct {inst['id']} has no cluster assignment"
 
     storage.close()
+
+
+def test_compression_rederives_clusters(tmp_path):
+    """Full compression triggers cluster re-derivation when co-firing data exists."""
+    _migrations = str(Path(__file__).resolve().parent.parent / "migrations")
+    db = tmp_path / "test.db"
+    storage = Storage(str(db), migrations_dir=_migrations)
+    embeddings = FakeEmbeddingProvider()
+    compressor = Compressor(storage, embeddings)
+
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "coding one", [], embedding=emb)
+    storage.add_instinct("i2", "preference", "coding two", [], embedding=emb)
+    storage.add_instinct("i3", "preference", "sports one", [], embedding=emb)
+    storage.add_instinct("i4", "preference", "sports two", [], embedding=emb)
+
+    for _ in range(10):
+        storage.record_co_fire("i1", "i2")
+        storage.record_co_fire("i3", "i4")
+
+    from clusters import ClusterEngine
+    engine = ClusterEngine(storage, embeddings)
+    cluster_ids = engine.derive_clusters()
+
+    assert len(cluster_ids) == 2
+    for cid in cluster_ids:
+        cluster = storage.get_cluster(cid)
+        assert cluster["maturity"] == "confirmed"
+
+    storage.close()
