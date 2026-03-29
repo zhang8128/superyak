@@ -703,7 +703,12 @@ def recall(
                             break
                 except Exception:
                     pass
-                strength = inst.get("strength", 0.5)
+                # Use per-cluster strength if available (max across clusters)
+                cluster_strengths = _storage.get_instinct_cluster_strengths(iid)
+                if cluster_strengths:
+                    strength = max(cs["strength"] for cs in cluster_strengths)
+                else:
+                    strength = inst.get("strength", 0.5)
                 score = ctx_sim * 0.5 + content_sim * 0.2 + strength * 0.3
                 instinct_results.append((iid, inst, score))
         except Exception:
@@ -829,7 +834,14 @@ def recall(
                 sim = vec0_distance_to_similarity(distance)
                 # Blend embedding similarity with instinct strength
                 inst = _storage.get_instinct(iid)
-                strength = inst.get("strength", 0.5) if inst else 0.5
+                if inst:
+                    cluster_strengths = _storage.get_instinct_cluster_strengths(iid)
+                    if cluster_strengths:
+                        strength = max(cs["strength"] for cs in cluster_strengths)
+                    else:
+                        strength = inst.get("strength", 0.5)
+                else:
+                    strength = 0.5
                 candidates[iid] = {
                     "layer": "instinct",
                     "similarity": sim * 0.7 + strength * 0.3,
