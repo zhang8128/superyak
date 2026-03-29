@@ -731,3 +731,73 @@ def test_co_firing_tables_exist(tmp_db):
     assert "instinct_clusters" in tables
     assert "instinct_cluster_members" in tables
     assert "lens_cluster_affinity" in tables
+
+
+def test_record_co_fire(tmp_db):
+    """Recording a co-fire creates or increments an edge."""
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "instinct one", [], embedding=emb)
+    storage.add_instinct("i2", "preference", "instinct two", [], embedding=emb)
+
+    storage.record_co_fire("i1", "i2")
+    edge = storage.get_co_firing_edge("i1", "i2")
+    assert edge is not None
+    assert edge["co_fire_count"] == 1
+    assert edge["co_follow_count"] == 0
+
+    # Second co-fire increments
+    storage.record_co_fire("i1", "i2")
+    edge = storage.get_co_firing_edge("i1", "i2")
+    assert edge["co_fire_count"] == 2
+
+
+def test_record_co_fire_canonical_order(tmp_db):
+    """Edge order is canonical — (i2, i1) reads the same as (i1, i2)."""
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("aaa", "preference", "first", [], embedding=emb)
+    storage.add_instinct("zzz", "preference", "second", [], embedding=emb)
+
+    storage.record_co_fire("zzz", "aaa")  # reversed order
+    edge = storage.get_co_firing_edge("aaa", "zzz")
+    assert edge is not None
+    assert edge["co_fire_count"] == 1
+
+
+def test_record_co_fire_with_outcome(tmp_db):
+    """Co-fire with followed=True increments co_follow_count."""
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("i1", "preference", "one", [], embedding=emb)
+    storage.add_instinct("i2", "preference", "two", [], embedding=emb)
+
+    storage.record_co_fire("i1", "i2", followed=True)
+    edge = storage.get_co_firing_edge("i1", "i2")
+    assert edge["co_fire_count"] == 1
+    assert edge["co_follow_count"] == 1
+    assert edge["co_override_count"] == 0
+
+    storage.record_co_fire("i1", "i2", followed=False)
+    edge = storage.get_co_firing_edge("i1", "i2")
+    assert edge["co_fire_count"] == 2
+    assert edge["co_follow_count"] == 1
+    assert edge["co_override_count"] == 1
+
+
+def test_get_co_firing_neighbors(tmp_db):
+    """Get all co-firing neighbors of an instinct."""
+    storage = tmp_db
+    emb = [0.1] * 768
+    storage.add_instinct("center", "preference", "center", [], embedding=emb)
+    storage.add_instinct("n1", "preference", "neighbor 1", [], embedding=emb)
+    storage.add_instinct("n2", "preference", "neighbor 2", [], embedding=emb)
+    storage.add_instinct("isolated", "preference", "isolated", [], embedding=emb)
+
+    storage.record_co_fire("center", "n1")
+    storage.record_co_fire("center", "n2")
+
+    neighbors = storage.get_co_firing_neighbors("center")
+    neighbor_ids = {n["instinct_id"] for n in neighbors}
+    assert neighbor_ids == {"n1", "n2"}
+    assert "isolated" not in neighbor_ids

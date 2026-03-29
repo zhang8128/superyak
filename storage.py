@@ -1146,6 +1146,71 @@ class Storage:
         logger.info("Instinct retired: %s (%s)", id, inst["action"][:60])
         return True
 
+    # --- Co-firing graph ---
+
+    def record_co_fire(
+        self, instinct_a: str, instinct_b: str, followed: bool | None = None
+    ) -> None:
+        """Record a co-firing event between two instincts."""
+        # Canonical order
+        a, b = (instinct_a, instinct_b) if instinct_a < instinct_b else (instinct_b, instinct_a)
+        now = _now_iso()
+
+        existing = self.conn.execute(
+            "SELECT co_fire_count, co_follow_count, co_override_count "
+            "FROM instinct_co_firing WHERE instinct_a = ? AND instinct_b = ?",
+            (a, b),
+        ).fetchone()
+
+        if existing:
+            follow_delta = 1 if followed is True else 0
+            override_delta = 1 if followed is False else 0
+            self.conn.execute(
+                "UPDATE instinct_co_firing SET co_fire_count = co_fire_count + 1, "
+                "co_follow_count = co_follow_count + ?, "
+                "co_override_count = co_override_count + ?, "
+                "last_co_fire = ? WHERE instinct_a = ? AND instinct_b = ?",
+                (follow_delta, override_delta, now, a, b),
+            )
+        else:
+            self.conn.execute(
+                "INSERT INTO instinct_co_firing "
+                "(instinct_a, instinct_b, co_fire_count, co_follow_count, co_override_count, last_co_fire) "
+                "VALUES (?, ?, 1, ?, ?, ?)",
+                (a, b, 1 if followed is True else 0, 1 if followed is False else 0, now),
+            )
+        self.conn.commit()
+
+    def get_co_firing_edge(self, instinct_a: str, instinct_b: str) -> dict | None:
+        """Get the co-firing edge between two instincts."""
+        a, b = (instinct_a, instinct_b) if instinct_a < instinct_b else (instinct_b, instinct_a)
+        row = self.conn.execute(
+            "SELECT * FROM instinct_co_firing WHERE instinct_a = ? AND instinct_b = ?",
+            (a, b),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_co_firing_neighbors(self, instinct_id: str) -> list[dict]:
+        """Get all co-firing neighbors of an instinct with edge data."""
+        rows = self.conn.execute(
+            "SELECT instinct_b AS instinct_id, co_fire_count, co_follow_count, "
+            "co_override_count, last_co_fire "
+            "FROM instinct_co_firing WHERE instinct_a = ? "
+            "UNION ALL "
+            "SELECT instinct_a AS instinct_id, co_fire_count, co_follow_count, "
+            "co_override_count, last_co_fire "
+            "FROM instinct_co_firing WHERE instinct_b = ?",
+            (instinct_id, instinct_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_all_co_firing_edges(self) -> list[dict]:
+        """Get all co-firing edges for graph construction."""
+        rows = self.conn.execute(
+            "SELECT * FROM instinct_co_firing ORDER BY co_fire_count DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # --- Memory Log ---
 
     def add_log_entry(
