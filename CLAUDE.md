@@ -63,6 +63,17 @@ Scores are hidden during dream-active recall and revealed only via `dream_verify
 after engagement. The reaction chain: each instance's response to a residue becomes
 the next instance's dream material.
 
+**Instinct co-firing clusters:** Instincts that activate together within a
+message window form co-firing edges in a weighted graph. Community detection
+(Louvain) derives clusters from the graph — groups of instincts that belong
+to the same domain. Cold start: clusters seeded from embedding proximity.
+Matures: clusters re-derive from behavioral co-firing. Each cluster has a
+temperament (conservative ↔ exploratory) from its follow/override ratio.
+Per-cluster instinct strength replaces global strength — an instinct can be
+strong in coding context and weak in sports context. Transfer between clusters
+is attenuated by edge weight and receiving cluster temperament. Dream residues
+prime dormant clusters at session start.
+
 **Task contexts:** Swappable working memory, separate from identity. A task context
 holds the current scope, plan state, what's built, what's next. It gets loaded at
 session start alongside instincts but in its own section. Task contexts don't decay
@@ -82,7 +93,7 @@ Separate from identity layers.
 | `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
 | `core_memories()` | List all core episodes. |
 | `recall(query)` | Search across all layers. Returns `recall_id` for feedback. Scores hidden when dreaming. |
-| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, contradictions. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
 | `compress()` | Manual compression cycle. |
@@ -108,6 +119,7 @@ Separate from identity layers.
 | `reflection.py` | Self-analysis (reflect, introspect) |
 | `embeddings.py` | FastEmbed wrapper with instruction prefixes |
 | `dreaming.py` | Dream residue — lossy emotional compression and surfacing |
+| `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `dedup.py` | LLM-based duplicate detection |
 | `indexer.py` | Source code indexing via tree-sitter |
 | `watcher.py` | File system watcher for code changes |
