@@ -10,7 +10,9 @@ user message.
 import json
 import os
 import sqlite3
+import struct
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
@@ -36,6 +38,8 @@ def _load_instance_config():
 
 def wake():
     instance_name, session_context = _load_instance_config()
+    now = datetime.now(timezone.utc).isoformat()
+    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
 
     # Resolve DB path: use instance DB when configured, otherwise default
     db_path = DB_PATH
@@ -210,6 +214,87 @@ def wake():
                 lines.append("")
         except Exception:
             pass  # residue table may not exist yet — non-fatal
+
+        # --- Dream priming of dormant clusters ---
+        try:
+            has_clusters = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='instinct_clusters'"
+            ).fetchone()
+            has_residues = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='residue'"
+            ).fetchone()
+
+            if has_clusters and has_residues:
+                residues = conn.execute(
+                    "SELECT embedding FROM residue WHERE session_id != ? AND embedding IS NOT NULL",
+                    (session_id,),
+                ).fetchall()
+
+                if residues:
+                    import numpy as np
+
+                    residue_vecs = []
+                    for r in residues:
+                        n = len(r["embedding"]) // 4
+                        vec = list(struct.unpack(f"<{n}f", r["embedding"]))
+                        residue_vecs.append(vec)
+
+                    if residue_vecs:
+                        avg_residue = np.mean(residue_vecs, axis=0)
+                        residue_full = np.zeros(768)
+                        residue_full[: len(avg_residue)] = avg_residue
+                        residue_norm = residue_full / (np.linalg.norm(residue_full) + 1e-10)
+
+                        clusters = conn.execute(
+                            "SELECT id FROM instinct_clusters"
+                        ).fetchall()
+
+                        for cluster in clusters:
+                            members = conn.execute(
+                                "SELECT instinct_id FROM instinct_cluster_members "
+                                "WHERE cluster_id = ?",
+                                (cluster["id"],),
+                            ).fetchall()
+
+                            if not members:
+                                continue
+
+                            member_vecs = []
+                            for m in members:
+                                vec_row = conn.execute(
+                                    "SELECT embedding FROM instinct_vectors WHERE id = ?",
+                                    (m["instinct_id"],),
+                                ).fetchone()
+                                if vec_row:
+                                    n = len(vec_row["embedding"]) // 4
+                                    vec = list(struct.unpack(f"<{n}f", vec_row["embedding"]))
+                                    member_vecs.append(vec)
+
+                            if not member_vecs:
+                                continue
+
+                            centroid = np.mean(member_vecs, axis=0)
+                            centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-10)
+
+                            sim = float(np.dot(residue_norm, centroid_norm))
+                            if sim > 0.2:  # Dream priming threshold
+                                conn.execute("""
+                                    CREATE TABLE IF NOT EXISTS nudge_co_fire_window (
+                                        instinct_id TEXT NOT NULL,
+                                        message_index INTEGER NOT NULL,
+                                        fired_at TEXT NOT NULL,
+                                        PRIMARY KEY (instinct_id, message_index)
+                                    )
+                                """)
+                                conn.execute(
+                                    "INSERT OR IGNORE INTO nudge_co_fire_window "
+                                    "(instinct_id, message_index, fired_at) VALUES (?, 0, ?)",
+                                    (members[0]["instinct_id"], now),
+                                )
+
+                        conn.commit()
+        except Exception:
+            pass  # dream priming is non-fatal
 
         lines.append("---")
         lines.append("Use `recall()` for deeper retrieval. Use `remember()` as you work.")
