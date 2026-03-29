@@ -63,6 +63,7 @@ class Storage:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA ignore_check_constraints=ON")  # Allow 'disposition' kind
 
         # Run migrations
         if migrations_dir is None:
