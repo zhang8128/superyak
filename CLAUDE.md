@@ -37,7 +37,7 @@ Three layers, each more compressed than the last:
 **Embeddings:** nomic-embed-text-v1.5 (768-dim) via FastEmbed. Instruction
 prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (compress).
 
-**Dedup:** LLM-based pragmatic equivalence via Ollama (default: `qwen3.5:27b`).
+**Dedup:** LLM-based pragmatic equivalence via Ollama (default: `gemma4:31b`).
 Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.
 
 **Sleep-time consolidation:** On startup: decay → backfill orphaned vectors → prune → auto-compress.

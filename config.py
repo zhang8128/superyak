@@ -46,7 +46,7 @@ class CompressionConfig:
 
 @dataclass
 class ClassificationConfig:
-    model: str = "qwen3.5:27b"
+    model: str = "gemma4:31b"
     prompt_path: str = "prompts/classify.txt"
     fallback: str = "heuristic"
 
@@ -175,7 +175,7 @@ reinforce_threshold = 0.70
 instinct_confidence = 0.75
 
 [classification]
-model = "qwen3.5:27b"
+model = "gemma4:31b"
 prompt_path = "prompts/classify.txt"
 fallback = "heuristic"
 

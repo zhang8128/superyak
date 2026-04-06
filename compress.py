@@ -99,7 +99,7 @@ def classify_episode_kind(
 
 def classify_episode_kind_with_model(
     episode: dict,
-    model: str = "qwen3.5:27b",
+    model: str = "gemma4:31b",
     prompt_path: str = "prompts/classify.txt",
 ) -> list[str] | None:
     """Classify episode using a local LLM. Returns None if model unavailable."""

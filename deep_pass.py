@@ -16,7 +16,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-DEEP_PASS_MODEL = os.environ.get("ENGRAM_DEEP_PASS_MODEL", "qwen3:8b")
+DEEP_PASS_MODEL = os.environ.get("ENGRAM_DEEP_PASS_MODEL", "gemma4:31b")
 READER_DB = os.environ.get("READER_DB", str(Path.home() / ".reader" / "reader.db"))
 STRUCTURAL_LENS_DIR = Path.home() / ".prism" / "packs" / "deep-pass"
 

@@ -243,7 +243,7 @@ def _init():
     from compress import Compressor
     from dedup import Deduplicator, DedupConfig
 
-    dedup_model = os.environ.get("ENGRAM_DEDUP_MODEL", "qwen3.5:27b")
+    dedup_model = os.environ.get("ENGRAM_DEDUP_MODEL", "gemma4:31b")
     _dedup = Deduplicator(DedupConfig(model=dedup_model))
 
     # Knowledge graph (Graphiti + Kuzu) — optional, don't block init on failure

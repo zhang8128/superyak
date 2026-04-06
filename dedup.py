@@ -30,7 +30,7 @@ Answer with ONLY "same" or "different" (one word)."""
 class DedupConfig:
     """Configuration for the dedup module."""
 
-    model: str = "qwen3.5:27b"
+    model: str = "gemma4:31b"
     ollama_url: str = OLLAMA_URL
     timeout: int = 60
 

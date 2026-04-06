@@ -781,7 +781,7 @@ class TestModelAssistedClassification:
         ep = {"content": "some episode content", "context": "{}"}
         result = classify_episode_kind_with_model(
             ep,
-            model="qwen3.5:27b",
+            model="gemma4:31b",
             prompt_path="/nonexistent/path/classify.txt",
         )
         assert result is None
