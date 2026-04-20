@@ -308,13 +308,13 @@ class Clipboard:
         if not engram_db.exists():
             return ""
 
+        conn = None
         try:
             conn = sqlite3.connect(str(engram_db))
             conn.row_factory = sqlite3.Row
 
             words = situation.split()[:5]
             if not words:
-                conn.close()
                 return ""
 
             like_clauses = " OR ".join(["content LIKE ?"] * len(words))
@@ -326,7 +326,6 @@ class Clipboard:
                 "ORDER BY created_at DESC LIMIT ?",
                 params,
             ).fetchall()
-            conn.close()
 
             if not rows:
                 return ""
@@ -344,6 +343,9 @@ class Clipboard:
         except Exception as e:
             logger.debug("clipboard: FTS search failed: %s", e)
             return ""
+        finally:
+            if conn:
+                conn.close()
 
     def _pull_parked_threads(self, situation: str, budget: int) -> str:
         """Surface parked context threads.
@@ -355,6 +357,7 @@ class Clipboard:
         if not engram_db.exists():
             return ""
 
+        conn = None
         try:
             conn = sqlite3.connect(str(engram_db))
             conn.row_factory = sqlite3.Row
@@ -363,14 +366,12 @@ class Clipboard:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='context_threads'"
             ).fetchone()
             if not has_threads:
-                conn.close()
                 return ""
 
             threads = conn.execute(
                 "SELECT id, summary, embedding, parked_at FROM context_threads "
                 "ORDER BY parked_at DESC LIMIT 10"
             ).fetchall()
-            conn.close()
 
             if not threads:
                 return ""
@@ -413,6 +414,9 @@ class Clipboard:
         except Exception as e:
             logger.debug("clipboard: parked threads pull failed: %s", e)
             return ""
+        finally:
+            if conn:
+                conn.close()
 
     # ── Stats ───────────────────────────────────────────────────────
 

@@ -48,9 +48,14 @@ class ClusterEngine:
         ids = [inst["id"] for inst in instincts]
 
         embeddings_list = self._embeddings.embed(actions, prefix="search_document")
-        embeddings_matrix = np.array(embeddings_list)
+        valid = [(i, emb) for i, emb in zip(ids, embeddings_list) if emb is not None]
+        if not valid:
+            return []
+        ids, valid_embeddings = zip(*valid)
+        ids = list(ids)
+        embeddings_matrix = np.array(valid_embeddings)
 
-        if len(instincts) == 1:
+        if len(ids) == 1:
             return self._create_clusters_from_labels(ids, [1], maturity="seeded")
 
         labels = fclusterdata(
@@ -118,7 +123,7 @@ class ClusterEngine:
 
         # Assign isolated instincts to nearest cluster by embedding
         if isolated and cluster_ids:
-            self._assign_isolated_to_clusters(list(isolated), cluster_ids)
+            self._assign_isolated_to_clusters(list(isolated))
 
         # Compute temperaments
         for cid in cluster_ids:
@@ -176,6 +181,11 @@ class ClusterEngine:
             return None
 
         inst_emb = self._embeddings.embed([inst["action"]], prefix="search_document")[0]
+        if inst_emb is None:
+            cid = str(uuid.uuid4())
+            self._storage.create_cluster(cid, maturity="seeded")
+            self._storage.add_to_cluster(instinct_id, cid)
+            return cid
         inst_arr = np.array(inst_emb)
 
         best_cluster = None
@@ -211,7 +221,8 @@ class ClusterEngine:
             inst = self._storage.get_instinct(m["instinct_id"])
             if inst:
                 emb = self._embeddings.embed([inst["action"]], prefix="search_document")[0]
-                embeddings.append(emb)
+                if emb is not None:
+                    embeddings.append(emb)
 
         if not embeddings:
             return None
@@ -237,9 +248,7 @@ class ClusterEngine:
 
         return cluster_ids
 
-    def _assign_isolated_to_clusters(
-        self, isolated_ids: list[str], cluster_ids: list[str]
-    ) -> None:
+    def _assign_isolated_to_clusters(self, isolated_ids: list[str]) -> None:
         for iid in isolated_ids:
             assigned = self.assign_new_instinct(iid)
             if not assigned:

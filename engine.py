@@ -11,8 +11,12 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+import logging
+
 from embeddings import NomicEmbedProvider
 from storage import Storage, vec0_distance_to_similarity, _pack_embedding
+
+logger = logging.getLogger(__name__)
 
 
 class EngineCore:
@@ -59,7 +63,8 @@ class EngineCore:
                     f"WHERE v.embedding MATCH ? AND k = ?",
                     (packed, max_results),
                 ).fetchall()
-            except Exception:
+            except Exception as e:
+                logger.debug("Vector search failed for %s: %s", lname, e)
                 continue
 
             for r in rows:

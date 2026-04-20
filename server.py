@@ -392,13 +392,17 @@ def _init():
     global _clipboard
     from clipboard import Clipboard
     clipboard_db = db_path.parent / "clipboard.db"
-    _clipboard = Clipboard(
-        db_path=clipboard_db,
-        max_chars=3000,
-        engram_storage=_storage,
-        embeddings=_embeddings,
-    )
-    atexit.register(lambda: _clipboard.close() if _clipboard else None)
+    try:
+        _clipboard = Clipboard(
+            db_path=clipboard_db,
+            max_chars=3000,
+            engram_storage=_storage,
+            embeddings=_embeddings,
+        )
+        atexit.register(lambda: _clipboard.close() if _clipboard else None)
+    except Exception:
+        logger.warning("Clipboard init failed (non-fatal)", exc_info=True)
+        _clipboard = None
 
     _initialized = True
 
@@ -1262,11 +1266,11 @@ def challenge_instinct(instinct_id: str, evidence: str) -> dict:
         session_id=_session_id,
         content=content,
         embedding=embedding,
-        context=json.dumps({
+        context={
             "type": "instinct_challenge",
             "instinct_id": instinct_id,
             "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        }),
+        },
     )
 
     return {
@@ -1312,11 +1316,11 @@ def retire_instinct(instinct_id: str, reason: str) -> dict:
         session_id=_session_id,
         content=content,
         embedding=embedding,
-        context=json.dumps({
+        context={
             "type": "instinct_retirement",
             "instinct_id": instinct_id,
             "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        }),
+        },
     )
 
     return {

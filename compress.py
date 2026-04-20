@@ -418,11 +418,11 @@ class Compressor:
         # Re-derive clusters if we have co-firing data
         edges = list(self._storage.get_all_co_firing_edges())
         if edges:
-            cluster_engine = ClusterEngine(self._storage, self._embeddings)
+            cluster_engine = ClusterEngine(self._storage, self._embeddings, cluster_similarity=self._cluster_similarity)
             cluster_engine.derive_clusters()
             logger.info("Clusters re-derived from co-firing graph")
         elif list(self._storage.get_all_instincts()):
-            cluster_engine = ClusterEngine(self._storage, self._embeddings)
+            cluster_engine = ClusterEngine(self._storage, self._embeddings, cluster_similarity=self._cluster_similarity)
             cluster_engine.seed_clusters()
             logger.info("Clusters seeded from embedding proximity")
 
@@ -691,7 +691,7 @@ class Compressor:
                     self._storage.add_instinct_context_vector(instinct_id, context_embedding)
 
                 # Assign to nearest cluster (or create singleton)
-                cluster_engine = ClusterEngine(self._storage, self._embeddings)
+                cluster_engine = ClusterEngine(self._storage, self._embeddings, cluster_similarity=self._cluster_similarity)
                 cluster_engine.assign_new_instinct(instinct_id)
 
                 created += 1
