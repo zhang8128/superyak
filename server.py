@@ -2032,6 +2032,8 @@ def clipboard_pin(text: str, priority: int = 0) -> dict:
         priority: Higher = more prominent. Default 0.
     """
     _init()
+    if _clipboard is None:
+        return {"error": "Clipboard unavailable"}
     pin_id = _clipboard.pin(text, priority=priority)
     logger.info("Clipboard pin: %s (priority=%d)", text[:80], priority)
     return {"pinned": text, "id": pin_id}
@@ -2045,6 +2047,8 @@ def clipboard_unpin(pin_id: str) -> dict:
         pin_id: The pin ID returned by clipboard_pin.
     """
     _init()
+    if _clipboard is None:
+        return {"error": "Clipboard unavailable"}
     removed = _clipboard.unpin(pin_id)
     return {"removed": removed, "id": pin_id}
 
@@ -2065,6 +2069,8 @@ def clipboard_remind(text: str, trigger: str = "every_n_steps", value: float = 1
         repeat: Whether the reminder repeats. Default True.
     """
     _init()
+    if _clipboard is None:
+        return {"error": "Clipboard unavailable"}
     rem_id = _clipboard.add_reminder(text, trigger_type=trigger, trigger_value=value, repeat=repeat)
     logger.info("Clipboard reminder: %s (trigger=%s, value=%s)", text[:80], trigger, value)
     return {"reminder": text, "id": rem_id, "trigger": trigger, "value": value}
@@ -2078,6 +2084,8 @@ def clipboard_dismiss(reminder_id: str) -> dict:
         reminder_id: The reminder ID returned by clipboard_remind.
     """
     _init()
+    if _clipboard is None:
+        return {"error": "Clipboard unavailable"}
     removed = _clipboard.remove_reminder(reminder_id)
     return {"removed": removed, "id": reminder_id}
 
@@ -2094,6 +2102,8 @@ def clipboard_view(situation: str = "") -> dict:
                    memories from engram if provided.
     """
     _init()
+    if _clipboard is None:
+        return {"clipboard": "", "stats": {}, "error": "Clipboard unavailable"}
     _clipboard.step()
     view = _clipboard.compose(situation=situation)
     stats = _clipboard.stats
