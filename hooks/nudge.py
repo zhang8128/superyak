@@ -128,6 +128,8 @@ def nudge():
         if norm > 0:
             arr = arr / norm
         query_emb = arr.tolist()
+        packed_query = _pack_embedding(query_emb)
+        now = datetime.now(timezone.utc).isoformat()
 
         # ── Context parking: detect topic shifts, snapshot/restore threads ──
         SHIFT_THRESHOLD = 0.35  # Below this similarity = topic shift
@@ -203,7 +205,6 @@ def nudge():
         conn.commit()
 
         # Search instinct context vectors
-        packed_query = _pack_embedding(query_emb)
         results = conn.execute(
             "SELECT id, distance FROM instinct_context_vectors "
             "WHERE embedding MATCH ? AND k = 8 ORDER BY distance",
@@ -285,7 +286,6 @@ def nudge():
                     })
 
         # Decay existing session biases
-        now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "UPDATE session_bias SET strength = strength - ?, updated_at = ?",
             (BIAS_DECAY, now)

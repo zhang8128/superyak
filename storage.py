@@ -63,7 +63,7 @@ class Storage:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA ignore_check_constraints=ON")  # Allow 'disposition' kind
+        # Note: migration 015 extends the semantic kind CHECK constraint to include 'disposition'
 
         # Run migrations
         if migrations_dir is None:
@@ -1186,6 +1186,22 @@ class Storage:
                 "VALUES (?, ?, 1, ?, ?, ?)",
                 (a, b, 1 if followed is True else 0, 1 if followed is False else 0, now),
             )
+        self.conn.commit()
+
+    def update_co_fire_feedback(
+        self, instinct_a: str, instinct_b: str, followed: bool
+    ) -> None:
+        """Update follow/override counts on an existing co-firing edge without inflating co_fire_count."""
+        a, b = (instinct_a, instinct_b) if instinct_a < instinct_b else (instinct_b, instinct_a)
+        follow_delta = 1 if followed else 0
+        override_delta = 1 if not followed else 0
+        self.conn.execute(
+            "UPDATE instinct_co_firing SET "
+            "co_follow_count = co_follow_count + ?, "
+            "co_override_count = co_override_count + ? "
+            "WHERE instinct_a = ? AND instinct_b = ?",
+            (follow_delta, override_delta, a, b),
+        )
         self.conn.commit()
 
     def get_co_firing_edge(self, instinct_a: str, instinct_b: str) -> dict | None:

@@ -81,9 +81,12 @@ class KnowledgeGraph:
         ollama_url = self._config.ollama_url
 
         llm_client = OpenAIGenericClient(
-            base_url=f"{ollama_url}/v1",
-            api_key="ollama",  # Ollama doesn't need a real key
-            config=LLMConfig(model=model, small_model=model),
+            config=LLMConfig(
+                base_url=f"{ollama_url}/v1",
+                api_key="ollama",
+                model=model,
+                small_model=model,
+            ),
         )
 
         graphiti = Graphiti(
@@ -122,7 +125,7 @@ class KnowledgeGraph:
         if loop and loop.is_running():
             return self._executor.submit(asyncio.run, coro).result(timeout=900)
         else:
-            return self._executor.submit(asyncio.run, coro).result(timeout=900)
+            return asyncio.run(coro)
 
     def feed(
         self,

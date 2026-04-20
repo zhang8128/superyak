@@ -89,7 +89,7 @@ def _backfill_instinct_perceptual(storage, embeddings):
     return backfilled
 
 # Engram home is fixed — same memories regardless of which project you're in
-ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram"))
+ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 # PROJECT_ROOT is the working directory (for code indexing), ENGRAM_HOME is where memories live
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
@@ -122,7 +122,7 @@ from transitions import TransitionGraph
 def _get_instinct_graph():
     global _instinct_graph
     if _instinct_graph is None:
-        db_path = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram")) / ".engram" / "instinct_transitions.db"
+        db_path = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent)) / ".engram" / "instinct_transitions.db"
         _instinct_graph = TransitionGraph(db_path=db_path)
     return _instinct_graph
 
@@ -1165,10 +1165,10 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
     else:
         _storage.update_instinct_overridden(instinct_id)
 
-    # Update co-firing edges for recently co-fired instincts
+    # Update co-firing feedback on existing edges (without inflating co_fire_count)
     neighbors = _storage.get_co_firing_neighbors(instinct_id)
     for neighbor in neighbors:
-        _storage.record_co_fire(
+        _storage.update_co_fire_feedback(
             instinct_id, neighbor["instinct_id"], followed=followed
         )
 
