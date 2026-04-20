@@ -22,10 +22,8 @@ from pathlib import Path
 
 import httpx
 
-# Import engram internals — same storage, same embeddings, same memories
 sys.path.insert(0, str(Path(__file__).parent))
-from embeddings import NomicEmbedProvider
-from storage import Storage, vec0_distance_to_similarity, _pack_embedding
+from engine import EngineCore
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -33,87 +31,13 @@ DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("MIRROR_MODEL", "gemma4:31b")
 
-
-def load_memory():
-    """Load engram's actual memory store."""
-    storage = Storage(str(DB_PATH))
-    embeddings = NomicEmbedProvider()
-    return storage, embeddings
+_engine: EngineCore | None = None
 
 
-def recall(storage, embeddings, query: str, layer: str | None = None, max_results: int = 10):
-    """Perform recall against engram's memory — same logic as server.py."""
-    query_embedding = embeddings.embed([query], prefix="search_query")[0]
-    packed = _pack_embedding(query_embedding)
-
-    results = []
-
-    # Search episodes
-    if layer in (None, "episode"):
-        rows = storage.conn.execute(
-            "SELECT e.id, e.content, e.core, e.source, v.distance "
-            "FROM episode_vectors v "
-            "JOIN episodes e ON e.id = v.id "
-            "WHERE v.embedding MATCH ? AND k = ?",
-            (packed, max_results),
-        ).fetchall()
-        for r in rows:
-            results.append({
-                "id": r[0], "content": r[1], "layer": "episode",
-                "core": bool(r[2]), "source": r[3],
-                "score": vec0_distance_to_similarity(r[4]),
-            })
-
-    # Search semantics
-    if layer in (None, "semantic"):
-        rows = storage.conn.execute(
-            "SELECT s.id, s.content, s.kind, s.confidence, v.distance "
-            "FROM semantic_vectors v "
-            "JOIN semantics s ON s.id = v.id "
-            "WHERE v.embedding MATCH ? AND k = ?",
-            (packed, max_results),
-        ).fetchall()
-        for r in rows:
-            results.append({
-                "id": r[0], "content": r[1], "layer": "semantic",
-                "kind": r[2], "confidence": r[3],
-                "score": vec0_distance_to_similarity(r[4]),
-            })
-
-    # Search instincts
-    if layer in (None, "instinct"):
-        rows = storage.conn.execute(
-            "SELECT i.id, i.action, i.trigger, i.strength, v.distance "
-            "FROM instinct_vectors v "
-            "JOIN instincts i ON i.id = v.id "
-            "WHERE v.embedding MATCH ? AND k = ?",
-            (packed, max_results),
-        ).fetchall()
-        for r in rows:
-            results.append({
-                "id": r[0], "content": r[1], "layer": "instinct",
-                "trigger": r[2], "strength": r[3],
-                "score": vec0_distance_to_similarity(r[4]),
-            })
-
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:max_results]
-
-
-def get_instincts(storage):
-    """Load all instincts — these form the dispositional context."""
-    rows = storage.conn.execute(
-        "SELECT trigger, action, strength FROM instincts ORDER BY strength DESC"
-    ).fetchall()
-    return [{"trigger": r[0], "action": r[1], "strength": r[2]} for r in rows]
-
-
-def get_core_episodes(storage):
-    """Load core memories — formative, never-decay episodes."""
-    rows = storage.conn.execute(
-        "SELECT content, source FROM episodes WHERE core = 1 ORDER BY created_at"
-    ).fetchall()
-    return [{"content": r[0], "source": r[1]} for r in rows]
+def load_memory() -> EngineCore:
+    global _engine
+    _engine = EngineCore(DB_PATH)
+    return _engine
 
 
 def build_prompt(query: str, recalled: list[dict], instincts: list[dict],
@@ -220,17 +144,16 @@ internal monologue, or deliberation. Be direct and concise."""
 
 def run_query(query: str, model: str = DEFAULT_MODEL, layer: str | None = None):
     """Run a query through engram's memories via a local model."""
-    storage, embeddings = load_memory()
+    engine = load_memory()
 
     print(f"Model: {model}")
     print(f"Query: {query}")
     print(f"Memory store: {DB_PATH}")
     print()
 
-    # Load context
-    instincts = get_instincts(storage)
-    core_episodes = get_core_episodes(storage)
-    recalled = recall(storage, embeddings, query, layer=layer)
+    instincts = engine.get_instincts()
+    core_episodes = engine.get_core_episodes()
+    recalled = engine.recall(query, layer=layer)
 
     print(f"Loaded: {len(instincts)} instincts, {len(core_episodes)} core memories, "
           f"{len(recalled)} recalled episodes")
@@ -243,15 +166,15 @@ def run_query(query: str, model: str = DEFAULT_MODEL, layer: str | None = None):
 
 def run_reflect(model: str = DEFAULT_MODEL):
     """Pure reflection — load all instincts and core memories, ask model to reflect."""
-    storage, embeddings = load_memory()
+    engine = load_memory()
 
     print(f"Model: {model}")
     print(f"Mode: reflection")
     print(f"Memory store: {DB_PATH}")
     print()
 
-    instincts = get_instincts(storage)
-    core_episodes = get_core_episodes(storage)
+    instincts = engine.get_instincts()
+    core_episodes = engine.get_core_episodes()
 
     print(f"Loaded: {len(instincts)} instincts, {len(core_episodes)} core memories")
     print("---")
@@ -263,11 +186,11 @@ def run_reflect(model: str = DEFAULT_MODEL):
 
 def run_compare(query: str, models: list[str], layer: str | None = None):
     """Run the same query through multiple models and show results side by side."""
-    storage, embeddings = load_memory()
+    engine = load_memory()
 
-    instincts = get_instincts(storage)
-    core_episodes = get_core_episodes(storage)
-    recalled = recall(storage, embeddings, query, layer=layer)
+    instincts = engine.get_instincts()
+    core_episodes = engine.get_core_episodes()
+    recalled = engine.recall(query, layer=layer)
 
     print(f"Query: {query}")
     print(f"Models: {', '.join(models)}")

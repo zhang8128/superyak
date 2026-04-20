@@ -239,7 +239,7 @@ def _init():
     _storage = Storage(str(db_path))
     _embeddings = NomicEmbedProvider()
 
-    _session_id = str(uuid.uuid4())
+    _session_id = os.environ.get("CLAUDE_SESSION_ID") or str(uuid.uuid4())
 
     from compress import Compressor
     from dedup import Deduplicator, DedupConfig
@@ -505,7 +505,7 @@ def _apply_recall_bias(query_embedding: list[float],
         return blended.tolist()
 
     except Exception:
-        logger.debug("Recall bias skipped", exc_info=True)
+        logger.warning("Recall bias failed", exc_info=True)
         return query_embedding
 
 
@@ -1049,17 +1049,19 @@ def recall(
                     _storage.increment_episode_access(did)
                 elif dlayer == "semantic":
                     row = _storage.get_semantic(did)
-                    if row:
-                        uninvited_result["content"] = row.get("content", "")
-                        uninvited_result["confidence"] = row.get("confidence")
-                        uninvited_result["kind"] = row.get("kind")
-                        uninvited_result["origin"] = "organic"
+                    if not row:
+                        continue
+                    uninvited_result["content"] = row.get("content", "")
+                    uninvited_result["confidence"] = row.get("confidence")
+                    uninvited_result["kind"] = row.get("kind")
+                    uninvited_result["origin"] = "organic"
                 elif dlayer == "instinct":
                     inst = _storage.get_instinct(did)
-                    if inst:
-                        uninvited_result["content"] = inst.get("action", "")
-                        uninvited_result["trigger"] = inst.get("trigger", "")
-                        uninvited_result["origin"] = "organic"
+                    if not inst:
+                        continue
+                    uninvited_result["content"] = inst.get("action", "")
+                    uninvited_result["trigger"] = inst.get("trigger", "")
+                    uninvited_result["origin"] = "organic"
                 results.append(uninvited_result)
                 result_ids.append(did)
         except Exception:
@@ -1098,6 +1100,9 @@ def recall(
     _residue_active = _has_active_residue()
     if _residue_active:
         _recall_scores[recall_id] = {r["id"]: r.get("score") for r in results}
+        if len(_recall_scores) > 50:
+            oldest = next(iter(_recall_scores))
+            del _recall_scores[oldest]
         for r in results:
             r.pop("score", None)
         # Shuffle slightly so order doesn't leak ranking

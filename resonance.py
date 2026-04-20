@@ -33,7 +33,9 @@ def compute_pmi(
         p_ab = count / total_recalls
         p_a = freq_a / total_recalls
         p_b = freq_b / total_recalls
-        pmi[(a, b)] = math.log2(p_ab / (p_a * p_b))
+        ratio = p_ab / (p_a * p_b + 1e-15)
+        if ratio > 0:
+            pmi[(a, b)] = math.log2(ratio)
     return pmi
 
 

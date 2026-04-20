@@ -306,7 +306,10 @@ class Compressor:
                 if semantic_id:
                     self._storage.reinforce_semantic(semantic_id, all_episode_ids)
                     semantics_reinforced += 1
-            else:
+                else:
+                    logger.warning("Reinforce requested but no semantic_id found, falling back to new")
+                    action = "new"
+            if action != "reinforce":
                 new_id = str(uuid.uuid4())
                 semantic_content = summary.get("content", "")
 
@@ -380,14 +383,15 @@ class Compressor:
             episodes_processed += len(all_episode_ids)
 
         # Multi-link: connect episodes to all matching semantics
+        # Only include clusters that were actually processed (had summaries)
+        processed_count = min(len(clusters), len(summaries))
         all_processed_episodes = []
         cluster_semantic_ids = []
-        for i, cluster in enumerate(clusters):
-            all_processed_episodes.extend(cluster["episodes"])
-            if i < len(summaries):
-                sid = summaries[i].get("semantic_id")
-                if sid:
-                    cluster_semantic_ids.append(sid)
+        for i in range(processed_count):
+            all_processed_episodes.extend(clusters[i]["episodes"])
+            sid = summaries[i].get("semantic_id")
+            if sid:
+                cluster_semantic_ids.append(sid)
 
         multi_links = self._multi_link_episodes(all_processed_episodes, cluster_semantic_ids)
 
@@ -412,12 +416,12 @@ class Compressor:
         instincts_created = self._check_instinct_creation()
 
         # Re-derive clusters if we have co-firing data
-        edges = self._storage.get_all_co_firing_edges()
+        edges = list(self._storage.get_all_co_firing_edges())
         if edges:
             cluster_engine = ClusterEngine(self._storage, self._embeddings)
             cluster_engine.derive_clusters()
             logger.info("Clusters re-derived from co-firing graph")
-        elif self._storage.get_all_instincts():
+        elif list(self._storage.get_all_instincts()):
             cluster_engine = ClusterEngine(self._storage, self._embeddings)
             cluster_engine.seed_clusters()
             logger.info("Clusters seeded from embedding proximity")
@@ -557,7 +561,7 @@ class Compressor:
                 # Redundancy: max cosine similarity to any already-selected
                 if selected:
                     redundancy = max(
-                        np.dot(emb, valid[s][1]) / (np.linalg.norm(emb) * np.linalg.norm(valid[s][1]))
+                        np.dot(emb, valid[s][1]) / (np.linalg.norm(emb) * np.linalg.norm(valid[s][1]) + 1e-10)
                         for s in selected
                     )
                 else:
@@ -602,7 +606,9 @@ class Compressor:
             implication = before[:120]
         elif lower.startswith(("always ", "never ", "prefer ", "avoid ")):
             # Action-oriented: the whole thing is the implication
-            word_end = content.index(" ")
+            word_end = content.find(" ")
+            if word_end < 0:
+                word_end = len(content)
             notice = f"when relevant: {first_sentence[:45]}"
             implication = first_sentence[:120]
         elif kind == "constraint":

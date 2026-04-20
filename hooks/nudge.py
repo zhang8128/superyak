@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(ENGRAM_HOME))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
 
@@ -93,6 +94,7 @@ def nudge():
         return
 
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.row_factory = sqlite3.Row
@@ -545,6 +547,50 @@ def nudge():
             if len(content) > ECHO_MAX_LEN:
                 content = content[:ECHO_MAX_LEN - 3] + "..."
             lines.append(f"Echo: {content}")
+
+        # --- Dream auto-capture: distill the collision of past and present ---
+        # When instincts fire or echoes surface, that moment of resonance
+        # is raw material for the dream chain. We capture the collision,
+        # not the user's words.
+        has_residue = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='residue'"
+        ).fetchone()
+        if (fired or echoes) and has_residue:
+            try:
+                from dreaming import distill
+
+                collision_parts = []
+                for inst in fired[:MAX_NUDGES]:
+                    collision_parts.append(inst["notice"])
+                for echo in echoes:
+                    collision_parts.append(echo["content"][:100])
+
+                collision_text = " — ".join(collision_parts)
+                collision_emb = list(model.embed([f"search_document: {collision_text}"]))[0]
+                c_arr = np.array(collision_emb)
+                c_norm = np.linalg.norm(c_arr)
+                if c_norm > 0:
+                    c_arr = c_arr / c_norm
+                collision_emb = c_arr.tolist()
+
+                residue = distill(collision_text, collision_emb)
+
+                # Store directly — dreaming.store_residue expects a storage object,
+                # but we have a raw connection. Inline the two inserts.
+                from dreaming import _pack_residue_embedding
+                conn.execute(
+                    "INSERT INTO residue (id, valence, fragments, created_at, session_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (residue["id"], residue["valence"], residue["fragments"],
+                     residue["created_at"], os.environ.get("CLAUDE_SESSION_ID", "")),
+                )
+                conn.execute(
+                    "INSERT INTO residue_vectors (id, embedding) VALUES (?, ?)",
+                    (residue["id"], _pack_residue_embedding(residue["embedding"])),
+                )
+                conn.commit()
+            except Exception:
+                pass  # Dream capture is non-critical
 
         if lines:
             output = {"systemMessage": "\n".join(lines)}

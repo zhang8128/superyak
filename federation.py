@@ -43,6 +43,9 @@ class SignalBus:
             CREATE INDEX IF NOT EXISTS idx_messages_type ON messages(type);
             CREATE INDEX IF NOT EXISTS idx_messages_reply ON messages(in_reply_to);
         """)
+        self.conn.execute("PRAGMA journal_mode=DELETE")
+        self.conn.execute("PRAGMA busy_timeout=10000")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
 
     def send(self, from_instance: str, to_instance: str | None,
              msg_type: str, content: str, in_reply_to: str | None = None) -> str:

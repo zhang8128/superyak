@@ -78,6 +78,8 @@ class Notepad:
                 VALUES (new.rowid, new.key, new.value, new.tags);
             END;
         """)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
 
         # Planner extension — add status, depends_on, due if missing
         try:

@@ -84,6 +84,8 @@ class Clipboard:
                 fired_count INTEGER DEFAULT 0
             );
         """)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.commit()
 
     # ── Pins ────────────────────────────────────────────────────────

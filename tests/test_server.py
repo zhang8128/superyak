@@ -64,6 +64,7 @@ def server_env(tmp_path, monkeypatch):
 
     session_id = str(uuid.uuid4())
 
+    monkeypatch.setattr(server, "_initialized", True)
     monkeypatch.setattr(server, "_storage", store)
     monkeypatch.setattr(server, "_embeddings", emb)
     monkeypatch.setattr(server, "_config", config)

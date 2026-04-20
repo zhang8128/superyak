@@ -27,8 +27,7 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).parent))
-from embeddings import NomicEmbedProvider
-from storage import Storage, vec0_distance_to_similarity, _pack_embedding
+from engine import EngineCore
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -132,51 +131,8 @@ HARNESSES = {
 # ─── Memory loading ──────────────────────────────────────────────────────
 
 
-def load_memory():
-    storage = Storage(str(DB_PATH))
-    embeddings = NomicEmbedProvider()
-    return storage, embeddings
-
-
-def recall(storage, embeddings, query: str, max_results: int = 10):
-    query_embedding = embeddings.embed([query], prefix="search_query")[0]
-    packed = _pack_embedding(query_embedding)
-    results = []
-
-    for layer, table, vec_table, cols in [
-        ("episode", "episodes", "episode_vectors", "e.id, e.content, e.core"),
-        ("semantic", "semantics", "semantic_vectors", "s.id, s.content, s.kind, s.confidence"),
-        ("instinct", "instincts", "instinct_vectors", "i.id, i.action, i.trigger, i.strength"),
-    ]:
-        alias = layer[0]
-        try:
-            rows = storage.conn.execute(
-                f"SELECT {cols}, v.distance "
-                f"FROM {vec_table} v "
-                f"JOIN {table} {alias} ON {alias}.id = v.id "
-                f"WHERE v.embedding MATCH ? AND k = ?",
-                (packed, max_results),
-            ).fetchall()
-        except Exception:
-            continue
-
-        for r in rows:
-            entry = {
-                "content": r[1],
-                "layer": layer,
-                "score": vec0_distance_to_similarity(r[-1]),
-            }
-            results.append(entry)
-
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:max_results]
-
-
-def get_instincts(storage):
-    rows = storage.conn.execute(
-        "SELECT trigger, action, strength FROM instincts ORDER BY strength DESC"
-    ).fetchall()
-    return [{"trigger": r[0], "action": r[1], "strength": r[2]} for r in rows]
+def load_memory() -> EngineCore:
+    return EngineCore(DB_PATH)
 
 
 # ─── Prompt building ─────────────────────────────────────────────────────
@@ -349,9 +305,9 @@ def run_experiment(claim: str, models: list[str],
     harnesses_to_run = harness_names or list(HARNESSES.keys())
 
     # Load memories
-    storage, embeddings = load_memory()
-    memories = recall(storage, embeddings, claim) if include_memories else []
-    instincts = get_instincts(storage) if include_memories else []
+    engine = load_memory()
+    memories = engine.recall(claim) if include_memories else []
+    instincts = engine.get_instincts() if include_memories else []
 
     print(f"Claim: {claim[:80]}{'...' if len(claim) > 80 else ''}")
     print(f"Models: {', '.join(models)}")

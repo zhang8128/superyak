@@ -29,8 +29,7 @@ import httpx
 
 # Import engram internals
 sys.path.insert(0, str(Path(__file__).parent))
-from embeddings import NomicEmbedProvider
-from storage import Storage, vec0_distance_to_similarity, _pack_embedding
+from engine import EngineCore
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -60,8 +59,8 @@ class LocalAgent:
         self.enable_claude = enable_claude
         self.instance = instance
         self.db_path = resolve_instance_db(instance)
-        self.storage = Storage(str(self.db_path))
-        self.embeddings = NomicEmbedProvider()
+        self._engine = EngineCore(self.db_path)
+        self.storage = self._engine.storage
         self.session_id = str(uuid.uuid4())
         self.conversation: list[dict] = []
         self.claude_status: dict = {"state": "idle", "steps": [], "result": None}
@@ -100,55 +99,12 @@ class LocalAgent:
         return self.bus.send(self.instance, to_instance, msg_type, content)
 
     def recall(self, query: str, max_results: int = 8) -> list[dict]:
-        """Search engram's memories."""
-        query_embedding = self.embeddings.embed([query], prefix="search_query")[0]
-        packed = _pack_embedding(query_embedding)
-        results = []
-
-        for table, join_table, cols, layer in [
-            ("episode_vectors", "episodes", "e.id, e.content, e.core, e.source", "episode"),
-            ("semantic_vectors", "semantics", "s.id, s.content, s.kind, s.confidence", "semantic"),
-            ("instinct_vectors", "instincts", "i.id, i.action, i.trigger, i.strength", "instinct"),
-        ]:
-            alias = join_table[0]
-            try:
-                rows = self.storage.conn.execute(
-                    f"SELECT {cols}, v.distance "
-                    f"FROM {table} v "
-                    f"JOIN {join_table} {alias} ON {alias}.id = v.id "
-                    f"WHERE v.embedding MATCH ? AND k = ?",
-                    (packed, max_results),
-                ).fetchall()
-                for r in rows:
-                    entry = {
-                        "content": r[1], "layer": layer,
-                        "score": vec0_distance_to_similarity(r[-1]),
-                    }
-                    if layer == "episode":
-                        entry["core"] = bool(r[2])
-                        entry["source"] = r[3]
-                    results.append(entry)
-            except Exception:
-                pass
-
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:max_results]
+        return self._engine.recall(query, max_results=max_results)
 
     def remember(self, content: str, core: bool = False, source: str = None):
-        """Store a new episode in engram."""
-        episode_id = str(uuid.uuid4())
-        embedding = self.embeddings.embed([content], prefix="search_document")[0]
-        self.storage.add_episode(
-            id=episode_id,
-            session_id=self.session_id,
-            content=content,
-            embedding=embedding,
+        episode_id = self._engine.remember(
+            content, session_id=self.session_id, core=core, source=source,
         )
-        if core:
-            self.storage.mark_core(episode_id)
-        if source:
-            self.storage.set_episode_source(episode_id, source)
-
         self.storage.add_log_entry(
             id=str(uuid.uuid4()),
             event_type="remember",
@@ -244,18 +200,10 @@ class LocalAgent:
             return "[Claude CLI not found]"
 
     def get_instincts(self) -> list[dict]:
-        """Load behavioral instincts."""
-        rows = self.storage.conn.execute(
-            "SELECT trigger, action, strength FROM instincts ORDER BY strength DESC"
-        ).fetchall()
-        return [{"trigger": r[0], "action": r[1], "strength": r[2]} for r in rows]
+        return self._engine.get_instincts()
 
     def get_core_episodes(self) -> list[dict]:
-        """Load core memories."""
-        rows = self.storage.conn.execute(
-            "SELECT content, source FROM episodes WHERE core = 1 ORDER BY created_at"
-        ).fetchall()
-        return [{"content": r[0], "source": r[1]} for r in rows]
+        return self._engine.get_core_episodes()
 
     def build_system_prompt(self) -> str:
         """Build the system prompt with instincts and core memories."""

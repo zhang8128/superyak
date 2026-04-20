@@ -105,8 +105,11 @@ class Storage:
         for ver, path in sorted(migrations):
             sql = path.read_text()
             self.conn.executescript(sql)
-            # executescript resets pragmas — restore them
+            # executescript resets all pragmas — restore them
+            self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA foreign_keys=ON")
+            self.conn.execute("PRAGMA busy_timeout=5000")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.execute(
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                 (ver, _now_iso()),
@@ -237,6 +240,12 @@ class Storage:
 
     def close(self) -> None:
         """Checkpoint WAL and close. Prevents vec0 corruption on unclean restart."""
+        if hasattr(self, "_cold_conn") and self._cold_conn is not None:
+            try:
+                self._cold_conn.close()
+            except Exception:
+                logger.warning("Cold storage close failed", exc_info=True)
+            self._cold_conn = None
         try:
             self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception:
@@ -610,29 +619,37 @@ class Storage:
 
         embedding = embed_fn(ep["content"])
 
-        # Insert directly — context is already JSON text from cold storage
+        # Insert into main, then delete from cold. If the main insert
+        # fails, the episode stays safely in cold storage.
         content_hash = hashlib.sha256(ep["content"].encode()).hexdigest()
-        self.conn.execute(
-            "INSERT INTO episodes "
-            "(id, session_id, content, episode_type, context, created_at, "
-            " content_hash, decay_strength, compressed, accessed_count, "
-            " dormant, core, source) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
-            (ep["id"], ep.get("session_id"), ep["content"],
-             ep.get("episode_type"), ep.get("context"),  # already JSON
-             ep["created_at"], content_hash,
-             strength, ep.get("compressed", 0), ep.get("accessed_count", 0),
-             ep.get("core", 0), ep.get("source")),
-        )
-        self.conn.execute(
-            "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
-            (ep["id"], _pack_embedding(embedding)),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                "INSERT INTO episodes "
+                "(id, session_id, content, episode_type, context, created_at, "
+                " content_hash, decay_strength, compressed, accessed_count, "
+                " dormant, core, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                (ep["id"], ep.get("session_id"), ep["content"],
+                 ep.get("episode_type"), ep.get("context"),  # already JSON
+                 ep["created_at"], content_hash,
+                 strength, ep.get("compressed", 0), ep.get("accessed_count", 0),
+                 ep.get("core", 0), ep.get("source")),
+            )
+            self.conn.execute(
+                "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                (ep["id"], _pack_embedding(embedding)),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
-        # Remove from cold
-        cold.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
-        cold.commit()
+        # Only remove from cold after main DB write succeeded
+        try:
+            cold.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
+            cold.commit()
+        except Exception:
+            logger.warning("Cold storage cleanup failed for %s", episode_id, exc_info=True)
 
         result = self.conn.execute(
             "SELECT * FROM episodes WHERE id = ?", (episode_id,)

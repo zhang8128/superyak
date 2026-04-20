@@ -52,6 +52,7 @@ def wake():
         return  # No memory yet — nothing to wake into
 
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
 
     try:
@@ -250,9 +251,15 @@ def wake():
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='residue'"
             ).fetchone()
 
-            if has_clusters and has_residues:
+            has_residue_vecs = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='residue_vectors'"
+            ).fetchone()
+
+            if has_clusters and has_residues and has_residue_vecs:
                 residues = conn.execute(
-                    "SELECT embedding FROM residue WHERE session_id != ? AND embedding IS NOT NULL",
+                    "SELECT rv.embedding FROM residue r "
+                    "JOIN residue_vectors rv ON r.id = rv.id "
+                    "WHERE r.session_id IS NOT NULL AND r.session_id != ?",
                     (session_id,),
                 ).fetchall()
 
@@ -267,9 +274,8 @@ def wake():
 
                     if residue_vecs:
                         avg_residue = np.mean(residue_vecs, axis=0)
-                        residue_full = np.zeros(768)
-                        residue_full[: len(avg_residue)] = avg_residue
-                        residue_norm = residue_full / (np.linalg.norm(residue_full) + 1e-10)
+                        residue_dim = len(avg_residue)
+                        residue_norm = avg_residue / (np.linalg.norm(avg_residue) + 1e-10)
 
                         clusters = conn.execute(
                             "SELECT id FROM instinct_clusters"
@@ -300,7 +306,9 @@ def wake():
                                 continue
 
                             centroid = np.mean(member_vecs, axis=0)
-                            centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-10)
+                            # Truncate to residue dimensionality (Matryoshka property)
+                            centroid_trunc = centroid[:residue_dim]
+                            centroid_norm = centroid_trunc / (np.linalg.norm(centroid_trunc) + 1e-10)
 
                             sim = float(np.dot(residue_norm, centroid_norm))
                             if sim > 0.2:  # Dream priming threshold
@@ -329,12 +337,13 @@ def wake():
 
         # --- Between-session deep pass ---
         try:
+            sys.path.insert(0, str(ENGRAM_HOME))
             from deep_pass import deep_pass as run_deep_pass
-            from embeddings import Embeddings
+            from embeddings import NomicEmbedProvider
             from storage import Storage
 
             dp_storage = Storage(str(db_path))
-            dp_embeddings = Embeddings()
+            dp_embeddings = NomicEmbedProvider()
             dp_result = run_deep_pass(dp_storage, dp_embeddings, session_id=None)
             dp_storage.close()
             structural = dp_result.get("structural_count", 0)

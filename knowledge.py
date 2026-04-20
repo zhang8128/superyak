@@ -69,7 +69,7 @@ class KnowledgeGraph:
 
         db_path = self._config.db_path
         if not db_path:
-            home = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram"))
+            home = Path(os.environ.get("ENGRAM_HOME") or Path(__file__).resolve().parent)
             db_path = str(home / ".engram" / "knowledge.kuzu")
 
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)

@@ -40,8 +40,8 @@ class ClusterEngine:
         Clears existing clusters and re-seeds from content embeddings.
         Returns list of created cluster IDs.
         """
-        instincts = self._storage.get_all_instincts()
-        if not instincts:
+        instincts = list(self._storage.get_all_instincts())
+        if len(instincts) == 0:
             return []
 
         actions = [inst["action"] for inst in instincts]
@@ -148,8 +148,8 @@ class ClusterEngine:
                     total_override += n["co_override_count"]
 
         # Each edge counted twice (once from each side), so divide by 2
-        total_follow //= 2
-        total_override //= 2
+        total_follow /= 2.0
+        total_override /= 2.0
 
         total = total_follow + total_override
         if total == 0:
