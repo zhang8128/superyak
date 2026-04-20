@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS instinct_cluster_members (
     PRIMARY KEY (instinct_id, cluster_id)
 );
 
--- Lens-to-cluster affinity (for prism integration)
+-- Lens-to-cluster affinity (reserved for prism integration — no storage.py methods yet)
 CREATE TABLE IF NOT EXISTS lens_cluster_affinity (
     lens_id TEXT NOT NULL,
     cluster_id TEXT NOT NULL REFERENCES instinct_clusters(id) ON DELETE CASCADE,

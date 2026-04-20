@@ -1028,14 +1028,25 @@ class Storage:
         rows = self.conn.execute(
             "SELECT * FROM instincts ORDER BY strength DESC"
         ).fetchall()
+        if not rows:
+            return []
+
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        source_rows = self.conn.execute(
+            f"SELECT instinct_id, semantic_id FROM instinct_sources "
+            f"WHERE instinct_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+
+        sources_by_instinct: dict[str, list[str]] = {}
+        for sr in source_rows:
+            sources_by_instinct.setdefault(sr[0], []).append(sr[1])
+
         results = []
         for r in rows:
             inst = dict(r)
-            source_rows = self.conn.execute(
-                "SELECT semantic_id FROM instinct_sources WHERE instinct_id = ?",
-                (inst["id"],),
-            ).fetchall()
-            inst["source_semantic_ids"] = [sr[0] for sr in source_rows]
+            inst["source_semantic_ids"] = sources_by_instinct.get(inst["id"], [])
             results.append(inst)
         return results
 
