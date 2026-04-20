@@ -52,6 +52,7 @@ def classify_episode_kind(
 
     # Parse context JSON if present
     context_str = ""
+    ctx = {}
     if context_raw:
         if isinstance(context_raw, str):
             try:
@@ -60,7 +61,13 @@ def classify_episode_kind(
             except (ValueError, TypeError):
                 context_str = context_raw.lower()
         elif isinstance(context_raw, dict):
+            ctx = context_raw
             context_str = _json.dumps(context_raw).lower()
+
+    # Challenge episodes are exclusively observation — prevents them from
+    # being absorbed into "factual" clusters where they can't form instincts
+    if ctx.get("type") == "instinct_challenge":
+        return ["observation"]
 
     # Reading: source tag or passage/chapter references
     if source == "reading" or "passage" in context_str or "chapter" in context_str:
@@ -71,8 +78,9 @@ def classify_episode_kind(
     if any(s in context_str for s in design_signals) or any(s in content[:100] for s in ("built ", "session 20")):
         kinds.add("design")
 
-    # Observation: self-observation, pattern-noticed
-    obs_signals = ("self-observation", "observation", "pattern", "noticed")
+    # Observation: self-observation, pattern-noticed, instinct challenges
+    obs_signals = ("self-observation", "observation", "pattern", "noticed",
+                   "instinct_challenge", "instinct_retirement")
     if any(s in context_str for s in obs_signals) or "pattern noticed" in content:
         kinds.add("observation")
 
@@ -313,17 +321,29 @@ class Compressor:
 
                 n_sources = len(source_ids)
                 confidence = min(0.9, 0.5 + 0.1 * (n_sources - 1))
+                semantic_embedding = self._embeddings.embed(
+                    [semantic_content], prefix="search_document"
+                )[0]
                 self._storage.add_semantic(
                     id=new_id,
                     content=semantic_content,
                     kind=summary.get("kind", "fact"),
                     confidence=confidence,
-                    embedding=centroid,
+                    embedding=semantic_embedding if semantic_embedding is not None else centroid,
                     source_episode_ids=source_ids,
                     auto_generated=bool(summary.get("auto_generated", False)),
                 )
                 semantics_created += 1
-                self._storage.mark_core_batch(source_ids)
+                # Only auto-promote the centroid-nearest episode as core.
+                # Promoting all source episodes caused 74% core bloat,
+                # defeating decay. The centroid representative preserves
+                # evidence alongside the conclusion without exempting everything.
+                if centroid is not None and source_ids:
+                    centroid_nearest = self._find_centroid_nearest_id(
+                        cluster["episodes"], centroid, source_ids,
+                    )
+                    if centroid_nearest:
+                        self._storage.mark_core(centroid_nearest)
 
                 # Disposition semantics get resonance links to source episodes
                 # so specific correction moments surface alongside the pattern
@@ -454,6 +474,30 @@ class Compressor:
             })
 
         return self.commit(compress_id, summaries)
+
+    def _find_centroid_nearest_id(
+        self, episodes: list[dict], centroid: list[float], candidate_ids: list[str],
+    ) -> str | None:
+        """Find the episode ID closest to centroid, restricted to candidate_ids."""
+        candidates = [ep for ep in episodes if ep["id"] in set(candidate_ids)]
+        if not candidates:
+            return None
+        texts = [ep["content"] for ep in candidates]
+        embeddings = self._embeddings.embed(texts, prefix="clustering")
+        centroid_arr = np.array(centroid)
+        best_id = None
+        best_sim = -1.0
+        for ep, emb in zip(candidates, embeddings):
+            if emb is None:
+                continue
+            emb_arr = np.array(emb)
+            dot = np.dot(centroid_arr, emb_arr)
+            norm = np.linalg.norm(centroid_arr) * np.linalg.norm(emb_arr)
+            sim = dot / norm if norm > 0 else 0.0
+            if sim > best_sim:
+                best_sim = sim
+                best_id = ep["id"]
+        return best_id
 
     def _select_centroid_nearest(self, episodes: list[dict], centroid: list[float]) -> str:
         """Select the episode closest to the cluster centroid."""
@@ -633,6 +677,7 @@ class Compressor:
                     embedding=instinct_embedding,
                     notice=notice,
                     implication=implication,
+                    context=kind,
                 )
 
                 # Store context vector separately

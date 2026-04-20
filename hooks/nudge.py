@@ -120,13 +120,87 @@ def nudge():
         from fastembed import TextEmbedding
         import numpy as np
 
-        model = TextEmbedding(model_name="nomic-ai/nomic-embed-text-v1.5")
+        cache_dir = str(Path.home() / ".kairos" / "models" / "fastembed")
+        model = TextEmbedding(model_name="nomic-ai/nomic-embed-text-v1.5", cache_dir=cache_dir)
         raw = list(model.embed([f"search_query: {prompt}"]))[0]
         arr = np.array(raw)
         norm = np.linalg.norm(arr)
         if norm > 0:
             arr = arr / norm
         query_emb = arr.tolist()
+
+        # ── Context parking: detect topic shifts, snapshot/restore threads ──
+        SHIFT_THRESHOLD = 0.35  # Below this similarity = topic shift
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS context_threads (
+                id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                parked_at TEXT NOT NULL,
+                restored_count INTEGER DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS context_prev_embedding (
+                singleton INTEGER PRIMARY KEY DEFAULT 1,
+                embedding BLOB NOT NULL,
+                message_text TEXT NOT NULL
+            )
+        """)
+
+        prev_row = conn.execute(
+            "SELECT embedding, message_text FROM context_prev_embedding WHERE singleton = 1"
+        ).fetchone()
+
+        if prev_row:
+            prev_emb = _unpack_embedding(prev_row["embedding"])
+            prev_arr = np.array(prev_emb)
+            curr_arr = np.array(query_emb)
+            sim = float(np.dot(prev_arr, curr_arr))
+
+            if sim < SHIFT_THRESHOLD:
+                # Topic shift detected — park the previous thread
+                import uuid as _park_uuid
+                thread_id = str(_park_uuid.uuid4())
+                prev_text = prev_row["message_text"]
+                summary = prev_text[:200] if len(prev_text) > 200 else prev_text
+                conn.execute(
+                    "INSERT INTO context_threads (id, summary, embedding, parked_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (thread_id, summary, prev_row["embedding"], now),
+                )
+
+                # Check if new message matches a previously parked thread
+                try:
+                    parked = conn.execute(
+                        "SELECT id, summary FROM context_threads ORDER BY parked_at DESC LIMIT 10"
+                    ).fetchall()
+                    for p in parked:
+                        p_emb = conn.execute(
+                            "SELECT embedding FROM context_threads WHERE id = ?",
+                            (p["id"],)
+                        ).fetchone()
+                        if p_emb:
+                            p_vec = _unpack_embedding(p_emb["embedding"])
+                            restore_sim = float(np.dot(np.array(p_vec), curr_arr))
+                            if restore_sim > 0.5:
+                                conn.execute(
+                                    "UPDATE context_threads SET restored_count = restored_count + 1 WHERE id = ?",
+                                    (p["id"],),
+                                )
+                                break
+                except Exception:
+                    pass
+
+                conn.commit()
+
+        # Update previous embedding for next comparison
+        conn.execute(
+            "INSERT OR REPLACE INTO context_prev_embedding (singleton, embedding, message_text) "
+            "VALUES (1, ?, ?)",
+            (packed_query, prompt[:500]),
+        )
+        conn.commit()
 
         # Search instinct context vectors
         packed_query = _pack_embedding(query_emb)
@@ -401,6 +475,62 @@ def nudge():
                 (echo["id"], now)
             )
         conn.commit()
+
+        # Novelty-gated auto-capture: only save what's surprising enough.
+        # Compare against recent episodes — if too similar, skip (shoe-tying).
+        # If novel, encode. Surprise = high embedding distance from recent context.
+        AUTO_CAPTURE_MIN_LEN = 50
+        NOVELTY_THRESHOLD = 0.65  # Below this similarity = novel enough to save
+        if len(prompt) >= AUTO_CAPTURE_MIN_LEN:
+            should_save = True
+
+            # Check novelty against recent episodes
+            has_ep_vec = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='episode_vectors'"
+            ).fetchone()
+            if has_ep_vec:
+                recent_hits = conn.execute(
+                    "SELECT id, distance FROM episode_vectors "
+                    "WHERE embedding MATCH ? AND k = 3 ORDER BY distance",
+                    (packed_query,)
+                ).fetchall()
+                for hit in recent_hits:
+                    sim = _distance_to_similarity(hit["distance"])
+                    if sim >= NOVELTY_THRESHOLD:
+                        should_save = False
+                        break
+
+            if should_save:
+                import uuid as _uuid
+                ep_id = str(_uuid.uuid4())
+                conn.execute(
+                    "INSERT OR IGNORE INTO episodes (id, content, created_at, origin, session_id) "
+                    "VALUES (?, ?, ?, 'auto', ?)",
+                    (ep_id, prompt, now, os.environ.get("CLAUDE_SESSION_ID", "")),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                    (ep_id, packed_query),
+                )
+                conn.commit()
+
+        # Continuous pruning: prune a few low-activation auto-captured episodes each message.
+        # Routine memories decay and get cleaned up during the session, not just between sessions.
+        INLINE_PRUNE_LIMIT = 3
+        PRUNE_DECAY_THRESHOLD = 0.08
+        try:
+            weak = conn.execute(
+                "SELECT id FROM episodes WHERE origin = 'auto' AND core = 0 "
+                "AND decay_strength < ? ORDER BY decay_strength ASC LIMIT ?",
+                (PRUNE_DECAY_THRESHOLD, INLINE_PRUNE_LIMIT),
+            ).fetchall()
+            for w in weak:
+                conn.execute("DELETE FROM episode_vectors WHERE id = ?", (w["id"],))
+                conn.execute("DELETE FROM episodes WHERE id = ?", (w["id"],))
+            if weak:
+                conn.commit()
+        except Exception:
+            pass  # pruning is non-fatal
 
         # Build system message — instinct threads + memory echoes
         lines = []

@@ -640,10 +640,16 @@ class Storage:
         return dict(result) if result else None
 
     def boost_episode_strength(self, id: str, boost: float = 0.1) -> None:
-        """Boost an episode's decay strength on access (counteracts decay)."""
+        """Boost an episode by recording a virtual access (survives apply_decay).
+
+        Instead of modifying decay_strength directly (which gets overwritten on
+        next init), increment accessed_count and touch last_accessed. This feeds
+        into the ACT-R power-law formula that apply_decay uses.
+        """
         self.conn.execute(
-            "UPDATE episodes SET decay_strength = MIN(1.0, decay_strength + ?) WHERE id = ?",
-            (boost, id),
+            "UPDATE episodes SET accessed_count = accessed_count + 1, "
+            "last_accessed = ? WHERE id = ?",
+            (_now_iso(), id),
         )
         self.conn.commit()
 
@@ -953,13 +959,14 @@ class Storage:
         embedding: list[float] | None = None,
         notice: str | None = None,
         implication: str | None = None,
+        context: str | None = None,
     ) -> str:
         now = _now_iso()
         content_hash = hashlib.sha256(action.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO instincts (id, trigger, action, strength, created_at, fired_count, followed_count, overridden_count, content_hash, notice, implication) "
-            "VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?)",
-            (id, trigger, action, strength, now, content_hash, notice, implication),
+            "INSERT INTO instincts (id, trigger, action, strength, created_at, fired_count, followed_count, overridden_count, content_hash, notice, implication, context) "
+            "VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)",
+            (id, trigger, action, strength, now, content_hash, notice, implication, context),
         )
         if embedding is not None:
             self.conn.execute(

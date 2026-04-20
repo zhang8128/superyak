@@ -474,6 +474,27 @@ class TestReflect:
         assert "most_accessed" in result["usage"]
         assert "least_accessed" in result["usage"]
 
+    def test_reflect_instinct_clusters_via_server(self, server_env):
+        """Server reflect tool supports instinct_clusters focus."""
+        srv = server_env["server"]
+
+        # Trigger _init() first so the server module is fully set up,
+        # then use the live storage (not the fixture's pre-init store).
+        srv.status()
+        store = srv._storage
+
+        emb = [0.1] * 768
+        store.add_instinct("i1", "preference", "coding instinct", [], embedding=emb)
+        store.add_instinct("i2", "preference", "also coding", [], embedding=emb)
+        store.create_cluster("c1", maturity="confirmed", temperament=0.3)
+        store.add_to_cluster("i1", "c1", strength=0.8)
+        store.add_to_cluster("i2", "c1", strength=0.6)
+
+        result = srv.reflect(focus="instinct_clusters")
+        assert "instinct_clusters" in result
+        cluster_ids = [c["id"] for c in result["instinct_clusters"]]
+        assert "c1" in cluster_ids
+
 
 class TestIntrospect:
     def test_introspect_returns_portrait(self, server_env):

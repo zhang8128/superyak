@@ -6,7 +6,10 @@ Supports task-specific prefixes for better clustering vs retrieval quality.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol
+
+_CACHE_DIR = str(Path.home() / ".kairos" / "models" / "fastembed")
 
 
 class EmbeddingProvider(Protocol):
@@ -33,7 +36,7 @@ class NomicEmbedProvider:
     def __init__(self) -> None:
         from fastembed import TextEmbedding
 
-        self._model = TextEmbedding(model_name=self.MODEL_NAME)
+        self._model = TextEmbedding(model_name=self.MODEL_NAME, cache_dir=_CACHE_DIR)
 
     def dimension(self) -> int:
         return self.DIMENSION
@@ -73,7 +76,7 @@ class FastEmbedProvider:
     def __init__(self) -> None:
         from fastembed import TextEmbedding
 
-        self._model = TextEmbedding(model_name=self.MODEL_NAME)
+        self._model = TextEmbedding(model_name=self.MODEL_NAME, cache_dir=_CACHE_DIR)
 
     def dimension(self) -> int:
         return self.DIMENSION

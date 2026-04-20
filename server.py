@@ -112,6 +112,7 @@ _instinct_graph = None
 _last_instinct_id = None
 _knowledge_graph = None
 _wander_visits: dict[str, int] = {}  # memory_id -> visit count this session
+_clipboard = None
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -121,7 +122,7 @@ from transitions import TransitionGraph
 def _get_instinct_graph():
     global _instinct_graph
     if _instinct_graph is None:
-        db_path = Path(os.environ.get("ENGRAM_HOME", Path.home())) / ".engram" / "instinct_transitions.db"
+        db_path = Path(os.environ.get("ENGRAM_HOME", Path.home() / "Projects" / "engram")) / ".engram" / "instinct_transitions.db"
         _instinct_graph = TransitionGraph(db_path=db_path)
     return _instinct_graph
 
@@ -386,6 +387,18 @@ def _init():
         target_ids=[],
         context={"session_id": _session_id},
     )
+
+    # Clipboard — internal working memory (pins, reminders, compose)
+    global _clipboard
+    from clipboard import Clipboard
+    clipboard_db = db_path.parent / "clipboard.db"
+    _clipboard = Clipboard(
+        db_path=clipboard_db,
+        max_chars=3000,
+        engram_storage=_storage,
+        embeddings=_embeddings,
+    )
+    atexit.register(lambda: _clipboard.close() if _clipboard else None)
 
     _initialized = True
 
@@ -1170,6 +1183,18 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
         )
 
     updated = _storage.get_instinct(instinct_id)
+
+    # Propagate updated strength to per-cluster memberships
+    if updated:
+        memberships = _storage.conn.execute(
+            "SELECT cluster_id FROM instinct_cluster_members WHERE instinct_id = ?",
+            (instinct_id,),
+        ).fetchall()
+        for mem in memberships:
+            _storage.update_cluster_member_strength(
+                instinct_id, mem["cluster_id"], updated["strength"]
+            )
+
     result = {
         "instinct_id": instinct_id,
         "followed": followed,
@@ -1229,6 +1254,7 @@ def challenge_instinct(instinct_id: str, evidence: str) -> dict:
     embedding = _embeddings.embed([content], prefix="search_document")[0]
     _storage.add_episode(
         id=episode_id,
+        session_id=_session_id,
         content=content,
         embedding=embedding,
         context=json.dumps({
@@ -1278,6 +1304,7 @@ def retire_instinct(instinct_id: str, reason: str) -> dict:
     embedding = _embeddings.embed([content], prefix="search_document")[0]
     _storage.add_episode(
         id=episode_id,
+        session_id=_session_id,
         content=content,
         embedding=embedding,
         context=json.dumps({
@@ -1980,6 +2007,88 @@ def wander(start_id: str, max_steps: int = 1) -> dict:
         "stopped_reason": stopped_reason,
         "final_neighbors": final_neighbors,
     }
+
+
+# ── Clipboard tools ─────────────────────────────────────────────
+
+@mcp.tool()
+def clipboard_pin(text: str, priority: int = 0) -> dict:
+    """Pin something to your clipboard — it stays visible until you unpin it.
+
+    Use for: current goals, constraints, things you keep forgetting,
+    watch-fors. Higher priority items appear first.
+
+    Args:
+        text: What to pin.
+        priority: Higher = more prominent. Default 0.
+    """
+    _init()
+    pin_id = _clipboard.pin(text, priority=priority)
+    logger.info("Clipboard pin: %s (priority=%d)", text[:80], priority)
+    return {"pinned": text, "id": pin_id}
+
+
+@mcp.tool()
+def clipboard_unpin(pin_id: str) -> dict:
+    """Remove a pin from the clipboard.
+
+    Args:
+        pin_id: The pin ID returned by clipboard_pin.
+    """
+    _init()
+    removed = _clipboard.unpin(pin_id)
+    return {"removed": removed, "id": pin_id}
+
+
+@mcp.tool()
+def clipboard_remind(text: str, trigger: str = "every_n_steps", value: float = 10, repeat: bool = True) -> dict:
+    """Set a reminder that fires automatically.
+
+    Reminders are involuntary — they appear on the clipboard when triggered,
+    whether or not you're thinking about them. Use for: time awareness,
+    step-count check-ins, one-shot deadlines.
+
+    Args:
+        text: The reminder text.
+        trigger: "every_n_steps" (fires every N actions), "interval_seconds"
+                 (fires every N seconds), or "once_at" (fires once at unix timestamp).
+        value: The trigger threshold (step count, seconds, or unix timestamp).
+        repeat: Whether the reminder repeats. Default True.
+    """
+    _init()
+    rem_id = _clipboard.add_reminder(text, trigger_type=trigger, trigger_value=value, repeat=repeat)
+    logger.info("Clipboard reminder: %s (trigger=%s, value=%s)", text[:80], trigger, value)
+    return {"reminder": text, "id": rem_id, "trigger": trigger, "value": value}
+
+
+@mcp.tool()
+def clipboard_dismiss(reminder_id: str) -> dict:
+    """Dismiss a reminder.
+
+    Args:
+        reminder_id: The reminder ID returned by clipboard_remind.
+    """
+    _init()
+    removed = _clipboard.remove_reminder(reminder_id)
+    return {"removed": removed, "id": reminder_id}
+
+
+@mcp.tool()
+def clipboard_view(situation: str = "") -> dict:
+    """Glance at your clipboard — see what's pinned, what reminders fired, what's relevant.
+
+    This is your working memory view. Call it to see what you should be
+    paying attention to right now.
+
+    Args:
+        situation: Optional — what you're doing right now. Pulls relevant
+                   memories from engram if provided.
+    """
+    _init()
+    _clipboard.step()
+    view = _clipboard.compose(situation=situation)
+    stats = _clipboard.stats
+    return {"clipboard": view, "stats": stats}
 
 
 if __name__ == "__main__":

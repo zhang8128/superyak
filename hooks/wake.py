@@ -183,6 +183,32 @@ def wake():
         except Exception:
             pass  # table may not exist yet — non-fatal
 
+        # Clipboard — pinned items and active reminders
+        try:
+            clipboard_db = db_path.parent / "clipboard.db"
+            if clipboard_db.exists():
+                cb_conn = sqlite3.connect(str(clipboard_db))
+                cb_conn.row_factory = sqlite3.Row
+
+                pins = cb_conn.execute(
+                    "SELECT text FROM clipboard_pins ORDER BY priority DESC, created_at"
+                ).fetchall()
+                reminders = cb_conn.execute(
+                    "SELECT text, trigger_type, trigger_value FROM clipboard_reminders"
+                ).fetchall()
+                cb_conn.close()
+
+                if pins or reminders:
+                    lines.append("## Clipboard")
+                    lines.append("")
+                    for p in pins:
+                        lines.append(f"- 📌 {p['text']}")
+                    for r in reminders:
+                        lines.append(f"- ⏰ {r['text']} ({r['trigger_type']}: {r['trigger_value']})")
+                    lines.append("")
+        except Exception:
+            pass  # clipboard is non-fatal
+
         # Dream residue — opaque emotional artifacts from prior sessions
         try:
             residue_rows = conn.execute(

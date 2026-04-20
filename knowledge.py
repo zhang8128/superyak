@@ -115,13 +115,14 @@ class KnowledgeGraph:
         except RuntimeError:
             loop = None
 
+        import concurrent.futures
+        if self._executor is None:
+            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
         if loop and loop.is_running():
-            import concurrent.futures
-            if self._executor is None:
-                self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            return self._executor.submit(asyncio.run, coro).result()
+            return self._executor.submit(asyncio.run, coro).result(timeout=900)
         else:
-            return asyncio.run(coro)
+            return self._executor.submit(asyncio.run, coro).result(timeout=900)
 
     def feed(
         self,
