@@ -38,6 +38,8 @@ class EngineCore:
         for semantics, trigger/strength for instincts).
         """
         query_embedding = self.embeddings.embed([query], prefix="search_query")[0]
+        if query_embedding is None:
+            return []
         packed = _pack_embedding(query_embedding)
         results = []
 

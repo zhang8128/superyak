@@ -61,12 +61,8 @@ class ClusterEngine:
         if not valid_ids:
             return []
 
-        # Clear existing clusters
-        for cluster in self._storage.get_all_clusters():
-            self._storage.delete_cluster(cluster["id"])
-
         if len(valid_ids) == 1:
-            cluster_ids = self._create_clusters_from_labels(valid_ids, [1], maturity="seeded")
+            labels = [1]
         else:
             embeddings_matrix = np.array(valid_embeddings)
             labels = fclusterdata(
@@ -75,7 +71,12 @@ class ClusterEngine:
                 metric="cosine",
                 criterion="distance",
             )
-            cluster_ids = self._create_clusters_from_labels(valid_ids, labels, maturity="seeded")
+
+        # Clear existing clusters only after new labels are computed
+        for cluster in self._storage.get_all_clusters():
+            self._storage.delete_cluster(cluster["id"])
+
+        cluster_ids = self._create_clusters_from_labels(valid_ids, labels, maturity="seeded")
 
         # Assign instincts whose embeddings failed to singleton clusters
         for iid in failed_ids:
