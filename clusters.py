@@ -48,28 +48,43 @@ class ClusterEngine:
         ids = [inst["id"] for inst in instincts]
 
         embeddings_list = self._embeddings.embed(actions, prefix="search_document")
-        valid = [(i, emb) for i, emb in zip(ids, embeddings_list) if emb is not None]
-        if not valid:
+        valid_ids = []
+        valid_embeddings = []
+        failed_ids = []
+        for inst_id, emb in zip(ids, embeddings_list):
+            if emb is not None:
+                valid_ids.append(inst_id)
+                valid_embeddings.append(emb)
+            else:
+                failed_ids.append(inst_id)
+
+        if not valid_ids:
             return []
-        ids, valid_embeddings = zip(*valid)
-        ids = list(ids)
-        embeddings_matrix = np.array(valid_embeddings)
-
-        if len(ids) == 1:
-            return self._create_clusters_from_labels(ids, [1], maturity="seeded")
-
-        labels = fclusterdata(
-            embeddings_matrix,
-            t=1.0 - self._cluster_similarity,
-            metric="cosine",
-            criterion="distance",
-        )
 
         # Clear existing clusters
         for cluster in self._storage.get_all_clusters():
             self._storage.delete_cluster(cluster["id"])
 
-        return self._create_clusters_from_labels(ids, labels, maturity="seeded")
+        if len(valid_ids) == 1:
+            cluster_ids = self._create_clusters_from_labels(valid_ids, [1], maturity="seeded")
+        else:
+            embeddings_matrix = np.array(valid_embeddings)
+            labels = fclusterdata(
+                embeddings_matrix,
+                t=1.0 - self._cluster_similarity,
+                metric="cosine",
+                criterion="distance",
+            )
+            cluster_ids = self._create_clusters_from_labels(valid_ids, labels, maturity="seeded")
+
+        # Assign instincts whose embeddings failed to singleton clusters
+        for iid in failed_ids:
+            cid = str(uuid.uuid4())
+            self._storage.create_cluster(cid, maturity="seeded")
+            self._storage.add_to_cluster(iid, cid)
+            cluster_ids.append(cid)
+
+        return cluster_ids
 
     def derive_clusters(self) -> list[str]:
         """Re-derive clusters from co-firing graph using community detection.

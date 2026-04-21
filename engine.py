@@ -8,10 +8,9 @@ builds on Storage directly.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
-
-import logging
 
 from embeddings import NomicEmbedProvider
 from storage import Storage, vec0_distance_to_similarity, _pack_embedding
