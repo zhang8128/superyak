@@ -368,3 +368,26 @@ class TestUnchallenged:
         ids = [u["instinct_id"] for u in unchallenged]
         assert inst_id not in ids
         store.close()
+
+
+class TestFullCheck:
+    def test_full_check_returns_all_sections(self, tmp_path):
+        store = _make_storage(tmp_path)
+        store.add_anchor(type="identity", content="test query", expected="fake-id", baseline_score=0.9)
+        store.add_anchor(type="value", content="test scenario", expected=json.dumps(["term1"]))
+
+        checker = CoherenceChecker(store)
+        report = checker.run_full_check(session_id="sess-full")
+        assert "anchor_results" in report
+        assert "drift" in report
+        assert "summary" in report
+        store.close()
+
+    def test_full_check_saves_report(self, tmp_path):
+        store = _make_storage(tmp_path)
+        checker = CoherenceChecker(store)
+        checker.run_full_check(session_id="sess-save")
+        saved = store.get_latest_drift_report()
+        assert saved is not None
+        assert saved["session_id"] == "sess-save"
+        store.close()

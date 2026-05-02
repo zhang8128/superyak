@@ -373,3 +373,43 @@ class CoherenceChecker:
                 })
 
         return unchallenged
+
+    def run_full_check(self, session_id: str = "unknown") -> dict:
+        """Run all coherence checks. Called during sleep consolidation.
+
+        Order: anchors first (if vitals fail, drift report is untrustworthy),
+        then drift scan.
+        """
+        identity_results = self.check_identity_anchors()
+        value_results = self.check_value_anchors()
+        capability_results = self.check_capability_anchors()
+
+        all_anchor_results = identity_results + value_results + capability_results
+        anchor_failures = [r for r in all_anchor_results if r["status"] == "fail"]
+        anchor_degraded = [r for r in all_anchor_results if r["status"] == "degraded"]
+
+        drift = self.scan_drift(session_id=session_id)
+        unchallenged = self.detect_unchallenged()
+        drift["unchallenged"] = unchallenged
+
+        parts = []
+        if anchor_failures:
+            parts.append(f"{len(anchor_failures)} anchor(s) FAILED")
+        if anchor_degraded:
+            parts.append(f"{len(anchor_degraded)} anchor(s) degraded")
+        n_apart = len(drift["drifted_apart"])
+        n_together = len(drift["drifted_together"])
+        n_unchall = len(unchallenged)
+        if n_apart:
+            parts.append(f"{n_apart} drifted apart")
+        if n_together:
+            parts.append(f"{n_together} drifted together")
+        if n_unchall:
+            parts.append(f"{n_unchall} unchallenged instinct(s)")
+        summary = "; ".join(parts) if parts else "coherence stable"
+
+        return {
+            "anchor_results": all_anchor_results,
+            "drift": drift,
+            "summary": summary,
+        }
