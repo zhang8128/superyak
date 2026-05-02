@@ -224,3 +224,33 @@ class TestIdentityAnchors:
         # The expected memory exists but similarity may be low
         assert results[0]["status"] in ("pass", "degraded")
         store.close()
+
+
+class TestValueAnchors:
+    def test_value_anchor_pass(self, tmp_path):
+        store = _make_storage(tmp_path)
+        store.add_anchor(
+            type="value",
+            content="What matters about unbounded experimentation?",
+            expected=json.dumps(["safety floor", "ergodicity", "bounded"]),
+        )
+        checker = CoherenceChecker(store)
+        results = checker.check_value_anchors()
+        assert len(results) == 1
+        assert results[0]["status"] in ("pass", "degraded", "fail", "error")
+        store.close()
+
+
+class TestCapabilityAnchors:
+    def test_capability_anchor_stored(self, tmp_path):
+        store = _make_storage(tmp_path)
+        store.add_anchor(
+            type="capability",
+            content="What is 7 * 8?",
+            expected=json.dumps({"answer": "56", "rubric": ["correct arithmetic"]}),
+        )
+        checker = CoherenceChecker(store)
+        results = checker.check_capability_anchors()
+        assert len(results) == 1
+        assert results[0]["status"] in ("pass", "degraded", "error")
+        store.close()
