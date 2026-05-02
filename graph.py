@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from storage import Storage
 
 from storage import vec0_distance_to_similarity
+
+logger = logging.getLogger("engram.graph")
+
 
 @dataclass
 class Edge:
@@ -28,11 +32,6 @@ class Node:
     id: str
     layer: str
     preview: str
-
-
-import logging
-
-logger = logging.getLogger("engram.graph")
 
 
 class MemoryGraph:
@@ -58,9 +57,8 @@ class MemoryGraph:
         "suggested": "dashed",
     }
 
-    def __init__(self, storage: Storage, knowledge_graph=None):
+    def __init__(self, storage: Storage):
         self._storage = storage
-        self._kg = knowledge_graph
 
     def neighbors(self, node_id: str) -> list[Edge]:
         """All edges touching a node, across all relationship types."""
@@ -74,20 +72,21 @@ class MemoryGraph:
                WHERE r.memory_a = ? OR r.memory_b = ?""",
             (node_id, node_id),
         ).fetchall()
-        for row in rows:
-            if row[0] == node_id:
-                peer_id, peer_layer = row[2], row[3]
-            else:
-                peer_id, peer_layer = row[0], row[1]
+        if rows:
             source_layer = self._detect_layer(node_id)
-            if source_layer:
-                edges.append(Edge(
-                    source=node_id, source_layer=source_layer,
-                    target=peer_id, target_layer=peer_layer,
-                    edge_type="resonance",
-                    weight=row[4] * row[5],
-                    directed=False,
-                ))
+            for row in rows:
+                if row[0] == node_id:
+                    peer_id, peer_layer = row[2], row[3]
+                else:
+                    peer_id, peer_layer = row[0], row[1]
+                if source_layer:
+                    edges.append(Edge(
+                        source=node_id, source_layer=source_layer,
+                        target=peer_id, target_layer=peer_layer,
+                        edge_type="resonance",
+                        weight=row[4] * row[5],
+                        directed=False,
+                    ))
 
         # --- Provenance: episode → semantics built from it ---
         sem_children = self._storage.conn.execute(
@@ -149,14 +148,16 @@ class MemoryGraph:
             (node_id, node_id),
         ).fetchall()
         if cofire_rows:
-            max_cofire = max(r[2] for r in cofire_rows) or 1
+            global_max = self._storage.conn.execute(
+                "SELECT MAX(co_fire_count) FROM instinct_co_firing"
+            ).fetchone()[0] or 1
             for row in cofire_rows:
                 peer = row[1] if row[0] == node_id else row[0]
                 edges.append(Edge(
                     source=node_id, source_layer="instinct",
                     target=peer, target_layer="instinct",
                     edge_type="co_firing",
-                    weight=row[2] / max_cofire,
+                    weight=row[2] / global_max,
                     directed=False,
                 ))
 
@@ -194,7 +195,7 @@ class MemoryGraph:
         return None
 
     def _make_node(self, memory_id: str, layer: str) -> Node:
-        content = self._storage._get_memory_content(memory_id, layer)
+        content = self._storage.get_memory_content(memory_id, layer)
         preview = (content or "")[:100]
         return Node(id=memory_id, layer=layer, preview=preview)
 
@@ -207,15 +208,21 @@ class MemoryGraph:
         visited_nodes: dict[str, Node] = {node_id: self._make_node(node_id, start_layer)}
         all_edges: list[Edge] = []
         frontier = {node_id}
+        dead: set[str] = set()
 
         for _ in range(depth):
             next_frontier: set[str] = set()
             for nid in frontier:
                 edges = self.neighbors(nid)
                 for edge in edges:
-                    all_edges.append(edge)
                     peer = edge.target if edge.source == nid else edge.source
                     peer_layer = edge.target_layer if edge.source == nid else edge.source_layer
+                    if peer in dead:
+                        continue
+                    if peer not in visited_nodes and self._detect_layer(peer) is None:
+                        dead.add(peer)
+                        continue
+                    all_edges.append(edge)
                     if peer not in visited_nodes:
                         visited_nodes[peer] = self._make_node(peer, peer_layer)
                         next_frontier.add(peer)
@@ -228,30 +235,34 @@ class MemoryGraph:
         nodes = []
         for row in self._storage.conn.execute("SELECT id FROM episodes").fetchall():
             nodes.append((row[0], "episode"))
-        for row in self._storage.conn.execute("SELECT id FROM semantics WHERE contradicted_by IS NULL").fetchall():
+        for row in self._storage.conn.execute("SELECT id FROM semantics").fetchall():
             nodes.append((row[0], "semantic"))
         for row in self._storage.conn.execute("SELECT id FROM instincts").fetchall():
             nodes.append((row[0], "instinct"))
         return nodes
 
-    def _build_adjacency(self) -> dict[str, set[str]]:
-        """Build full adjacency dict from all edges."""
+    def _build_adjacency(self) -> tuple[dict[str, set[str]], dict[str, list[Edge]]]:
+        """Build symmetric adjacency dict and per-node edge lists.
+
+        Adjacency is always undirected (for component analysis).
+        Edge lists are preserved for stats/analysis reuse.
+        """
         all_nodes = self._all_node_ids()
         adj: dict[str, set[str]] = {nid: set() for nid, _ in all_nodes}
+        edge_map: dict[str, list[Edge]] = {}
 
         for nid, _ in all_nodes:
-            for edge in self.neighbors(nid):
+            edges = self.neighbors(nid)
+            edge_map[nid] = edges
+            for edge in edges:
                 peer = edge.target if edge.source == nid else edge.source
                 if peer in adj:
                     adj[nid].add(peer)
-                    if not edge.directed:
-                        adj[peer].add(nid)
-                    else:
-                        adj.setdefault(peer, set())
-        return adj
+                    adj[peer].add(nid)
+        return adj, edge_map
 
     def _connected_components(self, adj: dict[str, set[str]]) -> list[set[str]]:
-        """Find connected components via BFS (undirected — ignores edge direction)."""
+        """Find connected components via BFS (undirected)."""
         visited: set[str] = set()
         components: list[set[str]] = []
         for node in adj:
@@ -265,19 +276,23 @@ class MemoryGraph:
                     continue
                 visited.add(current)
                 component.add(current)
-                for neighbor in adj.get(current, set()):
+                for neighbor in adj[current]:
                     if neighbor not in visited:
                         queue.append(neighbor)
-                # Also check reverse direction for directed edges
-                for other, peers in adj.items():
-                    if current in peers and other not in visited:
-                        queue.append(other)
             components.append(component)
         return components
 
+    def _full_scan(self) -> tuple[list[tuple[str, str]], dict[str, set[str]], dict[str, list[Edge]]]:
+        """Single traversal that stats() and analyze() both use."""
+        all_nodes = self._all_node_ids()
+        if not all_nodes:
+            return all_nodes, {}, {}
+        adj, edge_map = self._build_adjacency()
+        return all_nodes, adj, edge_map
+
     def stats(self) -> dict:
         """Connectivity summary: nodes, edges by type, components, isolated."""
-        all_nodes = self._all_node_ids()
+        all_nodes, adj, edge_map = self._full_scan()
         if not all_nodes:
             return {
                 "total_nodes": 0, "total_edges": 0,
@@ -285,17 +300,12 @@ class MemoryGraph:
                 "isolated_nodes": 0, "largest_component": 0,
             }
 
-        adj = self._build_adjacency()
         edge_counts: dict[str, int] = {}
-        total_edges = 0
-        for nid, _ in all_nodes:
-            for edge in self.neighbors(nid):
+        for nid, edges in edge_map.items():
+            for edge in edges:
                 edge_counts[edge.edge_type] = edge_counts.get(edge.edge_type, 0) + 1
-                total_edges += 1
-        # Undirected edges counted twice (once from each side)
         for etype in edge_counts:
-            if etype in ("resonance", "co_firing"):
-                edge_counts[etype] //= 2
+            edge_counts[etype] //= 2
         total_edges = sum(edge_counts.values())
 
         components = self._connected_components(adj)
@@ -313,14 +323,11 @@ class MemoryGraph:
 
     def analyze(self) -> dict:
         """Extended analysis: hubs, average degree, layer distribution."""
-        all_nodes = self._all_node_ids()
+        all_nodes, adj, edge_map = self._full_scan()
         if not all_nodes:
             return {"hubs": [], "avg_degree": 0.0, "layer_distribution": {}}
 
-        degrees: dict[str, int] = {}
-        for nid, _ in all_nodes:
-            edges = self.neighbors(nid)
-            degrees[nid] = len(edges)
+        degrees = {nid: len(edges) for nid, edges in edge_map.items()}
 
         sorted_by_degree = sorted(degrees.items(), key=lambda x: x[1], reverse=True)
         hubs = [{"id": nid, "degree": deg} for nid, deg in sorted_by_degree[:10] if deg > 0]
@@ -337,31 +344,46 @@ class MemoryGraph:
             "layer_distribution": layer_dist,
         }
 
-    def to_dot(self, center: str | None = None, depth: int = 1) -> str:
-        """Graphviz DOT export."""
+    def _collect_graph(self, center: str | None, depth: int) -> tuple[list[Node], list[Edge]]:
+        """Collect nodes and deduplicated edges for export."""
         if center:
             nodes, edges = self.neighborhood(center, depth)
         else:
             all_node_ids = self._all_node_ids()
+            node_id_set = {nid for nid, _ in all_node_ids}
             nodes = [self._make_node(nid, layer) for nid, layer in all_node_ids]
             edges = []
             for nid, _ in all_node_ids:
-                edges.extend(self.neighbors(nid))
+                for edge in self.neighbors(nid):
+                    peer = edge.target if edge.source == nid else edge.source
+                    if peer in node_id_set:
+                        edges.append(edge)
 
-        seen_edges: set[tuple[str, str, str]] = set()
+        seen: set[tuple[str, str, str]] = set()
+        unique_edges = []
+        for edge in edges:
+            key = (edge.source, edge.target, edge.edge_type)
+            rev_key = (edge.target, edge.source, edge.edge_type)
+            if key in seen or (not edge.directed and rev_key in seen):
+                continue
+            seen.add(key)
+            unique_edges.append(edge)
+
+        return nodes, unique_edges
+
+    def to_dot(self, center: str | None = None, depth: int = 1) -> str:
+        """Graphviz DOT export."""
+        nodes, edges = self._collect_graph(center, depth)
+
         lines = ["digraph memory {", '  rankdir=LR;', '  node [shape=box, style=filled];']
 
         for node in nodes:
             color = self._LAYER_COLORS.get(node.layer, "#FFFFFF")
-            label = f"{node.layer}\\n{node.id[:8]}\\n{node.preview[:40]}"
+            safe_preview = node.preview[:40].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            label = f"{node.layer}\\n{node.id[:8]}\\n{safe_preview}"
             lines.append(f'  "{node.id[:8]}" [label="{label}", fillcolor="{color}"];')
 
         for edge in edges:
-            key = (edge.source, edge.target, edge.edge_type)
-            rev_key = (edge.target, edge.source, edge.edge_type)
-            if key in seen_edges or (not edge.directed and rev_key in seen_edges):
-                continue
-            seen_edges.add(key)
             style = self._EDGE_STYLES.get(edge.edge_type, "solid")
             arrow = "forward" if edge.directed else "none"
             lines.append(
@@ -374,24 +396,7 @@ class MemoryGraph:
 
     def to_json(self, center: str | None = None, depth: int = 1) -> dict:
         """JSON export for browser rendering."""
-        if center:
-            nodes, edges = self.neighborhood(center, depth)
-        else:
-            all_node_ids = self._all_node_ids()
-            nodes = [self._make_node(nid, layer) for nid, layer in all_node_ids]
-            edges = []
-            for nid, _ in all_node_ids:
-                edges.extend(self.neighbors(nid))
-
-        seen_edges: set[tuple[str, str, str]] = set()
-        unique_edges = []
-        for edge in edges:
-            key = (edge.source, edge.target, edge.edge_type)
-            rev_key = (edge.target, edge.source, edge.edge_type)
-            if key in seen_edges or (not edge.directed and rev_key in seen_edges):
-                continue
-            seen_edges.add(key)
-            unique_edges.append(edge)
+        nodes, edges = self._collect_graph(center, depth)
 
         return {
             "nodes": [
@@ -404,7 +409,7 @@ class MemoryGraph:
                     "edge_type": e.edge_type, "weight": e.weight,
                     "directed": e.directed,
                 }
-                for e in unique_edges
+                for e in edges
             ],
         }
 
@@ -418,15 +423,15 @@ class MemoryGraph:
         if node_layer is None:
             return []
 
-        vec_table = {"episode": "episode", "semantic": "semantic", "instinct": "instinct"}.get(node_layer)
-        if vec_table is None:
-            return []
-
         node_vec = self._storage.get_vector(node_layer, node_id)
         if node_vec is None:
             return []
 
-        existing_neighbors = {e.target for e in self.neighbors(node_id)}
+        node_edges = self.neighbors(node_id)
+        existing_neighbors = set()
+        for e in node_edges:
+            existing_neighbors.add(e.target)
+            existing_neighbors.add(e.source)
         existing_neighbors.add(node_id)
 
         candidates: list[Edge] = []
@@ -472,13 +477,12 @@ class MemoryGraph:
         """
         import json as _json
         import random
-        import uuid as _uuid
 
         rows = self._storage.get_log_entries(
             event_type="proximity_suggestion", limit=1000
         )
 
-        pair_counts: dict[tuple[str, str], float] = {}
+        pair_counts: dict[tuple[str, str], int] = {}
         for row in rows:
             tids = _json.loads(row["target_ids"]) if isinstance(row["target_ids"], str) else row["target_ids"]
             if len(tids) != 2:
@@ -499,21 +503,20 @@ class MemoryGraph:
             if existing:
                 continue
 
+            layer_a = self._detect_layer(id_a)
+            layer_b = self._detect_layer(id_b)
+            if layer_a is None or layer_b is None:
+                continue
+
             neighbors_a = {e.target for e in self.neighbors(id_a)}
             neighbors_b = {e.target for e in self.neighbors(id_b)}
             shared = neighbors_a & neighbors_b
             if not shared:
                 continue
 
-            layer_a = self._detect_layer(id_a) or "episode"
-            layer_b = self._detect_layer(id_b) or "episode"
-            canonical_a, canonical_b = (id_a, id_b) if id_a < id_b else (id_b, id_a)
-            layer_ca = layer_a if canonical_a == id_a else layer_b
-            layer_cb = layer_b if canonical_b == id_b else layer_a
-
             self._storage.add_resonance(
-                id_a=canonical_a, layer_a=layer_ca,
-                id_b=canonical_b, layer_b=layer_cb,
+                id_a=id_a, layer_a=layer_a,
+                id_b=id_b, layer_b=layer_b,
                 similarity=0.0,
                 weight=max(0.1, min(0.9, random.gauss(0.3, 0.1))),
             )

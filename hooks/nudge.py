@@ -596,8 +596,8 @@ def nudge():
             output = {"systemMessage": "\n".join(lines)}
             json.dump(output, sys.stdout)
 
-    except Exception:
-        pass  # Nudge fails silently. Instincts are not critical path.
+    except Exception as e:
+        print(f"# nudge: {e}", file=sys.stderr)  # Non-critical, but visible for debugging
     finally:
         conn.close()
 

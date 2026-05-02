@@ -167,7 +167,7 @@ def _auto_walk(storage, start_id: str, max_steps: int, density_threshold: int,
             try:
                 layer = _detect_layer(storage, current_id)
                 if layer is not None:
-                    content = storage._get_memory_content(current_id, layer)
+                    content = storage.get_memory_content(current_id, layer)
                     if content:
                         entity_neighbors = knowledge_graph.get_entity_neighbors(
                             content, exclude_id=current_id, num_results=10
@@ -380,12 +380,12 @@ def _init():
         # 7. Promote proximity suggestions to resonances (graph consolidation)
         try:
             from graph import MemoryGraph
-            _memory_graph = MemoryGraph(_storage, _knowledge_graph)
+            _memory_graph = MemoryGraph(_storage)
             promoted = _memory_graph.promote_suggestions(min_prior_sessions=2)
             if promoted:
                 logger.info("Sleep: promoted %d proximity suggestions", promoted)
         except Exception:
-            logger.debug("Graph promotion skipped", exc_info=True)
+            logger.warning("Graph promotion skipped", exc_info=True)
     except Exception:
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
 
@@ -1963,7 +1963,7 @@ def wander(start_id: str, max_steps: int = 1) -> dict:
             try:
                 layer = _detect_layer(_storage, start_id)
                 if layer is not None:
-                    content = _storage._get_memory_content(start_id, layer)
+                    content = _storage.get_memory_content(start_id, layer)
                     if content:
                         entity_neighbors = _knowledge_graph.get_entity_neighbors(
                             content, exclude_id=start_id, num_results=10
@@ -1999,7 +1999,7 @@ def wander(start_id: str, max_steps: int = 1) -> dict:
         try:
             layer = _detect_layer(_storage, stopped_at)
             if layer is not None:
-                content = _storage._get_memory_content(stopped_at, layer)
+                content = _storage.get_memory_content(stopped_at, layer)
                 if content:
                     entity_neighbors_final = _knowledge_graph.get_entity_neighbors(
                         content, exclude_id=stopped_at, num_results=10
@@ -2042,7 +2042,7 @@ def graph_view(center: str | None = None, depth: int = 1) -> dict:
     """
     _init()
     from graph import MemoryGraph
-    g = MemoryGraph(_storage, _knowledge_graph)
+    g = MemoryGraph(_storage)
 
     if center is None:
         stats = g.stats()
@@ -2050,6 +2050,8 @@ def graph_view(center: str | None = None, depth: int = 1) -> dict:
         return {"mode": "global", "stats": stats, "analysis": analysis}
 
     json_view = g.to_json(center=center, depth=depth)
+    if not json_view["nodes"]:
+        return {"mode": "neighborhood", "error": f"Memory {center} not found", "nodes": [], "edges": []}
     suggestions = g.suggest_edges(center, k=5, threshold=0.7)
     json_view["suggested_edges"] = [
         {"source": e.source, "target": e.target,

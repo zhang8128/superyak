@@ -1569,7 +1569,7 @@ class Storage:
                 peer_id, peer_layer = row[2], row[3]
             else:
                 peer_id, peer_layer = row[0], row[1]
-            content = self._get_memory_content(peer_id, peer_layer)
+            content = self.get_memory_content(peer_id, peer_layer)
             if content is not None:
                 neighbors.append({
                     "id": peer_id,
@@ -1656,7 +1656,7 @@ class Storage:
 
         return neighbors
 
-    def _get_memory_content(self, memory_id: str, layer: str) -> str | None:
+    def get_memory_content(self, memory_id: str, layer: str) -> str | None:
         """Fetch content string for a memory by layer."""
         if layer == "episode":
             ep = self.get_episode(memory_id)
