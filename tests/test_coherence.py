@@ -422,3 +422,80 @@ class TestReflectIntegration:
         assert "anchors" in result
         assert len(result["anchors"]) == 1
         store.close()
+
+
+class TestEndToEnd:
+    def test_full_coherence_lifecycle(self, tmp_path):
+        """Full lifecycle: create memories, mark core, auto-anchor, run check, inspect report."""
+        store = _make_storage(tmp_path)
+
+        # Create some connected memories
+        ep1 = str(uuid.uuid4())
+        ep2 = str(uuid.uuid4())
+        sem1 = str(uuid.uuid4())
+        emb1 = _fake_emb(seed=10)
+        emb2 = _fake_emb(seed=10)  # same seed = same embedding = close
+        emb3 = _fake_emb(seed=500)  # different = distant
+
+        store.add_episode(ep1, None, "Kairos taught me about governance", embedding=emb1)
+        store.add_episode(ep2, None, "Unrelated episode about weather", embedding=emb3)
+        store.add_semantic(sem1, "Governance requires bounded experimentation",
+                          kind="fact", confidence=0.9, embedding=emb2,
+                          source_episode_ids=[ep1])
+
+        # Mark core and create identity anchor
+        store.mark_core(ep1)
+        store.add_anchor(
+            type="identity",
+            content="Kairos taught governance",
+            expected=ep1,
+            baseline_score=0.85,
+        )
+
+        # Add a value anchor
+        store.add_anchor(
+            type="value",
+            content="unbounded experimentation",
+            expected=json.dumps(["bounded", "safety"]),
+        )
+
+        # Create a high-confidence instinct with no overrides
+        inst_id = str(uuid.uuid4())
+        store.conn.execute(
+            "INSERT INTO instincts (id, trigger, action, strength, fired_count, followed_count, notice, implication, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (inst_id, "disposition", "Always check assumptions", 0.9, 15, 15, "assumptions present", "verify before acting"),
+        )
+        store.conn.commit()
+
+        # Run full check
+        checker = CoherenceChecker(store)
+        report = checker.run_full_check(session_id="integration-test")
+
+        # Verify structure
+        assert "anchor_results" in report
+        assert "drift" in report
+        assert "summary" in report
+
+        # Identity anchor should exist in results
+        identity_results = [r for r in report["anchor_results"] if "anchor_id" in r]
+        assert len(identity_results) >= 1
+
+        # Unchallenged instinct should be flagged
+        unchallenged_ids = [u["instinct_id"] for u in report["drift"]["unchallenged"]]
+        assert inst_id in unchallenged_ids
+
+        # Drift report should be saved
+        saved = store.get_latest_drift_report()
+        assert saved is not None
+        assert saved["session_id"] == "integration-test"
+
+        # Reflect should work
+        reflector = Reflector(store)
+        coherence = reflector.reflect(focus="coherence")
+        assert coherence["coherence"]["latest_report"] is not None
+
+        anchors = reflector.reflect(focus="anchors")
+        assert len(anchors["anchors"]) >= 1
+
+        store.close()
