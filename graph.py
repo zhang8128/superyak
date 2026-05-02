@@ -174,3 +174,33 @@ class MemoryGraph:
         if self._storage.get_instinct(memory_id) is not None:
             return "instinct"
         return None
+
+    def _make_node(self, memory_id: str, layer: str) -> Node:
+        content = self._storage._get_memory_content(memory_id, layer)
+        preview = (content or "")[:100]
+        return Node(id=memory_id, layer=layer, preview=preview)
+
+    def neighborhood(self, node_id: str, depth: int = 1) -> tuple[list[Node], list[Edge]]:
+        """BFS to given depth. Returns (nodes, edges) in the subgraph."""
+        start_layer = self._detect_layer(node_id)
+        if start_layer is None:
+            return [], []
+
+        visited_nodes: dict[str, Node] = {node_id: self._make_node(node_id, start_layer)}
+        all_edges: list[Edge] = []
+        frontier = {node_id}
+
+        for _ in range(depth):
+            next_frontier: set[str] = set()
+            for nid in frontier:
+                edges = self.neighbors(nid)
+                for edge in edges:
+                    all_edges.append(edge)
+                    peer = edge.target if edge.source == nid else edge.source
+                    peer_layer = edge.target_layer if edge.source == nid else edge.source_layer
+                    if peer not in visited_nodes:
+                        visited_nodes[peer] = self._make_node(peer, peer_layer)
+                        next_frontier.add(peer)
+            frontier = next_frontier
+
+        return list(visited_nodes.values()), all_edges

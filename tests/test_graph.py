@@ -117,3 +117,55 @@ class TestEdgeLoading:
         edges = g.neighbors(ep_id)
         assert edges == []
         store.close()
+
+
+class TestNeighborhood:
+    def test_depth_one_returns_immediate(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "test episode", embedding=_fake_emb())
+        store.add_semantic(sem_id, "test semantic", kind="fact",
+                          confidence=0.9, embedding=_fake_emb(),
+                          source_episode_ids=[ep_id])
+
+        g = MemoryGraph(store)
+        nodes, edges = g.neighborhood(ep_id, depth=1)
+        node_ids = {n.id for n in nodes}
+        assert ep_id in node_ids
+        assert sem_id in node_ids
+        assert len(edges) >= 1
+        store.close()
+
+    def test_depth_two_reaches_transitive(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        ins_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "test episode", embedding=_fake_emb())
+        store.add_semantic(sem_id, "test semantic", kind="preference",
+                          confidence=0.8, embedding=_fake_emb(),
+                          source_episode_ids=[ep_id])
+        store.add_instinct(ins_id, trigger="preference", action="test instinct",
+                          source_semantic_ids=[sem_id], embedding=_fake_emb(),
+                          notice="when testing", implication="test well")
+
+        g = MemoryGraph(store)
+        nodes, edges = g.neighborhood(ep_id, depth=2)
+        node_ids = {n.id for n in nodes}
+        assert ep_id in node_ids
+        assert sem_id in node_ids
+        assert ins_id in node_ids
+        store.close()
+
+    def test_depth_zero_returns_only_center(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "solo", embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        nodes, edges = g.neighborhood(ep_id, depth=0)
+        assert len(nodes) == 1
+        assert nodes[0].id == ep_id
+        assert edges == []
+        store.close()
