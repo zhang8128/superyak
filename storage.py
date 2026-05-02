@@ -1765,3 +1765,63 @@ class Storage:
         blob = row[0]
         n = len(blob) // 4
         return list(struct.unpack(f"<{n}f", blob))
+
+    # --- Coherence: Anchors ---
+
+    def add_anchor(
+        self,
+        type: str,
+        content: str,
+        expected: str,
+        baseline_score: float | None = None,
+    ) -> str:
+        """Create an anchor for coherence checking."""
+        import uuid as _uuid
+        aid = str(_uuid.uuid4())
+        now = _now_iso()
+        self.conn.execute(
+            "INSERT INTO anchors (id, type, content, expected, baseline_score, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (aid, type, content, expected, baseline_score, now),
+        )
+        self.conn.commit()
+        return aid
+
+    def get_anchor(self, anchor_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM anchors WHERE id = ?", (anchor_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_active_anchors(self, anchor_type: str | None = None) -> list[dict]:
+        """Return all non-retired anchors, optionally filtered by type."""
+        if anchor_type:
+            rows = self.conn.execute(
+                "SELECT * FROM anchors WHERE status != 'retired' AND type = ? ORDER BY created_at",
+                (anchor_type,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM anchors WHERE status != 'retired' ORDER BY created_at"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_anchor_result(self, anchor_id: str, result_json: str) -> None:
+        self.conn.execute(
+            "UPDATE anchors SET last_checked = ?, last_result = ? WHERE id = ?",
+            (_now_iso(), result_json, anchor_id),
+        )
+        self.conn.commit()
+
+    def propose_anchor_retirement(self, anchor_id: str) -> None:
+        """Propose retirement. After 2 proposals, anchor is retired."""
+        anchor = self.get_anchor(anchor_id)
+        if anchor is None:
+            return
+        new_count = anchor["retirement_sessions"] + 1
+        new_status = "retired" if new_count >= 2 else "proposed_retirement"
+        self.conn.execute(
+            "UPDATE anchors SET status = ?, retirement_sessions = ? WHERE id = ?",
+            (new_status, new_count, anchor_id),
+        )
+        self.conn.commit()
