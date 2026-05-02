@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from storage import Storage
 
+from storage import vec0_distance_to_similarity
+
 @dataclass
 class Edge:
     source: str
@@ -405,3 +407,44 @@ class MemoryGraph:
                 for e in unique_edges
             ],
         }
+
+    def suggest_edges(self, node_id: str, k: int = 5, threshold: float = 0.7) -> list[Edge]:
+        """Find embedding-proximity neighbors not already connected.
+
+        Returns Edge objects with edge_type="suggested". These are proposals,
+        not structural relationships.
+        """
+        node_layer = self._detect_layer(node_id)
+        if node_layer is None:
+            return []
+
+        vec_table = {"episode": "episode", "semantic": "semantic", "instinct": "instinct"}.get(node_layer)
+        if vec_table is None:
+            return []
+
+        node_vec = self._storage.get_vector(node_layer, node_id)
+        if node_vec is None:
+            return []
+
+        existing_neighbors = {e.target for e in self.neighbors(node_id)}
+        existing_neighbors.add(node_id)
+
+        candidates: list[Edge] = []
+        for search_layer in ("episode", "semantic", "instinct"):
+            try:
+                results = self._storage.search_vectors(search_layer, node_vec, k=k * 2)
+                for rid, distance in results:
+                    if rid in existing_neighbors:
+                        continue
+                    sim = vec0_distance_to_similarity(distance)
+                    if sim >= threshold:
+                        candidates.append(Edge(
+                            source=node_id, source_layer=node_layer,
+                            target=rid, target_layer=search_layer,
+                            edge_type="suggested", weight=sim, directed=False,
+                        ))
+            except Exception:
+                logger.debug("suggest_edges: %s vector search failed", search_layer)
+
+        candidates.sort(key=lambda e: e.weight, reverse=True)
+        return candidates[:k]

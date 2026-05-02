@@ -273,3 +273,45 @@ class TestExport:
         dot = g.to_dot()
         assert "digraph" in dot
         store.close()
+
+
+class TestSuggestEdges:
+    def test_suggests_nearby_unconnected(self, tmp_path):
+        store = _make_storage(tmp_path)
+        base_emb = [0.0] * 768
+        base_emb[0] = 1.0
+        near_emb = [0.0] * 768
+        near_emb[0] = 0.99
+        near_emb[1] = 0.01
+        far_emb = [0.0] * 768
+        far_emb[100] = 1.0
+
+        ep_a = str(uuid.uuid4())
+        ep_b = str(uuid.uuid4())
+        ep_c = str(uuid.uuid4())
+        store.add_episode(ep_a, None, "base episode", embedding=base_emb)
+        store.add_episode(ep_b, None, "near episode", embedding=near_emb)
+        store.add_episode(ep_c, None, "far episode", embedding=far_emb)
+
+        g = MemoryGraph(store)
+        suggestions = g.suggest_edges(ep_a, k=5, threshold=0.5)
+        suggested_targets = {e.target for e in suggestions}
+        assert ep_b in suggested_targets
+        assert all(e.edge_type == "suggested" for e in suggestions)
+        store.close()
+
+    def test_excludes_already_connected(self, tmp_path):
+        store = _make_storage(tmp_path)
+        emb = [0.0] * 768
+        emb[0] = 1.0
+        ep_a = str(uuid.uuid4())
+        sem_a = str(uuid.uuid4())
+        store.add_episode(ep_a, None, "connected episode", embedding=emb)
+        store.add_semantic(sem_a, "connected semantic", kind="fact",
+                          confidence=0.9, source_episode_ids=[ep_a], embedding=emb)
+
+        g = MemoryGraph(store)
+        suggestions = g.suggest_edges(ep_a, k=5, threshold=0.0)
+        suggested_targets = {e.target for e in suggestions}
+        assert sem_a not in suggested_targets
+        store.close()
