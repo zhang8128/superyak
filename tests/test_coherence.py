@@ -285,8 +285,8 @@ class TestDriftScan:
 
         checker = CoherenceChecker(store)
         report = checker.scan_drift()
-        # With random embeddings, the distance should be high enough to flag
-        assert len(report["drifted_apart"]) >= 0  # may or may not flag depending on threshold
+        # Smoke test: method runs without error on distant connected nodes
+        assert isinstance(report["drifted_apart"], list)
         store.close()
 
     def test_close_unconnected_nodes_found(self, tmp_path):

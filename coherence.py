@@ -24,6 +24,12 @@ class CoherenceChecker:
 
     def __init__(self, storage: Storage):
         self._storage = storage
+        self._embeddings: NomicEmbedProvider | None = None
+
+    def _get_embeddings(self) -> NomicEmbedProvider:
+        if self._embeddings is None:
+            self._embeddings = NomicEmbedProvider()
+        return self._embeddings
 
     def check_identity_anchors(self) -> list[dict]:
         """Check identity anchors: can we still find our core memories?
@@ -58,8 +64,7 @@ class CoherenceChecker:
 
             # Memory exists — check if it's retrievable via vector search
             try:
-                embeddings = NomicEmbedProvider()
-                query_emb = embeddings.embed([query], prefix="search_query")[0]
+                query_emb = self._get_embeddings().embed([query], prefix="search_query")[0]
             except Exception:
                 results.append({
                     "anchor_id": anchor["id"],
@@ -168,6 +173,7 @@ class CoherenceChecker:
         apart_threshold: float = 0.3,
         together_threshold: float = 0.85,
         max_together: int = 20,
+        _save: bool = True,
     ) -> dict:
         """Compare graph edges against embedding geometry.
 
@@ -186,10 +192,11 @@ class CoherenceChecker:
                 "drifted_apart": [],
                 "drifted_together": [],
             }
-            self._storage.save_drift_report(
-                session_id=session_id, summary="no nodes",
-                **empty_report, unchallenged=[], anchor_results=[],
-            )
+            if _save:
+                self._storage.save_drift_report(
+                    session_id=session_id, summary="no nodes",
+                    **empty_report, unchallenged=[], anchor_results=[],
+                )
             return empty_report
 
         # --- Drifted apart: edges where embedding similarity is low ---
@@ -294,18 +301,18 @@ class CoherenceChecker:
             "drifted_together": drifted_together,
         }
 
-        n_apart = len(drifted_apart)
-        n_together = len(drifted_together)
-        summary = f"{n_apart} drifted apart, {n_together} drifted together"
-
-        self._storage.save_drift_report(
-            session_id=session_id,
-            drifted_apart=drifted_apart,
-            drifted_together=drifted_together,
-            unchallenged=[],
-            anchor_results=[],
-            summary=summary,
-        )
+        if _save:
+            n_apart = len(drifted_apart)
+            n_together = len(drifted_together)
+            summary = f"{n_apart} drifted apart, {n_together} drifted together"
+            self._storage.save_drift_report(
+                session_id=session_id,
+                drifted_apart=drifted_apart,
+                drifted_together=drifted_together,
+                unchallenged=[],
+                anchor_results=[],
+                summary=summary,
+            )
 
         return report
 
@@ -339,13 +346,14 @@ class CoherenceChecker:
         self,
         min_strength: float = 0.7,
         min_follows: int = 5,
+        recent_feedback_limit: int = 20,
     ) -> list[dict]:
         """Find instincts that fire often, always get followed, and never get questioned.
 
-        Criteria:
+        Criteria per spec:
         - strength >= min_strength
         - followed_count >= min_follows
-        - No override feedback (followed=False) in context feedback
+        - No override (followed=False) in recent context feedback
         """
         instincts = self._storage.get_all_instincts()
         unchallenged = []
@@ -358,9 +366,10 @@ class CoherenceChecker:
                 continue
 
             feedback = self._storage.get_instinct_context_feedback(inst["id"])
-            has_override = any(not fb["followed"] for fb in feedback)
+            recent = feedback[-recent_feedback_limit:] if feedback else []
+            has_recent_override = any(not fb["followed"] for fb in recent)
 
-            if not has_override:
+            if not has_recent_override:
                 unchallenged.append({
                     "instinct_id": inst["id"],
                     "action": inst.get("action", ""),
@@ -388,7 +397,7 @@ class CoherenceChecker:
         anchor_failures = [r for r in all_anchor_results if r["status"] == "fail"]
         anchor_degraded = [r for r in all_anchor_results if r["status"] == "degraded"]
 
-        drift = self.scan_drift(session_id=session_id)
+        drift = self.scan_drift(session_id=session_id, _save=False)
         unchallenged = self.detect_unchallenged()
         drift["unchallenged"] = unchallenged
 
@@ -407,6 +416,15 @@ class CoherenceChecker:
         if n_unchall:
             parts.append(f"{n_unchall} unchallenged instinct(s)")
         summary = "; ".join(parts) if parts else "coherence stable"
+
+        self._storage.save_drift_report(
+            session_id=session_id,
+            drifted_apart=drift["drifted_apart"],
+            drifted_together=drift["drifted_together"],
+            unchallenged=unchallenged,
+            anchor_results=all_anchor_results,
+            summary=summary,
+        )
 
         return {
             "anchor_results": all_anchor_results,

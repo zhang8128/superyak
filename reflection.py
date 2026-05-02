@@ -445,4 +445,6 @@ class Reflector:
                 "contradictions": self.detect_contradictions(),
                 "staleness": self.detect_staleness(),
                 "instinct_contexts": self.instinct_context_health(),
+                "coherence": self.analyze_coherence(),
+                "anchors": self.analyze_anchors(),
             }
