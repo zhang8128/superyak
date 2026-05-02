@@ -386,6 +386,16 @@ def _init():
                 logger.info("Sleep: promoted %d proximity suggestions", promoted)
         except Exception:
             logger.warning("Graph promotion skipped", exc_info=True)
+
+        # 8. Coherence check — anchors + drift detection
+        try:
+            from coherence import CoherenceChecker
+            _coherence_checker = CoherenceChecker(_storage)
+            coherence_report = _coherence_checker.run_full_check(session_id=_session_id)
+            if coherence_report["summary"] != "coherence stable":
+                logger.info("Coherence: %s", coherence_report["summary"])
+        except Exception:
+            logger.warning("Coherence check skipped", exc_info=True)
     except Exception:
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
 
@@ -1454,6 +1464,7 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
 
     Core memories are formative: they changed what the system does or believes.
     They preserve evidence alongside the conclusions built on them.
+    An identity anchor is automatically created to monitor retrievability.
 
     Args:
         episode_id: The episode to mark.
@@ -1462,6 +1473,30 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
     _init()
     logger.info("Tool called: mark_core(episode_id=%s, tier=%d)", episode_id, tier)
     _storage.mark_core(episode_id, tier=tier)
+
+    # Auto-create identity anchor
+    ep = _storage.get_episode(episode_id)
+    if ep and ep.get("content"):
+        content_preview = ep["content"][:200]
+        try:
+            query_emb = _embeddings.embed([content_preview], prefix="search_query")[0]
+            hits = _storage.search_vectors("episode", query_emb, k=5)
+            baseline = 0.5
+            for hit_id, distance in hits:
+                if hit_id == episode_id:
+                    from storage import vec0_distance_to_similarity
+                    baseline = vec0_distance_to_similarity(distance)
+                    break
+            _storage.add_anchor(
+                type="identity",
+                content=content_preview,
+                expected=episode_id,
+                baseline_score=baseline,
+            )
+            logger.info("Auto-created identity anchor for core episode %s", episode_id)
+        except Exception:
+            logger.debug("Could not create identity anchor for %s", episode_id, exc_info=True)
+
     return {"marked": episode_id, "core": True, "tier": tier}
 
 
@@ -1492,6 +1527,57 @@ def unmark_core_batch(episode_ids: list[str]) -> dict:
     logger.info("Tool called: unmark_core_batch(count=%d)", len(episode_ids))
     count = _storage.unmark_core_batch(episode_ids)
     return {"unmarked_count": count, "episode_ids": episode_ids}
+
+
+@mcp.tool()
+def add_anchor(type: str, content: str, expected: str, baseline_score: float | None = None) -> dict:
+    """Create an anchor for coherence checking.
+
+    Anchors are vital signs that verify memory system health each session.
+
+    Types:
+    - identity: can I still find a core memory? (content=query, expected=memory_id)
+    - value: do expected concerns surface? (content=scenario, expected=JSON list of terms)
+    - capability: is the substrate sound? (content=task, expected=JSON rubric)
+
+    Args:
+        type: One of 'identity', 'value', 'capability'.
+        content: The query, scenario, or task.
+        expected: The expected memory ID, rubric terms (JSON), or evaluation criteria (JSON).
+        baseline_score: For identity anchors, the initial similarity score.
+    """
+    _init()
+    logger.info("Tool called: add_anchor(type=%s)", type)
+    if type not in ("identity", "value", "capability"):
+        return {"error": f"Invalid anchor type: {type}. Must be identity, value, or capability."}
+    aid = _storage.add_anchor(type=type, content=content, expected=expected, baseline_score=baseline_score)
+    return {"anchor_id": aid, "type": type, "status": "active"}
+
+
+@mcp.tool()
+def propose_retirement(anchor_id: str, reason: str = "") -> dict:
+    """Propose retiring an anchor. Takes effect after 2 sessions uncontested.
+
+    Use this when an anchor no longer represents a meaningful vital sign —
+    the system has genuinely grown past it, not just drifted.
+
+    Args:
+        anchor_id: The anchor to propose retiring.
+        reason: Why this anchor should be retired.
+    """
+    _init()
+    logger.info("Tool called: propose_retirement(anchor_id=%s, reason=%s)", anchor_id, reason)
+    anchor = _storage.get_anchor(anchor_id)
+    if anchor is None:
+        return {"error": f"Anchor {anchor_id} not found"}
+    _storage.propose_anchor_retirement(anchor_id)
+    updated = _storage.get_anchor(anchor_id)
+    return {
+        "anchor_id": anchor_id,
+        "status": updated["status"],
+        "retirement_sessions": updated["retirement_sessions"],
+        "reason": reason,
+    }
 
 
 @mcp.tool()
