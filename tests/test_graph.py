@@ -1,6 +1,11 @@
 """Tests for unified memory graph."""
 
-from graph import Edge, Node
+import uuid
+from pathlib import Path
+from storage import Storage
+from graph import Edge, Node, MemoryGraph
+
+MIGRATIONS_DIR = str(Path(__file__).resolve().parent.parent / "migrations")
 
 
 class TestDataclasses:
@@ -34,3 +39,81 @@ class TestDataclasses:
             edge_type="resonance", weight=-0.5, directed=False,
         )
         assert e.weight == 0.0
+
+
+def _make_storage(tmp_path):
+    """Create a storage with known edges for testing."""
+    db_path = str(tmp_path / "test_graph.db")
+    store = Storage(db_path, migrations_dir=MIGRATIONS_DIR)
+    return store
+
+
+def _fake_emb(dim=768):
+    import random
+    return [random.uniform(-1, 1) for _ in range(dim)]
+
+
+class TestEdgeLoading:
+    def test_provenance_episode_to_semantic(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "test episode", embedding=_fake_emb())
+        store.add_semantic(sem_id, "test semantic", kind="fact", confidence=0.9,
+                          embedding=_fake_emb(), source_episode_ids=[ep_id])
+
+        g = MemoryGraph(store)
+        edges = g.neighbors(ep_id)
+        prov = [e for e in edges if e.edge_type == "provenance"]
+        assert len(prov) == 1
+        assert prov[0].target == sem_id
+        assert prov[0].directed is True
+        store.close()
+
+    def test_provenance_semantic_to_episode(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "test episode", embedding=_fake_emb())
+        store.add_semantic(sem_id, "test semantic", kind="fact", confidence=0.9,
+                          embedding=_fake_emb(), source_episode_ids=[ep_id])
+
+        g = MemoryGraph(store)
+        edges = g.neighbors(sem_id)
+        prov = [e for e in edges if e.edge_type == "provenance"]
+        assert len(prov) == 1
+        assert prov[0].target == ep_id
+        assert prov[0].directed is True
+        store.close()
+
+    def test_resonance_edges(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_a = str(uuid.uuid4())
+        ep_b = str(uuid.uuid4())
+        store.add_episode(ep_a, None, "episode alpha", embedding=_fake_emb())
+        store.add_episode(ep_b, None, "episode beta", embedding=_fake_emb())
+        store.add_resonance(ep_a, "episode", ep_b, "episode",
+                           similarity=0.8, weight=0.6)
+
+        g = MemoryGraph(store)
+        edges = g.neighbors(ep_a)
+        res = [e for e in edges if e.edge_type == "resonance"]
+        assert len(res) == 1
+        assert res[0].target == ep_b
+        assert res[0].directed is False
+
+        edges_b = g.neighbors(ep_b)
+        res_b = [e for e in edges_b if e.edge_type == "resonance"]
+        assert len(res_b) == 1
+        assert res_b[0].target == ep_a
+        store.close()
+
+    def test_no_edges_for_isolated_node(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "lonely episode", embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        edges = g.neighbors(ep_id)
+        assert edges == []
+        store.close()
