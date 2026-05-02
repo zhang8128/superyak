@@ -391,3 +391,34 @@ class TestFullCheck:
         assert saved is not None
         assert saved["session_id"] == "sess-save"
         store.close()
+
+
+from reflection import Reflector
+
+
+class TestReflectIntegration:
+    def test_reflect_coherence_focus(self, tmp_path):
+        store = _make_storage(tmp_path)
+        store.save_drift_report(
+            session_id="sess-test",
+            drifted_apart=[{"source": "a", "target": "b", "embedding_similarity": 0.1}],
+            drifted_together=[],
+            unchallenged=[],
+            anchor_results=[],
+            summary="1 drifted apart",
+        )
+        reflector = Reflector(store)
+        result = reflector.reflect(focus="coherence")
+        assert "coherence" in result
+        assert "latest_report" in result["coherence"]
+        assert "trend" in result["coherence"]
+        store.close()
+
+    def test_reflect_anchors_focus(self, tmp_path):
+        store = _make_storage(tmp_path)
+        store.add_anchor(type="identity", content="test", expected="e1", baseline_score=0.9)
+        reflector = Reflector(store)
+        result = reflector.reflect(focus="anchors")
+        assert "anchors" in result
+        assert len(result["anchors"]) == 1
+        store.close()

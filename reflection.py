@@ -383,6 +383,36 @@ class Reflector:
 
         return result
 
+    def analyze_coherence(self) -> dict:
+        """Show the latest drift report with trend data."""
+        latest = self._storage.get_latest_drift_report()
+        if latest is None:
+            return {"latest_report": None, "trend": []}
+
+        history = self._storage.get_drift_history(limit=10)
+        trend = []
+        for report in history:
+            try:
+                apart = json.loads(report["drifted_apart"])
+                together = json.loads(report["drifted_together"])
+                unchall = json.loads(report["unchallenged"])
+            except (json.JSONDecodeError, TypeError):
+                apart, together, unchall = [], [], []
+            trend.append({
+                "session_id": report["session_id"],
+                "checked_at": report["checked_at"],
+                "drifted_apart": len(apart),
+                "drifted_together": len(together),
+                "unchallenged": len(unchall),
+                "summary": report.get("summary"),
+            })
+
+        return {"latest_report": dict(latest), "trend": trend}
+
+    def analyze_anchors(self) -> list[dict]:
+        """Show all anchors with their current status and scores."""
+        return self._storage.get_active_anchors()
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -403,6 +433,10 @@ class Reflector:
             return {"resonances": self.analyze_resonances()}
         elif focus == "instinct_clusters":
             return {"instinct_clusters": self.analyze_instinct_clusters()}
+        elif focus == "coherence":
+            return {"coherence": self.analyze_coherence()}
+        elif focus == "anchors":
+            return {"anchors": self.analyze_anchors()}
         else:
             return {
                 "usage": self.analyze_usage(),
