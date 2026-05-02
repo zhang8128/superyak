@@ -334,3 +334,42 @@ class CoherenceChecker:
             )
 
         return results
+
+    def detect_unchallenged(
+        self,
+        min_strength: float = 0.7,
+        min_follows: int = 5,
+    ) -> list[dict]:
+        """Find instincts that fire often, always get followed, and never get questioned.
+
+        Criteria:
+        - strength >= min_strength
+        - followed_count >= min_follows
+        - No override feedback (followed=False) in context feedback
+        """
+        instincts = self._storage.get_all_instincts()
+        unchallenged = []
+
+        for inst in instincts:
+            strength = inst.get("strength", 0.0)
+            followed = inst.get("followed_count", 0) or 0
+
+            if strength < min_strength or followed < min_follows:
+                continue
+
+            feedback = self._storage.get_instinct_context_feedback(inst["id"])
+            has_override = any(not fb["followed"] for fb in feedback)
+
+            if not has_override:
+                unchallenged.append({
+                    "instinct_id": inst["id"],
+                    "action": inst.get("action", ""),
+                    "notice": inst.get("notice"),
+                    "implication": inst.get("implication"),
+                    "strength": strength,
+                    "followed_count": followed,
+                    "fired_count": inst.get("fired_count", 0) or 0,
+                    "feedback_count": len(feedback),
+                })
+
+        return unchallenged

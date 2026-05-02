@@ -315,3 +315,56 @@ class TestDriftScan:
         assert saved is not None
         assert saved["session_id"] == "sess-test"
         store.close()
+
+
+class TestUnchallenged:
+    def test_high_strength_zero_override_flagged(self, tmp_path):
+        store = _make_storage(tmp_path)
+        inst_id = str(uuid.uuid4())
+        store.conn.execute(
+            "INSERT INTO instincts (id, trigger, action, strength, fired_count, followed_count, notice, implication, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (inst_id, "disposition", "Always do X", 0.85, 10, 10, "notice X", "implies Y"),
+        )
+        store.conn.commit()
+
+        checker = CoherenceChecker(store)
+        unchallenged = checker.detect_unchallenged(min_strength=0.7, min_follows=5)
+        ids = [u["instinct_id"] for u in unchallenged]
+        assert inst_id in ids
+        store.close()
+
+    def test_overridden_instinct_not_flagged(self, tmp_path):
+        store = _make_storage(tmp_path)
+        inst_id = str(uuid.uuid4())
+        store.conn.execute(
+            "INSERT INTO instincts (id, trigger, action, strength, fired_count, followed_count, notice, implication, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (inst_id, "disposition", "Sometimes do X", 0.85, 10, 7, "notice X", "implies Y"),
+        )
+        store.conn.commit()
+        # Add some override feedback
+        for _ in range(3):
+            store.add_instinct_context_feedback(inst_id, "building", None, False)
+
+        checker = CoherenceChecker(store)
+        unchallenged = checker.detect_unchallenged(min_strength=0.7, min_follows=5)
+        ids = [u["instinct_id"] for u in unchallenged]
+        assert inst_id not in ids
+        store.close()
+
+    def test_weak_instinct_not_flagged(self, tmp_path):
+        store = _make_storage(tmp_path)
+        inst_id = str(uuid.uuid4())
+        store.conn.execute(
+            "INSERT INTO instincts (id, trigger, action, strength, fired_count, followed_count, notice, implication, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (inst_id, "disposition", "Weak instinct", 0.3, 2, 2, "notice", "implication"),
+        )
+        store.conn.commit()
+
+        checker = CoherenceChecker(store)
+        unchallenged = checker.detect_unchallenged(min_strength=0.7, min_follows=5)
+        ids = [u["instinct_id"] for u in unchallenged]
+        assert inst_id not in ids
+        store.close()
