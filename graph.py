@@ -40,6 +40,22 @@ class MemoryGraph:
     through a single interface.
     """
 
+    _LAYER_COLORS = {
+        "episode": "#4A90D9",
+        "semantic": "#7BC67E",
+        "instinct": "#D94A4A",
+        "entity": "#AAAAAA",
+    }
+
+    _EDGE_STYLES = {
+        "provenance": "solid",
+        "resonance": "dashed",
+        "co_firing": "dotted",
+        "entity_link": "dotted",
+        "contradiction": "bold",
+        "suggested": "dashed",
+    }
+
     def __init__(self, storage: Storage, knowledge_graph=None):
         self._storage = storage
         self._kg = knowledge_graph
@@ -317,4 +333,75 @@ class MemoryGraph:
             "hubs": hubs,
             "avg_degree": round(avg_degree, 2),
             "layer_distribution": layer_dist,
+        }
+
+    def to_dot(self, center: str | None = None, depth: int = 1) -> str:
+        """Graphviz DOT export."""
+        if center:
+            nodes, edges = self.neighborhood(center, depth)
+        else:
+            all_node_ids = self._all_node_ids()
+            nodes = [self._make_node(nid, layer) for nid, layer in all_node_ids]
+            edges = []
+            for nid, _ in all_node_ids:
+                edges.extend(self.neighbors(nid))
+
+        seen_edges: set[tuple[str, str, str]] = set()
+        lines = ["digraph memory {", '  rankdir=LR;', '  node [shape=box, style=filled];']
+
+        for node in nodes:
+            color = self._LAYER_COLORS.get(node.layer, "#FFFFFF")
+            label = f"{node.layer}\\n{node.id[:8]}\\n{node.preview[:40]}"
+            lines.append(f'  "{node.id[:8]}" [label="{label}", fillcolor="{color}"];')
+
+        for edge in edges:
+            key = (edge.source, edge.target, edge.edge_type)
+            rev_key = (edge.target, edge.source, edge.edge_type)
+            if key in seen_edges or (not edge.directed and rev_key in seen_edges):
+                continue
+            seen_edges.add(key)
+            style = self._EDGE_STYLES.get(edge.edge_type, "solid")
+            arrow = "forward" if edge.directed else "none"
+            lines.append(
+                f'  "{edge.source[:8]}" -> "{edge.target[:8]}" '
+                f'[style={style}, dir={arrow}, label="{edge.edge_type}"];'
+            )
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    def to_json(self, center: str | None = None, depth: int = 1) -> dict:
+        """JSON export for browser rendering."""
+        if center:
+            nodes, edges = self.neighborhood(center, depth)
+        else:
+            all_node_ids = self._all_node_ids()
+            nodes = [self._make_node(nid, layer) for nid, layer in all_node_ids]
+            edges = []
+            for nid, _ in all_node_ids:
+                edges.extend(self.neighbors(nid))
+
+        seen_edges: set[tuple[str, str, str]] = set()
+        unique_edges = []
+        for edge in edges:
+            key = (edge.source, edge.target, edge.edge_type)
+            rev_key = (edge.target, edge.source, edge.edge_type)
+            if key in seen_edges or (not edge.directed and rev_key in seen_edges):
+                continue
+            seen_edges.add(key)
+            unique_edges.append(edge)
+
+        return {
+            "nodes": [
+                {"id": n.id, "layer": n.layer, "preview": n.preview}
+                for n in nodes
+            ],
+            "edges": [
+                {
+                    "source": e.source, "target": e.target,
+                    "edge_type": e.edge_type, "weight": e.weight,
+                    "directed": e.directed,
+                }
+                for e in unique_edges
+            ],
         }

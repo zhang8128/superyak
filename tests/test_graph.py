@@ -231,3 +231,45 @@ class TestAnalyze:
         assert a["hubs"][0]["id"] == sem_id
         assert a["hubs"][0]["degree"] == 5
         store.close()
+
+
+class TestExport:
+    def test_to_dot_produces_valid_output(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "test episode", embedding=_fake_emb())
+        store.add_semantic(sem_id, "test semantic", kind="fact", confidence=0.9,
+                          source_episode_ids=[ep_id], embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        dot = g.to_dot(center=ep_id, depth=1)
+        assert "digraph" in dot
+        assert ep_id[:8] in dot
+        assert sem_id[:8] in dot
+        store.close()
+
+    def test_to_json_structure(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "test episode", embedding=_fake_emb())
+        store.add_semantic(sem_id, "test semantic", kind="fact", confidence=0.9,
+                          source_episode_ids=[ep_id], embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        j = g.to_json(center=ep_id, depth=1)
+        assert "nodes" in j
+        assert "edges" in j
+        assert len(j["nodes"]) == 2
+        store.close()
+
+    def test_to_dot_global_without_center(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "solo", embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        dot = g.to_dot()
+        assert "digraph" in dot
+        store.close()
