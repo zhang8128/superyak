@@ -2028,6 +2028,42 @@ def wander(start_id: str, max_steps: int = 1) -> dict:
     }
 
 
+@mcp.tool()
+def graph_view(center: str | None = None, depth: int = 1) -> dict:
+    """View the unified memory graph topology.
+
+    Without center: returns global stats and analysis.
+    With center: returns neighborhood around that node to given depth,
+    including suggested edges from embedding proximity.
+
+    Args:
+        center: Memory ID to center the view on. None for global stats.
+        depth: BFS depth for neighborhood view (default 1).
+    """
+    _init()
+    from graph import MemoryGraph
+    g = MemoryGraph(_storage, _knowledge_graph)
+
+    if center is None:
+        stats = g.stats()
+        analysis = g.analyze()
+        return {"mode": "global", "stats": stats, "analysis": analysis}
+
+    json_view = g.to_json(center=center, depth=depth)
+    suggestions = g.suggest_edges(center, k=5, threshold=0.7)
+    json_view["suggested_edges"] = [
+        {"source": e.source, "target": e.target,
+         "weight": e.weight, "target_layer": e.target_layer}
+        for e in suggestions
+    ]
+
+    # Log suggestions for future sleep promotion
+    for e in suggestions:
+        g.log_suggestion(e.source, e.target, e.weight)
+
+    return {"mode": "neighborhood", **json_view}
+
+
 # ── Clipboard tools ─────────────────────────────────────────────
 
 @mcp.tool()
