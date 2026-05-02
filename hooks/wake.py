@@ -142,6 +142,32 @@ def wake():
         except Exception:
             pass  # table may not have disposition kind yet
 
+        # Coherence: latest drift report
+        try:
+            drift_row = conn.execute(
+                "SELECT summary, anchor_results, checked_at FROM drift_reports "
+                "ORDER BY checked_at DESC LIMIT 1"
+            ).fetchone()
+            if drift_row:
+                lines.append("## Coherence")
+                lines.append("")
+                summary = drift_row["summary"] or "no data"
+                lines.append(f"Last check: {summary}")
+
+                # Check for anchor failures
+                try:
+                    anchor_results = json.loads(drift_row["anchor_results"])
+                    failures = [r for r in anchor_results if r.get("status") == "fail"]
+                    if failures:
+                        lines.append("")
+                        lines.append(f"**WARNING: {len(failures)} anchor(s) failed** — run reflect(focus=\"anchors\") for details")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+                lines.append("")
+        except Exception:
+            pass  # table may not exist yet
+
         if recent_semantics:
             lines.append("## What you know")
             lines.append("")
