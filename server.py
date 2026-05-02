@@ -376,6 +376,16 @@ def _init():
 
         # 6. Backfill notice/implication for pre-existing instincts
         _backfill_instinct_perceptual(_storage, _embeddings)
+
+        # 7. Promote proximity suggestions to resonances (graph consolidation)
+        try:
+            from graph import MemoryGraph
+            _memory_graph = MemoryGraph(_storage, _knowledge_graph)
+            promoted = _memory_graph.promote_suggestions(min_prior_sessions=2)
+            if promoted:
+                logger.info("Sleep: promoted %d proximity suggestions", promoted)
+        except Exception:
+            logger.debug("Graph promotion skipped", exc_info=True)
     except Exception:
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
 

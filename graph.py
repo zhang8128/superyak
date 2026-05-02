@@ -448,3 +448,77 @@ class MemoryGraph:
 
         candidates.sort(key=lambda e: e.weight, reverse=True)
         return candidates[:k]
+
+    def log_suggestion(self, source_id: str, target_id: str, similarity: float) -> None:
+        """Persist a proximity suggestion to memory_log for multi-session tracking."""
+        import uuid as _uuid
+        canonical = sorted([source_id, target_id])
+        self._storage.add_log_entry(
+            id=str(_uuid.uuid4()),
+            event_type="proximity_suggestion",
+            layer="graph",
+            target_ids=canonical,
+            context={"similarity": similarity},
+        )
+
+    def promote_suggestions(self, min_prior_sessions: int = 2) -> int:
+        """Promote proximity suggestions to resonances during sleep.
+
+        A suggestion is promoted if:
+        1. It has appeared in >= min_prior_sessions prior log entries, AND
+        2. The two nodes share at least one neighbor (coherence check)
+
+        Returns count of promotions.
+        """
+        import json as _json
+        import random
+        import uuid as _uuid
+
+        rows = self._storage.get_log_entries(
+            event_type="proximity_suggestion", limit=1000
+        )
+
+        pair_counts: dict[tuple[str, str], float] = {}
+        for row in rows:
+            tids = _json.loads(row["target_ids"]) if isinstance(row["target_ids"], str) else row["target_ids"]
+            if len(tids) != 2:
+                continue
+            pair = (tids[0], tids[1])
+            pair_counts[pair] = pair_counts.get(pair, 0) + 1
+
+        promoted = 0
+        for (id_a, id_b), count in pair_counts.items():
+            if count < min_prior_sessions:
+                continue
+
+            existing = self._storage.conn.execute(
+                "SELECT 1 FROM resonances WHERE "
+                "(memory_a = ? AND memory_b = ?) OR (memory_a = ? AND memory_b = ?)",
+                (id_a, id_b, id_b, id_a),
+            ).fetchone()
+            if existing:
+                continue
+
+            neighbors_a = {e.target for e in self.neighbors(id_a)}
+            neighbors_b = {e.target for e in self.neighbors(id_b)}
+            shared = neighbors_a & neighbors_b
+            if not shared:
+                continue
+
+            layer_a = self._detect_layer(id_a) or "episode"
+            layer_b = self._detect_layer(id_b) or "episode"
+            canonical_a, canonical_b = (id_a, id_b) if id_a < id_b else (id_b, id_a)
+            layer_ca = layer_a if canonical_a == id_a else layer_b
+            layer_cb = layer_b if canonical_b == id_b else layer_a
+
+            self._storage.add_resonance(
+                id_a=canonical_a, layer_a=layer_ca,
+                id_b=canonical_b, layer_b=layer_cb,
+                similarity=0.0,
+                weight=max(0.1, min(0.9, random.gauss(0.3, 0.1))),
+            )
+            promoted += 1
+
+        if promoted:
+            logger.info("Promoted %d proximity suggestions to resonances", promoted)
+        return promoted

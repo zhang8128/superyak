@@ -315,3 +315,49 @@ class TestSuggestEdges:
         suggested_targets = {e.target for e in suggestions}
         assert sem_a not in suggested_targets
         store.close()
+
+
+class TestSleepPromotion:
+    def test_promote_skips_without_prior_suggestions(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_a = str(uuid.uuid4())
+        ep_b = str(uuid.uuid4())
+        emb = [0.0] * 768
+        emb[0] = 1.0
+        store.add_episode(ep_a, None, "alpha", embedding=emb)
+        store.add_episode(ep_b, None, "beta", embedding=emb)
+
+        g = MemoryGraph(store)
+        promoted = g.promote_suggestions(min_prior_sessions=2)
+        assert promoted == 0
+        store.close()
+
+    def test_promote_with_shared_neighbor(self, tmp_path):
+        store = _make_storage(tmp_path)
+        emb = [0.0] * 768
+        emb[0] = 1.0
+        ep_a = str(uuid.uuid4())
+        ep_b = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        store.add_episode(ep_a, None, "alpha", embedding=emb)
+        store.add_episode(ep_b, None, "beta", embedding=emb)
+        store.add_semantic(sem_id, "shared", kind="fact", confidence=0.9,
+                          source_episode_ids=[ep_a, ep_b], embedding=emb)
+
+        # Log suggestions from 2 prior sessions
+        for _ in range(2):
+            store.add_log_entry(
+                id=str(uuid.uuid4()), event_type="proximity_suggestion",
+                layer="episode", target_ids=[ep_a, ep_b],
+                context={"similarity": 0.85},
+            )
+
+        g = MemoryGraph(store)
+        promoted = g.promote_suggestions(min_prior_sessions=2)
+        assert promoted >= 1
+
+        # Verify resonance was created
+        edges = g.neighbors(ep_a)
+        res = [e for e in edges if e.edge_type == "resonance" and e.target == ep_b]
+        assert len(res) == 1
+        store.close()
