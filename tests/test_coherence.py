@@ -1,5 +1,6 @@
 """Tests for the coherence layer — anchors, drift detection, unchallenged instincts."""
 
+import json
 import uuid
 from pathlib import Path
 
@@ -108,4 +109,51 @@ class TestAnchorCRUD:
         store.propose_anchor_retirement(aid)
         active = store.get_active_anchors()
         assert len(active) == 0
+        store.close()
+
+
+class TestDriftReportStorage:
+    def test_save_drift_report(self, tmp_path):
+        store = _make_storage(tmp_path)
+        rid = store.save_drift_report(
+            session_id="sess-001",
+            drifted_apart=[{"edge": "a→b", "drift_score": 0.6}],
+            drifted_together=[{"node_a": "c", "node_b": "d", "similarity": 0.85}],
+            unchallenged=[{"instinct_id": "inst-1", "strength": 0.9}],
+            anchor_results=[{"id": "anc-1", "status": "pass"}],
+            summary="1 drifted apart, 1 drifted together, 1 unchallenged",
+        )
+        assert rid is not None
+        store.close()
+
+    def test_get_latest_drift_report(self, tmp_path):
+        store = _make_storage(tmp_path)
+        store.save_drift_report(
+            session_id="sess-001",
+            drifted_apart=[], drifted_together=[], unchallenged=[],
+            anchor_results=[], summary="all clear",
+        )
+        store.save_drift_report(
+            session_id="sess-002",
+            drifted_apart=[{"edge": "x"}], drifted_together=[], unchallenged=[],
+            anchor_results=[], summary="1 drift",
+        )
+        report = store.get_latest_drift_report()
+        assert report is not None
+        assert report["session_id"] == "sess-002"
+        apart = json.loads(report["drifted_apart"])
+        assert len(apart) == 1
+        store.close()
+
+    def test_get_drift_history(self, tmp_path):
+        store = _make_storage(tmp_path)
+        for i in range(5):
+            store.save_drift_report(
+                session_id=f"sess-{i:03d}",
+                drifted_apart=[], drifted_together=[], unchallenged=[],
+                anchor_results=[], summary=f"report {i}",
+            )
+        history = store.get_drift_history(limit=3)
+        assert len(history) == 3
+        assert history[0]["session_id"] == "sess-004"
         store.close()

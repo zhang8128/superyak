@@ -1825,3 +1825,46 @@ class Storage:
             (new_status, new_count, anchor_id),
         )
         self.conn.commit()
+
+    # --- Coherence: Drift Reports ---
+
+    def save_drift_report(
+        self,
+        session_id: str,
+        drifted_apart: list[dict],
+        drifted_together: list[dict],
+        unchallenged: list[dict],
+        anchor_results: list[dict],
+        summary: str | None = None,
+    ) -> str:
+        import uuid as _uuid
+        rid = str(_uuid.uuid4())
+        now = _now_iso()
+        self.conn.execute(
+            "INSERT INTO drift_reports "
+            "(id, session_id, checked_at, drifted_apart, drifted_together, unchallenged, anchor_results, summary) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                rid, session_id, now,
+                json.dumps(drifted_apart),
+                json.dumps(drifted_together),
+                json.dumps(unchallenged),
+                json.dumps(anchor_results),
+                summary,
+            ),
+        )
+        self.conn.commit()
+        return rid
+
+    def get_latest_drift_report(self) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM drift_reports ORDER BY checked_at DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_drift_history(self, limit: int = 10) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM drift_reports ORDER BY checked_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
