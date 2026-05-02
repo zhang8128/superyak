@@ -169,3 +169,65 @@ class TestNeighborhood:
         assert nodes[0].id == ep_id
         assert edges == []
         store.close()
+
+
+class TestStats:
+    def test_stats_empty_db(self, tmp_path):
+        store = _make_storage(tmp_path)
+        g = MemoryGraph(store)
+        s = g.stats()
+        assert s["total_nodes"] == 0
+        assert s["total_edges"] == 0
+        assert s["components"] == 0
+        assert s["isolated_nodes"] == 0
+        store.close()
+
+    def test_stats_counts_nodes_and_edges(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "episode", embedding=_fake_emb())
+        store.add_semantic(sem_id, "semantic", kind="fact", confidence=0.9,
+                          source_episode_ids=[ep_id], embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        s = g.stats()
+        assert s["total_nodes"] == 2
+        assert s["total_edges"] >= 1
+        assert s["components"] == 1
+        assert s["isolated_nodes"] == 0
+        store.close()
+
+    def test_stats_detects_isolated(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_a = str(uuid.uuid4())
+        ep_b = str(uuid.uuid4())
+        store.add_episode(ep_a, None, "episode a", embedding=_fake_emb())
+        store.add_episode(ep_b, None, "episode b", embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        s = g.stats()
+        assert s["total_nodes"] == 2
+        assert s["isolated_nodes"] == 2
+        assert s["components"] == 2
+        store.close()
+
+
+class TestAnalyze:
+    def test_analyze_returns_hubs(self, tmp_path):
+        store = _make_storage(tmp_path)
+        sem_id = str(uuid.uuid4())
+        ep_ids = []
+        for i in range(5):
+            ep_id = str(uuid.uuid4())
+            store.add_episode(ep_id, None, f"episode {i}", embedding=_fake_emb())
+            ep_ids.append(ep_id)
+        store.add_semantic(sem_id, "hub semantic", kind="fact", confidence=0.9,
+                          source_episode_ids=ep_ids, embedding=_fake_emb())
+
+        g = MemoryGraph(store)
+        a = g.analyze()
+        assert len(a["hubs"]) > 0
+        assert a["hubs"][0]["id"] == sem_id
+        assert a["hubs"][0]["degree"] == 5
+        store.close()

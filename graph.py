@@ -204,3 +204,117 @@ class MemoryGraph:
             frontier = next_frontier
 
         return list(visited_nodes.values()), all_edges
+
+    def _all_node_ids(self) -> list[tuple[str, str]]:
+        """Return (id, layer) for every memory in storage."""
+        nodes = []
+        for row in self._storage.conn.execute("SELECT id FROM episodes").fetchall():
+            nodes.append((row[0], "episode"))
+        for row in self._storage.conn.execute("SELECT id FROM semantics WHERE contradicted_by IS NULL").fetchall():
+            nodes.append((row[0], "semantic"))
+        for row in self._storage.conn.execute("SELECT id FROM instincts").fetchall():
+            nodes.append((row[0], "instinct"))
+        return nodes
+
+    def _build_adjacency(self) -> dict[str, set[str]]:
+        """Build full adjacency dict from all edges."""
+        all_nodes = self._all_node_ids()
+        adj: dict[str, set[str]] = {nid: set() for nid, _ in all_nodes}
+
+        for nid, _ in all_nodes:
+            for edge in self.neighbors(nid):
+                peer = edge.target if edge.source == nid else edge.source
+                if peer in adj:
+                    adj[nid].add(peer)
+                    if not edge.directed:
+                        adj[peer].add(nid)
+                    else:
+                        adj.setdefault(peer, set())
+        return adj
+
+    def _connected_components(self, adj: dict[str, set[str]]) -> list[set[str]]:
+        """Find connected components via BFS (undirected — ignores edge direction)."""
+        visited: set[str] = set()
+        components: list[set[str]] = []
+        for node in adj:
+            if node in visited:
+                continue
+            component: set[str] = set()
+            queue = [node]
+            while queue:
+                current = queue.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                component.add(current)
+                for neighbor in adj.get(current, set()):
+                    if neighbor not in visited:
+                        queue.append(neighbor)
+                # Also check reverse direction for directed edges
+                for other, peers in adj.items():
+                    if current in peers and other not in visited:
+                        queue.append(other)
+            components.append(component)
+        return components
+
+    def stats(self) -> dict:
+        """Connectivity summary: nodes, edges by type, components, isolated."""
+        all_nodes = self._all_node_ids()
+        if not all_nodes:
+            return {
+                "total_nodes": 0, "total_edges": 0,
+                "edges_by_type": {}, "components": 0,
+                "isolated_nodes": 0, "largest_component": 0,
+            }
+
+        adj = self._build_adjacency()
+        edge_counts: dict[str, int] = {}
+        total_edges = 0
+        for nid, _ in all_nodes:
+            for edge in self.neighbors(nid):
+                edge_counts[edge.edge_type] = edge_counts.get(edge.edge_type, 0) + 1
+                total_edges += 1
+        # Undirected edges counted twice (once from each side)
+        for etype in edge_counts:
+            if etype in ("resonance", "co_firing"):
+                edge_counts[etype] //= 2
+        total_edges = sum(edge_counts.values())
+
+        components = self._connected_components(adj)
+        isolated = sum(1 for c in components if len(c) == 1)
+        largest = max(len(c) for c in components) if components else 0
+
+        return {
+            "total_nodes": len(all_nodes),
+            "total_edges": total_edges,
+            "edges_by_type": edge_counts,
+            "components": len(components),
+            "isolated_nodes": isolated,
+            "largest_component": largest,
+        }
+
+    def analyze(self) -> dict:
+        """Extended analysis: hubs, average degree, layer distribution."""
+        all_nodes = self._all_node_ids()
+        if not all_nodes:
+            return {"hubs": [], "avg_degree": 0.0, "layer_distribution": {}}
+
+        degrees: dict[str, int] = {}
+        for nid, _ in all_nodes:
+            edges = self.neighbors(nid)
+            degrees[nid] = len(edges)
+
+        sorted_by_degree = sorted(degrees.items(), key=lambda x: x[1], reverse=True)
+        hubs = [{"id": nid, "degree": deg} for nid, deg in sorted_by_degree[:10] if deg > 0]
+
+        avg_degree = sum(degrees.values()) / len(degrees) if degrees else 0.0
+
+        layer_dist: dict[str, int] = {}
+        for _, layer in all_nodes:
+            layer_dist[layer] = layer_dist.get(layer, 0) + 1
+
+        return {
+            "hubs": hubs,
+            "avg_degree": round(avg_degree, 2),
+            "layer_distribution": layer_dist,
+        }
