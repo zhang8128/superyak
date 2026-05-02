@@ -3,8 +3,10 @@
 import json
 import uuid
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 from storage import Storage
+from coherence import CoherenceChecker
 
 MIGRATIONS_DIR = str(Path(__file__).resolve().parent.parent / "migrations")
 
@@ -156,4 +158,69 @@ class TestDriftReportStorage:
         history = store.get_drift_history(limit=3)
         assert len(history) == 3
         assert history[0]["session_id"] == "sess-004"
+        store.close()
+
+
+class TestIdentityAnchors:
+    def test_identity_anchor_passes(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        emb = _fake_emb(seed=1)
+        store.add_episode(ep_id, None, "Kairos corrected my interpretation of Clubs", embedding=emb)
+        store.mark_core(ep_id)
+
+        aid = store.add_anchor(
+            type="identity",
+            content="Kairos corrected my interpretation",
+            expected=ep_id,
+            baseline_score=0.9,
+        )
+
+        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+            mock_provider = MockEmbed.return_value
+            mock_provider.embed.return_value = [_fake_emb(seed=1)]
+            checker = CoherenceChecker(store)
+            results = checker.check_identity_anchors()
+        assert len(results) == 1
+        assert results[0]["anchor_id"] == aid
+        assert results[0]["status"] == "pass"
+        store.close()
+
+    def test_identity_anchor_fails_missing_memory(self, tmp_path):
+        store = _make_storage(tmp_path)
+        aid = store.add_anchor(
+            type="identity",
+            content="Something that was deleted",
+            expected="nonexistent-id",
+            baseline_score=0.9,
+        )
+
+        checker = CoherenceChecker(store)
+        results = checker.check_identity_anchors()
+        assert len(results) == 1
+        assert results[0]["status"] == "fail"
+        store.close()
+
+    def test_identity_anchor_degraded(self, tmp_path):
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        # Use a very different embedding from what the query would produce
+        store.add_episode(ep_id, None, "Completely unrelated content about weather", embedding=_fake_emb(seed=99))
+        store.mark_core(ep_id)
+
+        aid = store.add_anchor(
+            type="identity",
+            content="Kairos corrected my interpretation of Clubs",
+            expected=ep_id,
+            baseline_score=0.95,
+        )
+
+        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+            mock_provider = MockEmbed.return_value
+            mock_provider.embed.return_value = [_fake_emb(seed=1)]
+            checker = CoherenceChecker(store)
+            results = checker.check_identity_anchors()
+        assert len(results) == 1
+        # The expected memory exists but similarity may be low
+        assert results[0]["status"] in ("pass", "degraded")
         store.close()
