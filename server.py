@@ -1495,7 +1495,7 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
             )
             logger.info("Auto-created identity anchor for core episode %s", episode_id)
         except Exception:
-            logger.debug("Could not create identity anchor for %s", episode_id, exc_info=True)
+            logger.warning("Could not create identity anchor for %s", episode_id, exc_info=True)
 
     return {"marked": episode_id, "core": True, "tier": tier}
 

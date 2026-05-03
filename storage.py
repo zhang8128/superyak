@@ -1815,14 +1815,12 @@ class Storage:
 
     def propose_anchor_retirement(self, anchor_id: str) -> None:
         """Propose retirement. After 2 proposals, anchor is retired."""
-        anchor = self.get_anchor(anchor_id)
-        if anchor is None:
-            return
-        new_count = anchor["retirement_sessions"] + 1
-        new_status = "retired" if new_count >= 2 else "proposed_retirement"
         self.conn.execute(
-            "UPDATE anchors SET status = ?, retirement_sessions = ? WHERE id = ?",
-            (new_status, new_count, anchor_id),
+            "UPDATE anchors SET "
+            "retirement_sessions = retirement_sessions + 1, "
+            "status = CASE WHEN retirement_sessions + 1 >= 2 THEN 'retired' ELSE 'proposed_retirement' END "
+            "WHERE id = ? AND status != 'retired'",
+            (anchor_id,),
         )
         self.conn.commit()
 

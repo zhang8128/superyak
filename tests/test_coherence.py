@@ -227,7 +227,8 @@ class TestIdentityAnchors:
 
 
 class TestValueAnchors:
-    def test_value_anchor_pass(self, tmp_path):
+    def test_value_anchor_insufficient_data(self, tmp_path):
+        """With no semantics, value anchor should report insufficient_data, not fail."""
         store = _make_storage(tmp_path)
         store.add_anchor(
             type="value",
@@ -237,12 +238,34 @@ class TestValueAnchors:
         checker = CoherenceChecker(store)
         results = checker.check_value_anchors()
         assert len(results) == 1
-        assert results[0]["status"] in ("pass", "degraded", "fail", "error")
+        assert results[0]["status"] == "insufficient_data"
+        store.close()
+
+    def test_value_anchor_pass_with_semantics(self, tmp_path):
+        """With matching semantics, value anchor should pass."""
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "placeholder", embedding=_fake_emb(seed=1))
+        sem_id = str(uuid.uuid4())
+        store.add_semantic(sem_id, "Safety floor is critical for bounded experimentation",
+                          kind="fact", confidence=0.9, embedding=_fake_emb(seed=2),
+                          source_episode_ids=[ep_id])
+        store.add_anchor(
+            type="value",
+            content="experimentation",
+            expected=json.dumps(["safety floor", "bounded"]),
+        )
+        checker = CoherenceChecker(store)
+        results = checker.check_value_anchors()
+        assert len(results) == 1
+        assert results[0]["status"] == "pass"
+        assert results[0]["coverage"] == 1.0
         store.close()
 
 
 class TestCapabilityAnchors:
-    def test_capability_anchor_stored(self, tmp_path):
+    def test_capability_anchor_skipped_v1(self, tmp_path):
+        """V1 stub should report 'skipped', not 'pass'."""
         store = _make_storage(tmp_path)
         store.add_anchor(
             type="capability",
@@ -252,7 +275,7 @@ class TestCapabilityAnchors:
         checker = CoherenceChecker(store)
         results = checker.check_capability_anchors()
         assert len(results) == 1
-        assert results[0]["status"] in ("pass", "degraded", "error")
+        assert results[0]["status"] == "skipped"
         store.close()
 
 
@@ -498,4 +521,102 @@ class TestEndToEnd:
         anchors = reflector.reflect(focus="anchors")
         assert len(anchors["anchors"]) >= 1
 
+        store.close()
+
+
+class TestEdgeCases:
+    def test_identity_anchor_with_semantic_expected(self, tmp_path):
+        """Identity anchor pointing to a semantic (not episode) should work."""
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        sem_id = str(uuid.uuid4())
+        emb = _fake_emb(seed=1)
+        store.add_episode(ep_id, None, "source", embedding=_fake_emb(seed=99))
+        store.add_semantic(sem_id, "Core principle about governance",
+                          kind="fact", confidence=0.9, embedding=emb,
+                          source_episode_ids=[ep_id])
+
+        store.add_anchor(
+            type="identity",
+            content="Core principle about governance",
+            expected=sem_id,
+            baseline_score=0.9,
+        )
+
+        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+            mock_provider = MockEmbed.return_value
+            mock_provider.embed.return_value = [emb]
+            checker = CoherenceChecker(store)
+            results = checker.check_identity_anchors()
+
+        assert len(results) == 1
+        assert results[0]["status"] == "pass"
+        store.close()
+
+    def test_baseline_score_zero_not_treated_as_none(self, tmp_path):
+        """baseline_score=0.0 should use 0.0, not default to 0.5."""
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        emb = _fake_emb(seed=1)
+        store.add_episode(ep_id, None, "test", embedding=emb)
+
+        aid = store.add_anchor(
+            type="identity",
+            content="test query",
+            expected=ep_id,
+            baseline_score=0.0,
+        )
+
+        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+            mock_provider = MockEmbed.return_value
+            mock_provider.embed.return_value = [emb]
+            checker = CoherenceChecker(store)
+            results = checker.check_identity_anchors()
+
+        assert results[0]["baseline"] == 0.0
+        store.close()
+
+    def test_embedding_failure_persisted_and_counted(self, tmp_path):
+        """When embedding fails, error status should be persisted and appear in summary."""
+        store = _make_storage(tmp_path)
+        ep_id = str(uuid.uuid4())
+        store.add_episode(ep_id, None, "important memory", embedding=_fake_emb(seed=1))
+        store.add_anchor(
+            type="identity",
+            content="important memory",
+            expected=ep_id,
+            baseline_score=0.9,
+        )
+
+        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+            MockEmbed.return_value.embed.side_effect = RuntimeError("model not found")
+            checker = CoherenceChecker(store)
+            report = checker.run_full_check(session_id="error-test")
+
+        assert "could not be checked" in report["summary"]
+        anchor = store.get_anchor(store.get_active_anchors(anchor_type="identity")[0]["id"])
+        assert '"error"' in anchor["last_result"]
+        store.close()
+
+    def test_empty_system_reports_no_data(self, tmp_path):
+        """A system with nothing to check should say so, not 'coherence stable'."""
+        store = _make_storage(tmp_path)
+        checker = CoherenceChecker(store)
+        report = checker.run_full_check(session_id="empty-test")
+        assert report["summary"] == "no data to check"
+        store.close()
+
+    def test_full_check_report_includes_anchor_results(self, tmp_path):
+        """The persisted drift report should contain actual anchor results."""
+        store = _make_storage(tmp_path)
+        store.add_anchor(
+            type="identity", content="query", expected="nonexistent-id", baseline_score=0.9
+        )
+        checker = CoherenceChecker(store)
+        checker.run_full_check(session_id="persist-test")
+
+        saved = store.get_latest_drift_report()
+        anchor_results = json.loads(saved["anchor_results"])
+        assert len(anchor_results) == 1
+        assert anchor_results[0]["status"] == "fail"
         store.close()

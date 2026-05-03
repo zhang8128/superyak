@@ -43,7 +43,7 @@ class CoherenceChecker:
         for anchor in anchors:
             expected_id = anchor["expected"]
             query = anchor["content"]
-            baseline = anchor["baseline_score"] or 0.5
+            baseline = anchor["baseline_score"] if anchor["baseline_score"] is not None else 0.5
 
             ep = self._storage.get_episode(expected_id)
             if ep is None:
@@ -66,20 +66,27 @@ class CoherenceChecker:
             try:
                 query_emb = self._get_embeddings().embed([query], prefix="search_query")[0]
             except Exception:
-                results.append({
+                result = {
                     "anchor_id": anchor["id"],
                     "status": "error",
                     "reason": "embedding failed",
                     "score": 0.0,
                     "baseline": baseline,
-                })
+                }
+                results.append(result)
+                self._storage.update_anchor_result(
+                    anchor["id"],
+                    json.dumps({"status": "error", "reason": "embedding_failed"}),
+                )
                 continue
 
             found = False
             score = 0.0
+            layers_searched = 0
             for layer in ("episode", "semantic", "instinct"):
                 try:
                     hits = self._storage.search_vectors(layer, query_emb, k=20)
+                    layers_searched += 1
                     for hit_id, distance in hits:
                         if hit_id == expected_id:
                             score = vec0_distance_to_similarity(distance)
@@ -90,7 +97,10 @@ class CoherenceChecker:
                 if found:
                     break
 
-            if not found:
+            if layers_searched == 0:
+                status = "error"
+                reason = "all vector searches failed"
+            elif not found:
                 status = "fail"
                 reason = "memory exists but not in top-20 results"
             elif score < baseline * 0.5:
@@ -138,6 +148,23 @@ class CoherenceChecker:
             all_semantics = self._storage.conn.execute(
                 "SELECT content FROM semantics WHERE contradicted_by IS NULL"
             ).fetchall()
+
+            if not all_semantics:
+                result = {
+                    "anchor_id": anchor["id"],
+                    "status": "insufficient_data",
+                    "reason": "no semantics available for matching",
+                    "found_terms": [],
+                    "missing_terms": expected_terms,
+                    "coverage": 0.0,
+                }
+                results.append(result)
+                self._storage.update_anchor_result(
+                    anchor["id"],
+                    json.dumps({"status": "insufficient_data", "reason": "no_semantics"}),
+                )
+                continue
+
             corpus = " ".join(r[0].lower() for r in all_semantics)
 
             for term in expected_terms:
@@ -330,14 +357,14 @@ class CoherenceChecker:
         for anchor in anchors:
             result = {
                 "anchor_id": anchor["id"],
-                "status": "pass",
+                "status": "skipped",
                 "note": "v1: task stored, full generative evaluation not yet implemented",
                 "content": anchor["content"][:100],
             }
             results.append(result)
             self._storage.update_anchor_result(
                 anchor["id"],
-                json.dumps({"status": "pass", "note": "v1_stub"}),
+                json.dumps({"status": "skipped", "note": "v1_stub"}),
             )
 
         return results
@@ -396,12 +423,15 @@ class CoherenceChecker:
         all_anchor_results = identity_results + value_results + capability_results
         anchor_failures = [r for r in all_anchor_results if r["status"] == "fail"]
         anchor_degraded = [r for r in all_anchor_results if r["status"] == "degraded"]
+        anchor_errors = [r for r in all_anchor_results if r["status"] in ("error", "insufficient_data")]
 
         drift = self.scan_drift(session_id=session_id, _save=False)
         unchallenged = self.detect_unchallenged()
         drift["unchallenged"] = unchallenged
 
         parts = []
+        if anchor_errors:
+            parts.append(f"{len(anchor_errors)} anchor(s) could not be checked")
         if anchor_failures:
             parts.append(f"{len(anchor_failures)} anchor(s) FAILED")
         if anchor_degraded:
@@ -415,7 +445,11 @@ class CoherenceChecker:
             parts.append(f"{n_together} drifted together")
         if n_unchall:
             parts.append(f"{n_unchall} unchallenged instinct(s)")
-        summary = "; ".join(parts) if parts else "coherence stable"
+
+        if not all_anchor_results and not drift["drifted_apart"] and not drift["drifted_together"]:
+            summary = "no data to check"
+        else:
+            summary = "; ".join(parts) if parts else "coherence stable"
 
         self._storage.save_drift_report(
             session_id=session_id,
