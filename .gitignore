@@ -8,3 +8,8 @@ __pycache__/
 *.db-wal
 .codex-pair/
 .worktrees/
+.DS_Store
+.engram/
+.serena/
+.superpowers/
+kernel/backups/
