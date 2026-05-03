@@ -257,9 +257,10 @@ class CoherenceChecker:
                 if norm_b == 0:
                     continue
 
-                cos_sim = float(np.dot(arr_a, arr_b) / (norm_a * norm_b))
+                l2_dist = float(np.linalg.norm(arr_a - arr_b))
+                sim = vec0_distance_to_similarity(l2_dist)
 
-                if cos_sim < apart_threshold:
+                if sim < apart_threshold:
                     drifted_apart.append({
                         "source": edge.source,
                         "source_layer": edge.source_layer,
@@ -267,7 +268,7 @@ class CoherenceChecker:
                         "target_layer": edge.target_layer,
                         "edge_type": edge.edge_type,
                         "edge_weight": edge.weight,
-                        "embedding_similarity": round(cos_sim, 4),
+                        "embedding_similarity": round(sim, 4),
                     })
 
         # --- Drifted together: close in embedding space, no structural edge ---
@@ -291,6 +292,7 @@ class CoherenceChecker:
             structural_neighbors[nid].add(nid)
 
         # Sample-based: for each node, find closest unconnected via vector search
+        seen_together: set[tuple[str, str]] = set()
         for nid, (layer, _) in node_vecs.items():
             raw_vec = self._storage.get_vector(layer, nid)
             if raw_vec is None:
@@ -306,11 +308,8 @@ class CoherenceChecker:
                 sim = vec0_distance_to_similarity(distance)
                 if sim >= together_threshold:
                     pair = tuple(sorted([nid, hit_id]))
-                    already = any(
-                        (d["node_a"], d["node_b"]) == pair or (d["node_b"], d["node_a"]) == pair
-                        for d in drifted_together
-                    )
-                    if not already:
+                    if pair not in seen_together:
+                        seen_together.add(pair)
                         drifted_together.append({
                             "node_a": pair[0],
                             "node_b": pair[1],
