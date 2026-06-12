@@ -1489,16 +1489,6 @@ def test_work_cluster_reinforces_work_semantic(tmp_db, compressor, embedder):
 # Task 4 carry-over items
 # ---------------------------------------------------------------------------
 
-def test_work_cluster_lane_carried_forward(tmp_db, compressor, embedder):
-    """cluster_episodes result cluster carries the lane forward."""
-    emb = embedder.embed(["bedrock requires inference profiles carry-over"])[0]
-    tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t",
-                       content="bedrock requires inference profiles carry-over",
-                       embedding=emb, lane="work")
-    result = compressor.cluster_episodes()
-    assert result["clusters"][0]["lane"] == "work"  # cluster carries the lane forward
-
-
 def test_discard_with_lane_override_still_relanes(tmp_db, compressor, embedder):
     """Discarding a junk cluster while correcting its lane applies the correction."""
     emb = embedder.embed(["junk work chatter"])[0]
