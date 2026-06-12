@@ -80,6 +80,13 @@ session start alongside instincts but in its own section. Task contexts don't de
 or compress into instincts — they just get archived when done. This separation
 ensures task facts don't drown out identity-level memories during recall.
 
+**Memory lanes:** Episodes and semantics carry a `lane` ('personal' | 'work').
+The work lane is reference material: it decays and recalls normally but never
+becomes core episodes, instincts, or reinforcement for personal semantics.
+Lane is set at write time (`remember(work=True)`) and correctable during
+compression review (summary `lane` override re-lanes source episodes).
+Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.
+
 **Knowledge graph:** Graphiti (Kuzu embedded) runs alongside engram for applied
 knowledge — entities, relationships, temporal facts. Fed during compression,
 queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var (default: nemotron-nano).
@@ -89,10 +96,10 @@ Separate from identity layers.
 
 | Tool | Purpose |
 |------|---------|
-| `remember(content, core?, source?)` | Store an episode. `core=True` for formative memories, `source` for provenance. |
+| `remember(content, core?, source?, work?)` | Store an episode. `core=True` for formative memories, `source` for provenance, `work=True` for work-lane reference material. |
 | `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
 | `core_memories()` | List all core episodes. |
-| `recall(query)` | Search across all layers. Returns `recall_id` for feedback. Scores hidden when dreaming. |
+| `recall(query, lane?)` | Search across all layers. Returns `recall_id` for feedback. `lane="work"|"personal"` to filter. Scores hidden when dreaming. |
 | `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
@@ -131,7 +138,7 @@ Separate from identity layers.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 468 tests
+.venv/bin/python -m pytest tests/ -q   # 496 tests
 ```
 
 ## Part of a System
