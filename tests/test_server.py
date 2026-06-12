@@ -133,6 +133,16 @@ class TestRemember:
         result = server.remember("work fact that should not be genome", work=True, genome=True)
         assert result["layer"] == "rejected"
 
+    def test_mark_core_rejects_work_lane_episode(self, server_env):
+        import server
+        result = server.remember("work-lane reference fact for core test", work=True)
+        out = server.mark_core(result["episode_id"])
+        assert "error" in out
+        row = server._storage.conn.execute(
+            "SELECT core FROM episodes WHERE id = ?", (result["episode_id"],)
+        ).fetchone()
+        assert row["core"] == 0
+
 
 class TestRecall:
     def test_recall_finds_episode(self, server_env):

@@ -1592,6 +1592,13 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
     """
     _init()
     logger.info("Tool called: mark_core(episode_id=%s, tier=%d)", episode_id, tier)
+    row = _storage.conn.execute(
+        "SELECT lane FROM episodes WHERE id = ?", (episode_id,)
+    ).fetchone()
+    if row is None:
+        return {"error": f"Episode not found: {episode_id}"}
+    if (row["lane"] or "personal") == "work":
+        return {"error": "work-lane episodes cannot be core — re-lane to personal first if this is actually formative"}
     _storage.mark_core(episode_id, tier=tier)
 
     # Auto-create identity anchor
