@@ -83,3 +83,75 @@ def cohesion_energy(sheaf: LocalSheaf) -> dict:
               float(residuals[iu][o])) for o in order]
     return {"energy": float(np.clip(1.0 - lam2, 0.0, 1.0)), "lambda2": lam2,
             "fiedler": fiedler.tolist(), "worst_edges": worst, "n": n}
+
+
+@dataclass
+class Verdict:
+    semantic_id: str
+    split: bool
+    parts: list[list[str]]
+    ambiguous: list[str]
+    energy_before: float
+    part_energies: list[float]
+    gain: float
+    dl_cost: float
+    persistence_checked: bool
+    worst_edges: list
+
+    def to_dict(self) -> dict:
+        return {
+            "semantic_id": self.semantic_id, "split": self.split,
+            "parts": self.parts, "ambiguous": self.ambiguous,
+            "energy_before": self.energy_before,
+            "part_energies": self.part_energies, "gain": self.gain,
+            "dl_cost": self.dl_cost,
+            "persistence_checked": self.persistence_checked,
+        }
+
+
+def persistence_check(parts: list[list[str]]) -> bool:
+    """Layer 4 slot — persistence regularization (survives-across-scales).
+
+    Returns True until persistent homology lands; every event records
+    persistence_checked=False so Layer 4 can audit what it would have blocked.
+    """
+    return True
+
+
+def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
+                     dl_cost: float = 0.15, variance_threshold: float = 0.90,
+                     max_dim: int = 8, min_part: int = 2) -> Verdict:
+    ls = build_local_sheaf(semantic_id, episode_ids, X, variance_threshold, max_dim)
+    res = cohesion_energy(ls)
+    no_split = Verdict(semantic_id, False, [], [], res["energy"], [], 0.0,
+                       dl_cost, False, res["worst_edges"])
+    if res["energy"] == 0.0 or not res["fiedler"]:
+        return no_split
+    f = np.array(res["fiedler"])
+    eps = 0.1 * float(np.abs(f).max())
+    idx = {"a": [], "b": [], "amb": []}
+    for i, fi in enumerate(f):
+        key = "amb" if abs(fi) < eps else ("a" if fi > 0 else "b")
+        idx[key].append(i)
+    if len(idx["a"]) < min_part or len(idx["b"]) < min_part:
+        return no_split
+    parts_idx = [idx["a"], idx["b"]]
+    part_energies = []
+    for pi in parts_idx:
+        sub = build_local_sheaf(semantic_id, [episode_ids[i] for i in pi],
+                                X[pi], variance_threshold, max_dim)
+        part_energies.append(cohesion_energy(sub)["energy"])
+    n_assigned = sum(len(pi) for pi in parts_idx)
+    weighted_after = sum((len(pi) / n_assigned) * e
+                         for pi, e in zip(parts_idx, part_energies))
+    gain = res["energy"] - weighted_after
+    split = gain > dl_cost * (len(parts_idx) - 1) and persistence_check(
+        [[episode_ids[i] for i in pi] for pi in parts_idx])
+    return Verdict(
+        semantic_id, split,
+        [[episode_ids[i] for i in pi] for pi in parts_idx],
+        [episode_ids[i] for i in idx["amb"]],
+        res["energy"], part_energies, gain, dl_cost,
+        False,  # persistence slot not yet built — recorded on every event
+        res["worst_edges"],
+    )

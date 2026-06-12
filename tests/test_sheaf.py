@@ -102,3 +102,41 @@ class TestCohesionEnergy:
         # the Fiedler sign vector isolates the disconnected episode
         f = res["fiedler"]
         assert (f[5] > 0) != (f[0] > 0)
+
+
+class TestSubdivisionGate:
+    def test_conflated_splits(self):
+        ids, X = _two_orthogonal()
+        v = sheaf.subdivision_test("s1", ids, X, dl_cost=0.15)
+        assert v.split is True
+        assert len(v.parts) == 2
+        groups = [{int(e[1:]) < 10 for e in part} for part in v.parts]
+        assert groups[0] != groups[1] and all(len(g) == 1 for g in groups)
+        assert v.persistence_checked is False
+        assert v.gain > 0.15
+
+    def test_tight_cluster_does_not_split(self):
+        a = np.zeros(768); a[0] = 1.0
+        X = _cluster(a, 12, 0.05, 6)
+        v = sheaf.subdivision_test("s1", [f"e{i}" for i in range(12)], X, dl_cost=0.15)
+        assert v.split is False
+
+    def test_noise_perturbation_never_splits(self):
+        # the messageboard test: same data, jittered — verdict stays no-split
+        a = np.zeros(768); a[0] = 1.0
+        for seed in range(5):
+            X = _cluster(a, 12, 0.08, 100 + seed)
+            v = sheaf.subdivision_test("s1", [f"e{i}" for i in range(12)], X, dl_cost=0.15)
+            assert v.split is False
+
+    def test_dl_cost_blocks_marginal_split(self):
+        ids, X = _two_orthogonal()
+        v = sheaf.subdivision_test("s1", ids, X, dl_cost=10.0)  # absurd price
+        assert v.split is False
+
+    def test_too_small_parts_block_split(self):
+        a = np.zeros(768); a[0] = 1.0
+        b = np.zeros(768); b[1] = 1.0
+        X = np.vstack([_cluster(a, 10, 0.05, 7), _cluster(b, 1, 0.05, 8)])
+        v = sheaf.subdivision_test("s1", [f"e{i}" for i in range(11)], X, dl_cost=0.15)
+        assert v.split is False  # a 1-episode peer is not a peer
