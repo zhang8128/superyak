@@ -46,6 +46,12 @@ class TestLocalSheaf:
         assert 2 <= ls.k <= 8
         assert ls.coords.shape == (len(ids), ls.k)
 
+    def test_k_matches_coords_columns_for_tiny_n(self):
+        a = np.zeros(768); a[0] = 1.0
+        X = _cluster(a, 1, 0.05, 8)
+        ls = sheaf.build_local_sheaf("s1", ["e0"], X)
+        assert ls.k == ls.coords.shape[1]
+
 
 class TestCohesionEnergy:
     def test_conflated_semantic_is_hot(self):
@@ -81,3 +87,18 @@ class TestCohesionEnergy:
         for ea, eb, _r in res["worst_edges"][:3]:
             ia, ib = int(ea[1:]), int(eb[1:])
             assert (ia < 10) != (ib < 10)
+
+    def test_isolated_episode_is_maximally_incoherent(self):
+        # Create a tight cluster in one direction
+        a = np.zeros(768); a[0] = 1.0
+        cluster = _cluster(a, 5, 0.05, 7)
+        # Create an isolated vector: anti-aligned in the principal direction
+        # (zero cosine similarity to all cluster members after clipping to [0, ∞))
+        iso = np.zeros(768); iso[0] = -1.0
+        X = np.vstack([cluster, iso[None, :]])
+        ids = [f"e{i}" for i in range(6)]
+        res = sheaf.cohesion_energy(sheaf.build_local_sheaf("s1", ids, X))
+        assert res["energy"] == 1.0
+        # the Fiedler sign vector isolates the disconnected episode
+        f = res["fiedler"]
+        assert (f[5] > 0) != (f[0] > 0)

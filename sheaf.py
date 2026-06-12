@@ -53,7 +53,7 @@ def build_local_sheaf(semantic_id: str, episode_ids: list[str], X: np.ndarray,
     k = int(np.searchsorted(np.cumsum(var), variance_threshold)) + 1
     k = max(2, min(k, max_dim, len(s)))
     coords = Xn @ Vt[:k].T
-    return LocalSheaf(semantic_id, episode_ids, coords, k)
+    return LocalSheaf(semantic_id, episode_ids, coords, coords.shape[1])
 
 
 def cohesion_energy(sheaf: LocalSheaf) -> dict:
