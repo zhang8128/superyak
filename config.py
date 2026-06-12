@@ -109,6 +109,15 @@ class GraphConfig:
 
 
 @dataclass
+class CohesionConfig:
+    dl_cost: float = 0.15
+    variance_threshold: float = 0.90
+    max_subspace_dim: int = 8
+    min_episodes: int = 3
+    sleep_budget: int = 3
+
+
+@dataclass
 class EngramConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
@@ -124,6 +133,7 @@ class EngramConfig:
     signals: SignalsConfig = field(default_factory=SignalsConfig)
     resonance: ResonanceConfig = field(default_factory=ResonanceConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
+    cohesion: CohesionConfig = field(default_factory=CohesionConfig)
     instance: str | None = None
     session_context: str | None = None
 
@@ -194,6 +204,13 @@ max_in_recall = 3
 enabled = true
 model = "nemotron-nano"
 ollama_url = "http://localhost:11434"
+
+[cohesion]
+dl_cost = 0.15
+variance_threshold = 0.90
+max_subspace_dim = 8
+min_episodes = 3
+sleep_budget = 3
 """
 
 
@@ -226,6 +243,7 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         signals=SignalsConfig(**raw.get("signals", {})),
         resonance=ResonanceConfig(**raw.get("resonance", {})),
         graph=GraphConfig(**raw.get("graph", {})),
+        cohesion=CohesionConfig(**raw.get("cohesion", {})),
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),
     )
