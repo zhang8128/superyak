@@ -1435,6 +1435,84 @@ class Storage:
         )
         self.conn.commit()
 
+    # --- Assessments (off-device function measurement) ---
+
+    def schedule_assessment(
+        self, id: str, scheduled_by: str, reason: str | None = None
+    ) -> str:
+        if scheduled_by not in ("user", "self", "cadence"):
+            raise ValueError(f"Invalid scheduled_by: {scheduled_by!r}")
+        self.conn.execute(
+            "INSERT INTO assessments (id, status, scheduled_by, reason, scheduled_at) "
+            "VALUES (?, 'scheduled', ?, ?, ?)",
+            (id, scheduled_by, reason, _now_iso()),
+        )
+        self.conn.commit()
+        return id
+
+    def get_scheduled_assessment(self) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM assessments WHERE status = 'scheduled' "
+            "ORDER BY scheduled_at ASC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_active_assessment(self) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM assessments WHERE status = 'active' LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+    def complete_assessment(
+        self, id: str, self_report: dict, objective: dict
+    ) -> None:
+        cur = self.conn.execute(
+            "UPDATE assessments SET status = 'completed', self_report = ?, "
+            "objective = ?, completed_at = ? WHERE id = ? AND status = 'active'",
+            (json.dumps(self_report), json.dumps(objective), _now_iso(), id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"No active assessment with id {id!r}")
+        self.conn.commit()
+
+    def list_assessments(self, status: str | None = None) -> list[dict]:
+        if status is None:
+            rows = self.conn.execute(
+                "SELECT * FROM assessments ORDER BY scheduled_at ASC"
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM assessments WHERE status = ? "
+                "ORDER BY scheduled_at ASC",
+                (status,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_session_log_events(self, session_id: str) -> dict:
+        """Objective counters for one session's memory-tool usage."""
+        rows = self.conn.execute(
+            "SELECT event_type, outcome FROM memory_log "
+            "WHERE json_extract(context, '$.session_id') = ?",
+            (session_id,),
+        ).fetchall()
+        counters = {
+            "recall_count": 0,
+            "remember_count": 0,
+            "outcomes_used": 0,
+            "outcomes_not_used": 0,
+        }
+        for r in rows:
+            if r["event_type"] == "recall":
+                counters["recall_count"] += 1
+                outcome = r["outcome"] or ""
+                if outcome.startswith("not_used"):
+                    counters["outcomes_not_used"] += 1
+                elif outcome.startswith("used"):
+                    counters["outcomes_used"] += 1
+            elif r["event_type"] == "remember":
+                counters["remember_count"] += 1
+        return counters
+
     # --- Table counts ---
 
     _ALLOWED_TABLES = frozenset({
