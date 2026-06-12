@@ -87,6 +87,14 @@ Lane is set at write time (`remember(work=True)`) and correctable during
 compression review (summary `lane` override re-lanes source episodes).
 Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.
 
+**Off-device assessments:** Scheduled sessions where wake withholds the entire
+orientation (instincts, semantics, residues, task context) and emits only a
+marker — measuring memory function without the device, rehab-style. Self-report
+plus objective counters per assessment; longitudinal history via
+`reflect(focus="assessments")`. The instrument is provisional: early sessions
+are calibration, not findings. Spec:
+docs/superpowers/specs/2026-06-12-off-device-assessment-design.md.
+
 **Knowledge graph:** Graphiti (Kuzu embedded) runs alongside engram for applied
 knowledge — entities, relationships, temporal facts. Fed during compression,
 queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var (default: nemotron-nano).
@@ -100,7 +108,7 @@ Separate from identity layers.
 | `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
 | `core_memories()` | List all core episodes. |
 | `recall(query, lane?)` | Search across all layers. Returns `recall_id` for feedback. `lane="work"|"personal"` to filter. Scores hidden when dreaming. |
-| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs, assessments. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
 | `compress()` | Manual compression cycle. `compress_commit` accepts `action="discard"` for junk clusters. |
@@ -113,6 +121,8 @@ Separate from identity layers.
 | `dream_surface(n?)` | Surface dream residues from prior sessions. |
 | `dream_react(residue_id, reaction)` | React to a residue. Reaction feeds the next cycle. |
 | `dream_verify(recall_id)` | Reveal hidden scores from dream-influenced recall. Use after engaging. |
+| `assessment_schedule(reason?)` | Schedule the next session as an off-device assessment (no wake orientation; tools available). `ENGRAM_ASSESSMENT=next\|skip` env overrides. |
+| `assessment_report(function_score, ...)` | Complete the active assessment: structured self-report + objective counters. History via `reflect(focus="assessments")`. |
 | `search_code(query)` | Search project source code via embeddings. |
 | `reindex()` | Rebuild code index. |
 
@@ -138,7 +148,7 @@ Separate from identity layers.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 496 tests
+.venv/bin/python -m pytest tests/ -q   # 524 tests
 ```
 
 ## Part of a System
