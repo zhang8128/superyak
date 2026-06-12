@@ -241,3 +241,62 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
         conn.rollback()
         raise
     return {"peer_ids": peer_ids, "parent_id": verdict.semantic_id}
+
+
+def _ollama_generate(prompt: str, framing_cfg) -> str | None:
+    """Same transport as framing.py — model/url/timeout from FramingConfig."""
+    import urllib.request
+    model = getattr(framing_cfg, "model", "gemma4:31b")
+    url = getattr(framing_cfg, "ollama_url", "http://localhost:11434/api/generate")
+    timeout = getattr(framing_cfg, "timeout", 60)
+    body = {"model": model, "prompt": prompt, "stream": False,
+            "options": {"temperature": 0.0, "num_predict": 400}}
+    try:
+        req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read()).get("response", "")
+    except Exception:
+        logger.warning("subdivision distill LLM call failed", exc_info=True)
+        return None
+
+
+def distill_subdivision(parent_content: str,
+                        part_episode_contents: list[list[str]],
+                        has_ambiguous: bool, framing_cfg) -> tuple | None:
+    """Write peer contents (one per part) and optionally the hub residue.
+
+    Returns (peer_contents, hub_content_or_None) or None on any failure —
+    the caller queues the verdict and nothing splits.
+    """
+    sections = []
+    for i, part in enumerate(part_episode_contents):
+        sample = "\n".join(f"  - {c[:200]}" for c in part[:8])
+        sections.append(f"PART {i + 1}:\n{sample}")
+    hub_clause = (
+        '"hub": a 1-2 sentence summary of only what ALL parts genuinely share'
+        if has_ambiguous else '"hub": null')
+    prompt = (
+        "A memory summary conflates distinct groups of experiences.\n"
+        f"CURRENT SUMMARY: {parent_content[:400]}\n\n"
+        + "\n\n".join(sections)
+        + "\n\nReply with ONLY a JSON object: {\"peers\": [one 1-3 sentence"
+        " summary per PART, in order], " + hub_clause + "}."
+    )
+    raw = _ollama_generate(prompt, framing_cfg)
+    if not raw:
+        return None
+    try:
+        start, end = raw.index("{"), raw.rindex("}") + 1
+        data = json.loads(raw[start:end])
+        peers = data.get("peers")
+        if (not isinstance(peers, list)
+                or len(peers) != len(part_episode_contents)
+                or not all(isinstance(p, str) and p.strip() for p in peers)):
+            return None
+        hub = data.get("hub")
+        return ([p.strip() for p in peers],
+                hub.strip() if isinstance(hub, str) and hub.strip() else None)
+    except (ValueError, json.JSONDecodeError):
+        logger.warning("subdivision distill returned unparseable output")
+        return None
