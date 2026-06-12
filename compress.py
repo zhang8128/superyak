@@ -215,19 +215,21 @@ class Compressor:
         if not episodes:
             return {"clusters": [], "compress_id": None}
 
-        # Step 1: Classify episodes by kind — an episode can appear in multiple type pools
-        typed_groups: dict[str, list[dict]] = {}
+        # Step 1: Classify episodes by kind — an episode can appear in multiple type pools.
+        # Groups are keyed by (kind, lane) so episodes of different lanes never share a cluster.
+        typed_groups: dict[tuple[str, str], list[dict]] = {}
         for ep in episodes:
             model = self._classification_config.model if self._classification_config else None
             prompt_path = self._classification_config.prompt_path if self._classification_config else None
             kinds = classify_episode_kind(ep, model=model, prompt_path=prompt_path)
+            ep_lane = ep.get("lane") or "personal"
             for kind in kinds:
-                typed_groups.setdefault(kind, []).append(ep)
+                typed_groups.setdefault((kind, ep_lane), []).append(ep)
 
-        # Step 2: Cluster within each type independently
+        # Step 2: Cluster within each type+lane group independently
         all_clusters = []
 
-        for kind, kind_episodes in typed_groups.items():
+        for (kind, lane), kind_episodes in typed_groups.items():
             if not kind_episodes:
                 continue
 
@@ -273,6 +275,7 @@ class Compressor:
                     "action": action,
                     "near_miss": near_miss,
                     "kind": kind,
+                    "lane": lane,
                 })
 
         compress_id = str(uuid.uuid4())

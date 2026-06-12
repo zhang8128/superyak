@@ -697,6 +697,27 @@ def test_get_semantic_neighbors_empty_when_no_shared_episodes(tmp_db, embedder):
     assert neighbors == []
 
 
+def test_clusters_are_lane_pure(tmp_db, compressor, embedder):
+    """Episodes with identical embeddings but different lanes form separate clusters."""
+    shared = embedder.embed(["shared topic"])[0]
+    texts = ["personal note one", "personal note two", "work note one", "work note two"]
+    for t in texts:
+        embedder.override_map[t] = shared
+    for t in texts[:2]:
+        tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t", content=t, embedding=shared)
+    for t in texts[2:]:
+        tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t", content=t,
+                           embedding=shared, lane="work")
+
+    result = compressor.cluster_episodes()
+
+    assert len(result["clusters"]) == 2
+    for cluster in result["clusters"]:
+        lanes = {ep.get("lane", "personal") for ep in cluster["episodes"]}
+        assert len(lanes) == 1, f"mixed-lane cluster: {lanes}"
+        assert cluster["lane"] in ("personal", "work")
+
+
 class TestEpisodeTyping:
     def test_reading_from_source(self):
         ep = {"content": "some reading reaction", "source": "reading", "context": None}
