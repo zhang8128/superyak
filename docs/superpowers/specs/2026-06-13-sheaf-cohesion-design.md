@@ -165,9 +165,30 @@ below) is where they get tuned before the gate acts on the live store.
 - **Integration:** compression preview pre-partitioning; sleep path with
   mocked Ollama; top-3 budget cap; rate limiting; queued-verdict retry.
 - **Acceptance/calibration:** run read-only against a *copy* of the live
-  store before the gate may act on the real one — "Mistborn + Perfect
-  State" must measure hot, the Prism semantic (85 episodes, one topic)
-  must measure cool. First live sleep pass is observed.
+  store before the gate may act on the real one. First live sleep pass is
+  observed.
+
+### Calibration result (2026-06-13, first run)
+
+The pre-written expectations ("Mistborn + Perfect State hot, Prism cool")
+were wrong; the instrument was right. Raw energies on real embeddings are
+flat (0.00–0.07 — real episode embeddings never disconnect; the same
+flatness Layer 2 exists to fix), but the *ranking* discriminates. Prism
+measured hottest (energy 0.071, gain 0.060) and inspection of its Fiedler
+partition showed genuine provenance pollution: prism-design episodes on one
+side, LF52 grind logs on the other — reinforcement had been attaching game
+episodes to a design principle. Mistborn (gain 0.027) splits
+reading-passages vs meta-reflection; the "two books" never separate because
+reading episodes share register. The mega-hubs (194/174/144 episodes) show
+gains ~0.007: diffuse attractors, not bimodal — binary subdivision cannot
+fix them and should not try (Layer 2/4 problem). Noise floor: gain
+0.012–0.018. W-sharpening variants (median-shift, power, kNN) change the
+spread, not the story.
+
+**Calibrated posture:** set `dl_cost = 0.05` in `[cohesion]` when enabling —
+the first live pass then splits exactly Prism (3× above the noise floor) and
+nothing else, as an observed single action. Defaults in code stay
+conservative (0.15, enabled=false).
 
 ## Out of scope (next builds)
 
