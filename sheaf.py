@@ -8,11 +8,13 @@ which edges fail to glue and proposes the partition.
 Spec: docs/superpowers/specs/2026-06-13-sheaf-cohesion-design.md
 """
 
+import hashlib
 import json
 import logging
 import struct
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -158,3 +160,65 @@ def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
         False,  # persistence slot not yet built — recorded on every event
         res["worst_edges"],
     )
+
+
+def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
+                      hub_content: str | None, embed_fn, site: str) -> dict:
+    """Mint peers under the surviving hub. One transaction; partial splits
+    cannot exist. embed_fn: str -> list[float] (the recall-side embedding
+    used for new semantics)."""
+    if len(peer_contents) != len(verdict.parts):
+        raise ValueError(
+            f"{len(verdict.parts)} parts but {len(peer_contents)} peer contents")
+    parent = storage.get_semantic(verdict.semantic_id)
+    if parent is None:
+        raise ValueError(f"unknown semantic {verdict.semantic_id}")
+    now = datetime.now(timezone.utc).isoformat()
+    conn = storage.conn
+    peer_ids = [str(uuid.uuid4()) for _ in verdict.parts]
+    # Embed outside any partial writes so an embedder failure aborts cleanly
+    peer_vecs = [embed_fn(c) for c in peer_contents]
+    try:
+        for pid, content, vec, part, p_energy in zip(
+                peer_ids, peer_contents, peer_vecs, verdict.parts,
+                verdict.part_energies):
+            conn.execute(
+                "INSERT INTO semantics (id, content, content_hash, kind,"
+                " confidence, created_at, lane, auto_generated)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+                (pid, content, hashlib.sha256(content.encode()).hexdigest(),
+                 parent["kind"], parent["confidence"], now, parent["lane"]),
+            )
+            conn.execute(
+                "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
+                (pid, struct.pack(f"<{len(vec)}f", *vec)),
+            )
+            for eid in part:
+                conn.execute(
+                    "DELETE FROM semantic_sources WHERE semantic_id = ?"
+                    " AND episode_id = ?", (verdict.semantic_id, eid))
+                conn.execute(
+                    "INSERT INTO semantic_sources (semantic_id, episode_id)"
+                    " VALUES (?, ?)", (pid, eid))
+            conn.execute(
+                "INSERT INTO semantic_peers (peer_id, parent_id,"
+                " residual_energy, created_at) VALUES (?, ?, ?, ?)",
+                (pid, verdict.semantic_id, p_energy, now))
+        if verdict.ambiguous and hub_content:
+            conn.execute(
+                "UPDATE semantics SET content = ?, content_hash = ? WHERE id = ?",
+                (hub_content, hashlib.sha256(hub_content.encode()).hexdigest(),
+                 verdict.semantic_id))
+        conn.execute(
+            "INSERT INTO subdivision_events (id, parent_id, peer_ids,"
+            " energy_before, energy_after, dl_cost, persistence_checked,"
+            " site, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), verdict.semantic_id, json.dumps(peer_ids),
+             verdict.energy_before,
+             sum(verdict.part_energies) / max(len(verdict.part_energies), 1),
+             verdict.dl_cost, int(verdict.persistence_checked), site, now))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return {"peer_ids": peer_ids, "parent_id": verdict.semantic_id}
