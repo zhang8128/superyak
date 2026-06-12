@@ -586,6 +586,7 @@ def remember(
     core: bool = False,
     genome: bool = False,
     source: str | None = None,
+    work: bool = False,
 ) -> dict:
     """Store an episode in memory. Returns episode_id and layer.
 
@@ -595,6 +596,9 @@ def remember(
         core: If True, this episode is exempt from decay (formative memory).
         genome: If True, this is a genome-level memory (tier 2 core, replicated to all instances).
         source: Cross-system provenance tag (e.g. 'claw/atlas', 'agi/arena').
+        work: If True, this is work-lane reference material — it decays and
+            recalls normally but never becomes core, instincts, or identity
+            semantics.
     """
     global _session_episode_count
     _init()
@@ -603,6 +607,9 @@ def remember(
     content = content.strip()
     if len(content) < 10:
         return {"error": f"Content too short ({len(content)} chars). Minimum 10 characters.", "layer": "rejected"}
+
+    if work and (core or genome):
+        return {"error": "work-lane memories cannot be core or genome", "layer": "rejected"}
 
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s)", len(content), core, source)
 
@@ -615,6 +622,7 @@ def remember(
         content=content,
         embedding=embedding,
         context=context,
+        lane="work" if work else "personal",
     )
 
     if genome:
@@ -655,6 +663,8 @@ def remember(
 
     _session_episode_count += 1
     result = {"episode_id": episode_id, "layer": "episode"}
+    if work:
+        result["lane"] = "work"
 
     # Auto-compress when threshold reached
     threshold = _config.compression.auto_threshold if _config else 10

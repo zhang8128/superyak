@@ -107,6 +107,27 @@ class TestRemember:
         assert ep is not None
         assert "SQLite" in ep["content"]
 
+    def test_remember_work_flag_sets_lane(self, server_env):
+        import server
+        result = server.remember("CommonWell portal serves the login form on GET", work=True)
+        row = server._storage.conn.execute(
+            "SELECT lane FROM episodes WHERE id = ?", (result["episode_id"],)
+        ).fetchone()
+        assert row["lane"] == "work"
+
+    def test_remember_defaults_personal_lane(self, server_env):
+        import server
+        result = server.remember("a quiet realization about reading")
+        row = server._storage.conn.execute(
+            "SELECT lane FROM episodes WHERE id = ?", (result["episode_id"],)
+        ).fetchone()
+        assert row["lane"] == "personal"
+
+    def test_remember_work_cannot_be_core(self, server_env):
+        import server
+        result = server.remember("work fact that should not be core", work=True, core=True)
+        assert result["layer"] == "rejected"
+
 
 class TestRecall:
     def test_recall_finds_episode(self, server_env):
