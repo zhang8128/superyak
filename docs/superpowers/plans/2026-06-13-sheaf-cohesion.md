@@ -770,7 +770,7 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
     return {"peer_ids": peer_ids, "parent_id": verdict.semantic_id}
 ```
 
-Note: the parent's `semantic_vectors` row is left untouched — the hub still recalls. If `UPDATE semantics` rewrote hub content, its vector is stale until the next orphan-vector backfill; acceptable (content_hash changed marks it).
+Note (corrected during review): when `UPDATE semantics` rewrites hub content, the executor also DELETEs the hub's `semantic_vectors` row in the same transaction — the orphan-vector backfill keys on *missing* rows only, so deletion is what makes it re-embed the new content next startup. FTS stays correct via the update trigger meanwhile.
 **Check during implementation:** the live `semantics` table may have NOT NULL columns beyond these (inspect `migrations/002_v3_layers.sql` and later). If so, extend the INSERT with their defaults — the test on `tmp_db` will catch any violation.
 
 - [ ] **Step 4: Run to verify pass, then full suite**
