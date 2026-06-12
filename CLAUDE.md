@@ -87,6 +87,19 @@ Lane is set at write time (`remember(work=True)`) and correctable during
 compression review (summary `lane` override re-lanes source episodes).
 Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.
 
+**Sheaf cohesion:** Each semantic gets a cohesion energy in [0,1] — the
+spectral gap of its source episodes' similarity graph, computed in the
+semantic's own PCA subspace ("its terms"). High energy = provable conflation;
+the Fiedler vector localizes which episode pairs fail to glue. An
+energy-gated subdivision (split iff gain > DL cost per peer; persistence
+conjunct stubbed until Layer 4) acts at compression time (clusters
+pre-partitioned in review) and sleep time (budgeted, rate-limited; peers
+minted under the surviving hub with `semantic_peers` map-home edges; peer
+content distilled via Ollama, else queued). Gated by `[cohesion] enabled`
+(default false) until read-only calibration clears it: `python sheaf.py
+/path/to/copy-of-graph.db`. Observe via `reflect(focus="cohesion")`.
+Spec: docs/superpowers/specs/2026-06-13-sheaf-cohesion-design.md.
+
 **Off-device assessments:** Scheduled sessions where wake withholds the entire
 orientation (instincts, semantics, residues, task context) and emits only a
 marker — measuring memory function without the device, rehab-style. Self-report
@@ -108,7 +121,7 @@ Separate from identity layers.
 | `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
 | `core_memories()` | List all core episodes. |
 | `recall(query, lane?)` | Search across all layers. Returns `recall_id` for feedback. `lane="work"|"personal"` to filter. Scores hidden when dreaming. |
-| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs, assessments. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs, assessments, cohesion. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
 | `compress()` | Manual compression cycle. `compress_commit` accepts `action="discard"` for junk clusters. |
@@ -137,6 +150,7 @@ Separate from identity layers.
 | `embeddings.py` | FastEmbed wrapper with instruction prefixes |
 | `dreaming.py` | Dream residue — lossy emotional compression and surfacing |
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
+| `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
 | `dedup.py` | LLM-based duplicate detection |
 | `framing.py` | LLM-based instinct notice/implication distillation (`ENGRAM_FRAMING_MODEL`, defaults to dedup model) |
 | `indexer.py` | Source code indexing via tree-sitter |
@@ -148,7 +162,7 @@ Separate from identity layers.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 524 tests
+.venv/bin/python -m pytest tests/ -q   # 582 tests
 ```
 
 ## Part of a System

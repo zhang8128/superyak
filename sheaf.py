@@ -443,3 +443,34 @@ def distill_subdivision(parent_content: str,
     except (ValueError, json.JSONDecodeError):
         logger.warning("subdivision distill returned unparseable output")
         return None
+
+
+if __name__ == "__main__":
+    # Read-only calibration: python sheaf.py /path/to/graph.db
+    # The spec's acceptance gate: run against a COPY of the live store and
+    # check that known-conflated semantics measure hot and known-coherent
+    # ones cool — BEFORE setting [cohesion] enabled = true.
+    import sqlite3
+    import sys
+
+    import sqlite_vec
+
+    from config import CohesionConfig
+
+    db = sys.argv[1]
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    cfg = CohesionConfig()
+
+    class _RO:  # minimal storage shim for measure_all
+        def __init__(self, conn):
+            self.conn = conn
+
+    ranked = measure_all(_RO(conn), cfg)
+    print(f"{'energy':>7}  {'n':>4}  semantic")
+    for m in ranked:
+        row = conn.execute("SELECT substr(content, 1, 70) FROM semantics"
+                           " WHERE id = ?", (m["semantic_id"],)).fetchone()
+        print(f"{m['energy']:7.3f}  {m['n']:4d}  {row[0] if row else m['semantic_id']}")
