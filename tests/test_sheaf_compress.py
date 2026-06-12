@@ -140,6 +140,20 @@ class TestCompressionGate:
         assert ev is not None, "expected a subdivision_events row"
         assert ev[0] == "compress", f"site should be 'compress', got {ev[0]!r}"
 
+        # Fix 1: real energies and cluster: namespace prefix
+        events = db.conn.execute(
+            "SELECT parent_id, energy_before, energy_after FROM subdivision_events"
+            " WHERE site = 'compress'").fetchall()
+        assert len(events) == 1                          # exactly one per group
+        assert events[0][0].startswith("cluster:")
+        assert events[0][1] > 0.0                        # real energies recorded
+
+        # Fix 2: real centroid cosine similarity on sibling resonance edges
+        sims = db.conn.execute(
+            "SELECT similarity FROM resonances WHERE layer_a = 'semantic'"
+            " AND layer_b = 'semantic'").fetchall()
+        assert all(s[0] != 0.0 for s in sims)            # real centroid cosine
+
     def test_gate_disabled_no_partitioning(self, tmp_db):
         """With cohesion disabled, cluster_episodes must NOT set split_group."""
         table = _make_conflated_db(tmp_db)

@@ -365,8 +365,8 @@ class Compressor:
         semantics_created = 0
         semantics_reinforced = 0
         clusters_discarded = 0
-        # split_group → list of new semantic IDs for sibling resonance wiring
-        _split_group_semantics: dict[str, list[str]] = {}
+        # split_group → list of (sem_id, centroid, cohesion_dict, episode_count)
+        _split_group_semantics: dict[str, list[tuple[str, list[float], dict, int]]] = {}
 
         for i, cluster in enumerate(clusters):
             if i >= len(summaries):
@@ -439,7 +439,11 @@ class Compressor:
                 # Track sibling semantics from the same split_group
                 sg = cluster.get("split_group")
                 if sg:
-                    _split_group_semantics.setdefault(sg, []).append(new_id)
+                    cohesion_meta = cluster.get("cohesion") or {}
+                    ep_count = len(cluster["episodes"])
+                    _split_group_semantics.setdefault(sg, []).append(
+                        (new_id, centroid, cohesion_meta, ep_count)
+                    )
                 # Only auto-promote the centroid-nearest episode as core.
                 # Promoting all source episodes caused 74% core bloat,
                 # defeating decay. The centroid representative preserves
@@ -489,27 +493,52 @@ class Compressor:
 
         # Sheaf sibling resonances: wire resonance edges between semantics that
         # came from the same split_group, and record a subdivision_events row.
-        for sg, sem_ids in _split_group_semantics.items():
-            if len(sem_ids) < 2:
+        for sg, members in _split_group_semantics.items():
+            if len(members) < 2:
                 continue
+            sem_ids = [m[0] for m in members]
+            centroids = [m[1] for m in members]
+            cohesion_dicts = [m[2] for m in members]
+            ep_counts = [m[3] for m in members]
+
+            # energy_before is the same for all members (pre-split cohesion)
+            energy_before = cohesion_dicts[0].get("energy_before", 0.0) if cohesion_dicts else 0.0
+            # energy_after: size-weighted mean of each member's part_energy
+            total_eps = sum(ep_counts)
+            if total_eps > 0:
+                energy_after = sum(
+                    cd.get("part_energy", 0.0) * ec
+                    for cd, ec in zip(cohesion_dicts, ep_counts)
+                ) / total_eps
+            else:
+                energy_after = 0.0
+
             # Record one subdivision_events row per split_group
             self._storage.log_subdivision_event(
                 id=str(uuid.uuid4()),
-                parent_id=sg,          # group UUID is the virtual parent
+                parent_id=f"cluster:{sg}",   # spec'd namespace prefix
                 peer_ids=sem_ids,
-                energy_before=0.0,     # cohesion metadata lives on cluster dict;
-                energy_after=0.0,      # scalar summaries not needed here
+                energy_before=energy_before,
+                energy_after=energy_after,
                 dl_cost=getattr(self._cohesion, "dl_cost", 0.15) if self._cohesion else 0.15,
                 persistence_checked=False,
                 site="compress",
             )
             # Add a sibling resonance edge for every pair of semantics
-            for j in range(len(sem_ids)):
-                for k in range(j + 1, len(sem_ids)):
+            for j in range(len(members)):
+                for k in range(j + 1, len(members)):
+                    ca = np.array(centroids[j]) if centroids[j] is not None else None
+                    cb = np.array(centroids[k]) if centroids[k] is not None else None
+                    if ca is not None and cb is not None:
+                        similarity = float(
+                            np.dot(ca, cb) / (np.linalg.norm(ca) * np.linalg.norm(cb) + 1e-12)
+                        )
+                    else:
+                        similarity = 0.0
                     self._storage.add_resonance(
                         sem_ids[j], "semantic",
                         sem_ids[k], "semantic",
-                        similarity=0.0,  # provenance-based, not similarity-based
+                        similarity=similarity,
                         weight=max(0.1, min(0.9, random.gauss(0.6, 0.1))),
                     )
 
