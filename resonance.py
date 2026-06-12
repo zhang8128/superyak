@@ -137,6 +137,7 @@ def _hydrate(storage, memory_id: str, layer: str, resonance_id: str) -> dict | N
             return {"id": memory_id, "layer": "episode",
                     "content": row.get("content", ""),
                     "context": row.get("context"),
+                    "lane": row.get("lane") or "personal",
                     "origin": "lived", "resonant": True,
                     "resonance_id": resonance_id}
     elif layer == "semantic":
@@ -146,6 +147,7 @@ def _hydrate(storage, memory_id: str, layer: str, resonance_id: str) -> dict | N
                     "content": row.get("content", ""),
                     "confidence": row.get("confidence"),
                     "kind": row.get("kind"),
+                    "lane": row.get("lane") or "personal",
                     "origin": "organic", "resonant": True,
                     "resonance_id": resonance_id}
     elif layer == "instinct":

@@ -1191,14 +1191,15 @@ def recall(
     # Lane filter — applied after uninvited memories are appended
     if lane is not None:
         results = [r for r in results if (r.get("lane") or "personal") == lane]
-        kept = {r["id"] for r in results}
+        resonant_results = [r for r in resonant_results if (r.get("lane") or "personal") == lane]
+        kept = {r["id"] for r in results} | {r["id"] for r in resonant_results}
         result_ids[:] = [rid for rid in result_ids if rid in kept]
         # Update the already-written log entry so target_ids reflects what was returned
-        import json as _json
         _storage.conn.execute(
             "UPDATE memory_log SET target_ids = ? WHERE json_extract(context, '$.recall_id') = ?",
-            (_json.dumps(result_ids), recall_id),
+            (json.dumps(result_ids), recall_id),
         )
+        _storage.conn.commit()
 
     # Knowledge graph: entities and temporal facts
     knowledge = None

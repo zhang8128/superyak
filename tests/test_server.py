@@ -855,3 +855,70 @@ class TestUninvitedMemories:
         ).fetchone()
         logged = set(json.loads(row["target_ids"]))
         assert logged == returned_ids
+
+    def test_recall_lane_filter_applies_to_resonant(self, server_env, monkeypatch):
+        """Lane filter applies to resonant results; memory_log target_ids == results+resonant ids."""
+        import server, json, resonance as res_module
+
+        storage = server_env["storage"]
+        embeddings = server_env["embeddings"]
+
+        # ep_work: a work-lane episode with a vector so it appears in primary results
+        ep_work_id = str(uuid.uuid4())
+        ep_work_emb = embeddings.embed(["kubernetes deployment rollout"], prefix="search_document")[0]
+        storage.add_episode(
+            id=ep_work_id, session_id="s-test",
+            content="kubernetes deployment rollout",
+            embedding=ep_work_emb,
+            lane="work",
+        )
+
+        # ep_personal: a personal-lane episode without a vector (won't surface via search,
+        # but can be hydrated by ID through resonance — same pattern as existing resonant test)
+        ep_personal_id = str(uuid.uuid4())
+        storage.conn.execute(
+            "INSERT INTO episodes (id, session_id, content, created_at, decay_strength, lane) "
+            "VALUES (?, 's-test', 'quiet afternoon reading', datetime('now'), 0.8, 'personal')",
+            (ep_personal_id,),
+        )
+        storage.conn.commit()
+
+        # Create resonance between work episode and personal episode
+        storage.add_resonance(ep_work_id, "episode", ep_personal_id, "episode",
+                              similarity=0.7, weight=0.9)
+        storage.conn.execute(
+            "UPDATE resonances SET strength = 1.0 WHERE memory_a = ? OR memory_b = ?",
+            (ep_work_id, ep_work_id),
+        )
+        storage.conn.commit()
+
+        # Force resonance gate to always fire
+        monkeypatch.setattr(res_module.random, "random", lambda: 0.0)
+
+        # Recall with lane="work" — resonant personal entry must be excluded
+        result = server.recall(query="kubernetes deployment", lane="work", uninvited=0)
+
+        # (a) Resonant entries carry a lane label
+        for r in result.get("resonant", []):
+            assert "lane" in r, f"Resonant entry missing 'lane': {r}"
+
+        # (b) Lane filter excludes cross-lane resonants: no personal entries under resonant
+        for r in result.get("resonant", []):
+            assert (r.get("lane") or "personal") == "work", (
+                f"Personal-lane resonant entry leaked into work-lane recall: {r}"
+            )
+
+        # (c) memory_log target_ids == ids of (results + resonant) actually returned
+        returned_ids = (
+            {r["id"] for r in result["results"]}
+            | {r["id"] for r in result.get("resonant", [])}
+        )
+        row = server._storage.conn.execute(
+            "SELECT target_ids FROM memory_log WHERE json_extract(context, '$.recall_id') = ?",
+            (result["recall_id"],),
+        ).fetchone()
+        assert row is not None, "No memory_log entry found"
+        logged = set(json.loads(row["target_ids"]))
+        assert logged == returned_ids, (
+            f"memory_log target_ids {logged} != returned ids {returned_ids}"
+        )
