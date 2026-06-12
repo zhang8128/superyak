@@ -1887,6 +1887,8 @@ def assessment_report(
     session_mismatch = bool(active.get("session_id")) and active["session_id"] != _session_id
 
     objective = _storage.count_session_log_events(_session_id)
+    if session_mismatch:
+        objective["session_mismatch"] = True
     self_report = {
         "function_score": function_score,
         "reached_for": reached_for or [],

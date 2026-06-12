@@ -220,6 +220,24 @@ class TestAssessmentTools:
         result = srv.assessment_report(function_score=True)
         assert "error" in result
 
+    def test_session_mismatch_persisted_to_objective(self, server_env):
+        srv = server_env["server"]
+        store = server_env["storage"]
+        store.schedule_assessment(id="a-1", scheduled_by="user")
+        store.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = 'someone-else' "
+            "WHERE id = 'a-1'"
+        )
+        store.conn.commit()
+
+        result = srv.assessment_report(function_score=2)
+        assert result["objective"]["session_mismatch"] is True
+
+        row = store.conn.execute(
+            "SELECT objective FROM assessments WHERE id = 'a-1'"
+        ).fetchone()
+        assert json.loads(row["objective"])["session_mismatch"] is True
+
 
 # --- Reflection focus ---
 
@@ -254,3 +272,24 @@ class TestAssessmentReflection:
         assert entry["function_score"] == 4
         assert entry["objective"]["recall_count"] == 3
         assert entry["reached_for"] == ["lane triage"]
+        assert entry["id"] == "a-1"
+        assert entry["session_id"] == "s-1"
+        assert entry["missing"] == []
+        assert entry["completed_at"] is not None
+
+    def test_reflect_assessments_tolerates_corrupt_json(self, tmp_db):
+        from reflection import Reflector
+
+        tmp_db.schedule_assessment(id="a-bad", scheduled_by="self")
+        tmp_db.conn.execute(
+            "UPDATE assessments SET status = 'completed', "
+            "self_report = '{not json', objective = '{}', "
+            "completed_at = '2026-06-12T00:00:00+00:00' WHERE id = 'a-bad'"
+        )
+        tmp_db.conn.commit()
+
+        reflector = Reflector(tmp_db, staleness_days=30)
+        result = reflector.reflect(focus="assessments")["assessments"]
+        assert len(result["history"]) == 1
+        assert result["history"][0]["parse_error"] is True
+        assert result["counts"]["completed"] == 1

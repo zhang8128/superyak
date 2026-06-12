@@ -494,17 +494,34 @@ class Reflector:
         """Off-device assessment history — function over time."""
         history = []
         for a in self._storage.list_assessments(status="completed"):
-            report = json.loads(a["self_report"]) if a["self_report"] else {}
-            objective = json.loads(a["objective"]) if a["objective"] else {}
+            try:
+                report = json.loads(a["self_report"]) if a["self_report"] else {}
+                objective = json.loads(a["objective"]) if a["objective"] else {}
+            except (json.JSONDecodeError, TypeError):
+                history.append({
+                    "id": a["id"],
+                    "completed_at": a["completed_at"],
+                    "function_score": None,
+                    "parse_error": True,
+                })
+                continue
+            transfer = report.get("instinct_consistent_moments") or ""
             history.append({
+                "id": a["id"],
+                "session_id": a["session_id"],
                 "completed_at": a["completed_at"],
                 "function_score": report.get("function_score"),
                 "objective": objective,
                 "reached_for": report.get("reached_for", []),
                 "missing": report.get("missing", []),
+                "transfer_preview": transfer[:100],
             })
+        status_rows = self._storage.conn.execute(
+            "SELECT status, COUNT(*) AS n FROM assessments GROUP BY status"
+        ).fetchall()
+        found = {r["status"]: r["n"] for r in status_rows}
         counts = {
-            status: len(self._storage.list_assessments(status=status))
+            status: found.get(status, 0)
             for status in ("scheduled", "active", "completed", "skipped", "abandoned")
         }
         return {"history": history, "counts": counts}
