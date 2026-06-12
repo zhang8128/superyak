@@ -2051,3 +2051,20 @@ class Storage:
         self.conn.execute(
             "DELETE FROM subdivision_queue WHERE parent_id = ?", (parent_id,))
         self.conn.commit()
+
+    # --- Persistence (migration 021) -----------------------------------------
+
+    def upsert_persistence_scores(self, scores: list[dict]) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO persistence_scores"
+            " (episode_id, redundancy, uniqueness, generativity, computed_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [(s["episode_id"], s["redundancy"], s["uniqueness"],
+              s["generativity"], now) for s in scores],
+        )
+        self.conn.commit()
+
+    def get_persistence_scores(self) -> dict[str, dict]:
+        rows = self.conn.execute("SELECT * FROM persistence_scores").fetchall()
+        return {r["episode_id"]: dict(r) for r in rows}
