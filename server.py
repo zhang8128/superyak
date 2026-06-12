@@ -611,7 +611,7 @@ def remember(
     if work and (core or genome):
         return {"error": "work-lane memories cannot be core or genome", "layer": "rejected"}
 
-    logger.info("Tool called: remember(content_len=%d, core=%s, source=%s)", len(content), core, source)
+    logger.info("Tool called: remember(content_len=%d, core=%s, source=%s, work=%s)", len(content), core, source, work)
 
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]

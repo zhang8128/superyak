@@ -128,6 +128,11 @@ class TestRemember:
         result = server.remember("work fact that should not be core", work=True, core=True)
         assert result["layer"] == "rejected"
 
+    def test_remember_work_cannot_be_genome(self, server_env):
+        import server
+        result = server.remember("work fact that should not be genome", work=True, genome=True)
+        assert result["layer"] == "rejected"
+
 
 class TestRecall:
     def test_recall_finds_episode(self, server_env):
