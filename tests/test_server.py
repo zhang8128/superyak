@@ -811,3 +811,22 @@ class TestUninvitedMemories:
             avg_uninvited_score = sum(r["score"] for r in uninvited) / len(uninvited)
             # Uninvited should generally score lower than the best match
             assert avg_uninvited_score < best_matched_score
+
+    def test_recall_labels_lanes(self, server_env):
+        import server
+        server.remember("the portal login serves the form on GET", work=True)
+        server.remember("a memory about reading with someone")
+        result = server.recall("portal login form")
+        episode_lanes = {r["content"]: r.get("lane") for r in result["results"]
+                         if r.get("layer") == "episode"}
+        assert episode_lanes["the portal login serves the form on GET"] == "work"
+        assert episode_lanes["a memory about reading with someone"] == "personal"
+
+    def test_recall_lane_filter(self, server_env):
+        import server
+        server.remember("kubernetes ingress needs the rewrite annotation", work=True)
+        server.remember("a conversation that changed my reading")
+        result = server.recall("anything at all", lane="work", uninvited=0)
+        assert result["results"], "work-lane results expected"
+        for r in result["results"]:
+            assert r.get("lane") == "work"

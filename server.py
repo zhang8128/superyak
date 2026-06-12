@@ -732,6 +732,7 @@ def recall(
     layer: str | None = None,
     max_results: int = 20,
     uninvited: int = 3,
+    lane: str | None = None,
 ) -> dict:
     """Search memory across layers. Returns ranked results with recall_id for feedback.
 
@@ -740,10 +741,14 @@ def recall(
         layer: Filter to a specific layer (episode, semantic, instinct).
         max_results: Maximum matched results.
         uninvited: Number of random distant memories to append (0 to disable).
+        lane: Filter to a lane ('personal' or 'work'). Default spans both.
     """
     _init()
     logger.info("Tool called: recall(query=%r, layer=%s, max_results=%d, uninvited=%d)",
                 query[:80], layer, max_results, uninvited)
+
+    if lane not in (None, "personal", "work"):
+        return {"error": f"Invalid lane: {lane!r}"}
 
     # Special case: instinct layer — context-aware vector search
     if layer == "instinct":
@@ -943,6 +948,7 @@ def recall(
             info["content"] = row.get("content", "")
             info["context"] = row.get("context")
             info["source"] = row.get("source")
+            info["lane"] = row.get("lane") or "personal"
         elif info["layer"] == "semantic":
             row = _storage.get_semantic(cid)
             if row is None:
@@ -953,6 +959,7 @@ def recall(
             info["kind"] = row.get("kind")
             info["auto_generated"] = bool(row.get("auto_generated", 0))
             info["source_episode_ids"] = row.get("source_episode_ids", [])
+            info["lane"] = row.get("lane") or "personal"
         elif info["layer"] == "instinct":
             inst = _storage.get_instinct(cid)
             if inst is None:
@@ -991,12 +998,14 @@ def recall(
         if info["layer"] == "semantic":
             result["confidence"] = info.get("confidence")
             result["kind"] = info.get("kind")
+            result["lane"] = info.get("lane") or "personal"
             # Provenance: how many episodes fed this semantic
             source_ep_ids = info.get("source_episode_ids", [])
             result["source_episode_count"] = len(source_ep_ids)
             result["origin"] = "organic" if source_ep_ids else "direct"
         if info["layer"] == "episode":
             result["context"] = info.get("context")
+            result["lane"] = info.get("lane") or "personal"
             # Provenance: cross-system source tag
             ep_source = info.get("source")
             if ep_source:
@@ -1097,6 +1106,7 @@ def recall(
                         continue
                     uninvited_result["content"] = row.get("content", "")
                     uninvited_result["context"] = row.get("context")
+                    uninvited_result["lane"] = row.get("lane") or "personal"
                     uninvited_result["origin"] = "lived"
                     _storage.increment_episode_access(did)
                 elif dlayer == "semantic":
@@ -1106,6 +1116,7 @@ def recall(
                     uninvited_result["content"] = row.get("content", "")
                     uninvited_result["confidence"] = row.get("confidence")
                     uninvited_result["kind"] = row.get("kind")
+                    uninvited_result["lane"] = row.get("lane") or "personal"
                     uninvited_result["origin"] = "organic"
                 elif dlayer == "instinct":
                     inst = _storage.get_instinct(did)
@@ -1164,6 +1175,10 @@ def recall(
         rest = results[3:]
         _rng.shuffle(rest)
         results = stable + rest
+
+    # Lane filter — applied after uninvited memories are appended
+    if lane is not None:
+        results = [r for r in results if (r.get("lane") or "personal") == lane]
 
     # Knowledge graph: entities and temporal facts
     knowledge = None
