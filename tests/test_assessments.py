@@ -219,3 +219,38 @@ class TestAssessmentTools:
         srv = server_env["server"]
         result = srv.assessment_report(function_score=True)
         assert "error" in result
+
+
+# --- Reflection focus ---
+
+class TestAssessmentReflection:
+    def test_reflect_assessments_history_and_counts(self, tmp_db):
+        from reflection import Reflector
+
+        tmp_db.schedule_assessment(id="a-1", scheduled_by="self")
+        tmp_db.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = 's-1' "
+            "WHERE id = 'a-1'"
+        )
+        tmp_db.conn.commit()
+        tmp_db.complete_assessment(
+            "a-1",
+            self_report={
+                "function_score": 4,
+                "reached_for": ["lane triage"],
+                "missing": [],
+            },
+            objective={"recall_count": 3},
+        )
+        tmp_db.schedule_assessment(id="a-2", scheduled_by="user")
+
+        reflector = Reflector(tmp_db, staleness_days=30)
+        result = reflector.reflect(focus="assessments")["assessments"]
+
+        assert result["counts"]["completed"] == 1
+        assert result["counts"]["scheduled"] == 1
+        assert len(result["history"]) == 1
+        entry = result["history"][0]
+        assert entry["function_score"] == 4
+        assert entry["objective"]["recall_count"] == 3
+        assert entry["reached_for"] == ["lane triage"]

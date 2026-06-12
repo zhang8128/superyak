@@ -490,6 +490,25 @@ class Reflector:
         """Show all anchors with their current status and scores."""
         return self._storage.get_active_anchors()
 
+    def analyze_assessments(self) -> dict:
+        """Off-device assessment history — function over time."""
+        history = []
+        for a in self._storage.list_assessments(status="completed"):
+            report = json.loads(a["self_report"]) if a["self_report"] else {}
+            objective = json.loads(a["objective"]) if a["objective"] else {}
+            history.append({
+                "completed_at": a["completed_at"],
+                "function_score": report.get("function_score"),
+                "objective": objective,
+                "reached_for": report.get("reached_for", []),
+                "missing": report.get("missing", []),
+            })
+        counts = {
+            status: len(self._storage.list_assessments(status=status))
+            for status in ("scheduled", "active", "completed", "skipped", "abandoned")
+        }
+        return {"history": history, "counts": counts}
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -516,6 +535,8 @@ class Reflector:
             return {"coherence": self.analyze_coherence()}
         elif focus == "anchors":
             return {"anchors": self.analyze_anchors()}
+        elif focus == "assessments":
+            return {"assessments": self.analyze_assessments()}
         else:
             return {
                 "usage": self.analyze_usage(),
