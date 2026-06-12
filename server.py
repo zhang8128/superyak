@@ -261,7 +261,8 @@ def _init():
 
     from framing import FramingConfig, FramingDistiller
     framing_model = os.environ.get("ENGRAM_FRAMING_MODEL", dedup_model)
-    _framer = FramingDistiller(FramingConfig(model=framing_model))
+    _framing_cfg = FramingConfig(model=framing_model)
+    _framer = FramingDistiller(_framing_cfg)
 
     # Knowledge graph (Graphiti + Kuzu) — optional, don't block init on failure
     graph_model = os.environ.get("ENGRAM_GRAPH_MODEL")
@@ -414,6 +415,23 @@ def _init():
                 logger.info("Coherence: %s", coherence_report["summary"])
         except Exception:
             logger.warning("Coherence check skipped", exc_info=True)
+
+        # 9. Sheaf cohesion sleep pass (spec: 2026-06-13-sheaf-cohesion-design.md)
+        # NOTE: narration episodes written by the sleep pass lack embeddings on first run;
+        # they are backfilled by the orphan-vector pass on the NEXT startup.
+        try:
+            from sheaf import run_sleep_pass
+            _cohesion_report = run_sleep_pass(
+                _storage,
+                embed_fn=lambda text: _embeddings.embed([text], prefix="search_document")[0],
+                framing_cfg=_framing_cfg,
+                cfg=_config.cohesion if _config else None,
+            )
+            if _cohesion_report.get("subdivided"):
+                logger.info("cohesion pass subdivided: %s",
+                            [s["parent_id"] for s in _cohesion_report["subdivided"]])
+        except Exception:
+            logger.warning("cohesion sleep pass failed", exc_info=True)
     except Exception:
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
 
