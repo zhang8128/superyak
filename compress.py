@@ -266,7 +266,7 @@ class Compressor:
                 eps = [m[0] for m in members]
                 embs = [m[1] for m in members]
                 centroid = np.mean(embs, axis=0).tolist()
-                action, match, near_miss = self._find_semantic_match(centroid)
+                action, match, near_miss = self._find_semantic_match(centroid, lane=lane)
 
                 all_clusters.append({
                     "episodes": eps,
@@ -323,6 +323,10 @@ class Compressor:
                 episodes_processed += len(all_episode_ids)
                 clusters_discarded += 1
                 continue
+
+            if action == "reinforce" and summary.get("lane") and summary["lane"] != (cluster.get("lane") or "personal"):
+                logger.warning("Lane override on reinforce cluster — falling back to new semantic")
+                action = "new"
 
             if action == "reinforce":
                 semantic_id = summary.get("semantic_id") or (cluster["match"] or {}).get("id")
@@ -966,25 +970,29 @@ class Compressor:
             self._storage.conn.commit()
         return links_created
 
-    def _find_semantic_match(self, centroid: list[float]) -> tuple[str, dict | None, dict | None]:
-        """Search for existing semantic matching this centroid.
+    def _find_semantic_match(self, centroid: list[float], lane: str = "personal") -> tuple[str, dict | None, dict | None]:
+        """Search for an existing same-lane semantic matching this centroid.
 
         Returns (action, match_info, near_miss) where:
         - action is 'reinforce' or 'new'
         - match_info is populated when action == 'reinforce'
         - near_miss is populated when similarity is in [0.50, reinforce_threshold)
+
+        Cross-lane matches are skipped entirely: a work episode must not
+        reinforce a personal semantic (or vice versa).
         """
         try:
-            results = self._storage.search_vectors("semantic", centroid, k=1)
-            if results:
-                sem_id, distance = results[0]
+            results = self._storage.search_vectors("semantic", centroid, k=5)
+            for sem_id, distance in results:
+                sem = self._storage.get_semantic(sem_id)
+                if not sem or (sem.get("lane") or "personal") != lane:
+                    continue
                 similarity = vec0_distance_to_similarity(distance)
                 if similarity >= self._reinforce_threshold:
-                    sem = self._storage.get_semantic(sem_id)
-                    if sem:
-                        return "reinforce", {"id": sem_id, "similarity": similarity, "content": sem["content"]}, None
+                    return "reinforce", {"id": sem_id, "similarity": similarity, "content": sem["content"]}, None
                 elif similarity >= 0.50:
                     return "new", None, {"id": sem_id, "similarity": similarity}
+                break  # best same-lane hit below near-miss range — stop
         except Exception:
             logger.debug("Semantic vector search failed (table may be empty)")
 

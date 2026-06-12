@@ -1391,6 +1391,7 @@ def test_work_cluster_creates_work_semantic_without_core(tmp_db, compressor, emb
                        content="bedrock requires inference profiles",
                        embedding=emb, lane="work")
     result = compressor.cluster_episodes()
+    assert result["clusters"][0]["lane"] == "work"  # cluster carries the lane forward
     stats = compressor.commit(result["compress_id"],
                               [{"content": "Bedrock needs inference profile IDs",
                                 "kind": "fact", "action": "new"}])
@@ -1437,3 +1438,99 @@ def test_personal_cluster_still_promotes_core(tmp_db, compressor, embedder):
     core_count = tmp_db.conn.execute(
         "SELECT COUNT(*) FROM episodes WHERE core >= 1").fetchone()[0]
     assert core_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 5: cross-lane reinforcement guard
+# ---------------------------------------------------------------------------
+
+def test_work_episode_does_not_reinforce_personal_semantic(tmp_db, compressor, embedder):
+    """A work cluster matching a personal semantic gets action='new', not 'reinforce'."""
+    text = "always check the page's own classification first"
+    emb = embedder.embed([text])[0]
+    tmp_db.add_semantic(
+        id=str(uuid.uuid4()), content=text, kind="fact",
+        confidence=0.8, embedding=emb, source_episode_ids=[],
+    )  # personal lane
+    embedder.override_map["work version of the same idea"] = emb
+    tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t",
+                       content="work version of the same idea",
+                       embedding=emb, lane="work")
+
+    result = compressor.cluster_episodes()
+
+    assert len(result["clusters"]) == 1
+    assert result["clusters"][0]["action"] == "new"
+    assert result["clusters"][0]["match"] is None
+
+
+def test_work_cluster_reinforces_work_semantic(tmp_db, compressor, embedder):
+    """Same-lane (work) reinforcement still works."""
+    text = "the portal paginates with cursors"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="fact",
+        confidence=0.6, embedding=emb, source_episode_ids=[], lane="work",
+    )
+    embedder.override_map["cursor pagination on the portal"] = emb
+    tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t",
+                       content="cursor pagination on the portal",
+                       embedding=emb, lane="work")
+
+    result = compressor.cluster_episodes()
+
+    assert len(result["clusters"]) == 1
+    assert result["clusters"][0]["action"] == "reinforce"
+    assert result["clusters"][0]["match"]["id"] == sem_id
+
+
+# ---------------------------------------------------------------------------
+# Task 4 carry-over items
+# ---------------------------------------------------------------------------
+
+def test_work_cluster_lane_carried_forward(tmp_db, compressor, embedder):
+    """cluster_episodes result cluster carries the lane forward."""
+    emb = embedder.embed(["bedrock requires inference profiles carry-over"])[0]
+    tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t",
+                       content="bedrock requires inference profiles carry-over",
+                       embedding=emb, lane="work")
+    result = compressor.cluster_episodes()
+    assert result["clusters"][0]["lane"] == "work"  # cluster carries the lane forward
+
+
+def test_discard_with_lane_override_still_relanes(tmp_db, compressor, embedder):
+    """Discarding a junk cluster while correcting its lane applies the correction."""
+    emb = embedder.embed(["junk work chatter"])[0]
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(id=eid, session_id="t", content="junk work chatter", embedding=emb)
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"], [{"action": "discard", "lane": "work"}])
+
+    assert stats["clusters_discarded"] == 1
+    row = tmp_db.conn.execute("SELECT lane, compressed FROM episodes WHERE id = ?", (eid,)).fetchone()
+    assert row["lane"] == "work"
+    assert row["compressed"] == 1
+
+
+def test_reinforce_with_lane_override_falls_back_to_new(tmp_db, compressor, embedder):
+    """A lane override on a reinforce cluster creates a new semantic instead of cross-lane reinforcing."""
+    text = "user prefers dark mode"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content="prefers dark mode", kind="preference",
+        confidence=0.6, embedding=emb, source_episode_ids=[],
+    )
+    _add_episode(tmp_db, text, emb)
+    result = compressor.cluster_episodes()
+    assert result["clusters"][0]["action"] == "reinforce"
+
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": text, "kind": "preference",
+                                "action": "reinforce", "semantic_id": sem_id, "lane": "work"}])
+
+    assert stats["semantics_reinforced"] == 0
+    assert stats["semantics_created"] == 1
+    sem = tmp_db.get_semantic(sem_id)
+    assert sem["confidence"] == pytest.approx(0.6, abs=0.01)  # untouched
