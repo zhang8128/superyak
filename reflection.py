@@ -526,6 +526,34 @@ class Reflector:
         }
         return {"history": history, "counts": counts}
 
+    def analyze_cohesion(self) -> dict:
+        """Sheaf cohesion: global energy picture, hottest semantics, audit trail."""
+        from config import CohesionConfig
+        from sheaf import measure_all
+        measured = measure_all(self._storage, CohesionConfig())
+        hottest = []
+        for entry in measured[:5]:
+            sem = self._storage.get_semantic(entry["semantic_id"])
+            edges = []
+            for ea, eb, r in entry["worst_edges"]:
+                rows = self._storage.conn.execute(
+                    "SELECT id, substr(content, 1, 80) FROM episodes"
+                    " WHERE id IN (?, ?)", (ea, eb)).fetchall()
+                edges.append({"residual": round(r, 4),
+                              "episodes": {row[0]: row[1] for row in rows}})
+            hottest.append({"semantic_id": entry["semantic_id"],
+                            "content": (sem or {}).get("content", "")[:120],
+                            "energy": round(entry["energy"], 3),
+                            "episodes": entry["n"], "worst_edges": edges})
+        return {
+            "semantics_measured": len(measured),
+            "mean_energy": (round(sum(m["energy"] for m in measured)
+                                  / len(measured), 3) if measured else None),
+            "hottest": hottest,
+            "recent_events": self._storage.get_subdivision_events(limit=10),
+            "queued": self._storage.get_queued_subdivisions(),
+        }
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -554,6 +582,9 @@ class Reflector:
             return {"anchors": self.analyze_anchors()}
         elif focus == "assessments":
             return {"assessments": self.analyze_assessments()}
+        elif focus == "cohesion":
+            # Not included in the no-focus default: runs SVD+eigh per semantic — heavier than other foci.
+            return {"cohesion": self.analyze_cohesion()}
         else:
             return {
                 "usage": self.analyze_usage(),

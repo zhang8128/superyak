@@ -1756,6 +1756,23 @@ class Storage:
                     "connection_strength": sem.get("confidence", 0.5),
                 })
 
+        # --- Peer edges (sheaf subdivision siblings) ---
+        peer_rows = self.conn.execute(
+            "SELECT parent_id AS other, residual_energy FROM semantic_peers"
+            " WHERE peer_id = ?"
+            " UNION SELECT peer_id AS other, residual_energy FROM semantic_peers"
+            " WHERE parent_id = ?", (memory_id, memory_id)).fetchall()
+        for r in peer_rows:
+            sem = self.get_semantic(r["other"])
+            if sem:
+                neighbors.append({
+                    "id": r["other"],
+                    "content": sem["content"][:300],
+                    "layer": "semantic",
+                    "connection_type": "peer",
+                    "connection_strength": 1.0 - (r["residual_energy"] or 0.0),
+                })
+
         # --- Entity links (from knowledge graph) ---
         for en in (entity_neighbors or []):
             neighbors.append({
