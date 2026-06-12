@@ -752,6 +752,18 @@ def recall(
 
     # Special case: instinct layer — context-aware vector search
     if layer == "instinct":
+        # Instincts are personal-lane by definition; work-lane requests yield nothing
+        if lane == "work":
+            recall_id = str(uuid.uuid4())
+            _storage.add_log_entry(
+                id=str(uuid.uuid4()),
+                event_type="recall",
+                layer="instinct",
+                target_ids=[],
+                context={"recall_id": recall_id, "query": query, "session_id": _session_id},
+            )
+            return {"results": [], "recall_id": recall_id}
+
         embedding = _embeddings.embed([query], prefix="search_query")[0]
 
         # Try context vector search first
@@ -1179,6 +1191,14 @@ def recall(
     # Lane filter — applied after uninvited memories are appended
     if lane is not None:
         results = [r for r in results if (r.get("lane") or "personal") == lane]
+        kept = {r["id"] for r in results}
+        result_ids[:] = [rid for rid in result_ids if rid in kept]
+        # Update the already-written log entry so target_ids reflects what was returned
+        import json as _json
+        _storage.conn.execute(
+            "UPDATE memory_log SET target_ids = ? WHERE json_extract(context, '$.recall_id') = ?",
+            (_json.dumps(result_ids), recall_id),
+        )
 
     # Knowledge graph: entities and temporal facts
     knowledge = None

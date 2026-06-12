@@ -830,3 +830,28 @@ class TestUninvitedMemories:
         assert result["results"], "work-lane results expected"
         for r in result["results"]:
             assert r.get("lane") == "work"
+
+    def test_recall_instinct_layer_with_work_lane_is_empty(self, server_env):
+        import server
+        # ensure at least one instinct exists
+        server._storage.add_instinct(
+            id="i-lane",
+            trigger="preference",
+            action="test instinct",
+            source_semantic_ids=[],
+        )
+        result = server.recall("test instinct", layer="instinct", lane="work")
+        assert result["results"] == []
+
+    def test_recall_lane_filter_log_matches_returned(self, server_env):
+        import server, json
+        server.remember("work item for log check", work=True)
+        server.remember("personal item for log check")
+        result = server.recall("item for log check", lane="work", uninvited=0)
+        returned_ids = {r["id"] for r in result["results"]}
+        row = server._storage.conn.execute(
+            "SELECT target_ids FROM memory_log WHERE json_extract(context, '$.recall_id') = ?",
+            (result["recall_id"],),
+        ).fetchone()
+        logged = set(json.loads(row["target_ids"]))
+        assert logged == returned_ids
