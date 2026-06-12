@@ -83,6 +83,18 @@ def _assessment_active(conn) -> bool:
         return False  # pre-migration DB — assessments table absent, no gating
 
 
+def _hook_output(text: str) -> dict:
+    """systemMessage only displays in the UI — additionalContext is the
+    channel that actually enters the model's context."""
+    return {
+        "systemMessage": text,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": text,
+        },
+    }
+
+
 def nudge():
     # Read hook input
     try:
@@ -616,8 +628,7 @@ def nudge():
                 pass  # Dream capture is non-critical
 
         if lines:
-            output = {"systemMessage": "\n".join(lines)}
-            json.dump(output, sys.stdout)
+            json.dump(_hook_output("\n".join(lines)), sys.stdout)
 
     except Exception as e:
         print(f"# nudge: {e}", file=sys.stderr)  # Non-critical, but visible for debugging

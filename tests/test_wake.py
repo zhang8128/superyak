@@ -98,6 +98,21 @@ class TestWake:
         # Should appear in instincts section but NOT in semantics section
         assert msg.count(shared_text) == 1
 
+    def test_orientation_injected_into_context(self, tmp_path):
+        """Orientation must reach the model via hookSpecificOutput.additionalContext.
+        systemMessage is only displayed to the user — it never enters context."""
+        from storage import Storage
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+
+        output = _run_wake(str(tmp_path))
+        hso = output["hookSpecificOutput"]
+        assert hso["hookEventName"] == "SessionStart"
+        assert "0 episodes, 0 semantics, 0 instincts" in hso["additionalContext"]
+        # The user-visible copy stays in sync with what the model sees
+        assert output["systemMessage"] == hso["additionalContext"]
+
     def test_error_resilience(self, tmp_path):
         """Corrupt DB should produce a graceful error message, not crash."""
         db_dir = tmp_path / ".engram"
@@ -219,6 +234,18 @@ class TestWakeAssessment:
         assert row["session_id"] == "s-99"
         assert row["started_at"] is not None
         conn.close()
+
+    def test_marker_injected_into_context(self, tmp_path):
+        """The assessment marker must reach the model, not just the user —
+        otherwise the off-device session never learns it is one."""
+        store = self._make_store(tmp_path)
+        store.schedule_assessment(id="a-1", scheduled_by="self")
+        store.close()
+
+        output = _run_wake(str(tmp_path), extra_env={"CLAUDE_SESSION_ID": "s-99"})
+        hso = output["hookSpecificOutput"]
+        assert hso["hookEventName"] == "SessionStart"
+        assert "Assessment Session" in hso["additionalContext"]
 
     def test_no_scheduled_assessment_normal_wake(self, tmp_path):
         store = self._make_store(tmp_path)

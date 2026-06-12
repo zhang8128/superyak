@@ -2,9 +2,9 @@
 """Engram wake-up hook — reads memory state and outputs orientation context.
 
 Runs at SessionStart. Reads the engram SQLite database directly (no MCP)
-and produces a systemMessage so the AI starts each session already oriented
-in its memories. The output is injected into context before the first
-user message.
+and emits the orientation on both hook channels: systemMessage (displayed
+to the user) and hookSpecificOutput.additionalContext (injected into the
+model's context before the first user message).
 """
 
 import json
@@ -35,6 +35,18 @@ def _load_instance_config():
         return config.get("instance"), config.get("session_context")
     except Exception:
         return None, None
+
+
+def _hook_output(text: str) -> dict:
+    """systemMessage only displays in the UI — additionalContext is the
+    channel that actually enters the model's context."""
+    return {
+        "systemMessage": text,
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": text,
+        },
+    }
 
 
 _ASSESSMENT_MARKER = (
@@ -154,7 +166,7 @@ def wake():
     try:
         assessment_marker = _handle_assessment(conn, now, session_id)
         if assessment_marker:
-            json.dump({"systemMessage": assessment_marker}, sys.stdout)
+            json.dump(_hook_output(assessment_marker), sys.stdout)
             return
 
         # Counts
@@ -482,17 +494,13 @@ def wake():
 
         orientation = "\n".join(lines)
 
-        output = {
-            "systemMessage": orientation,
-        }
-        json.dump(output, sys.stdout)
+        json.dump(_hook_output(orientation), sys.stdout)
 
     except Exception as e:
         # Non-fatal — if wake fails, session starts normally
-        output = {
-            "systemMessage": f"Engram wake failed ({e.__class__.__name__}: {e}). Memory tools still available.",
-        }
-        json.dump(output, sys.stdout)
+        json.dump(_hook_output(
+            f"Engram wake failed ({e.__class__.__name__}: {e}). Memory tools still available."
+        ), sys.stdout)
     finally:
         conn.close()
 
