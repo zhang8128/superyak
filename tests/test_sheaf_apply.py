@@ -131,3 +131,16 @@ class TestApplySubdivision:
             sheaf.apply_subdivision(tmp_db, _verdict(eps), ["only one"],
                                     hub_content=None,
                                     embed_fn=lambda t: fake_embedding(), site="sleep")
+
+    def test_part_energy_count_mismatch_rejected(self, tmp_db, fake_embedding):
+        # zip() truncates silently — a short part_energies must not half-mint
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        v = _verdict(eps)
+        v.part_energies = [0.1]   # 2 parts, 1 energy
+        with pytest.raises(ValueError):
+            sheaf.apply_subdivision(tmp_db, v, ["peer one", "peer two"],
+                                    hub_content=None,
+                                    embed_fn=lambda t: fake_embedding(), site="sleep")
+        # nothing was minted
+        assert tmp_db.get_semantic_peers("sem-1") == []
+        assert set(tmp_db.get_semantic("sem-1")["source_episode_ids"]) == set(eps)

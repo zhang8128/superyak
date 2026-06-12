@@ -170,6 +170,10 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
     if len(peer_contents) != len(verdict.parts):
         raise ValueError(
             f"{len(verdict.parts)} parts but {len(peer_contents)} peer contents")
+    if len(verdict.part_energies) != len(verdict.parts):
+        raise ValueError(
+            f"{len(verdict.parts)} parts but"
+            f" {len(verdict.part_energies)} part_energies")
     parent = storage.get_semantic(verdict.semantic_id)
     if parent is None:
         raise ValueError(f"unknown semantic {verdict.semantic_id}")
