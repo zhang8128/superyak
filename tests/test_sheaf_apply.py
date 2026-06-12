@@ -144,3 +144,27 @@ class TestApplySubdivision:
         # nothing was minted
         assert tmp_db.get_semantic_peers("sem-1") == []
         assert set(tmp_db.get_semantic("sem-1")["source_episode_ids"]) == set(eps)
+
+    def test_hub_vector_dropped_on_content_rewrite(self, tmp_db, fake_embedding):
+        # the orphan-vector backfill only re-embeds MISSING rows, so the
+        # executor must drop the stale hub vector when it rewrites content
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        sheaf.apply_subdivision(tmp_db, _verdict(eps), ["peer one", "peer two"],
+                                hub_content="the shared residue",
+                                embed_fn=lambda t: fake_embedding(), site="sleep")
+        row = tmp_db.conn.execute(
+            "SELECT 1 FROM semantic_vectors WHERE id = 'sem-1'").fetchone()
+        assert row is None
+
+    def test_hub_vector_kept_when_content_untouched(self, tmp_db, fake_embedding):
+        eps = _seed_semantic(tmp_db, fake_embedding)
+        v = _verdict(eps)
+        v.parts = [eps[:3], eps[3:]]
+        v.ambiguous = []
+        v.part_energies = [0.1, 0.1]
+        sheaf.apply_subdivision(tmp_db, v, ["peer one", "peer two"],
+                                hub_content=None,
+                                embed_fn=lambda t: fake_embedding(), site="sleep")
+        row = tmp_db.conn.execute(
+            "SELECT 1 FROM semantic_vectors WHERE id = 'sem-1'").fetchone()
+        assert row is not None

@@ -183,6 +183,9 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
     # Embed outside any partial writes so an embedder failure aborts cleanly
     peer_vecs = [embed_fn(c) for c in peer_contents]
     try:
+        # Raw SQL throughout: the Storage helpers (add_semantic_peer,
+        # log_subdivision_event, ...) each commit, which would break this
+        # function's single-transaction guarantee.
         for pid, content, vec, part, p_energy in zip(
                 peer_ids, peer_contents, peer_vecs, verdict.parts,
                 verdict.part_energies):
@@ -213,13 +216,25 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
                 "UPDATE semantics SET content = ?, content_hash = ? WHERE id = ?",
                 (hub_content, hashlib.sha256(hub_content.encode()).hexdigest(),
                  verdict.semantic_id))
+            # The old vector embeds the pre-split conflated text. Drop it so
+            # the startup orphan-vector backfill (which keys on missing rows
+            # only) re-embeds the new common-ground content; FTS stays correct
+            # via the semantics update trigger meanwhile.
+            conn.execute(
+                "DELETE FROM semantic_vectors WHERE id = ?",
+                (verdict.semantic_id,))
+        n_assigned = sum(len(p) for p in verdict.parts)
+        energy_after = sum(
+            (len(p) / n_assigned) * e
+            for p, e in zip(verdict.parts, verdict.part_energies)
+        ) if n_assigned else 0.0
         conn.execute(
             "INSERT INTO subdivision_events (id, parent_id, peer_ids,"
             " energy_before, energy_after, dl_cost, persistence_checked,"
             " site, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), verdict.semantic_id, json.dumps(peer_ids),
              verdict.energy_before,
-             sum(verdict.part_energies) / max(len(verdict.part_energies), 1),
+             energy_after,  # size-weighted to match the gate's decision quantity
              verdict.dl_cost, int(verdict.persistence_checked), site, now))
         conn.commit()
     except Exception:
