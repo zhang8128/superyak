@@ -17,3 +17,5 @@ CREATE TABLE IF NOT EXISTS assessments (
     completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_assessments_status ON assessments(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assessments_one_active
+    ON assessments(status) WHERE status = 'active';

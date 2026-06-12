@@ -54,6 +54,10 @@ class TestAssessmentStorage:
         assert json.loads(row["objective"])["recall_count"] == 2
         assert row["completed_at"] is not None
 
+        # Completed assessments cannot be completed again
+        with pytest.raises(ValueError):
+            tmp_db.complete_assessment("a-1", self_report={}, objective={})
+
     def test_complete_non_active_raises(self, tmp_db):
         tmp_db.schedule_assessment(id="a-1", scheduled_by="self")
         with pytest.raises(ValueError):

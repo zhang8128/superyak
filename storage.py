@@ -1472,6 +1472,7 @@ class Storage:
             (json.dumps(self_report), json.dumps(objective), _now_iso(), id),
         )
         if cur.rowcount == 0:
+            self.conn.rollback()
             raise ValueError(f"No active assessment with id {id!r}")
         self.conn.commit()
 
