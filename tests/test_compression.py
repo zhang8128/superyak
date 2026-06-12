@@ -717,6 +717,9 @@ def test_clusters_are_lane_pure(tmp_db, compressor, embedder):
         assert len(lanes) == 1, f"mixed-lane cluster: {lanes}"
         assert cluster["lane"] in ("personal", "work")
 
+    lane_labels = {c["lane"] for c in result["clusters"]}
+    assert lane_labels == {"personal", "work"}, f"Expected both lanes, got: {lane_labels}"
+
 
 class TestEpisodeTyping:
     def test_reading_from_source(self):
@@ -1379,3 +1382,58 @@ class TestActionCapping:
         assert action.startswith("Attend to the difference")
         assert "third sentence" not in action
         assert action.endswith("known.")
+
+
+def test_work_cluster_creates_work_semantic_without_core(tmp_db, compressor, embedder):
+    """A work cluster compresses to a work semantic; no episode becomes core."""
+    emb = embedder.embed(["bedrock requires inference profiles"])[0]
+    tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t",
+                       content="bedrock requires inference profiles",
+                       embedding=emb, lane="work")
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "Bedrock needs inference profile IDs",
+                                "kind": "fact", "action": "new"}])
+
+    assert stats["semantics_created"] == 1
+    sem_lane = tmp_db.conn.execute("SELECT lane FROM semantics").fetchone()["lane"]
+    assert sem_lane == "work"
+    core_count = tmp_db.conn.execute(
+        "SELECT COUNT(*) FROM episodes WHERE core >= 1").fetchone()[0]
+    assert core_count == 0
+
+
+def test_summary_lane_override_relanes_sources(tmp_db, compressor, embedder):
+    """A summary carrying lane='work' re-lanes the cluster's source episodes."""
+    emb = embedder.embed(["auto captured work chatter"])[0]
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(id=eid, session_id="t", content="auto captured work chatter",
+                       embedding=emb)  # defaults personal
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "deploy pipeline uses blue-green",
+                                "kind": "fact", "action": "new", "lane": "work"}])
+
+    assert stats["semantics_created"] == 1
+    ep_lane = tmp_db.conn.execute(
+        "SELECT lane FROM episodes WHERE id = ?", (eid,)).fetchone()["lane"]
+    assert ep_lane == "work"
+    sem_lane = tmp_db.conn.execute("SELECT lane FROM semantics").fetchone()["lane"]
+    assert sem_lane == "work"
+    core_count = tmp_db.conn.execute(
+        "SELECT COUNT(*) FROM episodes WHERE core >= 1").fetchone()[0]
+    assert core_count == 0
+
+
+def test_personal_cluster_still_promotes_core(tmp_db, compressor, embedder):
+    """Personal lane keeps today's behavior: centroid episode becomes core."""
+    emb = embedder.embed(["a formative correction"])[0]
+    tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t",
+                       content="a formative correction", embedding=emb)
+    result = compressor.cluster_episodes()
+    compressor.commit(result["compress_id"],
+                      [{"content": "corrections change how I read",
+                        "kind": "preference", "action": "new"}])
+    core_count = tmp_db.conn.execute(
+        "SELECT COUNT(*) FROM episodes WHERE core >= 1").fetchone()[0]
+    assert core_count == 1

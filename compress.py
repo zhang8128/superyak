@@ -311,6 +311,11 @@ class Compressor:
             centroid = cluster["centroid"]
             action = summary.get("action", cluster["action"])
 
+            lane = summary.get("lane") or cluster.get("lane") or "personal"
+            if summary.get("lane") and summary["lane"] != (cluster.get("lane") or "personal"):
+                # Compression review corrected the lane — re-lane the evidence too
+                self._storage.set_episode_lanes(all_episode_ids, summary["lane"])
+
             if action == "discard":
                 # Junk cluster — no knowledge to extract. Mark compressed so
                 # it doesn't re-cluster every cycle; episodes decay normally.
@@ -353,13 +358,16 @@ class Compressor:
                     embedding=semantic_embedding if semantic_embedding is not None else centroid,
                     source_episode_ids=source_ids,
                     auto_generated=bool(summary.get("auto_generated", False)),
+                    lane=lane,
                 )
                 semantics_created += 1
                 # Only auto-promote the centroid-nearest episode as core.
                 # Promoting all source episodes caused 74% core bloat,
                 # defeating decay. The centroid representative preserves
                 # evidence alongside the conclusion without exempting everything.
-                if centroid is not None and source_ids:
+                # Work episodes never become core — they're ephemeral operational
+                # facts, not identity-shaping memories.
+                if lane != "work" and centroid is not None and source_ids:
                     centroid_nearest = self._find_centroid_nearest_id(
                         cluster["episodes"], centroid, source_ids,
                     )
