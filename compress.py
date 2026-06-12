@@ -5,6 +5,7 @@ from __future__ import annotations
 import json as _json
 import logging
 import random
+import re
 import uuid
 from typing import TYPE_CHECKING
 
@@ -177,11 +178,13 @@ class Compressor:
         deduplicator: Deduplicator | None = None,
         knowledge_graph=None,
         classification_config=None,
+        framer=None,
     ):
         self._storage = storage
         self._embeddings = embedding_provider
         self._config = config
         self._dedup = deduplicator
+        self._framer = framer
         self._knowledge_graph = knowledge_graph
         self._classification_config = classification_config
         self._pending: dict[str, dict] = {}  # compress_id -> cluster state
@@ -280,8 +283,11 @@ class Compressor:
         """Phase 2: store semantics from AI-provided summaries.
 
         Each summary should have: {content, kind, action, semantic_id (if reinforce)}
+        action="discard" drops a junk cluster: episodes are marked compressed
+        (and decay normally) but no semantic is created.
 
-        Returns: {episodes_processed, semantics_created, semantics_reinforced, instincts_created}
+        Returns: {episodes_processed, semantics_created, semantics_reinforced,
+        clusters_discarded, instincts_created}
         """
         state = self._pending.pop(compress_id, None)
         if state is None:
@@ -291,6 +297,7 @@ class Compressor:
         episodes_processed = 0
         semantics_created = 0
         semantics_reinforced = 0
+        clusters_discarded = 0
 
         for i, cluster in enumerate(clusters):
             if i >= len(summaries):
@@ -300,6 +307,14 @@ class Compressor:
             all_episode_ids = [ep["id"] for ep in cluster["episodes"]]
             centroid = cluster["centroid"]
             action = summary.get("action", cluster["action"])
+
+            if action == "discard":
+                # Junk cluster — no knowledge to extract. Mark compressed so
+                # it doesn't re-cluster every cycle; episodes decay normally.
+                self._storage.mark_episodes_compressed(all_episode_ids)
+                episodes_processed += len(all_episode_ids)
+                clusters_discarded += 1
+                continue
 
             if action == "reinforce":
                 semantic_id = summary.get("semantic_id") or (cluster["match"] or {}).get("id")
@@ -430,6 +445,7 @@ class Compressor:
             "episodes_processed": episodes_processed,
             "semantics_created": semantics_created,
             "semantics_reinforced": semantics_reinforced,
+            "clusters_discarded": clusters_discarded,
             "instincts_created": instincts_created,
             "multi_links": multi_links,
             "singletons_created": singletons_created,
@@ -588,9 +604,21 @@ class Compressor:
         The notice is what appears in mid-conversation nudges. It must be
         short enough to glance at and decide whether to pull the thread.
         The implication is revealed if you pull.
+
+        Tries LLM distillation first (if a framer is wired); the string
+        heuristics below are the fallback.
         """
         if not content:
             return (f"when: {kind}", content)
+
+        if self._framer is not None:
+            try:
+                distilled = self._framer.distill(content, kind)
+            except Exception:
+                logger.warning("Framing distillation failed, using heuristic", exc_info=True)
+                distilled = None
+            if distilled is not None:
+                return distilled
 
         # Extract the first sentence as the core insight
         first_sentence = content.split(". ")[0].strip().rstrip(".")
@@ -629,6 +657,53 @@ class Compressor:
 
         return (notice, implication)
 
+    _REFERENTIAL_PATTERNS = (
+        re.compile(r"\(\)"),                     # call syntax / empty parens
+        re.compile(r"[{}`]"),                    # code braces, backticks
+        re.compile(r"\b\w+_\w+\b"),              # snake_case identifier
+        re.compile(r"\b\d+\.\d+"),               # version number
+        re.compile(r"\b[A-Z][A-Z0-9]{2,}\b"),    # acronym / env var
+        re.compile(r"--\w+|://"),                # CLI flag / URL
+        re.compile(r"\b\w+\.(py|js|ts|sh|json|toml|yaml|md|db)\b"),  # file path
+    )
+
+    def _is_referential(self, content: str) -> bool:
+        """Detect referential facts — API names, versions, identifiers, config details.
+
+        These need verbatim recall, not perceptual framing, so they stay
+        semantics and never become instincts. Two independent signal types
+        required, so prose that merely mentions one acronym stays eligible.
+        """
+        signals = sum(1 for p in self._REFERENTIAL_PATTERNS if p.search(content))
+        return signals >= 2
+
+    @staticmethod
+    def _balanced(text: str) -> bool:
+        return (
+            text.count("(") == text.count(")")
+            and text.count("{") == text.count("}")
+            and text.count("[") == text.count("]")
+        )
+
+    def _cap_action(self, content: str) -> str:
+        """Cap instinct action length — instincts are dispositions, not essays.
+
+        Sentence-splitting can land inside code snippets and produce garbage
+        fragments ("Defining 'local () { ."), so a kept sentence must be long
+        enough and delimiter-balanced; trailing fragments are dropped. The full
+        semantic content stays available via source links.
+        """
+        if len(content) <= 200:
+            return content
+        kept = []
+        for sentence in content.split(". ")[:2]:
+            if len(sentence.strip()) < 30 or not self._balanced(sentence):
+                break
+            kept.append(sentence)
+        if not kept:
+            return content[:200].rsplit(" ", 1)[0] + "…"
+        return ". ".join(kept).rstrip(".") + "."
+
     def _check_instinct_creation(self) -> int:
         """Check for semantics qualifying for instinct creation.
 
@@ -641,6 +716,12 @@ class Compressor:
             semantics = self._storage.get_active_semantics(kind=kind)
             for sem in semantics:
                 if sem["confidence"] < self._instinct_confidence:
+                    continue
+
+                if self._is_referential(sem["content"]):
+                    logger.info(
+                        "Skipping instinct for referential semantic %s", sem["id"]
+                    )
                     continue
 
                 # Check if instinct already exists for this semantic
@@ -666,13 +747,7 @@ class Compressor:
                 # Context vector: embed the notice (describes when instinct applies)
                 context_embedding = self._embeddings.embed([notice], prefix="search_document")[0]
 
-                # Cap action length — instincts are dispositions, not essays.
-                # The full semantic content is still available via source links.
-                action = sem["content"]
-                if len(action) > 200:
-                    # Take first two sentences max
-                    sentences = action.split(". ")
-                    action = ". ".join(sentences[:2]).rstrip(".") + "."
+                action = self._cap_action(sem["content"])
 
                 self._storage.add_instinct(
                     id=instinct_id,

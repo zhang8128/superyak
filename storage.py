@@ -701,21 +701,28 @@ class Storage:
         self.conn.commit()
 
     def unmark_core(self, episode_id: str) -> None:
-        """Demote a core episode back to normal — re-enables decay."""
+        """Demote a core episode back to normal — re-enables decay.
+
+        Refreshes last_accessed so the episode gets a fair decay run
+        (a grace window of roughly two weeks at d=0.5) instead of being
+        pruned on the next cycle from a stale access clock.
+        """
+        now = datetime.now(timezone.utc).isoformat()
         self.conn.execute(
-            "UPDATE episodes SET core = 0 WHERE id = ?",
-            (episode_id,),
+            "UPDATE episodes SET core = 0, last_accessed = ? WHERE id = ?",
+            (now, episode_id),
         )
         self.conn.commit()
 
     def unmark_core_batch(self, episode_ids: list[str]) -> int:
-        """Demote multiple core episodes. Returns count updated."""
+        """Demote multiple core episodes with decay grace. Returns count updated."""
         if not episode_ids:
             return 0
+        now = datetime.now(timezone.utc).isoformat()
         placeholders = ", ".join("?" * len(episode_ids))
         cursor = self.conn.execute(
-            f"UPDATE episodes SET core = 0 WHERE id IN ({placeholders})",
-            episode_ids,
+            f"UPDATE episodes SET core = 0, last_accessed = ? WHERE id IN ({placeholders})",
+            [now, *episode_ids],
         )
         self.conn.commit()
         return cursor.rowcount

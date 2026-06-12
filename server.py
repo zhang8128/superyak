@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,6 +114,7 @@ _last_instinct_id = None
 _knowledge_graph = None
 _wander_visits: dict[str, int] = {}  # memory_id -> visit count this session
 _clipboard = None
+_category_store = None
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -218,7 +220,7 @@ def _apply_resonance_feedback(storage, recall_id: str, used: bool) -> None:
 
 
 def _init():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store
     if _initialized:
         return
     from embeddings import NomicEmbedProvider
@@ -241,11 +243,25 @@ def _init():
 
     _session_id = os.environ.get("CLAUDE_SESSION_ID") or str(uuid.uuid4())
 
+    from categories import CategoryStore
+    cat_conn = sqlite3.connect(str(db_path.parent / "categories.db"))
+    try:
+        import sqlite_vec
+        cat_conn.enable_load_extension(True)
+        cat_conn.load_extension(sqlite_vec.loadable_path())
+    except Exception as e:
+        logger.warning("sqlite-vec not available for categories: %s", e)
+    _category_store = CategoryStore(cat_conn, dimension=768)
+
     from compress import Compressor
     from dedup import Deduplicator, DedupConfig
 
     dedup_model = os.environ.get("ENGRAM_DEDUP_MODEL", "gemma4:31b")
     _dedup = Deduplicator(DedupConfig(model=dedup_model))
+
+    from framing import FramingConfig, FramingDistiller
+    framing_model = os.environ.get("ENGRAM_FRAMING_MODEL", dedup_model)
+    _framer = FramingDistiller(FramingConfig(model=framing_model))
 
     # Knowledge graph (Graphiti + Kuzu) — optional, don't block init on failure
     graph_model = os.environ.get("ENGRAM_GRAPH_MODEL")
@@ -267,6 +283,7 @@ def _init():
         _config.compression if _config else None,
         deduplicator=_dedup,
         knowledge_graph=_knowledge_graph,
+        framer=_framer,
     )
 
     from reflection import Reflector
@@ -286,6 +303,7 @@ def _init():
     atexit.register(lambda: _watcher.stop() if _watcher else None)
     atexit.register(lambda: _storage.close() if _storage else None)
     atexit.register(lambda: _knowledge_graph.close() if _knowledge_graph else None)
+    atexit.register(lambda: _category_store._conn.close() if _category_store else None)
 
     # Federation: genome sync + inbox processing
     if _config and _config.instance:
@@ -1145,9 +1163,25 @@ def recall(
         except Exception:
             logger.warning("Knowledge graph search failed during recall", exc_info=True)
 
+    # ∞-category: surface relevant morphisms (cross-domain transfers)
+    transfers = []
+    if _category_store:
+        try:
+            cat_results = _category_store.search(embedding, level=2, limit=3)
+            for cr in cat_results:
+                transfers.append({
+                    "content": cr["content"],
+                    "level": cr["level"],
+                    "context": cr.get("context", {}),
+                })
+        except Exception:
+            logger.warning("Category search failed (non-fatal)", exc_info=True)
+
     response = {"results": results, "recall_id": recall_id}
     if resonant_results:
         response["resonant"] = resonant_results
+    if transfers:
+        response["transfers"] = transfers
     if _residue_active:
         response["dreaming"] = True
         response["note"] = "Scores hidden — some memories may be dream-pulled. Use dream_verify(recall_id) after engaging."
@@ -1173,7 +1207,81 @@ def log_outcome(recall_id: str, used: bool, note: str | None = None) -> dict:
     # Strengthen/weaken resonances based on outcome
     _apply_resonance_feedback(_storage, recall_id, used)
 
-    return {"logged": True}
+    # ∞-category: create application edges for useful recalls
+    category_cells = []
+    if used and _category_store and _embeddings:
+        try:
+            category_cells = _record_application(_storage, _category_store, _embeddings, recall_id, note)
+        except Exception:
+            logger.warning("Category recording failed (non-fatal)", exc_info=True)
+
+    result = {"logged": True}
+    if category_cells:
+        result["category_cells"] = len(category_cells)
+    return result
+
+
+def _record_application(storage, cat_store, embeddings, recall_id: str, note: str | None) -> list[str]:
+    """Create ∞-category application edges from a useful recall.
+
+    For each memory that was useful: create a level-1 cell linking the memory
+    to the context it was useful in. Then check for cross-domain transfers:
+    if this memory has application edges in structurally different contexts,
+    compose them into a level-2 cell.
+    """
+    log_entry = storage.conn.execute(
+        "SELECT context, target_ids FROM memory_log WHERE json_extract(context, '$.recall_id') = ?",
+        (recall_id,),
+    ).fetchone()
+    if not log_entry:
+        return []
+
+    ctx = json.loads(log_entry[0]) if log_entry[0] else {}
+    target_ids = json.loads(log_entry[1]) if log_entry[1] else []
+    query = ctx.get("query", "")
+    if not query or not target_ids:
+        return []
+
+    application_desc = f"useful in context: {query}"
+    if note:
+        application_desc = f"{application_desc} ({note})"
+    app_vec = embeddings.embed([application_desc], prefix="search_document")[0]
+
+    created = []
+    for memory_id in target_ids:
+        cell_id = cat_store.add_cell(
+            content=application_desc,
+            level=1,
+            source_id=memory_id,
+            target_id=memory_id,
+            context={"query": query, "recall_id": recall_id, "note": note},
+            embedding=app_vec,
+        )
+        created.append(cell_id)
+
+        existing_apps = cat_store.search(app_vec, level=1, limit=10)
+        for existing in existing_apps:
+            if existing["id"] == cell_id:
+                continue
+            if existing["source_id"] == memory_id:
+                continue
+            dist = existing.get("distance", 2.0)
+            if dist < 0.8:
+                transfer_content = (
+                    f"cross-domain: '{query}' connects to '{existing['context'].get('query', '?')}'"
+                )
+                transfer_vec = embeddings.embed([transfer_content], prefix="search_document")[0]
+                t_id = cat_store.compose(
+                    cell_id, existing["id"],
+                    content=transfer_content,
+                    context={"type": "cross_domain_transfer"},
+                    embedding=transfer_vec,
+                )
+                created.append(t_id)
+                logger.info("∞-category: level-2 transfer %s composed from %s + %s",
+                           t_id[:8], cell_id[:8], existing["id"][:8])
+
+    return created
 
 
 @mcp.tool()
@@ -1446,7 +1554,9 @@ def compress(scope: str | None = None) -> dict:
 @mcp.tool()
 def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
     """Phase 2: Commit AI-provided summaries for clusters.
-    Each summary: {content, kind, action, semantic_id (if reinforce)}."""
+    Each summary: {content, kind, action, semantic_id (if reinforce)}.
+    Use action="discard" for junk clusters (no signal) — episodes are
+    marked compressed but no semantic is created."""
     _init()
     logger.info("Tool called: compress_commit(compress_id=%s, summaries=%d)",
                 compress_id, len(summaries))
@@ -1641,7 +1751,7 @@ def revive(episode_id: str) -> dict:
 
 @mcp.tool()
 def reflect(focus: str | None = None) -> dict:
-    """Self-observation over memory. Focus: usage, gaps, instincts, contradictions, staleness."""
+    """Self-observation over memory. Focus: usage, gaps, instincts, contradictions, staleness, vital_signs."""
     _init()
     logger.info("Tool called: reflect(focus=%s)", focus)
 

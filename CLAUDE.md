@@ -93,10 +93,10 @@ Separate from identity layers.
 | `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
 | `core_memories()` | List all core episodes. |
 | `recall(query)` | Search across all layers. Returns `recall_id` for feedback. Scores hidden when dreaming. |
-| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
-| `compress()` | Manual compression cycle. |
+| `compress()` | Manual compression cycle. `compress_commit` accepts `action="discard"` for junk clusters. |
 | `log_outcome(recall_id, used)` | Feedback after recall. |
 | `instinct_feedback(id, followed, context?)` | Strengthen/weaken instincts. `context` for situational learning. |
 | `task_focus(name, content?)` | Start or resume a task context. Archives any previous active context. |
@@ -121,6 +121,7 @@ Separate from identity layers.
 | `dreaming.py` | Dream residue — lossy emotional compression and surfacing |
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `dedup.py` | LLM-based duplicate detection |
+| `framing.py` | LLM-based instinct notice/implication distillation (`ENGRAM_FRAMING_MODEL`, defaults to dedup model) |
 | `indexer.py` | Source code indexing via tree-sitter |
 | `watcher.py` | File system watcher for code changes |
 | `config.py` | Environment and path configuration |
@@ -130,7 +131,7 @@ Separate from identity layers.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 179 tests
+.venv/bin/python -m pytest tests/ -q   # 468 tests
 ```
 
 ## Part of a System

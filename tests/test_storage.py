@@ -875,3 +875,47 @@ def test_delete_cluster_cascades(tmp_db):
     storage.delete_cluster("c1")
     assert storage.get_cluster("c1") is None
     assert storage.get_instinct_cluster_strengths("i1") == []
+
+
+class TestCoreDemotionGrace:
+    """Demoting a core episode must grant a fair decay run, not instant pruning."""
+
+    def _add_old_compressed_episode(self, tmp_db, fake_embedding, ep_id):
+        from datetime import timedelta
+        tmp_db.add_episode(id=ep_id, session_id="s1", content=f"old episode {ep_id}",
+                           embedding=fake_embedding())
+        old = (datetime.now(timezone.utc) - timedelta(days=80)).isoformat()
+        tmp_db.conn.execute(
+            "UPDATE episodes SET created_at=?, last_accessed=?, compressed=1 WHERE id=?",
+            (old, old, ep_id),
+        )
+        tmp_db.conn.commit()
+
+    def test_unmark_core_grants_decay_grace(self, tmp_db, fake_embedding):
+        self._add_old_compressed_episode(tmp_db, fake_embedding, "ep-demote")
+        tmp_db.mark_core("ep-demote")
+
+        tmp_db.unmark_core("ep-demote")
+        tmp_db.apply_decay(min_interval_minutes=0)
+
+        row = tmp_db.conn.execute(
+            "SELECT decay_strength, last_accessed FROM episodes WHERE id='ep-demote'"
+        ).fetchone()
+        assert row["decay_strength"] >= 0.05, "demoted episode must not be instantly prunable"
+        assert tmp_db.prune_decayed() == 0
+
+    def test_unmark_core_batch_grants_decay_grace(self, tmp_db, fake_embedding):
+        ids = ["ep-b1", "ep-b2", "ep-b3"]
+        for ep_id in ids:
+            self._add_old_compressed_episode(tmp_db, fake_embedding, ep_id)
+        tmp_db.mark_core_batch(ids)
+
+        assert tmp_db.unmark_core_batch(ids) == 3
+        tmp_db.apply_decay(min_interval_minutes=0)
+
+        for ep_id in ids:
+            strength = tmp_db.conn.execute(
+                "SELECT decay_strength FROM episodes WHERE id=?", (ep_id,)
+            ).fetchone()[0]
+            assert strength >= 0.05
+        assert tmp_db.prune_decayed() == 0

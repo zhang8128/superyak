@@ -127,6 +127,58 @@ class Reflector:
         ).fetchall()
         return [{"id": r["id"], "content": r["content"], "contradicted_by": r["contradicted_by"]} for r in rows]
 
+    def vital_signs(self) -> dict:
+        """Structural health checks for pathologies the other foci can't see.
+
+        The existing foci measure activity (usage, gaps, contradictions); these
+        measure whether the regulating mechanisms themselves still function:
+        core inflation disables decay's salience contrast, a frozen feedback
+        loop means instinct strengths can never move, and access concentration
+        shows whether recall is spread across memory or orbiting a few nodes.
+        """
+        warnings = []
+
+        episode_count = self._storage.get_table_count("episodes")
+        core_count = self._storage.conn.execute(
+            "SELECT COUNT(*) FROM episodes WHERE core >= 1"
+        ).fetchone()[0]
+        core_fraction = (core_count / episode_count) if episode_count else 0.0
+        if core_fraction > 0.3:
+            warnings.append(
+                f"core inflation: {core_count}/{episode_count} episodes "
+                f"({core_fraction:.0%}) are decay-exempt — salience contrast degrades above 30%"
+            )
+
+        instincts = self._storage.get_all_instincts()
+        total_fired = sum(i.get("fired_count") or 0 for i in instincts)
+        frozen = bool(instincts) and total_fired == 0
+        if frozen:
+            warnings.append(
+                f"frozen instinct loop: {len(instincts)} instincts with zero feedback "
+                f"events ever — strengths cannot move without instinct_feedback"
+            )
+
+        rows = self._storage.conn.execute(
+            "SELECT accessed_count FROM episodes ORDER BY accessed_count DESC"
+        ).fetchall()
+        counts = [r[0] or 0 for r in rows]
+        total_accesses = sum(counts)
+        top_n = max(1, len(counts) // 10)
+        top_decile_share = (sum(counts[:top_n]) / total_accesses) if total_accesses else 0.0
+
+        return {
+            "core_fraction": round(core_fraction, 3),
+            "core_count": core_count,
+            "episode_count": episode_count,
+            "instinct_feedback": {
+                "frozen": frozen,
+                "total_fired": total_fired,
+                "instinct_count": len(instincts),
+            },
+            "access_concentration": {"top_decile_share": round(top_decile_share, 3)},
+            "warnings": warnings,
+        }
+
     def introspect(self) -> dict:
         """High-level self-portrait of memory state."""
         # Group active semantics by kind
@@ -423,6 +475,8 @@ class Reflector:
             return {"instincts": self.instinct_health()}
         elif focus == "contradictions":
             return {"contradictions": self.detect_contradictions()}
+        elif focus == "vital_signs":
+            return {"vital_signs": self.vital_signs()}
         elif focus == "staleness":
             return {"staleness": self.detect_staleness()}
         elif focus == "instinct_contexts":
@@ -447,4 +501,5 @@ class Reflector:
                 "instinct_contexts": self.instinct_context_health(),
                 "coherence": self.analyze_coherence(),
                 "anchors": self.analyze_anchors(),
+                "vital_signs": self.vital_signs(),
             }

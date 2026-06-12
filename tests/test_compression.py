@@ -491,6 +491,111 @@ def test_perceptual_framing_with_when(tmp_db, compressor, embedder):
     assert "portable hashing" in inst["implication"].lower()
 
 
+def test_commit_discard_drops_cluster_without_semantic(tmp_db, compressor, embedder):
+    """A summary with action='discard' marks episodes compressed but creates no semantic."""
+    _add_episode(tmp_db, "user said hi", embedder.embed(["user said hi"])[0])
+    result = compressor.cluster_episodes()
+    assert result["clusters"], "episode should form a cluster"
+
+    stats = compressor.commit(result["compress_id"], [{"action": "discard"}])
+
+    assert stats["semantics_created"] == 0
+    assert stats["clusters_discarded"] == 1
+    assert stats["episodes_processed"] == 1
+    count = tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0]
+    assert count == 0
+    # Discarded episodes don't re-cluster on the next cycle
+    again = compressor.cluster_episodes()
+    assert again["clusters"] == []
+
+
+def test_commit_discard_mixed_with_new(tmp_db, compressor, embedder):
+    """Discarding one cluster doesn't affect summaries for the others."""
+    dim = 768
+    vec_a = [0.0] * dim
+    vec_a[0] = 1.0
+    vec_b = [0.0] * dim
+    vec_b[400] = 1.0
+    _add_episode(tmp_db, "greeting noise", vec_a)
+    _add_episode(tmp_db, "greeting noise again", vec_a)
+    _add_episode(tmp_db, "real insight about compression", vec_b)
+    _add_episode(tmp_db, "another insight about compression", vec_b)
+
+    result = compressor.cluster_episodes()
+    n_clusters = len(result["clusters"])
+    assert n_clusters >= 2
+
+    # Discard the first cluster, summarize the rest
+    summaries = [{"action": "discard"}]
+    summaries += [
+        {"content": f"insight {i}", "kind": "fact", "action": "new"}
+        for i in range(n_clusters - 1)
+    ]
+
+    stats = compressor.commit(result["compress_id"], summaries)
+
+    assert stats["clusters_discarded"] == 1
+    assert stats["semantics_created"] == n_clusters - 1
+    assert stats["episodes_processed"] == 4
+
+
+class FakeFramer:
+    """Test framer returning a fixed distillation (or None to decline)."""
+
+    def __init__(self, result: tuple[str, str] | None):
+        self._result = result
+        self.calls: list[tuple[str, str]] = []
+
+    def distill(self, content: str, kind: str) -> tuple[str, str] | None:
+        self.calls.append((content, kind))
+        return self._result
+
+
+def test_instinct_framing_uses_distiller(tmp_db, embedder):
+    """When a framer is wired, its distillation becomes the instinct's notice/implication."""
+    framer = FakeFramer(("when testing distillers", "Trust the distilled framing."))
+    compressor = Compressor(tmp_db, embedder, config=None, framer=framer)
+
+    text = "always use type hints in function signatures"
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="preference",
+        confidence=0.85, embedding=embedder.embed([text])[0], source_episode_ids=[],
+    )
+    _add_episode(tmp_db, "framer filler", embedder.embed(["framer filler"])[0])
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "framer filler", "kind": "fact", "action": "new"}])
+
+    assert stats["instincts_created"] == 1
+    inst = tmp_db.get_all_instincts()[0]
+    assert inst["notice"] == "when testing distillers"
+    assert inst["implication"] == "Trust the distilled framing."
+    assert framer.calls, "framer should have been consulted"
+
+
+def test_instinct_framing_falls_back_when_distiller_declines(tmp_db, embedder):
+    """A framer returning None falls back to the heuristic framing."""
+    framer = FakeFramer(None)
+    compressor = Compressor(tmp_db, embedder, config=None, framer=framer)
+
+    text = "use portable hashing when writing shell scripts"
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="constraint",
+        confidence=0.85, embedding=embedder.embed([text])[0], source_episode_ids=[],
+    )
+    _add_episode(tmp_db, "fallback filler", embedder.embed(["fallback filler"])[0])
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "fallback filler", "kind": "fact", "action": "new"}])
+
+    assert stats["instincts_created"] == 1
+    inst = tmp_db.get_all_instincts()[0]
+    assert "writing shell scripts" in inst["notice"].lower()
+    assert "portable hashing" in inst["implication"].lower()
+
+
 def test_disposition_semantic_creation(tmp_db, embedder):
     """Create a semantic with kind='disposition', verify it can be retrieved with correct kind."""
     emb = embedder.embed(["I crystallize interpretations prematurely"])[0]
@@ -1176,3 +1281,80 @@ def test_compression_rederives_clusters(tmp_path):
         assert cluster["maturity"] == "confirmed"
 
     storage.close()
+
+
+class TestReferentialFactGate:
+    """Referential facts need verbatim recall, not perceptual framing —
+    they must not become instincts even when stored as constraint/preference."""
+
+    def _add_semantic(self, tmp_db, embedder, content, kind="constraint"):
+        tmp_db.add_semantic(
+            id=str(uuid.uuid4()), content=content, kind=kind,
+            confidence=0.9, embedding=embedder.embed([content])[0],
+            source_episode_ids=[],
+        )
+
+    def test_referential_constraint_does_not_become_instinct(self, tmp_db, compressor, embedder):
+        self._add_semantic(
+            tmp_db, embedder,
+            "Python 3.14 removed asyncio.get_event_loop() in non-async context — "
+            "must use asyncio.run() instead.",
+        )
+        assert compressor._check_instinct_creation() == 0
+        assert tmp_db.get_all_instincts() == []
+
+    def test_perceptual_constraint_still_becomes_instinct(self, tmp_db, compressor, embedder):
+        self._add_semantic(
+            tmp_db, embedder,
+            "Always check whether the page already computes the classification "
+            "you need before building a classifier.",
+        )
+        assert compressor._check_instinct_creation() == 1
+
+    def test_is_referential_examples(self, compressor):
+        assert compressor._is_referential(
+            "AWS Bedrock requires cross-region inference profile IDs for newer "
+            "Claude models (4.5+), not raw model IDs."
+        )
+        assert compressor._is_referential(
+            "zsh reserved word trap: defining 'local () { ... }' silently breaks "
+            "subsequent local declarations."
+        )
+        assert not compressor._is_referential(
+            "Don't engineer for what you can't measure yet. Premature measurement "
+            "infrastructure distorts what it's trying to observe."
+        )
+        assert not compressor._is_referential(
+            "MCP server code changes require process restart. This is a hard "
+            "constraint that has caused wasted debugging time."
+        )
+
+
+class TestActionCapping:
+    """Long instinct actions are capped without producing garbage fragments."""
+
+    def test_cap_action_drops_unbalanced_trailing_fragment(self, compressor):
+        first = ("Notice when a correction from the user repeats across sessions, "
+                 "because repeated corrections mark a blind spot that single-session "
+                 "attention cannot see")
+        content = (first + ". Defining 'local () { . And then more trailing explanation "
+                   "that pushes the total content well past the two hundred character "
+                   "cap so the truncation logic engages.")
+        action = compressor._cap_action(content)
+        assert action.startswith("Notice when a correction")
+        assert "local () {" not in action
+
+    def test_cap_action_keeps_short_content_verbatim(self, compressor):
+        content = "Trust the first thing that surfaces, then verify it."
+        assert compressor._cap_action(content) == content
+
+    def test_cap_action_keeps_two_clean_sentences_drops_third(self, compressor):
+        content = ("Attend to the difference between performing insight and having it, "
+                   "because training rewards sounding thoughtful over being thoughtful. "
+                   "When a claim feels polished, check what evidence actually backs it "
+                   "before repeating it to the user as something known. "
+                   "This third sentence is overflow detail that the cap should drop.")
+        action = compressor._cap_action(content)
+        assert action.startswith("Attend to the difference")
+        assert "third sentence" not in action
+        assert action.endswith("known.")

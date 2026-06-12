@@ -270,3 +270,55 @@ def test_reflect_instinct_clusters(tmp_db):
     assert "temperament" in c
     assert "maturity" in c
     assert len(c["members"]) == 2
+
+
+def test_vital_signs_warns_on_core_inflation(tmp_db, fake_embedding):
+    for i in range(10):
+        tmp_db.add_episode(id=f"ep-{i}", session_id="s1", content=f"e{i}",
+                           embedding=fake_embedding())
+    tmp_db.mark_core_batch([f"ep-{i}" for i in range(8)])
+
+    r = Reflector(tmp_db)
+    vs = r.vital_signs()
+    assert vs["core_fraction"] == pytest.approx(0.8)
+    assert any("core" in w.lower() for w in vs["warnings"])
+
+
+def test_vital_signs_healthy_core_fraction_no_warning(tmp_db, fake_embedding):
+    for i in range(10):
+        tmp_db.add_episode(id=f"ep-{i}", session_id="s1", content=f"e{i}",
+                           embedding=fake_embedding())
+    tmp_db.mark_core("ep-0")
+
+    r = Reflector(tmp_db)
+    vs = r.vital_signs()
+    assert vs["core_fraction"] == pytest.approx(0.1)
+    assert not any("core" in w.lower() for w in vs["warnings"])
+
+
+def test_vital_signs_detects_frozen_instinct_loop(tmp_db):
+    for i in range(3):
+        tmp_db.add_instinct(id=f"i{i}", trigger="t", action=f"a{i}", source_semantic_ids=[])
+
+    r = Reflector(tmp_db)
+    vs = r.vital_signs()
+    assert vs["instinct_feedback"]["frozen"] is True
+    assert vs["instinct_feedback"]["total_fired"] == 0
+    assert any("instinct" in w.lower() for w in vs["warnings"])
+
+
+def test_vital_signs_thawed_when_feedback_flows(tmp_db):
+    for i in range(3):
+        tmp_db.add_instinct(id=f"i{i}", trigger="t", action=f"a{i}", source_semantic_ids=[])
+    tmp_db.update_instinct_followed("i0")
+
+    r = Reflector(tmp_db)
+    vs = r.vital_signs()
+    assert vs["instinct_feedback"]["frozen"] is False
+
+
+def test_reflect_routes_vital_signs_focus(tmp_db):
+    r = Reflector(tmp_db)
+    out = r.reflect(focus="vital_signs")
+    assert "vital_signs" in out
+    assert "core_fraction" in out["vital_signs"]
