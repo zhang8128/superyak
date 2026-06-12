@@ -1979,3 +1979,58 @@ class Storage:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # --- Sheaf cohesion (migration 020) ---------
+
+    def log_subdivision_event(self, id: str, parent_id: str, peer_ids: list[str],
+                              energy_before: float, energy_after: float,
+                              dl_cost: float, persistence_checked: bool,
+                              site: str) -> None:
+        self.conn.execute(
+            "INSERT INTO subdivision_events (id, parent_id, peer_ids, energy_before,"
+            " energy_after, dl_cost, persistence_checked, site, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, parent_id, json.dumps(peer_ids), energy_before, energy_after,
+             dl_cost, int(persistence_checked), site,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
+
+    def get_subdivision_events(self, limit: int = 20) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM subdivision_events ORDER BY created_at DESC LIMIT ?",
+            (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_semantic_peer(self, peer_id: str, parent_id: str,
+                          residual_energy: float | None = None) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO semantic_peers"
+            " (peer_id, parent_id, residual_energy, created_at) VALUES (?, ?, ?, ?)",
+            (peer_id, parent_id, residual_energy,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
+
+    def get_semantic_peers(self, parent_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM semantic_peers WHERE parent_id = ?", (parent_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def queue_subdivision(self, parent_id: str, verdict: dict) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO subdivision_queue (parent_id, verdict, created_at)"
+            " VALUES (?, ?, ?)",
+            (parent_id, json.dumps(verdict), datetime.now(timezone.utc).isoformat()),
+        )
+        self.conn.commit()
+
+    def get_queued_subdivisions(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM subdivision_queue ORDER BY created_at").fetchall()
+        return [dict(r) for r in rows]
+
+    def dequeue_subdivision(self, parent_id: str) -> None:
+        self.conn.execute(
+            "DELETE FROM subdivision_queue WHERE parent_id = ?", (parent_id,))
+        self.conn.commit()
