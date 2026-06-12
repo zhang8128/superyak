@@ -138,9 +138,11 @@ class TestRemember:
         result = server.remember("work-lane reference fact for core test", work=True)
         out = server.mark_core(result["episode_id"])
         assert "error" in out
+        assert "work-lane" in out["error"]
         row = server._storage.conn.execute(
             "SELECT core FROM episodes WHERE id = ?", (result["episode_id"],)
         ).fetchone()
+        assert row is not None
         assert row["core"] == 0
 
 

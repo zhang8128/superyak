@@ -1596,7 +1596,7 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
         "SELECT lane FROM episodes WHERE id = ?", (episode_id,)
     ).fetchone()
     if row is None:
-        return {"error": f"Episode not found: {episode_id}"}
+        return {"error": f"Unknown episode: {episode_id}"}
     if (row["lane"] or "personal") == "work":
         return {"error": "work-lane episodes cannot be core — re-lane to personal first if this is actually formative"}
     _storage.mark_core(episode_id, tier=tier)
