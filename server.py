@@ -285,6 +285,7 @@ def _init():
         deduplicator=_dedup,
         knowledge_graph=_knowledge_graph,
         framer=_framer,
+        cohesion_config=_config.cohesion if _config else None,
     )
 
     from reflection import Reflector

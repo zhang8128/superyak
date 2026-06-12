@@ -179,6 +179,7 @@ class Compressor:
         knowledge_graph=None,
         classification_config=None,
         framer=None,
+        cohesion_config=None,
     ):
         self._storage = storage
         self._embeddings = embedding_provider
@@ -187,6 +188,7 @@ class Compressor:
         self._framer = framer
         self._knowledge_graph = knowledge_graph
         self._classification_config = classification_config
+        self._cohesion = cohesion_config
         self._pending: dict[str, dict] = {}  # compress_id -> cluster state
 
     @property
@@ -228,6 +230,8 @@ class Compressor:
 
         # Step 2: Cluster within each type+lane group independently
         all_clusters = []
+        # id → embedding: built alongside clusters for the sheaf gate
+        _emb_by_id: dict[str, list[float]] = {}
 
         for (kind, lane), kind_episodes in typed_groups.items():
             if not kind_episodes:
@@ -261,6 +265,7 @@ class Compressor:
                 if label_int not in cluster_groups:
                     cluster_groups[label_int] = []
                 cluster_groups[label_int].append((ep, emb))
+                _emb_by_id[ep["id"]] = emb
 
             for label, members in cluster_groups.items():
                 eps = [m[0] for m in members]
@@ -278,8 +283,67 @@ class Compressor:
                     "lane": lane,
                 })
 
+        # Sheaf gate: pre-partition conflated clusters before handing to the
+        # human reviewer.  Runs only when cohesion is enabled; auto_compress()
+        # stays unaffected because CohesionConfig defaults to enabled=False.
+        if self._cohesion is not None and getattr(self._cohesion, "enabled", False):
+            from sheaf import subdivision_test
+            min_ep = getattr(self._cohesion, "min_episodes", 3)
+            gated: list[dict] = []
+            for cluster in all_clusters:
+                eps = cluster["episodes"]
+                ids = [e["id"] for e in eps]
+                if len(ids) < min_ep:
+                    gated.append(cluster)
+                    continue
+                # Build the embedding matrix from the ids we tracked above
+                id_embs = [_emb_by_id[i] for i in ids if i in _emb_by_id]
+                if len(id_embs) < min_ep:
+                    gated.append(cluster)
+                    continue
+                X = np.stack(id_embs)
+                verdict = subdivision_test(
+                    "(cluster)", ids,
+                    X,
+                    dl_cost=getattr(self._cohesion, "dl_cost", 0.15),
+                    variance_threshold=getattr(self._cohesion, "variance_threshold", 0.90),
+                    max_dim=getattr(self._cohesion, "max_subspace_dim", 8),
+                )
+                if not verdict.split:
+                    gated.append(cluster)
+                    continue
+                # Split: assign ambiguous episodes to the nearest part centroid
+                group = str(uuid.uuid4())
+                parts = [list(p) for p in verdict.parts]
+                for amb in verdict.ambiguous:
+                    cents = [
+                        np.mean([np.array(_emb_by_id[i]) for i in p], axis=0)
+                        for p in parts
+                    ]
+                    v = np.array(_emb_by_id[amb])
+                    parts[int(np.argmax([c @ v for c in cents]))].append(amb)
+                by_id = {e["id"]: e for e in eps}
+                for part, p_energy in zip(parts, verdict.part_energies):
+                    valid_part = [pid for pid in part if pid in by_id]
+                    if not valid_part:
+                        continue
+                    part_embs = [np.array(_emb_by_id[pid]) for pid in valid_part if pid in _emb_by_id]
+                    sub_centroid = (np.mean(part_embs, axis=0).tolist()
+                                    if part_embs else cluster["centroid"])
+                    sub = dict(cluster)
+                    sub["episodes"] = [by_id[pid] for pid in valid_part]
+                    sub["centroid"] = sub_centroid
+                    sub["split_group"] = group
+                    sub["cohesion"] = {
+                        "energy_before": verdict.energy_before,
+                        "gain": verdict.gain,
+                        "part_energy": p_energy,
+                    }
+                    gated.append(sub)
+            all_clusters = gated
+
         compress_id = str(uuid.uuid4())
-        self._pending[compress_id] = {"clusters": all_clusters}
+        self._pending[compress_id] = {"clusters": all_clusters, "emb_by_id": _emb_by_id}
         return {"clusters": all_clusters, "compress_id": compress_id}
 
     def commit(self, compress_id: str, summaries: list[dict]) -> dict:
@@ -301,6 +365,8 @@ class Compressor:
         semantics_created = 0
         semantics_reinforced = 0
         clusters_discarded = 0
+        # split_group → list of new semantic IDs for sibling resonance wiring
+        _split_group_semantics: dict[str, list[str]] = {}
 
         for i, cluster in enumerate(clusters):
             if i >= len(summaries):
@@ -370,6 +436,10 @@ class Compressor:
                     lane=lane,
                 )
                 semantics_created += 1
+                # Track sibling semantics from the same split_group
+                sg = cluster.get("split_group")
+                if sg:
+                    _split_group_semantics.setdefault(sg, []).append(new_id)
                 # Only auto-promote the centroid-nearest episode as core.
                 # Promoting all source episodes caused 74% core bloat,
                 # defeating decay. The centroid representative preserves
@@ -416,6 +486,32 @@ class Compressor:
 
             self._storage.mark_episodes_compressed(all_episode_ids)
             episodes_processed += len(all_episode_ids)
+
+        # Sheaf sibling resonances: wire resonance edges between semantics that
+        # came from the same split_group, and record a subdivision_events row.
+        for sg, sem_ids in _split_group_semantics.items():
+            if len(sem_ids) < 2:
+                continue
+            # Record one subdivision_events row per split_group
+            self._storage.log_subdivision_event(
+                id=str(uuid.uuid4()),
+                parent_id=sg,          # group UUID is the virtual parent
+                peer_ids=sem_ids,
+                energy_before=0.0,     # cohesion metadata lives on cluster dict;
+                energy_after=0.0,      # scalar summaries not needed here
+                dl_cost=getattr(self._cohesion, "dl_cost", 0.15) if self._cohesion else 0.15,
+                persistence_checked=False,
+                site="compress",
+            )
+            # Add a sibling resonance edge for every pair of semantics
+            for j in range(len(sem_ids)):
+                for k in range(j + 1, len(sem_ids)):
+                    self._storage.add_resonance(
+                        sem_ids[j], "semantic",
+                        sem_ids[k], "semantic",
+                        similarity=0.0,  # provenance-based, not similarity-based
+                        weight=max(0.1, min(0.9, random.gauss(0.6, 0.1))),
+                    )
 
         # Multi-link: connect episodes to all matching semantics
         # Only include clusters that were actually processed (had summaries)
