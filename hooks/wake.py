@@ -12,6 +12,7 @@ import os
 import sqlite3
 import struct
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,6 +37,69 @@ def _load_instance_config():
         return None, None
 
 
+def _handle_assessment(conn, now: str, session_id: str):
+    """Off-device assessment check. Returns the marker message when this
+    session is an assessment, else None.
+
+    Spec: docs/superpowers/specs/2026-06-12-off-device-assessment-design.md
+    """
+    env_flag = os.environ.get("ENGRAM_ASSESSMENT", "").lower()
+    try:
+        # A prior session ended without a report — abandon its active row.
+        conn.execute(
+            "UPDATE assessments SET status = 'abandoned' "
+            "WHERE status = 'active' AND session_id != ?",
+            (session_id,),
+        )
+
+        if env_flag == "skip":
+            conn.execute(
+                "UPDATE assessments SET status = 'skipped' "
+                "WHERE status = 'scheduled'"
+            )
+            conn.commit()
+            return None
+
+        if env_flag == "next":
+            existing = conn.execute(
+                "SELECT id FROM assessments WHERE status = 'scheduled'"
+            ).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO assessments "
+                    "(id, status, scheduled_by, scheduled_at) "
+                    "VALUES (?, 'scheduled', 'user', ?)",
+                    (str(uuid.uuid4()), now),
+                )
+
+        row = conn.execute(
+            "SELECT id FROM assessments WHERE status = 'scheduled' "
+            "ORDER BY scheduled_at ASC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return None
+
+        conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = ?, "
+            "started_at = ? WHERE id = ?",
+            (session_id, now, row["id"]),
+        )
+        conn.commit()
+        return (
+            "# Engram — Assessment Session\n"
+            "\n"
+            "No orientation loaded. This is an off-device assessment: memory\n"
+            "tools (recall, remember, ...) are available, but no instincts,\n"
+            "semantics, dispositions, residues, or task context were injected.\n"
+            "\n"
+            "Work normally. Before the session ends, call `assessment_report()`\n"
+            "with your structured self-report."
+        )
+    except sqlite3.OperationalError:
+        return None  # pre-migration DB — assessments table absent
+
+
 def wake():
     instance_name, session_context = _load_instance_config()
     now = datetime.now(timezone.utc).isoformat()
@@ -56,6 +120,11 @@ def wake():
     conn.row_factory = sqlite3.Row
 
     try:
+        assessment_marker = _handle_assessment(conn, now, session_id)
+        if assessment_marker:
+            json.dump({"systemMessage": assessment_marker}, sys.stdout)
+            return
+
         # Counts
         episodes = conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
         semantics = conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0]

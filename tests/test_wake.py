@@ -15,11 +15,15 @@ HOOK_SCRIPT = Path(__file__).parent.parent / "hooks" / "wake.py"
 MIGRATIONS_DIR = str(Path(__file__).parent.parent / "migrations")
 
 
-def _run_wake(project_dir: str, project_root: str | None = None) -> dict:
+def _run_wake(project_dir: str, project_root: str | None = None,
+              extra_env: dict | None = None) -> dict:
     """Run wake.py as a subprocess and parse JSON output."""
     env = {**os.environ, "ENGRAM_HOME": project_dir}
+    env.pop("ENGRAM_ASSESSMENT", None)  # never inherit from the outer shell
     if project_root is not None:
         env["ENGRAM_PROJECT_ROOT"] = project_root
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
         capture_output=True, text=True, env=env, timeout=10,
@@ -178,3 +182,100 @@ class TestWake:
         # Should display perceptual format
         assert "Attend to:" in msg
         assert "when building code" in msg
+
+
+class TestWakeAssessment:
+    def _make_store(self, tmp_path):
+        from storage import Storage
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        return Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+
+    def test_scheduled_assessment_emits_marker_only(self, tmp_path):
+        store = self._make_store(tmp_path)
+        store.add_instinct(
+            id=str(uuid.uuid4()), trigger="preference",
+            action="Be curious about unexpected results",
+            source_semantic_ids=[], strength=0.7,
+        )
+        store.schedule_assessment(id="a-1", scheduled_by="self", reason="baseline")
+        store.close()
+
+        output = _run_wake(str(tmp_path), extra_env={"CLAUDE_SESSION_ID": "s-99"})
+        msg = output["systemMessage"]
+        assert "Assessment Session" in msg
+        assert "assessment_report" in msg
+        # The device is off: no instinct content, no orientation sections
+        assert "Be curious about unexpected results" not in msg
+        assert "Your instincts" not in msg
+        assert "What you know" not in msg
+
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM assessments WHERE id = 'a-1'").fetchone()
+        assert row["status"] == "active"
+        assert row["session_id"] == "s-99"
+        assert row["started_at"] is not None
+        conn.close()
+
+    def test_no_scheduled_assessment_normal_wake(self, tmp_path):
+        store = self._make_store(tmp_path)
+        store.close()
+        output = _run_wake(str(tmp_path))
+        assert "Assessment Session" not in output["systemMessage"]
+        assert "0 episodes" in output["systemMessage"]
+
+    def test_env_skip_cancels_scheduled(self, tmp_path):
+        store = self._make_store(tmp_path)
+        store.schedule_assessment(id="a-1", scheduled_by="self")
+        store.close()
+
+        output = _run_wake(str(tmp_path), extra_env={"ENGRAM_ASSESSMENT": "skip"})
+        assert "Assessment Session" not in output["systemMessage"]
+
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT status FROM assessments WHERE id = 'a-1'").fetchone()
+        assert row["status"] == "skipped"
+        conn.close()
+
+    def test_env_next_creates_and_activates(self, tmp_path):
+        store = self._make_store(tmp_path)
+        store.close()
+
+        output = _run_wake(
+            str(tmp_path),
+            extra_env={"ENGRAM_ASSESSMENT": "next", "CLAUDE_SESSION_ID": "s-7"},
+        )
+        assert "Assessment Session" in output["systemMessage"]
+
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM assessments").fetchone()
+        assert row["status"] == "active"
+        assert row["scheduled_by"] == "user"
+        conn.close()
+
+    def test_stale_active_marked_abandoned(self, tmp_path):
+        store = self._make_store(tmp_path)
+        store.schedule_assessment(id="a-old", scheduled_by="self")
+        store.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = 's-old' "
+            "WHERE id = 'a-old'"
+        )
+        store.conn.commit()
+        store.close()
+
+        output = _run_wake(str(tmp_path), extra_env={"CLAUDE_SESSION_ID": "s-new"})
+        # Stale active row abandoned; no scheduled row left, so normal wake
+        assert "Assessment Session" not in output["systemMessage"]
+
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT status FROM assessments WHERE id = 'a-old'").fetchone()
+        assert row["status"] == "abandoned"
+        conn.close()
