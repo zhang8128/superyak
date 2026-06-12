@@ -1524,3 +1524,29 @@ def test_reinforce_with_lane_override_falls_back_to_new(tmp_db, compressor, embe
     assert stats["semantics_created"] == 1
     sem = tmp_db.get_semantic(sem_id)
     assert sem["confidence"] == pytest.approx(0.6, abs=0.01)  # untouched
+
+
+def test_cross_lane_near_miss_is_suppressed(tmp_db, compressor, embedder):
+    """A cross-lane semantic in near-miss range produces no near_miss link."""
+    base = [0.0] * 768
+    base[0] = 1.0
+    near = [0.0] * 768
+    near[0] = 0.8
+    near[1] = 0.6  # cosine sim to base = 0.8 — inside [0.50, threshold)
+    sem_text = "personal idea about checking sources"
+    tmp_db.add_semantic(
+        id=str(uuid.uuid4()), content=sem_text, kind="fact",
+        confidence=0.8, embedding=base, source_episode_ids=[],
+    )  # personal lane
+    ep_text = "work-lane neighbor of that idea"
+    embedder.override_map[ep_text] = near
+    tmp_db.add_episode(id=str(uuid.uuid4()), session_id="t", content=ep_text,
+                       embedding=near, lane="work")
+
+    result = compressor.cluster_episodes()
+
+    assert len(result["clusters"]) == 1
+    cluster = result["clusters"][0]
+    assert cluster["action"] == "new"
+    assert cluster["match"] is None
+    assert cluster["near_miss"] is None  # cross-lane near-miss must not leak

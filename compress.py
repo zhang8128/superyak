@@ -325,7 +325,12 @@ class Compressor:
                 continue
 
             if action == "reinforce" and summary.get("lane") and summary["lane"] != (cluster.get("lane") or "personal"):
-                logger.warning("Lane override on reinforce cluster — falling back to new semantic")
+                logger.warning(
+                    "Lane override on reinforce cluster (cluster_lane=%r summary_lane=%r semantic_id=%r) — falling back to new semantic",
+                    cluster.get("lane") or "personal",
+                    summary["lane"],
+                    summary.get("semantic_id"),
+                )
                 action = "new"
 
             if action == "reinforce":
@@ -982,17 +987,27 @@ class Compressor:
         reinforce a personal semantic (or vice versa).
         """
         try:
-            results = self._storage.search_vectors("semantic", centroid, k=5)
-            for sem_id, distance in results:
-                sem = self._storage.get_semantic(sem_id)
-                if not sem or (sem.get("lane") or "personal") != lane:
-                    continue
-                similarity = vec0_distance_to_similarity(distance)
-                if similarity >= self._reinforce_threshold:
-                    return "reinforce", {"id": sem_id, "similarity": similarity, "content": sem["content"]}, None
-                elif similarity >= 0.50:
-                    return "new", None, {"id": sem_id, "similarity": similarity}
-                break  # best same-lane hit below near-miss range — stop
+            results = self._storage.search_vectors("semantic", centroid, k=20)
+            if results:
+                ids = [sem_id for sem_id, _ in results]
+                placeholders = ", ".join("?" * len(ids))
+                rows = self._storage.conn.execute(
+                    f"SELECT id, lane, content FROM semantics WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                lanes = {r["id"]: (r["lane"] or "personal") for r in rows}
+                contents = {r["id"]: r["content"] for r in rows}
+                # k=20 so a run of cross-lane neighbors can't shadow a same-lane
+                # match just past the cutoff; results stay distance-ordered.
+                for sem_id, distance in results:
+                    if lanes.get(sem_id) != lane:
+                        continue
+                    similarity = vec0_distance_to_similarity(distance)
+                    if similarity >= self._reinforce_threshold:
+                        return "reinforce", {"id": sem_id, "similarity": similarity, "content": contents[sem_id]}, None
+                    elif similarity >= 0.50:
+                        return "new", None, {"id": sem_id, "similarity": similarity}
+                    break  # first same-lane hit is below near-miss range — stop
         except Exception:
             logger.debug("Semantic vector search failed (table may be empty)")
 
