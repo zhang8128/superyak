@@ -243,6 +243,146 @@ def apply_subdivision(storage, verdict: Verdict, peer_contents: list[str],
     return {"peer_ids": peer_ids, "parent_id": verdict.semantic_id}
 
 
+def _episode_matrix(conn, semantic_id: str):
+    """Return (episode_ids, X) for all source episodes that have vectors."""
+    rows = conn.execute(
+        "SELECT ss.episode_id, ev.embedding FROM semantic_sources ss"
+        " JOIN episode_vectors ev ON ev.id = ss.episode_id"
+        " WHERE ss.semantic_id = ?", (semantic_id,)).fetchall()
+    if not rows:
+        return [], None
+    ids = [r[0] for r in rows]
+    X = np.stack([_unpack_embedding(r[1]) for r in rows])
+    return ids, X
+
+
+def measure_all(storage, cfg) -> list[dict]:
+    """Energy for every semantic with enough provenance. Read-only."""
+    sem_rows = storage.conn.execute(
+        "SELECT semantic_id, COUNT(*) AS n FROM semantic_sources"
+        " GROUP BY semantic_id HAVING n >= ?", (cfg.min_episodes,)).fetchall()
+    out = []
+    for r in sem_rows:
+        ids, X = _episode_matrix(storage.conn, r[0])
+        if len(ids) < cfg.min_episodes:
+            continue  # episodes lacking vectors shrink the neighbourhood
+        ls = build_local_sheaf(r[0], ids, X, cfg.variance_threshold,
+                               cfg.max_subspace_dim)
+        res = cohesion_energy(ls)
+        out.append({"semantic_id": r[0], "energy": res["energy"], "n": len(ids),
+                    "worst_edges": res["worst_edges"][:3]})
+    out.sort(key=lambda d: d["energy"], reverse=True)
+    return out
+
+
+def _rate_limited(conn, minutes: int = 30) -> bool:
+    """Mirror apply_decay's rate-limit pattern: check the most recent
+    'cohesion_pass' row in memory_log (columns: id, timestamp, event_type,
+    layer, target_ids, context, outcome).  Returns True if a pass ran within
+    the last <minutes> minutes on this connection."""
+    row = conn.execute(
+        "SELECT timestamp FROM memory_log"
+        " WHERE event_type = 'cohesion_pass'"
+        " ORDER BY timestamp DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return False
+    last = datetime.fromisoformat(row[0])
+    elapsed = (datetime.now(timezone.utc) - last).total_seconds()
+    return elapsed < minutes * 60
+
+
+def run_sleep_pass(storage, embed_fn, framing_cfg, cfg) -> dict:
+    """Budgeted sleep-time subdivision. Fails toward leaving the store unchanged.
+
+    Flow:
+    1. Rate-limit check (30 min via memory_log 'cohesion_pass' event — mirrors
+       apply_decay's 'session_start' check; same table, same columns).
+    2. Measure energy for every semantic with ≥ cfg.min_episodes source episodes.
+    3. Rank desc by energy; iterate hottest first.
+    4. For each candidate: run subdivision_test; skip if no split.
+    5. Distillation failure → queue via storage.queue_subdivision, continue
+       (does NOT count against sleep_budget).
+    6. Successful split → apply_subdivision + narration episode; increment budget
+       counter.
+    7. Stop when applied == cfg.sleep_budget or candidates exhausted.
+    8. Record 'cohesion_pass' event so next run within 30 min is skipped.
+    """
+    report: dict = {"measured": [], "subdivided": [], "queued": []}
+    try:
+        if _rate_limited(storage.conn):
+            return {"skipped": "rate_limited"}
+
+        ranked = measure_all(storage, cfg)
+        report["measured"] = ranked[:10]
+
+        applied = 0
+        for entry in ranked:
+            if applied >= cfg.sleep_budget:
+                break
+            sid = entry["semantic_id"]
+            ids, X = _episode_matrix(storage.conn, sid)
+            verdict = subdivision_test(sid, ids, X, cfg.dl_cost,
+                                       cfg.variance_threshold, cfg.max_subspace_dim)
+            if not verdict.split:
+                continue
+
+            parent = storage.get_semantic(sid)
+            part_contents = []
+            for part in verdict.parts:
+                rows = storage.conn.execute(
+                    "SELECT content FROM episodes WHERE id IN (%s)"
+                    % ",".join("?" * len(part)), part).fetchall()
+                part_contents.append([r[0] for r in rows])
+
+            distilled = distill_subdivision(parent["content"], part_contents,
+                                            bool(verdict.ambiguous), framing_cfg)
+            if distilled is None:
+                # Queue for later (LLM unavailable / bad output); no split applied.
+                # Critically: does NOT burn the budget — the loop continues.
+                storage.queue_subdivision(sid, verdict.to_dict())
+                report["queued"].append({"parent_id": sid})
+                continue
+
+            peer_contents, hub_content = distilled
+            result = apply_subdivision(storage, verdict, peer_contents,
+                                       hub_content, embed_fn, site="sleep")
+            storage.dequeue_subdivision(sid)
+            # Narration episode — intentionally no embedding; the startup
+            # orphan-vector backfill embeds it on next boot.
+            n_parts = len(peer_contents)
+            avg_after = (sum(verdict.part_energies) / n_parts) if n_parts else 0.0
+            storage.add_episode(
+                id=str(uuid.uuid4()),
+                session_id=None,
+                content=(
+                    f"Sleep-time subdivision: '{parent['content'][:80]}'"
+                    f" split into {n_parts} peers"
+                    f" (energy {verdict.energy_before:.2f} ->"
+                    f" {avg_after:.2f},"
+                    f" gain {verdict.gain:.2f}, persistence unchecked)."
+                ),
+                context={"topic": "sheaf-subdivision", "parent_id": sid,
+                         "peer_ids": result["peer_ids"]},
+            )
+            report["subdivided"].append({"parent_id": sid, **result})
+            applied += 1
+
+        # Record the pass so the next run within 30 min is skipped.
+        # Matches memory_log insert convention: (id, timestamp, event_type,
+        # layer, target_ids, context, outcome) — same columns apply_decay reads.
+        storage.conn.execute(
+            "INSERT INTO memory_log"
+            " (id, timestamp, event_type, layer, target_ids, context, outcome)"
+            " VALUES (?, ?, 'cohesion_pass', 'semantics', '[]', NULL, NULL)",
+            (str(uuid.uuid4()), datetime.now(timezone.utc).isoformat()),
+        )
+        storage.conn.commit()
+    except Exception:
+        logger.warning("cohesion sleep pass aborted", exc_info=True)
+    return report
+
+
 def _ollama_generate(prompt: str, framing_cfg) -> str | None:
     """Same transport as framing.py — model/url/timeout from FramingConfig."""
     import urllib.request
