@@ -133,6 +133,15 @@ def test_reflect_no_genome_returns_empty(tmp_db):
     assert r.detect_genome_drift() == []
 
 
+def test_introspect_reports_lane_counts(tmp_db):
+    import uuid as _uuid
+    tmp_db.add_episode(id=str(_uuid.uuid4()), session_id="s", content="a personal one")
+    tmp_db.add_episode(id=str(_uuid.uuid4()), session_id="s", content="a work one", lane="work")
+    reflector = Reflector(tmp_db, 30)
+    result = reflector.introspect()
+    assert result["health_metrics"]["lanes"]["episodes"] == {"personal": 1, "work": 1}
+
+
 def test_signal_health(tmp_path, tmp_db):
     """signal_health returns message count from signals db."""
     import sqlite3

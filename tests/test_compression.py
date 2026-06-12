@@ -1567,3 +1567,28 @@ def test_work_semantic_never_becomes_instinct(tmp_db, compressor, embedder):
 
     assert stats["instincts_created"] == 0
     assert tmp_db.get_all_instincts() == []
+
+
+def test_multi_link_respects_lanes(tmp_db, compressor, embedder):
+    """A work episode is not multi-linked as a source of a personal semantic."""
+    text = "shared concept for multilink"
+    emb = embedder.embed([text])[0]
+    sem_id = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sem_id, content=text, kind="fact",
+        confidence=0.8, embedding=emb, source_episode_ids=[],
+    )  # personal (default lane)
+
+    ep_text = "work twin of the multilink concept"
+    embedder.override_map[ep_text] = emb  # identical embedding → similarity == 1.0
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(id=eid, session_id="t", content=ep_text, embedding=emb, lane="work")
+
+    result = compressor.cluster_episodes()
+    compressor.commit(result["compress_id"],
+                      [{"content": "work multilink semantic", "kind": "fact", "action": "new"}])
+
+    links = tmp_db.conn.execute(
+        "SELECT 1 FROM semantic_sources WHERE semantic_id = ? AND episode_id = ?",
+        (sem_id, eid)).fetchone()
+    assert links is None

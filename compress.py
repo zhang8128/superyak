@@ -939,9 +939,11 @@ class Compressor:
         sem_embeddings = self._embeddings.embed(sem_texts, prefix="clustering")
 
         sem_emb_map: dict[str, np.ndarray] = {}
-        for sid, emb in zip(sem_ids, sem_embeddings):
+        sem_lane_map: dict[str, str] = {}
+        for s, sid, emb in zip(all_semantics, sem_ids, sem_embeddings):
             if emb is not None:
                 sem_emb_map[sid] = np.array(emb)
+                sem_lane_map[sid] = s.get("lane") or "personal"
 
         ep_texts = [ep["content"] for ep in episodes]
         ep_embeddings = self._embeddings.embed(ep_texts, prefix="clustering")
@@ -954,9 +956,12 @@ class Compressor:
             ep_norm = np.linalg.norm(ep_arr)
             if ep_norm == 0:
                 continue
+            ep_lane = ep.get("lane") or "personal"
 
             for sid, sem_arr in sem_emb_map.items():
                 if sid in exclude_semantic_ids:
+                    continue
+                if sem_lane_map.get(sid, "personal") != ep_lane:
                     continue
                 sem_norm = np.linalg.norm(sem_arr)
                 if sem_norm == 0:

@@ -1600,7 +1600,7 @@ def compress(scope: str | None = None) -> dict:
 @mcp.tool()
 def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
     """Phase 2: Commit AI-provided summaries for clusters.
-    Each summary: {content, kind, action, semantic_id (if reinforce)}.
+    Each summary: {content, kind, action, semantic_id (if reinforce), lane (optional — overrides cluster lane, re-lanes source episodes)}.
     Use action="discard" for junk clusters (no signal) — episodes are
     marked compressed but no semantic is created."""
     _init()

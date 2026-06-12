@@ -127,6 +127,20 @@ class Reflector:
         ).fetchall()
         return [{"id": r["id"], "content": r["content"], "contradicted_by": r["contradicted_by"]} for r in rows]
 
+    def _lane_counts(self) -> dict:
+        """Return per-table, per-lane counts for episodes and semantics."""
+        lane_counts: dict[str, dict[str, int]] = {
+            "episodes": {"personal": 0, "work": 0},
+            "semantics": {"personal": 0, "work": 0},
+        }
+        for table in ("episodes", "semantics"):
+            rows = self._storage.conn.execute(
+                f"SELECT COALESCE(lane, 'personal') AS lane, COUNT(*) FROM {table} GROUP BY 1"
+            ).fetchall()
+            for lane_name, count in rows:
+                lane_counts[table][lane_name] = count
+        return lane_counts
+
     def vital_signs(self) -> dict:
         """Structural health checks for pathologies the other foci can't see.
 
@@ -143,14 +157,7 @@ class Reflector:
 
         # Compute lane_counts first; derive personal episode count from it
         # to avoid a redundant COUNT query.
-        lane_counts = {"episodes": {"personal": 0, "work": 0},
-                       "semantics": {"personal": 0, "work": 0}}
-        for table in ("episodes", "semantics"):
-            rows = self._storage.conn.execute(
-                f"SELECT COALESCE(lane, 'personal') AS lane, COUNT(*) FROM {table} GROUP BY 1"
-            ).fetchall()
-            for lane_name, count in rows:
-                lane_counts[table][lane_name] = count
+        lane_counts = self._lane_counts()
 
         personal_episode_count = lane_counts["episodes"]["personal"]
         # core_count is personal-lane scoped — excludes work-lane episodes.
@@ -231,6 +238,7 @@ class Reflector:
             "semantic_count": semantic_count,
             "avg_confidence": avg_confidence,
             "instinct_reliability": avg_reliability,
+            "lanes": self._lane_counts(),
         }
 
         # Recent activity (last 10 log entries)
