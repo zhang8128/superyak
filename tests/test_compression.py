@@ -1550,3 +1550,20 @@ def test_cross_lane_near_miss_is_suppressed(tmp_db, compressor, embedder):
     assert cluster["action"] == "new"
     assert cluster["match"] is None
     assert cluster["near_miss"] is None  # cross-lane near-miss must not leak
+
+
+def test_work_semantic_never_becomes_instinct(tmp_db, compressor, embedder):
+    """A high-confidence work-lane preference is skipped by instinct creation."""
+    text = "prefer cursor-based pagination for the portal scraper"
+    tmp_db.add_semantic(
+        id=str(uuid.uuid4()), content=text, kind="preference",
+        confidence=0.85, embedding=embedder.embed([text])[0],
+        source_episode_ids=[], lane="work",
+    )
+    _add_episode(tmp_db, "instinct gate filler", embedder.embed(["instinct gate filler"])[0])
+    result = compressor.cluster_episodes()
+    stats = compressor.commit(result["compress_id"],
+                              [{"content": "filler", "kind": "fact", "action": "new"}])
+
+    assert stats["instincts_created"] == 0
+    assert tmp_db.get_all_instincts() == []

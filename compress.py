@@ -738,6 +738,9 @@ class Compressor:
                 if sem["confidence"] < self._instinct_confidence:
                     continue
 
+                if (sem.get("lane") or "personal") == "work":
+                    continue  # work lane never forms instincts
+
                 if self._is_referential(sem["content"]):
                     logger.info(
                         "Skipping instinct for referential semantic %s", sem["id"]
