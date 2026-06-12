@@ -54,6 +54,7 @@ class MemoryGraph:
         "co_firing": "dotted",
         "entity_link": "dotted",
         "contradiction": "bold",
+        "peer": "dashed",
         "suggested": "dashed",
     }
 
@@ -181,6 +182,22 @@ class MemoryGraph:
                 source=node_id, source_layer="semantic",
                 target=new_id, target_layer="semantic",
                 edge_type="contradiction", weight=1.0, directed=True,
+            ))
+
+        # --- Peer edges (sheaf subdivision siblings, bidirectional) ---
+        peer_rows = self._storage.conn.execute(
+            "SELECT peer_id AS other, residual_energy FROM semantic_peers WHERE parent_id = ?"
+            " UNION SELECT parent_id AS other, residual_energy FROM semantic_peers WHERE peer_id = ?",
+            (node_id, node_id),
+        ).fetchall()
+        for row in peer_rows:
+            other_id, residual = row[0], row[1]
+            edges.append(Edge(
+                source=node_id, source_layer="semantic",
+                target=other_id, target_layer="semantic",
+                edge_type="peer",
+                weight=1.0 - (residual or 0.0),
+                directed=False,
             ))
 
         return edges

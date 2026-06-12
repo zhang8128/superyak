@@ -51,3 +51,18 @@ class TestPeerNeighbors:
         back = [n for n in tmp_db.get_neighbors("peer-1")
                 if n["connection_type"] == "peer"]
         assert back and back[0]["id"] == "sem-1"
+
+
+class TestGraphViewPeers:
+    def test_peer_edges_in_memory_graph(self, tmp_db):
+        from graph import MemoryGraph
+        for sid in ("sem-1", "peer-1"):
+            tmp_db.add_semantic(id=sid, content=f"content {sid}", kind="fact",
+                                confidence=0.8, embedding=_emb(0, 0.1, 1),
+                                source_episode_ids=[])
+        tmp_db.add_semantic_peer(peer_id="peer-1", parent_id="sem-1",
+                                 residual_energy=0.1)
+        g = MemoryGraph(tmp_db)
+        view = g.to_json("sem-1", depth=1)
+        edge_types = {e.get("edge_type") for e in view.get("edges", [])}
+        assert "peer" in edge_types
