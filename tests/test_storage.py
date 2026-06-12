@@ -919,3 +919,42 @@ class TestCoreDemotionGrace:
             ).fetchone()[0]
             assert strength >= 0.05
         assert tmp_db.prune_decayed() == 0
+
+
+# --- Memory lanes ---
+
+def test_episode_lane_defaults_personal(tmp_db):
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(id=eid, session_id="s", content="a plain memory")
+    row = tmp_db.conn.execute("SELECT lane FROM episodes WHERE id = ?", (eid,)).fetchone()
+    assert row["lane"] == "personal"
+
+
+def test_episode_lane_work_round_trip(tmp_db):
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(id=eid, session_id="s", content="CommonWell uses OTP login", lane="work")
+    row = tmp_db.conn.execute("SELECT lane FROM episodes WHERE id = ?", (eid,)).fetchone()
+    assert row["lane"] == "work"
+
+
+def test_semantic_lane_round_trip(tmp_db):
+    sid = str(uuid.uuid4())
+    tmp_db.add_semantic(
+        id=sid, content="pagination is cursor-based", kind="fact",
+        confidence=0.5, embedding=[0.1] * 768, source_episode_ids=[], lane="work",
+    )
+    sem = tmp_db.get_semantic(sid)
+    assert sem["lane"] == "work"
+
+
+def test_set_episode_lanes_batch(tmp_db):
+    ids = []
+    for i in range(3):
+        eid = str(uuid.uuid4())
+        tmp_db.add_episode(id=eid, session_id="s", content=f"episode {i}")
+        ids.append(eid)
+    changed = tmp_db.set_episode_lanes(ids[:2], "work")
+    assert changed == 2
+    lanes = [r["lane"] for r in tmp_db.conn.execute(
+        "SELECT lane FROM episodes ORDER BY created_at").fetchall()]
+    assert lanes.count("work") == 2 and lanes.count("personal") == 1

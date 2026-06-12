@@ -360,12 +360,13 @@ class Storage:
         embedding: list[float] | None = None,
         entity_ids: list[str] | None = None,
         context: dict | None = None,
+        lane: str = "personal",
     ) -> str:
         now = _now_iso()
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO episodes (id, session_id, content, episode_type, context, created_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (id, session_id, content, episode_type, json.dumps(context) if context is not None else None, now, content_hash),
+            "INSERT INTO episodes (id, session_id, content, episode_type, context, created_at, content_hash, lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, session_id, content, episode_type, json.dumps(context) if context is not None else None, now, content_hash, lane),
         )
         if embedding is not None:
             self.conn.execute(
@@ -391,6 +392,18 @@ class Storage:
             ids,
         )
         self.conn.commit()
+
+    def set_episode_lanes(self, ids: list[str], lane: str) -> int:
+        """Re-lane episodes (e.g. when compression review reveals work content)."""
+        if not ids:
+            return 0
+        placeholders = ", ".join("?" * len(ids))
+        cur = self.conn.execute(
+            f"UPDATE episodes SET lane = ? WHERE id IN ({placeholders})",
+            [lane, *ids],
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def get_uncompressed_episodes(self) -> list[dict]:
         """Return all episodes that have not been compressed."""
@@ -782,12 +795,13 @@ class Storage:
         embedding: list[float],
         source_episode_ids: list[str],
         auto_generated: bool = False,
+        lane: str = "personal",
     ) -> str:
         now = _now_iso()
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         self.conn.execute(
-            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash),
+            "INSERT INTO semantics (id, content, kind, confidence, created_at, auto_generated, content_hash, lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, content, kind, confidence, now, 1 if auto_generated else 0, content_hash, lane),
         )
         self.conn.execute(
             "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
