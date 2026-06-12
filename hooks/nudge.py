@@ -65,6 +65,24 @@ def _distance_to_similarity(distance: float) -> float:
     return max(0.0, min(1.0, 1.0 - (distance * distance) / 2.0))
 
 
+def _assessment_active(conn) -> bool:
+    """True when an off-device assessment session is running.
+
+    Any active row counts (singleton-active invariant): an active row means
+    an assessment is running right now, and failing toward no-assistance
+    only makes the measurement cleaner. During an assessment the device
+    must be OFF — no instinct threads, no echoes, no session_bias writes.
+    Spec: docs/superpowers/specs/2026-06-12-off-device-assessment-design.md
+    """
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM assessments WHERE status = 'active' LIMIT 1"
+        ).fetchone()
+        return row is not None
+    except sqlite3.OperationalError:
+        return False  # pre-migration DB — assessments table absent, no gating
+
+
 def nudge():
     # Read hook input
     try:
@@ -100,6 +118,11 @@ def nudge():
     conn.row_factory = sqlite3.Row
 
     try:
+        # Off-device assessment gate: exit silently before computing or
+        # writing anything, matching the hook's normal nothing-to-say exit.
+        if _assessment_active(conn):
+            return
+
         # Check tables exist
         has_ctx = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='instinct_context_vectors'"

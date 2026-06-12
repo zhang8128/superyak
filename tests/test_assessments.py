@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
+import sqlite3
+import subprocess
+import sys
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -104,6 +110,117 @@ class TestAssessmentStorage:
             "outcomes_used": 1,
             "outcomes_not_used": 1,
         }
+
+
+# --- Nudge gating ---
+
+NUDGE_SCRIPT = Path(__file__).resolve().parent.parent / "hooks" / "nudge.py"
+MIGRATIONS_DIR = str(Path(__file__).resolve().parent.parent / "migrations")
+
+
+def _load_nudge_module():
+    spec = importlib.util.spec_from_file_location("engram_nudge_hook", NUDGE_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestNudgeAssessmentGate:
+    """During an active off-device assessment the nudge pathway is part of
+    the device and must be off: no Thread/Echo injection, no bias writes.
+    Spec: docs/superpowers/specs/2026-06-12-off-device-assessment-design.md
+    """
+
+    def test_gate_fires_on_any_active_row(self, tmp_db):
+        nudge = _load_nudge_module()
+        tmp_db.schedule_assessment(id="a-1", scheduled_by="self")
+        tmp_db.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = 's-other' "
+            "WHERE id = 'a-1'"
+        )
+        tmp_db.conn.commit()
+        assert nudge._assessment_active(tmp_db.conn) is True
+
+    def test_gate_quiet_without_active_row(self, tmp_db):
+        nudge = _load_nudge_module()
+        assert nudge._assessment_active(tmp_db.conn) is False
+        # Scheduled / completed rows don't gate — only active ones.
+        tmp_db.schedule_assessment(id="a-1", scheduled_by="self")
+        tmp_db.conn.execute(
+            "INSERT INTO assessments (id, status, scheduled_by, scheduled_at, "
+            "completed_at) VALUES ('a-2', 'completed', 'self', "
+            "'2026-06-11T00:00:00+00:00', '2026-06-11T01:00:00+00:00')"
+        )
+        tmp_db.conn.commit()
+        assert nudge._assessment_active(tmp_db.conn) is False
+
+    def test_gate_quiet_on_pre_migration_db(self, tmp_db):
+        nudge = _load_nudge_module()
+        tmp_db.conn.execute("DROP TABLE assessments")
+        tmp_db.conn.commit()
+        assert nudge._assessment_active(tmp_db.conn) is False
+
+    # --- End-to-end: run the hook the way the harness does (stdin JSON) ---
+
+    def _make_engram_home(self, tmp_path):
+        from storage import Storage
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        return Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+
+    def _run_nudge(self, engram_home, prompt):
+        env = {
+            **os.environ,
+            "ENGRAM_HOME": str(engram_home),
+            "ENGRAM_PROJECT_ROOT": str(engram_home),  # don't pick up repo config
+        }
+        env.pop("CLAUDE_SESSION_ID", None)
+        return subprocess.run(
+            [sys.executable, str(NUDGE_SCRIPT)],
+            input=json.dumps({"prompt": prompt}),
+            capture_output=True, text=True, env=env, timeout=120,
+        )
+
+    def test_nudge_silent_during_active_assessment(self, tmp_path):
+        store = self._make_engram_home(tmp_path)
+        store.schedule_assessment(id="a-1", scheduled_by="self")
+        store.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = 's-1' "
+            "WHERE id = 'a-1'"
+        )
+        store.conn.commit()
+        store.close()
+
+        prompt = ("a sufficiently long user prompt about memory lanes, "
+                  "compression review, and instinct formation during a session")
+        result = self._run_nudge(tmp_path, prompt)
+        assert result.stdout.strip() == ""   # nothing injected
+        assert "# nudge:" not in result.stderr  # silent exit, not an error
+
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        assert conn.execute("SELECT COUNT(*) FROM session_bias").fetchone()[0] == 0
+        # No auto-captured episode either — the device is fully off.
+        assert conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 0
+        conn.close()
+
+    def test_nudge_proceeds_without_assessment(self, tmp_path):
+        """Smoke: with no active assessment, nudge runs its normal flow."""
+        store = self._make_engram_home(tmp_path)
+        store.close()
+
+        prompt = ("a sufficiently long user prompt about memory lanes, "
+                  "compression review, and instinct formation during a session")
+        result = self._run_nudge(tmp_path, prompt)
+        assert result.returncode == 0
+
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        # The normal flow records the message embedding for topic-shift
+        # tracking — its presence proves the gate did not fire.
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM context_prev_embedding"
+        ).fetchone()[0]
+        conn.close()
+        assert rows == 1
 
 
 # --- Server tools ---

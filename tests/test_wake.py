@@ -291,6 +291,62 @@ class TestWakeAssessment:
         assert "Assessment Session" not in output["systemMessage"]
         assert "0 episodes" in output["systemMessage"]
 
+    def test_activation_clears_session_bias(self, tmp_path):
+        """Activation turns the device off — residual recall bias from the
+        previous oriented session must not leak into the assessment."""
+        store = self._make_store(tmp_path)
+        store.schedule_assessment(id="a-1", scheduled_by="self")
+        # Residual bias left behind by nudge.py (schema: migration 011)
+        store.conn.execute(
+            "INSERT INTO session_bias "
+            "(instinct_id, embedding, strength, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("inst-stale", b"\x00\x00\x00\x00", 0.8,
+             "2026-06-11T00:00:00+00:00", "2026-06-11T00:00:00+00:00"),
+        )
+        store.conn.commit()
+        store.close()
+
+        output = _run_wake(str(tmp_path), extra_env={"CLAUDE_SESSION_ID": "s-1"})
+        assert "Assessment Session" in output["systemMessage"]
+
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        count = conn.execute("SELECT COUNT(*) FROM session_bias").fetchone()[0]
+        conn.close()
+        assert count == 0
+
+    def test_refire_does_not_reclear_session_bias(self, tmp_path):
+        """One clear per activation: a same-session re-fire (auto-compact,
+        /clear) must not delete rows written after activation."""
+        store = self._make_store(tmp_path)
+        store.schedule_assessment(id="a-1", scheduled_by="self")
+        store.close()
+
+        env = {"CLAUDE_SESSION_ID": "s-1"}
+        first = _run_wake(str(tmp_path), extra_env=env)
+        assert "Assessment Session" in first["systemMessage"]
+
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.execute(
+            "INSERT INTO session_bias "
+            "(instinct_id, embedding, strength, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("inst-mid", b"\x00\x00\x00\x00", 1.0,
+             "2026-06-12T00:00:00+00:00", "2026-06-12T00:00:00+00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        second = _run_wake(str(tmp_path), extra_env=env)
+        assert "Assessment Session" in second["systemMessage"]
+
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        count = conn.execute("SELECT COUNT(*) FROM session_bias").fetchone()[0]
+        conn.close()
+        assert count == 1
+
     def test_same_session_refire_keeps_assessment(self, tmp_path):
         store = self._make_store(tmp_path)
         store.schedule_assessment(id="a-1", scheduled_by="self")

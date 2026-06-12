@@ -116,6 +116,15 @@ def _handle_assessment(conn, now: str, session_id: str):
             "started_at = ? WHERE id = ?",
             (session_id, now, row["id"]),
         )
+        # The device is going off: drop residual recall bias accrued by
+        # nudge.py during the previous oriented session. One clear per
+        # activation — same-session re-fires above don't re-clear.
+        # Table is owned by migration 011 but guard anyway (nudge also
+        # creates it lazily; a partially migrated DB may lack it).
+        try:
+            conn.execute("DELETE FROM session_bias")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         return _ASSESSMENT_MARKER
     except sqlite3.OperationalError:

@@ -57,16 +57,30 @@ At the top of `wake()`, before any orientation is built, in this order:
 3. **Stale `active` row** (from a prior session that ended without a report) —
    mark it `abandoned`.
 4. **Activation** — if a `scheduled` row exists: flip the oldest to `active`,
-   stamp `session_id` (from `CLAUDE_SESSION_ID`) and `started_at`, emit ONLY
-   the minimal marker, and return early:
+   stamp `session_id` (from `CLAUDE_SESSION_ID`) and `started_at`, clear the
+   `session_bias` table (residual recall bias accrued by nudge.py during the
+   previous oriented session must not tilt assessment recall; one clear per
+   activation — same-session re-fires don't re-clear), emit ONLY the minimal
+   marker, and return early:
 
    > Assessment session: no orientation loaded. Memory tools are available.
    > Call `assessment_report()` before the session ends.
+
+`ENGRAM_ASSESSMENT=skip` during a same-session re-fire (auto-compact, /clear)
+marks the in-progress assessment `abandoned` — not `skipped` — since the
+session was already running off-device.
 
 Withheld during an assessment session — all of it is device activity, and the
 off-device test is only clean if the device is actually off:
 instincts, semantics, dispositions, dream residue, dream cluster priming,
 clipboard, coherence/drift report, **task context**, and the **deep pass**.
+
+The device includes the per-prompt nudge pathway: while any assessment row is
+`active`, `nudge.py` (UserPromptSubmit) exits silently before computing or
+writing anything — no "Thread:"/"Echo:" injection, no `session_bias` writes,
+no auto-capture. Gating on *any* active row (the singleton-active invariant)
+fails toward no-assistance, which can only make measurements cleaner. On a
+pre-migration DB (no `assessments` table) nudge behaves as before.
 
 If the `assessments` table does not exist (pre-migration DB), wake proceeds
 normally — non-fatal, consistent with wake's existing error posture.
@@ -99,8 +113,8 @@ Server behavior:
    active-row invariant makes the join trivial and robust against
    wake/server session-id mismatches. Error if none active.
 2. Compute objective counters from the existing memory log for the current
-   server session: `recall_count`, `outcomes_logged_used`,
-   `outcomes_logged_unused`, `remember_count`.
+   server session: `recall_count`, `remember_count`, `outcomes_used`,
+   `outcomes_not_used`.
 3. Store `self_report` (JSON) and `objective` (JSON), set
    `completed_at`, status `completed`.
 
