@@ -395,6 +395,8 @@ class Storage:
 
     def set_episode_lanes(self, ids: list[str], lane: str) -> int:
         """Re-lane episodes (e.g. when compression review reveals work content)."""
+        if lane not in ("personal", "work"):
+            raise ValueError(f"Invalid lane: {lane!r}. Must be 'personal' or 'work'.")
         if not ids:
             return 0
         placeholders = ", ".join("?" * len(ids))
@@ -532,13 +534,14 @@ class Storage:
                 "INSERT OR REPLACE INTO episodes "
                 "(id, session_id, content, episode_type, created_at, context, "
                 " accessed_count, last_accessed, compressed, decay_strength, "
-                " core, source, content_hash, dormant) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                " core, source, content_hash, dormant, lane) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
                 (ep["id"], ep.get("session_id"), ep["content"],
                  ep.get("episode_type"), ep["created_at"], ep.get("context"),
                  ep.get("accessed_count", 0), ep.get("last_accessed"),
                  ep.get("compressed", 0), ep.get("decay_strength", 0),
-                 ep.get("core", 0), ep.get("source"), ep.get("content_hash")),
+                 ep.get("core", 0), ep.get("source"), ep.get("content_hash"),
+                 ep.get("lane", "personal")),
             )
         cold.commit()
 
@@ -577,9 +580,19 @@ class Storage:
                     core INTEGER NOT NULL DEFAULT 0,
                     source TEXT,
                     content_hash TEXT,
-                    dormant INTEGER NOT NULL DEFAULT 1
+                    dormant INTEGER NOT NULL DEFAULT 1,
+                    lane TEXT NOT NULL DEFAULT 'personal'
                 )
             """)
+            # Migrate existing cold.db files that pre-date the lane column.
+            cold_cols = {
+                row[1]
+                for row in self._cold_conn.execute("PRAGMA table_info(episodes)").fetchall()
+            }
+            if "lane" not in cold_cols:
+                self._cold_conn.execute(
+                    "ALTER TABLE episodes ADD COLUMN lane TEXT NOT NULL DEFAULT 'personal'"
+                )
             self._cold_conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS cold_fts USING fts5(
                     content, content=episodes, content_rowid=rowid
@@ -640,13 +653,13 @@ class Storage:
                 "INSERT INTO episodes "
                 "(id, session_id, content, episode_type, context, created_at, "
                 " content_hash, decay_strength, compressed, accessed_count, "
-                " dormant, core, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                " dormant, core, source, lane) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
                 (ep["id"], ep.get("session_id"), ep["content"],
                  ep.get("episode_type"), ep.get("context"),  # already JSON
                  ep["created_at"], content_hash,
                  strength, ep.get("compressed", 0), ep.get("accessed_count", 0),
-                 ep.get("core", 0), ep.get("source")),
+                 ep.get("core", 0), ep.get("source"), ep.get("lane", "personal")),
             )
             self.conn.execute(
                 "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",

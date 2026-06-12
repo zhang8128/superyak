@@ -956,5 +956,39 @@ def test_set_episode_lanes_batch(tmp_db):
     changed = tmp_db.set_episode_lanes(ids[:2], "work")
     assert changed == 2
     lanes = [r["lane"] for r in tmp_db.conn.execute(
-        "SELECT lane FROM episodes ORDER BY created_at").fetchall()]
+        "SELECT lane FROM episodes").fetchall()]
     assert lanes.count("work") == 2 and lanes.count("personal") == 1
+
+
+def test_set_episode_lanes_rejects_invalid_lane(tmp_db):
+    with pytest.raises(ValueError):
+        tmp_db.set_episode_lanes(["any-id"], "wrk")
+
+
+def test_prune_preserves_lane_in_cold_storage(tmp_db, fake_embedding):
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(id=eid, session_id="s", content="stale work detail",
+                       embedding=fake_embedding(), lane="work")
+    tmp_db.mark_episodes_compressed([eid])
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.01 WHERE id = ?", (eid,))
+    tmp_db.conn.commit()
+    pruned = tmp_db.prune_decayed(threshold=0.05)
+    assert pruned == 1
+    cold_row = tmp_db._cold_storage().execute(
+        "SELECT lane FROM episodes WHERE id = ?", (eid,)).fetchone()
+    assert cold_row["lane"] == "work"
+
+
+def test_revive_preserves_lane(tmp_db, fake_embedding):
+    emb = fake_embedding()
+    eid = str(uuid.uuid4())
+    tmp_db.add_episode(id=eid, session_id="s", content="stale work detail two",
+                       embedding=emb, lane="work")
+    tmp_db.mark_episodes_compressed([eid])
+    tmp_db.conn.execute("UPDATE episodes SET decay_strength = 0.01 WHERE id = ?", (eid,))
+    tmp_db.conn.commit()
+    tmp_db.prune_decayed(threshold=0.05)
+    assert tmp_db.get_episode(eid) is None
+    tmp_db.revive_episode(eid, embed_fn=lambda content: emb)
+    row = tmp_db.conn.execute("SELECT lane FROM episodes WHERE id = ?", (eid,)).fetchone()
+    assert row["lane"] == "work"
