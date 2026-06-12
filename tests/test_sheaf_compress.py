@@ -180,3 +180,69 @@ class TestCompressionGate:
         assert all(not c.get("split_group") for c in preview["clusters"]), (
             "no cohesion_config must not set split_group on any cluster"
         )
+
+    def test_split_reinforce_cluster_keeps_match_on_one_part_only(self, tmp_db):
+        """On split of a reinforce cluster, only the part nearest the matched semantic
+        keeps action='reinforce'; all other parts get action='new', match=None.
+
+        Fixture: 10 conflated episodes (5 on A-axis, 5 on B-axis, 60° apart).
+        A semantic is pre-placed on the A-axis so the conflated centroid (cos≈0.865
+        to sem-a) clears the reinforce_threshold=0.80.  After the sheaf gate splits
+        the cluster, part A (cos≈0.998 to sem-a) keeps the match; part B (cos≈0.498)
+        must get action='new' and match=None.
+        """
+        table: dict[str, list[float]] = {}
+        for i in range(10):
+            content = f"episode about topic {'A' if i < 5 else 'B'} number {i}"
+            emb = _emb(_V_A if i < 5 else _V_B, 0.005, i)
+            table[content] = emb
+            tmp_db.add_episode(
+                id=f"ep-r{i}",
+                session_id="s",
+                content=content,
+                embedding=emb,
+            )
+
+        # Semantic placed on topic-A direction (no noise)
+        sem_a_emb = _emb(_V_A, 0.0, 999)
+        tmp_db.add_semantic(
+            id="sem-a",
+            content="topic A knowledge",
+            kind="fact",
+            confidence=0.8,
+            embedding=sem_a_emb,
+            source_episode_ids=[],
+        )
+
+        # reinforce_threshold=0.80: conflated centroid (cos≈0.865) clears it;
+        # part B (cos≈0.498) does not.
+        cfg = CompressionConfig(cluster_similarity=0.30, reinforce_threshold=0.80)
+        comp = Compressor(
+            tmp_db,
+            FakeEmbedder(table),
+            config=cfg,
+            cohesion_config=_COHESION_ON,
+        )
+        preview = comp.cluster_episodes()
+        split = [c for c in preview["clusters"] if c.get("split_group")]
+        assert split, "fixture must produce a split cluster"
+
+        reinforcers = [c for c in split if c.get("action") == "reinforce"]
+        assert len(reinforcers) == 1, (
+            f"exactly one part should keep action='reinforce', got {len(reinforcers)}: "
+            f"{[c['action'] for c in split]}"
+        )
+        assert reinforcers[0]["match"]["id"] == "sem-a", (
+            f"reinforcer should reference sem-a, got {reinforcers[0].get('match')}"
+        )
+
+        others = [c for c in split if c is not reinforcers[0]]
+        assert all(c["action"] == "new" and c.get("match") is None for c in others), (
+            f"all non-reinforcer parts must have action='new' and match=None; "
+            f"got {[(c['action'], c.get('match')) for c in others]}"
+        )
+
+        # The reinforcer should hold the topic-A episodes
+        assert all("topic A" in e["content"] for e in reinforcers[0]["episodes"]), (
+            "the reinforcer part should contain only topic-A episodes"
+        )

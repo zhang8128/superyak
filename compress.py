@@ -323,8 +323,17 @@ class Compressor:
                     v = np.array(_emb_by_id[amb])
                     parts[int(np.argmax([c @ v for c in cents]))].append(amb)
                 by_id = {e["id"]: e for e in eps}
+                # Build sub-cluster dicts for each part first, then fix up
+                # action/match for reinforce clusters (see policy below).
+                sub_clusters: list[dict] = []
                 for part, p_energy in zip(parts, verdict.part_energies):
                     valid_part = [pid for pid in part if pid in by_id]
+                    dropped = [pid for pid in part if pid not in by_id]
+                    if dropped:
+                        logger.warning(
+                            "Sheaf gate: verdict referenced %d unknown id(s) %s — dropped",
+                            len(dropped), dropped,
+                        )
                     if not valid_part:
                         continue
                     part_embs = [np.array(_emb_by_id[pid]) for pid in valid_part if pid in _emb_by_id]
@@ -339,11 +348,49 @@ class Compressor:
                         "gain": verdict.gain,
                         "part_energy": p_energy,
                     }
-                    gated.append(sub)
+                    sub_clusters.append(sub)
+
+                # Policy: on a reinforce split, only the part whose recomputed
+                # centroid is most similar to the matched semantic's embedding
+                # keeps action='reinforce'/'match'; all others get action='new',
+                # match=None.  Fallback (embedding unavailable): first/largest
+                # part keeps the match.
+                if cluster.get("action") == "reinforce" and cluster.get("match") and len(sub_clusters) > 1:
+                    match_id = (cluster["match"] or {}).get("id")
+                    sem_emb = None
+                    if match_id:
+                        try:
+                            sem_emb = self._storage.get_vector("semantic", match_id)
+                        except Exception:
+                            logger.debug("Could not fetch semantic vector for %s", match_id)
+                    if sem_emb is not None:
+                        sem_arr = np.array(sem_emb)
+                        sem_norm = np.linalg.norm(sem_arr)
+                        best_idx = 0
+                        best_sim = -1.0
+                        for idx, sub in enumerate(sub_clusters):
+                            cent = sub.get("centroid")
+                            if cent is None:
+                                continue
+                            cent_arr = np.array(cent)
+                            norm = np.linalg.norm(cent_arr) * sem_norm
+                            sim = float(np.dot(cent_arr, sem_arr) / norm) if norm > 0 else 0.0
+                            if sim > best_sim:
+                                best_sim = sim
+                                best_idx = idx
+                    else:
+                        # Fallback: first (largest or lead) part keeps the match
+                        best_idx = 0
+                    for idx, sub in enumerate(sub_clusters):
+                        if idx != best_idx:
+                            sub["action"] = "new"
+                            sub["match"] = None
+
+                gated.extend(sub_clusters)
             all_clusters = gated
 
         compress_id = str(uuid.uuid4())
-        self._pending[compress_id] = {"clusters": all_clusters, "emb_by_id": _emb_by_id}
+        self._pending[compress_id] = {"clusters": all_clusters}
         return {"clusters": all_clusters, "compress_id": compress_id}
 
     def commit(self, compress_id: str, summaries: list[dict]) -> dict:
