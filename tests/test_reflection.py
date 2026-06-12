@@ -294,6 +294,7 @@ def test_vital_signs_healthy_core_fraction_no_warning(tmp_db, fake_embedding):
     vs = r.vital_signs()
     assert vs["core_fraction"] == pytest.approx(0.1)
     assert not any("core" in w.lower() for w in vs["warnings"])
+    assert "lanes" in vs
 
 
 def test_vital_signs_detects_frozen_instinct_loop(tmp_db):
@@ -336,7 +337,7 @@ def test_vital_signs_core_fraction_over_personal_lane(tmp_db):
             tmp_db.mark_core(eid)
     reflector = Reflector(tmp_db, 30)
     vs = reflector.vital_signs()
-    assert vs["episode_count"] == 2          # personal only
+    assert vs["personal_episode_count"] == 2  # personal only
     assert vs["core_fraction"] == 0.5        # 1 of 2 personal
     assert vs["lanes"] == {"episodes": {"personal": 2, "work": 2},
                            "semantics": {"personal": 0, "work": 0}}

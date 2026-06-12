@@ -135,19 +135,32 @@ class Reflector:
         core inflation disables decay's salience contrast, a frozen feedback
         loop means instinct strengths can never move, and access concentration
         shows whether recall is spread across memory or orbiting a few nodes.
+
+        Both ``personal_episode_count`` and ``core_count`` are personal-lane
+        scoped — they exclude any episodes in the work lane.
         """
         warnings = []
 
-        episode_count = self._storage.conn.execute(
-            "SELECT COUNT(*) FROM episodes WHERE COALESCE(lane, 'personal') = 'personal'"
-        ).fetchone()[0]
+        # Compute lane_counts first; derive personal episode count from it
+        # to avoid a redundant COUNT query.
+        lane_counts = {"episodes": {"personal": 0, "work": 0},
+                       "semantics": {"personal": 0, "work": 0}}
+        for table in ("episodes", "semantics"):
+            rows = self._storage.conn.execute(
+                f"SELECT COALESCE(lane, 'personal') AS lane, COUNT(*) FROM {table} GROUP BY 1"
+            ).fetchall()
+            for lane_name, count in rows:
+                lane_counts[table][lane_name] = count
+
+        personal_episode_count = lane_counts["episodes"]["personal"]
+        # core_count is personal-lane scoped — excludes work-lane episodes.
         core_count = self._storage.conn.execute(
             "SELECT COUNT(*) FROM episodes WHERE core >= 1 AND COALESCE(lane, 'personal') = 'personal'"
         ).fetchone()[0]
-        core_fraction = (core_count / episode_count) if episode_count else 0.0
+        core_fraction = (core_count / personal_episode_count) if personal_episode_count else 0.0
         if core_fraction > 0.3:
             warnings.append(
-                f"core inflation: {core_count}/{episode_count} personal episodes "
+                f"core inflation: {core_count}/{personal_episode_count} personal episodes "
                 f"({core_fraction:.0%}) are decay-exempt — salience contrast degrades above 30%"
             )
 
@@ -160,6 +173,7 @@ class Reflector:
                 f"events ever — strengths cannot move without instinct_feedback"
             )
 
+        # Access concentration is deliberately lane-agnostic: it measures recall attention across ALL memory.
         rows = self._storage.conn.execute(
             "SELECT accessed_count FROM episodes ORDER BY accessed_count DESC"
         ).fetchall()
@@ -168,19 +182,10 @@ class Reflector:
         top_n = max(1, len(counts) // 10)
         top_decile_share = (sum(counts[:top_n]) / total_accesses) if total_accesses else 0.0
 
-        lane_counts = {"episodes": {"personal": 0, "work": 0},
-                       "semantics": {"personal": 0, "work": 0}}
-        for table in ("episodes", "semantics"):
-            rows = self._storage.conn.execute(
-                f"SELECT COALESCE(lane, 'personal') AS lane, COUNT(*) FROM {table} GROUP BY 1"
-            ).fetchall()
-            for lane_name, count in rows:
-                lane_counts[table][lane_name] = count
-
         return {
             "core_fraction": round(core_fraction, 3),
             "core_count": core_count,
-            "episode_count": episode_count,
+            "personal_episode_count": personal_episode_count,
             "instinct_feedback": {
                 "frozen": frozen,
                 "total_fired": total_fired,
