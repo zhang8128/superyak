@@ -11,11 +11,14 @@ logger = logging.getLogger("engram.reflection")
 class Reflector:
     def __init__(self, storage, staleness_days=30,
                  genome_db_path: str | None = None,
-                 signals_db_path: str | None = None):
+                 signals_db_path: str | None = None,
+                 *,
+                 cohesion_config=None):
         self._storage = storage
         self._staleness_days = staleness_days
         self._genome_db_path = genome_db_path
         self._signals_db_path = signals_db_path
+        self._cohesion_config = cohesion_config
 
     def analyze_usage(self) -> dict:
         """Most/least accessed episodes and semantics."""
@@ -530,7 +533,7 @@ class Reflector:
         """Sheaf cohesion: global energy picture, hottest semantics, audit trail."""
         from config import CohesionConfig
         from sheaf import measure_all
-        measured = measure_all(self._storage, CohesionConfig())
+        measured = measure_all(self._storage, self._cohesion_config or CohesionConfig())
         hottest = []
         for entry in measured[:5]:
             sem = self._storage.get_semantic(entry["semantic_id"])

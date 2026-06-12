@@ -296,6 +296,7 @@ def _init():
         _config.reflection.staleness_days if _config else 30,
         genome_db_path=str(_genome_db_path) if _genome_db_path and _genome_db_path.exists() else None,
         signals_db_path=str(_signals_db_path) if _signals_db_path and _signals_db_path.exists() else None,
+        cohesion_config=_config.cohesion if _config else None,
     )
 
     # Watcher is created but NOT started — lazy-started on first code search

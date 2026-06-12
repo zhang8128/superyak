@@ -35,6 +35,22 @@ class TestReflectCohesion:
         out = Reflector(tmp_db).reflect(focus="cohesion")
         assert out["cohesion"]["semantics_measured"] == 0
 
+    def test_reflector_honors_injected_cohesion_config(self, tmp_db):
+        from config import CohesionConfig
+        eps = []
+        for i in range(8):
+            eid = f"e{i}"
+            tmp_db.add_episode(id=eid, session_id="s", content=f"ep {i}",
+                               embedding=_emb(0 if i < 4 else 1, 0.05, i))
+            eps.append(eid)
+        tmp_db.add_semantic(id="sem-1", content="conflated", kind="fact",
+                            confidence=0.8, embedding=_emb(0, 0.3, 9),
+                            source_episode_ids=eps)
+        # min_episodes above the neighborhood size: nothing should qualify
+        r = Reflector(tmp_db, cohesion_config=CohesionConfig(min_episodes=99))
+        out = r.reflect(focus="cohesion")
+        assert out["cohesion"]["semantics_measured"] == 0
+
 
 class TestPeerNeighbors:
     def test_peer_edge_appears(self, tmp_db):
