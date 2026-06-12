@@ -37,6 +37,18 @@ def _load_instance_config():
         return None, None
 
 
+_ASSESSMENT_MARKER = (
+    "# Engram — Assessment Session\n"
+    "\n"
+    "No orientation loaded. This is an off-device assessment: memory\n"
+    "tools (recall, remember, ...) are available, but no instincts,\n"
+    "semantics, dispositions, residues, or task context were injected.\n"
+    "\n"
+    "Work normally. Before the session ends, call `assessment_report()`\n"
+    "with your structured self-report."
+)
+
+
 def _handle_assessment(conn, now: str, session_id: str):
     """Off-device assessment check. Returns the marker message when this
     session is an assessment, else None.
@@ -46,11 +58,30 @@ def _handle_assessment(conn, now: str, session_id: str):
     env_flag = os.environ.get("ENGRAM_ASSESSMENT", "").lower()
     try:
         # A prior session ended without a report — abandon its active row.
+        # Treat an empty stored session_id as always stale.
         conn.execute(
             "UPDATE assessments SET status = 'abandoned' "
-            "WHERE status = 'active' AND session_id != ?",
+            "WHERE status = 'active' AND (session_id != ? OR session_id = '')",
             (session_id,),
         )
+
+        # Same-session re-fire (auto-compact, /clear): this session is already
+        # the assessment — don't re-activate, don't load orientation.
+        if session_id:
+            current = conn.execute(
+                "SELECT id FROM assessments WHERE status = 'active' AND session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if current:
+                if env_flag == "skip":  # the buffer zone still wins mid-session
+                    conn.execute(
+                        "UPDATE assessments SET status = 'abandoned' WHERE id = ?",
+                        (current["id"],),
+                    )
+                    conn.commit()
+                    return None
+                conn.commit()
+                return _ASSESSMENT_MARKER
 
         if env_flag == "skip":
             conn.execute(
@@ -86,17 +117,9 @@ def _handle_assessment(conn, now: str, session_id: str):
             (session_id, now, row["id"]),
         )
         conn.commit()
-        return (
-            "# Engram — Assessment Session\n"
-            "\n"
-            "No orientation loaded. This is an off-device assessment: memory\n"
-            "tools (recall, remember, ...) are available, but no instincts,\n"
-            "semantics, dispositions, residues, or task context were injected.\n"
-            "\n"
-            "Work normally. Before the session ends, call `assessment_report()`\n"
-            "with your structured self-report."
-        )
+        return _ASSESSMENT_MARKER
     except sqlite3.OperationalError:
+        conn.rollback()
         return None  # pre-migration DB — assessments table absent
 
 

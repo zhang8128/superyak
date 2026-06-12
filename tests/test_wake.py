@@ -20,6 +20,7 @@ def _run_wake(project_dir: str, project_root: str | None = None,
     """Run wake.py as a subprocess and parse JSON output."""
     env = {**os.environ, "ENGRAM_HOME": project_dir}
     env.pop("ENGRAM_ASSESSMENT", None)  # never inherit from the outer shell
+    env.pop("CLAUDE_SESSION_ID", None)  # never inherit from the outer shell
     if project_root is not None:
         env["ENGRAM_PROJECT_ROOT"] = project_root
     if extra_env:
@@ -279,3 +280,44 @@ class TestWakeAssessment:
         row = conn.execute("SELECT status FROM assessments WHERE id = 'a-old'").fetchone()
         assert row["status"] == "abandoned"
         conn.close()
+
+    def test_missing_assessments_table_normal_wake(self, tmp_path):
+        store = self._make_store(tmp_path)
+        store.conn.execute("DROP TABLE assessments")
+        store.conn.commit()
+        store.close()
+
+        output = _run_wake(str(tmp_path))
+        assert "Assessment Session" not in output["systemMessage"]
+        assert "0 episodes" in output["systemMessage"]
+
+    def test_same_session_refire_keeps_assessment(self, tmp_path):
+        store = self._make_store(tmp_path)
+        store.schedule_assessment(id="a-1", scheduled_by="self")
+        store.close()
+
+        env = {"CLAUDE_SESSION_ID": "s-1"}
+        first = _run_wake(str(tmp_path), extra_env=env)
+        assert "Assessment Session" in first["systemMessage"]
+
+        # Mid-session the instance schedules a future assessment, then wake
+        # re-fires (auto-compact / clear) with the SAME session id.
+        import sqlite3
+        from storage import Storage
+        store = Storage(str(tmp_path / ".engram" / "graph.db"),
+                        migrations_dir=MIGRATIONS_DIR)
+        store.schedule_assessment(id="a-2", scheduled_by="self")
+        store.close()
+
+        second = _run_wake(str(tmp_path), extra_env=env)
+        # Marker re-emitted; no orientation; no IntegrityError wake-failure
+        assert "Assessment Session" in second["systemMessage"]
+        assert "wake failed" not in second["systemMessage"]
+
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.row_factory = sqlite3.Row
+        rows = {r["id"]: r["status"] for r in
+                conn.execute("SELECT id, status FROM assessments").fetchall()}
+        conn.close()
+        assert rows["a-1"] == "active"      # still this session's assessment
+        assert rows["a-2"] == "scheduled"   # untouched, waits for next session
