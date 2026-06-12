@@ -82,3 +82,18 @@ class TestGraphViewPeers:
         view = g.to_json("sem-1", depth=1)
         edge_types = {e.get("edge_type") for e in view.get("edges", [])}
         assert "peer" in edge_types
+
+    def test_orphaned_peer_rows_do_not_render(self, tmp_db):
+        from graph import MemoryGraph
+        tmp_db.add_semantic(id="sem-1", content="hub", kind="fact",
+                            confidence=0.8, embedding=_emb(0, 0.1, 1),
+                            source_episode_ids=[])
+        # peer row whose other end does not exist (simulates stale row)
+        tmp_db.add_semantic_peer(peer_id="ghost-1", parent_id="sem-1",
+                                 residual_energy=0.1)
+        g = MemoryGraph(tmp_db)
+        # neighbors() is the raw edge builder — ghost must not appear there either
+        edges = g.neighbors("sem-1")
+        peer_targets = {e.target for e in edges if e.edge_type == "peer"} | \
+                       {e.source for e in edges if e.edge_type == "peer"}
+        assert "ghost-1" not in peer_targets

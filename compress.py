@@ -296,12 +296,14 @@ class Compressor:
                 if len(ids) < min_ep:
                     gated.append(cluster)
                     continue
-                # Build the embedding matrix from the ids we tracked above
-                id_embs = [_emb_by_id[i] for i in ids if i in _emb_by_id]
-                if len(id_embs) < min_ep:
+                # Build the embedding matrix from the ids we tracked above.
+                # Filter ids and embs together so they stay structurally in sync
+                # (a missing _emb_by_id entry would otherwise desync ids vs X rows).
+                ids = [i for i in ids if i in _emb_by_id]
+                if len(ids) < min_ep:
                     gated.append(cluster)
                     continue
-                X = np.stack(id_embs)
+                X = np.stack([_emb_by_id[i] for i in ids])
                 verdict = subdivision_test(
                     "(cluster)", ids,
                     X,
@@ -1239,6 +1241,9 @@ class Compressor:
         )
         self._storage.conn.execute("DELETE FROM semantics")
         self._storage.conn.execute("DELETE FROM resonances")
+        self._storage.conn.execute("DELETE FROM semantic_peers")
+        self._storage.conn.execute("DELETE FROM subdivision_queue")
+        # subdivision_events is an audit trail and intentionally survives full reset
         self._storage.conn.commit()
 
     def _refine_clusters(self) -> dict:

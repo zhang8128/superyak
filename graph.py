@@ -192,6 +192,10 @@ class MemoryGraph:
         ).fetchall()
         for row in peer_rows:
             other_id, residual = row[0], row[1]
+            # Skip orphaned peer rows whose other-end semantic was deleted (e.g. after
+            # a full re-compress); these would otherwise render as ghost edges.
+            if self._storage.get_semantic(other_id) is None:
+                continue
             edges.append(Edge(
                 source=node_id, source_layer="semantic",
                 target=other_id, target_layer="semantic",

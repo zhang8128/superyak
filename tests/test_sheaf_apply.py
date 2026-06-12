@@ -168,3 +168,24 @@ class TestApplySubdivision:
         row = tmp_db.conn.execute(
             "SELECT 1 FROM semantic_vectors WHERE id = 'sem-1'").fetchone()
         assert row is not None
+
+
+class TestFullRecompressCleansPeers:
+    def test_reset_all_clears_peer_and_queue_rows(self, tmp_db, fake_embedding):
+        from compress import Compressor
+        from config import CompressionConfig
+        tmp_db.add_semantic(id="sem-1", content="hub", kind="fact",
+                            confidence=0.8, embedding=fake_embedding(),
+                            source_episode_ids=[])
+        tmp_db.add_semantic_peer(peer_id="p1", parent_id="sem-1", residual_energy=0.1)
+        tmp_db.queue_subdivision("sem-1", {"gain": 0.5})
+        tmp_db.log_subdivision_event(id="ev1", parent_id="sem-1", peer_ids=["p1"],
+                                     energy_before=0.5, energy_after=0.1,
+                                     dl_cost=0.15, persistence_checked=False,
+                                     site="sleep")
+        comp = Compressor(tmp_db, None, config=CompressionConfig())
+        comp._reset_all()
+        assert tmp_db.get_semantic_peers("sem-1") == []
+        assert tmp_db.get_queued_subdivisions() == []
+        # audit trail survives intentionally
+        assert tmp_db.get_subdivision_events() != []
