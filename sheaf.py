@@ -128,6 +128,9 @@ def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
     if res["energy"] == 0.0 or not res["fiedler"]:
         return no_split
     f = np.array(res["fiedler"])
+    # A single dominant outlier inflates max|f| until the band absorbs the
+    # majority — the verdict collapses to no-split by design: a lone episode
+    # is not a peer, and outlier eviction is not this gate's job.
     eps = 0.1 * float(np.abs(f).max())
     idx = {"a": [], "b": [], "amb": []}
     for i, fi in enumerate(f):

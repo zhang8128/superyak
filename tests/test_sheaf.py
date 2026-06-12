@@ -140,3 +140,11 @@ class TestSubdivisionGate:
         X = np.vstack([_cluster(a, 10, 0.05, 7), _cluster(b, 1, 0.05, 8)])
         v = sheaf.subdivision_test("s1", [f"e{i}" for i in range(11)], X, dl_cost=0.15)
         assert v.split is False  # a 1-episode peer is not a peer
+
+    def test_parts_and_ambiguous_partition_episodes(self):
+        # the exact contract apply_subdivision depends on
+        ids, X = _two_orthogonal()
+        v = sheaf.subdivision_test("s1", ids, X, dl_cost=0.15)
+        flat = [e for p in v.parts for e in p] + v.ambiguous
+        assert sorted(flat) == sorted(ids)
+        assert len(flat) == len(set(flat))
