@@ -24,6 +24,10 @@ class TestCohesionConfig:
         assert cfg.cohesion.dl_cost == 0.3
         assert cfg.cohesion.sleep_budget == 1
 
+    def test_enabled_defaults_false(self, tmp_path):
+        cfg = load_config(tmp_path)
+        assert cfg.cohesion.enabled is False
+
 
 def _cluster(center: np.ndarray, n: int, noise: float, seed: int) -> np.ndarray:
     rng = np.random.default_rng(seed)

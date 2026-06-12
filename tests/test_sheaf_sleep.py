@@ -45,7 +45,7 @@ class TestSleepPass:
         from config import CohesionConfig
         return sheaf.run_sleep_pass(
             tmp_db, embed_fn=lambda t: _emb(5, 0.1, abs(hash(t)) % 1000),
-            framing_cfg=None, cfg=CohesionConfig(), **kw)
+            framing_cfg=None, cfg=CohesionConfig(enabled=True), **kw)
 
     def test_splits_hot_not_cool(self, tmp_db, monkeypatch):
         _seed_store(tmp_db)
@@ -70,7 +70,7 @@ class TestSleepPass:
             lambda parent, parts, amb, cfg: ([f"p{i}" for i in range(len(parts))], None))
         report = sheaf.run_sleep_pass(
             tmp_db, embed_fn=lambda t: _emb(5, 0.1, 1),
-            framing_cfg=None, cfg=CohesionConfig(sleep_budget=0))
+            framing_cfg=None, cfg=CohesionConfig(enabled=True, sleep_budget=0))
         assert report["subdivided"] == []
 
     def test_distill_failure_queues(self, tmp_db, monkeypatch):
@@ -80,7 +80,7 @@ class TestSleepPass:
         from config import CohesionConfig
         report = sheaf.run_sleep_pass(
             tmp_db, embed_fn=lambda t: _emb(5, 0.1, 1),
-            framing_cfg=None, cfg=CohesionConfig())
+            framing_cfg=None, cfg=CohesionConfig(enabled=True))
         assert report["subdivided"] == []
         assert "sem-hot" in [q["parent_id"] for q in tmp_db.get_queued_subdivisions()]
         assert tmp_db.get_semantic_peers("sem-hot") == []
@@ -90,6 +90,22 @@ class TestSleepPass:
         self._run(tmp_db, monkeypatch)
         report2 = self._run(tmp_db, monkeypatch)
         assert report2.get("skipped") == "rate_limited"
+
+    def test_disabled_pass_is_inert(self, tmp_db, monkeypatch):
+        _seed_store(tmp_db)
+        from config import CohesionConfig
+        monkeypatch.setattr(
+            sheaf, "distill_subdivision",
+            lambda parent, parts, amb, cfg: (["p0", "p1"], None))
+        report = sheaf.run_sleep_pass(
+            tmp_db, embed_fn=lambda t: _emb(5, 0.1, 1),
+            framing_cfg=None, cfg=CohesionConfig(enabled=False))
+        assert report.get("skipped") == "disabled"
+        assert tmp_db.get_semantic_peers("sem-hot") == []
+        # disabled must not even record a rate-limit event
+        row = tmp_db.conn.execute(
+            "SELECT 1 FROM memory_log WHERE event_type = 'cohesion_pass'").fetchone()
+        assert row is None
 
 
 class TestDistillSubdivision:

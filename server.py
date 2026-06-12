@@ -430,6 +430,9 @@ def _init():
             if _cohesion_report.get("subdivided"):
                 logger.info("cohesion pass subdivided: %s",
                             [s["parent_id"] for s in _cohesion_report["subdivided"]])
+            if _cohesion_report.get("queued"):
+                logger.info("cohesion pass queued (LLM unavailable): %s",
+                            [q["parent_id"] for q in _cohesion_report["queued"]])
         except Exception:
             logger.warning("cohesion sleep pass failed", exc_info=True)
     except Exception:

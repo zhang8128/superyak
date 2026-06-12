@@ -110,6 +110,8 @@ class GraphConfig:
 
 @dataclass
 class CohesionConfig:
+    # gate stays inert until read-only calibration clears it (spec: acceptance)
+    enabled: bool = False
     dl_cost: float = 0.15
     variance_threshold: float = 0.90
     max_subspace_dim: int = 8
@@ -206,6 +208,7 @@ model = "nemotron-nano"
 ollama_url = "http://localhost:11434"
 
 [cohesion]
+enabled = false
 dl_cost = 0.15
 variance_threshold = 0.90
 max_subspace_dim = 8

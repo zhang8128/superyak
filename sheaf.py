@@ -310,6 +310,9 @@ def run_sleep_pass(storage, embed_fn, framing_cfg, cfg) -> dict:
     """
     report: dict = {"measured": [], "subdivided": [], "queued": []}
     try:
+        if not getattr(cfg, "enabled", False):
+            return {"skipped": "disabled"}
+
         if _rate_limited(storage.conn):
             return {"skipped": "rate_limited"}
 
