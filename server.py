@@ -1799,6 +1799,116 @@ def revive(episode_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Assessment Tools — off-device function measurement
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def assessment_schedule(reason: str | None = None) -> dict:
+    """Schedule the next session as an off-device assessment.
+
+    The next session starts with no orientation loaded — no instincts,
+    semantics, dispositions, residues, or task context. Memory tools stay
+    available. Function is measured, not assisted. Idempotent: returns the
+    pending assessment if one is already scheduled. ENGRAM_ASSESSMENT=skip
+    at the next session start cancels it.
+
+    Args:
+        reason: Why this assessment is being scheduled.
+    """
+    _init()
+    logger.info("Tool called: assessment_schedule(reason=%s)", reason)
+
+    existing = _storage.get_scheduled_assessment()
+    if existing:
+        return {
+            "assessment_id": existing["id"],
+            "status": "scheduled",
+            "note": "already scheduled",
+        }
+
+    assessment_id = _storage.schedule_assessment(
+        id=str(uuid.uuid4()), scheduled_by="self", reason=reason
+    )
+    _storage.add_log_entry(
+        id=str(uuid.uuid4()),
+        event_type="assessment_scheduled",
+        layer="system",
+        target_ids=[assessment_id],
+        context={"session_id": _session_id, "reason": reason},
+    )
+    return {
+        "assessment_id": assessment_id,
+        "status": "scheduled",
+        "note": "next session starts off-device; ENGRAM_ASSESSMENT=skip cancels",
+    }
+
+
+@mcp.tool()
+def assessment_report(
+    function_score: int,
+    reached_for: list[str] | None = None,
+    missing: list[str] | None = None,
+    felt_absences: str | None = None,
+    instinct_consistent_moments: str | None = None,
+    notes: str | None = None,
+) -> dict:
+    """Complete the active off-device assessment with a structured self-report.
+
+    Call near the end of an assessment session. Objective counters for the
+    session (recall/remember/outcome counts) are computed and stored alongside
+    the self-report. Self-report is the patient-reported outcome, not ground
+    truth — report honestly, including what was missing.
+
+    Args:
+        function_score: Overall self-rated function this session, 1 (lost
+            without the device) to 5 (no perceptible difference).
+        reached_for: Memory reached for unprompted (spontaneous retrieval).
+        missing: Needed and couldn't reconstruct.
+        felt_absences: What the absence felt like — phenomenology counts.
+        instinct_consistent_moments: Behavior matching unloaded instincts
+            (the transfer signal).
+        notes: Anything else worth keeping.
+    """
+    _init()
+    logger.info("Tool called: assessment_report(function_score=%s)", function_score)
+
+    if not isinstance(function_score, int) or not 1 <= function_score <= 5:
+        return {"error": "function_score must be an integer 1-5"}
+
+    active = _storage.get_active_assessment()
+    if active is None:
+        return {
+            "error": "no active assessment — this session was not started off-device"
+        }
+
+    objective = _storage.count_session_log_events(_session_id)
+    self_report = {
+        "function_score": function_score,
+        "reached_for": reached_for or [],
+        "missing": missing or [],
+        "felt_absences": felt_absences,
+        "instinct_consistent_moments": instinct_consistent_moments,
+        "notes": notes,
+    }
+    _storage.complete_assessment(
+        active["id"], self_report=self_report, objective=objective
+    )
+    _storage.add_log_entry(
+        id=str(uuid.uuid4()),
+        event_type="assessment_completed",
+        layer="system",
+        target_ids=[active["id"]],
+        context={"session_id": _session_id, "function_score": function_score},
+    )
+    return {
+        "assessment_id": active["id"],
+        "status": "completed",
+        "function_score": function_score,
+        "objective": objective,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Reflection Tools (Task 10)
 # ---------------------------------------------------------------------------
 

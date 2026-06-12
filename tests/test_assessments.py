@@ -104,3 +104,74 @@ class TestAssessmentStorage:
             "outcomes_used": 1,
             "outcomes_not_used": 1,
         }
+
+
+# --- Server tools ---
+
+# Reuse the server wiring fixture from test_server.py
+from tests.test_server import server_env, FakeEmbeddingProvider  # noqa: F401
+
+
+class TestAssessmentTools:
+    def test_schedule_creates_row(self, server_env):
+        srv = server_env["server"]
+        result = srv.assessment_schedule(reason="post-lanes baseline")
+        assert result["status"] == "scheduled"
+        row = server_env["storage"].get_scheduled_assessment()
+        assert row["id"] == result["assessment_id"]
+        assert row["scheduled_by"] == "self"
+        assert row["reason"] == "post-lanes baseline"
+
+    def test_schedule_idempotent(self, server_env):
+        srv = server_env["server"]
+        first = srv.assessment_schedule()
+        second = srv.assessment_schedule()
+        assert second["assessment_id"] == first["assessment_id"]
+        assert second["note"] == "already scheduled"
+        assert len(server_env["storage"].list_assessments()) == 1
+
+    def test_report_without_active_errors(self, server_env):
+        srv = server_env["server"]
+        result = srv.assessment_report(function_score=3)
+        assert "error" in result
+
+    def test_report_validates_function_score(self, server_env):
+        srv = server_env["server"]
+        result = srv.assessment_report(function_score=6)
+        assert "error" in result
+
+    def test_report_completes_active_assessment(self, server_env):
+        srv = server_env["server"]
+        store = server_env["storage"]
+        sid = server_env["session_id"]
+
+        store.schedule_assessment(id="a-1", scheduled_by="user")
+        store.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = ? "
+            "WHERE id = 'a-1'",
+            (sid,),
+        )
+        store.conn.commit()
+
+        # Generate some session activity for the objective counters
+        srv.remember("an observation made during the assessment")
+
+        result = srv.assessment_report(
+            function_score=4,
+            reached_for=["the lane triage decision"],
+            missing=["the exact prune threshold"],
+            felt_absences="reaching for instincts found smooth air",
+            instinct_consistent_moments="still asked 'what does it actually do'",
+            notes="calibration run",
+        )
+        assert result["status"] == "completed"
+        assert result["function_score"] == 4
+        assert result["objective"]["remember_count"] >= 1
+
+        row = store.conn.execute(
+            "SELECT * FROM assessments WHERE id = 'a-1'"
+        ).fetchone()
+        assert row["status"] == "completed"
+        report = json.loads(row["self_report"])
+        assert report["function_score"] == 4
+        assert report["reached_for"] == ["the lane triage decision"]
