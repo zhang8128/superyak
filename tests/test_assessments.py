@@ -175,3 +175,47 @@ class TestAssessmentTools:
         report = json.loads(row["self_report"])
         assert report["function_score"] == 4
         assert report["reached_for"] == ["the lane triage decision"]
+
+    def test_report_race_abandoned_returns_error(self, server_env):
+        srv = server_env["server"]
+        store = server_env["storage"]
+        store.schedule_assessment(id="a-1", scheduled_by="user")
+        store.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = ? WHERE id = 'a-1'",
+            (server_env["session_id"],),
+        )
+        store.conn.commit()
+
+        original = store.complete_assessment
+
+        def race(aid, self_report, objective):
+            store.conn.execute(
+                "UPDATE assessments SET status = 'abandoned' WHERE id = ?", (aid,)
+            )
+            store.conn.commit()
+            return original(aid, self_report=self_report, objective=objective)
+
+        store.complete_assessment = race
+        result = srv.assessment_report(function_score=3)
+        store.complete_assessment = original
+        assert "error" in result
+        assert "abandoned" in result["error"]
+
+    def test_report_warns_on_session_mismatch(self, server_env):
+        srv = server_env["server"]
+        store = server_env["storage"]
+        store.schedule_assessment(id="a-1", scheduled_by="user")
+        store.conn.execute(
+            "UPDATE assessments SET status = 'active', session_id = 'someone-else' "
+            "WHERE id = 'a-1'"
+        )
+        store.conn.commit()
+
+        result = srv.assessment_report(function_score=2)
+        assert result["status"] == "completed"
+        assert "warning" in result
+
+    def test_report_rejects_bool_score(self, server_env):
+        srv = server_env["server"]
+        result = srv.assessment_report(function_score=True)
+        assert "error" in result

@@ -1824,6 +1824,7 @@ def assessment_schedule(reason: str | None = None) -> dict:
             "assessment_id": existing["id"],
             "status": "scheduled",
             "note": "already scheduled",
+            "reason": existing["reason"],
         }
 
     assessment_id = _storage.schedule_assessment(
@@ -1872,14 +1873,18 @@ def assessment_report(
     _init()
     logger.info("Tool called: assessment_report(function_score=%s)", function_score)
 
-    if not isinstance(function_score, int) or not 1 <= function_score <= 5:
+    if isinstance(function_score, bool) or not isinstance(function_score, int) \
+            or not 1 <= function_score <= 5:
         return {"error": "function_score must be an integer 1-5"}
 
     active = _storage.get_active_assessment()
     if active is None:
         return {
-            "error": "no active assessment — this session was not started off-device"
+            "error": "no active assessment — either this session was not started off-device, "
+            "or the assessment was abandoned"
         }
+
+    session_mismatch = bool(active.get("session_id")) and active["session_id"] != _session_id
 
     objective = _storage.count_session_log_events(_session_id)
     self_report = {
@@ -1890,9 +1895,15 @@ def assessment_report(
         "instinct_consistent_moments": instinct_consistent_moments,
         "notes": notes,
     }
-    _storage.complete_assessment(
-        active["id"], self_report=self_report, objective=objective
-    )
+    try:
+        _storage.complete_assessment(
+            active["id"], self_report=self_report, objective=objective
+        )
+    except ValueError:
+        return {
+            "error": "assessment was abandoned by another session before the "
+            "report landed — nothing completed"
+        }
     _storage.add_log_entry(
         id=str(uuid.uuid4()),
         event_type="assessment_completed",
@@ -1900,12 +1911,18 @@ def assessment_report(
         target_ids=[active["id"]],
         context={"session_id": _session_id, "function_score": function_score},
     )
-    return {
+    result = {
         "assessment_id": active["id"],
         "status": "completed",
         "function_score": function_score,
         "objective": objective,
     }
+    if session_mismatch:
+        result["warning"] = (
+            "active assessment was activated under a different session id; "
+            "objective counters reflect the current server session"
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
