@@ -322,3 +322,21 @@ def test_reflect_routes_vital_signs_focus(tmp_db):
     out = r.reflect(focus="vital_signs")
     assert "vital_signs" in out
     assert "core_fraction" in out["vital_signs"]
+
+
+def test_vital_signs_core_fraction_over_personal_lane(tmp_db):
+    from reflection import Reflector
+    import uuid as _uuid
+    # 2 personal (1 core) + 2 work episodes
+    for i, (lane, core) in enumerate([("personal", True), ("personal", False),
+                                      ("work", False), ("work", False)]):
+        eid = str(_uuid.uuid4())
+        tmp_db.add_episode(id=eid, session_id="s", content=f"episode {i}", lane=lane)
+        if core:
+            tmp_db.mark_core(eid)
+    reflector = Reflector(tmp_db, 30)
+    vs = reflector.vital_signs()
+    assert vs["episode_count"] == 2          # personal only
+    assert vs["core_fraction"] == 0.5        # 1 of 2 personal
+    assert vs["lanes"] == {"episodes": {"personal": 2, "work": 2},
+                           "semantics": {"personal": 0, "work": 0}}
