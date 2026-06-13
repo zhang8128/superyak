@@ -22,9 +22,10 @@ Three named problems, one mechanism:
    *unaccessed* — but the memory most likely to matter under a future
    reframe is precisely the unique one nobody touched. Conversely,
    near-duplicates are kept warm just because they were accessed.
-3. **Core inflation.** Episodes that spawn semantics auto-promote to core
-   wholesale (93 cores before hand triage cut to 76). Nothing measures
-   whether a new core adds coverage the core set lacks.
+3. **Core inflation.** When episodes spawn a semantic, the centroid-nearest
+   episode is promoted to core (already centroid-nearest-only in compress.py,
+   not wholesale) — but nothing measures whether that single candidate adds
+   coverage the core set lacks (93 cores before hand triage cut to 76).
 
 Plus a question from the cohesion calibration: the mega-hubs (194/174/144
 episodes) measure *diffuse* — are they truly structureless, or do they hide
@@ -95,10 +96,10 @@ by `1 + 0.15 × (2 × redundancy − 1)` — redundancy 0 → 0.85× (ages slowe
 cliff.
 
 **Surface 2c — core regulation.**
-- *Promotion:* when episodes spawn a semantic, promote to core only those
-  that are non-redundant **within the existing core set** — a candidate
-  whose redundancy against current cores (1 − nn-distance to the core set)
-  is ≥ `redundancy_floor` is declined. Stops inflation at the source.
+- *Promotion:* compress.py already promotes only the centroid-nearest episode
+  (not all sources). The gate guards that single candidate: if its redundancy
+  against the existing core set (1 − nn-distance to the core set) is ≥
+  `redundancy_floor` the promotion is declined. Stops inflation at the source.
 - *Demotion:* sleep-time scan flags cores whose redundancy within the core
   set exceeds the floor — **flags for review only** (surfaced in
   `reflect(focus="persistence")`), never auto-demotes.

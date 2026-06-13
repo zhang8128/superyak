@@ -406,3 +406,73 @@ def flag_redundant_cores(storage, cfg) -> list[dict]:
             flagged.append({"id": eid, "redundancy": round(float(red[i]), 3),
                             "content": ep.get("content", "")[:100]})
     return sorted(flagged, key=lambda d: -d["redundancy"])
+
+
+if __name__ == "__main__":
+    # Read-only calibration: python persistence.py /path/to/copy-of-graph.db
+    # Acceptance (spec): read the forgetting preview and hub classification
+    # BEFORE setting [persistence] enabled = true. Pre-registered questions:
+    # (1) does the recorded Prism verdict's band pass the conjunct?
+    # (2) are the mega-hubs diffuse or looped?
+    import sqlite3
+    import sys
+
+    import sqlite_vec
+
+    from config import PersistenceConfig
+
+    conn = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    conn.row_factory = sqlite3.Row  # must be set before any cursor use
+
+    class _RO:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def get_semantic(self, sid):
+            row = self.conn.execute(
+                "SELECT * FROM semantics WHERE id = ?", (sid,)).fetchone()
+            return dict(row) if row else None
+
+        def get_episode(self, eid):
+            row = self.conn.execute(
+                "SELECT * FROM episodes WHERE id = ?", (eid,)).fetchone()
+            return dict(row) if row else None
+
+        def get_persistence_scores(self):
+            return {}
+
+        def upsert_persistence_scores(self, scores):
+            pass  # read-only: scores printed, not cached
+
+    cfg = PersistenceConfig(enabled=True)  # evaluation only; nothing writes
+    store = _RO(conn)
+
+    print("== score distribution ==")
+    gen = generativity_scores(conn)
+    for lane in ("personal", "work"):
+        ids, X = _episodes_with_vectors(conn, lane=lane)
+        if not ids:
+            continue
+        f = build_filtration(X)
+        red, uniq = redundancy(f), uniqueness(f)
+        print(f"[{lane}] n={len(ids)} redundancy p50/p90:"
+              f" {np.percentile(red, 50):.3f}/{np.percentile(red, 90):.3f}"
+              f" uniqueness p50/p90:"
+              f" {np.percentile(uniq, 50):.3f}/{np.percentile(uniq, 90):.3f}")
+        prot = sum(1 for u in uniq if u >= cfg.protect_threshold)
+        redd = sum(1 for x in red if x >= cfg.redundancy_floor)
+        print(f"  would-protect(unique): {prot}  redundant-enough: {redd}"
+              f"  generativity>0: {sum(1 for i in ids if gen.get(i, 0) > 0)}")
+
+    print("\n== hub classification ==")
+    for h in classify_hubs(store, cfg):
+        print(f"  {h['classification']:>11}  n={h['n']:>4}"
+              f" band={h['band'] if h['band'] is None else round(h['band'], 3)}"
+              f" h1={h['h1']}  {h['content'][:60]}")
+
+    print("\n== retroactive conjunct audit ==")
+    for a in audit_unchecked_events(store, cfg):
+        print(f"  {a}")

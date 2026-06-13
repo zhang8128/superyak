@@ -100,6 +100,22 @@ content distilled via Ollama, else queued). Gated by `[cohesion] enabled`
 /path/to/copy-of-graph.db`. Observe via `reflect(focus="cohesion")`.
 Spec: docs/superpowers/specs/2026-06-13-sheaf-cohesion-design.md.
 
+**Persistence (Layer 4):** Single-linkage filtrations (exact, via MST) give
+each episode a redundancy (nearest-neighbor coverage) and uniqueness
+(survival across merge scales); resonance history adds generativity
+(behaviorally close, geometrically far = keeps getting reframed). The
+subdivision gate's middle conjunct is live: splits must hold a persistence
+band ≥ `min_split_band`. Forgetting (gated by `[persistence] enabled`,
+default false): prune requires decayed AND redundant; unique, generative,
+anchor-referenced, and core episodes are never auto-evicted; eviction is
+always a move to cold.db. Decay pressure modulates ±15% by redundancy. Core
+promotion declines candidates redundant within the core set; demotion only
+flags for review. Recall's uninvited slot occasionally daydreams a random
+(never query-matched) cold episode back into view. Observe via
+`reflect(focus="persistence")`; calibrate read-only via `python
+persistence.py /path/to/copy-of-graph.db`.
+Spec: docs/superpowers/specs/2026-06-13-persistence-design.md.
+
 **Off-device assessments:** Scheduled sessions where wake withholds the entire
 orientation (instincts, semantics, residues, task context) and emits only a
 marker — measuring memory function without the device, rehab-style. Self-report
@@ -121,7 +137,7 @@ Separate from identity layers.
 | `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
 | `core_memories()` | List all core episodes. |
 | `recall(query, lane?)` | Search across all layers. Returns `recall_id` for feedback. `lane="work"|"personal"` to filter. Scores hidden when dreaming. |
-| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs, assessments, cohesion. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs, assessments, cohesion, persistence. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
 | `compress()` | Manual compression cycle. `compress_commit` accepts `action="discard"` for junk clusters. |
@@ -151,6 +167,7 @@ Separate from identity layers.
 | `dreaming.py` | Dream residue — lossy emotional compression and surfacing |
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
+| `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
 | `dedup.py` | LLM-based duplicate detection |
 | `framing.py` | LLM-based instinct notice/implication distillation (`ENGRAM_FRAMING_MODEL`, defaults to dedup model) |
 | `indexer.py` | Source code indexing via tree-sitter |
@@ -162,7 +179,7 @@ Separate from identity layers.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 582 tests
+.venv/bin/python -m pytest tests/ -q   # 623 tests
 ```
 
 ## Part of a System
