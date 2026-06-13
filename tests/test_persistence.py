@@ -103,3 +103,29 @@ class TestSplitBand:
         X = _cluster(0, 16, 0.05, 8)
         band = persistence.split_band(X, list(range(8)), list(range(8, 16)))
         assert band < 0.05
+
+
+class TestFiltrationInvariants:
+    def test_carrier_conservation(self):
+        # exactly one survivor lineage (death=inf) in a connected set
+        X = _cluster(0, 20, 0.2, 42)
+        f = persistence.build_filtration(X)
+        assert int(np.isfinite(f.death).sum()) == f.n - 1
+
+    def test_score_arrays_match_n(self):
+        X = _cluster(0, 7, 0.1, 43)
+        f = persistence.build_filtration(X)
+        assert len(persistence.redundancy(f)) == f.n
+        assert len(persistence.uniqueness(f)) == f.n
+
+    def test_split_band_interleaved_indices(self):
+        # scattered (non-contiguous) index sets — where np.ix_ bugs would hide
+        X = _cluster(0, 12, 0.05, 44)
+        band = persistence.split_band(X, [0, 2, 4, 6], [1, 3, 5, 7])
+        assert band <= 0.05  # an arbitrary interleaved cut has no band
+
+    def test_all_duplicates_uniqueness_all_ones(self):
+        base = _cluster(0, 1, 0.0, 45)[0]
+        X = np.vstack([base] * 5)
+        f = persistence.build_filtration(X)
+        assert (persistence.uniqueness(f) == 1.0).all()
