@@ -286,6 +286,7 @@ def _init():
         knowledge_graph=_knowledge_graph,
         framer=_framer,
         cohesion_config=_config.cohesion if _config else None,
+        persistence_config=_config.persistence if _config else None,
     )
 
     from reflection import Reflector
@@ -428,6 +429,7 @@ def _init():
                 embed_fn=lambda text: _embeddings.embed([text], prefix="search_document")[0],
                 framing_cfg=_framing_cfg,
                 cfg=_config.cohesion if _config else None,
+                persistence_cfg=_config.persistence if _config else None,
             )
             if _cohesion_report.get("subdivided"):
                 logger.info("cohesion pass subdivided: %s",

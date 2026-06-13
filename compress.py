@@ -180,6 +180,7 @@ class Compressor:
         classification_config=None,
         framer=None,
         cohesion_config=None,
+        persistence_config=None,
     ):
         self._storage = storage
         self._embeddings = embedding_provider
@@ -189,6 +190,7 @@ class Compressor:
         self._knowledge_graph = knowledge_graph
         self._classification_config = classification_config
         self._cohesion = cohesion_config
+        self._persistence = persistence_config
         self._pending: dict[str, dict] = {}  # compress_id -> cluster state
 
     @property
@@ -310,6 +312,7 @@ class Compressor:
                     dl_cost=getattr(self._cohesion, "dl_cost", 0.15),
                     variance_threshold=getattr(self._cohesion, "variance_threshold", 0.90),
                     max_dim=getattr(self._cohesion, "max_subspace_dim", 8),
+                    persistence_cfg=self._persistence,
                 )
                 if not verdict.split:
                     gated.append(cluster)

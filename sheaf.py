@@ -99,6 +99,7 @@ class Verdict:
     dl_cost: float
     persistence_checked: bool
     worst_edges: list
+    persistence_band: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -108,25 +109,32 @@ class Verdict:
             "part_energies": self.part_energies, "gain": self.gain,
             "dl_cost": self.dl_cost,
             "persistence_checked": self.persistence_checked,
+            "persistence_band": self.persistence_band,
         }
 
 
-def persistence_check(parts: list[list[str]]) -> bool:
-    """Layer 4 slot — persistence regularization (survives-across-scales).
+def persistence_check(parts_idx: list[list[int]], X: np.ndarray,
+                      persistence_cfg) -> tuple[bool, bool, float | None]:
+    """Layer 4 conjunct: does the split survive across filtration scales?
 
-    Returns True until persistent homology lands; every event records
-    persistence_checked=False so Layer 4 can audit what it would have blocked.
+    Returns (passes, checked, band). Disabled/missing config preserves the
+    historical stub behavior: vacuously true, recorded as unchecked.
     """
-    return True
+    if persistence_cfg is None or not getattr(persistence_cfg, "enabled", False):
+        return True, False, None
+    from persistence import split_band
+    band = split_band(X, parts_idx[0], parts_idx[1])
+    return band >= persistence_cfg.min_split_band, True, band
 
 
 def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
                      dl_cost: float = 0.15, variance_threshold: float = 0.90,
-                     max_dim: int = 8, min_part: int = 2) -> Verdict:
+                     max_dim: int = 8, min_part: int = 2,
+                     persistence_cfg=None) -> Verdict:
     ls = build_local_sheaf(semantic_id, episode_ids, X, variance_threshold, max_dim)
     res = cohesion_energy(ls)
     no_split = Verdict(semantic_id, False, [], [], res["energy"], [], 0.0,
-                       dl_cost, False, res["worst_edges"])
+                       dl_cost, False, res["worst_edges"], persistence_band=None)
     if res["energy"] == 0.0 or not res["fiedler"]:
         return no_split
     f = np.array(res["fiedler"])
@@ -150,15 +158,14 @@ def subdivision_test(semantic_id: str, episode_ids: list[str], X: np.ndarray,
     weighted_after = sum((len(pi) / n_assigned) * e
                          for pi, e in zip(parts_idx, part_energies))
     gain = res["energy"] - weighted_after
-    split = gain > dl_cost * (len(parts_idx) - 1) and persistence_check(
-        [[episode_ids[i] for i in pi] for pi in parts_idx])
+    p_pass, p_checked, p_band = persistence_check(parts_idx, X, persistence_cfg)
+    split = (gain > dl_cost * (len(parts_idx) - 1)) and p_pass
     return Verdict(
         semantic_id, split,
         [[episode_ids[i] for i in pi] for pi in parts_idx],
         [episode_ids[i] for i in idx["amb"]],
         res["energy"], part_energies, gain, dl_cost,
-        False,  # persistence slot not yet built — recorded on every event
-        res["worst_edges"],
+        p_checked, res["worst_edges"], p_band,
     )
 
 
@@ -292,7 +299,7 @@ def _rate_limited(conn, minutes: int = 30) -> bool:
     return elapsed < minutes * 60
 
 
-def run_sleep_pass(storage, embed_fn, framing_cfg, cfg) -> dict:
+def run_sleep_pass(storage, embed_fn, framing_cfg, cfg, persistence_cfg=None) -> dict:
     """Budgeted sleep-time subdivision. Fails toward leaving the store unchanged.
 
     Flow:
@@ -326,7 +333,8 @@ def run_sleep_pass(storage, embed_fn, framing_cfg, cfg) -> dict:
             sid = entry["semantic_id"]
             ids, X = _episode_matrix(storage.conn, sid)
             verdict = subdivision_test(sid, ids, X, cfg.dl_cost,
-                                       cfg.variance_threshold, cfg.max_subspace_dim)
+                                       cfg.variance_threshold, cfg.max_subspace_dim,
+                                       persistence_cfg=persistence_cfg)
             if not verdict.split:
                 continue
 
