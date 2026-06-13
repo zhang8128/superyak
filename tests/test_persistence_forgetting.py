@@ -41,6 +41,9 @@ class TestGuardedPrune:
         # evicted went to cold, not destroyed
         cold = tmp_db._cold_storage()
         assert cold.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] >= 1
+        # evicted episodes leave no stale cache rows behind
+        cached = set(tmp_db.get_persistence_scores())
+        assert cached <= remaining
 
     def test_anchor_reference_protects(self, tmp_db):
         for i in range(5):

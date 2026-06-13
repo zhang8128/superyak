@@ -1258,6 +1258,7 @@ class Compressor:
         self._storage.conn.execute("DELETE FROM resonances")
         self._storage.conn.execute("DELETE FROM semantic_peers")
         self._storage.conn.execute("DELETE FROM subdivision_queue")
+        self._storage.conn.execute("DELETE FROM persistence_scores")
         # subdivision_events is an audit trail and intentionally survives full reset
         self._storage.conn.commit()
 

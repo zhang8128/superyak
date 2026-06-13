@@ -183,9 +183,13 @@ class TestFullRecompressCleansPeers:
                                      energy_before=0.5, energy_after=0.1,
                                      dl_cost=0.15, persistence_checked=False,
                                      site="sleep")
+        tmp_db.upsert_persistence_scores([
+            {"episode_id": "stale", "redundancy": 0.5, "uniqueness": 0.5,
+             "generativity": 0.0}])
         comp = Compressor(tmp_db, None, config=CompressionConfig())
         comp._reset_all()
         assert tmp_db.get_semantic_peers("sem-1") == []
         assert tmp_db.get_queued_subdivisions() == []
+        assert tmp_db.get_persistence_scores() == {}
         # audit trail survives intentionally
         assert tmp_db.get_subdivision_events() != []

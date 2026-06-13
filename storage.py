@@ -555,6 +555,9 @@ class Storage:
         self.conn.execute(
             f"DELETE FROM episodes WHERE id IN ({placeholders})", ids
         )
+        self.conn.execute(
+            f"DELETE FROM persistence_scores WHERE episode_id IN ({placeholders})", ids
+        )
         self.cleanup_resonances(ids)
         self.conn.commit()
         logger.info("Moved %d episodes to cold storage", len(ids))
