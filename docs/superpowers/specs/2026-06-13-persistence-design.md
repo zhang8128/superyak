@@ -205,10 +205,37 @@ when enabling (cohesion precedent: code default ≠ calibrated setting).
   Expectations are written down before looking, and the instrument is
   allowed to win arguments (cohesion-calibration precedent).
 
+## Calibration result (2026-06-13, first run, read-only on live copy)
+
+Both pre-registered questions answered; the instrument won both arguments.
+
+1. **The mega-hubs are looped, not diffuse.** Persistent H₁ (ripser,
+   optional install) separates identity-adjacent hubs — Self-observation
+   0.163, Diversity 0.178, Three-modes 0.151, Identity 0.153, Prism 0.133,
+   Mistborn 0.132 — from operational reference hubs (all ≤ 0.08), with the
+   0.10 threshold in a natural gap. The giants carry cycle structure that
+   binary subdivision cannot resolve; Layer 5's toroidal anchor looks less
+   like an analogy now.
+2. **The split-band conjunct over-blocks on real data.** Every hub's
+   single-linkage band is negative (Prism −0.29): one bridging episode
+   chains the parts, and min-cross-distance is chaining-sensitive. Enabled
+   today, the conjunct would veto even the inspection-verified Prism split.
+   The expectation in §Acceptance ("the recorded Prism verdict's band —
+   expected to pass") was wrong. A chaining-robust band (k-th-NN cross
+   distance / density-aware) is Layer 2 work.
+
+**Rollout order:** let the cohesion pass perform the Prism split first
+(persistence disabled ⇒ conjunct vacuous), then enable `[persistence]` for
+the forgetting surfaces — accepting an over-conservative conjunct on future
+splits (blocking is safe; it never destroys). Forgetting preview at
+defaults: 108/313 personal + 84/112 work episodes clear the redundancy
+floor, 30+32 unique-protected; generativity evidence is sparse (5 episodes),
+so its threshold stays disabled until resonances accumulate.
+
 ## Out of scope (later builds)
 
 - Information geometry (Layer 2) — the diffuse-hub fix and score-contrast
-  problem.
+  problem, now also the chaining-robust persistence band.
 - Ledger (immutable engram) — the deeper backup layer.
 - Persistence-driven *semantic* lifecycle (this build touches episodes and
   cores only).
