@@ -217,3 +217,9 @@ class TestAudit:
         assert report[0]["event_id"] == "ev1"
         assert report[0]["band"] > 0.10
         assert report[0]["would_pass"] is True
+
+    def test_audit_tolerates_pre_migration_store(self, tmp_db):
+        from config import PersistenceConfig
+        tmp_db.conn.execute("DROP TABLE subdivision_events")
+        tmp_db.conn.commit()
+        assert persistence.audit_unchecked_events(tmp_db, PersistenceConfig()) == []

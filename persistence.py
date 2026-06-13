@@ -10,6 +10,7 @@ Spec: docs/superpowers/specs/2026-06-13-persistence-design.md
 
 import json
 import logging
+import sqlite3
 import struct
 import uuid
 from dataclasses import dataclass
@@ -216,9 +217,13 @@ def audit_unchecked_events(storage, cfg) -> list[dict]:
     conjunct existed (persistence_checked=0). Best-effort: uses the peers'
     CURRENT provenance; events whose peers lack >=1 vectored episode on
     both sides are skipped with a reason."""
-    events = storage.conn.execute(
-        "SELECT * FROM subdivision_events WHERE persistence_checked = 0"
-    ).fetchall()
+    try:
+        events = storage.conn.execute(
+            "SELECT * FROM subdivision_events WHERE persistence_checked = 0"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # pre-migration-020 store (e.g. read-only calibration copy)
+        return []
     report = []
     for ev in events:
         peer_ids = json.loads(ev["peer_ids"])
