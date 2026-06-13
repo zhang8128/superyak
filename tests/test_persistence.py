@@ -143,21 +143,49 @@ class TestComputeScores:
         cached = tmp_db.get_persistence_scores()
         assert set(cached) == set(out)
 
-    def test_generativity_from_distant_resonances(self, tmp_db, fake_embedding):
+    def test_generativity_uses_geometry_not_pmi_column(self, tmp_db):
         from config import PersistenceConfig
-        for i in range(3):
-            tmp_db.add_episode(id=f"e{i}", session_id="s", content=f"ep {i}",
-                               embedding=fake_embedding())
-        # behaviorally close, geometrically far: low similarity, many co-occurrences
-        tmp_db.conn.execute(
-            "INSERT INTO resonances (id, memory_a, layer_a, memory_b, layer_b,"
-            " similarity, weight, strength, co_occurrences, created_at, last_seen)"
-            " VALUES ('r1', 'e0', 'episode', 'e1', 'episode', 0.1, 1.0, 0.5, 5,"
-            " '2026-01-01', '2026-01-01')")
+        import numpy as np
+        # distant pair: axis-0 vs axis-1 embeddings, high co-occurrence,
+        # similarity column holds a HIGH PMI (would be sign-inverted under
+        # the old formula)
+        a = np.zeros(768); a[0] = 1.0
+        b = np.zeros(768); b[1] = 1.0
+        tmp_db.add_episode(id="far-a", session_id="s", content="a",
+                           embedding=a.tolist())
+        tmp_db.add_episode(id="far-b", session_id="s", content="b",
+                           embedding=b.tolist())
+        # near-identical pair, equally high co-occurrence and PMI
+        tmp_db.add_episode(id="near-a", session_id="s", content="na",
+                           embedding=a.tolist())
+        tmp_db.add_episode(id="near-b", session_id="s", content="nb",
+                           embedding=(a + 1e-6 * b).tolist())
+        for rid, ma, mb in (("r1", "far-a", "far-b"), ("r2", "near-a", "near-b")):
+            tmp_db.conn.execute(
+                "INSERT INTO resonances (id, memory_a, layer_a, memory_b,"
+                " layer_b, similarity, weight, strength, co_occurrences,"
+                " created_at, last_seen) VALUES (?, ?, 'episode', ?, 'episode',"
+                " 3.2, 1.0, 0.5, 5, '2026-01-01', '2026-01-01')", (rid, ma, mb))
         tmp_db.conn.commit()
         out = persistence.compute_scores(tmp_db, PersistenceConfig())
-        assert out["e0"]["generativity"] == out["e1"]["generativity"] > 4.0
-        assert out["e2"]["generativity"] == 0.0
+        # geometrically far + behaviorally close = generative
+        assert out["far-a"]["generativity"] > 3.0
+        assert out["far-a"]["generativity"] == out["far-b"]["generativity"]
+        # near-duplicates resonating is NOT generativity, and never negative
+        assert 0.0 <= out["near-a"]["generativity"] < 0.1
+
+    def test_generativity_skips_unvectored_endpoints(self, tmp_db, fake_embedding):
+        from config import PersistenceConfig
+        tmp_db.add_episode(id="e0", session_id="s", content="x",
+                           embedding=fake_embedding())
+        tmp_db.conn.execute(
+            "INSERT INTO resonances (id, memory_a, layer_a, memory_b, layer_b,"
+            " similarity, weight, strength, co_occurrences, created_at,"
+            " last_seen) VALUES ('r1', 'e0', 'episode', 'ghost', 'semantic',"
+            " 0.5, 1.0, 0.5, 9, '2026-01-01', '2026-01-01')")
+        tmp_db.conn.commit()
+        out = persistence.compute_scores(tmp_db, PersistenceConfig())
+        assert out["e0"]["generativity"] == 0.0   # no vector for ghost -> no credit
 
 
 class TestAudit:

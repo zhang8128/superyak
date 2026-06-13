@@ -74,7 +74,9 @@ Per-episode scores from the store-wide, lane-pure filtration:
 - **uniqueness** = normalized persistence of its component: how long it
   resists merging.
 - **generativity** = Σ over its resonance edges of
-  `co_occurrences × (1 − similarity)`: behaviorally close, geometrically
+  `co_occurrences × geometric distance (1 − cos of endpoint embeddings;
+  the resonances.similarity column stores PMI, not cosine — corrected
+  during implementation review)`: behaviorally close, geometrically
   far — the signature of a memory that keeps getting reframed (mode-3
   collisions feeding back into the substrate).
 

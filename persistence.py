@@ -136,15 +136,49 @@ def _episodes_with_vectors(conn, lane: str | None = None):
     return ids, X
 
 
+_LAYER_VEC_TABLE = {
+    "episode": "episode_vectors",
+    "semantic": "semantic_vectors",
+    "instinct": "instinct_vectors",
+}
+
+
+def _fetch_embedding(conn, layer: str, memory_id: str) -> np.ndarray | None:
+    """Return the L2-normalised embedding for a memory, or None if missing."""
+    table = _LAYER_VEC_TABLE.get(layer)
+    if table is None:
+        return None
+    row = conn.execute(
+        f"SELECT embedding FROM {table} WHERE id = ?", (memory_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    v = _unpack_embedding(row[0])
+    norm = np.linalg.norm(v)
+    return v / (norm + _EPS)
+
+
 def generativity_scores(conn) -> dict[str, float]:
-    """Sum of co_occurrences x (1 - similarity) over episode resonance edges:
-    behaviorally close, geometrically far = keeps getting reframed."""
+    """Geometric distance computed from embeddings — the similarity column
+    stores PMI, not cosine (review finding 2026-06-13).
+
+    For each resonance edge: fetch endpoint embeddings, compute
+    d = 1 − cos(a, b) clipped to [0, 1], then w = co_occurrences × d.
+    Episode endpoints receive the credit; edges where either endpoint
+    lacks a vector are skipped (no evidence, no credit).
+    """
     rows = conn.execute(
-        "SELECT memory_a, layer_a, memory_b, layer_b, similarity,"
+        "SELECT memory_a, layer_a, memory_b, layer_b,"
         " co_occurrences FROM resonances").fetchall()
     g: dict[str, float] = {}
     for r in rows:
-        w = (r["co_occurrences"] or 1) * (1.0 - (r["similarity"] or 0.0))
+        va = _fetch_embedding(conn, r["layer_a"], r["memory_a"])
+        vb = _fetch_embedding(conn, r["layer_b"], r["memory_b"])
+        if va is None or vb is None:
+            continue
+        cos_sim = float(np.dot(va, vb))
+        d = min(max(1.0 - cos_sim, 0.0), 1.0)
+        w = (r["co_occurrences"] or 1) * d
         for mid, lay in ((r["memory_a"], r["layer_a"]),
                          (r["memory_b"], r["layer_b"])):
             if lay == "episode":
@@ -155,8 +189,11 @@ def generativity_scores(conn) -> dict[str, float]:
 def compute_scores(storage, cfg) -> dict[str, dict]:
     """Per-episode redundancy/uniqueness (lane-pure filtrations) +
     generativity overlay. Refreshes the persistence_scores cache."""
+    # cfg unused; kept for signature parity with the persistence API
     gen = generativity_scores(storage.conn)
     out: dict[str, dict] = {}
+    # O(n^2) per lane (dense distance matrix); fine to ~2k episodes/lane.
+    # If the store grows past that, cap with most-recent-N sampling here.
     for lane in ("personal", "work"):
         ids, X = _episodes_with_vectors(storage.conn, lane=lane)
         if not ids:
