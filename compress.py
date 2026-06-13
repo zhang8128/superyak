@@ -509,7 +509,13 @@ class Compressor:
                         cluster["episodes"], centroid, source_ids,
                     )
                     if centroid_nearest:
-                        self._storage.mark_core(centroid_nearest)
+                        from persistence import core_promotion_allowed
+                        if core_promotion_allowed(self._storage, centroid_nearest,
+                                                  self._persistence):
+                            self._storage.mark_core(centroid_nearest)
+                        else:
+                            logger.info("core promotion declined (redundant vs core"
+                                        " set): %s", centroid_nearest)
 
                 # Disposition semantics get resonance links to source episodes
                 # so specific correction moments surface alongside the pattern

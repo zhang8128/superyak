@@ -129,6 +129,37 @@ class TestPruneHardening:
             assert "generative" not in p["reasons"]
 
 
+class TestCorePromotionGate:
+    def _seed(self, tmp_db, candidate_emb):
+        # an existing core occupying axis 0
+        tmp_db.add_episode(id="core-1", session_id="s", content="existing core",
+                           embedding=_emb(0, 0.01, 1))
+        tmp_db.mark_core("core-1")
+        tmp_db.add_episode(id="cand", session_id="s", content="candidate",
+                           embedding=candidate_emb)
+
+    def test_redundant_candidate_declined(self, tmp_db):
+        self._seed(tmp_db, _emb(0, 0.01, 2))   # nearly identical to core-1
+        cfg = PersistenceConfig(enabled=True)
+        assert persistence.core_promotion_allowed(tmp_db, "cand", cfg) is False
+
+    def test_novel_candidate_allowed(self, tmp_db):
+        self._seed(tmp_db, _emb(5, 0.01, 3))   # different direction entirely
+        cfg = PersistenceConfig(enabled=True)
+        assert persistence.core_promotion_allowed(tmp_db, "cand", cfg) is True
+
+    def test_disabled_always_allows(self, tmp_db):
+        self._seed(tmp_db, _emb(0, 0.01, 4))
+        cfg = PersistenceConfig(enabled=False)
+        assert persistence.core_promotion_allowed(tmp_db, "cand", cfg) is True
+
+    def test_empty_core_set_allows(self, tmp_db):
+        tmp_db.add_episode(id="cand", session_id="s", content="c",
+                           embedding=_emb(0, 0.01, 5))
+        cfg = PersistenceConfig(enabled=True)
+        assert persistence.core_promotion_allowed(tmp_db, "cand", cfg) is True
+
+
 class TestDecayModulation:
     def test_multipliers_change_aging_rate(self, tmp_db):
         import datetime as dt

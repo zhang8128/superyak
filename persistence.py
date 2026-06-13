@@ -306,3 +306,26 @@ def guarded_prune(storage, cfg, threshold: float = 0.05) -> int:
     except Exception:
         logger.warning("guarded prune aborted — store unchanged", exc_info=True)
         return 0
+
+
+def core_promotion_allowed(storage, episode_id: str, cfg) -> bool:
+    """Decline promotion when the candidate is redundant within the
+    existing core set (adds no coverage). Permissive on any gap in
+    evidence: disabled, no cores, or missing vectors -> allow."""
+    if cfg is None or not getattr(cfg, "enabled", False):
+        return True
+    cand = storage.get_vector("episode", episode_id)
+    if cand is None:
+        return True
+    rows = storage.conn.execute(
+        "SELECT ev.embedding FROM episodes e"
+        " JOIN episode_vectors ev ON ev.id = e.id"
+        " WHERE e.core > 0 AND e.id != ?", (episode_id,)).fetchall()
+    if not rows:
+        return True
+    C = np.stack([_unpack_embedding(r["embedding"]) for r in rows])
+    C = C / (np.linalg.norm(C, axis=1, keepdims=True) + _EPS)
+    v = np.asarray(cand, dtype=np.float64)
+    v = v / (np.linalg.norm(v) + _EPS)
+    redundancy_vs_cores = float(np.clip((C @ v).max(), 0.0, 1.0))
+    return redundancy_vs_cores < cfg.redundancy_floor
