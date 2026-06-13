@@ -129,3 +129,63 @@ class TestFiltrationInvariants:
         X = np.vstack([base] * 5)
         f = persistence.build_filtration(X)
         assert (persistence.uniqueness(f) == 1.0).all()
+
+
+class TestComputeScores:
+    def test_scores_cover_episodes_with_vectors(self, tmp_db, fake_embedding):
+        from config import PersistenceConfig
+        for i in range(5):
+            tmp_db.add_episode(id=f"e{i}", session_id="s", content=f"ep {i}",
+                               embedding=fake_embedding())
+        tmp_db.add_episode(id="no-vec", session_id="s", content="no vector")
+        out = persistence.compute_scores(tmp_db, PersistenceConfig())
+        assert set(out) == {f"e{i}" for i in range(5)}   # no-vec excluded
+        cached = tmp_db.get_persistence_scores()
+        assert set(cached) == set(out)
+
+    def test_generativity_from_distant_resonances(self, tmp_db, fake_embedding):
+        from config import PersistenceConfig
+        for i in range(3):
+            tmp_db.add_episode(id=f"e{i}", session_id="s", content=f"ep {i}",
+                               embedding=fake_embedding())
+        # behaviorally close, geometrically far: low similarity, many co-occurrences
+        tmp_db.conn.execute(
+            "INSERT INTO resonances (id, memory_a, layer_a, memory_b, layer_b,"
+            " similarity, weight, strength, co_occurrences, created_at, last_seen)"
+            " VALUES ('r1', 'e0', 'episode', 'e1', 'episode', 0.1, 1.0, 0.5, 5,"
+            " '2026-01-01', '2026-01-01')")
+        tmp_db.conn.commit()
+        out = persistence.compute_scores(tmp_db, PersistenceConfig())
+        assert out["e0"]["generativity"] == out["e1"]["generativity"] > 4.0
+        assert out["e2"]["generativity"] == 0.0
+
+
+class TestAudit:
+    def test_audit_unchecked_events(self, tmp_db, fake_embedding):
+        from config import PersistenceConfig
+        import numpy as np
+        # two separated groups as the peers' provenance
+        rngs = [np.random.default_rng(s) for s in (1, 2)]
+        for p, (axis, rng) in enumerate(zip((0, 1), rngs)):
+            sem = f"peer-{p}"
+            eps = []
+            for i in range(4):
+                eid = f"p{p}e{i}"
+                c = np.zeros(768); c[axis] = 1.0
+                v = (c + 0.03 * rng.standard_normal(768))
+                tmp_db.add_episode(id=eid, session_id="s", content=f"x{p}{i}",
+                                   embedding=(v / np.linalg.norm(v)).tolist())
+                eps.append(eid)
+            tmp_db.add_semantic(id=sem, content=f"peer {p}", kind="fact",
+                                confidence=0.8, embedding=fake_embedding(),
+                                source_episode_ids=eps)
+        tmp_db.log_subdivision_event(id="ev1", parent_id="old-hub",
+                                     peer_ids=["peer-0", "peer-1"],
+                                     energy_before=0.8, energy_after=0.1,
+                                     dl_cost=0.05, persistence_checked=False,
+                                     site="sleep")
+        report = persistence.audit_unchecked_events(tmp_db, PersistenceConfig())
+        assert len(report) == 1
+        assert report[0]["event_id"] == "ev1"
+        assert report[0]["band"] > 0.10
+        assert report[0]["would_pass"] is True

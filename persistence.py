@@ -121,3 +121,90 @@ def split_band(X, part_a: list[int], part_b: list[int]) -> float:
     full = _mst_edges(D)
     h_max = full[-1][0] if full else _EPS
     return float((h_cross - h_int) / max(h_max, _EPS))
+
+
+def _episodes_with_vectors(conn, lane: str | None = None):
+    sql = ("SELECT e.id, e.lane, ev.embedding FROM episodes e"
+           " JOIN episode_vectors ev ON ev.id = e.id")
+    args: tuple = ()
+    if lane is not None:
+        sql += " WHERE COALESCE(e.lane, 'personal') = ?"
+        args = (lane,)
+    rows = conn.execute(sql, args).fetchall()
+    ids = [r["id"] for r in rows]
+    X = np.stack([_unpack_embedding(r["embedding"]) for r in rows]) if rows else None
+    return ids, X
+
+
+def generativity_scores(conn) -> dict[str, float]:
+    """Sum of co_occurrences x (1 - similarity) over episode resonance edges:
+    behaviorally close, geometrically far = keeps getting reframed."""
+    rows = conn.execute(
+        "SELECT memory_a, layer_a, memory_b, layer_b, similarity,"
+        " co_occurrences FROM resonances").fetchall()
+    g: dict[str, float] = {}
+    for r in rows:
+        w = (r["co_occurrences"] or 1) * (1.0 - (r["similarity"] or 0.0))
+        for mid, lay in ((r["memory_a"], r["layer_a"]),
+                         (r["memory_b"], r["layer_b"])):
+            if lay == "episode":
+                g[mid] = g.get(mid, 0.0) + w
+    return g
+
+
+def compute_scores(storage, cfg) -> dict[str, dict]:
+    """Per-episode redundancy/uniqueness (lane-pure filtrations) +
+    generativity overlay. Refreshes the persistence_scores cache."""
+    gen = generativity_scores(storage.conn)
+    out: dict[str, dict] = {}
+    for lane in ("personal", "work"):
+        ids, X = _episodes_with_vectors(storage.conn, lane=lane)
+        if not ids:
+            continue
+        f = build_filtration(X)
+        red, uniq = redundancy(f), uniqueness(f)
+        for i, eid in enumerate(ids):
+            out[eid] = {"episode_id": eid,
+                        "redundancy": float(red[i]),
+                        "uniqueness": float(uniq[i]),
+                        "generativity": float(gen.get(eid, 0.0))}
+    if out:
+        storage.upsert_persistence_scores(list(out.values()))
+    return out
+
+
+def audit_unchecked_events(storage, cfg) -> list[dict]:
+    """Re-run the band check on subdivision events recorded before the
+    conjunct existed (persistence_checked=0). Best-effort: uses the peers'
+    CURRENT provenance; events whose peers lack >=1 vectored episode on
+    both sides are skipped with a reason."""
+    events = storage.conn.execute(
+        "SELECT * FROM subdivision_events WHERE persistence_checked = 0"
+    ).fetchall()
+    report = []
+    for ev in events:
+        peer_ids = json.loads(ev["peer_ids"])
+        parts: list[list[str]] = []
+        for pid in peer_ids:
+            rows = storage.conn.execute(
+                "SELECT ss.episode_id FROM semantic_sources ss"
+                " JOIN episode_vectors ev ON ev.id = ss.episode_id"
+                " WHERE ss.semantic_id = ?", (pid,)).fetchall()
+            parts.append([r["episode_id"] for r in rows])
+        usable = [p for p in parts if p]
+        if len(usable) < 2:
+            report.append({"event_id": ev["id"], "parent_id": ev["parent_id"],
+                           "band": None, "would_pass": None,
+                           "skipped": "insufficient surviving provenance"})
+            continue
+        all_ids = [e for p in usable[:2] for e in p]
+        X = np.stack([
+            _unpack_embedding(storage.conn.execute(
+                "SELECT embedding FROM episode_vectors WHERE id = ?",
+                (e,)).fetchone()[0]) for e in all_ids])
+        na = len(usable[0])
+        band = split_band(X, list(range(na)), list(range(na, len(all_ids))))
+        report.append({"event_id": ev["id"], "parent_id": ev["parent_id"],
+                       "band": round(band, 4),
+                       "would_pass": band >= cfg.min_split_band})
+    return report
