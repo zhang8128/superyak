@@ -137,3 +137,41 @@ class TestCompressSiteAudit:
             f"expected persistence_checked=1, got {row[0]!r}; "
             "compress.py commit site is still hardcoding False"
         )
+
+
+from reflection import Reflector
+
+
+def _emb_list(axis, noise, seed):
+    rng = np.random.default_rng(seed)
+    v = np.zeros(768); v[axis] = 1.0
+    v = v + noise * rng.standard_normal(768)
+    return (v / np.linalg.norm(v)).tolist()
+
+
+class TestReflectPersistence:
+    def test_focus_returns_previews_and_classification(self, tmp_db):
+        eps = []
+        for i in range(10):
+            eid = f"e{i}"
+            tmp_db.add_episode(id=eid, session_id="s", content=f"ep {i}",
+                               embedding=_emb_list(0 if i < 5 else 1, 0.03, i))
+            eps.append(eid)
+        tmp_db.add_semantic(id="hub-1", content="bimodal hub", kind="fact",
+                            confidence=0.8, embedding=_emb_list(0, 0.3, 11),
+                            source_episode_ids=eps)
+        from config import PersistenceConfig
+        r = Reflector(tmp_db, persistence_config=PersistenceConfig())
+        out = r.reflect(focus="persistence")
+        p = out["persistence"]
+        assert "forgetting_preview" in p and "hubs" in p
+        assert "conjunct_audit" in p and "flagged_cores" in p
+        hub = [h for h in p["hubs"] if h["semantic_id"] == "hub-1"][0]
+        assert hub["classification"] == "multi-modal"
+
+    def test_empty_store(self, tmp_db):
+        from config import PersistenceConfig
+        out = Reflector(tmp_db,
+                        persistence_config=PersistenceConfig()).reflect(
+                            focus="persistence")
+        assert out["persistence"]["hubs"] == []

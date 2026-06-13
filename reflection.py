@@ -13,12 +13,14 @@ class Reflector:
                  genome_db_path: str | None = None,
                  signals_db_path: str | None = None,
                  *,
-                 cohesion_config=None):
+                 cohesion_config=None,
+                 persistence_config=None):
         self._storage = storage
         self._staleness_days = staleness_days
         self._genome_db_path = genome_db_path
         self._signals_db_path = signals_db_path
         self._cohesion_config = cohesion_config
+        self._persistence_config = persistence_config
 
     def analyze_usage(self) -> dict:
         """Most/least accessed episodes and semantics."""
@@ -557,6 +559,22 @@ class Reflector:
             "queued": self._storage.get_queued_subdivisions(),
         }
 
+    def analyze_persistence(self) -> dict:
+        """Layer 4: forgetting preview, hub classification, core flags, audit."""
+        from config import PersistenceConfig
+        from persistence import (audit_unchecked_events, classify_hubs,
+                                 compute_scores, evaluate_prune,
+                                 flag_redundant_cores)
+        cfg = self._persistence_config or PersistenceConfig()
+        compute_scores(self._storage, cfg)
+        return {
+            "enabled": bool(getattr(cfg, "enabled", False)),
+            "forgetting_preview": evaluate_prune(self._storage, cfg),
+            "hubs": classify_hubs(self._storage, cfg),
+            "flagged_cores": flag_redundant_cores(self._storage, cfg),
+            "conjunct_audit": audit_unchecked_events(self._storage, cfg),
+        }
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -588,6 +606,9 @@ class Reflector:
         elif focus == "cohesion":
             # Not included in the no-focus default: runs SVD+eigh per semantic — heavier than other foci.
             return {"cohesion": self.analyze_cohesion()}
+        elif focus == "persistence":
+            # Not in the no-focus default: filtrations per hub — heavier than other foci.
+            return {"persistence": self.analyze_persistence()}
         else:
             return {
                 "usage": self.analyze_usage(),

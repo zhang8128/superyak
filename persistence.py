@@ -329,3 +329,77 @@ def core_promotion_allowed(storage, episode_id: str, cfg) -> bool:
     v = v / (np.linalg.norm(v) + _EPS)
     redundancy_vs_cores = float(np.clip((C @ v).max(), 0.0, 1.0))
     return redundancy_vs_cores < cfg.redundancy_floor
+
+
+def classify_hubs(storage, cfg, min_episodes: int = 10) -> list[dict]:
+    """diffuse / multi-modal / looped, per provenance-heavy semantic.
+    multi-modal: the best Fiedler split's band clears min_split_band.
+    looped: persistent H1 exists (optional ripser; omitted otherwise)."""
+    from sheaf import build_local_sheaf, cohesion_energy
+    try:
+        from ripser import ripser as _ripser
+    except ImportError:
+        _ripser = None
+    sems = storage.conn.execute(
+        "SELECT semantic_id, COUNT(*) AS n FROM semantic_sources"
+        " GROUP BY semantic_id HAVING n >= ?", (min_episodes,)).fetchall()
+    out = []
+    for r in sems:
+        rows = storage.conn.execute(
+            "SELECT ss.episode_id, ev.embedding FROM semantic_sources ss"
+            " JOIN episode_vectors ev ON ev.id = ss.episode_id"
+            " WHERE ss.semantic_id = ?", (r["semantic_id"],)).fetchall()
+        if len(rows) < min_episodes:
+            continue
+        ids = [x["episode_id"] for x in rows]
+        X = np.stack([_unpack_embedding(x["embedding"]) for x in rows])
+        ls = build_local_sheaf(r["semantic_id"], ids, X)
+        res = cohesion_energy(ls)
+        band = None
+        if res["fiedler"]:
+            f = np.array(res["fiedler"])
+            a = [i for i, v in enumerate(f) if v > 0]
+            b = [i for i, v in enumerate(f) if v <= 0]
+            if len(a) >= 2 and len(b) >= 2:
+                band = split_band(X, a, b)
+        h1 = None
+        if _ripser is not None:
+            D = distance_matrix(X)
+            dgm1 = _ripser(D, maxdim=1, distance_matrix=True)["dgms"][1]
+            if len(dgm1):
+                f_full = build_filtration(X)
+                denom = max(f_full.max_height, _EPS)
+                h1 = float(np.max(dgm1[:, 1] - dgm1[:, 0]) / denom)
+        if band is not None and band >= cfg.min_split_band:
+            cls = "multi-modal"
+        elif h1 is not None and h1 >= 0.10:
+            cls = "looped"
+        else:
+            cls = "diffuse"
+        sem = storage.get_semantic(r["semantic_id"])
+        out.append({"semantic_id": r["semantic_id"],
+                    "content": (sem or {}).get("content", "")[:100],
+                    "n": len(ids), "band": band,
+                    "h1": h1 if _ripser is not None else "ripser-not-installed",
+                    "classification": cls})
+    return out
+
+
+def flag_redundant_cores(storage, cfg) -> list[dict]:
+    """Cores redundant within the core set — demotion candidates, review only."""
+    rows = storage.conn.execute(
+        "SELECT e.id, ev.embedding FROM episodes e"
+        " JOIN episode_vectors ev ON ev.id = e.id WHERE e.core > 0").fetchall()
+    if len(rows) < 2:
+        return []
+    ids = [r["id"] for r in rows]
+    X = np.stack([_unpack_embedding(r["embedding"]) for r in rows])
+    f = build_filtration(X)
+    red = redundancy(f)
+    flagged = []
+    for i, eid in enumerate(ids):
+        if red[i] >= cfg.redundancy_floor:
+            ep = storage.get_episode(eid) or {}
+            flagged.append({"id": eid, "redundancy": round(float(red[i]), 3),
+                            "content": ep.get("content", "")[:100]})
+    return sorted(flagged, key=lambda d: -d["redundancy"])

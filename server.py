@@ -298,6 +298,7 @@ def _init():
         genome_db_path=str(_genome_db_path) if _genome_db_path and _genome_db_path.exists() else None,
         signals_db_path=str(_signals_db_path) if _signals_db_path and _signals_db_path.exists() else None,
         cohesion_config=_config.cohesion if _config else None,
+        persistence_config=_config.persistence if _config else None,
     )
 
     # Watcher is created but NOT started — lazy-started on first code search
