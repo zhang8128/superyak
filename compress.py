@@ -352,6 +352,8 @@ class Compressor:
                         "energy_before": verdict.energy_before,
                         "gain": verdict.gain,
                         "part_energy": p_energy,
+                        "persistence_checked": verdict.persistence_checked,
+                        "persistence_band": verdict.persistence_band,
                     }
                     sub_clusters.append(sub)
 
@@ -565,7 +567,11 @@ class Compressor:
             else:
                 energy_after = 0.0
 
-            # Record one subdivision_events row per split_group
+            # Record one subdivision_events row per split_group.
+            # persistence_checked is uniform across a split_group — read it
+            # from the first member's cohesion dict rather than hardcoding.
+            first_cohesion = cohesion_dicts[0] if cohesion_dicts else {}
+            persistence_checked = bool(first_cohesion.get("persistence_checked", False))
             self._storage.log_subdivision_event(
                 id=str(uuid.uuid4()),
                 parent_id=f"cluster:{sg}",   # spec'd namespace prefix
@@ -573,7 +579,7 @@ class Compressor:
                 energy_before=energy_before,
                 energy_after=energy_after,
                 dl_cost=getattr(self._cohesion, "dl_cost", 0.15) if self._cohesion else 0.15,
-                persistence_checked=False,
+                persistence_checked=persistence_checked,
                 site="compress",
             )
             # Add a sibling resonance edge for every pair of semantics

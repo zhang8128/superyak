@@ -371,7 +371,8 @@ def run_sleep_pass(storage, embed_fn, framing_cfg, cfg, persistence_cfg=None) ->
                     f" split into {n_parts} peers"
                     f" (energy {verdict.energy_before:.2f} ->"
                     f" {avg_after:.2f},"
-                    f" gain {verdict.gain:.2f}, persistence unchecked)."
+                    f" gain {verdict.gain:.2f},"
+                    f" persistence {'band %.2f' % verdict.persistence_band if verdict.persistence_checked else 'unchecked'})."
                 ),
                 context={"topic": "sheaf-subdivision", "parent_id": sid,
                          "peer_ids": result["peer_ids"]},

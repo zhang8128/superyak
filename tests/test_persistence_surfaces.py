@@ -1,6 +1,9 @@
 """Persistence surfaces: gate conjunct, audit, reflect, cold-uninvited."""
 
+import math
+
 import numpy as np
+import pytest
 
 import sheaf
 from config import PersistenceConfig
@@ -32,17 +35,105 @@ class TestGateConjunct:
         assert v.persistence_band is not None and v.persistence_band > 0.10
         assert v.split is True
 
-    def test_enabled_blocks_flicker(self):
-        # one blob, but force the gate's energy conjunct to pass by using a
-        # tiny dl_cost: the persistence conjunct must be the one that blocks
-        rng = np.random.default_rng(9)
-        a = np.zeros(768); a[0] = 1.0
-        X = a + 0.3 * rng.standard_normal((16, 768))
+    def test_enabled_blocks_when_energy_passes_but_persistence_fails(self):
+        rng = np.random.default_rng(0)
+        a = np.zeros(768); b = np.zeros(768); b[0] = 0.05  # near-touching blobs
+        X = np.vstack([a + 0.08 * rng.standard_normal((8, 768)),
+                       b + 0.08 * rng.standard_normal((8, 768))])
         ids = [f"e{i}" for i in range(16)]
-        cfg = PersistenceConfig(enabled=True)
-        v = sheaf.subdivision_test("s1", ids, X, dl_cost=0.0001,
-                                   persistence_cfg=cfg)
-        if v.parts:  # only meaningful when a partition was proposed
-            assert v.persistence_checked is True
-            if v.gain > 0.0001:          # energy conjunct passed
-                assert v.split is (v.persistence_band >= cfg.min_split_band)
+        off = sheaf.subdivision_test("s1", ids, X, dl_cost=0.05)
+        on = sheaf.subdivision_test("s1", ids, X, dl_cost=0.05,
+                                    persistence_cfg=PersistenceConfig(enabled=True))
+        assert off.split is True                  # energy conjunct alone would split
+        assert on.persistence_checked is True
+        assert on.persistence_band < PersistenceConfig().min_split_band
+        assert on.split is False                  # persistence is the blocker
+
+
+class TestCompressSiteAudit:
+    def test_compress_event_records_real_persistence_check(self, tmp_db):
+        """compress-site subdivision_events row must carry persistence_checked=1
+        when the Compressor was constructed with persistence enabled."""
+        import math
+
+        import numpy as np
+
+        from compress import Compressor
+        from config import CohesionConfig, CompressionConfig
+
+        def _emb(v, noise, seed):
+            rng = np.random.default_rng(seed)
+            v = np.array(v, dtype=float)
+            v = v + noise * rng.standard_normal(768)
+            return (v / np.linalg.norm(v)).tolist()
+
+        # Two directions 60° apart (cos=0.5) — same conflated fixture as
+        # test_sheaf_compress.py's test_sibling_resonance_after_commit
+        V_A = np.zeros(768); V_A[0] = 1.0
+        V_B = np.zeros(768); V_B[0] = 0.5; V_B[1] = math.sqrt(1 - 0.5 ** 2)
+
+        table: dict[str, list[float]] = {}
+        for i in range(10):
+            content = f"episode about topic {'A' if i < 5 else 'B'} number {i}"
+            emb = _emb(V_A if i < 5 else V_B, 0.005, i)
+            table[content] = emb
+            tmp_db.add_episode(
+                id=f"ep-{i}",
+                session_id="s",
+                content=content,
+                embedding=emb,
+            )
+
+        class FakeEmbedder:
+            def __init__(self, t):
+                self._t = t
+
+            def embed(self, texts, prefix=None):
+                results = []
+                for t in texts:
+                    if t in self._t:
+                        results.append(self._t[t])
+                    else:
+                        rng = np.random.default_rng(abs(hash(t)) % (2 ** 31))
+                        v = rng.standard_normal(768)
+                        results.append((v / np.linalg.norm(v)).tolist())
+                return results
+
+        persistence_cfg = PersistenceConfig(enabled=True)
+        comp = Compressor(
+            tmp_db,
+            FakeEmbedder(table),
+            config=CompressionConfig(cluster_similarity=0.30),
+            cohesion_config=CohesionConfig(enabled=True, dl_cost=0.15),
+            persistence_config=persistence_cfg,
+        )
+        preview = comp.cluster_episodes()
+        split = [c for c in preview["clusters"] if c.get("split_group")]
+        if not split:
+            pytest.skip("clustering separated the topics on its own — fixture not conflated")
+
+        # Verify the split actually happened (gate fired with persistence enabled)
+        # The 60° fixture has wide separation so the persistence band should pass
+        # and the split should still occur.
+
+        summaries = []
+        for c in preview["clusters"]:
+            summaries.append({
+                "content": f"summary of {len(c['episodes'])} eps",
+                "kind": "fact",
+                "action": "new",
+            })
+        comp.commit(preview["compress_id"], summaries)
+
+        # The subdivision_events row must record persistence_checked = 1
+        row = tmp_db.conn.execute(
+            "SELECT persistence_checked FROM subdivision_events WHERE site = 'compress'"
+        ).fetchone()
+        assert row is not None, (
+            "no compress-site subdivision_events row — split may have been blocked "
+            "by persistence; check the band value via sheaf.subdivision_test directly"
+        )
+        assert row[0] == 1, (
+            f"expected persistence_checked=1, got {row[0]!r}; "
+            "compress.py commit site is still hardcoding False"
+        )
