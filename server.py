@@ -335,14 +335,31 @@ def _init():
     # This is engram's "consolidation during sleep" — runs between sessions.
     try:
         # 1. Recompute decay: power-law activation based on access history
-        decayed = _storage.apply_decay(decay_exponent=0.5)
-        if decayed:
-            logger.info("Decay recomputed for %d episodes", decayed)
+        try:
+            multipliers = None
+            if _config.persistence.enabled:
+                # one-sleep-stale cache is fine for ±15% pressure
+                cached = _storage.get_persistence_scores()
+                multipliers = {eid: 1.0 + 0.15 * (2.0 * s["redundancy"] - 1.0)
+                               for eid, s in cached.items()}
+            decayed = _storage.apply_decay(decay_exponent=0.5,
+                                           exponent_multipliers=multipliers)
+            if decayed:
+                logger.info("Decay recomputed for %d episodes", decayed)
+        except Exception:
+            logger.warning("decay failed", exc_info=True)
 
         # 2. Prune: delete compressed episodes that have decayed past threshold
-        pruned = _storage.prune_decayed(threshold=0.05)
-        if pruned:
-            logger.info("Pruned %d decayed episodes", pruned)
+        try:
+            if _config.persistence.enabled:
+                from persistence import guarded_prune
+                pruned = guarded_prune(_storage, _config.persistence)
+            else:
+                pruned = _storage.prune_decayed(threshold=0.05)
+            if pruned:
+                logger.info("Pruned %d decayed episodes", pruned)
+        except Exception:
+            logger.warning("prune failed", exc_info=True)
 
         # 2b. Prune weak instincts (overridden enough to drop below threshold)
         pruned_instincts = _storage.prune_weak_instincts(strength_threshold=0.1)
@@ -439,6 +456,15 @@ def _init():
                             [q["parent_id"] for q in _cohesion_report["queued"]])
         except Exception:
             logger.warning("cohesion sleep pass failed", exc_info=True)
+
+        # Persistence score refresh (spec: 2026-06-13-persistence-design.md)
+        # Always-on observation: feeds reflect previews and next-boot decay
+        # modulation; the cache is advisory, decisions recompute live.
+        try:
+            from persistence import compute_scores
+            compute_scores(_storage, _config.persistence)
+        except Exception:
+            logger.warning("persistence score refresh failed", exc_info=True)
     except Exception:
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
 
