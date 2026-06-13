@@ -513,7 +513,8 @@ class Storage:
     def prune_episode_ids(self, ids: list[str]) -> int:
         """Move the given episodes to cold storage (text+metadata preserved,
         vectors stripped). Extracted from prune_decayed so callers can supply
-        their own eviction policy."""
+        their own eviction policy. Caller owns policy: this performs NO core/dormant/anchored
+        re-check — it moves any id it is given."""
         if not ids:
             return 0
 

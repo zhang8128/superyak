@@ -79,3 +79,51 @@ class TestGuardedPrune:
         assert "iso" in protected_ids
         reasons = {p["id"]: p["reasons"] for p in preview["protected"]}
         assert "unique" in reasons["iso"]
+
+
+class TestPruneHardening:
+    def test_partition_is_disjoint(self, tmp_db):
+        for i in range(5):
+            _decayed_episode(tmp_db, f"dup-{i}", _emb(0, 0.01, i))
+        cfg = PersistenceConfig(enabled=True)
+        persistence.compute_scores(tmp_db, cfg)
+        v = persistence.evaluate_prune(tmp_db, cfg)
+        protected_ids = {p["id"] for p in v["protected"]}
+        assert protected_ids.isdisjoint(set(v["evict"]))
+        assert len(protected_ids) + len(v["evict"]) == v["candidates"]
+
+    def test_no_score_row_protects(self, tmp_db):
+        # decayed+compressed but NO vector -> no score row -> protected
+        tmp_db.add_episode(id="novec", session_id="s", content="no vector")
+        tmp_db.conn.execute(
+            "UPDATE episodes SET decay_strength = 0.01, compressed = 1"
+            " WHERE id = 'novec'")
+        tmp_db.conn.commit()
+        cfg = PersistenceConfig(enabled=True)
+        v = persistence.evaluate_prune(tmp_db, cfg)
+        prot = {p["id"]: p["reasons"] for p in v["protected"]}
+        assert "novec" in prot and "no-vector-no-evidence" in prot["novec"]
+
+    def test_retired_anchor_does_not_protect(self, tmp_db):
+        for i in range(5):
+            _decayed_episode(tmp_db, f"dup-{i}", _emb(0, 0.01, i))
+        aid = tmp_db.add_anchor(type="identity", content="q", expected="dup-1")
+        tmp_db.conn.execute(
+            "UPDATE anchors SET status = 'retired' WHERE id = ?", (aid,))
+        tmp_db.conn.commit()
+        assert "dup-1" not in persistence._anchored_episode_ids(tmp_db.conn)
+        aid2 = tmp_db.add_anchor(type="identity", content="q", expected="dup-2")
+        tmp_db.conn.execute(
+            "UPDATE anchors SET status = 'proposed_retirement' WHERE id = ?",
+            (aid2,))
+        tmp_db.conn.commit()
+        assert "dup-2" in persistence._anchored_episode_ids(tmp_db.conn)
+
+    def test_zero_generativity_threshold_ignored(self, tmp_db):
+        for i in range(5):
+            _decayed_episode(tmp_db, f"dup-{i}", _emb(0, 0.01, i))
+        cfg = PersistenceConfig(enabled=True)  # generativity_threshold = 0.0
+        persistence.compute_scores(tmp_db, cfg)
+        v = persistence.evaluate_prune(tmp_db, cfg)
+        for p in v["protected"]:
+            assert "generative" not in p["reasons"]

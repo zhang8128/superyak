@@ -102,6 +102,7 @@ def uniqueness(f: Filtration) -> np.ndarray:
         return np.zeros(0)
     if f.n == 1 or f.max_height <= _MST_FLOOR:
         return np.ones(f.n)
+    # Normalization is per-filtration (relative): in a homogeneous all-duplicate set, scores skew high and protection dominates — conservative by design.
     return np.clip(np.minimum(f.death, f.max_height) / f.max_height, 0.0, 1.0)
 
 
@@ -275,6 +276,7 @@ def evaluate_prune(storage, cfg, threshold: float = 0.05) -> dict:
         s = scores.get(eid)
         reasons = []
         if s is None:
+            # No score row = no vector = no evidence; such episodes can never be evicted by this gate — deliberate (forgetting requires evidence).
             reasons.append("no-vector-no-evidence")
         else:
             if s["uniqueness"] >= cfg.protect_threshold:
