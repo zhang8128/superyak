@@ -436,7 +436,8 @@ class Storage:
         )
         self.conn.commit()
 
-    def apply_decay(self, decay_exponent: float = 0.5, min_interval_minutes: int = 30) -> int:
+    def apply_decay(self, decay_exponent: float = 0.5, min_interval_minutes: int = 30,
+                    exponent_multipliers: dict[str, float] | None = None) -> int:
         """Recompute episode strengths using ACT-R power-law decay.
 
         Base-level activation: B = ln(1 + n * t^(-d))
@@ -450,6 +451,9 @@ class Storage:
         Rate-limited: skips if the last session_start was less than
         min_interval_minutes ago, preventing rapid restarts from recomputing
         needlessly.
+
+        exponent_multipliers: optional dict mapping episode_id to a per-episode
+        multiplier for the decay exponent. Applied as d_eff = d * multiplier.
         """
         import math
         from datetime import datetime, timezone
@@ -487,7 +491,9 @@ class Storage:
                 t_hours = 24.0  # fallback: assume 1 day
 
             n = (ep["accessed_count"] or 0) + 1  # creation counts as an access
-            activation = math.log(1 + n * t_hours ** (-decay_exponent))
+            d_eff = decay_exponent * (
+                (exponent_multipliers or {}).get(ep["id"], 1.0))
+            activation = math.log(1 + n * t_hours ** (-d_eff))
 
             # Normalize: ln(1 + n*0.1^-0.5) ≈ ln(1 + 3.16*n) is roughly the max
             # for a freshly-touched episode. We use a soft normalization that

@@ -127,3 +127,26 @@ class TestPruneHardening:
         v = persistence.evaluate_prune(tmp_db, cfg)
         for p in v["protected"]:
             assert "generative" not in p["reasons"]
+
+
+class TestDecayModulation:
+    def test_multipliers_change_aging_rate(self, tmp_db):
+        import datetime as dt
+        old = (dt.datetime.now(dt.timezone.utc)
+               - dt.timedelta(days=30)).isoformat()
+        for eid in ("redundant-ep", "unique-ep"):
+            tmp_db.add_episode(id=eid, session_id="s", content=eid)
+            tmp_db.conn.execute(
+                "UPDATE episodes SET created_at = ?, last_accessed = ?,"
+                " decay_strength = 0.9 WHERE id = ?", (old, old, eid))
+        tmp_db.conn.commit()
+        tmp_db.apply_decay(min_interval_minutes=0, exponent_multipliers={
+            "redundant-ep": 1.15, "unique-ep": 0.85})
+        s = {r["id"]: r["decay_strength"] for r in tmp_db.conn.execute(
+            "SELECT id, decay_strength FROM episodes").fetchall()}
+        assert s["redundant-ep"] < s["unique-ep"]   # redundant ages faster
+
+    def test_no_multipliers_is_todays_behavior(self, tmp_db):
+        tmp_db.add_episode(id="e1", session_id="s", content="x")
+        n = tmp_db.apply_decay(min_interval_minutes=0)
+        assert isinstance(n, int)   # smoke: signature unchanged for old callers
