@@ -120,6 +120,17 @@ class CohesionConfig:
 
 
 @dataclass
+class PersistenceConfig:
+    # forgetting stays inert until read-only calibration clears it (spec)
+    enabled: bool = False
+    min_split_band: float = 0.10
+    redundancy_floor: float = 0.85
+    protect_threshold: float = 0.6
+    generativity_threshold: float = 0.0  # 0 disables until calibrated
+    cold_uninvited_p: float = 0.05
+
+
+@dataclass
 class EngramConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
@@ -136,6 +147,7 @@ class EngramConfig:
     resonance: ResonanceConfig = field(default_factory=ResonanceConfig)
     graph: GraphConfig = field(default_factory=GraphConfig)
     cohesion: CohesionConfig = field(default_factory=CohesionConfig)
+    persistence: PersistenceConfig = field(default_factory=PersistenceConfig)
     instance: str | None = None
     session_context: str | None = None
 
@@ -214,6 +226,14 @@ variance_threshold = 0.90
 max_subspace_dim = 8
 min_episodes = 3
 sleep_budget = 3
+
+[persistence]
+enabled = false
+min_split_band = 0.10
+redundancy_floor = 0.85
+protect_threshold = 0.6
+generativity_threshold = 0.0
+cold_uninvited_p = 0.05
 """
 
 
@@ -247,6 +267,7 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         resonance=ResonanceConfig(**raw.get("resonance", {})),
         graph=GraphConfig(**raw.get("graph", {})),
         cohesion=CohesionConfig(**raw.get("cohesion", {})),
+        persistence=PersistenceConfig(**raw.get("persistence", {})),
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),
     )
