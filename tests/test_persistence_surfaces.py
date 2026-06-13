@@ -175,3 +175,20 @@ class TestReflectPersistence:
                         persistence_config=PersistenceConfig()).reflect(
                             focus="persistence")
         assert out["persistence"]["hubs"] == []
+
+
+class TestColdUninvited:
+    def test_sample_cold_random(self, tmp_db, fake_embedding):
+        tmp_db.add_episode(id="e1", session_id="s", content="soon cold",
+                           embedding=fake_embedding())
+        tmp_db.conn.execute(
+            "UPDATE episodes SET decay_strength = 0.01, compressed = 1"
+            " WHERE id = 'e1'")
+        tmp_db.conn.commit()
+        tmp_db.prune_decayed()
+        out = tmp_db.sample_cold_random(k=1)
+        assert len(out) == 1 and out[0]["id"] == "e1"
+        assert tmp_db.sample_cold_random(k=5)[0]["content"] == "soon cold"
+
+    def test_empty_cold_returns_nothing(self, tmp_db):
+        assert tmp_db.sample_cold_random(k=1) == []

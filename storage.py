@@ -644,6 +644,20 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def sample_cold_random(self, k: int = 1) -> list[dict]:
+        """Unconditioned draw from cold storage — daydream material, never
+        query-matched (a query-matched cold memory is retrieval pretending
+        to be serendipity)."""
+        try:
+            cold = self._cold_storage()
+            rows = cold.execute(
+                "SELECT * FROM episodes ORDER BY RANDOM() LIMIT ?", (k,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            logger.warning("cold sample failed", exc_info=True)
+            return []
+
     def revive_episode(self, episode_id: str, embed_fn,
                        strength: float = 0.5) -> dict | None:
         """Revive a cold episode — move it back to main db with a fresh vector.

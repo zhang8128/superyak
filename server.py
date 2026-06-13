@@ -1125,6 +1125,29 @@ def recall(
     # Uninvited memories: gap-biased + pure random for generative collisions
     if uninvited > 0:
         matched_ids = {r["id"] for r in results}
+
+        # Cold-uninvited draw: with probability cold_uninvited_p, pull one
+        # random episode from cold storage into an uninvited slot. Deliberately
+        # independent of [persistence] enabled — surfacing is observation, not
+        # forgetting. A cold episode is never query-matched (that would be
+        # retrieval pretending to be serendipity).
+        import random as _random
+        cold_p = getattr(getattr(_config, "persistence", None),
+                         "cold_uninvited_p", 0.0)
+        if uninvited > 0 and _random.random() < cold_p:
+            cold_rows = _storage.sample_cold_random(k=1)
+            if cold_rows:
+                ep = cold_rows[0]
+                results.append({
+                    "id": ep["id"], "layer": "episode",
+                    "content": ep.get("content", ""),
+                    "lane": ep.get("lane") or "personal",
+                    "uninvited": True, "cold": True, "origin": "cold",
+                    "note": "daydream fragment from cold storage — revive(id) to bring it back",
+                })
+                result_ids.append(ep["id"])
+                uninvited -= 1   # the cold draw takes one uninvited slot
+
         try:
             uninvited_layers = (layer,) if layer else None
 
