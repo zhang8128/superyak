@@ -245,3 +245,62 @@ def audit_unchecked_events(storage, cfg) -> list[dict]:
                        "band": round(band, 4),
                        "would_pass": band >= cfg.min_split_band})
     return report
+
+
+def _anchored_episode_ids(conn) -> set[str]:
+    """Episode ids held by active identity anchors.
+
+    Mirrors Storage.get_active_anchors's filter: status != 'retired'
+    (NOT status = 'active' — anchors can have pending/proposed states that
+    are also non-retired and should still protect the memory).
+    """
+    rows = conn.execute(
+        "SELECT expected FROM anchors WHERE type = 'identity'"
+        " AND status != 'retired'").fetchall()
+    return {r["expected"] for r in rows if r["expected"]}
+
+
+def evaluate_prune(storage, cfg, threshold: float = 0.05) -> dict:
+    """Pure preview of the two-key prune rule. Reads the score cache —
+    callers wanting live decisions refresh via compute_scores first."""
+    scores = storage.get_persistence_scores()
+    anchored = _anchored_episode_ids(storage.conn)
+    rows = storage.conn.execute(
+        "SELECT id FROM episodes WHERE decay_strength < ?"
+        " AND compressed = 1 AND core = 0 AND dormant = 0",
+        (threshold,)).fetchall()
+    evict, protected = [], []
+    for r in rows:
+        eid = r["id"]
+        s = scores.get(eid)
+        reasons = []
+        if s is None:
+            reasons.append("no-vector-no-evidence")
+        else:
+            if s["uniqueness"] >= cfg.protect_threshold:
+                reasons.append("unique")
+            if (cfg.generativity_threshold > 0
+                    and s["generativity"] >= cfg.generativity_threshold):
+                reasons.append("generative")
+            if s["redundancy"] < cfg.redundancy_floor:
+                reasons.append("not-redundant-enough")
+        if eid in anchored:
+            reasons.append("anchored")
+        if reasons:
+            protected.append({"id": eid, "reasons": reasons})
+        else:
+            evict.append(eid)
+    return {"evict": evict, "protected": protected,
+            "candidates": len(rows)}
+
+
+def guarded_prune(storage, cfg, threshold: float = 0.05) -> int:
+    """The two-key rule, acting: decayed AND redundant AND unprotected ->
+    cold storage. Fails toward leaving the store unchanged."""
+    try:
+        compute_scores(storage, cfg)   # decisions never trust a stale cache
+        verdict = evaluate_prune(storage, cfg, threshold)
+        return storage.prune_episode_ids(verdict["evict"])
+    except Exception:
+        logger.warning("guarded prune aborted — store unchanged", exc_info=True)
+        return 0

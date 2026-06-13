@@ -510,22 +510,18 @@ class Storage:
         logger.debug("Decay recomputed (d=%.2f): %d episodes updated", decay_exponent, count)
         return count
 
-    def prune_decayed(self, threshold: float = 0.05) -> int:
-        """Move decayed episodes to cold storage.
-
-        Compressed episodes below threshold get moved to a sibling cold.db:
-        text and metadata preserved, vectors stripped. The main db stays lean.
-        """
-        rows = self.conn.execute(
-            "SELECT * FROM episodes "
-            "WHERE decay_strength < ? AND compressed = 1 AND core = 0 AND dormant = 0",
-            (threshold,),
-        ).fetchall()
-        if not rows:
+    def prune_episode_ids(self, ids: list[str]) -> int:
+        """Move the given episodes to cold storage (text+metadata preserved,
+        vectors stripped). Extracted from prune_decayed so callers can supply
+        their own eviction policy."""
+        if not ids:
             return 0
 
+        placeholders = ", ".join("?" * len(ids))
+        rows = self.conn.execute(
+            f"SELECT * FROM episodes WHERE id IN ({placeholders})", ids
+        ).fetchall()
         episodes = [dict(r) for r in rows]
-        ids = [e["id"] for e in episodes]
 
         # Move to cold storage
         cold = self._cold_storage()
@@ -546,7 +542,6 @@ class Storage:
         cold.commit()
 
         # Remove from main db (vectors, FTS triggers handle cascade)
-        placeholders = ", ".join("?" * len(ids))
         self.conn.execute(
             f"DELETE FROM episode_vectors WHERE id IN ({placeholders})", ids
         )
@@ -555,8 +550,24 @@ class Storage:
         )
         self.cleanup_resonances(ids)
         self.conn.commit()
-        logger.info("Moved %d decayed episodes to cold storage (threshold=%.3f)", len(ids), threshold)
+        logger.info("Moved %d episodes to cold storage", len(ids))
         return len(ids)
+
+    def prune_decayed(self, threshold: float = 0.05) -> int:
+        """Move decayed episodes to cold storage.
+
+        Compressed episodes below threshold get moved to a sibling cold.db:
+        text and metadata preserved, vectors stripped. The main db stays lean.
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM episodes "
+            "WHERE decay_strength < ? AND compressed = 1 AND core = 0 AND dormant = 0",
+            (threshold,),
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        if ids:
+            logger.info("Pruning %d decayed episodes (threshold=%.3f)", len(ids), threshold)
+        return self.prune_episode_ids(ids)
 
     def _cold_storage(self):
         """Get or create the cold storage database (sibling of main db)."""
