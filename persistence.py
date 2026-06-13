@@ -366,10 +366,13 @@ def classify_hubs(storage, cfg, min_episodes: int = 10) -> list[dict]:
         if _ripser is not None:
             D = distance_matrix(X)
             dgm1 = _ripser(D, maxdim=1, distance_matrix=True)["dgms"][1]
-            if len(dgm1):
+            # inf deaths can't occur without thresh=, but guard anyway:
+            # inf would leak invalid JSON through the MCP transport
+            finite = dgm1[np.isfinite(dgm1[:, 1])] if len(dgm1) else dgm1
+            if len(finite):
                 f_full = build_filtration(X)
                 denom = max(f_full.max_height, _EPS)
-                h1 = float(np.max(dgm1[:, 1] - dgm1[:, 0]) / denom)
+                h1 = float(np.max(finite[:, 1] - finite[:, 0]) / denom)
         if band is not None and band >= cfg.min_split_band:
             cls = "multi-modal"
         elif h1 is not None and h1 >= 0.10:
