@@ -413,6 +413,25 @@ def flag_redundant_cores(storage, cfg) -> list[dict]:
     return sorted(flagged, key=lambda d: -d["redundancy"])
 
 
+def innovation_distribution(storage) -> dict:
+    """Distribution of write-time innovation over episodes, for tuning
+    core_innovation_floor from evidence. NULL rows are excluded."""
+    rows = storage.conn.execute(
+        "SELECT innovation FROM episodes WHERE innovation IS NOT NULL"
+    ).fetchall()
+    vals = [r[0] for r in rows]
+    if not vals:
+        return {"count": 0}
+    arr = np.array(vals, dtype=np.float64)
+    return {
+        "count": len(vals),
+        "mean": round(float(arr.mean()), 4),
+        "min": round(float(arr.min()), 4),
+        "max": round(float(arr.max()), 4),
+        "histogram": [int(x) for x in np.histogram(arr, bins=5, range=(0.0, 1.0))[0]],
+    }
+
+
 if __name__ == "__main__":
     # Read-only calibration: python persistence.py /path/to/copy-of-graph.db
     # Acceptance (spec): read the forgetting preview and hub classification

@@ -564,7 +564,7 @@ class Reflector:
         from config import PersistenceConfig
         from persistence import (audit_unchecked_events, classify_hubs,
                                  compute_scores, evaluate_prune,
-                                 flag_redundant_cores)
+                                 flag_redundant_cores, innovation_distribution)
         cfg = self._persistence_config or PersistenceConfig()
         compute_scores(self._storage, cfg)
         return {
@@ -573,6 +573,7 @@ class Reflector:
             "hubs": classify_hubs(self._storage, cfg),
             "flagged_cores": flag_redundant_cores(self._storage, cfg),
             "conjunct_audit": audit_unchecked_events(self._storage, cfg),
+            "innovation": innovation_distribution(self._storage),
         }
 
     def reflect(self, focus=None) -> dict:

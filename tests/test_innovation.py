@@ -100,3 +100,32 @@ def test_gate_permits_at_or_above_floor():
     from compress import _innovation_permits_core
     assert _innovation_permits_core(0.05, 0.05) is True
     assert _innovation_permits_core(0.9, 0.05) is True
+
+
+def test_innovation_distribution_empty(tmp_path):
+    from persistence import innovation_distribution
+    s = _mk(tmp_path)
+    assert innovation_distribution(s)["count"] == 0
+    s.conn.close()
+
+
+def test_innovation_distribution_stats(tmp_path):
+    from persistence import innovation_distribution
+    s = _mk(tmp_path)
+    for eid, innov in [("e1", 0.2), ("e2", 0.8)]:
+        s.conn.execute(
+            "INSERT INTO episodes (id, content, created_at, innovation, lane) "
+            "VALUES (?, ?, '2026-07-07T00:00:00Z', ?, 'personal')",
+            (eid, "content", innov),
+        )
+    s.conn.execute(
+        "INSERT INTO episodes (id, content, created_at, innovation, lane) "
+        "VALUES ('e3', 'content', '2026-07-07T00:00:00Z', NULL, 'personal')"
+    )
+    s.conn.commit()
+    d = innovation_distribution(s)
+    assert d["count"] == 2
+    assert abs(d["mean"] - 0.5) < 1e-6
+    assert d["min"] == 0.2 and d["max"] == 0.8
+    assert sum(d["histogram"]) == 2
+    s.conn.close()
