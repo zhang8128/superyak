@@ -25,6 +25,16 @@ logger = logging.getLogger("engram.compression")
 _KNOWN_NAMES = {"andy", "kairos", "vaughn", "emma", "koan", "vin", "kelsier"}
 
 
+def _innovation_permits_core(innovation: float | None, floor: float) -> bool:
+    """Core-promotion gate. An episode already well-predicted by the semantic
+    layer at write time (low innovation) adds no coverage by becoming
+    decay-exempt — the semantic already holds it. NULL innovation (cold start /
+    pre-migration) and floor <= 0 mean the gate does not fire."""
+    if innovation is None or floor <= 0.0:
+        return True
+    return innovation >= floor
+
+
 def classify_episode_kind(
     episode: dict,
     model: str | None = None,
@@ -57,8 +67,19 @@ def classify_episode_kind(
     if context_raw:
         if isinstance(context_raw, str):
             try:
-                ctx = _json.loads(context_raw)
-                context_str = _json.dumps(ctx).lower()
+                parsed = _json.loads(context_raw)
+                # Some stored contexts are double-encoded (a JSON string
+                # containing JSON) — unwrap once more before giving up.
+                if isinstance(parsed, str):
+                    try:
+                        parsed = _json.loads(parsed)
+                    except (ValueError, TypeError):
+                        pass
+                if isinstance(parsed, dict):
+                    ctx = parsed
+                    context_str = _json.dumps(ctx).lower()
+                else:
+                    context_str = str(parsed).lower()
             except (ValueError, TypeError):
                 context_str = context_raw.lower()
         elif isinstance(context_raw, dict):
@@ -510,8 +531,16 @@ class Compressor:
                     )
                     if centroid_nearest:
                         from persistence import core_promotion_allowed
-                        if core_promotion_allowed(self._storage, centroid_nearest,
-                                                  self._persistence):
+                        ep = self._storage.get_episode(centroid_nearest)
+                        innovation = ep.get("innovation") if ep else None
+                        floor = (self._config.core_innovation_floor
+                                 if self._config else 0.0)
+                        if not _innovation_permits_core(innovation, floor):
+                            logger.info("core promotion declined (low innovation"
+                                        " %.3f < floor %.3f): %s",
+                                        innovation, floor, centroid_nearest)
+                        elif core_promotion_allowed(self._storage, centroid_nearest,
+                                                    self._persistence):
                             self._storage.mark_core(centroid_nearest)
                         else:
                             logger.info("core promotion declined (redundant vs core"

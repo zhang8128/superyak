@@ -42,6 +42,7 @@ class CompressionConfig:
     cluster_similarity: float = 0.75
     reinforce_threshold: float = 0.70
     instinct_confidence: float = 0.75
+    core_innovation_floor: float = 0.05
 
 
 @dataclass
@@ -271,3 +272,24 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),
     )
+
+
+def resolve_db_path(engram_home: Path) -> Path:
+    """Resolve the active graph.db, honoring instance routing.
+
+    Mirrors the federation logic in server.py: when an instance is configured
+    and its store exists, that is the live DB. Otherwise the top-level
+    ``.engram/graph.db`` (which, post-federation, is a frozen pre-federation
+    orphan — do not read it directly). Use this anywhere a standalone script
+    needs the same store the MCP server is actually using.
+    """
+    default = engram_home / ".engram" / "graph.db"
+    try:
+        config = load_config(engram_home)
+    except Exception:
+        return default
+    if config and config.instance:
+        instance_db = engram_home / ".engram" / "instances" / config.instance / "graph.db"
+        if instance_db.exists():
+            return instance_db
+    return default

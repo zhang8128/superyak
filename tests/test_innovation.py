@@ -73,3 +73,30 @@ def test_innovation_is_lane_pure(tmp_path):
     # personal semantics -> None (work never feeds personal identity).
     assert s.compute_innovation(_vec(0), lane="personal") is None
     s.conn.close()
+
+
+def test_config_default_floor():
+    from config import CompressionConfig
+    assert CompressionConfig().core_innovation_floor == 0.05
+
+
+def test_gate_null_innovation_permits():
+    from compress import _innovation_permits_core
+    assert _innovation_permits_core(None, 0.05) is True
+
+
+def test_gate_floor_zero_permits_everything():
+    from compress import _innovation_permits_core
+    assert _innovation_permits_core(0.0, 0.0) is True
+    assert _innovation_permits_core(0.001, 0.0) is True
+
+
+def test_gate_declines_below_floor():
+    from compress import _innovation_permits_core
+    assert _innovation_permits_core(0.02, 0.05) is False
+
+
+def test_gate_permits_at_or_above_floor():
+    from compress import _innovation_permits_core
+    assert _innovation_permits_core(0.05, 0.05) is True
+    assert _innovation_permits_core(0.9, 0.05) is True
