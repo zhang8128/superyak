@@ -230,6 +230,7 @@ class TestKnowledgeGraphIntegration:
 
         # Mock storage
         storage = MagicMock()
+        storage.get_episode.return_value = None
         storage.get_uncompressed_episodes.return_value = [
             {"id": "ep1", "content": "Vin trained with Kelsier", "created_at": "2026-03-25T10:00:00+00:00"},
             {"id": "ep2", "content": "Vin practiced pewter burns", "created_at": "2026-03-25T10:05:00+00:00"},
