@@ -351,6 +351,33 @@ class Storage:
 
     # --- Episodes ---
 
+    def compute_innovation(self, embedding: list[float], lane: str = "personal") -> float | None:
+        """Write-time innovation: 1 − max cosine similarity to same-lane semantics.
+
+        HOLA's ‖e‖ analog — how poorly the compressed (semantic) layer of this
+        lane can reconstruct the episode. Returns None when the lane has no
+        semantics (cold start): NULL means 'no signal', not 'maximally novel'.
+        Same-lane only: core promotion is a personal-identity decision, so a
+        personal episode must never be measured against work semantics.
+        """
+        import numpy as np
+        rows = self.conn.execute(
+            "SELECT sv.embedding FROM semantic_vectors sv "
+            "JOIN semantics s ON s.id = sv.id WHERE s.lane = ?",
+            (lane,),
+        ).fetchall()
+        if not rows:
+            return None
+        C = np.array(
+            [struct.unpack(f"<{len(r[0]) // 4}f", r[0]) for r in rows],
+            dtype=np.float64,
+        )
+        C = C / (np.linalg.norm(C, axis=1, keepdims=True) + 1e-12)
+        v = np.asarray(embedding, dtype=np.float64)
+        v = v / (np.linalg.norm(v) + 1e-12)
+        max_sim = float(np.clip((C @ v).max(), 0.0, 1.0))
+        return 1.0 - max_sim
+
     def add_episode(
         self,
         id: str,
@@ -364,9 +391,12 @@ class Storage:
     ) -> str:
         now = _now_iso()
         content_hash = hashlib.sha256(content.encode()).hexdigest()
+        innovation = (
+            self.compute_innovation(embedding, lane) if embedding is not None else None
+        )
         self.conn.execute(
-            "INSERT INTO episodes (id, session_id, content, episode_type, context, created_at, content_hash, lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (id, session_id, content, episode_type, json.dumps(context) if context is not None else None, now, content_hash, lane),
+            "INSERT INTO episodes (id, session_id, content, episode_type, context, created_at, content_hash, lane, innovation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, session_id, content, episode_type, json.dumps(context) if context is not None else None, now, content_hash, lane, innovation),
         )
         if embedding is not None:
             self.conn.execute(
