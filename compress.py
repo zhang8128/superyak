@@ -532,7 +532,7 @@ class Compressor:
                     if centroid_nearest:
                         from persistence import core_promotion_allowed
                         ep = self._storage.get_episode(centroid_nearest)
-                        innovation = ep.get("innovation") if ep else None
+                        innovation = ep.get("innovation") if ep is not None else None
                         floor = (self._config.core_innovation_floor
                                  if self._config else 0.0)
                         if not _innovation_permits_core(innovation, floor):

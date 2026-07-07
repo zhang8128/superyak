@@ -361,22 +361,28 @@ class Storage:
         personal episode must never be measured against work semantics.
         """
         import numpy as np
-        rows = self.conn.execute(
-            "SELECT sv.embedding FROM semantic_vectors sv "
-            "JOIN semantics s ON s.id = sv.id WHERE s.lane = ?",
-            (lane,),
-        ).fetchall()
-        if not rows:
+        try:
+            rows = self.conn.execute(
+                "SELECT sv.embedding FROM semantic_vectors sv "
+                "JOIN semantics s ON s.id = sv.id WHERE s.lane = ?",
+                (lane,),
+            ).fetchall()
+            if not rows:
+                return None
+            C = np.array(
+                [struct.unpack(f"<{len(r[0]) // 4}f", r[0]) for r in rows],
+                dtype=np.float64,
+            )
+            C = C / (np.linalg.norm(C, axis=1, keepdims=True) + 1e-12)
+            v = np.asarray(embedding, dtype=np.float64)
+            v = v / (np.linalg.norm(v) + 1e-12)
+            max_sim = float(np.clip((C @ v).max(), 0.0, 1.0))
+            return 1.0 - max_sim
+        except Exception:
+            # NULL = no signal. A failed computation (e.g. a ragged/malformed
+            # semantic vector) must degrade to None, never abort the episode write.
+            logger.debug("compute_innovation failed for lane=%s", lane, exc_info=True)
             return None
-        C = np.array(
-            [struct.unpack(f"<{len(r[0]) // 4}f", r[0]) for r in rows],
-            dtype=np.float64,
-        )
-        C = C / (np.linalg.norm(C, axis=1, keepdims=True) + 1e-12)
-        v = np.asarray(embedding, dtype=np.float64)
-        v = v / (np.linalg.norm(v) + 1e-12)
-        max_sim = float(np.clip((C @ v).max(), 0.0, 1.0))
-        return 1.0 - max_sim
 
     def add_episode(
         self,

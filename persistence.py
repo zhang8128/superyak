@@ -415,9 +415,13 @@ def flag_redundant_cores(storage, cfg) -> list[dict]:
 
 def innovation_distribution(storage) -> dict:
     """Distribution of write-time innovation over episodes, for tuning
-    core_innovation_floor from evidence. NULL rows are excluded."""
+    core_innovation_floor from evidence. NULL rows are excluded. Restricted to
+    personal-lane episodes — the core-promotion gate this feeds only ever
+    fires for the personal lane, so work-lane rows would contaminate the
+    tuning signal."""
     rows = storage.conn.execute(
         "SELECT innovation FROM episodes WHERE innovation IS NOT NULL"
+        " AND lane = 'personal'"
     ).fetchall()
     vals = [r[0] for r in rows]
     if not vals:
