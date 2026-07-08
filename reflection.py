@@ -27,6 +27,28 @@ def _gravity_warning(gravity: float) -> str | None:
     return None
 
 
+# Provisional low-fidelity threshold: cosine below which a semantic's embedding
+# sits far enough from its source-episode centroid to warrant review — either a
+# poor distillation at birth or drift as sources changed. Measurement-first, not
+# calibrated; recalibrate once a fidelity distribution has been observed.
+FIDELITY_LOW = 0.5
+
+
+def _source_fidelity(semantic_vec, source_vecs) -> float:
+    """Cosine between a semantic's embedding and the centroid of its source
+    embeddings. 1.0 = the distillation still sits at the center of its sources;
+    low = it has drifted from (or never matched) them. Returns 0.0 for
+    degenerate zero-norm inputs rather than NaN."""
+    import numpy as np
+    s = np.asarray(semantic_vec, dtype=float)
+    centroid = np.mean(np.asarray(source_vecs, dtype=float), axis=0)
+    ns = float(np.linalg.norm(s))
+    nc = float(np.linalg.norm(centroid))
+    if ns == 0.0 or nc == 0.0:
+        return 0.0
+    return round(float(np.dot(s, centroid) / (ns * nc)), 4)
+
+
 class Reflector:
     def __init__(self, storage, staleness_days=30,
                  genome_db_path: str | None = None,
@@ -604,6 +626,52 @@ class Reflector:
             "queued": self._storage.get_queued_subdivisions(),
         }
 
+    def analyze_fidelity(self) -> dict:
+        """Semantic-source fidelity: does each semantic still sit near its live
+        source episodes, and how many have lost all their sources?
+
+        Read-only and embedding-based (no LLM re-distillation, so no write-path
+        corruption risk). 'Unreconcilable' semantics have no live source
+        episodes — the provenance link is severed when a source is pruned to
+        cold — so drift cannot be measured for them; their count quantifies how
+        much reconciliation substrate the store has already lost.
+        """
+        from sheaf import _unpack_embedding
+        rows = self._storage.conn.execute(
+            "SELECT s.id, s.content, sv.embedding FROM semantics s"
+            " JOIN semantic_vectors sv ON sv.id = s.id"
+        ).fetchall()
+        reconcilable = []
+        unreconcilable = 0
+        for sid, content, sem_blob in rows:
+            src = self._storage.conn.execute(
+                "SELECT ev.embedding FROM semantic_sources ss"
+                " JOIN episode_vectors ev ON ev.id = ss.episode_id"
+                " WHERE ss.semantic_id = ?", (sid,)).fetchall()
+            if not src:
+                unreconcilable += 1
+                continue
+            fid = _source_fidelity(_unpack_embedding(sem_blob),
+                                   [_unpack_embedding(r[0]) for r in src])
+            reconcilable.append({"semantic_id": sid,
+                                 "content": (content or "")[:120],
+                                 "fidelity": fid,
+                                 "live_sources": len(src)})
+        reconcilable.sort(key=lambda d: d["fidelity"])
+        fids = [d["fidelity"] for d in reconcilable]
+        return {
+            "semantics_total": len(rows),
+            "reconcilable": len(reconcilable),
+            "unreconcilable": unreconcilable,
+            "mean_fidelity": round(sum(fids) / len(fids), 3) if fids else None,
+            "low_fidelity_count": sum(1 for f in fids if f < FIDELITY_LOW),
+            "threshold": FIDELITY_LOW,
+            "lowest": reconcilable[:5],
+            "note": ("unreconcilable = no live source episodes (pruned to cold "
+                     "or never recorded); provenance links are severed on prune, "
+                     "so drift cannot be measured for those"),
+        }
+
     def analyze_persistence(self) -> dict:
         """Layer 4: forgetting preview, hub classification, core flags, audit."""
         from config import PersistenceConfig
@@ -649,6 +717,9 @@ class Reflector:
             return {"anchors": self.analyze_anchors()}
         elif focus == "assessments":
             return {"assessments": self.analyze_assessments()}
+        elif focus == "fidelity":
+            # Not in the no-focus default: a source query per semantic — heavier than other foci.
+            return {"fidelity": self.analyze_fidelity()}
         elif focus == "cohesion":
             # Not included in the no-focus default: runs SVD+eigh per semantic — heavier than other foci.
             return {"cohesion": self.analyze_cohesion()}

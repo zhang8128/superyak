@@ -334,6 +334,65 @@ def test_reflect_routes_vital_signs_focus(tmp_db):
     assert "core_fraction" in out["vital_signs"]
 
 
+class TestSourceFidelity:
+    """Pure cosine between a semantic and the centroid of its source embeddings."""
+
+    def test_identical_is_one(self):
+        from reflection import _source_fidelity
+        assert _source_fidelity([1.0, 0.0], [[1.0, 0.0]]) == 1.0
+
+    def test_orthogonal_is_zero(self):
+        from reflection import _source_fidelity
+        assert _source_fidelity([0.0, 1.0], [[1.0, 0.0]]) == 0.0
+
+    def test_sits_at_centroid_of_two_sources(self):
+        from reflection import _source_fidelity
+        # semantic [1,1] vs centroid of [1,0],[0,1] = [0.5,0.5] → cosine 1.0
+        assert _source_fidelity([1.0, 1.0], [[1.0, 0.0], [0.0, 1.0]]) == pytest.approx(1.0)
+
+    def test_zero_vector_is_zero_not_nan(self):
+        from reflection import _source_fidelity
+        assert _source_fidelity([0.0, 0.0], [[0.0, 0.0]]) == 0.0
+
+
+def _emb(*hot, dim=768):
+    v = [0.0] * dim
+    for i in hot:
+        v[i] = 1.0
+    return v
+
+
+def test_analyze_fidelity_separates_reconcilable_and_lost(tmp_db):
+    # High-fidelity semantic: its embedding matches its source.
+    tmp_db.add_episode(id="ep-h", session_id="s", content="h", embedding=_emb(0))
+    tmp_db.add_semantic("sem-h", "faithful", kind="fact", confidence=0.9,
+                        embedding=_emb(0), source_episode_ids=["ep-h"])
+    # Low-fidelity semantic: embedding orthogonal to its source.
+    tmp_db.add_episode(id="ep-l", session_id="s", content="l", embedding=_emb(0))
+    tmp_db.add_semantic("sem-l", "drifted", kind="fact", confidence=0.9,
+                        embedding=_emb(1), source_episode_ids=["ep-l"])
+    # Unreconcilable semantic: its only source decays to cold (link CASCADE-deleted).
+    tmp_db.add_episode(id="ep-g", session_id="s", content="g", embedding=_emb(0))
+    tmp_db.add_semantic("sem-g", "orphaned", kind="fact", confidence=0.9,
+                        embedding=_emb(0), source_episode_ids=["ep-g"])
+    tmp_db.prune_episode_ids(["ep-g"])
+
+    r = Reflector(tmp_db)
+    rep = r.analyze_fidelity()
+    assert rep["semantics_total"] == 3
+    assert rep["reconcilable"] == 2
+    assert rep["unreconcilable"] == 1
+    assert rep["lowest"][0]["semantic_id"] == "sem-l"
+    assert rep["lowest"][0]["fidelity"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_reflect_routes_fidelity_focus(tmp_db):
+    r = Reflector(tmp_db)
+    out = r.reflect(focus="fidelity")
+    assert "fidelity" in out
+    assert out["fidelity"]["semantics_total"] == 0
+
+
 def test_gravity_warning_fires_above_threshold():
     from reflection import _gravity_warning, GRAVITY_WARN
     warning = _gravity_warning(GRAVITY_WARN + 0.05)
