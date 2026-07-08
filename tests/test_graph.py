@@ -2,8 +2,9 @@
 
 import uuid
 from pathlib import Path
+import pytest
 from storage import Storage
-from graph import Edge, Node, MemoryGraph
+from graph import Edge, Node, MemoryGraph, degree_gini
 
 MIGRATIONS_DIR = str(Path(__file__).resolve().parent.parent / "migrations")
 
@@ -41,11 +42,89 @@ class TestDataclasses:
         assert e.weight == 0.0
 
 
+class TestDegreeGini:
+    """Gini coefficient of the degree distribution — the gravity-well metric.
+
+    0.0 = every node equally connected (no gravity well possible);
+    rises toward 1.0 as connectivity concentrates in a few hubs.
+    """
+
+    def test_empty_is_zero(self):
+        assert degree_gini([]) == 0.0
+
+    def test_single_node_is_zero(self):
+        assert degree_gini([5]) == 0.0
+
+    def test_all_equal_is_zero(self):
+        # A regular graph — every node has the same degree.
+        assert degree_gini([3, 3, 3, 3]) == 0.0
+
+    def test_no_edges_is_zero(self):
+        # All isolated: total degree zero, must not divide by zero.
+        assert degree_gini([0, 0, 0]) == 0.0
+
+    def test_star_graph_is_concentrated(self):
+        # 5-node star: hub degree 4, four leaves degree 1. Gini = 0.3 exactly.
+        assert degree_gini([4, 1, 1, 1, 1]) == 0.3
+
+    def test_order_independent(self):
+        assert degree_gini([4, 1, 1, 1, 1]) == degree_gini([1, 1, 4, 1, 1])
+
+    def test_monotonic_in_concentration(self):
+        # More lopsided distribution → strictly higher Gini.
+        even = degree_gini([4, 3, 3, 2])
+        lopsided = degree_gini([10, 1, 1, 1])
+        assert lopsided > even
+
+
 def _make_storage(tmp_path):
     """Create a storage with known edges for testing."""
     db_path = str(tmp_path / "test_graph.db")
     store = Storage(db_path, migrations_dir=MIGRATIONS_DIR)
     return store
+
+
+class TestAnalyzeGravity:
+    def test_empty_graph_gravity_is_zero(self, tmp_path):
+        store = _make_storage(tmp_path)
+        analysis = MemoryGraph(store).analyze()
+        assert analysis["gravity"] == 0.0
+
+    def test_hub_graph_reports_concentration(self, tmp_path):
+        # One semantic distilled from five episodes = a provenance star:
+        # the semantic has degree 5, each episode degree 1.
+        store = _make_storage(tmp_path)
+        ep_ids = []
+        for _ in range(5):
+            ep_id = str(uuid.uuid4())
+            store.add_episode(ep_id, None, "episode", embedding=_fake_emb())
+            ep_ids.append(ep_id)
+        sem_id = str(uuid.uuid4())
+        store.add_semantic(sem_id, "hub semantic", kind="fact", confidence=0.9,
+                           embedding=_fake_emb(), source_episode_ids=ep_ids)
+
+        analysis = MemoryGraph(store).analyze()
+        assert analysis["gravity"] > 0.25
+
+    def test_gravity_ignores_isolated_nodes(self, tmp_path):
+        # A star (1 semantic + 5 episodes) plus three unconnected episodes.
+        # Isolated nodes are not part of the connectivity structure, so they
+        # must not inflate the gravity metric — otherwise a burst of fresh,
+        # not-yet-consolidated episodes would masquerade as a gravity well.
+        store = _make_storage(tmp_path)
+        ep_ids = []
+        for _ in range(5):
+            ep_id = str(uuid.uuid4())
+            store.add_episode(ep_id, None, "episode", embedding=_fake_emb())
+            ep_ids.append(ep_id)
+        store.add_semantic(str(uuid.uuid4()), "hub", kind="fact", confidence=0.9,
+                           embedding=_fake_emb(), source_episode_ids=ep_ids)
+        for _ in range(3):  # isolated, edgeless
+            store.add_episode(str(uuid.uuid4()), None, "loner", embedding=_fake_emb())
+
+        analysis = MemoryGraph(store).analyze()
+        # Same value as the 6-node star alone — isolated nodes ignored.
+        assert analysis["gravity"] == pytest.approx(0.3333, abs=1e-3)
 
 
 def _fake_emb(dim=768):

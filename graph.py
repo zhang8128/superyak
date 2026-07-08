@@ -34,6 +34,24 @@ class Node:
     preview: str
 
 
+def degree_gini(degrees) -> float:
+    """Gini coefficient of a degree distribution — the gravity-well metric.
+
+    0.0 = every node equally connected (no gravity well possible); rises
+    toward 1.0 as connectivity concentrates in a few hubs. Returns 0.0 for
+    empty, single-node, or edgeless inputs. Order-independent. Rounded to
+    four places to match the codebase's pre-rounded metric convention.
+    """
+    xs = sorted(float(d) for d in degrees)
+    n = len(xs)
+    total = sum(xs)
+    if n == 0 or total == 0:
+        return 0.0
+    weighted = sum(i * x for i, x in enumerate(xs, start=1))
+    gini = (2.0 * weighted) / (n * total) - (n + 1) / n
+    return round(gini, 4)
+
+
 class MemoryGraph:
     """Virtual unified view over engram's memory relationships.
 
@@ -346,7 +364,7 @@ class MemoryGraph:
         """Extended analysis: hubs, average degree, layer distribution."""
         all_nodes, adj, edge_map = self._full_scan()
         if not all_nodes:
-            return {"hubs": [], "avg_degree": 0.0, "layer_distribution": {}}
+            return {"hubs": [], "avg_degree": 0.0, "gravity": 0.0, "layer_distribution": {}}
 
         degrees = {nid: len(edges) for nid, edges in edge_map.items()}
 
@@ -359,9 +377,15 @@ class MemoryGraph:
         for _, layer in all_nodes:
             layer_dist[layer] = layer_dist.get(layer, 0) + 1
 
+        # Gravity is measured over connected nodes only: isolated (degree-0)
+        # nodes are not part of the connectivity structure a walk can traverse,
+        # so counting them would let graph sparsity masquerade as hub concentration.
+        connected_degrees = [d for d in degrees.values() if d > 0]
+
         return {
             "hubs": hubs,
             "avg_degree": round(avg_degree, 2),
+            "gravity": degree_gini(connected_degrees),
             "layer_distribution": layer_dist,
         }
 

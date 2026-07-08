@@ -7,6 +7,25 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger("engram.reflection")
 
+# Provisional gravity-well threshold: the degree-Gini above which the graph's
+# connectivity is concentrated enough that recall and wander orbit a few hubs.
+# Anchored to the one pathological graph measured so far (the live engram store
+# read 0.61, having been observed to collapse every walk into a single cluster);
+# a pure single-hub star tops out at 0.5. This is a measurement-first flag, not
+# a calibrated boundary — recalibrate once healthy-graph baselines accumulate.
+GRAVITY_WARN = 0.6
+
+
+def _gravity_warning(gravity: float) -> str | None:
+    """Return a warning string if degree concentration is pathological, else None."""
+    if gravity > GRAVITY_WARN:
+        return (
+            f"gravity well: graph degree-Gini {gravity:.2f} exceeds provisional "
+            f"threshold {GRAVITY_WARN} — connectivity is concentrated in a few hubs, "
+            f"so recall and wander tend to orbit them"
+        )
+    return None
+
 
 class Reflector:
     def __init__(self, storage, staleness_days=30,
@@ -146,8 +165,13 @@ class Reflector:
                 lane_counts[table][lane_name] = count
         return lane_counts
 
-    def vital_signs(self) -> dict:
+    def vital_signs(self, include_graph: bool = True) -> dict:
         """Structural health checks for pathologies the other foci can't see.
+
+        ``include_graph`` gates the graph-gravity scan (a full traversal); it
+        is False on the no-focus default reflect() path and True for an
+        explicit ``reflect(focus="vital_signs")``.
+
 
         The existing foci measure activity (usage, gaps, contradictions); these
         measure whether the regulating mechanisms themselves still function:
@@ -194,6 +218,26 @@ class Reflector:
         top_n = max(1, len(counts) // 10)
         top_decile_share = (sum(counts[:top_n]) / total_accesses) if total_accesses else 0.0
 
+        # Graph gravity: how concentrated is connectivity? A few nodes hoarding
+        # edges create gravity wells that collapse recall/wander onto themselves.
+        # The full graph traversal is heavy (a query per node), so it is gated
+        # behind include_graph and left OUT of the no-focus default reflect() —
+        # mirroring how cohesion and persistence are excluded from the default.
+        # None means "not measured" (skipped or failed), distinct from 0.0
+        # "measured, no concentration" — a failed metric must not read as healthy.
+        graph_gravity = None
+        if include_graph:
+            try:
+                from graph import MemoryGraph
+                graph_gravity = MemoryGraph(self._storage).analyze()["gravity"]
+            except Exception:
+                logger.warning("gravity computation failed", exc_info=True)
+                warnings.append("gravity metric unavailable — graph scan failed")
+            else:
+                gravity_warning = _gravity_warning(graph_gravity)
+                if gravity_warning:
+                    warnings.append(gravity_warning)
+
         return {
             "core_fraction": round(core_fraction, 3),
             "core_count": core_count,
@@ -204,6 +248,7 @@ class Reflector:
                 "instinct_count": len(instincts),
             },
             "access_concentration": {"top_decile_share": round(top_decile_share, 3)},
+            "graph_concentration": {"degree_gini": graph_gravity},
             "lanes": lane_counts,
             "warnings": warnings,
         }
@@ -620,5 +665,5 @@ class Reflector:
                 "instinct_contexts": self.instinct_context_health(),
                 "coherence": self.analyze_coherence(),
                 "anchors": self.analyze_anchors(),
-                "vital_signs": self.vital_signs(),
+                "vital_signs": self.vital_signs(include_graph=False),
             }

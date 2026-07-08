@@ -334,6 +334,65 @@ def test_reflect_routes_vital_signs_focus(tmp_db):
     assert "core_fraction" in out["vital_signs"]
 
 
+def test_gravity_warning_fires_above_threshold():
+    from reflection import _gravity_warning, GRAVITY_WARN
+    warning = _gravity_warning(GRAVITY_WARN + 0.05)
+    assert warning is not None
+    assert "concentrat" in warning.lower() or "gravity" in warning.lower()
+
+
+def test_gravity_warning_silent_below_threshold():
+    from reflection import _gravity_warning, GRAVITY_WARN
+    assert _gravity_warning(GRAVITY_WARN - 0.3) is None
+
+
+def test_vital_signs_gravity_failure_is_not_silent(tmp_db, fake_embedding, monkeypatch):
+    # A failed graph build must NOT report 0.0 (the healthiest reading) — that
+    # would hide a real failure behind a perfect score. It reports None + warns.
+    tmp_db.add_episode(id="ep-0", session_id="s1", content="e", embedding=fake_embedding())
+    import graph
+    def boom(self):
+        raise RuntimeError("graph build failed")
+    monkeypatch.setattr(graph.MemoryGraph, "analyze", boom)
+
+    r = Reflector(tmp_db)
+    vs = r.vital_signs()
+    assert vs["graph_concentration"]["degree_gini"] is None
+    assert any("gravity" in w.lower() and "unavailable" in w.lower() for w in vs["warnings"])
+
+
+def test_default_reflect_excludes_graph_scan(tmp_db, fake_embedding):
+    # The no-focus reflect() must not pay for a full graph traversal — mirrors
+    # how cohesion and persistence are excluded from the default. Explicit
+    # focus="vital_signs" still computes it.
+    tmp_db.add_episode(id="ep-0", session_id="s1", content="e", embedding=fake_embedding())
+    r = Reflector(tmp_db)
+
+    default = r.reflect()["vital_signs"]
+    assert default["graph_concentration"]["degree_gini"] is None
+
+    focused = r.reflect(focus="vital_signs")["vital_signs"]
+    assert focused["graph_concentration"]["degree_gini"] == 0.0
+
+
+def test_vital_signs_surfaces_graph_concentration(tmp_db, fake_embedding):
+    # One semantic distilled from five episodes = a provenance star.
+    ep_ids = []
+    for i in range(5):
+        eid = f"ep-{i}"
+        tmp_db.add_episode(id=eid, session_id="s1", content=f"e{i}",
+                           embedding=fake_embedding())
+        ep_ids.append(eid)
+    tmp_db.add_semantic("sem-0", "hub", kind="fact", confidence=0.9,
+                        embedding=fake_embedding(), source_episode_ids=ep_ids)
+
+    r = Reflector(tmp_db)
+    vs = r.vital_signs()
+    assert vs["graph_concentration"]["degree_gini"] == pytest.approx(0.3333, abs=1e-3)
+    # A 6-node star sits below the pathological threshold — no warning.
+    assert not any("concentrat" in w.lower() for w in vs["warnings"])
+
+
 def test_vital_signs_core_fraction_over_personal_lane(tmp_db):
     from reflection import Reflector
     import uuid as _uuid
