@@ -1,5 +1,5 @@
 {
-  "description": "Engram memory hooks — wake into memories, nudge mid-conversation, dream on exit",
+  "description": "Engram memory hooks — wake into memories, nudge mid-conversation, dream on exit. Absolute paths on purpose: the plugin installer snapshots this repo into ~/.claude/plugins/cache, and ${CLAUDE_PLUGIN_ROOT} may resolve there — stale hook code and a forked .engram store. This plugin is machine-bound (it points at one live memory store), so the hooks pin the live repo.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/nudge.py",
+            "command": "python3 \"$HOME/Projects/engram/hooks/nudge.py\"",
             "timeout": 10
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/wake.py",
+            "command": "python3 \"$HOME/Projects/engram/hooks/wake.py\"",
             "timeout": 10
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/sleep.py",
+            "command": "python3 \"$HOME/Projects/engram/hooks/sleep.py\"",
             "timeout": 5
           }
         ]
