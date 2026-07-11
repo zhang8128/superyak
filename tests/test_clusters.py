@@ -124,6 +124,34 @@ def test_rederive_from_co_firing(storage, engine, embeddings):
     assert {"b1", "b2"} in member_sets
 
 
+def test_derive_clusters_ignores_stale_co_fire_edges(storage, engine, embeddings):
+    """Co-firing edges referencing deleted instincts must not crash derivation."""
+    emb = [1.0] + [0.0] * 767
+    for iid in ("a1", "a2", "b1", "b2", "z9"):
+        _add_instinct(storage, iid, f"instinct {iid}", emb)
+
+    for _ in range(10):
+        storage.record_co_fire("a1", "a2")
+        storage.record_co_fire("b1", "b2")
+        storage.record_co_fire("a1", "z9")
+
+    # Simulate historical deletes that bypassed the cascade (live-store state:
+    # co-firing rows survive their instinct).
+    storage.conn.commit()
+    storage.conn.execute("PRAGMA foreign_keys=OFF")
+    storage.conn.execute("DELETE FROM instincts WHERE id = 'z9'")
+    storage.conn.commit()
+    storage.conn.execute("PRAGMA foreign_keys=ON")
+
+    clusters = engine.derive_clusters()
+
+    members = set()
+    for cid in clusters:
+        members |= {m["instinct_id"] for m in storage.get_cluster_members(cid)}
+    assert "z9" not in members
+    assert {"a1", "a2", "b1", "b2"} <= members
+
+
 def test_compute_temperament(storage, engine):
     """Temperament emerges from follow/override ratio."""
     emb = [0.1] * 768

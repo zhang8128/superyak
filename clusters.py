@@ -106,10 +106,15 @@ class ClusterEngine:
 
         G = nx.Graph()
         all_instincts = self._storage.get_all_instincts()
+        known = {inst["id"] for inst in all_instincts}
         for inst in all_instincts:
             G.add_node(inst["id"])
 
         for edge in edges:
+            # Stale edges can reference instincts deleted without cascade;
+            # add_edge would resurrect them as nodes and break the members FK.
+            if edge["instinct_a"] not in known or edge["instinct_b"] not in known:
+                continue
             G.add_edge(
                 edge["instinct_a"],
                 edge["instinct_b"],
