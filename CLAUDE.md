@@ -168,6 +168,7 @@ Separate from identity layers.
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
 | `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
+| `maintenance.py` | Pain channel — per-step sleep-maintenance report, surfaced via `status()` and wake |
 | `dedup.py` | LLM-based duplicate detection |
 | `framing.py` | LLM-based instinct notice/implication distillation (`ENGRAM_FRAMING_MODEL`, defaults to dedup model) |
 | `indexer.py` | Source code indexing via tree-sitter |

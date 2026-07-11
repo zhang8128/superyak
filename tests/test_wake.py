@@ -123,6 +123,42 @@ class TestWake:
         msg = output.get("systemMessage", "")
         assert "wake failed" in msg.lower() or output == {}
 
+    def test_wake_surfaces_maintenance_failures(self, tmp_path):
+        """A failed sleep-maintenance step must appear in the orientation."""
+        from storage import Storage
+        from maintenance import MaintenanceReport
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        store = Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+        report = MaintenanceReport()
+        with report.step("auto-compress"):
+            raise RuntimeError("poisoned context row")
+        report.save(store.conn)
+        store.close()
+
+        output = _run_wake(str(tmp_path))
+        msg = output["systemMessage"]
+        assert "maintenance" in msg.lower()
+        assert "auto-compress" in msg
+        assert "poisoned context row" in msg
+
+    def test_wake_silent_on_clean_maintenance(self, tmp_path):
+        """A clean maintenance run adds no section — pain channel, not noise."""
+        from storage import Storage
+        from maintenance import MaintenanceReport
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        store = Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+        report = MaintenanceReport()
+        with report.step("decay"):
+            pass
+        report.save(store.conn)
+        store.close()
+
+        output = _run_wake(str(tmp_path))
+        msg = output["systemMessage"]
+        assert "maintenance" not in msg.lower()
+
     def test_wake_shows_instance_identity(self, tmp_path):
         """When config.toml has instance = 'agi', header should show Engram (agi)."""
         from storage import Storage

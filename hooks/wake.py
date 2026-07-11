@@ -211,6 +211,36 @@ def wake():
         lines.append(f"You have {episodes} episodes, {semantics} semantics, {instincts_count} instincts.")
         lines.append("")
 
+        # Pain channel: surface last sleep-maintenance failures. Silence
+        # means clean — this section only exists when something went wrong.
+        try:
+            maint_row = conn.execute(
+                "SELECT timestamp, context FROM memory_log "
+                "WHERE event_type = 'maintenance_report' "
+                "ORDER BY timestamp DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            if maint_row and maint_row["context"]:
+                maint = json.loads(maint_row["context"])
+                failures = maint.get("failures") or []
+                if failures:
+                    lines.append("## Sleep maintenance — attention needed")
+                    lines.append("")
+                    lines.append(
+                        f"Last consolidation ({maint_row['timestamp'][:16]}) had"
+                        f" {len(failures)} failed step(s):"
+                    )
+                    for f in failures[:5]:
+                        err = (f.get("error") or "unknown error")[:160]
+                        lines.append(f"- **{f.get('name', '?')}** — {err}")
+                    lines.append("")
+                    lines.append(
+                        "Steps after a failure may have been degraded or skipped."
+                        " Mention this to the user."
+                    )
+                    lines.append("")
+        except Exception:
+            pass
+
         if instincts:
             lines.append("## Your instincts")
             lines.append("")

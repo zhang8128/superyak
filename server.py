@@ -334,9 +334,14 @@ def _init():
 
     # Sleep-time maintenance on init: decay → prune → compress
     # This is engram's "consolidation during sleep" — runs between sessions.
+    # Each step records into the maintenance report (the pain channel):
+    # failures are swallowed so later steps still run, but they surface in
+    # status() and the wake orientation instead of dying in stderr.
+    from maintenance import MaintenanceReport
+    _maint = MaintenanceReport()
     try:
         # 1. Recompute decay: power-law activation based on access history
-        try:
+        with _maint.step("decay"):
             multipliers = None
             if _config.persistence.enabled:
                 # one-sleep-stale cache is fine for ±15% pressure
@@ -347,11 +352,9 @@ def _init():
                                            exponent_multipliers=multipliers)
             if decayed:
                 logger.info("Decay recomputed for %d episodes", decayed)
-        except Exception:
-            logger.warning("decay failed", exc_info=True)
 
         # 2. Prune: delete compressed episodes that have decayed past threshold
-        try:
+        with _maint.step("prune"):
             if _config.persistence.enabled:
                 from persistence import guarded_prune
                 pruned = guarded_prune(_storage, _config.persistence)
@@ -359,88 +362,91 @@ def _init():
                 pruned = _storage.prune_decayed(threshold=0.05)
             if pruned:
                 logger.info("Pruned %d decayed episodes", pruned)
-        except Exception:
-            logger.warning("prune failed", exc_info=True)
+                _maint.note("prune", pruned=pruned)
 
         # 2b. Prune weak instincts (overridden enough to drop below threshold)
-        pruned_instincts = _storage.prune_weak_instincts(strength_threshold=0.1)
-        if pruned_instincts:
-            logger.info("Pruned %d weak instincts", pruned_instincts)
+        with _maint.step("instinct-prune"):
+            pruned_instincts = _storage.prune_weak_instincts(strength_threshold=0.1)
+            if pruned_instincts:
+                logger.info("Pruned %d weak instincts", pruned_instincts)
 
         # 3. Auto-compress uncompressed episodes (crash recovery + consolidation)
-        uncompressed = _storage.get_uncompressed_episodes()
-        if uncompressed:
-            logger.info("Auto-compressing %d uncompressed episodes on init", len(uncompressed))
-            _compressor.auto_compress()
+        with _maint.step("auto-compress"):
+            uncompressed = _storage.get_uncompressed_episodes()
+            if uncompressed:
+                logger.info("Auto-compressing %d uncompressed episodes on init", len(uncompressed))
+                _maint.note("auto-compress", pending=len(uncompressed))
+                _compressor.auto_compress()
+
         # 4. Backfill: embed any episodes that lost vectors (WAL corruption recovery)
-        orphaned = _storage.get_orphaned_episodes()
-        if orphaned:
-            for ep in orphaned:
-                emb = _embeddings.embed([ep["content"]], prefix="search_document")[0]
-                _storage.conn.execute(
-                    "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
-                    (ep["id"], _pack_embedding(emb)),
-                )
-            _storage.conn.commit()
-            logger.info("Backfilled vectors for %d orphaned episodes", len(orphaned))
+        with _maint.step("episode-vector-backfill"):
+            orphaned = _storage.get_orphaned_episodes()
+            if orphaned:
+                for ep in orphaned:
+                    emb = _embeddings.embed([ep["content"]], prefix="search_document")[0]
+                    _storage.conn.execute(
+                        "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                        (ep["id"], _pack_embedding(emb)),
+                    )
+                _storage.conn.commit()
+                logger.info("Backfilled vectors for %d orphaned episodes", len(orphaned))
 
         # 5. Backfill: embed any semantics that lost vectors (WAL corruption recovery)
-        orphaned_sems = _storage.get_orphaned_semantics()
-        if orphaned_sems:
-            for sem in orphaned_sems:
-                emb = _embeddings.embed([sem["content"]], prefix="search_document")[0]
-                _storage.conn.execute(
-                    "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
-                    (sem["id"], _pack_embedding(emb)),
-                )
-            _storage.conn.commit()
-            logger.info("Backfilled vectors for %d orphaned semantics", len(orphaned_sems))
+        with _maint.step("semantic-vector-backfill"):
+            orphaned_sems = _storage.get_orphaned_semantics()
+            if orphaned_sems:
+                for sem in orphaned_sems:
+                    emb = _embeddings.embed([sem["content"]], prefix="search_document")[0]
+                    _storage.conn.execute(
+                        "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
+                        (sem["id"], _pack_embedding(emb)),
+                    )
+                _storage.conn.commit()
+                logger.info("Backfilled vectors for %d orphaned semantics", len(orphaned_sems))
 
         # 6. Backfill: embed any instincts that lack vectors (pre-existing instincts)
-        instincts = _storage.get_all_instincts()
-        backfilled = 0
-        for inst in instincts:
-            has_vec = _storage.conn.execute(
-                "SELECT 1 FROM instinct_vectors WHERE id = ?", (inst["id"],)
-            ).fetchone()
-            if not has_vec:
-                emb = _embeddings.embed([inst["action"]], prefix="search_document")[0]
-                _storage.conn.execute(
-                    "INSERT INTO instinct_vectors (id, embedding) VALUES (?, ?)",
-                    (inst["id"], _pack_embedding(emb)),
-                )
-                backfilled += 1
-        if backfilled:
-            _storage.conn.commit()
-            logger.info("Backfilled vectors for %d instincts", backfilled)
+        with _maint.step("instinct-vector-backfill"):
+            instincts = _storage.get_all_instincts()
+            backfilled = 0
+            for inst in instincts:
+                has_vec = _storage.conn.execute(
+                    "SELECT 1 FROM instinct_vectors WHERE id = ?", (inst["id"],)
+                ).fetchone()
+                if not has_vec:
+                    emb = _embeddings.embed([inst["action"]], prefix="search_document")[0]
+                    _storage.conn.execute(
+                        "INSERT INTO instinct_vectors (id, embedding) VALUES (?, ?)",
+                        (inst["id"], _pack_embedding(emb)),
+                    )
+                    backfilled += 1
+            if backfilled:
+                _storage.conn.commit()
+                logger.info("Backfilled vectors for %d instincts", backfilled)
 
-        # 6. Backfill notice/implication for pre-existing instincts
-        _backfill_instinct_perceptual(_storage, _embeddings)
+        # 6b. Backfill notice/implication for pre-existing instincts
+        with _maint.step("instinct-perceptual-backfill"):
+            _backfill_instinct_perceptual(_storage, _embeddings)
 
         # 7. Promote proximity suggestions to resonances (graph consolidation)
-        try:
+        with _maint.step("graph-promotion"):
             from graph import MemoryGraph
             _memory_graph = MemoryGraph(_storage)
             promoted = _memory_graph.promote_suggestions(min_prior_sessions=2)
             if promoted:
                 logger.info("Sleep: promoted %d proximity suggestions", promoted)
-        except Exception:
-            logger.warning("Graph promotion skipped", exc_info=True)
 
         # 8. Coherence check — anchors + drift detection
-        try:
+        with _maint.step("coherence-check"):
             from coherence import CoherenceChecker
             _coherence_checker = CoherenceChecker(_storage)
             coherence_report = _coherence_checker.run_full_check(session_id=_session_id)
             if coherence_report["summary"] != "coherence stable":
                 logger.info("Coherence: %s", coherence_report["summary"])
-        except Exception:
-            logger.warning("Coherence check skipped", exc_info=True)
 
         # 9. Sheaf cohesion sleep pass (spec: 2026-06-13-sheaf-cohesion-design.md)
         # NOTE: narration episodes written by the sleep pass lack embeddings on first run;
         # they are backfilled by the orphan-vector pass on the NEXT startup.
-        try:
+        with _maint.step("cohesion-sleep-pass"):
             from sheaf import run_sleep_pass
             _cohesion_report = run_sleep_pass(
                 _storage,
@@ -455,19 +461,24 @@ def _init():
             if _cohesion_report.get("queued"):
                 logger.info("cohesion pass queued (LLM unavailable): %s",
                             [q["parent_id"] for q in _cohesion_report["queued"]])
-        except Exception:
-            logger.warning("cohesion sleep pass failed", exc_info=True)
+            _maint.note("cohesion-sleep-pass",
+                        subdivided=len(_cohesion_report.get("subdivided", []) or []),
+                        queued=len(_cohesion_report.get("queued", []) or []))
 
         # Persistence score refresh (spec: 2026-06-13-persistence-design.md)
         # Always-on observation: feeds reflect previews and next-boot decay
         # modulation; the cache is advisory, decisions recompute live.
-        try:
+        with _maint.step("persistence-score-refresh"):
             from persistence import compute_scores
             compute_scores(_storage, _config.persistence)
-        except Exception:
-            logger.warning("persistence score refresh failed", exc_info=True)
     except Exception:
+        # Backstop for failures outside any step (should not happen — every
+        # step swallows its own); recorded so the pain channel still sees it.
         logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
+        _maint.steps.append({"name": "maintenance-outer", "ok": False,
+                             "error": "unexpected failure outside step scope"})
+
+    _maint.save(_storage.conn)
 
     # Log session start
     _storage.add_log_entry(
@@ -1638,6 +1649,21 @@ def status() -> dict:
         health["min_decay_strength"] = min_decay
     if health:
         result["health_warnings"] = health
+
+    # Pain channel: last sleep-maintenance outcome, failures spelled out
+    try:
+        from maintenance import MaintenanceReport
+        last_maint = MaintenanceReport.load_last(_storage.conn)
+        if last_maint:
+            summary = {"at": last_maint.get("at"), "ok": last_maint.get("ok")}
+            if not last_maint.get("ok"):
+                summary["failures"] = [
+                    {"step": f.get("name"), "error": f.get("error")}
+                    for f in last_maint.get("failures", [])
+                ]
+            result["last_maintenance"] = summary
+    except Exception:
+        pass
 
     return result
 
