@@ -24,9 +24,11 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).parent))
 from engine import EngineCore
+from config import resolve_db_path
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).parent))
-DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
+# Honor instance routing — the top-level graph.db is a frozen pre-federation orphan.
+DB_PATH = resolve_db_path(ENGRAM_HOME)
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("MIRROR_MODEL", "gemma4:31b")
