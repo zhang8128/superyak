@@ -401,8 +401,11 @@ def _ollama_generate(prompt: str, framing_cfg) -> str | None:
     model = getattr(framing_cfg, "model", "gemma4:31b")
     url = getattr(framing_cfg, "ollama_url", "http://localhost:11434/api/generate")
     timeout = getattr(framing_cfg, "timeout", 60)
+    # num_predict must leave room for hidden thinking tokens on reasoning
+    # models (gemma4 burns ~300-500 before the first response token; an
+    # exhausted budget returns done_reason=length with an EMPTY response).
     body = {"model": model, "prompt": prompt, "stream": False,
-            "options": {"temperature": 0.0, "num_predict": 400}}
+            "options": {"temperature": 0.0, "num_predict": 1500}}
     try:
         req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
