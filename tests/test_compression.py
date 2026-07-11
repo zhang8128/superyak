@@ -768,6 +768,28 @@ class TestEpisodeTyping:
         kinds = classify_episode_kind(ep)
         assert "factual" in kinds
 
+    def test_double_encoded_context_reparsed(self):
+        # Live-store shape (episode e1bfe641): context stored as JSON-encoded
+        # JSON string, so a single json.loads yields a str, not a dict.
+        import json
+        ep = {
+            "content": "built the lens system",
+            "source": None,
+            "context": json.dumps('{"topic": "design-session"}'),
+        }
+        kinds = classify_episode_kind(ep)
+        assert "design" in kinds
+
+    def test_non_dict_context_degrades_gracefully(self):
+        import json
+        ep = {
+            "content": "something",
+            "source": None,
+            "context": json.dumps("just a plain string"),
+        }
+        kinds = classify_episode_kind(ep)
+        assert "factual" in kinds
+
 
 class TestTypedClustering:
     def test_different_types_get_kind_label(self, tmp_db, embedder):
