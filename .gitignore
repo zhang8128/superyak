@@ -6,7 +6,6 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
-.codex-pair/
 .worktrees/
 .DS_Store
 .engram/
