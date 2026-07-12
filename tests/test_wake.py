@@ -471,6 +471,47 @@ class TestWakeAssessment:
         assert rows["a-1"] == "active"      # still this session's assessment
         assert rows["a-2"] == "scheduled"   # untouched, waits for next session
 
+    def test_refire_continuity_via_stdin_payload_session_id(self, tmp_path):
+        """Production path: real Claude Code hook processes never have
+        CLAUDE_SESSION_ID set — read_context()'s only source of session_id
+        is the stdin payload. Before harness.read_context() existed, wake's
+        session_id was always "" in production, so the same-session re-fire
+        branch (`if session_id:`) never matched and the stale-abandon UPDATE
+        (`session_id != ? OR session_id = ''` with ?="") abandoned every
+        active assessment on every wake. This pins the now-reachable
+        continuity path with the same session_id supplied ONLY via the
+        stdin payload — no CLAUDE_SESSION_ID env at all."""
+        store = self._make_store(tmp_path)
+        store.schedule_assessment(id="a-1", scheduled_by="self")
+        store.close()
+
+        stdin = json.dumps({
+            "session_id": "sess-refire", "hook_event_name": "SessionStart",
+        })
+
+        first = _run_wake(str(tmp_path), stdin=stdin)
+        assert "Assessment Session" in first["systemMessage"]
+
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT status, session_id FROM assessments WHERE id = 'a-1'"
+        ).fetchone()
+        conn.close()
+        assert row["status"] == "active"
+        assert row["session_id"] == "sess-refire"
+
+        second = _run_wake(str(tmp_path), stdin=stdin)
+        assert "Assessment Session" in second["systemMessage"]
+
+        conn = sqlite3.connect(str(tmp_path / ".engram" / "graph.db"))
+        conn.row_factory = sqlite3.Row
+        row2 = conn.execute(
+            "SELECT status FROM assessments WHERE id = 'a-1'"
+        ).fetchone()
+        conn.close()
+        assert row2["status"] == "active"  # NOT abandoned by the re-fire
+
 
 class TestWakeHarnessAdapter:
     """hooks/harness.py integration: codex emits plain text and stamps
