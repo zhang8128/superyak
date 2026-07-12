@@ -1609,7 +1609,9 @@ class Storage:
                  datetime.now(timezone.utc).isoformat()),
             )
             self.conn.commit()
-        except sqlite3.OperationalError:
+        except sqlite3.Error:
+            # Provenance is never a gate — failures including bad payloads or
+            # missing tables must never block writes.
             logger.debug("session_registry stamp skipped", exc_info=True)
 
     # --- Table counts ---

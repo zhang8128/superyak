@@ -39,3 +39,12 @@ def test_stamp_empty_session_id_is_noop(store):
     store.stamp_session_registry("", harness="codex", model=None, repo=None)
     n = store.conn.execute("SELECT COUNT(*) FROM session_registry").fetchone()[0]
     assert n == 0
+
+
+def test_stamp_missing_table_is_swallowed(store):
+    store.conn.execute("DROP TABLE session_registry")
+    store.stamp_session_registry("s3", harness="codex", model=None, repo=None)  # must not raise
+
+
+def test_stamp_bad_payload_is_swallowed(store):
+    store.stamp_session_registry("s4", harness=object(), model=None, repo=None)  # must not raise
