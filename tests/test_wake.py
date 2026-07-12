@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import uuid
@@ -15,23 +16,52 @@ HOOK_SCRIPT = Path(__file__).parent.parent / "hooks" / "wake.py"
 MIGRATIONS_DIR = str(Path(__file__).parent.parent / "migrations")
 
 
-def _run_wake(project_dir: str, project_root: str | None = None,
-              extra_env: dict | None = None) -> dict:
-    """Run wake.py as a subprocess and parse JSON output."""
+def _run_wake_raw(project_dir: str, project_root: str | None = None,
+                   extra_env: dict | None = None, stdin: str = "") -> str:
+    """Run wake.py as a subprocess and return raw stdout, unparsed.
+
+    Needed for the codex path, which emits plain text (never JSON).
+    `stdin` is always passed explicitly (default empty) so the harness's
+    stdin read never blocks on an inherited tty.
+    """
     env = {**os.environ, "ENGRAM_HOME": project_dir}
     env.pop("ENGRAM_ASSESSMENT", None)  # never inherit from the outer shell
     env.pop("CLAUDE_SESSION_ID", None)  # never inherit from the outer shell
+    env.pop("ENGRAM_HARNESS", None)  # never inherit from the outer shell
+    env.pop("ENGRAM_WAKE", None)  # never inherit from the outer shell
+    env.pop("CODEX_PAIR_SESSION_ID", None)  # never inherit from the outer shell
     if project_root is not None:
         env["ENGRAM_PROJECT_ROOT"] = project_root
     if extra_env:
         env.update(extra_env)
     result = subprocess.run(
         [sys.executable, str(HOOK_SCRIPT)],
-        capture_output=True, text=True, env=env, timeout=10,
+        capture_output=True, text=True, env=env, input=stdin, timeout=10,
     )
-    if not result.stdout.strip():
+    return result.stdout
+
+
+def _run_wake(project_dir: str, project_root: str | None = None,
+              extra_env: dict | None = None, stdin: str = "") -> dict:
+    """Run wake.py as a subprocess and parse JSON output."""
+    out = _run_wake_raw(project_dir, project_root=project_root,
+                         extra_env=extra_env, stdin=stdin)
+    if not out.strip():
         return {}
-    return json.loads(result.stdout)
+    return json.loads(out)
+
+
+def _seed_db(tmp_path) -> Path:
+    """Build an empty-but-migrated graph.db under tmp_path/.engram.
+
+    Migration 023 (session_registry) applies automatically via Storage.
+    """
+    from storage import Storage
+    db_dir = tmp_path / ".engram"
+    db_dir.mkdir()
+    db_path = db_dir / "graph.db"
+    Storage(str(db_path), migrations_dir=MIGRATIONS_DIR).close()
+    return db_path
 
 
 class TestWake:
@@ -440,3 +470,66 @@ class TestWakeAssessment:
         conn.close()
         assert rows["a-1"] == "active"      # still this session's assessment
         assert rows["a-2"] == "scheduled"   # untouched, waits for next session
+
+
+class TestWakeHarnessAdapter:
+    """hooks/harness.py integration: codex emits plain text and stamps
+    session_registry; Claude keeps the JSON envelope. Adapted from the
+    Task 3 brief's assumed in-process `seeded_db`/`wake_module.wake()`
+    pattern to this file's actual subprocess pattern — env vars go
+    through `extra_env`, stdin through `_run_wake_raw`'s `stdin` param."""
+
+    def test_codex_wake_emits_plain_text(self, tmp_path):
+        _seed_db(tmp_path)
+        stdin = json.dumps({
+            "session_id": "codex-sess-1", "cwd": "/tmp/r",
+            "hook_event_name": "SessionStart", "model": "gpt-5.6-sol",
+        })
+        out = _run_wake_raw(
+            str(tmp_path),
+            extra_env={"ENGRAM_HARNESS": "codex"},
+            stdin=stdin,
+        )
+        assert "Memory Orientation" in out
+        with pytest.raises(ValueError):
+            json.loads(out)  # plain text — never JSON on the codex path
+
+    def test_codex_wake_stamps_registry(self, tmp_path):
+        db_path = _seed_db(tmp_path)
+        stdin = json.dumps({
+            "session_id": "codex-sess-2", "cwd": "/tmp/r",
+            "hook_event_name": "SessionStart", "model": "gpt-5.6-sol",
+        })
+        _run_wake_raw(
+            str(tmp_path),
+            extra_env={"ENGRAM_HARNESS": "codex"},
+            stdin=stdin,
+        )
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT harness, model, repo FROM session_registry "
+            "WHERE session_id='codex-sess-2'"
+        ).fetchone()
+        conn.close()
+        assert row == ("codex", "gpt-5.6-sol", "/tmp/r")
+
+    def test_skip_emits_nothing(self, tmp_path):
+        _seed_db(tmp_path)
+        out = _run_wake_raw(
+            str(tmp_path),
+            extra_env={
+                "ENGRAM_HARNESS": "codex",
+                "CODEX_PAIR_SESSION_ID": "parent-claude-sess",
+            },
+            stdin="{}",
+        )
+        assert out == ""
+
+    def test_claude_wake_still_json_envelope(self, tmp_path):
+        _seed_db(tmp_path)
+        output = _run_wake(
+            str(tmp_path),
+            extra_env={"CLAUDE_SESSION_ID": "claude-sess-9"},
+            stdin="{}",
+        )
+        assert "hookSpecificOutput" in output

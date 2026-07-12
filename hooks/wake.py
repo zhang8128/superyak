@@ -16,6 +16,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness import emit, read_context, stamp_registry
+
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 
@@ -35,18 +38,6 @@ def _load_instance_config():
         return config.get("instance"), config.get("session_context")
     except Exception:
         return None, None
-
-
-def _hook_output(text: str) -> dict:
-    """systemMessage only displays in the UI — additionalContext is the
-    channel that actually enters the model's context."""
-    return {
-        "systemMessage": text,
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": text,
-        },
-    }
 
 
 _ASSESSMENT_MARKER = (
@@ -147,7 +138,10 @@ def _handle_assessment(conn, now: str, session_id: str):
 def wake():
     instance_name, session_context = _load_instance_config()
     now = datetime.now(timezone.utc).isoformat()
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    ctx = read_context()
+    if ctx["skip"]:
+        return  # review children / explicit skip: no orientation, no output
+    session_id = ctx["session_id"]
 
     # Resolve DB path: use instance DB when configured, otherwise default
     db_path = DB_PATH
@@ -162,11 +156,12 @@ def wake():
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
+    stamp_registry(conn, ctx)
 
     try:
         assessment_marker = _handle_assessment(conn, now, session_id)
         if assessment_marker:
-            json.dump(_hook_output(assessment_marker), sys.stdout)
+            emit(ctx["harness"], "SessionStart", assessment_marker)
             return
 
         # Counts
@@ -524,13 +519,12 @@ def wake():
 
         orientation = "\n".join(lines)
 
-        json.dump(_hook_output(orientation), sys.stdout)
+        emit(ctx["harness"], "SessionStart", orientation)
 
     except Exception as e:
         # Non-fatal — if wake fails, session starts normally
-        json.dump(_hook_output(
-            f"Engram wake failed ({e.__class__.__name__}: {e}). Memory tools still available."
-        ), sys.stdout)
+        emit(ctx["harness"], "SessionStart",
+             f"Engram wake failed ({e.__class__.__name__}: {e}). Memory tools still available.")
     finally:
         conn.close()
 
