@@ -1585,6 +1585,33 @@ class Storage:
                 counters["remember_count"] += 1
         return counters
 
+    def stamp_session_registry(
+        self,
+        session_id: str,
+        harness: str | None = None,
+        model: str | None = None,
+        repo: str | None = None,
+    ) -> None:
+        """Upsert silent provenance for a session. COALESCE-merge: later
+        stampers fill NULLs, never clobber. Provenance is never a gate —
+        failures are swallowed."""
+        if not session_id:
+            return
+        try:
+            self.conn.execute(
+                "INSERT INTO session_registry (session_id, harness, model, repo, started_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "harness = COALESCE(session_registry.harness, excluded.harness), "
+                "model = COALESCE(session_registry.model, excluded.model), "
+                "repo = COALESCE(session_registry.repo, excluded.repo)",
+                (session_id, harness, model, repo,
+                 datetime.now(timezone.utc).isoformat()),
+            )
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            logger.debug("session_registry stamp skipped", exc_info=True)
+
     # --- Table counts ---
 
     _ALLOWED_TABLES = frozenset({
