@@ -17,11 +17,15 @@ import random
 import re
 import sqlite3
 import struct
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness import read_context
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -113,6 +117,10 @@ def _distill_episode(text: str, embedding: list[float]) -> dict:
 
 
 def sleep():
+    ctx = read_context()
+    if ctx["skip"]:
+        return
+
     instance_name = _load_instance_config()
 
     db_path = DB_PATH
@@ -124,8 +132,20 @@ def sleep():
     if not db_path.exists():
         return
 
+    # episode_vectors is a vec0 virtual table — the module must be loaded
+    # on THIS connection (extension loading is per-connection, not
+    # process-wide) or every read below silently no-ops via the except
+    # below, and dream capture never fires.
+    try:
+        import sqlite_vec
+    except ImportError:
+        return
+
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA busy_timeout = 5000")
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
     conn.row_factory = sqlite3.Row
 
     try:
@@ -165,7 +185,7 @@ def sleep():
                 "INSERT INTO residue (id, valence, fragments, created_at, session_id) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (residue["id"], residue["valence"], residue["fragments"],
-                 residue["created_at"], os.environ.get("CLAUDE_SESSION_ID")),
+                 residue["created_at"], ctx["session_id"] or None),
             )
             packed = struct.pack(f"<{len(residue['embedding'])}f", *residue["embedding"])
             conn.execute(

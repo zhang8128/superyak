@@ -16,7 +16,6 @@ Echoes are memory speaking unprompted. They only fire at high similarity
 (0.55) and won't repeat within a session.
 """
 
-import json
 import os
 import sqlite3
 import struct
@@ -26,6 +25,9 @@ from pathlib import Path
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(ENGRAM_HOME))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness import emit, read_context, stamp_registry
+
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
 
@@ -83,26 +85,11 @@ def _assessment_active(conn) -> bool:
         return False  # pre-migration DB — assessments table absent, no gating
 
 
-def _hook_output(text: str) -> dict:
-    """systemMessage only displays in the UI — additionalContext is the
-    channel that actually enters the model's context."""
-    return {
-        "systemMessage": text,
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": text,
-        },
-    }
-
-
 def nudge():
-    # Read hook input
-    try:
-        hook_input = json.loads(sys.stdin.read())
-    except (json.JSONDecodeError, EOFError):
+    ctx = read_context()
+    if ctx["skip"]:
         return
-
-    prompt = hook_input.get("prompt", "").strip()
+    prompt = (ctx["prompt"] or "").strip()
     if not prompt or len(prompt) < 10:
         return
 
@@ -130,6 +117,8 @@ def nudge():
     conn.row_factory = sqlite3.Row
 
     try:
+        stamp_registry(conn, ctx)
+
         # Off-device assessment gate: exit silently before computing or
         # writing anything, matching the hook's normal nothing-to-say exit.
         if _assessment_active(conn):
@@ -543,7 +532,7 @@ def nudge():
                 conn.execute(
                     "INSERT OR IGNORE INTO episodes (id, content, created_at, origin, session_id) "
                     "VALUES (?, ?, ?, 'auto', ?)",
-                    (ep_id, prompt, now, os.environ.get("CLAUDE_SESSION_ID", "")),
+                    (ep_id, prompt, now, ctx["session_id"]),
                 )
                 conn.execute(
                     "INSERT OR IGNORE INTO episode_vectors (id, embedding) VALUES (?, ?)",
@@ -617,7 +606,7 @@ def nudge():
                     "INSERT INTO residue (id, valence, fragments, created_at, session_id) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (residue["id"], residue["valence"], residue["fragments"],
-                     residue["created_at"], os.environ.get("CLAUDE_SESSION_ID", "")),
+                     residue["created_at"], ctx["session_id"]),
                 )
                 conn.execute(
                     "INSERT INTO residue_vectors (id, embedding) VALUES (?, ?)",
@@ -628,7 +617,7 @@ def nudge():
                 pass  # Dream capture is non-critical
 
         if lines:
-            json.dump(_hook_output("\n".join(lines)), sys.stdout)
+            emit(ctx["harness"], "UserPromptSubmit", "\n".join(lines))
 
     except Exception as e:
         print(f"# nudge: {e}", file=sys.stderr)  # Non-critical, but visible for debugging
