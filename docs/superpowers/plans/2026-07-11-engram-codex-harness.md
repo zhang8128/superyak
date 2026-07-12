@@ -916,12 +916,16 @@ print('migrated')"
 ```
 
 Then verify the codex wake path end-to-end without trust, using the bypass
-flag and a scratch cwd. CRITICAL: run with `env -u` — a codex child spawned
-from a Claude session inherits `CODEX_PAIR_SESSION_ID`, which would trip our
-own review-child gate and make wake skip:
+flag. CRITICAL details learned in execution: (1) run with `env -u` — a codex
+child spawned from a Claude session inherits `CODEX_PAIR_SESSION_ID`, which
+would trip our own review-child gate and make wake skip; (2) run from a
+directory WITH a `.engram/config.toml` instance config (e.g. the engram
+repo) — instance routing is cwd-based BY DESIGN (per-project memory
+instances), and from a bare directory wake correctly finds no store and
+stays silent:
 
 ```bash
-cd /tmp && env -u CODEX_PAIR_SESSION_ID -u ENGRAM_WAKE \
+cd ~/Projects/engram && env -u CODEX_PAIR_SESSION_ID -u ENGRAM_WAKE \
   codex exec --skip-git-repo-check --dangerously-bypass-hook-trust \
   "What memory orientation were you given at session start? Quote its first heading." < /dev/null
 ```
