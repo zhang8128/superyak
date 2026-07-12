@@ -243,6 +243,15 @@ def _init():
 
     _session_id = os.environ.get("CLAUDE_SESSION_ID") or str(uuid.uuid4())
 
+    # Silent provenance: server-side best-effort stamp. The hook-side stamp
+    # (same session_id under Claude Code) is authoritative and fills model.
+    _storage.stamp_session_registry(
+        _session_id,
+        harness=os.environ.get("ENGRAM_HARNESS", "claude-code"),
+        model=None,
+        repo=os.getcwd(),
+    )
+
     from categories import CategoryStore
     cat_conn = sqlite3.connect(str(db_path.parent / "categories.db"))
     try:
