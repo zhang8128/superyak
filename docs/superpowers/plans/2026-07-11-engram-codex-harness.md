@@ -130,7 +130,8 @@ In `storage.py`, add to the `Storage` class (near `count_session_log_events`):
                  datetime.now(timezone.utc).isoformat()),
             )
             self.conn.commit()
-        except sqlite3.OperationalError:
+        except sqlite3.Error:
+            # Not just OperationalError: bad payloads must not gate either.
             logger.debug("session_registry stamp skipped", exc_info=True)
 ```
 
@@ -412,7 +413,9 @@ def stamp_registry(conn, ctx: dict) -> None:
              ctx.get("cwd"), datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
-    except sqlite3.OperationalError:
+    except sqlite3.Error:
+        # Not just OperationalError: bad payloads raise InterfaceError/
+        # ProgrammingError and must not gate either ("provenance is never a gate").
         pass
 ```
 
