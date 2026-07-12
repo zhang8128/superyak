@@ -51,26 +51,48 @@ command line. No payload sniffing. Absent the variable, behavior is exactly
 today's Claude Code behavior (env `CLAUDE_SESSION_ID`, JSON envelope output).
 
 Codex shim:
-- **Input:** parse stdin JSON. SessionStart carries `session_id`, `cwd`,
-  `model`, `permission_mode`, and a target/source discriminator.
-  UserPromptSubmit carries the prompt text (field name verified during
-  implementation probe). `sleep.py` reads nothing and needs no input shim.
+- **Input:** parse stdin JSON. Probe-verified (2026-07-11, Codex 0.144.1):
+  Codex clones Claude Code's hook payload format field-for-field —
+  `hook_event_name`, `session_id`, `transcript_path`, `cwd`, `model`,
+  `permission_mode`; UserPromptSubmit adds `prompt`, Stop adds
+  `stop_hook_active` + `last_assistant_message`. Because shapes are
+  indistinguishable, harness selection MUST stay explicit (env), never
+  sniffed. `sleep.py` needs only `session_id` from the payload.
+  Env-leak hazard (probe-observed): a Codex child spawned from a Claude
+  Code session inherits `CLAUDE_*` env vars — the codex shim must never
+  read them.
 - **Output:** plain text on stdout, nothing else. **Hard contract:** Codex
   parses JSON stdout as control flow (`"continue": false` stops the
   session), so the Claude JSON envelope must never leak through the codex
-  path. Enforced by regression test.
-- **Interactive gate:** wake exits silently when the SessionStart payload
-  identifies a non-interactive run (`codex exec`). Fallback guard:
-  `ENGRAM_WAKE=skip` honored by `wake.py` regardless of harness.
+  path. Enforced by regression test. Probe-verified: plain stdout from
+  SessionStart AND UserPromptSubmit both inject into model context.
+- **Interactive gate:** probe-verified that the payload carries NO
+  exec-vs-TUI discriminator (`source: "startup"` both ways) and that exec
+  runs hooks. The gate is therefore environmental: skip when
+  `ENGRAM_WAKE=skip` (any harness) or, on the codex shim, when
+  `CODEX_PAIR_SESSION_ID` is present (codex-pair review children inherit
+  it from the driving Claude session — free, reliable detection). Applies
+  to all three hooks. Consequence: a manual `codex exec` run by the user
+  wakes — acceptable; the decision's intent was that *reviews* stay lean.
 
 ### 2. Registration (config only, no code)
 
-`~/.codex/config.toml`:
-- Three hook entries invoking the scripts with `ENGRAM_HARNESS=codex`,
-  timeouts 10/10/5 s (matching `hooks/hooks.json`). Exact TOML nesting for
-  hook events verified by probe during implementation (docs show
-  array-of-tables `[[SessionStart]]` / `[[SessionStart.hooks]]` shape).
-- MCP server, mirroring Claude's `.mcp.json` registration:
+Hook registration (probe-corrected): hooks do NOT go in `config.toml`.
+Codex discovers `<config_folder>/hooks.json` — i.e. `~/.codex/hooks.json`
+(user scope) and `<repo>/.codex/hooks.json` (project scope) — in **Claude
+Code's exact hooks.json format** (`HooksFile { description, hooks }`).
+Register user-scope with the three commands prefixed `ENGRAM_HARNESS=codex`,
+timeouts 10/10/5 s.
+
+**Trust gate (probe-discovered):** Codex silently skips hooks with no
+persisted `trusted_hash` — this is why misregistered/untrusted hooks fail
+with zero symptoms. One-time interactive approval in the Codex TUI
+(startup hooks review) persists trust; re-approval needed whenever the
+command line changes (hash mismatch → `Modified` → skipped).
+`--dangerously-bypass-hook-trust` exists for automated verification only.
+
+`~/.codex/config.toml` gets only the MCP server, mirroring Claude's
+`.mcp.json` registration:
 
 ```toml
 [mcp_servers.engram]
@@ -188,11 +210,18 @@ delivery proof):
 6. Claude Code session afterward → wake unchanged, provenance row says
    claude-code.
 
-## Implementation probe items (resolve first, cheap)
+## Probe findings (2026-07-11, Codex 0.144.1 — all four items resolved)
 
-1. Exact TOML nesting for hook events in `~/.codex/config.toml`
-   (top-level `[[SessionStart]]` vs `[hooks]` table).
-2. UserPromptSubmit stdout-injection semantics on Codex (assumed to mirror
-   SessionStart's plain-stdout contract; verify with a probe hook).
-3. The SessionStart payload's interactive/exec discriminator field name.
-4. Whether Codex `Stop` hooks fire on TUI exit paths sleep cares about.
+Probed via isolated `CODEX_HOME` + `codex exec --dangerously-bypass-hook-trust`
+with marker-echo hooks; payloads captured to files:
+
+1. Registration lives in `~/.codex/hooks.json` (or `<repo>/.codex/hooks.json`),
+   Claude Code's hooks.json format verbatim. Hooks are trust-gated per
+   handler hash; untrusted hooks are skipped silently.
+2. UserPromptSubmit plain stdout injects into model context (marker
+   appeared in the model's reply). Same for SessionStart.
+3. No interactive/exec discriminator exists in the payload
+   (`source: "startup"` in both). Gate is environmental:
+   `ENGRAM_WAKE=skip` + `CODEX_PAIR_SESSION_ID` detection.
+4. Stop hooks fire in exec mode (and receive `last_assistant_message`).
+   Payload format across all events is identical to Claude Code's.
