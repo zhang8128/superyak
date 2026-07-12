@@ -189,7 +189,7 @@ def wake():
         # Recent semantics — exclude those already shown as instincts
         instinct_actions = {inst["action"] for inst in instincts}
         all_semantics = conn.execute(
-            "SELECT content, kind, confidence FROM semantics "
+            "SELECT content, kind, confidence, created_at FROM semantics "
             "ORDER BY confidence DESC LIMIT 20"
         ).fetchall()
         recent_semantics = [
@@ -310,7 +310,9 @@ def wake():
             lines.append("## What you know")
             lines.append("")
             for sem in recent_semantics:
-                lines.append(f"- [{sem['kind']}, confidence={sem['confidence']:.2f}] {sem['content']}")
+                when = (sem["created_at"] or "")[:10]
+                stamp = f", {when}" if when else ""
+                lines.append(f"- [{sem['kind']}, confidence={sem['confidence']:.2f}{stamp}] {sem['content']}")
             lines.append("")
 
         # Show inbox count when instance is configured
@@ -401,7 +403,9 @@ def wake():
                     else:
                         direction = "ambiguous"
                     fragments = r["fragments"] or "..."
-                    lines.append(f"- `{r['id'][:8]}` [{direction}] {fragments}")
+                    when = (r["created_at"] or "")[:10]
+                    stamp = f", {when}" if when else ""
+                    lines.append(f"- `{r['id'][:8]}` [{direction}{stamp}] {fragments}")
                 lines.append("")
         except Exception:
             pass  # residue table may not exist yet — non-fatal

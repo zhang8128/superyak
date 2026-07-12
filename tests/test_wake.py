@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -574,3 +575,55 @@ class TestWakeHarnessAdapter:
             stdin="{}",
         )
         assert "hookSpecificOutput" in output
+
+
+class TestWakeDates:
+    """Task 6: time visible in working surfaces.
+
+    Everything engram stores already carries created_at; wake's "What you
+    know" semantic lines and dream-residue lines should render it. Adapted
+    from the task brief's assumed in-process `seeded_db`/`wake_module.wake()`
+    sketch to this file's actual subprocess pattern (`_seed_db` + `_run_wake`),
+    same adaptation `TestWakeHarnessAdapter` made for Task 3.
+    """
+
+    def test_semantic_lines_show_date(self, tmp_path):
+        from storage import Storage
+
+        db_path = _seed_db(tmp_path)
+        store = Storage(str(db_path), migrations_dir=MIGRATIONS_DIR)
+        store.add_semantic(
+            id=str(uuid.uuid4()),
+            content="prefers concise commit messages",
+            kind="preference",
+            confidence=0.9,
+            embedding=[0.0] * 768,
+            source_episode_ids=[],
+        )
+        store.close()
+
+        output = _run_wake(str(tmp_path))
+        msg = output["systemMessage"]
+        know = [
+            l for l in msg.splitlines()
+            if l.startswith("- [fact") or l.startswith("- [preference")
+        ]
+        assert know and re.search(r", \d{4}-\d{2}-\d{2}\]", know[0])
+
+    def test_residue_lines_show_date(self, tmp_path):
+        import numpy as np
+
+        from dreaming import distill, store_residue
+        from storage import Storage
+
+        db_path = _seed_db(tmp_path)
+        store = Storage(str(db_path), migrations_dir=MIGRATIONS_DIR)
+        embedding = np.random.randn(768).tolist()
+        residue = distill("a quiet ache that won't name itself", embedding)
+        store_residue(store, residue, session_id="test-session")
+        store.close()
+
+        output = _run_wake(str(tmp_path))
+        msg = output["systemMessage"]
+        residue_lines = [l for l in msg.splitlines() if l.startswith("- `")]
+        assert residue_lines and re.search(r", \d{4}-\d{2}-\d{2}\]", residue_lines[0])

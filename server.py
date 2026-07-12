@@ -1079,6 +1079,8 @@ def recall(
             "layer": info["layer"],
             "score": score,
         }
+        if created_at:
+            result["when"] = str(created_at)[:10]
         if info["layer"] == "semantic":
             result["confidence"] = info.get("confidence")
             result["kind"] = info.get("kind")
