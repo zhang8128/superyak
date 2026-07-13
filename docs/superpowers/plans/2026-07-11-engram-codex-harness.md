@@ -902,7 +902,7 @@ git commit -m "chore(mcp): tag Claude registration with ENGRAM_HARNESS for prove
 The trust step is Kairos's: hooks stay silently skipped until approved once
 in the Codex TUI.
 
-- [ ] **Step 1 (Kairos): trust the hooks.** Run `codex` in any directory; the startup hooks review lists the three engram hooks; approve them. (Re-approval is needed any time the command strings change.)
+- [x] **Step 1 (Kairos): trust the hooks.** Run `codex` in any directory; the startup hooks review lists the three engram hooks; approve them. (Re-approval is needed any time the command strings change.)
 
 - [ ] **Step 2: automated pre-check (before Kairos's session).** First apply migration 023 to the live store (Storage runs migrations on construction):
 
@@ -944,5 +944,19 @@ Expected: the reply quotes `# Engram (…) — Memory Orientation`.
   4. A prompt using known instinct vocabulary surfaces a Thread line.
   5. Run a codex-pair review from Claude; its transcript contains no orientation.
   6. Next Claude Code session: wake unchanged, its registry row says `claude-code`.
+
+  Post-fix acceptance evidence (2026-07-13, through `513a3ae`):
+
+  - [x] A fresh bounded Codex process loaded `# Engram (engram) — Memory Orientation` before its response.
+  - [x] `status()` returned session `019f5c04-4a5a-7470-8b17-f0ba93ceb05f`; `remember("Task 8 post-fix identity probe", work=true, source="codex/task-8-post-fix")` returned episode `06ffd1b5-9050-4f46-ab9c-397fa935d60b`.
+  - [x] The authoritative episode/registry join is `codex | gpt-5.6-sol | /Users/kairos/Projects/engram`, and Stop removed the runtime binding.
+  - [x] Familiar vocabulary emitted `Thread: when code changes affect a running MCP server so the user kn` (a separate fresh prompt also emitted the measurement-first Thread).
+  - [x] The corrected codex-pair reviewer child used the working FNM Codex binary and returned no `Memory Orientation`, `Thread:`, or `Echo:` output. Its lean-skip finding was fixed in `513a3ae` and the fix re-review was clean.
+  - [ ] A new human Claude Code session was not started by this automated acceptance. The existing Claude-ID precedence tests pass, but the next-session wake/registry observation remains human-only.
+
+  The reviewer also noted that a first-use/new-store wake with no selected
+  database cannot create a binding before MCP startup. That is the approved
+  missing-binding/pre-migration fail-open path: MCP remains available under a
+  generated UUID rather than inferring identity.
 
 - [ ] **Step 4: merge.** After the checklist passes, merge `feat/engram-codex-harness` to main per superpowers:finishing-a-development-branch.
