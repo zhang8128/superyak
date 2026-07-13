@@ -1,7 +1,7 @@
 # Codex Session Binding and Sleep Fail-Open Fix
 
-**Date:** 2026-07-12  
-**Status:** Approved design  
+**Date:** 2026-07-12
+**Status:** Approved design
 **Scope:** The two blockers found during Task 8 live acceptance of the Codex harness
 
 ## Context

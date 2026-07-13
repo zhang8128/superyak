@@ -1,6 +1,6 @@
 # Codex Task 8 Expansion: Complete Identity and Silent Attribution
 
-**Date:** 2026-07-13  
+**Date:** 2026-07-13
 **Status:** Approved for implementation by Kairos (“proceed”)
 
 ## Goal
