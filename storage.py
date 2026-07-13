@@ -1614,6 +1614,48 @@ class Storage:
             # missing tables must never block writes.
             logger.debug("session_registry stamp skipped", exc_info=True)
 
+    def bind_session(self, run_key: str, session_id: str) -> None:
+        if not run_key or not session_id:
+            return
+        try:
+            self.conn.execute(
+                "INSERT INTO session_bindings (run_key, session_id, bound_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(run_key) DO UPDATE SET "
+                "session_id = excluded.session_id, bound_at = excluded.bound_at",
+                (run_key, session_id, _now_iso()),
+            )
+            self.conn.commit()
+        except sqlite3.Error:
+            logger.debug("session binding skipped", exc_info=True)
+
+    def resolve_session_binding(self, run_key: str) -> str | None:
+        if not run_key:
+            return None
+        try:
+            row = self.conn.execute(
+                "SELECT session_id FROM session_bindings WHERE run_key = ?",
+                (run_key,),
+            ).fetchone()
+            return row["session_id"] if row else None
+        except sqlite3.Error:
+            logger.debug("session binding lookup skipped", exc_info=True)
+            return None
+
+    def clear_session_binding(self, run_key: str, session_id: str | None = None) -> None:
+        if not run_key:
+            return
+        try:
+            if session_id:
+                self.conn.execute(
+                    "DELETE FROM session_bindings WHERE run_key = ? AND session_id = ?",
+                    (run_key, session_id),
+                )
+            else:
+                self.conn.execute("DELETE FROM session_bindings WHERE run_key = ?", (run_key,))
+            self.conn.commit()
+        except sqlite3.Error:
+            logger.debug("session binding cleanup skipped", exc_info=True)
+
     # --- Table counts ---
 
     _ALLOWED_TABLES = frozenset({

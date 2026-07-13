@@ -61,6 +61,7 @@ def read_context() -> dict:
     return {
         "harness": harness,
         "session_id": session_id,
+        "run_key": os.environ.get("ENGRAM_RUN_KEY") if harness == CODEX else None,
         "model": payload.get("model"),
         "cwd": payload.get("cwd") or os.getcwd(),
         "prompt": payload.get("prompt"),
@@ -110,4 +111,36 @@ def stamp_registry(conn, ctx: dict) -> None:
     except sqlite3.Error:
         # Not just OperationalError: bad payloads raise InterfaceError/
         # ProgrammingError and must not gate either ("provenance is never a gate").
+        pass
+
+
+def bind_session(conn, ctx: dict) -> None:
+    run_key = ctx.get("run_key")
+    session_id = ctx.get("session_id")
+    if not run_key or not session_id:
+        return
+    try:
+        conn.execute(
+            "INSERT INTO session_bindings (run_key, session_id, bound_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(run_key) DO UPDATE SET "
+            "session_id = excluded.session_id, bound_at = excluded.bound_at",
+            (run_key, session_id, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        pass
+
+
+def clear_session_binding(conn, ctx: dict) -> None:
+    run_key = ctx.get("run_key")
+    session_id = ctx.get("session_id")
+    if not run_key:
+        return
+    try:
+        conn.execute(
+            "DELETE FROM session_bindings WHERE run_key = ? AND session_id = ?",
+            (run_key, session_id),
+        )
+        conn.commit()
+    except sqlite3.Error:
         pass

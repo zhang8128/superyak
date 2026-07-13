@@ -123,3 +123,40 @@ def test_stamp_registry_upserts_and_tolerates_missing_table(tmp_path):
     assert row == ("gpt-5.6-sol", "/r")  # merge never clobbers
     harness.stamp_registry(conn, {"session_id": "", "harness": "codex", "model": None, "cwd": None})
     assert conn.execute("SELECT COUNT(*) FROM session_registry").fetchone()[0] == 1
+
+
+def test_codex_context_carries_run_key(monkeypatch):
+    monkeypatch.setenv("ENGRAM_HARNESS", "codex")
+    monkeypatch.setenv("ENGRAM_RUN_KEY", "codex:42")
+    _fake_stdin(monkeypatch, CODEX_PAYLOAD)
+    assert harness.read_context()["run_key"] == "codex:42"
+
+
+def test_claude_context_ignores_inherited_run_key(monkeypatch):
+    monkeypatch.setenv("ENGRAM_HARNESS", "claude-code")
+    monkeypatch.setenv("ENGRAM_RUN_KEY", "codex:42")
+    _fake_stdin(monkeypatch, {"session_id": "claude-session"})
+    assert harness.read_context()["run_key"] is None
+
+
+def test_raw_binding_helpers_round_trip(monkeypatch):
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE session_bindings (run_key TEXT PRIMARY KEY, "
+        "session_id TEXT NOT NULL, bound_at TEXT NOT NULL)"
+    )
+    ctx = {"run_key": "codex:42", "session_id": "cx-session"}
+    harness.bind_session(conn, ctx)
+    assert conn.execute(
+        "SELECT session_id FROM session_bindings WHERE run_key='codex:42'"
+    ).fetchone()[0] == "cx-session"
+    harness.clear_session_binding(conn, ctx)
+    assert conn.execute("SELECT COUNT(*) FROM session_bindings").fetchone()[0] == 0
+
+
+def test_raw_binding_helpers_fail_open_without_table(tmp_path):
+    conn = sqlite3.connect(str(tmp_path / "pre-migration.db"))
+    ctx = {"run_key": "codex:42", "session_id": "cx-session"}
+    harness.bind_session(conn, ctx)
+    harness.clear_session_binding(conn, ctx)
+    conn.close()
