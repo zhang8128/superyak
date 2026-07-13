@@ -959,4 +959,24 @@ Expected: the reply quotes `# Engram (…) — Memory Orientation`.
   missing-binding/pre-migration fail-open path: MCP remains available under a
   generated UUID rather than inferring identity.
 
+  Expanded acceptance evidence (2026-07-13, through `4bb6dc9`):
+
+  - [x] Codex identity hardening rejects malformed run keys, ignores a decoy
+    `CLAUDE_SESSION_ID`, and keeps Stop cleanup/close independently fail-open.
+  - [x] MCP launcher now uses `uv run --project` with the absolute server path,
+    preserving the caller's project cwd; the exact command passed a temporary
+    non-Engram-cwd smoke check.
+  - [x] Fresh status session `019f5ce9-28c9-7402-bef7-ae7245dbd464` and episode
+    `53427a47-71bd-4249-ae77-c054f3e0d9d7` joined `codex | gpt-5.6-sol | /Users/kairos/Projects/engram`.
+  - [x] The same session produced an `operation_log` row for `remember` with
+    the episode target, source details, and `success` outcome; Stop left zero
+    runtime bindings.
+  - [x] Familiar vocabulary still surfaced `Thread: when don't engineer for
+    what you can't measure yet`.
+  - [x] Expanded codex-pair output contained no `Memory Orientation`,
+    `Thread:`, or `Echo:` text; its two attribution findings were fixed and
+    re-reviewed clean.
+  - [ ] A new human Claude Code session remains the only unperformed
+    continuity observation; existing Claude precedence tests pass.
+
 - [ ] **Step 4: merge.** After the checklist passes, merge `feat/engram-codex-harness` to main per superpowers:finishing-a-development-branch.
