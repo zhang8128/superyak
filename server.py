@@ -241,13 +241,20 @@ def _init():
     _storage = Storage(str(db_path))
     _embeddings = NomicEmbedProvider()
 
-    _session_id = os.environ.get("CLAUDE_SESSION_ID") or str(uuid.uuid4())
+    harness = os.environ.get("ENGRAM_HARNESS", "claude-code")
+    claude_session_id = os.environ.get("CLAUDE_SESSION_ID")
+    bound_session_id = None
+    if harness == "codex" and not claude_session_id:
+        bound_session_id = _storage.resolve_session_binding(
+            os.environ.get("ENGRAM_RUN_KEY", "")
+        )
+    _session_id = claude_session_id or bound_session_id or str(uuid.uuid4())
 
     # Silent provenance: server-side best-effort stamp. The hook-side stamp
     # (same session_id under Claude Code) is authoritative and fills model.
     _storage.stamp_session_registry(
         _session_id,
-        harness=os.environ.get("ENGRAM_HARNESS", "claude-code"),
+        harness=harness,
         model=None,
         repo=os.getcwd(),
     )
