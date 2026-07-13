@@ -40,7 +40,10 @@ def _mutation_logged(fn):
                 pass
             raise
         try:
-            _record_operation(fn.__name__, bound, result, "success")
+            status = "success"
+            if isinstance(result, dict) and (result.get("error") or result.get("removed") is False or result.get("ok") is False):
+                status = "failure"
+            _record_operation(fn.__name__, bound, result, status)
         except Exception:
             pass
         return result
@@ -51,12 +54,17 @@ def _record_operation(operation, bound, result, outcome):
         return
     values = bound.arguments if bound is not None else {}
     ids = []
-    for key, value in values.items():
-        if key.endswith("id") or key.endswith("_ids"):
-            ids.extend(value if isinstance(value, list) else [value])
-    if isinstance(result, dict):
-        for key in ("id", "episode_id", "instinct_id", "task_id", "assessment_id", "residue_id"):
-            if result.get(key): ids.append(result[key])
+    def collect(obj):
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if key == "id" or key.endswith("_id") or key.endswith("_ids"):
+                    if isinstance(value, list): ids.extend(value)
+                    elif value is not None: ids.append(value)
+                collect(value)
+        elif isinstance(obj, list):
+            for item in obj: collect(item)
+    collect(values)
+    collect(result)
     row = _storage.conn.execute("SELECT harness, model, repo FROM session_registry WHERE session_id = ?", (_session_id,)).fetchone()
     harness, model, repo = (row[0], row[1], row[2]) if row else (os.environ.get("ENGRAM_HARNESS"), None, os.getcwd())
     _storage.add_operation(operation, _session_id, harness, model, repo, list(dict.fromkeys(str(i) for i in ids if i)), values, outcome)

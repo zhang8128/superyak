@@ -39,3 +39,26 @@ def test_mutation_wrapper_preserves_exception(monkeypatch):
     @server._mutation_logged
     def boom(): raise ValueError('x')
     with pytest.raises(ValueError): boom()
+
+@pytest.mark.skipif(server is None, reason='server dependencies unavailable')
+def test_wrapper_classifies_domain_failures(monkeypatch):
+    class S:
+        def add_operation(self,*args): self.args = args
+        conn = type('C', (), {'execute': lambda self,*a: type('R', (), {'fetchone': lambda self: ('codex','m','/r')})()})()
+    st=S(); monkeypatch.setattr(server,'_storage',st); monkeypatch.setattr(server,'_session_id','s')
+    @server._mutation_logged
+    def bad(): return {'error':'bad'}
+    bad(); assert st.args[7] == 'failure'
+    @server._mutation_logged
+    def removed(): return {'removed':False}
+    removed(); assert st.args[7] == 'failure'
+
+@pytest.mark.skipif(server is None, reason='server dependencies unavailable')
+def test_wrapper_extracts_nested_ids(monkeypatch):
+    class S:
+        def add_operation(self,*args): self.args = args
+        conn = type('C', (), {'execute': lambda self,*a: type('R', (), {'fetchone': lambda self: ('codex','m','/r')})()})()
+    st=S(); monkeypatch.setattr(server,'_storage',st); monkeypatch.setattr(server,'_session_id','s')
+    @server._mutation_logged
+    def nested(): return {'anchor_id':'a1','task_context':{'id':'t1'}}
+    nested(); assert set(st.args[5]) >= {'a1','t1'}
