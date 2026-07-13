@@ -136,11 +136,12 @@ def _handle_assessment(conn, now: str, session_id: str):
 
 
 def wake():
-    instance_name, session_context = _load_instance_config()
-    now = datetime.now(timezone.utc).isoformat()
     ctx = read_context()
     if ctx["skip"]:
         return  # review children / explicit skip: no orientation, no output
+
+    instance_name, session_context = _load_instance_config()
+    now = datetime.now(timezone.utc).isoformat()
     session_id = ctx["session_id"]
 
     # Resolve DB path: use instance DB when configured, otherwise default

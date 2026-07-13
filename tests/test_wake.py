@@ -1,5 +1,7 @@
 """Tests for the SessionStart wake hook."""
 
+import importlib.util
+import io
 import json
 import os
 import re
@@ -15,6 +17,13 @@ HOOK_SCRIPT = Path(__file__).parent.parent / "hooks" / "wake.py"
 
 # Reuse conftest fixtures for storage
 MIGRATIONS_DIR = str(Path(__file__).parent.parent / "migrations")
+
+
+def _load_wake_module():
+    spec = importlib.util.spec_from_file_location("engram_wake_hook", HOOK_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_wake_raw(project_dir: str, project_root: str | None = None,
@@ -587,6 +596,19 @@ class TestWakeHarnessAdapter:
             stdin="{}",
         )
         assert out == ""
+
+    def test_explicit_skip_returns_before_loading_instance_config(
+        self, monkeypatch,
+    ):
+        monkeypatch.setenv("ENGRAM_WAKE", "skip")
+        monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+        wake = _load_wake_module()
+
+        def fail_if_called():
+            raise AssertionError("instance config loaded for skipped wake")
+
+        monkeypatch.setattr(wake, "_load_instance_config", fail_if_called)
+        wake.wake()
 
     def test_claude_wake_still_json_envelope(self, tmp_path):
         _seed_db(tmp_path)
