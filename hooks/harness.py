@@ -23,6 +23,12 @@ from datetime import datetime, timezone
 
 CLAUDE = "claude-code"
 CODEX = "codex"
+try:
+    from session_bindings import valid_codex_run_key
+except ImportError:
+    import re
+    def valid_codex_run_key(value):
+        return value if isinstance(value, str) and re.fullmatch(r"^codex:[0-9]+$", value) else None
 
 
 def read_context() -> dict:
@@ -115,7 +121,7 @@ def stamp_registry(conn, ctx: dict) -> None:
 
 
 def bind_session(conn, ctx: dict) -> None:
-    run_key = ctx.get("run_key")
+    run_key = valid_codex_run_key(ctx.get("run_key"))
     session_id = ctx.get("session_id")
     if not run_key or not session_id:
         return
@@ -132,7 +138,7 @@ def bind_session(conn, ctx: dict) -> None:
 
 
 def clear_session_binding(conn, ctx: dict) -> None:
-    run_key = ctx.get("run_key")
+    run_key = valid_codex_run_key(ctx.get("run_key"))
     session_id = ctx.get("session_id")
     if not run_key:
         return

@@ -242,7 +242,7 @@ def _init():
     _embeddings = NomicEmbedProvider()
 
     harness = os.environ.get("ENGRAM_HARNESS", "claude-code")
-    claude_session_id = os.environ.get("CLAUDE_SESSION_ID")
+    claude_session_id = os.environ.get("CLAUDE_SESSION_ID") if harness != "codex" else None
     bound_session_id = None
     if harness == "codex" and not claude_session_id:
         bound_session_id = _storage.resolve_session_binding(

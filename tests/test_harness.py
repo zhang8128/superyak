@@ -103,6 +103,13 @@ def test_emit_codex_is_plain_text_never_json(capsys):
     with pytest.raises(ValueError):
         json.loads(out)  # MUST not parse as JSON — Codex treats JSON as control flow
 
+@pytest.mark.parametrize("value", ["codex:", "codex:-1", "codex:1.2", "codex:abc", "claude:1", 3, None])
+def test_codex_run_key_validator_rejects_malformed(value):
+    assert harness.valid_codex_run_key(value) is None
+
+def test_codex_run_key_validator_accepts_decimal_pid():
+    assert harness.valid_codex_run_key("codex:123") == "codex:123"
+
 
 def test_emit_empty_writes_nothing(capsys):
     harness.emit(harness.CODEX, "SessionStart", "")

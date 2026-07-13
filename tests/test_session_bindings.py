@@ -27,6 +27,12 @@ def test_bind_resolve_rebind_and_clear(store):
     store.clear_session_binding("codex:10", session_id="session-b")
     assert store.resolve_session_binding("codex:10") is None
 
+def test_binding_methods_ignore_malformed_run_keys(store):
+    for key in ("codex:abc", "codex:-1", "codex:1.2", "codex:"):
+        store.bind_session(key, "session-a")
+        assert store.resolve_session_binding(key) is None
+        store.clear_session_binding(key)
+
 
 def test_concurrent_run_keys_are_isolated(store):
     store.bind_session("codex:10", "session-a")

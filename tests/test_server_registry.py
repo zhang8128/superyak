@@ -145,6 +145,14 @@ def test_codex_init_without_binding_generates_uuid(engram_server_env, monkeypatc
     assert engram_server_env._session_id != ""
     assert engram_server_env._session_id != "hook-session"
 
+def test_codex_ignores_decoy_claude_session_id(engram_server_env, monkeypatch):
+    monkeypatch.setenv("ENGRAM_HARNESS", "codex")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "decoy-claude")
+    monkeypatch.setenv("ENGRAM_RUN_KEY", "codex:42")
+    _seed_bound_hook_row(engram_server_env)
+    engram_server_env._init()
+    assert engram_server_env._session_id == "hook-session"
+
 
 def test_claude_session_id_wins_over_inherited_run_key(engram_server_env, monkeypatch):
     monkeypatch.setenv("ENGRAM_HARNESS", "claude-code")

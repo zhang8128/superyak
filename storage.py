@@ -8,6 +8,7 @@ import logging
 import re
 import sqlite3
 import struct
+from session_bindings import valid_codex_run_key
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1615,6 +1616,7 @@ class Storage:
             logger.debug("session_registry stamp skipped", exc_info=True)
 
     def bind_session(self, run_key: str, session_id: str) -> None:
+        run_key = valid_codex_run_key(run_key)
         if not run_key or not session_id:
             return
         try:
@@ -1629,6 +1631,7 @@ class Storage:
             logger.debug("session binding skipped", exc_info=True)
 
     def resolve_session_binding(self, run_key: str) -> str | None:
+        run_key = valid_codex_run_key(run_key)
         if not run_key:
             return None
         try:
@@ -1642,6 +1645,7 @@ class Storage:
             return None
 
     def clear_session_binding(self, run_key: str, session_id: str | None = None) -> None:
+        run_key = valid_codex_run_key(run_key)
         if not run_key:
             return
         try:

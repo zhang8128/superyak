@@ -150,6 +150,22 @@ def test_sleep_extension_load_failure_closes_connection(
     assert conn.closed is True
     assert capsys.readouterr().out == ""
 
+def test_sleep_attempts_close_when_binding_cleanup_raises(tmp_path, monkeypatch):
+    sleep = _load("sleep")
+    db_path = tmp_path / ".engram" / "graph.db"
+    db_path.parent.mkdir(); db_path.touch()
+    monkeypatch.setattr(sleep, "DB_PATH", db_path)
+    monkeypatch.setattr(sleep, "ENGRAM_HOME", tmp_path)
+    monkeypatch.setattr(sleep, "clear_session_binding", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+    class C:
+        def execute(self, *a, **k): return self
+        def enable_load_extension(self, *a): pass
+        def close(self): self.closed = True
+    c = C(); monkeypatch.setattr(sleep.sqlite3, "connect", lambda *_: c)
+    monkeypatch.setitem(__import__('sys').modules, "sqlite_vec", type("V", (), {"load": lambda *_: (_ for _ in ()).throw(RuntimeError("load"))})())
+    sleep.sleep()
+    assert c.closed is True
+
 
 def test_sleep_clears_runtime_binding(tmp_path):
     db_path = _seed_episodes(tmp_path)

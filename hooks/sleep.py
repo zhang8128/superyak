@@ -185,8 +185,14 @@ def sleep():
         pass  # Stop hooks and dreams are non-critical.
     finally:
         if conn is not None:
-            clear_session_binding(conn, ctx)
-            conn.close()
+            try:
+                clear_session_binding(conn, ctx)
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
