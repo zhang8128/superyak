@@ -43,6 +43,10 @@
 
 **Interfaces:** MCP command uses `uv run --project /Users/kairos/Projects/engram python /Users/kairos/Projects/engram/server.py`; process cwd remains Codex's caller cwd.
 
+The Codex config is machine-local by design (`~/.codex/config.toml`). The
+tracked `.mcp.json` is Claude Code's separate registration and is not changed
+to the Codex launcher.
+
 - [ ] Add a config assertion test that parses TOML and requires `--project`, the absolute server path, no `--directory`, and unchanged environment/approvals.
 - [ ] Run it RED against the current `--directory` launcher.
 - [ ] Change only the MCP command/args in `~/.codex/config.toml` to use `--project` and the absolute script path.

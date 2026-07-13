@@ -31,6 +31,9 @@ failure in one cannot prevent the other or produce a nonzero hook exit.
 The MCP launcher uses the Engram checkout as the uv project/environment while
 preserving the Codex process working directory. Hooks and MCP therefore read
 the same project-local `.engram/config.toml` and select the same instance.
+The Codex launcher is intentionally installed in the machine-local
+`~/.codex/config.toml`; tracked `.mcp.json` remains the Claude Code
+registration and must retain `ENGRAM_HARNESS=claude-code`.
 
 ### Silent mutation attribution
 
