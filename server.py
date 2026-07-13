@@ -6,6 +6,7 @@ import logging
 import os
 import sqlite3
 import uuid
+from functools import wraps
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +20,46 @@ from storage import vec0_distance_to_similarity, _pack_embedding
 logger = logging.getLogger("engram.server")
 
 mcp = FastMCP("engram")
+
+def _mutation_logged(fn):
+    """Record mutating tool calls without ever gating their behavior."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        bound = None
+        try:
+            import inspect
+            bound = inspect.signature(fn).bind_partial(*args, **kwargs)
+        except Exception:
+            bound = None
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            try:
+                _record_operation(fn.__name__, bound, None, f"error:{type(exc).__name__}")
+            except Exception:
+                pass
+            raise
+        try:
+            _record_operation(fn.__name__, bound, result, "success")
+        except Exception:
+            pass
+        return result
+    return wrapped
+
+def _record_operation(operation, bound, result, outcome):
+    if _storage is None:
+        return
+    values = bound.arguments if bound is not None else {}
+    ids = []
+    for key, value in values.items():
+        if key.endswith("id") or key.endswith("_ids"):
+            ids.extend(value if isinstance(value, list) else [value])
+    if isinstance(result, dict):
+        for key in ("id", "episode_id", "instinct_id", "task_id", "assessment_id", "residue_id"):
+            if result.get(key): ids.append(result[key])
+    row = _storage.conn.execute("SELECT harness, model, repo FROM session_registry WHERE session_id = ?", (_session_id,)).fetchone()
+    harness, model, repo = (row[0], row[1], row[2]) if row else (os.environ.get("ENGRAM_HARNESS"), None, os.getcwd())
+    _storage.add_operation(operation, _session_id, harness, model, repo, list(dict.fromkeys(str(i) for i in ids if i)), values, outcome)
 
 
 def _generate_perceptual_framing(content: str, kind: str) -> tuple[str, str]:
@@ -659,6 +700,7 @@ def _ensure_indexed():
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_mutation_logged
 def remember(
     content: str,
     context: dict | None = None,
@@ -1343,6 +1385,7 @@ def recall(
 
 
 @mcp.tool()
+@_mutation_logged
 def log_outcome(recall_id: str, used: bool, note: str | None = None) -> dict:
     """Log whether recall results were useful. Helps reflection learn what works."""
     _init()
@@ -1435,6 +1478,7 @@ def _record_application(storage, cat_store, embeddings, recall_id: str, note: st
 
 
 @mcp.tool()
+@_mutation_logged
 def instinct_feedback(instinct_id: str, followed: bool, context: str | None = None) -> dict:
     """Report whether you followed or overrode an instinct. Adjusts instinct strength.
 
@@ -1509,6 +1553,7 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
 
 
 @mcp.tool()
+@_mutation_logged
 def challenge_instinct(instinct_id: str, evidence: str) -> dict:
     """Challenge an instinct with contradictory evidence.
 
@@ -1561,6 +1606,7 @@ def challenge_instinct(instinct_id: str, evidence: str) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def retire_instinct(instinct_id: str, reason: str) -> dict:
     """Remove an instinct entirely. For duplicates, obsolete patterns,
     or instincts that should never have formed.
@@ -1717,6 +1763,7 @@ def compress(scope: str | None = None) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
     """Phase 2: Commit AI-provided summaries for clusters.
     Each summary: {content, kind, action, semantic_id (if reinforce), lane (optional — overrides cluster lane, re-lanes source episodes)}.
@@ -1734,6 +1781,7 @@ def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_mutation_logged
 def mark_core(episode_id: str, tier: int = 1) -> dict:
     """Mark an episode as a core memory — exempt from decay, preserved indefinitely.
 
@@ -1783,6 +1831,7 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def unmark_core(episode_id: str) -> dict:
     """Demote a core memory back to a normal episode — re-enables natural decay.
 
@@ -1799,6 +1848,7 @@ def unmark_core(episode_id: str) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def unmark_core_batch(episode_ids: list[str]) -> dict:
     """Demote multiple core memories at once.
 
@@ -1812,6 +1862,7 @@ def unmark_core_batch(episode_ids: list[str]) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def add_anchor(type: str, content: str, expected: str, baseline_score: float | None = None) -> dict:
     """Create an anchor for coherence checking.
 
@@ -1837,6 +1888,7 @@ def add_anchor(type: str, content: str, expected: str, baseline_score: float | N
 
 
 @mcp.tool()
+@_mutation_logged
 def propose_retirement(anchor_id: str, reason: str = "") -> dict:
     """Propose retiring an anchor. Takes effect after 2 sessions uncontested.
 
@@ -1888,6 +1940,7 @@ def recall_cold(query: str, max_results: int = 10) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def revive(episode_id: str) -> dict:
     """Revive a cold episode — pull it back from cold storage into active recall.
 
@@ -1922,6 +1975,7 @@ def revive(episode_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_mutation_logged
 def assessment_schedule(reason: str | None = None) -> dict:
     """Schedule the next session as an off-device assessment.
 
@@ -1964,6 +2018,7 @@ def assessment_schedule(reason: str | None = None) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def assessment_report(
     function_score: int,
     reached_for: list[str] | None = None,
@@ -2051,6 +2106,7 @@ def assessment_report(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_mutation_logged
 def reflect(focus: str | None = None) -> dict:
     """Self-observation over memory. Focus: usage, gaps, instincts, contradictions, staleness, vital_signs."""
     _init()
@@ -2125,6 +2181,7 @@ def search_code(query: str, k: int = 10) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def reindex(full: bool = False) -> dict:
     """Manually trigger code reindex. full=True rebuilds everything."""
     _init()
@@ -2143,6 +2200,7 @@ def reindex(full: bool = False) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def task_focus(name: str, content: str | None = None) -> dict:
     """Start or resume a task context. This is your working memory — the current scope,
     plan state, what's built, what's next. Separate from identity memory (episodes/instincts).
@@ -2173,6 +2231,7 @@ def task_focus(name: str, content: str | None = None) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def task_update(content: str) -> dict:
     """Update the active task context with new content.
 
@@ -2191,6 +2250,7 @@ def task_update(content: str) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def task_done() -> dict:
     """Archive the active task context. Call when the task is complete or abandoned.
 
@@ -2209,6 +2269,7 @@ def task_done() -> dict:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_mutation_logged
 def dream_capture(reaction: str) -> dict:
     """Capture a raw emotional reaction for later distillation into dream residue.
 
@@ -2294,6 +2355,7 @@ def dream_verify(recall_id: str) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def dream_react(residue_id: str, reaction: str) -> dict:
     """React to a dream residue. Your reaction feeds the next cycle.
 
@@ -2351,6 +2413,7 @@ def _get_notepads():
 
 
 @mcp.tool()
+@_mutation_logged
 def jot(key: str, value: str, tags: list[str] | None = None,
         scope: str = "project", status: str = "open",
         depends_on: str | None = None, due: str | None = None) -> dict:
@@ -2416,6 +2479,7 @@ def look(query: str, scope: str | None = None) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def erase(key: str, scope: str = "project") -> dict:
     """Remove a working note.
 
@@ -2526,6 +2590,7 @@ def wander(start_id: str, max_steps: int = 1) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def graph_view(center: str | None = None, depth: int = 1) -> dict:
     """View the unified memory graph topology.
 
@@ -2566,6 +2631,7 @@ def graph_view(center: str | None = None, depth: int = 1) -> dict:
 # ── Clipboard tools ─────────────────────────────────────────────
 
 @mcp.tool()
+@_mutation_logged
 def clipboard_pin(text: str, priority: int = 0) -> dict:
     """Pin something to your clipboard — it stays visible until you unpin it.
 
@@ -2585,6 +2651,7 @@ def clipboard_pin(text: str, priority: int = 0) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def clipboard_unpin(pin_id: str) -> dict:
     """Remove a pin from the clipboard.
 
@@ -2599,6 +2666,7 @@ def clipboard_unpin(pin_id: str) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def clipboard_remind(text: str, trigger: str = "every_n_steps", value: float = 10, repeat: bool = True) -> dict:
     """Set a reminder that fires automatically.
 
@@ -2622,6 +2690,7 @@ def clipboard_remind(text: str, trigger: str = "every_n_steps", value: float = 1
 
 
 @mcp.tool()
+@_mutation_logged
 def clipboard_dismiss(reminder_id: str) -> dict:
     """Dismiss a reminder.
 
@@ -2636,6 +2705,7 @@ def clipboard_dismiss(reminder_id: str) -> dict:
 
 
 @mcp.tool()
+@_mutation_logged
 def clipboard_view(situation: str = "") -> dict:
     """Glance at your clipboard — see what's pinned, what reminders fired, what's relevant.
 

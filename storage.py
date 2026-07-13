@@ -1615,6 +1615,22 @@ class Storage:
             # missing tables must never block writes.
             logger.debug("session_registry stamp skipped", exc_info=True)
 
+    def add_operation(self, operation, session_id, harness=None, model=None,
+                      repo=None, target_ids=None, details=None, outcome="success") -> str:
+        """Append an observational operation record; attribution is fail-open."""
+        op_id = str(__import__('uuid').uuid4())
+        try:
+            self.conn.execute(
+                "INSERT INTO operation_log (id,timestamp,operation,session_id,harness,model,repo,target_ids,details,outcome) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (op_id, _now_iso(), str(operation), session_id, harness, model, repo,
+                 json.dumps(target_ids if target_ids is not None else []),
+                 json.dumps(details if details is not None else {}, default=str), str(outcome)),
+            )
+            self.conn.commit()
+        except Exception:
+            logger.debug("operation attribution skipped", exc_info=True)
+        return op_id
+
     def bind_session(self, run_key: str, session_id: str) -> None:
         run_key = valid_codex_run_key(run_key)
         if not run_key or not session_id:
