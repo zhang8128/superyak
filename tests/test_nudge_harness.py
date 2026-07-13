@@ -102,3 +102,77 @@ def test_sleep_codex_uses_payload_session_id(tmp_path):
     ).fetchone()
     conn.close()
     assert row[0] == "codex-sleep-sess"
+
+
+def test_sleep_extension_load_failure_closes_connection(
+    tmp_path, monkeypatch, capsys,
+):
+    import types
+
+    sleep = _load("sleep")
+    db_path = tmp_path / ".engram" / "graph.db"
+    db_path.parent.mkdir()
+    db_path.touch()
+    monkeypatch.setattr(sleep, "ENGRAM_HOME", tmp_path)
+    monkeypatch.setattr(sleep, "DB_PATH", db_path)
+    monkeypatch.setattr(sleep, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setenv("ENGRAM_HARNESS", "codex")
+    monkeypatch.setenv("ENGRAM_RUN_KEY", "codex:42")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
+        "session_id": "codex-hook-session", "hook_event_name": "Stop",
+    })))
+
+    class FakeConnection:
+        def __init__(self):
+            self.closed = False
+            self.row_factory = None
+
+        def execute(self, *_args, **_kwargs):
+            return self
+
+        def enable_load_extension(self, _enabled):
+            pass
+
+        def commit(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    conn = FakeConnection()
+    monkeypatch.setattr(sleep.sqlite3, "connect", lambda _path: conn)
+    monkeypatch.setitem(sys.modules, "sqlite_vec", types.SimpleNamespace(
+        load=lambda _conn: (_ for _ in ()).throw(RuntimeError("load failed"))
+    ))
+
+    sleep.sleep()
+
+    assert conn.closed is True
+    assert capsys.readouterr().out == ""
+
+
+def test_sleep_clears_runtime_binding(tmp_path):
+    db_path = _seed_episodes(tmp_path)
+    from storage import Storage
+
+    store = Storage(str(db_path), migrations_dir=MIGRATIONS_DIR)
+    store.bind_session("codex:42", "codex-sleep-sess")
+    store.close()
+
+    result = _run_sleep(
+        str(tmp_path),
+        extra_env={
+            "ENGRAM_HARNESS": "codex",
+            "ENGRAM_RUN_KEY": "codex:42",
+        },
+        stdin=json.dumps({
+            "session_id": "codex-sleep-sess", "hook_event_name": "Stop",
+        }),
+    )
+    assert result.returncode == 0, result.stderr
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute(
+        "SELECT session_id FROM session_bindings WHERE run_key = 'codex:42'"
+    ).fetchone()
+    conn.close()
+    assert row is None

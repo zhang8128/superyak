@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import emit, read_context, stamp_registry
+from harness import bind_session, emit, read_context, stamp_registry
 
 ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
@@ -157,6 +157,7 @@ def wake():
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
     stamp_registry(conn, ctx)
+    bind_session(conn, ctx)
 
     try:
         assessment_marker = _handle_assessment(conn, now, session_id)

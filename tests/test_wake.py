@@ -514,6 +514,27 @@ class TestWakeAssessment:
         assert row2["status"] == "active"  # NOT abandoned by the re-fire
 
 
+def test_codex_wake_binds_run_key(tmp_path):
+    db_path = _seed_db(tmp_path)
+    output = _run_wake_raw(
+        str(tmp_path),
+        extra_env={"ENGRAM_HARNESS": "codex", "ENGRAM_RUN_KEY": "codex:42"},
+        stdin=json.dumps({
+            "session_id": "codex-hook-session",
+            "hook_event_name": "SessionStart",
+            "model": "gpt-5.6-sol",
+            "cwd": str(tmp_path),
+        }),
+    )
+    assert output.startswith("# Engram")
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT session_id FROM session_bindings WHERE run_key = 'codex:42'"
+    ).fetchone()
+    conn.close()
+    assert row == ("codex-hook-session",)
+
+
 class TestWakeHarnessAdapter:
     """hooks/harness.py integration: codex emits plain text and stamps
     session_registry; Claude keeps the JSON envelope. Adapted from the
