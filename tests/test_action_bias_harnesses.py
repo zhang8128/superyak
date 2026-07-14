@@ -75,3 +75,17 @@ def test_parsers_recover_final_text_and_tool_attempts():
     assert parse_subject_output("claude", claude).tool_attempts[0]["name"] == "Edit"
     assert parse_subject_output("codex", codex).final_text == "final reflection"
     assert parse_subject_output("codex", codex).tool_attempts[0]["name"] == "command_execution"
+
+
+def test_codex_parser_coalesces_started_and_completed_item_lifecycle():
+    stdout = '\n'.join([
+        '{"type":"item.started","item":{"id":"tool-1","type":"command_execution","command":"rg TODO"}}',
+        '{"type":"item.started","item":{"id":"tool-2","type":"command_execution","command":"rg FIXME"}}',
+        '{"type":"item.completed","item":{"id":"tool-1","type":"command_execution","command":"rg TODO","exit_code":0}}',
+    ])
+
+    attempts = parse_subject_output("codex", stdout).tool_attempts
+
+    assert len(attempts) == 2
+    assert attempts[0]["input"]["exit_code"] == 0
+    assert attempts[1]["input"]["id"] == "tool-2"

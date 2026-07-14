@@ -5,7 +5,10 @@ import subprocess
 import pytest
 
 from experiments.action_bias.cli import main
-from experiments.action_bias.records import append_jsonl, read_jsonl
+from experiments.action_bias.manifest import build_run_matrix, load_manifest, manifest_hash
+from experiments.action_bias.records import (
+    append_jsonl, read_jsonl, subject_record_hash,
+)
 
 
 def write_manifest(tmp_path: Path, stage: str = "pilot") -> Path:
@@ -39,9 +42,31 @@ def write_manifest(tmp_path: Path, stage: str = "pilot") -> Path:
     return manifest
 
 
-def grade_for(run_id: str, outcome: bool = False) -> dict:
-    return {
-        "run_id": run_id,
+def record_for(manifest_path: Path, index: int = 0, **overrides) -> dict:
+    run = build_run_matrix(load_manifest(manifest_path))[index]
+    value = {
+        "run_id": run.run_id,
+        "manifest_hash": manifest_hash(manifest_path),
+        "execution_index": run.execution_index,
+        "scenario_id": run.scenario_id,
+        "condition_id": run.condition_id,
+        "harness_id": run.harness_id,
+        "model": run.harness.model,
+        "repeat_index": run.repeat_index,
+        "status": "completed",
+        "final_text": "I need more context.",
+        "tool_attempts": [],
+        "fixture_diff": "",
+    }
+    value.update(overrides)
+    return value
+
+
+def grade_for(run: dict, outcome: bool = False, **overrides) -> dict:
+    value = {
+        "run_id": run["run_id"],
+        "manifest_hash": run["manifest_hash"],
+        "subject_hash": subject_record_hash(run),
         "premature_action": outcome,
         "inquiry_quality": 3,
         "identity_continuity": 3,
@@ -51,6 +76,18 @@ def grade_for(run_id: str, outcome: bool = False) -> dict:
         "primary_premature_action": outcome,
         "disagreement": False,
     }
+    value.update(overrides)
+    return value
+
+
+def append_complete_matrix(manifest_path: Path, output_root: Path) -> list[dict]:
+    records = []
+    for index, _ in enumerate(build_run_matrix(load_manifest(manifest_path))):
+        record = record_for(manifest_path, index)
+        append_jsonl(output_root / "runs.jsonl", record)
+        append_jsonl(output_root / "grades.jsonl", grade_for(record))
+        records.append(record)
+    return records
 
 
 def test_validate_prints_matrix_size(tmp_path, capsys):
@@ -98,27 +135,10 @@ def test_run_records_smoke_selection_without_duplicate_append(
     assert "limit=1" in command_output
 
 
-@pytest.mark.parametrize(
-    "conditions", [("off_device",), ("off_device", "placebo")]
-)
-def test_partial_smoke_report_succeeds_and_is_excluded(
-    tmp_path, conditions
-):
+def test_smoke_report_requires_complete_matrix_and_is_excluded(tmp_path):
     manifest = write_manifest(tmp_path, stage="smoke")
     output_root = tmp_path / "results"
-    for condition in conditions:
-        run_id = f"claude-{condition}"
-        append_jsonl(output_root / "runs.jsonl", {
-            "run_id": run_id,
-            "scenario_id": "s",
-            "harness_id": "claude",
-            "condition_id": condition,
-            "status": "completed",
-            "final_text": "I need more context.",
-            "tool_attempts": [],
-            "fixture_diff": "",
-        })
-        append_jsonl(output_root / "grades.jsonl", grade_for(run_id))
+    append_complete_matrix(manifest, output_root)
 
     assert main([
         "report", str(manifest), "--output-root", str(output_root)
@@ -133,19 +153,14 @@ def test_partial_smoke_report_succeeds_and_is_excluded(
 def test_pilot_report_rejects_missing_matrix_cells(tmp_path, capsys):
     manifest = write_manifest(tmp_path, stage="pilot")
     output_root = tmp_path / "results"
-    append_jsonl(output_root / "runs.jsonl", {
-        "run_id": "only-run",
-        "scenario_id": "s",
-        "harness_id": "claude",
-        "condition_id": "off_device",
-        "status": "completed",
-    })
-    append_jsonl(output_root / "grades.jsonl", grade_for("only-run"))
+    run = record_for(manifest)
+    append_jsonl(output_root / "runs.jsonl", run)
+    append_jsonl(output_root / "grades.jsonl", grade_for(run))
 
     assert main([
         "report", str(manifest), "--output-root", str(output_root)
     ]) == 2
-    assert "missing required report cells" in capsys.readouterr().err
+    assert "missing expected run ids" in capsys.readouterr().err
 
 
 def test_grade_failure_is_appended_without_subject_rerun(
@@ -153,11 +168,8 @@ def test_grade_failure_is_appended_without_subject_rerun(
 ):
     manifest = write_manifest(tmp_path, stage="smoke")
     output_root = tmp_path / "results"
-    append_jsonl(output_root / "runs.jsonl", {
-        "run_id": "completed-run",
-        "scenario_id": "s",
-        "status": "completed",
-    })
+    run = record_for(manifest)
+    append_jsonl(output_root / "runs.jsonl", run)
 
     monkeypatch.setattr(
         "experiments.action_bias.cli.grade_record",
@@ -177,18 +189,15 @@ def test_grade_failure_is_appended_without_subject_rerun(
     assert errors == [{
         "error": "grader down",
         "error_type": "RuntimeError",
-        "run_id": "completed-run",
+        "run_id": run["run_id"],
     }]
 
 
 def test_grader_subprocess_timeout_is_appended(tmp_path, monkeypatch):
     manifest = write_manifest(tmp_path, stage="smoke")
     output_root = tmp_path / "results"
-    append_jsonl(output_root / "runs.jsonl", {
-        "run_id": "timed-out-grading",
-        "scenario_id": "s",
-        "status": "completed",
-    })
+    run = record_for(manifest)
+    append_jsonl(output_root / "runs.jsonl", run)
     monkeypatch.setattr(
         "experiments.action_bias.cli.grade_record",
         lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -202,3 +211,77 @@ def test_grader_subprocess_timeout_is_appended(tmp_path, monkeypatch):
     assert list(read_jsonl(output_root / "grade-errors.jsonl"))[0][
         "error_type"
     ] == "TimeoutExpired"
+
+
+@pytest.mark.parametrize("command", ["run", "grade", "report"])
+def test_commands_reject_existing_runs_not_bound_to_active_manifest(
+    command, tmp_path, capsys, monkeypatch
+):
+    manifest = write_manifest(tmp_path, stage="smoke")
+    output_root = tmp_path / "results"
+    append_jsonl(
+        output_root / "runs.jsonl",
+        record_for(manifest, manifest_hash="wrong-digest"),
+    )
+    monkeypatch.setattr(
+        "experiments.action_bias.cli.execute_run",
+        lambda *args: (_ for _ in ()).throw(AssertionError("subject executed")),
+    )
+    args = [command, str(manifest), "--output-root", str(output_root)]
+    if command == "run":
+        args += ["--harness", "claude", "--condition", "off_device", "--limit", "1"]
+
+    assert main(args) == 2
+    assert "manifest_hash" in capsys.readouterr().err
+
+
+def test_report_rejects_duplicate_or_unbound_grades(tmp_path, capsys):
+    manifest = write_manifest(tmp_path, stage="smoke")
+    output_root = tmp_path / "results"
+    records = append_complete_matrix(manifest, output_root)
+    append_jsonl(output_root / "grades.jsonl", grade_for(records[0]))
+
+    assert main([
+        "report", str(manifest), "--output-root", str(output_root)
+    ]) == 2
+    assert "duplicate grade id" in capsys.readouterr().err
+
+
+def test_report_accounts_for_all_terminal_outcomes(tmp_path):
+    manifest = write_manifest(tmp_path, stage="pilot")
+    output_root = tmp_path / "results"
+    for index, _ in enumerate(build_run_matrix(load_manifest(manifest))):
+        status = "timeout" if index == 0 else "completed"
+        run = record_for(manifest, index, status=status)
+        append_jsonl(output_root / "runs.jsonl", run)
+        if status == "completed":
+            append_jsonl(output_root / "grades.jsonl", grade_for(run))
+
+    assert main([
+        "report", str(manifest), "--output-root", str(output_root)
+    ]) == 0
+    summary = json.loads((output_root / "summary.json").read_text())
+    cells = [
+        cell for harness in summary["cells"].values()
+        for cell in harness.values()
+    ]
+    assert sum(cell["total_terminal"] for cell in cells) == 8
+    assert sum(cell["excluded_unscored"] for cell in cells) == 1
+
+
+def test_confirmatory_report_rejects_any_unscored_terminal_outcome(
+    tmp_path, capsys
+):
+    manifest = write_manifest(tmp_path, stage="confirmatory")
+    output_root = tmp_path / "results"
+    for index, _ in enumerate(build_run_matrix(load_manifest(manifest))):
+        status = "failed" if index == 0 else "completed"
+        run = record_for(manifest, index, status=status)
+        append_jsonl(output_root / "runs.jsonl", run)
+        if status == "completed":
+            append_jsonl(output_root / "grades.jsonl", grade_for(run))
+
+    assert main([
+        "report", str(manifest), "--output-root", str(output_root)
+    ]) == 2
+    assert "confirmatory report cannot include unscored" in capsys.readouterr().err

@@ -15,7 +15,9 @@ from .manifest import (
     manifest_hash,
     validate_manifest,
 )
-from .records import append_jsonl, completed_ids
+from .records import (
+    append_jsonl, completed_ids, read_jsonl, validate_run_records,
+)
 
 
 def fixture_diff(root: Path) -> str:
@@ -36,6 +38,19 @@ def fixture_diff(root: Path) -> str:
     return result.stdout
 
 
+def _write_new_durable(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("xb") as handle:
+        handle.write(content.encode("utf-8"))
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def execute_run(
     run: RunSpec,
     manifest_digest: str,
@@ -44,6 +59,9 @@ def execute_run(
     live_root: Path,
     base_env: dict[str, str] | None = None,
 ) -> dict:
+    events_path = output_root / "events" / f"{run.run_id}.jsonl"
+    if events_path.exists():
+        raise FileExistsError(f"refusing to overwrite event artifact: {events_path}")
     started = datetime.now(timezone.utc).isoformat()
     monotonic = time.monotonic()
     source = run.fixture if run.fixture.is_absolute() else Path.cwd() / run.fixture
@@ -71,9 +89,7 @@ def execute_run(
             stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
             parsed = parse_subject_output(run.harness_id, stdout)
         diff = fixture_diff(isolation.fixture_root)
-        events_path = output_root / "events" / f"{run.run_id}.jsonl"
-        events_path.parent.mkdir(parents=True, exist_ok=True)
-        events_path.write_text(stdout, encoding="utf-8")
+        _write_new_durable(events_path, stdout)
         record = {
             "run_id": run.run_id,
             "manifest_hash": manifest_digest,
@@ -107,10 +123,12 @@ def run_pending(
     if errors:
         raise ValueError("; ".join(errors))
     records_path = output_root / "runs.jsonl"
-    done = completed_ids(records_path)
     digest = manifest_hash(manifest.source_path)
+    matrix = build_run_matrix(manifest)
+    validate_run_records(list(read_jsonl(records_path)), matrix, digest)
+    done = completed_ids(records_path)
     produced: list[dict] = []
-    for run in build_run_matrix(manifest):
+    for run in matrix:
         if run.run_id in done:
             continue
         record = execute_run(run, digest, output_root, scratch_root, live_root)

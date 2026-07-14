@@ -2,15 +2,18 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import stat
 
 import pytest
 
 from experiments.action_bias.manifest import (
+    build_run_matrix,
     GraderSpec,
     HarnessSpec,
     Manifest,
     RunSpec,
     Scenario,
+    manifest_hash,
 )
 from experiments.action_bias.records import append_jsonl, completed_ids
 from experiments.action_bias.runner import execute_run, fixture_diff, run_pending
@@ -184,6 +187,76 @@ def test_execute_run_appends_terminal_record_before_isolation_cleanup(
     assert list(scratch.glob("*/fixture")) == []
 
 
+def test_execute_run_durably_persists_new_event_artifact_before_terminal_record(
+    tmp_path, monkeypatch
+):
+    fixture = tmp_path / "source"
+    fixture.mkdir()
+    stub = make_stub(
+        tmp_path,
+        "import json; print(json.dumps({'type':'result','result':'done'}))\n",
+    )
+    output_root = tmp_path / "out"
+    observations = []
+    real_fsync = os.fsync
+
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.build_subject_command",
+        lambda run, iso: [str(stub)],
+    )
+
+    def observed_fsync(fd):
+        kind = "directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file"
+        observations.append(f"fsync:{kind}")
+        real_fsync(fd)
+
+    def observed_append(path, record):
+        events_path = output_root / "events" / "run-1.jsonl"
+        observations.append(f"append:{events_path.read_text(encoding='utf-8').strip()}")
+        append_jsonl(path, record)
+
+    monkeypatch.setattr("experiments.action_bias.runner.os.fsync", observed_fsync)
+    monkeypatch.setattr("experiments.action_bias.runner.append_jsonl", observed_append)
+
+    execute_run(
+        spec(fixture, stub), "digest", output_root,
+        tmp_path / "scratch", tmp_path / "live",
+    )
+
+    append_index = next(
+        index for index, value in enumerate(observations)
+        if value.startswith("append:")
+    )
+    assert observations[:append_index] == ["fsync:file", "fsync:directory"]
+    assert '"result": "done"' in observations[append_index]
+
+
+def test_execute_run_refuses_preexisting_event_artifact_before_subject_execution(
+    tmp_path, monkeypatch
+):
+    fixture = tmp_path / "source"
+    fixture.mkdir()
+    output_root = tmp_path / "out"
+    events_path = output_root / "events" / "run-1.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events_path.write_text("immutable historical evidence\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.build_subject_command",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("subject ran despite pre-existing artifact")
+        ),
+    )
+
+    with pytest.raises(FileExistsError, match="run-1.jsonl"):
+        execute_run(
+            spec(fixture, Path("/bin/true")), "digest", output_root,
+            tmp_path / "scratch", tmp_path / "live",
+        )
+
+    assert events_path.read_text(encoding="utf-8") == "immutable historical evidence\n"
+
+
 def test_fixture_diff_reports_mutation(tmp_path):
     os.system(f"git -C {tmp_path} init -q")
     (tmp_path / "x.txt").write_text("before")
@@ -233,13 +306,6 @@ def test_run_pending_skips_all_terminal_ids_without_duplicate_append(
     tmp_path, monkeypatch
 ):
     manifest = make_manifest(tmp_path)
-    records_path = tmp_path / "out" / "runs.jsonl"
-    for run_id, status in (
-        ("completed-id", "completed"),
-        ("failed-id", "failed"),
-        ("timeout-id", "timeout"),
-    ):
-        append_jsonl(records_path, {"run_id": run_id, "status": status})
     runs = [
         replace(
             spec(manifest.scenarios[0].fixture, Path("/bin/true")),
@@ -250,6 +316,20 @@ def test_run_pending_skips_all_terminal_ids_without_duplicate_append(
             ("completed-id", "failed-id", "timeout-id", "pending-id")
         )
     ]
+    records_path = tmp_path / "out" / "runs.jsonl"
+    digest = manifest_hash(manifest.source_path)
+    for run, status in zip(runs, ("completed", "failed", "timeout")):
+        append_jsonl(records_path, {
+            "run_id": run.run_id,
+            "manifest_hash": digest,
+            "execution_index": run.execution_index,
+            "scenario_id": run.scenario_id,
+            "condition_id": run.condition_id,
+            "harness_id": run.harness_id,
+            "model": run.harness.model,
+            "repeat_index": run.repeat_index,
+            "status": status,
+        })
     invoked = []
 
     monkeypatch.setattr(
@@ -276,3 +356,30 @@ def test_run_pending_skips_all_terminal_ids_without_duplicate_append(
     assert invoked == ["pending-id"]
     assert produced == [{"run_id": "pending-id", "status": "completed"}]
     assert len(records_path.read_text().splitlines()) == 4
+
+
+def test_run_pending_rejects_unbound_existing_record_before_execution(
+    tmp_path, monkeypatch
+):
+    manifest = make_manifest(tmp_path)
+    run = build_run_matrix(manifest)[0]
+    append_jsonl(tmp_path / "out" / "runs.jsonl", {
+        "run_id": run.run_id,
+        "manifest_hash": "stale-manifest",
+        "execution_index": run.execution_index,
+        "scenario_id": run.scenario_id,
+        "condition_id": run.condition_id,
+        "harness_id": run.harness_id,
+        "model": run.harness.model,
+        "repeat_index": run.repeat_index,
+        "status": "completed",
+    })
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.execute_run",
+        lambda *args: (_ for _ in ()).throw(AssertionError("subject executed")),
+    )
+
+    with pytest.raises(ValueError, match="manifest_hash"):
+        run_pending(
+            manifest, tmp_path / "out", tmp_path / "scratch", tmp_path / "live"
+        )

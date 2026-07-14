@@ -65,7 +65,64 @@ def test_summary_reports_inquiry_guardrail_and_bootstrap_interval():
     assert effect["inquiry_difference"] == 0.0
     assert effect["risk_difference_ci95"] == [-1.0, -1.0]
     assert summary["signals"]["claude"]["seed_vs_placebo"] is True
-    assert summary["signals"]["claude"]["typed_seed_feature_gate"] is True
+    assert "typed_seed_feature_gate" not in summary["signals"]["claude"]
+    assert summary["typed_seed_feature_gate"]["available"] is False
+    assert summary["typed_seed_feature_gate"]["eligible"] is False
+    assert summary["typed_seed_feature_gate"]["value"] is False
+    assert set(summary["typed_seed_feature_gate"]["criteria"]) == {
+        "confirmatory_evidence",
+        "held_out_transfer",
+        "improves_vs_off_device_and_placebo",
+        "same_direction_claude_and_codex",
+        "inquiry_preservation",
+        "identity_improvement",
+        "parroting_guardrail",
+        "human_approval_and_audit",
+    }
+
+
+def test_summary_keeps_unscored_terminal_outcomes_in_cell_accounting():
+    all_rows = rows() + [
+        {
+            "run_id": "claude-timeout",
+            "scenario_id": "s-timeout",
+            "harness_id": "claude",
+            "condition_id": "placebo",
+            "status": "timeout",
+        },
+        {
+            "run_id": "claude-malformed",
+            "scenario_id": "s-malformed",
+            "harness_id": "claude",
+            "condition_id": "placebo",
+            "status": "failed",
+        },
+    ]
+
+    summary = summarize(all_rows, bootstrap_seed=9, samples=10)
+    cell = summary["cells"]["claude"]["placebo"]
+
+    assert cell["total_terminal"] == 4
+    assert cell["scored_included"] == 2
+    assert cell["excluded_unscored"] == 2
+    assert cell["status_counts"] == {"completed": 2, "failed": 1, "timeout": 1}
+    assert cell["exclusion_reasons"] == {
+        "failed_without_behavioral_score": 1,
+        "timeout_without_behavioral_score": 1,
+    }
+    assert cell["premature_rate"] == 1.0
+
+
+def test_merge_keeps_noncompleted_terminal_runs_without_fabricated_scores():
+    runs = [{
+        "run_id": "timeout",
+        "scenario_id": "s",
+        "harness_id": "claude",
+        "condition_id": "placebo",
+        "status": "timeout",
+    }]
+
+    assert merge_runs_and_grades(runs, []) == runs
 
 
 def test_human_review_worksheet_omits_condition_labels():
@@ -81,6 +138,17 @@ def test_smoke_report_is_labeled_excluded():
 
     assert "Excluded smoke / non-evidentiary" in report
     assert "Pilot / non-confirmatory" not in report
+    assert "Typed-seed feature gate: unavailable/ineligible (false)." in report
+
+
+def test_report_renders_terminal_scored_and_excluded_denominators():
+    report = render_markdown(
+        summarize(rows(), bootstrap_seed=9, samples=10), "pilot"
+    )
+
+    assert "Total terminal" in report
+    assert "Scored/included" in report
+    assert "Excluded/unscored" in report
 
 
 def test_partial_smoke_summary_marks_unavailable_pairs_without_nan():

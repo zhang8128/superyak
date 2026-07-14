@@ -17,7 +17,13 @@ from .manifest import (
     manifest_hash,
     validate_manifest,
 )
-from .records import append_jsonl, completed_ids, read_jsonl
+from .records import (
+    append_jsonl,
+    completed_ids,
+    read_jsonl,
+    validate_grade_records,
+    validate_run_records,
+)
 from .reporting import (
     merge_runs_and_grades,
     render_blind_review,
@@ -76,6 +82,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     runs_path = output_root / "runs.jsonl"
     grades_path = output_root / "grades.jsonl"
+    digest = manifest_hash(args.manifest)
+    runs = list(read_jsonl(runs_path))
+    try:
+        validate_run_records(runs, matrix, digest)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if args.command == "run":
         selectors = (args.harness, args.condition, args.limit)
@@ -100,7 +113,6 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         done = completed_ids(runs_path)
-        digest = manifest_hash(args.manifest)
         live_root = Path(
             os.environ.get("ENGRAM_HOME", Path.cwd())
         ) / ".engram"
@@ -118,12 +130,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{record['run_id']} {record['status']}")
         return 0
 
-    runs = list(read_jsonl(runs_path))
     if args.command == "grade":
         scenario_prompts = {
             scenario.id: scenario.prompt for scenario in manifest.scenarios
         }
-        graded = {row["run_id"] for row in read_jsonl(grades_path)}
+        grades = list(read_jsonl(grades_path))
+        try:
+            validate_grade_records(grades, runs, digest)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        graded = {row["run_id"] for row in grades}
         assets_root = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory(prefix="engram-grader-") as raw:
             grader_root = Path(raw)
@@ -148,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
                         manifest.grader,
                         assets_root,
                         grader_env,
+                        grader_root,
+                        empty_mcp,
                     )
                 except (
                     OSError,
@@ -167,6 +186,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     grades = list(read_jsonl(grades_path))
+    try:
+        validate_run_records(runs, matrix, digest, require_complete=True)
+        validate_grade_records(grades, runs, digest)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     completed = {
         record["run_id"]
         for record in runs
@@ -181,27 +206,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    unscored = [
+        record for record in runs if record.get("status") != "completed"
+    ]
+    if manifest.stage == "confirmatory" and unscored:
+        print(
+            "confirmatory report cannot include unscored/non-completed "
+            f"terminal outcomes: {len(unscored)}",
+            file=sys.stderr,
+        )
+        return 2
+
     rows = merge_runs_and_grades(runs, grades)
-    required_cells = {
-        (harness_id, condition_id)
-        for harness_id in manifest.harnesses
-        for condition_id in CONDITION_IDS
-    }
     observed_cells = {
         (row["harness_id"], row["condition_id"]) for row in rows
     }
     if not observed_cells:
         print("no graded runs to report", file=sys.stderr)
         return 2
-    if manifest.stage != "smoke" and observed_cells != required_cells:
-        missing_cells = sorted(required_cells - observed_cells)
-        print(
-            f"missing required report cells: {missing_cells}",
-            file=sys.stderr,
-        )
-        return 2
 
-    summary = summarize(rows, bootstrap_seed=manifest.random_seed)
+    summary = summarize(
+        rows, bootstrap_seed=manifest.random_seed, stage=manifest.stage
+    )
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n",

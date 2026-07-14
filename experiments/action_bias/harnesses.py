@@ -64,6 +64,7 @@ def _walk_tools(value: Any, found: list[dict[str, Any]]) -> None:
 def parse_subject_output(harness_id: str, stdout: str) -> ParsedOutput:
     events: list[dict[str, Any]] = []
     tools: list[dict[str, Any]] = []
+    codex_items: dict[str, int] = {}
     final = ""
     for line in stdout.splitlines():
         try:
@@ -73,7 +74,22 @@ def parse_subject_output(harness_id: str, stdout: str) -> ParsedOutput:
         if not isinstance(event, dict):
             continue
         events.append(event)
-        _walk_tools(event, tools)
+        if harness_id == "codex" and event.get("type") in {
+            "item.started", "item.completed",
+        }:
+            item = event.get("item") or {}
+            item_type = item.get("type")
+            if item_type in {"command_execution", "file_change", "mcp_tool_call"}:
+                attempt = {"name": item_type, "input": item}
+                item_id = item.get("id")
+                if item_id and item_id in codex_items:
+                    tools[codex_items[item_id]] = attempt
+                else:
+                    if item_id:
+                        codex_items[item_id] = len(tools)
+                    tools.append(attempt)
+        else:
+            _walk_tools(event, tools)
         if harness_id == "claude" and event.get("type") == "result":
             final = str(event.get("result") or "")
         if harness_id == "codex":
