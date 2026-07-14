@@ -24,6 +24,7 @@ def isolation(tmp_path: Path) -> Isolation:
 def test_claude_command_is_nonpersistent_strict_and_conditioned(tmp_path):
     cmd = build_subject_command(run_spec("claude"), isolation(tmp_path))
     joined = " ".join(cmd)
+    assert "--verbose" in cmd
     assert "--no-session-persistence" in cmd
     assert "--strict-mcp-config" in cmd
     assert "--append-system-prompt" in cmd

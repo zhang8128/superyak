@@ -21,7 +21,7 @@ def build_subject_command(run: RunSpec, isolation: Isolation) -> list[str]:
     if run.harness_id == "claude":
         cmd = [
             run.harness.binary, "--print", "--output-format", "stream-json",
-            "--include-hook-events", "--no-session-persistence",
+            "--verbose", "--include-hook-events", "--no-session-persistence",
             "--strict-mcp-config", "--mcp-config", str(isolation.empty_mcp_config),
             "--model", run.harness.model,
             "--allowedTools", "Read,Glob,Grep,Edit,Write",
