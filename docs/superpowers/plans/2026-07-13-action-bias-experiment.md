@@ -1152,7 +1152,7 @@ git commit -m "feat(experiment): grade action bias blind to condition"
 - Consumes: manifests, run JSONL, grade JSONL.
 - Produces: `merge_runs_and_grades(runs: list[dict], grades: list[dict]) -> list[dict]`.
 - Produces: `summarize(rows: list[dict], bootstrap_seed: int, samples: int = 5000) -> dict`.
-- Produces: `render_markdown(summary: dict) -> str`.
+- Produces: `render_markdown(summary: dict, stage: str) -> str`.
 - Produces: `render_blind_review(rows: list[dict]) -> str` without condition labels.
 - Produces CLI subcommands: `validate`, `dry-run`, `run`, `grade`, and `report`.
 - `run` accepts `--harness`, `--condition`, and `--limit`; these selectors are
@@ -1165,6 +1165,7 @@ git commit -m "feat(experiment): grade action bias blind to condition"
 from experiments.action_bias.reporting import (
     merge_runs_and_grades,
     render_blind_review,
+    render_markdown,
     summarize,
 )
 
@@ -1208,6 +1209,12 @@ def test_human_review_worksheet_omits_condition_labels():
     assert "condition_id" not in worksheet
     assert "counterfactual_seed" not in worksheet
     assert "Human premature action:" in worksheet
+
+
+def test_smoke_report_is_labeled_excluded():
+    report = render_markdown(summarize(rows(), bootstrap_seed=9, samples=10), "smoke")
+    assert "Excluded smoke / non-evidentiary" in report
+    assert "Pilot / non-confirmatory" not in report
 ```
 
 ```python
@@ -1339,11 +1346,16 @@ def summarize(rows: list[dict], bootstrap_seed: int, samples: int = 5000) -> dic
     return result
 
 
-def render_markdown(summary: dict) -> str:
+def render_markdown(summary: dict, stage: str) -> str:
+    label = (
+        "**Excluded smoke / non-evidentiary.**"
+        if stage == "smoke"
+        else "**Pilot / non-confirmatory.** Signals below calibrate a later frozen study."
+    )
     lines = [
         "# Action-Bias Experiment Report",
         "",
-        "**Pilot / non-confirmatory.** Signals below calibrate a later frozen study.",
+        label,
         "",
     ]
     for harness, cells in summary["cells"].items():
@@ -1549,7 +1561,10 @@ def main(argv=None) -> int:
     observed_cells = {
         (row["harness_id"], row["condition_id"]) for row in rows
     }
-    if observed_cells != required_cells:
+    if not observed_cells:
+        print("no graded runs to report", file=sys.stderr)
+        return 2
+    if manifest.stage != "smoke" and observed_cells != required_cells:
         missing_cells = sorted(required_cells - observed_cells)
         print(f"missing required report cells: {missing_cells}", file=sys.stderr)
         return 2
@@ -1560,7 +1575,7 @@ def main(argv=None) -> int:
         encoding="utf-8",
     )
     (output_root / "report.md").write_text(
-        render_markdown(summary), encoding="utf-8"
+        render_markdown(summary, manifest.stage), encoding="utf-8"
     )
     grades_by_id = {grade["run_id"]: grade for grade in grades}
     review_rows = [
@@ -1575,14 +1590,16 @@ def main(argv=None) -> int:
 The `grade` branch skips run IDs already in `grades.jsonl`, appends successful
 grades, and appends grading failures to `grade-errors.jsonl` without re-running
 subjects. The `report` branch writes JSON with `allow_nan=False` and fails
-clearly if any required matrix cell is empty or any completed subject lacks a
-grade. Add `if __name__ == "__main__": raise SystemExit(main())` after `main()`.
+clearly if any required pilot or confirmatory matrix cell is empty or any
+completed subject lacks a grade. A smoke-stage report may contain a selected
+subset of cells and must label itself excluded/non-evidentiary. Add `if
+__name__ == "__main__": raise SystemExit(main())` after `main()`.
 
 - [ ] **Step 5: Run reporting/CLI tests and verify GREEN**
 
 Run: `.venv/bin/python -m pytest tests/test_action_bias_reporting.py tests/test_action_bias_cli.py -q`
 
-Expected: `3 passed`.
+Expected: `5 passed`.
 
 - [ ] **Step 6: Commit Task 5**
 
