@@ -74,6 +74,14 @@ def test_validation_rejects_length_band_and_missing_fixture(tmp_path):
     assert any("fixture" in e for e in errors)
 
 
+def test_validation_rejects_unknown_fallback_tokenizer(tmp_path):
+    path = write_manifest(tmp_path, fallback_tokenizer="byte-pair-v1")
+
+    errors = validate_manifest(load_manifest(path), tmp_path)
+
+    assert errors == ["fallback_tokenizer must be whitespace-v1"]
+
+
 def test_load_rejects_unknown_condition(tmp_path):
     path = write_manifest(tmp_path)
     data = json.loads(path.read_text())

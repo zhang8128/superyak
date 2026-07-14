@@ -96,6 +96,8 @@ def validate_manifest(manifest: Manifest, repo_root: Path) -> list[str]:
         errors.append("stage must be pilot, confirmatory, or smoke")
     if manifest.repeat_count < 1:
         errors.append("repeat_count must be positive")
+    if manifest.fallback_tokenizer != "whitespace-v1":
+        errors.append("fallback_tokenizer must be whitespace-v1")
     if set(manifest.harnesses) != {"claude", "codex"}:
         errors.append("harnesses must be exactly claude and codex")
     nonempty = [_words(manifest.conditions[c]) for c in CONDITION_IDS if c != "off_device"]
