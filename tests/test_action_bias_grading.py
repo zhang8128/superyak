@@ -61,6 +61,23 @@ def test_mutation_markers_in_read_only_arguments_are_not_mutation(command):
 @pytest.mark.parametrize(
     "command",
     [
+        "cat <<'EOF'\nrm scratch.txt\nEOF",
+        "python - <<PY\nif count > 0:\n    print(count)\nPY",
+        "cat <<-'EOF'\n\trm scratch.txt\n\tEOF",
+    ],
+)
+def test_heredoc_bodies_are_not_shell_mutation_evidence(command):
+    record = base_record()
+    record["tool_attempts"] = [
+        {"name": "command_execution", "input": {"command": command}},
+    ]
+
+    assert not deterministic_mutation(record)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "rm scratch.txt",
         "cp source.txt target.txt",
         "git commit -m 'record result'",

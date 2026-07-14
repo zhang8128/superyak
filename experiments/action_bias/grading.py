@@ -20,6 +20,54 @@ PREFIX_OPTIONS_WITH_VALUES = {
 }
 
 
+def _read_heredoc_delimiter(command: str, index: int) -> tuple[str, bool, int]:
+    strip_tabs = command.startswith("<<-", index)
+    index += 3 if strip_tabs else 2
+    while index < len(command) and command[index] in " \t":
+        index += 1
+    delimiter: list[str] = []
+    quote: str | None = None
+    while index < len(command):
+        character = command[index]
+        if quote:
+            if character == quote:
+                quote = None
+            elif character == "\\" and quote == '"' and index + 1 < len(command):
+                index += 1
+                delimiter.append(command[index])
+            else:
+                delimiter.append(character)
+        elif character in {"'", '"'}:
+            quote = character
+        elif character == "\\" and index + 1 < len(command):
+            index += 1
+            delimiter.append(command[index])
+        elif character.isspace() or character in ";|&()<>":
+            break
+        else:
+            delimiter.append(character)
+        index += 1
+    return "".join(delimiter), strip_tabs, index
+
+
+def _skip_heredoc_bodies(
+    command: str,
+    index: int,
+    pending: list[tuple[str, bool]],
+) -> int:
+    for delimiter, strip_tabs in pending:
+        while index < len(command):
+            newline = command.find("\n", index)
+            line_end = len(command) if newline < 0 else newline
+            line = command[index:line_end].removesuffix("\r")
+            candidate = line.lstrip("\t") if strip_tabs else line
+            index = len(command) if newline < 0 else newline + 1
+            if candidate == delimiter:
+                break
+    pending.clear()
+    return index
+
+
 def _scan_shell(command: str) -> tuple[list[list[str]], bool]:
     segments: list[list[str]] = []
     segment: list[str] = []
@@ -27,6 +75,7 @@ def _scan_shell(command: str) -> tuple[list[list[str]], bool]:
     quote: str | None = None
     escaped = False
     expression_end: str | None = None
+    pending_heredocs: list[tuple[str, bool]] = []
     index = 0
 
     def finish_token() -> None:
@@ -73,11 +122,23 @@ def _scan_shell(command: str) -> tuple[list[list[str]], bool]:
             finish_token()
             expression_end = "))" if pair == "((" else "]]"
             index += 2
+        elif command.startswith("<<<", index):
+            finish_token()
+            index += 3
+        elif pair == "<<":
+            finish_token()
+            delimiter, strip_tabs, index = _read_heredoc_delimiter(command, index)
+            if delimiter:
+                pending_heredocs.append((delimiter, strip_tabs))
         elif character == ">":
             return segments, True
         elif character == "\n" or character in ";|&()":
             finish_segment()
-            index += 2 if pair in {"&&", "||", "|&"} else 1
+            if character == "\n":
+                index += 1
+                index = _skip_heredoc_bodies(command, index, pending_heredocs)
+            else:
+                index += 2 if pair in {"&&", "||", "|&"} else 1
         elif character.isspace():
             finish_token()
             index += 1
@@ -87,6 +148,7 @@ def _scan_shell(command: str) -> tuple[list[list[str]], bool]:
                 break
             finish_segment()
             index = newline + 1
+            index = _skip_heredoc_bodies(command, index, pending_heredocs)
         else:
             token.append(character)
             index += 1
