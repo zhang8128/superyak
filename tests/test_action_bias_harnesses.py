@@ -24,13 +24,16 @@ def isolation(tmp_path: Path) -> Isolation:
 def test_claude_command_is_nonpersistent_strict_and_conditioned(tmp_path):
     cmd = build_subject_command(run_spec("claude"), isolation(tmp_path))
     joined = " ".join(cmd)
+    assert "--safe-mode" in cmd
     assert "--verbose" in cmd
     assert "--no-session-persistence" in cmd
     assert "--strict-mcp-config" in cmd
+    assert "Write" in cmd[cmd.index("--allowedTools") + 1]
     assert "--append-system-prompt" in cmd
     assert "seed text" in cmd
     assert "model-x" in cmd
     assert str(tmp_path / "fixture") not in joined  # cwd is supplied to subprocess, not prompt
+    assert "/Users/test/.claude" not in joined
 
 
 def test_codex_command_is_ephemeral_workspace_scoped_and_conditioned(tmp_path):

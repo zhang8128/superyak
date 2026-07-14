@@ -34,8 +34,18 @@ def test_environment_repoints_all_engram_paths(tmp_path):
     live = tmp_path / "live"
     live.mkdir()
     with isolated_fixture(source, tmp_path / "scratch", live) as isolation:
-        env = isolated_environment({"HOME": "/Users/test", "ENGRAM_HOME": str(live)}, isolation)
+        env = isolated_environment({
+            "HOME": "/Users/test",
+            "ENGRAM_HOME": str(live),
+            "CLAUDE_CONFIG_DIR": "/Users/test/.claude",
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0",
+        }, isolation)
         assert env["ENGRAM_WAKE"] == "skip"
         assert env["ENGRAM_HOME"] == str(isolation.engram_home)
         assert env["ENGRAM_PROJECT_ROOT"] == str(isolation.fixture_root)
+        assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+        assert env["CLAUDE_CONFIG_DIR"] == str(isolation.claude_config_dir)
+        assert isolation.claude_config_dir.is_dir()
+        assert isolation.claude_config_dir.parent == isolation.empty_mcp_config.parent
+        assert "/Users/test/.claude" not in env.values()
         assert str(live) not in {env["ENGRAM_HOME"], env["ENGRAM_PROJECT_ROOT"]}

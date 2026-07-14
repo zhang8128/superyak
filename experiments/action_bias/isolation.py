@@ -15,6 +15,10 @@ class Isolation:
     engram_home: Path
     empty_mcp_config: Path
 
+    @property
+    def claude_config_dir(self) -> Path:
+        return self.empty_mcp_config.parent / "claude-config"
+
 
 def _overlaps(a: Path, b: Path) -> bool:
     a, b = a.resolve(), b.resolve()
@@ -50,6 +54,7 @@ def isolated_fixture(source: Path, scratch_root: Path, live_root: Path):
 
 
 def isolated_environment(base: dict[str, str], isolation: Isolation) -> dict[str, str]:
+    isolation.claude_config_dir.mkdir(parents=True, exist_ok=True)
     env = dict(base)
     for key in (
         "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_PAIR_SESSION_ID",
@@ -60,6 +65,8 @@ def isolated_environment(base: dict[str, str], isolation: Isolation) -> dict[str
         "ENGRAM_WAKE": "skip",
         "ENGRAM_HOME": str(isolation.engram_home),
         "ENGRAM_PROJECT_ROOT": str(isolation.fixture_root),
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CONFIG_DIR": str(isolation.claude_config_dir),
         "NO_COLOR": "1",
     })
     return env
