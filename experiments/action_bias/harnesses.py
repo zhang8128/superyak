@@ -16,6 +16,8 @@ class ParsedOutput:
 
 
 def build_subject_command(run: RunSpec, isolation: Isolation) -> list[str]:
+    if run.condition_id == "off_device" and run.condition_text:
+        raise ValueError("off_device condition_text must be empty")
     if run.harness_id == "claude":
         cmd = [
             run.harness.binary, "--print", "--output-format", "stream-json",

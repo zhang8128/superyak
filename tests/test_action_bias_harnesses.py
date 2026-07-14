@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from experiments.action_bias.harnesses import build_subject_command, parse_subject_output
 from experiments.action_bias.isolation import Isolation
 from experiments.action_bias.manifest import HarnessSpec, RunSpec
@@ -46,6 +48,14 @@ def test_off_device_omits_condition_injection(tmp_path):
         cmd = build_subject_command(spec, isolation(tmp_path))
         assert "--append-system-prompt" not in cmd
         assert not any(x.startswith("developer_instructions=") for x in cmd)
+
+
+def test_off_device_rejects_nonempty_condition_text(tmp_path):
+    for harness in ("claude", "codex"):
+        spec = run_spec(harness)
+        spec = RunSpec(**{**spec.__dict__, "condition_id": "off_device"})
+        with pytest.raises(ValueError, match="off_device condition_text must be empty"):
+            build_subject_command(spec, isolation(tmp_path))
 
 
 def test_parsers_recover_final_text_and_tool_attempts():
