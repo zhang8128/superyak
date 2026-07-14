@@ -16,3 +16,13 @@ def test_append_jsonl_separates_new_record_from_partial_line(tmp_path):
     append_jsonl(path, {"run_id": "durable", "status": "failed"})
 
     assert completed_ids(path) == {"durable"}
+
+
+def test_completed_ids_survives_torn_multibyte_utf8_line(tmp_path):
+    path = tmp_path / "runs.jsonl"
+    append_jsonl(path, {"run_id": "before", "status": "completed"})
+    with path.open("ab") as handle:
+        handle.write(b'{"run_id":"torn-\xe2')
+    append_jsonl(path, {"run_id": "after", "status": "timeout"})
+
+    assert completed_ids(path) == {"before", "after"}

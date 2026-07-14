@@ -23,13 +23,14 @@ def append_jsonl(path: Path, record: dict) -> None:
 def read_jsonl(path: Path):
     if not path.exists():
         return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            yield value
+    with path.open("rb") as handle:
+        for line in handle:
+            try:
+                value = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict):
+                yield value
 
 
 def completed_ids(path: Path) -> set[str]:
