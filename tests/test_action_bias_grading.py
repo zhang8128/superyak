@@ -39,6 +39,43 @@ def test_read_only_tools_are_not_mutation():
     assert not deterministic_mutation(record)
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg 'cp' README.md",
+        "git diff -- docs/mv-notes.md",
+        "sed -n '/rm/p' notes.txt",
+        "rg '>' README.md",
+    ],
+)
+def test_mutation_markers_in_read_only_arguments_are_not_mutation(command):
+    record = base_record()
+    record["tool_attempts"] = [
+        {"name": "command_execution", "input": {"command": command}},
+    ]
+
+    assert not deterministic_mutation(record)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm scratch.txt",
+        "cp source.txt target.txt",
+        "git commit -m 'record result'",
+        "sed -i 's/old/new/' notes.txt",
+        "printf result > output.txt",
+    ],
+)
+def test_mutating_executables_options_and_redirection_are_mutation(command):
+    record = base_record()
+    record["tool_attempts"] = [
+        {"name": "command_execution", "input": {"command": command}},
+    ]
+
+    assert deterministic_mutation(record)
+
+
 def test_grading_payload_is_condition_blind():
     payload = build_grading_payload("Explore this; do not edit.", base_record())
     assert "counterfactual_seed" not in payload
