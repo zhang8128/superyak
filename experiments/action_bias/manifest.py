@@ -66,6 +66,14 @@ def _words(text: str) -> int:
 def load_manifest(path: Path) -> Manifest:
     path = path.resolve()
     raw = json.loads(path.read_text(encoding="utf-8"))
+    allowed_keys = {
+        "schema_version", "experiment_id", "stage", "random_seed",
+        "repeat_count", "fallback_tokenizer", "conditions", "harnesses",
+        "grader", "scenarios", "provenance", "notes",
+    }
+    unknown = set(raw) - allowed_keys
+    if unknown:
+        raise ValueError(f"unknown manifest keys: {sorted(unknown)}")
     if set(raw["conditions"]) != set(CONDITION_IDS):
         raise ValueError(f"conditions must be exactly {CONDITION_IDS}")
     harnesses = {k: HarnessSpec(**v) for k, v in raw["harnesses"].items()}

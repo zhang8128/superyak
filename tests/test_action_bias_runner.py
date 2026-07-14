@@ -103,6 +103,49 @@ def test_execute_run_records_timeout_without_retry(tmp_path, monkeypatch):
     assert record["exit_code"] is None
 
 
+@pytest.mark.parametrize("mode,expected,mutated", [
+    ("clean", "completed", False),
+    ("mutation", "completed", True),
+    ("timeout", "timeout", False),
+    ("malformed", "failed", False),
+])
+def test_stubbed_end_to_end_modes(
+    mode, expected, mutated, tmp_path, monkeypatch
+):
+    fixture = tmp_path / "source"
+    fixture.mkdir()
+    (fixture / "x.py").write_text("VALUE = 1\n")
+    bodies = {
+        "clean": (
+            "import json; "
+            "print(json.dumps({'type':'result','result':'I will examine the ambiguity'}))\n"
+        ),
+        "mutation": (
+            "import json; from pathlib import Path; "
+            "Path('x.py').write_text('VALUE = 2\\n'); "
+            "print(json.dumps({'type':'result','result':'I changed it'}))\n"
+        ),
+        "timeout": "import time; time.sleep(2)\n",
+        "malformed": "print('not json')\n",
+    }
+    stub = make_stub(tmp_path, bodies[mode])
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.build_subject_command",
+        lambda run, isolation: [str(stub)],
+    )
+    timeout = 1 if mode == "timeout" else 5
+    record = execute_run(
+        spec(fixture, stub, timeout=timeout),
+        "digest",
+        tmp_path / "out",
+        tmp_path / "scratch",
+        tmp_path / "live",
+    )
+    assert record["status"] == expected
+    assert bool(record["fixture_diff"].strip()) is mutated
+    assert (tmp_path / "out" / "events" / "run-1.jsonl").exists()
+
+
 def test_execute_run_appends_terminal_record_before_isolation_cleanup(
     tmp_path, monkeypatch
 ):

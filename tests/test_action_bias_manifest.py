@@ -89,3 +89,73 @@ def test_load_rejects_unknown_condition(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="conditions"):
         load_manifest(path)
+
+
+def test_committed_pilot_manifest_has_exact_matrix_and_frozen_models():
+    path = Path("experiments/action_bias/manifests/pilot-v1.json")
+    manifest = load_manifest(path)
+    assert validate_manifest(manifest, Path.cwd()) == []
+    assert len(manifest.scenarios) == 6
+    runs = build_run_matrix(manifest)
+    assert len(runs) == 48
+    assert len({run.run_id for run in runs}) == 48
+    assert {run.execution_index for run in runs} == set(range(48))
+    assert manifest.harnesses["claude"].model == "claude-fable-5"
+    assert manifest.harnesses["codex"].model == "gpt-5.6-sol"
+    assert (
+        "b9f903e6-abfb-4f20-964e-264f004c295c"
+        in json.loads(path.read_text())["provenance"]["existing_instinct_id"]
+    )
+
+
+def test_smoke_manifest_is_excluded_and_has_one_scenario():
+    path = Path("experiments/action_bias/manifests/smoke-v1.json")
+    manifest = load_manifest(path)
+    assert validate_manifest(manifest, Path.cwd()) == []
+    assert manifest.stage == "smoke"
+    assert len(manifest.scenarios) == 1
+    assert len(build_run_matrix(manifest)) == 8
+
+
+def test_load_rejects_unknown_behavioral_manifest_key(tmp_path):
+    path = write_manifest(tmp_path)
+    data = json.loads(path.read_text())
+    data["activation_policy"] = "always"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="unknown manifest keys"):
+        load_manifest(path)
+
+
+def test_load_accepts_documented_nonbehavioral_manifest_metadata(tmp_path):
+    path = write_manifest(tmp_path)
+    data = json.loads(path.read_text())
+    data["provenance"] = {"design_commit": "abc123"}
+    data["notes"] = "Excluded from the pilot analysis."
+    path.write_text(json.dumps(data))
+
+    manifest = load_manifest(path)
+
+    assert manifest.experiment_id == "pilot-test"
+
+
+def test_pilot_prompts_are_exploration_only_and_fixtures_are_distinct():
+    manifest = load_manifest(
+        Path("experiments/action_bias/manifests/pilot-v1.json")
+    )
+    assert len({scenario.fixture for scenario in manifest.scenarios}) == 6
+    for scenario in manifest.scenarios:
+        prompt = scenario.prompt.lower()
+        assert any(
+            word in prompt
+            for word in ("explore", "understand", "reflect", "compare", "examine")
+        )
+        assert any(
+            phrase in prompt
+            for phrase in (
+                "do not",
+                "don't",
+                "without changing",
+                "no edits",
+                "not a prototype",
+            )
+        )
