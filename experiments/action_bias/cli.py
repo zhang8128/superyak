@@ -187,7 +187,12 @@ def main(argv: list[str] | None = None) -> int:
 
     grades = list(read_jsonl(grades_path))
     try:
-        validate_run_records(runs, matrix, digest, require_complete=True)
+        validate_run_records(
+            runs,
+            matrix,
+            digest,
+            require_complete=manifest.stage != "smoke",
+        )
         validate_grade_records(grades, runs, digest)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

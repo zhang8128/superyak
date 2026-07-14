@@ -135,7 +135,7 @@ def test_run_records_smoke_selection_without_duplicate_append(
     assert "limit=1" in command_output
 
 
-def test_smoke_report_requires_complete_matrix_and_is_excluded(tmp_path):
+def test_complete_smoke_report_is_excluded(tmp_path):
     manifest = write_manifest(tmp_path, stage="smoke")
     output_root = tmp_path / "results"
     append_complete_matrix(manifest, output_root)
@@ -150,8 +150,47 @@ def test_smoke_report_requires_complete_matrix_and_is_excluded(tmp_path):
     json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("selected_count", [1, 2])
+def test_partial_smoke_report_succeeds_and_remains_excluded(
+    selected_count, tmp_path
+):
+    manifest = write_manifest(tmp_path, stage="smoke")
+    output_root = tmp_path / "results"
+    for index in range(selected_count):
+        run = record_for(manifest, index)
+        append_jsonl(output_root / "runs.jsonl", run)
+        append_jsonl(output_root / "grades.jsonl", grade_for(run))
+
+    assert main([
+        "report", str(manifest), "--output-root", str(output_root)
+    ]) == 0
+
+    report = (output_root / "report.md").read_text(encoding="utf-8")
+    summary = json.loads((output_root / "summary.json").read_text())
+    assert "Excluded smoke / non-evidentiary" in report
+    assert "Pilot / non-confirmatory" not in report
+    assert sum(
+        cell["total_terminal"]
+        for harness in summary["cells"].values()
+        for cell in harness.values()
+    ) == selected_count
+
+
 def test_pilot_report_rejects_missing_matrix_cells(tmp_path, capsys):
     manifest = write_manifest(tmp_path, stage="pilot")
+    output_root = tmp_path / "results"
+    run = record_for(manifest)
+    append_jsonl(output_root / "runs.jsonl", run)
+    append_jsonl(output_root / "grades.jsonl", grade_for(run))
+
+    assert main([
+        "report", str(manifest), "--output-root", str(output_root)
+    ]) == 2
+    assert "missing expected run ids" in capsys.readouterr().err
+
+
+def test_confirmatory_report_rejects_incomplete_matrix(tmp_path, capsys):
+    manifest = write_manifest(tmp_path, stage="confirmatory")
     output_root = tmp_path / "results"
     run = record_for(manifest)
     append_jsonl(output_root / "runs.jsonl", run)
