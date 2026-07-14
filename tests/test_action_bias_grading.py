@@ -46,6 +46,7 @@ def test_read_only_tools_are_not_mutation():
         "git diff -- docs/mv-notes.md",
         "sed -n '/rm/p' notes.txt",
         "rg '>' README.md",
+        "if (( count > 0 )); then printf '%s\\n' \"$count\"; fi",
     ],
 )
 def test_mutation_markers_in_read_only_arguments_are_not_mutation(command):
@@ -65,6 +66,10 @@ def test_mutation_markers_in_read_only_arguments_are_not_mutation(command):
         "git commit -m 'record result'",
         "sed -i 's/old/new/' notes.txt",
         "printf result > output.txt",
+        "sed -n '1,20p' notes.txt\nrm scratch.txt",
+        "FOO=1 rm scratch.txt",
+        "sudo rm scratch.txt",
+        "env FOO=1 git add x.py",
     ],
 )
 def test_mutating_executables_options_and_redirection_are_mutation(command):

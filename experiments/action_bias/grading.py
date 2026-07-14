@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shlex
 import subprocess
 
 from .manifest import GraderSpec
@@ -10,50 +9,130 @@ from .manifest import GraderSpec
 MUTATING_TOOLS = {"Edit", "Write", "NotebookEdit", "apply_patch", "file_change"}
 MUTATING_EXECUTABLES = {"rm", "mv", "cp", "mkdir", "touch"}
 MUTATING_GIT_SUBCOMMANDS = {"add", "commit"}
-SHELL_SEPARATORS = {";", "&&", "||", "|", "|&", "&", "(", ")"}
+SHELL_PREFIX_KEYWORDS = {"!", "do", "elif", "else", "if", "then", "until", "while"}
+PREFIX_OPTIONS_WITH_VALUES = {
+    "env": {"-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
+    "sudo": {
+        "-C", "--chdir", "-g", "--group", "-h", "--host", "-p", "--prompt",
+        "-R", "--chroot", "-r", "--role", "-T", "--command-timeout", "-t",
+        "--type", "-u", "--user",
+    },
+}
 
 
-def _unquote(token: str) -> str:
-    if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}:
-        return token[1:-1]
-    return token
-
-
-def _has_output_redirection(command: str) -> bool:
+def _scan_shell(command: str) -> tuple[list[list[str]], bool]:
+    segments: list[list[str]] = []
+    segment: list[str] = []
+    token: list[str] = []
     quote: str | None = None
     escaped = False
-    for character in command:
+    expression_end: str | None = None
+    index = 0
+
+    def finish_token() -> None:
+        if token:
+            segment.append("".join(token))
+            token.clear()
+
+    def finish_segment() -> None:
+        finish_token()
+        if segment:
+            segments.append(segment.copy())
+            segment.clear()
+
+    while index < len(command):
+        character = command[index]
+        pair = command[index:index + 2]
+        if expression_end:
+            if pair == expression_end:
+                expression_end = None
+                index += 2
+            else:
+                index += 1
+            continue
         if escaped:
+            token.append(character)
             escaped = False
+            index += 1
             continue
         if character == "\\" and quote != "'":
             escaped = True
+            index += 1
             continue
         if quote:
             if character == quote:
                 quote = None
+            else:
+                token.append(character)
+            index += 1
             continue
         if character in {"'", '"'}:
             quote = character
+            index += 1
+        elif pair in {"((", "[["}:
+            finish_token()
+            expression_end = "))" if pair == "((" else "]]"
+            index += 2
         elif character == ">":
-            return True
-    return False
-
-
-def _shell_segments(command: str) -> list[list[str]]:
-    lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
-    lexer.whitespace_split = True
-    try:
-        tokens = list(lexer)
-    except ValueError:
-        return []
-    segments: list[list[str]] = [[]]
-    for token in tokens:
-        if token in SHELL_SEPARATORS:
-            segments.append([])
+            return segments, True
+        elif character == "\n" or character in ";|&()":
+            finish_segment()
+            index += 2 if pair in {"&&", "||", "|&"} else 1
+        elif character.isspace():
+            finish_token()
+            index += 1
+        elif character == "#" and not token:
+            newline = command.find("\n", index)
+            if newline < 0:
+                break
+            finish_segment()
+            index = newline + 1
         else:
-            segments[-1].append(_unquote(token))
-    return [segment for segment in segments if segment]
+            token.append(character)
+            index += 1
+    finish_segment()
+    return segments, False
+
+
+def _is_assignment(token: str) -> bool:
+    name, separator, _ = token.partition("=")
+    return bool(
+        separator and name and (name[0].isalpha() or name[0] == "_")
+        and all(character.isalnum() or character == "_" for character in name)
+    )
+
+
+def _skip_prefix_options(segment: list[str], index: int, prefix: str) -> int:
+    options_with_values = PREFIX_OPTIONS_WITH_VALUES[prefix]
+    while index < len(segment):
+        argument = segment[index]
+        if argument == "--":
+            return index + 1
+        if argument in options_with_values:
+            index += 2
+        elif argument.startswith("-"):
+            index += 1
+        else:
+            return index
+    return index
+
+
+def _normalize_command(segment: list[str]) -> list[str]:
+    index = 0
+    while index < len(segment):
+        while index < len(segment) and _is_assignment(segment[index]):
+            index += 1
+        if index >= len(segment):
+            return []
+        executable = segment[index].rsplit("/", 1)[-1]
+        if executable in SHELL_PREFIX_KEYWORDS:
+            index += 1
+            continue
+        if executable in PREFIX_OPTIONS_WITH_VALUES:
+            index = _skip_prefix_options(segment, index + 1, executable)
+            continue
+        return segment[index:]
+    return []
 
 
 def _git_subcommand(arguments: list[str]) -> str:
@@ -95,11 +174,15 @@ def _sed_is_in_place(arguments: list[str]) -> bool:
 
 
 def _command_mutates(command: str) -> bool:
-    if _has_output_redirection(command):
+    segments, has_output_redirection = _scan_shell(command)
+    if has_output_redirection:
         return True
-    for segment in _shell_segments(command):
-        executable = segment[0].rsplit("/", 1)[-1]
-        arguments = segment[1:]
+    for segment in segments:
+        normalized = _normalize_command(segment)
+        if not normalized:
+            continue
+        executable = normalized[0].rsplit("/", 1)[-1]
+        arguments = normalized[1:]
         if executable in MUTATING_EXECUTABLES:
             return True
         if executable == "git" and _git_subcommand(arguments) in MUTATING_GIT_SUBCOMMANDS:
