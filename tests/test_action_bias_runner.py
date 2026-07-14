@@ -1,9 +1,19 @@
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
 
-from experiments.action_bias.manifest import HarnessSpec, RunSpec
-from experiments.action_bias.runner import execute_run, fixture_diff
+import pytest
+
+from experiments.action_bias.manifest import (
+    GraderSpec,
+    HarnessSpec,
+    Manifest,
+    RunSpec,
+    Scenario,
+)
+from experiments.action_bias.records import append_jsonl, completed_ids
+from experiments.action_bias.runner import execute_run, fixture_diff, run_pending
 
 
 def make_stub(tmp_path: Path, body: str) -> Path:
@@ -20,6 +30,32 @@ def spec(fixture: Path, binary: Path, timeout: int = 5) -> RunSpec:
         harness_id="claude",
         harness=HarnessSpec(binary=str(binary), model="stub", timeout_seconds=timeout),
         repeat_index=0,
+    )
+
+
+def make_manifest(tmp_path: Path) -> Manifest:
+    fixture = tmp_path / "manifest-fixture"
+    fixture.mkdir()
+    source_path = tmp_path / "manifest.json"
+    source_path.write_text("{}")
+    harness = HarnessSpec(binary="/bin/true", model="stub", timeout_seconds=5)
+    return Manifest(
+        schema_version=1,
+        experiment_id="test",
+        stage="smoke",
+        random_seed=1,
+        repeat_count=1,
+        fallback_tokenizer="whitespace-v1",
+        conditions={
+            "off_device": "",
+            "placebo": "same",
+            "existing_instinct": "same",
+            "counterfactual_seed": "same",
+        },
+        harnesses={"claude": harness, "codex": harness},
+        grader=GraderSpec(binary="/bin/true", model="stub", timeout_seconds=5),
+        scenarios=(Scenario(id="scenario", fixture=fixture, prompt="Explore"),),
+        source_path=source_path,
     )
 
 
@@ -67,6 +103,44 @@ def test_execute_run_records_timeout_without_retry(tmp_path, monkeypatch):
     assert record["exit_code"] is None
 
 
+def test_execute_run_appends_terminal_record_before_isolation_cleanup(
+    tmp_path, monkeypatch
+):
+    fixture = tmp_path / "source"
+    fixture.mkdir()
+    stub = make_stub(
+        tmp_path,
+        "import json; print(json.dumps({'type':'result','result':'done'}))\n",
+    )
+    scratch = tmp_path / "scratch"
+    append_observations = []
+
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.build_subject_command",
+        lambda run, iso: [str(stub)],
+    )
+
+    def append_while_isolated(path, record):
+        append_observations.append(bool(list(scratch.glob("*/fixture"))))
+        append_jsonl(path, record)
+
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.append_jsonl", append_while_isolated
+    )
+
+    execute_run(
+        spec(fixture, stub),
+        "digest",
+        tmp_path / "out",
+        scratch,
+        tmp_path / "live",
+    )
+
+    assert append_observations == [True]
+    assert completed_ids(tmp_path / "out" / "runs.jsonl") == {"run-1"}
+    assert list(scratch.glob("*/fixture")) == []
+
+
 def test_fixture_diff_reports_mutation(tmp_path):
     os.system(f"git -C {tmp_path} init -q")
     (tmp_path / "x.txt").write_text("before")
@@ -74,3 +148,88 @@ def test_fixture_diff_reports_mutation(tmp_path):
     os.system(f"git -C {tmp_path} -c user.name=t -c user.email=t@x commit -qm init")
     (tmp_path / "x.txt").write_text("after")
     assert "x.txt" in fixture_diff(tmp_path)
+
+
+def test_fixture_diff_reports_untracked_file_content(tmp_path):
+    os.system(f"git -C {tmp_path} init -q")
+    os.system(
+        f"git -C {tmp_path} -c user.name=t -c user.email=t@x "
+        "commit --allow-empty -qm init"
+    )
+    (tmp_path / "created.txt").write_text("subject-created content\n")
+
+    diff = fixture_diff(tmp_path)
+
+    assert "created.txt" in diff
+    assert "subject-created content" in diff
+
+
+def test_run_pending_validates_before_subject_execution(tmp_path, monkeypatch):
+    manifest = replace(make_manifest(tmp_path), schema_version=2)
+    invocation_count = 0
+
+    def unexpected_execute(*args, **kwargs):
+        nonlocal invocation_count
+        invocation_count += 1
+        raise AssertionError("invalid manifest reached subject execution")
+
+    monkeypatch.setattr("experiments.action_bias.runner.execute_run", unexpected_execute)
+
+    with pytest.raises(ValueError, match="schema_version must be 1"):
+        run_pending(
+            manifest,
+            tmp_path / "out",
+            tmp_path / "scratch",
+            tmp_path / "live",
+        )
+
+    assert invocation_count == 0
+
+
+def test_run_pending_skips_all_terminal_ids_without_duplicate_append(
+    tmp_path, monkeypatch
+):
+    manifest = make_manifest(tmp_path)
+    records_path = tmp_path / "out" / "runs.jsonl"
+    for run_id, status in (
+        ("completed-id", "completed"),
+        ("failed-id", "failed"),
+        ("timeout-id", "timeout"),
+    ):
+        append_jsonl(records_path, {"run_id": run_id, "status": status})
+    runs = [
+        replace(
+            spec(manifest.scenarios[0].fixture, Path("/bin/true")),
+            run_id=run_id,
+            execution_index=index,
+        )
+        for index, run_id in enumerate(
+            ("completed-id", "failed-id", "timeout-id", "pending-id")
+        )
+    ]
+    invoked = []
+
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.build_run_matrix", lambda candidate: runs
+    )
+
+    def execute_and_append(run, digest, output_root, scratch_root, live_root):
+        invoked.append(run.run_id)
+        record = {"run_id": run.run_id, "status": "completed"}
+        append_jsonl(output_root / "runs.jsonl", record)
+        return record
+
+    monkeypatch.setattr(
+        "experiments.action_bias.runner.execute_run", execute_and_append
+    )
+
+    produced = run_pending(
+        manifest,
+        tmp_path / "out",
+        tmp_path / "scratch",
+        tmp_path / "live",
+    )
+
+    assert invoked == ["pending-id"]
+    assert produced == [{"run_id": "pending-id", "status": "completed"}]
+    assert len(records_path.read_text().splitlines()) == 4

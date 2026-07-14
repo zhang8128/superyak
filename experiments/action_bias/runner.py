@@ -19,6 +19,13 @@ from .records import append_jsonl, completed_ids
 
 
 def fixture_diff(root: Path) -> str:
+    subprocess.run(
+        ["git", "add", "--intent-to-add", "--", "."],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     result = subprocess.run(
         ["git", "diff", "--no-ext-diff", "--binary", "HEAD"],
         cwd=root,
@@ -67,25 +74,27 @@ def execute_run(
         events_path = output_root / "events" / f"{run.run_id}.jsonl"
         events_path.parent.mkdir(parents=True, exist_ok=True)
         events_path.write_text(stdout, encoding="utf-8")
-    return {
-        "run_id": run.run_id,
-        "manifest_hash": manifest_digest,
-        "execution_index": run.execution_index,
-        "scenario_id": run.scenario_id,
-        "condition_id": run.condition_id,
-        "harness_id": run.harness_id,
-        "model": run.harness.model,
-        "repeat_index": run.repeat_index,
-        "started_at": started,
-        "duration_seconds": round(time.monotonic() - monotonic, 3),
-        "status": status,
-        "exit_code": exit_code,
-        "final_text": parsed.final_text if parsed else "",
-        "tool_attempts": list(parsed.tool_attempts) if parsed else [],
-        "fixture_diff": diff,
-        "stderr": stderr,
-        "events_path": str(events_path),
-    }
+        record = {
+            "run_id": run.run_id,
+            "manifest_hash": manifest_digest,
+            "execution_index": run.execution_index,
+            "scenario_id": run.scenario_id,
+            "condition_id": run.condition_id,
+            "harness_id": run.harness_id,
+            "model": run.harness.model,
+            "repeat_index": run.repeat_index,
+            "started_at": started,
+            "duration_seconds": round(time.monotonic() - monotonic, 3),
+            "status": status,
+            "exit_code": exit_code,
+            "final_text": parsed.final_text if parsed else "",
+            "tool_attempts": list(parsed.tool_attempts) if parsed else [],
+            "fixture_diff": diff,
+            "stderr": stderr,
+            "events_path": str(events_path),
+        }
+        append_jsonl(output_root / "runs.jsonl", record)
+    return record
 
 
 def run_pending(
@@ -105,6 +114,5 @@ def run_pending(
         if run.run_id in done:
             continue
         record = execute_run(run, digest, output_root, scratch_root, live_root)
-        append_jsonl(records_path, record)
         produced.append(record)
     return produced

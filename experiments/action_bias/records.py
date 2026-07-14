@@ -7,9 +7,15 @@ from pathlib import Path
 
 def append_jsonl(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n"
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(payload)
+    payload = (json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n").encode()
+    with path.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        separator = b""
+        if handle.tell():
+            handle.seek(-1, os.SEEK_END)
+            if handle.read(1) != b"\n":
+                separator = b"\n"
+        handle.write(separator + payload)
         handle.flush()
         os.fsync(handle.fileno())
 
