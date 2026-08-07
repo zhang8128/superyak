@@ -132,6 +132,29 @@ class PersistenceConfig:
 
 
 @dataclass
+class CategoryEvolutionConfig:
+    enabled: bool = False
+    shadow: bool = True
+    influence_recall: bool = False
+    auto_commit: bool = False
+    db_path: str = ""
+    archive_quota_bytes: int = 3_000_000_000_000
+    archive_high_watermark_ratio: float = 0.90
+    interpreted_max_dimension: int = 2
+    max_traversal_depth: int = 4
+    max_neighbors: int = 64
+    max_candidates: int = 50_000
+    compile_wall_time_ms: int = 500
+    consolidation_event_interval: int = 250
+    consolidation_rewrite_budget: int = 32
+    max_rewrite_members: int = 32
+    max_active_branches: int = 4
+    soft_boundary_threshold: float = 0.35
+    hard_boundary_threshold: float = 0.65
+    hard_boundary_confirmations: int = 2
+
+
+@dataclass
 class EngramConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     indexing: IndexingConfig = field(default_factory=IndexingConfig)
@@ -149,6 +172,7 @@ class EngramConfig:
     graph: GraphConfig = field(default_factory=GraphConfig)
     cohesion: CohesionConfig = field(default_factory=CohesionConfig)
     persistence: PersistenceConfig = field(default_factory=PersistenceConfig)
+    category_evolution: CategoryEvolutionConfig = field(default_factory=CategoryEvolutionConfig)
     instance: str | None = None
     session_context: str | None = None
 
@@ -235,6 +259,27 @@ redundancy_floor = 0.85
 protect_threshold = 0.6
 generativity_threshold = 0.0
 cold_uninvited_p = 0.05
+
+[category_evolution]
+enabled = false
+shadow = true
+influence_recall = false
+auto_commit = false
+db_path = ""
+archive_quota_bytes = 3000000000000
+archive_high_watermark_ratio = 0.90
+interpreted_max_dimension = 2
+max_traversal_depth = 4
+max_neighbors = 64
+max_candidates = 50000
+compile_wall_time_ms = 500
+consolidation_event_interval = 250
+consolidation_rewrite_budget = 32
+max_rewrite_members = 32
+max_active_branches = 4
+soft_boundary_threshold = 0.35
+hard_boundary_threshold = 0.65
+hard_boundary_confirmations = 2
 """
 
 
@@ -269,6 +314,7 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
         graph=GraphConfig(**raw.get("graph", {})),
         cohesion=CohesionConfig(**raw.get("cohesion", {})),
         persistence=PersistenceConfig(**raw.get("persistence", {})),
+        category_evolution=CategoryEvolutionConfig(**raw.get("category_evolution", {})),
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),
     )
