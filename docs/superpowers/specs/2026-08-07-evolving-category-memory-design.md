@@ -1,478 +1,519 @@
-# Generic Evolving-Category Memory — Design Specification
+# Contextual Stochastic Memory — Design Specification
 
 **Date:** 2026-08-07
 
-**Status:** Approved direction; awaiting written-spec review
+**Status:** Approved research direction; awaiting written-spec review
 
-**Scope:** First falsifiable implementation in `engram`
+**Scope:** First falsifiable, shadow-mode implementation in `engram`
+
+## Revision Note
+
+This document supersedes the pre-research design committed at `a1e161c`.
+That design treated context as an input to a bounded category compiler. The
+research review exposed a missing feedback loop: context must change recall,
+and recalled or successfully used memories must in turn update the inferred
+context. A context-weighted static graph cannot provide that behavior.
+
+The revised design is a **contextual-inference sparse multilayer Markov
+memory**. Category theory specifies composition and transport laws; it is not
+an excuse to store arbitrary higher cells. V1 interprets only dimensions 0–2.
 
 ## Purpose
 
-Build a generic memory substrate whose categorical organization can change over
-time. Context does not merely select among fixed graphs. Experience may propose
-new distinctions, relations, equivalences, mergers, and retirements; periodic
-consolidation commits justified structural changes while retaining the complete
-history.
+Make memory expression depend on a continuously inferred context without
+duplicating memories or corrupting durable knowledge. The same cue may follow
+different recall trajectories in different situations, and returning to a
+prior situation should restore its trajectory without relearning it.
 
-The first implementation must point toward an evolving higher-category system
-without attempting an unbounded higher-category runtime. It must be safe to run
-beside the existing memory system, measurable before it influences recall, and
-bounded in RAM even when its disk archive grows very large.
+Skills must retain durable structure through long inactivity while adapting
+quickly to a changed body, tool, environment, or goal. A changed agent is not a
+cold-start agent.
+
+V1 must prove two behaviors before influencing live recall:
+
+1. **Reversible contextual recall:** switching context changes an ambiguous
+   recall trajectory; switching back restores the earlier trajectory.
+2. **Dormant skill reactivation:** an old skill transfers into a changed
+   context, adapts faster than cold start, and does not corrupt the old skill.
+
+## Research Basis
+
+The design combines mechanisms that are separately well supported:
+
+- Context Maintenance and Retrieval (CMR): memory search is driven by an
+  internally maintained context, and a retrieved item reinstates context that
+  biases the next retrieval.
+- Contextual Inference (COIN): latent-context inference jointly controls memory
+  creation, updating, and expression; apparent learning can be a change in
+  which preserved memory is expressed.
+- Sparse memory and multilayer networks: distinguish a physical node from the
+  context-specific state nodes through which flow visits it.
+- Fast/slow adaptation and complementary learning systems: fast local learning
+  coexists with slow, well-retained structure.
+- Context-dependent gating: sparse activation protects unrelated knowledge
+  from interference.
+- Successor features and temporally extended options: reusable dynamics and
+  skill structure should be separated from current valuation, while recognizing
+  that changed dynamics require adaptation rather than zero-shot reuse.
+- Markov categories and categorical Bayes filtering: stochastic kernels and
+  their composition have a legitimate categorical semantics without requiring
+  an unbounded higher-category runtime.
+
+Primary references:
+
+- Polyn, Norman, and Kahana, *A Context Maintenance and Retrieval Model*:
+  https://pubmed.ncbi.nlm.nih.gov/19159151/
+- Heald, Lengyel, and Wolpert, *Contextual inference underlies the learning of
+  sensorimotor repertoires*: https://www.nature.com/articles/s41586-021-04129-3
+- Edler, Bohlin, and Rosvall, *Mapping higher-order network flows*:
+  https://arxiv.org/abs/1706.04792
+- Smith, Ghazizadeh, and Shadmehr, *Interacting Adaptive Processes with
+  Different Timescales*: https://doi.org/10.1371/journal.pbio.0040179
+- Fritz, *A synthetic approach to Markov kernels*:
+  https://arxiv.org/abs/1908.07021
+- Fritz et al., *Hidden Markov Models and the Bayes Filter in Categorical
+  Probability*: https://arxiv.org/abs/2401.14669
+- Barreto et al., *Successor Features for Transfer in Reinforcement Learning*:
+  https://arxiv.org/abs/1606.05312
 
 ## Existing System and Baseline
 
-Engram already has several compatible pieces:
+Engram currently has three relevant but disconnected mechanisms:
 
-- `categories.py` stores cells and vector embeddings in `categories.db`.
-- Useful recalls create level-1 application cells.
-- Similar applications compose into level-2 cross-domain-transfer cells.
-- `graph.py` supplies a unified view over existing memory relationships.
-- `sheaf.py` detects local cohesion failures and performs gated subdivision.
-- `persistence.py` distinguishes persistent structure from noise.
-- The memory ledger, provenance links, cold storage, task contexts, and
-  consolidation cycle already provide evidence and lifecycle machinery.
+- `server.recall` generates candidates with vector/FTS search and scores most
+  memories with static similarity and recency. Dream and session state can bias
+  the query, but no persistent posterior over latent contexts drives the search.
+- `categories.py` stores nominal higher cells. `compose` merely sets the result
+  level to `max(input levels) + 1`; it does not implement categorical
+  composition, coherence laws, or stochastic transport.
+- `transitions.py` stores context-isolated weighted edges. It is a useful
+  Markov-chain primitive, but currently serves instinct sequences and treats
+  context as an exact string rather than an uncertain inferred state.
 
-The active instance currently contains 1,460 legacy category cells: 171 at
-level 1 and 1,289 at level 2. It has no stored level-0 cells. The 171 level-1
-cells point directly at external memory IDs, so their missing category-cell
-references are intentional under the legacy representation.
-
-The current category store is useful experimental evidence, but it does not yet
-model categorical evolution:
-
-- `level` conflates categorical dimension with composition depth;
-- cells lack explicit types, epochs, typed weights, lifecycle, and rewrite
-  provenance;
-- composition always raises the level, although categorical composition of two
-  1-morphisms normally remains a 1-morphism;
-- source and target boundaries are not validated;
-- the category is appended to, but changes to the category itself are not
-  represented;
-- retrieval is an unweighted vector search over level-2 cells.
-
-This implementation extends that experiment rather than replacing the unified
-memory graph, sheaf, persistence, or Graphiti layers.
+The existing category, transition, unified-graph, sheaf, persistence, and
+recall systems remain untouched during shadow evaluation. The new model is an
+overlay and uses their identifiers; it does not become another source of truth
+for memory content.
 
 ## Design Decision
 
-Implement an **event-sourced, context-weighted weak 2-category in shadow mode**.
+Implement a **sparse joint context-memory state model** in an isolated database.
 
-- Interpret dimensions 0, 1, and 2.
-- Permit higher-dimensional records in the disk format but treat them as opaque.
-- Represent every structural change as an immutable rewrite from input cells to
-  output cells.
-- Preserve forks rather than forcing a single current ontology.
-- Compile a small context-dependent working category from disk; never load the
-  archive as an in-memory graph.
-- Keep arbitrary computation in separately budgeted operators. Category cells
-  may describe executable rules, but they do not grant execution authority.
+- A physical memory has one durable identity in the existing store.
+- A context-state node `(context_id, memory_id)` exists only after evidence that
+  the memory participates in that context.
+- A sticky hidden-state filter maintains a probability distribution over
+  contexts rather than selecting a single label.
+- Context-conditioned stochastic kernels model likely memory transitions.
+- The active state is a sparse joint belief over context-state nodes.
+- Recall evidence and confirmed memory use update the context posterior.
+- Skills have a durable core and fast context-local residuals.
+- Slow consolidation, not online recall, may promote repeated residual structure
+  into a durable core.
+- All behavior remains shadow-only until preregistered acceptance gates pass.
 
-The infinity-category is an extension direction, not a claim about the first
-runtime.
+Do not implement a full hierarchical Dirichlet process in V1. Use a finite,
+online set of context prototypes with explicit novelty and persistence gates.
+The nonparametric model is a research reference, not required machinery.
 
-## Generic Kernel
+## Conceptual Model
 
-No domain concept such as book, repository, conversation, or task is built into
-the substrate. The kernel contains only:
+### Physical nodes and state nodes
 
-1. **Cell** — an immutable object of dimension `n >= 0` with content and
-   provenance.
-2. **Boundary** — an ordered source or target boundary of a cell.
-3. **Context** — an immutable sparse feature map identifying a local situation.
-4. **Weight observation** — a typed assessment of a cell in a context.
-5. **Rewrite** — an immutable proposal or committed mapping from input cells to
-   output cells.
-6. **Epoch** — a committed categorical version with one or more parents.
-7. **Snapshot** — a regenerable materialization of an epoch for fast reads.
-
-Types and composition rules are represented by cells and relations rather than
-hard-coded domain enums. The implementation may use internal storage labels, but
-those labels have no domain semantics.
-
-### Interpreted dimensions
-
-- **0-cells:** entities, memories, concepts, contexts, conventions, types, or
-  rules.
-- **1-cells:** directed typed relationships between 0-cells.
-- **2-cells:** witnesses that two paths agree, conflict, refine one another, or
-  participate in a structural rewrite.
-- **3+-cells:** stored and returned as opaque records; v1 does not validate their
-  categorical meaning or use them for online traversal.
-
-An ordered boundary list lets a 2-cell relate paths rather than only individual
-arrows. Dimension and composition depth remain separate fields.
-
-## Temporal Morphogenesis
-
-Let `C_e` be the category visible at epoch `e`. Evolution is a DAG rather than a
-single mutable chain:
+Let `m` identify an existing episode, semantic, instinct, category cell, or
+skill. Let `c` identify an inferred context.
 
 ```text
-C0 ──rewrite──> C1 ──rewrite──> C2
- └──────alternative──────────> C2b
+physical memory m
+    ├── state node (c_work, m)
+    ├── state node (c_personal, m)
+    └── state node (c_research, m)
 ```
 
-A rewrite contains input cells, output cells, witnesses, evidence event IDs,
-the proposing context, and its disposition:
+State nodes contain activation and learned transition statistics, not copied
+memory content. Deleting a derived state node never deletes the physical
+memory. One context may contain several overlapping subcontexts, and one memory
+may participate in several contexts.
 
-- `proposed`
-- `committed`
-- `rejected`
-- `superseded`
+### Context posterior
 
-The primitive operation is a general input-to-output rewrite. Create, retire,
-retype, split, and merge are conventions over that primitive:
+At observation `t`, the model receives generic evidence `x_t`:
 
-- create: no inputs, one or more outputs;
-- retire: inputs, no active outputs;
-- retype: old cell to replacement cell plus a lineage witness;
-- split: one input to multiple outputs plus maps home;
-- merge: multiple inputs to one output plus provenance maps.
+- query or situation embedding;
+- active goal and entities;
+- participant, tool, source, and lane features;
+- temporal continuity;
+- optional explicit context anchors;
+- prior recalls that were actually used, followed, corrected, or rejected.
 
-Cells and committed rewrites are never updated in place. Corrections append new
-cells and rewrites. A snapshot identifies what is active at an epoch but remains
-reconstructable from the event history.
-
-### Two-stage structural learning
-
-Experiences may create proposals immediately. Only periodic consolidation may
-commit structural rewrites.
-
-A proposal is eligible to commit when:
-
-- all referenced evidence and boundaries exist;
-- dimensional boundary rules hold for dimensions 0–2;
-- it reduces a measured cohesion failure or has explicit correction evidence;
-- its distinction survives the configured persistence/noise check;
-- every split or merge records lineage back to its inputs;
-- the description-length gain exceeds its complexity cost;
-- it fits the per-pass structural budget.
-
-An explicit user correction may supply sufficient evidence by itself, but it
-still passes integrity and transaction checks. An LLM may propose content; it
-cannot directly commit a rewrite.
-
-Consolidation runs at session sleep and may also run after a configurable number
-of new events. It never runs inside latency-sensitive recall.
-
-## Generic Context and Boundaries
-
-A context is a sparse weighted feature map. Conventional feature namespaces are
-allowed but optional:
-
-- goal or intent;
-- active entities;
-- participants or agents;
-- tools and resources;
-- source or environment;
-- temporal horizon;
-- attention state.
-
-There is no `book_id`, `repo_id`, or other domain-specific field in the kernel.
-Applications express those facts as ordinary features.
-
-The v1 boundary detector uses only generic signals:
+For known contexts, filtering computes:
 
 ```text
-boundary_score =
-    0.40 * goal_divergence
-  + 0.20 * entity_turnover
-  + 0.15 * participant_tool_turnover
-  + 0.15 * source_change
-  + 0.10 * temporal_discontinuity
+q_prior(c) = sum_c' q_(t-1)(c') * A(c | c')
+q_t(c)     ∝ q_prior(c) * likelihood(x_t | c)
 ```
 
-An explicit boundary event always creates a hard boundary. An inferred hard
-boundary requires a score of at least `0.65` on two consecutive observations.
-A score of `0.35` begins a soft transition: the new context gains weight while
-the old one decays gradually. These defaults are calibration hypotheses and stay
-shadow-only until evaluated.
+`A` is a learned context transition matrix with a configurable self-transition
+bias. Explicit anchors contribute likelihood evidence; they do not bypass the
+posterior. The posterior is normalized, calibrated, and retained as a sparse
+top-K distribution plus an `unknown` mass.
 
-Contexts may overlap and nest. A boundary changes activation; it does not retire
-cells or erase the prior context.
+Context must not flicker on ambiguous observations. A new context may be
+proposed only when:
 
-## Typed Weights and Surfacing
+1. the `unknown` posterior mass exceeds the novelty threshold;
+2. poor fit to every known context persists for multiple observations;
+3. the observations are not adequately explained by a short transition;
+4. the per-session and global context budgets permit it.
 
-Each weight observation preserves seven independent channels:
+A proposal is shadow evidence. Consolidation creates the context; recall never
+creates one synchronously.
 
-| Channel | Range | Meaning |
-|---|---:|---|
-| relevance | 0..1 | fit to the active context |
-| evidence | 0..1 | support and provenance quality |
-| recency | 0..1 | current temporal availability |
-| affect | -1..1 | signed valence; magnitude contributes salience |
-| adoption | 0..1 | scoped agreement or convention uptake |
-| novelty | 0..1 | distance from already active material |
-| cost | 0..1 | estimated retrieval/rendering expense |
+### Joint activation and recall
 
-The vector remains stored intact. A versioned valuation policy produces a
-surfacing score at query time. Every compiled result records the policy version
-and component contributions, so a retrieval decision can be explained and
-replayed. Truth, agreement, emotion, and relevance are never collapsed in
-persistent storage.
-
-## Working-Category Compiler
-
-For context `c`, epoch `e`, and budget `B`, the compiler produces a bounded view:
+Let `b_t(c,m)` be active probability mass on state node `(c,m)`. Its prediction
+uses both context transitions and memory transitions:
 
 ```text
-W(e, c, B) = compile(history, epoch=e, context=c, budget=B)
+b_pred(c,m) = sum_(c',m') b_(t-1)(c',m')
+              * A(c | c') * K_(c',c)(m | m')
 ```
 
-The compiler:
+Candidate evidence then filters and normalizes that prediction:
 
-1. Seeds candidates from direct semantic/vector matches and explicit context
-   membership.
-2. Traverses relevant 1- and 2-cells from disk indexes.
-3. Translates historical cells through committed rewrite lineage.
-4. Scores candidates with the versioned context valuation.
-5. Applies diversity selection so one dense category cannot consume the view.
-6. Packs provenance-linked capsules to the requested token and cell budgets.
+```text
+b_t(c,m) ∝ b_pred(c,m) * E(x_t, c, m)
+R_t(m)    = sum_c b_t(c,m)
+```
 
-V1 hard limits:
+`E` combines the existing candidate score with context compatibility and
+explicit evidence. `K_(c,c)` is the within-context memory kernel;
+`K_(c',c)` for `c' != c` is an inter-context transport kernel. The
+implementation uses sparse top-K beams and bounded diffusion, never a dense
+Cartesian product of all contexts and memories.
 
-- maximum interpreted dimension: 2;
-- maximum traversal depth: 4;
-- maximum expanded neighbors per cell: 64;
-- maximum candidate cells per compile: 50,000;
-- normal rendered target: 36,000 tokens;
-- forced rotation watermark: 40,000 tokens;
-- absolute logical ceiling: 65,536 tokens;
-- maximum committed rewrites per consolidation pass: 32;
-- maximum inputs or outputs per rewrite: 32 each;
-- maximum active alternative branches at one structural locus: 4.
+Baseline vector/FTS retrieval remains candidate generation. The shadow model
+reranks only those candidates plus a bounded set of graph neighbors. It records
+what it would have returned but cannot change the live response in V1.
 
-All additional proposals and opaque higher cells remain on disk. Limits affect
-interpretation and activation, not archival retention.
+### Bidirectional context reinstatement
 
-The existing local-model governor remains authoritative for the 112 GB process
-ceiling. Engram supplies budgeted capsules; it does not estimate MLX allocation
-from first principles.
+Surfacing a memory is not proof that it belongs in the current context; using
+it may be. Context observations distinguish:
 
-## Persistence and Disk Budget
+- `surfaced`: no positive learning signal;
+- `attended`: weak evidence;
+- `used` or `followed`: positive evidence;
+- `corrected`, `rejected`, or `not_applicable`: negative evidence;
+- `explicit_anchor`: strong but scoped context evidence.
 
-The v2 experiment uses a separate `categories_v2.db`. It does not alter
-`categories.db` during shadow evaluation.
+After a confirmed event, the associated memory features update the next context
+posterior. This closes the CMR-style loop:
 
-Persist:
+```text
+context -> recall -> confirmed memory -> updated context -> next recall
+```
 
-- raw category events;
-- cells and ordered boundaries;
-- contexts and weight observations;
-- proposals and committed rewrites;
-- epoch-parent relationships;
-- lineage and provenance;
-- periodic snapshots and indexes.
+Learning from `surfaced` results would amplify the model's own guesses and is
+forbidden.
 
-Snapshots, embeddings, and secondary indexes are derived and may be rebuilt.
-Raw events, cells, committed rewrites, and provenance are immutable.
+### Soft transition learning
 
-The archive receives a configurable hard quota. The recommended default for the
-available 4 TB volume is the lower of 3 TB or 75% of the assigned filesystem.
-At the high-water mark, the system stops producing derived snapshots and vector
-duplicates first. If the hard quota is reached, category writes fail closed and
-the existing engram recall path continues without category evolution. The
-system never fills the volume or silently deletes immutable history.
+Context and memory transitions update with fractional responsibility rather
+than hard assignments:
 
-## Storage Schema
+```text
+count_A(c',c)       += q_(t-1)(c') * q_t(c)
+count_K(c,m',m)     += q_t(c) * responsibility(m',m)
+```
 
-The shadow database uses prefixed tables so schema intent remains explicit:
+Rows are converted to stochastic kernels with smoothing. Negative feedback
+reduces the responsible edge through an append-only counter-observation; it
+does not erase history. Decay applies to accessibility statistics, not durable
+memory content or proven skill competence.
 
-- `cat_schema_version`
-- `cat_events`
-- `cat_cells`
-- `cat_boundaries`
-- `cat_contexts`
-- `cat_weight_observations`
-- `cat_rewrites`
-- `cat_rewrite_members`
-- `cat_epochs`
-- `cat_epoch_parents`
-- `cat_snapshots`
-- `cat_vectors`
+## Durable Skills
 
-Foreign keys are enabled. Committing a rewrite, creating its epoch, attaching
-members, and recording epoch membership occurs in one transaction. Cell rows
-remain immutable; active membership is derived from the selected epoch and its
-rewrite history.
+A skill is a temporally extended option or attractor, not a one-step recall
+edge. Its context-specific realization is:
 
-The legacy importer creates proxy 0-cells for external memory IDs, imports
-level-1 cells as 1-cells, and imports level-2 transfers as 2-cells. Import is
-idempotent and content-addressed. It emits a validation report before writing
-and never modifies the legacy database.
+```text
+skill(s,c) = transport(core_s, c) + residual_(s,c)
+```
+
+The three pieces have different roles:
+
+1. **Durable core `core_s`:** reusable topology, ordered phases, invariants,
+   termination conditions, and evidence-backed competence. It has a low learning
+   rate and high retention.
+2. **Transport map:** maps the durable structure into the features and controls
+   available in a related context. It records its source, target, confidence,
+   and evidence.
+3. **Fast residual `residual_(s,c)`:** local corrections for the current body,
+   tool, environment, or goal. It learns quickly and its accessibility may
+   decay quickly.
+
+Long inactivity lowers activation and confidence that a context is current. It
+does not decay the durable core merely because the skill was not observed.
+
+Online success updates residuals according to context responsibility. A slow
+consolidation may alter the core only when a pattern:
+
+- recurs across separated observations;
+- succeeds rather than merely fires;
+- persists across more than one context, or has explicit correction evidence;
+- improves predictive loss on held-out history;
+- stays within a bounded core-drift budget;
+- preserves lineage to the previous core version.
+
+Failure in a new context updates its residual or transport map first. It cannot
+immediately overwrite the durable skill.
+
+## Categorical Semantics
+
+The categorical layer describes the stochastic system; it is not a parallel
+ontology database.
+
+- **0-cells:** state spaces such as contexts, physical memories, skills, and
+  observations.
+- **1-cells:** stochastic kernels for context transition, recall, feedback,
+  skill execution, and transport.
+- **Composition:** ordinary kernel composition (matrix multiplication or its
+  sparse equivalent), with identity kernels and normalized rows.
+- **2-cells:** explicit, evidence-linked witnesses that two composed paths are
+  equivalent, compatible, conflicting, or successful transfers.
+
+For example, a transfer witness may compare:
+
+```text
+old context -> old skill -> outcome
+old context -> new context -> adapted skill -> outcome
+```
+
+A 2-cell is retained only if the comparison and evidence can be replayed. V1
+does not create or interpret dimensions above 2. If later experiments reveal a
+behavior that requires higher coherence data, the disk format may be extended
+then. The system does not claim to implement an infinity-category.
+
+Conceptually, contexts form a base graph, each context has a sparse memory
+fiber, and transport connects fibers. Operationally, this is stored as a sparse
+multilayer graph over `(context_id, memory_id)` state nodes.
+
+## Storage and Replay
+
+Use a separate `context_memory.db`. Never modify `categories.db`, the instinct
+transition database, or physical memory rows during shadow evaluation.
+
+Suggested tables:
+
+- `ctx_model_versions`
+- `ctx_events`
+- `ctx_contexts`
+- `ctx_context_observations`
+- `ctx_context_transition_counts`
+- `ctx_state_nodes`
+- `ctx_memory_transition_counts`
+- `ctx_activation_events`
+- `ctx_context_proposals`
+- `ctx_skill_cores`
+- `ctx_skill_residuals`
+- `ctx_transport_maps`
+- `ctx_consolidations`
+- `ctx_path_witnesses`
+
+Raw observations, feedback, model versions, consolidation decisions, and core
+versions are append-only. Counts, normalized kernels, posterior checkpoints,
+and indexes are rebuildable materializations. Every shadow result records:
+
+- model and valuation version;
+- input event IDs;
+- context posterior before and after filtering;
+- candidate and state-node contributions;
+- diffusion budget and stopping reason;
+- the live baseline order and shadow order.
+
+Replaying the same canonical event sequence with the same model version must
+produce the same contexts, kernels, posterior checkpoints, and rankings.
+
+## Bounds and Safety Invariants
+
+Initial limits are calibration hypotheses and live in configuration:
+
+- at most 8 posterior contexts plus `unknown` per observation;
+- at most 200 baseline candidates;
+- at most 32 graph neighbors expanded per candidate;
+- at most 2 diffusion steps;
+- at most 10,000 active state nodes in one inference;
+- at most 100 context proposals retained per session;
+- no synchronous context creation or core consolidation;
+- no live recall influence by default;
+- no automatic mutation of physical memories.
+
+Required invariants:
+
+- every state node references an existing physical memory and context;
+- memory content exists in exactly one authoritative store;
+- context posteriors are non-negative and sum to one within tolerance;
+- materialized kernel rows are non-negative and sum to one within tolerance;
+- an unconfirmed surfaced result cannot strengthen its own path;
+- failed shadow inference leaves baseline recall unchanged;
+- a failed transaction leaves no partial event or materialization;
+- durable skill cores change only through versioned consolidation;
+- every residual and transport map retains lineage to its core and evidence;
+- accessibility decay cannot delete or weaken durable competence by itself;
+- all inference obeys candidate, neighbor, state, step, and wall-time budgets.
 
 ## Components
 
-Follow the repository's flat-module organization:
+The implementation plan may adjust file boundaries after code-level planning,
+but responsibilities must remain separated:
 
 | Component | Responsibility |
 |---|---|
-| `categories.py` | Preserve `CategoryStore`; add immutable v2 cell and storage primitives |
-| `category_evolution.py` | Proposals, validation, consolidation, epochs, replay |
-| `category_context.py` | Sparse contexts, divergence, soft/hard boundaries |
-| `category_compile.py` | Indexed traversal, valuation, diversity, budget packing |
-| `config.py` | Shadow-mode, quotas, thresholds, and structural budgets |
-| `reflection.py` | `reflect(focus="category_evolution")` diagnostics |
-| `server.py` | Non-fatal initialization and shadow observation wiring |
-| `tests/test_categories_v2.py` | Cell, boundary, transaction, and replay invariants |
-| `tests/test_category_context.py` | Domain-neutral boundary fixtures |
-| `tests/test_category_evolution.py` | Proposal, rewrite, fork, and consolidation behavior |
-| `tests/test_category_compile.py` | Ranking, traversal, lineage, and budget enforcement |
+| `context_memory.py` | Immutable events, contexts, state nodes, transition statistics, replay |
+| `context_inference.py` | Sticky posterior, novelty mass, proposal gating, calibration |
+| `context_recall.py` | Candidate seeding, sparse joint activation, bounded diffusion, explanations |
+| `skill_memory.py` | Durable options, transports, residuals, promotion and drift checks |
+| `category_semantics.py` | Kernel composition and replayable 2-cell/path witnesses |
+| `config.py` | Independent observer, influence, learning, and consolidation gates and budgets |
+| `server.py` | Fail-open shadow observation and read-only diagnostics |
 
-No new MCP mutation tool is required for v1. Existing events and recall outcomes
-feed proposals internally. Diagnostics are exposed through reflection and a
-read-only replay/calibration CLI.
+The existing `categories.py` and `transitions.py` remain legacy inputs until
+experiments justify a migration. V1 should reuse concepts, not silently change
+their storage semantics.
 
-## Configuration and Rollout
+## Rollout
 
-```toml
-[category_evolution]
-enabled = false
-shadow = true
-influence_recall = false
-auto_commit = false
-db_path = ""
-archive_quota_bytes = 3000000000000
-archive_high_watermark_ratio = 0.90
-interpreted_max_dimension = 2
-max_traversal_depth = 4
-max_neighbors = 64
-max_candidates = 50000
-compile_wall_time_ms = 500
-consolidation_event_interval = 250
-consolidation_rewrite_budget = 32
-max_rewrite_members = 32
-max_active_branches = 4
-soft_boundary_threshold = 0.35
-hard_boundary_threshold = 0.65
-hard_boundary_confirmations = 2
-```
+1. **Deterministic simulator:** no server integration; generated contexts,
+   transitions, ambiguous cues, dormant skills, and known ground truth.
+2. **Unit and replay tests:** temporary databases, transaction failures,
+   deterministic replay, normalization, and budget enforcement.
+3. **Historical shadow replay:** derive observations from existing recall and
+   feedback logs without writing to the live database.
+4. **Live shadow observation:** record baseline and counterfactual rankings;
+   return baseline results unchanged.
+5. **Read-only A/B evaluation:** compare frozen model variants on a sealed
+   holdout set.
+6. **Quiet ranking influence:** only after explicit approval and acceptance;
+   no structural consolidation.
+7. **Residual learning:** enable context-local learning before durable-core
+   consolidation.
+8. **Core consolidation:** last, bounded, versioned, and rollbackable.
 
-`enabled` starts the v2 observer. `shadow` prevents its results from altering
-existing behavior. `influence_recall` independently permits ranking influence,
-and `auto_commit` independently permits consolidation to commit eligible
-proposals. The shipped combination disables the observer; the first calibration
-explicitly sets only `enabled = true` while leaving the other safety gates as
-shown.
+Shipping code does not advance a rollout stage.
 
-Rollout stages:
+## Acceptance Experiments
 
-1. **Unit-only:** isolated temporary databases and deterministic fixtures.
-2. **Legacy replay:** import the 1,460-cell active archive into a disposable v2
-   database and compare counts, lineage, and retrieval.
-3. **Shadow observation:** record contexts, proposals, and compiled views without
-   changing recall output.
-4. **Read-only A/B:** compare baseline retrieval with shadow compiled retrieval.
-5. **Quiet influence:** only after acceptance, allow the compiled view to adjust
-   ranking without injecting visible commentary.
-6. **Structural commits:** enable automatic periodic consolidation last, with
-   bounded batches and rollback by epoch selection.
+All thresholds are preregistered hypotheses. Failure revises the model; it does
+not permit tuning on the sealed holdout.
 
-Each stage requires explicit configuration. Shipping the code does not enable
-live structural mutation.
+Metric definitions are fixed before generating the holdout:
 
-## Error Handling and Recovery
+- recall trajectory similarity uses rank-biased overlap with persistence
+  `p = 0.90`;
+- context calibration uses multiclass Brier score;
+- retrieval quality uses nDCG@10 against scenario-specific relevance labels;
+- simulator performance is mean normalized reward over the fixed first block;
+- time to competence is the first step at which a fixed rolling-success
+  threshold is sustained for the configured window;
+- core structural divergence is total-variation distance between the old and
+  new normalized core transition kernels;
+- reported comparisons include bootstrap 95% confidence intervals across
+  scenario seeds, and a gate passes only when its interval satisfies the bound.
 
-- Invalid dimensional boundaries reject the proposal; they never partially
-  create cells.
-- A failed rewrite transaction creates no epoch and changes no active lifetime.
-- Missing vectors exclude cells from vector seeding but not exact traversal.
-- Corrupt snapshots are deleted and rebuilt from immutable events.
-- An unavailable shadow database disables category evolution only; normal recall
-  remains available.
-- Disk pressure disables derived writes and then category writes before the
-  filesystem fills.
-- Every compile has wall-time, cell-count, traversal, and token limits.
-- Epoch selection provides logical rollback without deleting later history.
+### Experiment A — reversible contextual recall
 
-## Test Strategy
+Construct at least four domain-neutral scenario families with identical
+structure and different vocabulary. Each contains ambiguous cues, contexts A
+and B, gradual and abrupt switches, an explicit-anchor subset, and a return to
+A after intervening B observations.
 
-### Mathematical and storage invariants
+Compare:
 
-- Dimension-1 boundaries reference dimension-0 cells.
-- Dimension-2 boundaries are ordered paths of dimension-1 cells.
-- Path endpoints compose where v1 claims a valid path.
-- Cells and committed events are immutable.
-- Every active cell is reachable from the selected epoch.
-- Every split and merge retains maps to its inputs.
-- Epoch parents form an acyclic graph.
-- A failed commit leaves the logical database state unchanged; WAL and journal
-  bytes are not part of this invariant.
-- Replaying the same event log produces the same canonical snapshot hash.
-- Importing the legacy archive twice produces no duplicates.
+1. current static similarity/recency recall;
+2. static context-weighted scoring;
+3. posterior context gating without retrieval reinstatement;
+4. the full joint context-memory model.
 
-### Generic-context fixtures
+Gates:
 
-Use four scenario families—conversation, coding, reading/media, and planning—
-with equivalent structural transitions but different vocabulary. The same
-boundary algorithm and storage API must pass all four; production code may not
-branch on scenario family.
+- labeled context macro-F1 at least `0.80` on the holdout;
+- posterior Brier score better than the empirical-frequency predictor;
+- full-model ambiguous-cue nDCG@10 at least 15% above static recall;
+- full-model ambiguous-cue nDCG@10 at least 5% above posterior-only gating,
+  demonstrating value from the feedback loop rather than context labels alone;
+- after returning to A, rank-biased overlap with A's prior trajectory at least
+  `0.80` within three observations;
+- unambiguous same-context recall regresses by no more than 5%;
+- context creation false-positive rate at most 5%;
+- no inference exceeds its configured resource bounds.
 
-Fixtures cover:
+### Experiment B — dormant skill reactivation
 
-- gradual topic drift;
-- explicit hard boundaries;
-- returning to a prior context;
-- overlapping contexts;
-- a source change without a goal change;
-- a goal change without a source change;
-- forked interpretations followed by optional reconciliation.
+Use a simulator in which a skill is learned in several source contexts, remains
+unused for a long interval, and returns under altered observations and dynamics.
+Preserve a cold-start learner and the source-context model as controls.
 
-### Evolution fixtures
+Compare:
 
-- repeated evidence creates a proposal but not an immediate rewrite;
-- consolidation commits a supported split;
-- noise and one-off novelty do not split;
-- merge, retire, and retype preserve lineage;
-- explicit correction can commit with one evidence event;
-- consolidation respects the 32-rewrite budget;
-- no more than four alternatives become active at one locus;
-- dimensions above 2 round-trip opaquely and never enter online traversal.
+1. cold start;
+2. one global fast/slow skill;
+3. context-local skills without transport;
+4. durable core plus transport and fast residual.
 
-### Compiler fixtures
+Gates:
 
-- direct relevance beats unrelated popularity;
-- strong evidence does not masquerade as current relevance;
-- affect changes salience without changing evidence;
-- adopted conventions surface within their scope;
-- a useful distant association can occupy a diversity slot;
-- historical cells translate through rewrite lineage;
-- output is deterministic under stable inputs and tie-breaking;
-- 36k target, 40k rotation watermark, and 64k ceiling are enforced exactly.
+- mean first-block normalized reward after reactivation at least 20% above cold
+  start;
+- time to the predefined competence threshold at most 60% of cold start;
+- source-context performance regresses by no more than 5%;
+- core total-variation divergence remains at most `0.02` before any
+  consolidation;
+- unrelated-skill performance regresses by no more than 2%;
+- after residual accessibility decay, a second reactivation remains faster than
+  cold start;
+- promotion is rejected when evidence is one-off, context-specific, or
+  unsuccessful.
 
-### Acceptance experiments
+### Regression evaluation
 
-Before live influence:
+Run existing Engram tests and a long-term retrieval benchmark such as
+LongMemEval for regression coverage. Those benchmarks test extraction,
+multi-session reasoning, temporal reasoning, knowledge updates, and abstention;
+they do not replace Experiments A and B.
 
-1. Legacy replay has zero unexplained cell loss and a stable snapshot hash over
-   three independent replays.
-2. Hand-labeled boundary fixtures reach at least `0.80` F1, reported separately
-   for explicit, abrupt, and gradual boundaries.
-3. Shadow compiled retrieval improves cross-context mean reciprocal rank by at
-   least 15% over the current category search on the evaluation fixtures.
-4. Direct same-context retrieval regresses by no more than 5%.
-5. False cross-context transfers remain at or below 10% under blinded review.
-6. A one-million-cell synthetic archive compiles without loading the archive and
-   adds less than 1 GB peak RSS to the process.
-7. Every compile remains inside its configured candidate, traversal, wall-time,
-   and token budgets.
+## Failure Modes to Test Explicitly
 
-These thresholds are gates, not claims. Failed experiments produce evidence for
-revision; they do not get tuned away after looking at the holdout results.
+- **Context flicker:** rapid switching between nearly identical contexts.
+- **Context explosion:** every novelty creates a new graph layer.
+- **Self-confirmation:** surfaced memories train the path that surfaced them.
+- **Core contamination:** a local adaptation overwrites durable skill structure.
+- **False transfer:** structural similarity is mistaken for applicable skill.
+- **Popularity collapse:** high-degree state nodes dominate every context.
+- **Posterior lock-in:** early context guesses prevent contradictory evidence
+  from recovering the correct context.
+- **History loss:** materialized counts cannot be reconstructed from events.
+- **Budget escape:** sparse inference becomes dense under overlap.
+- **Mathematical theater:** higher cells exist without an invariant, witness,
+  or acceptance test that uses them.
 
 ## Out of Scope for V1
 
-- Interpreting dimensions above 2.
-- Automatically inventing executable operators or granting them authority.
-- A global consensus that erases contextual forks.
-- Domain-specific storage or boundary rules.
-- Replacing Graphiti, the unified memory graph, sheaf cohesion, or persistence.
-- Automatically enabling recall influence or structural commits.
-- Proving that the runtime implements an infinity-category.
+- An unbounded or fully formal infinity-category implementation.
+- Automatic higher-cell generation above dimension 2.
+- A hierarchical Dirichlet process or particle-learning implementation.
+- End-to-end learned neural context inference.
+- Replacing existing vector/FTS candidate generation.
+- Rewriting or copying physical memory content into context layers.
+- Allowing model-generated recalls to count as successful use.
+- Automatically enabling live ranking influence or core consolidation.
+- Claiming biological equivalence; the cited models supply mechanisms and
+  falsifiable precedents, not proof that Engram is brain-like.
 
 ## Success Criterion
 
-The v1 succeeds when the same generic substrate can replay and evolve categorical
-structure across several domains, reconstruct every change from disk, compile a
-useful bounded working category, and measurably improve cross-context retrieval
-without destabilizing direct recall or exceeding RAM and context budgets.
+V1 succeeds only if the full joint model beats simpler ablations on reversible
+contextual recall and dormant-skill adaptation, preserves baseline direct
+recall, remains calibrated and bounded, and can replay every learned transition
+and consolidation decision. If a static context scorer performs just as well,
+the stochastic multilayer machinery is not justified and should not ship.
