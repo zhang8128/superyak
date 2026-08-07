@@ -91,13 +91,12 @@ class Storage:
         self._transaction_depth += 1
         try:
             yield
+            if outermost:
+                self.conn.commit()
         except Exception:
             if outermost and self.conn.in_transaction:
                 self.conn.rollback()
             raise
-        else:
-            if outermost:
-                self.conn.commit()
         finally:
             self._transaction_depth -= 1
 

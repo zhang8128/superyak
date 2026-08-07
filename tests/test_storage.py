@@ -214,6 +214,44 @@ def test_storage_transaction_defers_helper_commits_and_rolls_back(tmp_db):
     assert tmp_db.conn.in_transaction is False
 
 
+def test_storage_transaction_rolls_back_when_outer_commit_fails(tmp_db):
+    class CommitFailingConnection:
+        def __init__(self, conn):
+            self._conn = conn
+            self.rollback_calls = 0
+
+        @property
+        def in_transaction(self):
+            return self._conn.in_transaction
+
+        def commit(self):
+            raise sqlite3.OperationalError("injected commit failure")
+
+        def rollback(self):
+            self.rollback_calls += 1
+            self._conn.rollback()
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    episode_id = str(uuid.uuid4())
+    failing_conn = CommitFailingConnection(tmp_db.conn)
+    tmp_db.conn = failing_conn
+
+    with pytest.raises(sqlite3.OperationalError, match="injected commit failure"):
+        with tmp_db.transaction():
+            tmp_db.add_episode(
+                id=episode_id,
+                session_id="transaction-test",
+                content="This write must roll back when the outer commit fails.",
+                embedding=[0.0] * 768,
+            )
+
+    assert failing_conn.rollback_calls == 1
+    assert failing_conn.in_transaction is False
+    assert tmp_db.get_episode(episode_id) is None
+
+
 def test_v3_migration_creates_tables(tmp_db):
     """v3 migration creates semantics, instincts, memory_log tables."""
     tables = {r[0] for r in tmp_db.conn.execute(
