@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 from typing import Iterable, Mapping, Sequence
 import uuid
 
@@ -16,6 +17,49 @@ from categories import Boundary, CellDraft, EvolvingCategoryStore
 
 
 LEGACY_NAMESPACE = uuid.UUID("f4210ab5-b9e8-53ba-b3ca-261db44a9223")
+_V2_TABLES = frozenset(
+    {
+        "cat_schema_version",
+        "cat_events",
+        "cat_contexts",
+        "cat_cells",
+        "cat_boundaries",
+        "cat_weight_observations",
+        "cat_rewrites",
+        "cat_rewrite_members",
+        "cat_epochs",
+        "cat_epoch_parents",
+        "cat_snapshots",
+    }
+)
+_REPLAY_STATE_TABLES = (
+    "cat_schema_version",
+    "cat_events",
+    "cat_contexts",
+    "cat_cells",
+    "cat_boundaries",
+    "cat_weight_observations",
+    "cat_rewrites",
+    "cat_rewrite_members",
+    "cat_epochs",
+    "cat_epoch_parents",
+    "cat_snapshots",
+)
+_IMMUTABLE_V2_TABLES = _V2_TABLES - {"cat_snapshots"}
+_EXPECTED_IMMUTABILITY_TRIGGERS = frozenset(
+    f"{table}_{operation}"
+    for table in _IMMUTABLE_V2_TABLES
+    for operation in ("no_update", "no_delete")
+)
+_VEC_SHADOW_TABLES = frozenset(
+    {
+        "cat_vectors_chunks",
+        "cat_vectors_info",
+        "cat_vectors_rowids",
+        "cat_vectors_vector_chunks00",
+        "sqlite_sequence",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -68,6 +112,14 @@ def _stable_id(kind: str, content_hash: str) -> str:
     return str(uuid.uuid5(LEGACY_NAMESPACE, f"{kind}:{content_hash}"))
 
 
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
 def _read_legacy_rows(legacy_path: Path) -> list[_LegacyCell]:
     """Read the legacy table via SQLite's read-only URI mode."""
     connection = sqlite3.connect(f"{legacy_path.resolve().as_uri()}?mode=ro", uri=True)
@@ -100,7 +152,7 @@ def _read_legacy_rows(legacy_path: Path) -> list[_LegacyCell]:
 
 
 def _is_valid_row(row: _LegacyCell) -> bool:
-    return (
+    basic_fields_valid = (
         isinstance(row.id, str)
         and bool(row.id)
         and isinstance(row.level, int)
@@ -108,6 +160,13 @@ def _is_valid_row(row: _LegacyCell) -> bool:
         and row.level >= 0
         and isinstance(row.content, str)
     )
+    if not basic_fields_valid:
+        return False
+    try:
+        _canonical_json(_legacy_payload(row))
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _has_pair_of_references(row: _LegacyCell) -> bool:
@@ -187,6 +246,7 @@ def _plan_cells(cells: Sequence[_LegacyCell]) -> _ReplayPlan:
         known_ids.add(row.id)
 
     imported_one = 0
+    imported_one_ids: set[str] = set()
     for row in usable_one:
         source_id = legacy_proxy_id(row.source_id or "")
         target_id = legacy_proxy_id(row.target_id or "")
@@ -203,11 +263,16 @@ def _plan_cells(cells: Sequence[_LegacyCell]) -> _ReplayPlan:
             )
         )
         known_ids.add(row.id)
+        imported_one_ids.add(row.id)
         imported_one += 1
 
     imported_two = 0
     for row in (row for row in valid_rows if row.level == 2):
-        if not _has_pair_of_references(row) or row.source_id not in known_ids or row.target_id not in known_ids:
+        if (
+            not _has_pair_of_references(row)
+            or row.source_id not in imported_one_ids
+            or row.target_id not in imported_one_ids
+        ):
             loss += 1
             continue
         if row.id in known_ids:
@@ -244,6 +309,267 @@ def _plan_cells(cells: Sequence[_LegacyCell]) -> _ReplayPlan:
         opaque_cells=opaque,
         unexplained_loss=loss,
     )
+
+
+def _ordered_boundaries(draft: CellDraft) -> list[dict[str, object]]:
+    return [
+        {"side": boundary.side, "position": boundary.position, "cell_id": boundary.cell_id}
+        for boundary in sorted(
+            draft.boundaries,
+            key=lambda boundary: (0 if boundary.side == "source" else 1, boundary.position),
+        )
+    ]
+
+
+def _replay_manifest(
+    plan: _ReplayPlan,
+    *,
+    legacy_total: int,
+    snapshot_id: str,
+    root_epoch_id: str,
+    snapshot_hash: str,
+) -> dict[str, object]:
+    """Describe every persisted replay artifact that must match on re-run."""
+    return {
+        "cells": [
+            {
+                "id": draft.id,
+                "dimension": draft.dimension,
+                "content": draft.content,
+                "payload": draft.payload,
+                "boundaries": _ordered_boundaries(draft),
+            }
+            for draft in sorted(plan.drafts, key=lambda draft: draft.id)
+        ],
+        "event": {"kind": "legacy_import_summary"},
+        "epoch": {"id": root_epoch_id, "rewrite_id": None, "parents": []},
+        "snapshot": {
+            "id": snapshot_id,
+            "epoch_id": root_epoch_id,
+            "active_cell_ids": sorted(draft.id for draft in plan.drafts),
+            "content_hash": snapshot_hash,
+        },
+        "report": {
+            "legacy_total": legacy_total,
+            "proxy_zero_cells": plan.proxy_zero_cells,
+            "imported_one_cells": plan.imported_one_cells,
+            "imported_two_cells": plan.imported_two_cells,
+            "opaque_cells": plan.opaque_cells,
+            "unexplained_loss": plan.unexplained_loss,
+        },
+    }
+
+
+def _manifest_fingerprint(manifest: Mapping[str, object]) -> str:
+    return hashlib.sha256(_canonical_json(manifest).encode()).hexdigest()
+
+
+def _validate_completed_replay(
+    connection: sqlite3.Connection,
+    plan: _ReplayPlan,
+    *,
+    event_id: str,
+    event_payload_json: str,
+    root_epoch_id: str,
+    snapshot_id: str,
+    active_cell_ids_json: str,
+    snapshot_hash: str,
+) -> bool:
+    """Return true only when an existing output is the exact expected replay."""
+    snapshot = connection.execute(
+        """
+        SELECT epoch_id, active_cell_ids_json, content_hash
+        FROM cat_snapshots WHERE id = ?
+        """,
+        (snapshot_id,),
+    ).fetchone()
+    expected_counts = {
+        "cat_schema_version": 1,
+        "cat_events": 1,
+        "cat_contexts": 0,
+        "cat_cells": len(plan.drafts),
+        "cat_boundaries": sum(len(draft.boundaries) for draft in plan.drafts),
+        "cat_weight_observations": 0,
+        "cat_rewrites": 0,
+        "cat_rewrite_members": 0,
+        "cat_epochs": 1,
+        "cat_epoch_parents": 0,
+        "cat_snapshots": 1,
+    }
+    actual_counts = {
+        table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in _REPLAY_STATE_TABLES
+    }
+    schema_versions = [
+        row[0]
+        for row in connection.execute(
+            "SELECT version FROM cat_schema_version ORDER BY version"
+        )
+    ]
+    trigger_names = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        )
+    }
+    if (
+        schema_versions != [1]
+        or trigger_names != _EXPECTED_IMMUTABILITY_TRIGGERS
+    ):
+        raise ValueError("output is incompatible with legacy replay")
+    if snapshot is None:
+        if any(
+            count
+            for table, count in actual_counts.items()
+            if table != "cat_schema_version"
+        ):
+            raise ValueError("output contains conflicting legacy replay state")
+        return False
+    if (
+        snapshot["epoch_id"] != root_epoch_id
+        or snapshot["active_cell_ids_json"] != active_cell_ids_json
+        or snapshot["content_hash"] != snapshot_hash
+        or actual_counts != expected_counts
+    ):
+        raise ValueError("existing legacy replay snapshot does not match source")
+
+    event = connection.execute(
+        "SELECT kind, payload_json FROM cat_events WHERE id = ?", (event_id,)
+    ).fetchone()
+    epoch = connection.execute(
+        "SELECT rewrite_id, created_event_id FROM cat_epochs WHERE id = ?", (root_epoch_id,)
+    ).fetchone()
+    if (
+        event is None
+        or event["kind"] != "legacy_import_summary"
+        or event["payload_json"] != event_payload_json
+        or epoch is None
+        or epoch["rewrite_id"] is not None
+        or epoch["created_event_id"] != event_id
+        or connection.execute(
+            "SELECT COUNT(*) FROM cat_epoch_parents WHERE epoch_id = ?", (root_epoch_id,)
+        ).fetchone()[0]
+        != 0
+        or connection.execute(
+            "SELECT COUNT(*) FROM cat_events WHERE kind = 'legacy_import_summary'"
+        ).fetchone()[0]
+        != 1
+    ):
+        raise ValueError("existing legacy replay state does not match source")
+
+    for draft in plan.drafts:
+        cell = connection.execute(
+            """
+            SELECT dimension, content, context_id, payload_json, content_hash, created_event_id
+            FROM cat_cells WHERE id = ?
+            """,
+            (draft.id,),
+        ).fetchone()
+        if (
+            cell is None
+            or cell["dimension"] != draft.dimension
+            or cell["content"] != draft.content
+            or cell["context_id"] != draft.context_id
+            or cell["payload_json"] != _canonical_json(draft.payload)
+            or cell["content_hash"] != _content_hash(draft.content)
+            or cell["created_event_id"] != event_id
+        ):
+            raise ValueError("existing legacy replay cells do not match source")
+        boundaries = connection.execute(
+            """
+            SELECT side, position, boundary_id FROM cat_boundaries WHERE cell_id = ?
+            ORDER BY CASE side WHEN 'source' THEN 0 ELSE 1 END, position
+            """,
+            (draft.id,),
+        ).fetchall()
+        expected_boundaries = [
+            (boundary["side"], boundary["position"], boundary["cell_id"])
+            for boundary in _ordered_boundaries(draft)
+        ]
+        if [tuple(boundary) for boundary in boundaries] != expected_boundaries:
+            raise ValueError("existing legacy replay boundaries do not match source")
+    return True
+
+
+def _preflight_existing_output(
+    output: Path,
+    plan: _ReplayPlan,
+    *,
+    event_id: str,
+    event_payload_json: str,
+    root_epoch_id: str,
+    snapshot_id: str,
+    active_cell_ids_json: str,
+    snapshot_hash: str,
+) -> bool:
+    """Inspect an existing output read-only before v2 schema initialization."""
+    if not output.exists():
+        return False
+    connection = sqlite3.connect(f"{output.as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        tables = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if not tables:
+            return False
+        if not _V2_TABLES <= tables:
+            raise ValueError("output is incompatible with legacy replay")
+        try:
+            if "cat_vectors" in tables:
+                permitted_tables = _V2_TABLES | {"cat_vectors"} | _VEC_SHADOW_TABLES
+                if not _VEC_SHADOW_TABLES <= tables or not tables <= permitted_tables:
+                    raise ValueError("output is incompatible with legacy replay")
+                vector_sql = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cat_vectors'"
+                ).fetchone()["sql"]
+                normalized_vector_sql = " ".join((vector_sql or "").lower().split())
+                expected_vector_tokens = (
+                    "create virtual table",
+                    "cat_vectors",
+                    "using vec0",
+                    "cell_id text primary key",
+                    "embedding float[768]",
+                )
+                if (
+                    not all(token in normalized_vector_sql for token in expected_vector_tokens)
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_chunks"
+                    ).fetchone()[0]
+                    != 0
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_rowids"
+                    ).fetchone()[0]
+                    != 0
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_vector_chunks00"
+                    ).fetchone()[0]
+                    != 0
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_info"
+                    ).fetchone()[0]
+                    != 4
+                ):
+                    raise ValueError("output is incompatible with legacy replay")
+            elif not tables <= _V2_TABLES:
+                raise ValueError("output is incompatible with legacy replay")
+            return _validate_completed_replay(
+                connection,
+                plan,
+                event_id=event_id,
+                event_payload_json=event_payload_json,
+                root_epoch_id=root_epoch_id,
+                snapshot_id=snapshot_id,
+                active_cell_ids_json=active_cell_ids_json,
+                snapshot_hash=snapshot_hash,
+            )
+        except sqlite3.Error as exc:
+            raise ValueError("output is incompatible with legacy replay") from exc
+    finally:
+        connection.close()
 
 
 def _report(
@@ -285,48 +611,37 @@ def import_legacy_category(
     snapshot_hash = canonical_snapshot_hash(draft.id for draft in plan.drafts)
     root_epoch_id = _stable_id("legacy-root-epoch", snapshot_hash)
     snapshot_id = _stable_id("legacy-snapshot", snapshot_hash)
+    manifest = _replay_manifest(
+        plan,
+        legacy_total=len(rows),
+        snapshot_id=snapshot_id,
+        root_epoch_id=root_epoch_id,
+        snapshot_hash=snapshot_hash,
+    )
+    manifest_fingerprint = _manifest_fingerprint(manifest)
+    event_id = _stable_id("legacy-import-summary", manifest_fingerprint)
+    event_payload = {"manifest_fingerprint": manifest_fingerprint}
+    event_payload_json = _canonical_json(event_payload)
+    if _preflight_existing_output(
+        output,
+        plan,
+        event_id=event_id,
+        event_payload_json=event_payload_json,
+        root_epoch_id=root_epoch_id,
+        snapshot_id=snapshot_id,
+        active_cell_ids_json=active_cell_ids_json,
+        snapshot_hash=snapshot_hash,
+    ):
+        return _report(plan, len(rows), root_epoch_id, snapshot_hash)
     output_connection = sqlite3.connect(output)
     store = EvolvingCategoryStore(output_connection)
     try:
-        # The contents of this event are deliberately only source-derived.
-        # It is the sole event emitted for the bootstrap, regardless of size.
-        source_fingerprint = hashlib.sha256(
-            json.dumps(
-                [
-                    (row.id, row.level, row.source_id, row.target_id, row.content)
-                    for row in rows
-                ],
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        event_id = _stable_id("legacy-import-summary", source_fingerprint)
-        existing_snapshot = store.connection.execute(
-            """
-            SELECT epoch_id, active_cell_ids_json, content_hash
-            FROM cat_snapshots WHERE id = ?
-            """,
-            (snapshot_id,),
-        ).fetchone()
-        if existing_snapshot is not None:
-            if (
-                existing_snapshot["epoch_id"] != root_epoch_id
-                or existing_snapshot["active_cell_ids_json"] != active_cell_ids_json
-                or existing_snapshot["content_hash"] != snapshot_hash
-            ):
-                raise ValueError("existing legacy replay snapshot does not match source")
-            return _report(plan, len(rows), root_epoch_id, snapshot_hash)
-        if store.connection.execute(
-            "SELECT 1 FROM cat_events WHERE id = ?", (event_id,)
-        ).fetchone() is not None:
-            raise ValueError("incomplete legacy replay already exists in output")
-        store.append_event(
-            "legacy_import_summary",
-            {"source_fingerprint": source_fingerprint},
-            event_id=event_id,
-        )
-        for draft in plan.drafts:
-            store.create_cell(draft, created_event_id=event_id)
         with store.transaction() as connection:
+            store.append_event(
+                "legacy_import_summary", event_payload, event_id=event_id
+            )
+            for draft in plan.drafts:
+                store.create_cell(draft, created_event_id=event_id)
             connection.execute(
                 """
                 INSERT INTO cat_epochs (id, created_event_id, created_at)
@@ -352,7 +667,11 @@ def import_legacy_category(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    class _ReplayArgumentParser(argparse.ArgumentParser):
+        def error(self, message: str) -> None:
+            raise ValueError(message)
+
+    parser = _ReplayArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
     replay = subcommands.add_parser("replay", help="replay a legacy category database")
     replay.add_argument("--legacy", required=True, type=Path)
@@ -363,13 +682,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
-    if args.command != "replay":
-        parser.error("a command is required")
     try:
+        args = parser.parse_args(argv)
+        if args.command != "replay":
+            raise ValueError("a command is required")
         report = import_legacy_category(args.legacy, args.output)
-    except ValueError as exc:
-        parser.error(str(exc))
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     if args.as_json:
         print(json.dumps(asdict(report), sort_keys=True))
     else:
