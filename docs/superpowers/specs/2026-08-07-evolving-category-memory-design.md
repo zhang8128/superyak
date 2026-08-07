@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 
-**Status:** Approved research direction; awaiting written-spec review
+**Status:** Approved 2026-08-07; implementation remains experiment-gated
 
 **Scope:** First falsifiable, shadow-mode implementation in `engram`
 
