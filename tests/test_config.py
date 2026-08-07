@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from config import EngramConfig, SignalsConfig, load_config
 
 
@@ -35,6 +37,20 @@ def test_resource_path_prefers_checked_out_source_asset(tmp_path, monkeypatch):
     monkeypatch.setattr(resources, "_INSTALL_ROOT", installed_root)
 
     assert resources.resource_path("prompts/classify.txt") == source_marker
+
+
+def test_resource_path_rejects_absolute_path():
+    import resources
+
+    with pytest.raises(ValueError, match="must be relative"):
+        resources.resource_path("/etc/hosts")
+
+
+def test_resource_path_rejects_parent_traversal():
+    import resources
+
+    with pytest.raises(ValueError, match="parent traversal"):
+        resources.resource_path("../migrations/001.sql")
 
 
 def test_config_has_watcher_defaults():

@@ -13,21 +13,34 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _build_wheel(tmp_path: Path) -> Path:
+    source_copy = tmp_path / "source-copy"
     wheelhouse = tmp_path / "wheelhouse"
+    source_copy.mkdir()
     wheelhouse.mkdir()
-    checkout_build = PROJECT_ROOT / "build"
-    build_was_present = checkout_build.exists()
-    try:
-        subprocess.run(
-            ["uv", "build", "--wheel", "--out-dir", str(wheelhouse)],
-            cwd=PROJECT_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        if checkout_build.exists() and not build_was_present:
-            shutil.move(str(checkout_build), tmp_path / "setuptools-build")
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    for raw_relative in tracked:
+        if not raw_relative:
+            continue
+        relative = Path(os.fsdecode(raw_relative))
+        source = PROJECT_ROOT / relative
+        if not source.is_file():
+            continue
+        destination = source_copy / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(wheelhouse)],
+        cwd=source_copy,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
     wheels = list(wheelhouse.glob("*.whl"))
     assert len(wheels) == 1
@@ -50,6 +63,49 @@ def test_wheel_contains_runtime_modules_and_assets(tmp_path):
     assert any(name.endswith("share/engram/prompts/classify.txt") for name in names)
     assert any(name.endswith("share/engram/hooks/hooks.json") for name in names)
     assert any(name.endswith("share/engram/skills/engram/skill.md") for name in names)
+
+
+def test_wheel_build_does_not_create_artifacts_in_source_tree(
+    tmp_path, monkeypatch,
+):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "sample.py").write_text("VALUE = 1\n")
+    (source / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["setuptools>=75"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+        "\n"
+        "[project]\n"
+        'name = "test-artifact-hygiene"\n'
+        'version = "0.0.0"\n'
+        "\n"
+        "[tool.setuptools]\n"
+        'py-modules = ["sample"]\n'
+    )
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "add", "pyproject.toml", "sample.py"], cwd=source, check=True
+    )
+    monkeypatch.setattr("tests.test_packaging.PROJECT_ROOT", source)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
+    wheel = _build_wheel(artifacts)
+
+    assert wheel.exists()
+    assert not (source / "build").exists()
+    assert not list(source.glob("*.egg-info"))
+
+
+def test_lockfile_matches_project_metadata():
+    subprocess.run(
+        ["uv", "lock", "--check"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_installed_wheel_starts_outside_checkout(tmp_path):
