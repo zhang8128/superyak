@@ -468,6 +468,39 @@ def test_mutation_wrapper_never_logs_raw_content(monkeypatch):
     assert fake_storage.args[6] == {}
     assert "SECRET-DREAM-WRAPPER" not in json.dumps(fake_storage.args[6])
 
+
+def test_mutation_wrapper_fail_open_when_sanitizer_raises(monkeypatch):
+    class FakeConnection:
+        def execute(self, *args):
+            return self
+
+        def fetchone(self):
+            return ("codex", "m", "/r")
+
+    class FakeStorage:
+        conn = FakeConnection()
+
+        def add_operation(self, *args):
+            raise AssertionError("recorder must not run after sanitizer failure")
+
+    def fail_sanitization(*args):
+        raise RuntimeError("injected sanitizer failure")
+
+    monkeypatch.setattr(server, "_storage", FakeStorage())
+    monkeypatch.setattr(server, "_session_id", "sid")
+    monkeypatch.setattr(server, "sanitize_operation_details", fail_sanitization)
+    domain_side_effects = []
+
+    @server._mutation_logged
+    def remember(content):
+        domain_side_effects.append(content)
+        return {"id": "domain-result", "ok": True}
+
+    result = remember("domain mutation survives")
+
+    assert result == {"id": "domain-result", "ok": True}
+    assert domain_side_effects == ["domain mutation survives"]
+
 def test_mutation_wrapper_preserves_exception(monkeypatch):
     monkeypatch.setattr(server, '_storage', None)
     @server._mutation_logged
