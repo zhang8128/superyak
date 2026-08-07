@@ -1,0 +1,187 @@
+"""Behavioral tests for the immutable evolving-category SQLite store."""
+
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+
+import pytest
+
+from categories import Boundary, CellDraft, EvolvingCategoryStore, WeightVector
+
+
+@pytest.fixture
+def v2_store(tmp_path):
+    connection = sqlite3.connect(tmp_path / "categories_v2.db")
+    store = EvolvingCategoryStore(connection)
+    yield store
+    store.close()
+
+
+def test_schema_uses_prefixed_tables_and_enforces_foreign_keys(v2_store):
+    names = {
+        row[0]
+        for row in v2_store.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+
+    assert {
+        "cat_schema_version",
+        "cat_events",
+        "cat_contexts",
+        "cat_cells",
+        "cat_boundaries",
+        "cat_weight_observations",
+        "cat_rewrites",
+        "cat_rewrite_members",
+        "cat_epochs",
+        "cat_epoch_parents",
+        "cat_snapshots",
+    } <= names
+    assert v2_store.connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.create_cell(CellDraft("orphan", 0, "orphan", context_id="missing"))
+
+
+def test_dimension_one_requires_zero_cell_boundaries(v2_store):
+    v2_store.create_cell(CellDraft("a", 0, "a"))
+    v2_store.create_cell(CellDraft("b", 0, "b"))
+    arrow = CellDraft(
+        "f",
+        1,
+        "a to b",
+        (Boundary("source", 0, "a"), Boundary("target", 0, "b")),
+    )
+
+    assert v2_store.create_cell(arrow) == "f"
+    with pytest.raises(ValueError, match="dimension-1 cell requires"):
+        v2_store.create_cell(CellDraft("broken", 1, "broken"))
+
+
+def test_boundaries_are_returned_in_side_and_position_order(v2_store):
+    for cell_id in ("a", "b", "c", "d"):
+        v2_store.create_cell(CellDraft(cell_id, 0, cell_id))
+    v2_store.create_cell(
+        CellDraft(
+            "higher",
+            4,
+            "opaque",
+            (
+                Boundary("target", 1, "d"),
+                Boundary("source", 1, "b"),
+                Boundary("source", 0, "a"),
+                Boundary("target", 0, "c"),
+            ),
+        )
+    )
+
+    assert v2_store.get_boundaries("higher") == [
+        Boundary("source", 0, "a"),
+        Boundary("source", 1, "b"),
+        Boundary("target", 0, "c"),
+        Boundary("target", 1, "d"),
+    ]
+    assert v2_store.get_boundaries("higher", side="target") == [
+        Boundary("target", 0, "c"),
+        Boundary("target", 1, "d"),
+    ]
+
+
+def test_higher_cell_is_opaque(v2_store):
+    v2_store.create_cell(CellDraft("higher", 5, "opaque", payload={"k": "v"}))
+
+    assert v2_store.get_cell("higher")["payload"] == {"k": "v"}
+    assert v2_store.is_interpretable("higher") is False
+
+
+def test_cell_content_hash_is_canonical_sha256(v2_store):
+    content = "A stable cell\n"
+    v2_store.create_cell(CellDraft("fixed", 0, content, payload={"z": 2, "a": [1]}))
+
+    cell = v2_store.get_cell("fixed")
+    assert cell["content_hash"] == hashlib.sha256(content.encode()).hexdigest()
+    assert v2_store.connection.execute(
+        "SELECT payload_json FROM cat_cells WHERE id = 'fixed'"
+    ).fetchone()[0] == '{"a":[1],"z":2}'
+
+
+def test_cell_is_sql_immutable(v2_store):
+    v2_store.create_cell(CellDraft("fixed", 0, "original"))
+
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute(
+            "UPDATE cat_cells SET content='changed' WHERE id='fixed'"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute("DELETE FROM cat_cells WHERE id='fixed'")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute("UPDATE cat_schema_version SET version = 2")
+
+
+def test_contexts_deduplicate_canonical_feature_maps(v2_store):
+    first = v2_store.create_context({"z": [2, 1], "a": {"b": True}})
+    second = v2_store.create_context({"a": {"b": True}, "z": [2, 1]})
+
+    assert first == second
+    assert v2_store.connection.execute(
+        "SELECT features_json FROM cat_contexts WHERE id = ?", (first,)
+    ).fetchone()[0] == '{"a":{"b":true},"z":[2,1]}'
+
+
+def test_weight_observations_are_ranged_append_only_and_latest(v2_store):
+    v2_store.create_cell(CellDraft("cell", 0, "cell"))
+    context_id = v2_store.create_context({"mode": "test"})
+    old = WeightVector(0.1, 0.2, 0.3, -0.4, 0.5, 0.6, 0.7)
+    current = WeightVector(0.8, 0.9, 1.0, 0.4, 0.3, 0.2, 0.1)
+    old_id = v2_store.observe_weight("cell", context_id, old)
+    assert v2_store.observe_weight("cell", context_id, current) != old_id
+
+    assert v2_store.latest_weight("cell", context_id) == current
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute(
+            "UPDATE cat_weight_observations SET relevance = 0.0 WHERE id = ?",
+            (old_id,),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.observe_weight(
+            "cell", context_id, WeightVector(1.1, 0, 0, 0, 0, 0, 0)
+        )
+
+
+def test_append_event_canonicalizes_payload_and_transaction_does_not_commit_caller(v2_store):
+    event_id = v2_store.append_event("created", {"z": 1, "a": [True, None]})
+
+    assert v2_store.connection.execute(
+        "SELECT payload_json FROM cat_events WHERE id = ?", (event_id,)
+    ).fetchone()[0] == '{"a":[true,null],"z":1}'
+
+    v2_store.connection.execute("BEGIN")
+    v2_store.create_cell(CellDraft("rolled-back", 0, "temporary"))
+    assert v2_store.connection.in_transaction
+    v2_store.connection.rollback()
+    assert v2_store.get_cell("rolled-back") is None
+
+
+def test_rewrite_members_and_epochs_have_schema_constraints(v2_store):
+    v2_store.connection.execute(
+        "INSERT INTO cat_rewrites (id, created_at) VALUES ('rewrite', 'now')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute(
+            """
+            INSERT INTO cat_rewrite_members
+                (rewrite_id, role, position, cell_id, external_id)
+            VALUES ('rewrite', 'invalid', 0, 'both', 'external')
+            """
+        )
+    v2_store.connection.execute(
+        "INSERT INTO cat_epochs (id, created_at) VALUES ('epoch', 'now')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute(
+            "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) "
+            "VALUES ('epoch', -1, 'parent')"
+        )
