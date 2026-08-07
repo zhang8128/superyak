@@ -3,6 +3,10 @@ from __future__ import annotations
 import sqlite3
 import struct
 import json
+import os
+from pathlib import Path
+import select
+import threading
 
 import pytest
 
@@ -38,6 +42,34 @@ def _observe(store, cell_id, *, context_id=None, relevance=0.0, evidence=0.0,
         context_id,
         WeightVector(relevance, evidence, recency, affect, adoption, novelty, cost),
     )
+
+
+def _observe_dedicated_connections(monkeypatch):
+    """Capture SQL and cleanup state from compiler-owned connections."""
+    real_connect = sqlite3.connect
+    traced_sql = []
+    close_states = []
+
+    class ObservedConnection(sqlite3.Connection):
+        def close(self):
+            temp_names = tuple(
+                row[0]
+                for row in super().execute(
+                    "SELECT name FROM sqlite_temp_master "
+                    "WHERE name LIKE 'category_compile_active_%' ORDER BY name"
+                )
+            )
+            close_states.append((temp_names, self.in_transaction))
+            return super().close()
+
+    def connect_observed(*args, **kwargs):
+        kwargs["factory"] = ObservedConnection
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(traced_sql.append)
+        return connection
+
+    monkeypatch.setattr("category_compile.sqlite3.connect", connect_observed)
+    return traced_sql, close_states
 
 
 def test_weight_channels_remain_separate():
@@ -355,6 +387,7 @@ def test_context_weights_and_output_order_are_stable_and_hashable(store):
 
 def test_sql_deadline_interrupt_cleans_progress_handler_and_temp_state(store, monkeypatch):
     _root(store, CellDraft("seed", 0, "seed"))
+    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
     large_active = json.dumps([f"missing-{index}" for index in range(20_000)])
     store.connection.execute(
         "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
@@ -383,16 +416,13 @@ def test_sql_deadline_interrupt_cleans_progress_handler_and_temp_state(store, mo
         lambda *_args, **_kwargs: pytest.fail("staging was not interrupted"),
     )
 
-    result = CategoryCompiler(store, CompileBudget(wall_time_ms=1)).compile(
-        "root", None, ("seed",), 0
-    )
+    compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=1))
+    result = compiler.compile("root", None, ("seed",), 0)
+    compiler.close()
 
     assert result.cells == ()
     assert result.truncated
-    assert store.connection.execute(
-        "SELECT name FROM sqlite_temp_master "
-        "WHERE name LIKE 'category_compile_active_%'"
-    ).fetchall() == []
+    assert close_states == [((), False)] * 4
     assert tuple(
         store.connection.execute(
             "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
@@ -480,8 +510,95 @@ def test_file_compile_reads_committed_snapshot_without_touching_caller_write(sto
     store.connection.rollback()
 
 
-def test_reentrant_seed_iteration_keeps_each_compile_connection_isolated(store):
+def test_snapshot_size_check_and_staging_share_one_pinned_read_snapshot(
+    store, monkeypatch
+):
+    store.connection.execute("PRAGMA journal_mode = WAL")
     _root(store, CellDraft("seed", 0, "seed"))
+    database_path = store.connection.execute("PRAGMA database_list").fetchone()[2]
+    real_connect = sqlite3.connect
+    size_checked = threading.Event()
+    resume_staging = threading.Event()
+    paused = False
+
+    class PausingCursor(sqlite3.Cursor):
+        pause_after_fetch = False
+
+        def execute(self, sql, parameters=()):
+            self.pause_after_fetch = (
+                "length(cast(active_cell_ids_json as blob))" in sql.lower()
+            )
+            return super().execute(sql, parameters)
+
+        def fetchone(self):
+            nonlocal paused
+            row = super().fetchone()
+            if self.pause_after_fetch and not paused:
+                paused = True
+                size_checked.set()
+                assert resume_staging.wait(5)
+            return row
+
+    class PausingConnection(sqlite3.Connection):
+        def cursor(self, factory=PausingCursor):
+            return super().cursor(factory)
+
+        def execute(self, sql, parameters=()):
+            return self.cursor().execute(sql, parameters)
+
+    def connect_compile(*args, **kwargs):
+        kwargs["factory"] = PausingConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr("category_compile.sqlite3.connect", connect_compile)
+    monkeypatch.setattr(
+        "category_compile._MAX_ACTIVE_SNAPSHOT_BYTES", 64, raising=False
+    )
+    compiler = CategoryCompiler(store)
+    writer_errors = []
+
+    def replace_snapshot():
+        assert size_checked.wait(5)
+        writer = real_connect(database_path)
+        try:
+            writer.execute(
+                "INSERT INTO cat_snapshots VALUES (?, ?, ?, ?, ?)",
+                (
+                    "new-snapshot",
+                    "root",
+                    json.dumps(["replacement-" + "x" * 128]),
+                    "replacement-hash",
+                    "later",
+                ),
+            )
+            writer.commit()
+        except BaseException as exc:
+            writer_errors.append(exc)
+        finally:
+            writer.close()
+            resume_staging.set()
+
+    thread = threading.Thread(target=replace_snapshot)
+    thread.start()
+    result = compiler.compile("root", None, ("seed",), 0)
+    thread.join(5)
+
+    assert not thread.is_alive()
+    assert writer_errors == []
+    assert tuple(cell.id for cell in result.cells) == ("seed",)
+    assert not result.truncated
+
+    future = compiler.compile("root", None, ("seed",), 0)
+    assert future.cells == ()
+    assert future.truncated
+    compiler.close()
+
+
+def test_reentrant_seed_iteration_keeps_each_compile_connection_isolated(
+    store, monkeypatch
+):
+    _root(store, CellDraft("seed", 0, "seed"))
+    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
     compiler = CategoryCompiler(store)
     nested_results = []
 
@@ -494,10 +611,212 @@ def test_reentrant_seed_iteration_keeps_each_compile_connection_isolated(store):
     assert tuple(cell.id for cell in outer.cells) == ("seed",)
     assert tuple(cell.id for cell in nested_results[0].cells) == ("seed",)
     assert not store.connection.in_transaction
-    assert store.connection.execute(
-        "SELECT name FROM sqlite_temp_master "
-        "WHERE name LIKE 'category_compile_active_%'"
-    ).fetchall() == []
+    compiler.close()
+    assert sorted(close_states) == [((), False)] * 4
+
+
+def test_database_file_replacement_after_construction_is_rejected(store, tmp_path):
+    _root(store, CellDraft("seed", 0, "original"))
+    compiler = CategoryCompiler(store)
+    database_path = store.connection.execute("PRAGMA database_list").fetchone()[2]
+    replacement_path = tmp_path / "replacement.db"
+    replacement = EvolvingCategoryStore(sqlite3.connect(replacement_path))
+    try:
+        _root(replacement, CellDraft("seed", 0, "replacement"))
+    finally:
+        replacement.close()
+
+    os.replace(replacement_path, database_path)
+
+    with pytest.raises(ValueError, match="database file identity changed"):
+        compiler.compile("root", None, ("seed",), 0)
+    compiler.close()
+    assert list(Path(database_path).parent.glob(".category-compile-*")) == []
+
+
+def test_database_file_replacement_during_read_connection_open_is_rejected(
+    store, tmp_path, monkeypatch
+):
+    _root(store, CellDraft("seed", 0, "original"))
+    database_path = store.connection.execute("PRAGMA database_list").fetchone()[2]
+    replacement_path = tmp_path / "racing-replacement.db"
+    replacement = EvolvingCategoryStore(sqlite3.connect(replacement_path))
+    try:
+        _root(replacement, CellDraft("seed", 0, "replacement"))
+    finally:
+        replacement.close()
+    real_connect = sqlite3.connect
+    replaced = False
+
+    def replace_during_open(*args, **kwargs):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            os.replace(replacement_path, database_path)
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr("category_compile.sqlite3.connect", replace_during_open)
+
+    with pytest.raises(ValueError, match="database file identity changed"):
+        CategoryCompiler(store)
+    assert replaced
+    assert list(Path(database_path).parent.glob(".category-compile-*")) == []
+
+
+def test_database_aba_swap_during_open_cannot_redirect_compile(
+    store, tmp_path
+):
+    _root(store, CellDraft("seed", 0, "ORIGINAL"))
+    compiler = CategoryCompiler(store)
+    database_path = store.connection.execute("PRAGMA database_list").fetchone()[2]
+    replacement_path = tmp_path / "aba-replacement.db"
+    original_away = tmp_path / "original-away.db"
+    replacement = EvolvingCategoryStore(sqlite3.connect(replacement_path))
+    try:
+        _root(replacement, CellDraft("seed", 0, "REPLACEMENT"))
+    finally:
+        replacement.close()
+    swapped = False
+
+    def swap_during_seed_iteration():
+        nonlocal swapped
+        swapped = True
+        os.replace(database_path, original_away)
+        os.replace(replacement_path, database_path)
+        try:
+            pass
+        finally:
+            os.replace(database_path, replacement_path)
+            os.replace(original_away, database_path)
+        yield "seed"
+
+    result = compiler.compile("root", None, swap_during_seed_iteration(), 0)
+
+    assert swapped
+    assert tuple(cell.content for cell in result.cells) == ("ORIGINAL",)
+    compiler.close()
+
+
+@pytest.mark.skipif(
+    not hasattr(select, "kqueue"),
+    reason="constructor ABA latching is a macOS kqueue guarantee",
+)
+def test_constructor_rejects_aba_swap_around_each_pooled_connection_open(
+    store, tmp_path, monkeypatch
+):
+    _root(store, CellDraft("seed", 0, "ORIGINAL"))
+    database_path = store.connection.execute("PRAGMA database_list").fetchone()[2]
+    replacement_path = tmp_path / "constructor-aba-replacement.db"
+    original_away = tmp_path / "constructor-original-away.db"
+    replacement = EvolvingCategoryStore(sqlite3.connect(replacement_path))
+    try:
+        _root(replacement, CellDraft("seed", 0, "REPLACEMENT"))
+    finally:
+        replacement.close()
+    real_connect = sqlite3.connect
+    connect_calls = 0
+
+    def swap_while_pooled_connection_opens(*args, **kwargs):
+        nonlocal connect_calls
+        connect_calls += 1
+        os.replace(database_path, original_away)
+        os.replace(replacement_path, database_path)
+        try:
+            return real_connect(*args, **kwargs)
+        finally:
+            os.replace(database_path, replacement_path)
+            os.replace(original_away, database_path)
+
+    monkeypatch.setattr(
+        "category_compile.sqlite3.connect", swap_while_pooled_connection_opens
+    )
+
+    with pytest.raises(ValueError, match="database file identity changed"):
+        CategoryCompiler(store)
+    assert connect_calls == 1
+
+
+def test_symlinked_wal_database_supports_two_concurrent_compile_threads(tmp_path):
+    database_path = tmp_path / "threaded.db"
+    symlink_path = tmp_path / "threaded-link.db"
+    os.symlink(database_path, symlink_path)
+    category_store = EvolvingCategoryStore(sqlite3.connect(symlink_path))
+    try:
+        category_store.connection.execute("PRAGMA journal_mode = WAL")
+        _root(category_store, CellDraft("seed", 0, "committed seed"))
+        compiler = CategoryCompiler(category_store)
+        barrier = threading.Barrier(2)
+        results = []
+        errors = []
+
+        def concurrent_seeds():
+            barrier.wait(timeout=5)
+            yield "seed"
+
+        def run_compile():
+            try:
+                results.append(
+                    compiler.compile("root", None, concurrent_seeds(), 0)
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=run_compile) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        assert sorted(tuple(cell.id for cell in result.cells) for result in results) == [
+            ("seed",),
+            ("seed",),
+        ]
+        assert compiler.connection is category_store.connection
+        compiler.close()
+    finally:
+        category_store.close()
+
+
+def test_connection_pool_acquisition_obeys_compile_deadline(store):
+    _root(store, CellDraft("seed", 0, "seed"))
+    compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=100))
+    all_leases_held = threading.Event()
+    release_leases = threading.Event()
+    entered = 0
+    entered_lock = threading.Lock()
+    worker_results = []
+
+    def holding_seeds():
+        nonlocal entered
+        with entered_lock:
+            entered += 1
+            if entered == 4:
+                all_leases_held.set()
+        assert release_leases.wait(5)
+        yield "seed"
+
+    def hold_connection():
+        worker_results.append(
+            compiler.compile("root", None, holding_seeds(), 0)
+        )
+
+    workers = [threading.Thread(target=hold_connection) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    assert all_leases_held.wait(5)
+
+    timed_out = compiler.compile("root", None, ("seed",), 0)
+
+    assert timed_out.cells == ()
+    assert timed_out.truncated
+    release_leases.set()
+    for worker in workers:
+        worker.join(5)
+    assert all(not worker.is_alive() for worker in workers)
+    assert len(worker_results) == 4
+    compiler.close()
 
 
 def test_in_memory_store_is_rejected_without_mutation():
@@ -510,24 +829,24 @@ def test_in_memory_store_is_rejected_without_mutation():
         memory_store.close()
 
 
-def test_temp_membership_preserves_caller_transaction(store):
+def test_temp_membership_preserves_caller_transaction(store, monkeypatch):
     _root(store, CellDraft("seed", 0, "seed"))
+    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
     store.connection.execute("BEGIN")
     store.connection.execute(
         "INSERT INTO cat_events VALUES ('caller-pending', 'test', '{}', 'now')"
     )
 
-    result = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+    compiler = CategoryCompiler(store)
+    result = compiler.compile("root", None, ("seed",), 0)
 
     assert result.cells[0].id == "seed"
     assert store.connection.in_transaction
     assert store.connection.execute(
         "SELECT kind FROM cat_events WHERE id = 'caller-pending'"
     ).fetchone()[0] == "test"
-    assert store.connection.execute(
-        "SELECT name FROM sqlite_temp_master "
-        "WHERE name LIKE 'category_compile_active_%'"
-    ).fetchall() == []
+    compiler.close()
+    assert close_states == [((), False)] * 4
     store.connection.rollback()
     assert store.connection.execute(
         "SELECT 1 FROM cat_events WHERE id = 'caller-pending'"
@@ -544,23 +863,26 @@ def test_temp_membership_does_not_leave_an_idle_connection_in_transaction(store)
     assert not store.connection.in_transaction
 
 
-def test_non_interrupt_sql_errors_propagate_and_temp_state_is_clean(store):
+def test_non_interrupt_sql_errors_propagate_and_temp_state_is_clean(
+    store, monkeypatch
+):
     _root(store, CellDraft("seed", 0, "seed"))
+    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
     store.connection.execute("DROP TABLE cat_snapshots")
     store.connection.commit()
 
+    compiler = CategoryCompiler(store)
     with pytest.raises(sqlite3.OperationalError, match="no such table"):
-        CategoryCompiler(store).compile("missing", None, ("seed",), 0)
+        compiler.compile("missing", None, ("seed",), 0)
+    compiler.close()
 
-    assert store.connection.execute(
-        "SELECT name FROM sqlite_temp_master "
-        "WHERE name LIKE 'category_compile_active_%'"
-    ).fetchall() == []
+    assert close_states == [((), False)] * 4
     assert not store.connection.in_transaction
 
 
-def test_non_interrupt_embedding_schema_errors_propagate(store):
+def test_non_interrupt_embedding_schema_errors_propagate(store, monkeypatch):
     _root(store, CellDraft("seed", 0, "seed"))
+    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
     store.connection.execute("DROP TABLE IF EXISTS cat_vectors")
     store.connection.execute(
         "CREATE TABLE cat_vectors (cell_id TEXT PRIMARY KEY, wrong_column BLOB)"
@@ -571,17 +893,16 @@ def test_non_interrupt_embedding_schema_errors_propagate(store):
         "INSERT INTO cat_events VALUES ('caller-error', 'test', '{}', 'now')"
     )
 
+    compiler = CategoryCompiler(store)
     with pytest.raises(sqlite3.OperationalError, match="no column named|no such column"):
-        CategoryCompiler(store).compile("root", None, ("seed",), 0)
+        compiler.compile("root", None, ("seed",), 0)
 
     assert store.connection.in_transaction
     assert store.connection.execute(
         "SELECT kind FROM cat_events WHERE id = 'caller-error'"
     ).fetchone()[0] == "test"
-    assert store.connection.execute(
-        "SELECT name FROM sqlite_temp_master "
-        "WHERE name LIKE 'category_compile_active_%'"
-    ).fetchall() == []
+    compiler.close()
+    assert close_states == [((), False)] * 4
     store.connection.rollback()
 
 
@@ -617,7 +938,9 @@ def test_historical_translation_excludes_proposed_and_nonancestor_rewrites(store
     assert nonancestor.cells == ()
 
 
-def test_deep_ancestry_is_iterative_bounded_and_marks_truncation(store):
+def test_deep_ancestry_is_iterative_bounded_and_marks_truncation(
+    store, monkeypatch
+):
     store.create_cell(CellDraft("cell-0", 0, "cell 0"))
     engine = EvolutionEngine(store)
     engine.create_root_epoch("epoch-0", ("cell-0",))
@@ -640,14 +963,10 @@ def test_deep_ancestry_is_iterative_bounded_and_marks_truncation(store):
             rewrite_id, (parent,), epoch_id=f"epoch-{index}"
         )
         assert parent == f"epoch-{index}"
-    traced_sql = []
-    store.connection.set_trace_callback(traced_sql.append)
-    try:
-        result = CategoryCompiler(
-            store, CompileBudget(max_candidates=4)
-        ).compile("epoch-8", None, ("cell-0",), 0)
-    finally:
-        store.connection.set_trace_callback(None)
+    traced_sql, _close_states = _observe_dedicated_connections(monkeypatch)
+    result = CategoryCompiler(
+        store, CompileBudget(max_candidates=4)
+    ).compile("epoch-8", None, ("cell-0",), 0)
 
     assert result.cells == ()
     assert result.candidate_count <= 4
@@ -693,6 +1012,62 @@ def test_multi_parent_ancestry_translates_both_inputs_once(store):
     )
 
     assert tuple(cell.id for cell in result.cells) == ("joined",)
+
+
+def test_invalid_raw_seeds_do_not_consume_candidate_cap_before_useful_seed(store):
+    _root(
+        store,
+        CellDraft("b-opaque", 3, "opaque"),
+        CellDraft("c-malformed", 2, "path without boundaries"),
+        CellDraft("d-oversized", 0, "x" * (2 * 1024 * 1024)),
+        CellDraft("z-useful", 0, "useful"),
+    )
+    compiler = CategoryCompiler(store, CompileBudget(max_candidates=1))
+
+    result = compiler.compile(
+        "root",
+        None,
+        ("a-missing", "b-opaque", "c-malformed", "d-oversized", "z-useful"),
+        0,
+    )
+
+    assert tuple(cell.id for cell in result.cells) == ("z-useful",)
+    assert result.candidate_count == 1
+    assert result.truncated
+
+
+def test_opaque_rewrite_output_does_not_consume_cap_before_active_descendant(store):
+    store.create_cell(CellDraft("historical", 0, "historical"))
+    engine = EvolutionEngine(store)
+    engine.create_root_epoch("historical-root", ("historical",))
+    engine.propose(
+        RewriteProposal(
+            "filtered-output-rewrite",
+            "split",
+            "locus",
+            None,
+            ("historical",),
+            (
+                CellDraft("a-opaque-output", 3, "opaque output"),
+                CellDraft("z-valid-output", 0, "valid output"),
+            ),
+            (),
+            RewriteEvidence((), 0.8, 0.5, 0.2),
+        )
+    )
+    assert engine.commit(
+        "filtered-output-rewrite",
+        ("historical-root",),
+        epoch_id="filtered-output-epoch",
+    ) == "filtered-output-epoch"
+
+    result = CategoryCompiler(
+        store, CompileBudget(max_candidates=2)
+    ).compile("filtered-output-epoch", None, ("historical",), 0)
+
+    assert tuple(cell.id for cell in result.cells) == ("z-valid-output",)
+    assert result.candidate_count == 1
+    assert not result.truncated
 
 
 def test_oversized_content_is_not_retained_as_a_candidate(store):
@@ -774,6 +1149,31 @@ def test_invalid_embedding_falls_back_without_excluding_cell(store, embedding):
     assert result.truncated
 
 
+@pytest.mark.parametrize(
+    "embedding",
+    [
+        "[" + "9" * 400 + "]",
+        "[" * 2_000 + "0" + "]" * 2_000,
+    ],
+)
+def test_overflowing_or_deep_json_embedding_falls_back_to_words(store, embedding):
+    _root(store, CellDraft("seed", 0, "word fallback"))
+    store.connection.execute("DROP TABLE IF EXISTS cat_vectors")
+    store.connection.execute(
+        "CREATE TABLE cat_vectors (cell_id TEXT PRIMARY KEY, embedding TEXT)"
+    )
+    store.connection.execute(
+        "INSERT INTO cat_vectors VALUES ('seed', ?)", (embedding,)
+    )
+    store.connection.commit()
+
+    result = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+
+    assert tuple(cell.id for cell in result.cells) == ("seed",)
+    assert result.candidate_count == 1
+    assert result.truncated
+
+
 def test_cosine_mmr_uses_lambda_point_seven_five(store):
     drafts = (
         CellDraft("a", 0, "a"),
@@ -840,6 +1240,8 @@ def test_cosine_is_stable_for_huge_finite_components(store):
 
 def test_active_snapshot_byte_and_cardinality_bounds_truncate_safely(store, monkeypatch):
     _root(store, CellDraft("seed", 0, "seed"))
+    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
+    compiler = CategoryCompiler(store)
     monkeypatch.setattr("category_compile._MAX_ACTIVE_SNAPSHOT_BYTES", 32, raising=False)
     store.connection.execute(
         "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
@@ -847,7 +1249,7 @@ def test_active_snapshot_byte_and_cardinality_bounds_truncate_safely(store, monk
     )
     store.connection.commit()
 
-    too_many_bytes = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+    too_many_bytes = compiler.compile("root", None, ("seed",), 0)
     assert too_many_bytes.cells == ()
     assert too_many_bytes.truncated
 
@@ -859,13 +1261,11 @@ def test_active_snapshot_byte_and_cardinality_bounds_truncate_safely(store, monk
     )
     store.connection.commit()
 
-    too_many_members = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+    too_many_members = compiler.compile("root", None, ("seed",), 0)
     assert too_many_members.cells == ()
     assert too_many_members.truncated
-    assert store.connection.execute(
-        "SELECT name FROM sqlite_temp_master "
-        "WHERE name LIKE 'category_compile_active_%'"
-    ).fetchall() == []
+    compiler.close()
+    assert close_states == [((), False)] * 4
 
 
 def test_equal_contribution_mappings_have_equal_hashes():
@@ -877,17 +1277,44 @@ def test_equal_contribution_mappings_have_equal_hashes():
 
 
 def test_wall_time_is_checked_before_translated_seed_admission(store, monkeypatch):
-    _root(store, CellDraft("a", 0, "alpha"), CellDraft("b", 0, "beta"))
-    readings = iter((0, 0, 2_000_000))
+    store.create_cell(CellDraft("historical", 0, "historical"))
+    engine = EvolutionEngine(store)
+    engine.create_root_epoch("historical-root", ("historical",))
+    engine.propose(
+        RewriteProposal(
+            "deadline-rewrite",
+            "retype",
+            "locus",
+            None,
+            ("historical",),
+            (CellDraft("active", 0, "active"),),
+            (),
+            RewriteEvidence((), 0.8, 0.5, 0.2),
+        )
+    )
+    engine.commit(
+        "deadline-rewrite", ("historical-root",), epoch_id="deadline-epoch"
+    )
+    translation_finished = False
+    original_translate = CategoryCompiler._translate_seeds
+
+    def translate_then_expire(compiler, *args, **kwargs):
+        nonlocal translation_finished
+        translated = original_translate(compiler, *args, **kwargs)
+        translation_finished = True
+        return translated
+
+    monkeypatch.setattr(CategoryCompiler, "_translate_seeds", translate_then_expire)
     monkeypatch.setattr(
         "category_compile.time.monotonic_ns",
-        lambda: next(readings, 2_000_000),
+        lambda: 2_000_000 if translation_finished else 0,
     )
 
     result = CategoryCompiler(store, CompileBudget(wall_time_ms=1)).compile(
-        "root", None, ("a", "b"), 0
+        "deadline-epoch", None, ("historical",), 0
     )
 
+    assert translation_finished
     assert result.cells == ()
     assert result.candidate_count == 0
     assert result.truncated

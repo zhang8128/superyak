@@ -9,10 +9,13 @@ from dataclasses import dataclass, field
 import heapq
 import json
 import math
+import os
 from pathlib import Path
 import re
+import select
 import sqlite3
 import struct
+import threading
 import time
 from typing import Any
 import uuid
@@ -30,6 +33,8 @@ _MAX_EMBEDDING_BYTES = 64 * 1024
 _MAX_EMBEDDING_DIMENSIONS = 4096
 _MAX_RETAINED_FEATURE_BYTES = 256 * 1024 * 1024
 _SQL_PROGRESS_OPCODES = 1000
+_CONNECTION_POOL_SIZE = 4
+_CONNECTION_OPEN_LOCK = threading.Lock()
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _ZERO_WEIGHTS = WeightVector(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
@@ -195,6 +200,27 @@ class CategoryCompiler:
             self.store_connection = getattr(store, "conn", None)
         if self.store_connection is None:
             raise TypeError("category compiler requires a SQLite-backed store")
+        main_rows = self.store_connection.execute("PRAGMA database_list")
+        main_path = next(
+            (str(row[2]) for row in main_rows if str(row[1]) == "main"), ""
+        )
+        if not main_path:
+            raise ValueError("category compilation requires a file-backed SQLite store")
+        self.database_path = Path(main_path).resolve(strict=True)
+        database_stat = self.database_path.stat()
+        self.database_identity = (database_stat.st_dev, database_stat.st_ino)
+        self._pool_condition = threading.Condition()
+        self._available_connections: list[sqlite3.Connection] = []
+        self._closed = False
+        try:
+            for _index in range(_CONNECTION_POOL_SIZE):
+                self._available_connections.append(self._create_compile_connection())
+        except Exception:
+            for connection in self._available_connections:
+                connection.close()
+            self._available_connections.clear()
+            self._closed = True
+            raise
         self._compile_connection: ContextVar[sqlite3.Connection | None] = ContextVar(
             f"category_compile_connection_{id(self)}", default=None
         )
@@ -225,21 +251,26 @@ class CategoryCompiler:
         started = time.monotonic_ns()
         deadline = started + self.budget.wall_time_ms * 1_000_000
         active_table = f"category_compile_active_{uuid.uuid4().hex}"
-        compile_connection = self._open_compile_connection(deadline)
+        try:
+            compile_connection = self._acquire_compile_connection(deadline)
+        except _DeadlineExceeded:
+            return self._empty_result(epoch_id, context_id, True, rotation_at_start)
         connection_token = self._compile_connection.set(compile_connection)
         try:
             compile_connection.set_progress_handler(
                 lambda: int(self._expired(deadline)), _SQL_PROGRESS_OPCODES
             )
+            compile_connection.execute("BEGIN")
+            self._stage_active_membership(epoch_id, active_table, deadline)
             bounded_seeds, seed_truncated = self._bounded_seed_ids(
-                seed_cell_ids, deadline
+                seed_cell_ids, deadline, active_table
             )
             if not bounded_seeds:
+                self._assert_database_identity()
                 return self._empty_result(
                     epoch_id, context_id, seed_truncated, rotation_at_start
                 )
-            self._stage_active_membership(epoch_id, active_table, deadline)
-            return self._compile_active(
+            result = self._compile_active(
                 epoch_id,
                 context_id,
                 bounded_seeds,
@@ -248,6 +279,8 @@ class CategoryCompiler:
                 deadline,
                 active_table,
             )
+            self._assert_database_identity()
+            return result
         except (_DeadlineExceeded, _ResourceLimitExceeded):
             return self._empty_result(epoch_id, context_id, True, rotation_at_start)
         except sqlite3.OperationalError as exc:
@@ -257,31 +290,65 @@ class CategoryCompiler:
         finally:
             try:
                 compile_connection.set_progress_handler(None, 0)
-                compile_connection.execute(
-                    f'DROP TABLE IF EXISTS temp."{active_table}"'
-                )
             finally:
                 try:
-                    compile_connection.close()
+                    if compile_connection.in_transaction:
+                        compile_connection.rollback()
                 finally:
-                    self._compile_connection.reset(connection_token)
+                    try:
+                        compile_connection.execute(
+                            f'DROP TABLE IF EXISTS temp."{active_table}"'
+                        )
+                    finally:
+                        try:
+                            self._assert_database_identity()
+                        finally:
+                            try:
+                                self._release_compile_connection(compile_connection)
+                            finally:
+                                self._compile_connection.reset(connection_token)
 
-    def _open_compile_connection(self, deadline: int) -> sqlite3.Connection:
-        main_rows = self.store_connection.execute("PRAGMA database_list")
-        main_path = next(
-            (str(row[2]) for row in main_rows if str(row[1]) == "main"), ""
-        )
-        if not main_path:
-            raise ValueError("category compilation requires a file-backed SQLite store")
-        database_uri = f"{Path(main_path).resolve().as_uri()}?mode=ro"
-        connection = sqlite3.connect(database_uri, uri=True, timeout=0)
+    def _create_compile_connection(self) -> sqlite3.Connection:
+        anchor_fd = -1
+        vnode_queue = None
+        connection: sqlite3.Connection | None = None
         try:
+            self._assert_database_identity()
+            anchor_fd = os.open(self.database_path, os.O_RDONLY)
+            anchored = os.fstat(anchor_fd)
+            if (anchored.st_dev, anchored.st_ino) != self.database_identity:
+                raise ValueError("category database file identity changed")
+            if hasattr(select, "kqueue"):
+                vnode_queue = select.kqueue()
+                vnode_queue.control(
+                    [
+                        select.kevent(
+                            anchor_fd,
+                            filter=select.KQ_FILTER_VNODE,
+                            flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                            fflags=(
+                                select.KQ_NOTE_RENAME
+                                | select.KQ_NOTE_DELETE
+                                | select.KQ_NOTE_REVOKE
+                            ),
+                        )
+                    ],
+                    0,
+                    0,
+                )
+            database_uri = f"{self.database_path.as_uri()}?mode=ro"
+            with _CONNECTION_OPEN_LOCK:
+                connection = sqlite3.connect(
+                    database_uri, uri=True, timeout=0, check_same_thread=False
+                )
+                if vnode_queue is not None and vnode_queue.control(None, 1, 0):
+                    raise ValueError("category database file identity changed")
+                # Platforms without kqueue retain the pre/post stat checks below.
+                # That fallback detects ordinary replacement but cannot latch ABA.
+            self._assert_database_identity()
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA temp_store = FILE")
-            connection.set_progress_handler(
-                lambda: int(self._expired(deadline)), _SQL_PROGRESS_OPCODES
-            )
             vector_schema = connection.execute(
                 "SELECT sql FROM sqlite_master "
                 "WHERE type = 'table' AND name = 'cat_vectors'"
@@ -296,9 +363,70 @@ class CategoryCompiler:
                     connection.enable_load_extension(False)
             return connection
         except Exception:
-            connection.set_progress_handler(None, 0)
-            connection.close()
+            if connection is not None:
+                connection.set_progress_handler(None, 0)
+                connection.close()
             raise
+        finally:
+            if vnode_queue is not None:
+                vnode_queue.close()
+            if anchor_fd >= 0:
+                os.close(anchor_fd)
+
+    def _assert_database_identity(self) -> None:
+        try:
+            database_stat = self.database_path.stat()
+        except OSError as exc:
+            raise ValueError("category database file identity changed") from exc
+        if (database_stat.st_dev, database_stat.st_ino) != self.database_identity:
+            raise ValueError("category database file identity changed")
+
+    def _acquire_compile_connection(self, deadline: int) -> sqlite3.Connection:
+        self._assert_database_identity()
+        with self._pool_condition:
+            while not self._available_connections:
+                if self._closed:
+                    raise RuntimeError("category compiler is closed")
+                remaining_ns = deadline - time.monotonic_ns()
+                if remaining_ns <= 0:
+                    raise _DeadlineExceeded
+                self._pool_condition.wait(remaining_ns / 1_000_000_000)
+            if time.monotonic_ns() >= deadline:
+                raise _DeadlineExceeded
+            connection = self._available_connections.pop()
+        try:
+            self._assert_database_identity()
+            if time.monotonic_ns() >= deadline:
+                raise _DeadlineExceeded
+        except Exception:
+            self._release_compile_connection(connection)
+            raise
+        return connection
+
+    def _release_compile_connection(self, connection: sqlite3.Connection) -> None:
+        with self._pool_condition:
+            if self._closed:
+                connection.close()
+            else:
+                self._available_connections.append(connection)
+                self._pool_condition.notify()
+
+    def close(self) -> None:
+        with self._pool_condition:
+            if self._closed:
+                return
+            self._closed = True
+            connections = self._available_connections
+            self._available_connections = []
+            self._pool_condition.notify_all()
+        for connection in connections:
+            connection.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _compile_active(
         self,
@@ -497,7 +625,7 @@ class CategoryCompiler:
                 active.add(cell_id)
             else:
                 descendants, descendants_limited = self._lineage_descendants(
-                    cell_id, ancestor_ids, deadline
+                    cell_id, ancestor_ids, active_table, deadline
                 )
                 truncated |= descendants_limited
                 for descendant in descendants:
@@ -512,12 +640,12 @@ class CategoryCompiler:
         return tuple(sorted(active)), truncated, False
 
     def _bounded_seed_ids(
-        self, seed_cell_ids: Sequence[str], deadline: int
+        self, seed_cell_ids: Sequence[str], deadline: int, active_table: str
     ) -> tuple[tuple[str, ...], bool]:
-        """Keep the lexicographically first distinct seeds in bounded memory."""
+        """Keep active-first viable seeds without letting invalid IDs use the cap."""
         limit = self.budget.max_candidates
-        selected: set[str] = set()
-        largest_first: list[_ReverseId] = []
+        selected: dict[str, bool] = {}
+        worst_first: list[tuple[int, _ReverseId, str]] = []
         overflow = False
         iterator = iter(seed_cell_ids)
         index = 0
@@ -535,16 +663,50 @@ class CategoryCompiler:
                 raise TypeError("seed cell IDs must be strings")
             if cell_id in selected:
                 continue
+            viable, resource_limited = self._cell_viability(cell_id, deadline)
+            overflow |= resource_limited
+            if not viable:
+                continue
+            active = self._is_active(active_table, cell_id)
             if len(selected) < limit:
-                selected.add(cell_id)
-                heapq.heappush(largest_first, _ReverseId(cell_id))
+                selected[cell_id] = active
+                heapq.heappush(
+                    worst_first,
+                    (0 if not active else 1, _ReverseId(cell_id), cell_id),
+                )
                 continue
             overflow = True
-            if limit and cell_id < largest_first[0].value:
-                removed = heapq.heapreplace(largest_first, _ReverseId(cell_id))
-                selected.remove(removed.value)
-                selected.add(cell_id)
+            if limit:
+                worst = worst_first[0]
+                worst_priority = (0 if worst[0] else 1, worst[2])
+                new_priority = (0 if active else 1, cell_id)
+                if new_priority < worst_priority:
+                    removed = heapq.heapreplace(
+                        worst_first,
+                        (0 if not active else 1, _ReverseId(cell_id), cell_id),
+                    )
+                    del selected[removed[2]]
+                    selected[cell_id] = active
         return tuple(sorted(selected)), overflow
+
+    def _cell_viability(self, cell_id: str, deadline: int) -> tuple[bool, bool]:
+        """Return candidate/lineage viability and whether a resource cap rejected it.
+
+        Oversized content is not retained even as a structural lineage waypoint;
+        callers propagate the resource flag as truncation and continue siblings.
+        """
+        if self._expired(deadline):
+            raise _DeadlineExceeded
+        row = self.connection.execute(
+            "SELECT dimension, length(CAST(content AS BLOB)) FROM cat_cells "
+            "WHERE id = ?",
+            (cell_id,),
+        ).fetchone()
+        if row is None or not 0 <= int(row[0]) <= 2:
+            return False, False
+        if int(row[1]) > _MAX_CONTENT_BYTES:
+            return False, True
+        return self._is_interpretable(cell_id, deadline), False
 
     def _is_active(self, active_table: str, cell_id: str) -> bool:
         row = self.connection.execute(
@@ -582,7 +744,11 @@ class CategoryCompiler:
         return discovered, truncated
 
     def _lineage_descendants(
-        self, cell_id: str, ancestor_ids: set[str], deadline: int
+        self,
+        cell_id: str,
+        ancestor_ids: set[str],
+        active_table: str,
+        deadline: int,
     ) -> tuple[tuple[str, ...], bool]:
         limit = self.budget.max_candidates
         if limit <= 0:
@@ -606,32 +772,56 @@ class CategoryCompiler:
             if is_input is not None:
                 rewrites.append((epoch_id, rewrite_id))
 
-        descendants: set[str] = set()
-        largest_first: list[_ReverseId] = []
+        descendants: dict[str, bool] = {}
+        worst_first: list[tuple[int, _ReverseId, str]] = []
         for _epoch_id, rewrite_id in rewrites:
             cursor = self.connection.execute(
                 "SELECT cell_id FROM cat_rewrite_members "
                 "WHERE rewrite_id = ? AND role = 'output' "
-                "ORDER BY position LIMIT ?",
-                (rewrite_id, limit + 1),
+                "ORDER BY position",
+                (rewrite_id,),
             )
             for row in cursor:
                 descendant = str(row[0])
                 if descendant in descendants:
                     continue
+                viable, resource_limited = self._cell_viability(descendant, deadline)
+                truncated |= resource_limited
+                if not viable:
+                    continue
+                active = self._is_active(active_table, descendant)
                 if len(descendants) < limit:
-                    descendants.add(descendant)
-                    heapq.heappush(largest_first, _ReverseId(descendant))
-                elif descendant < largest_first[0].value:
+                    descendants[descendant] = active
+                    heapq.heappush(
+                        worst_first,
+                        (
+                            0 if not active else 1,
+                            _ReverseId(descendant),
+                            descendant,
+                        ),
+                    )
+                    continue
+                worst = worst_first[0]
+                worst_priority = (0 if worst[0] else 1, worst[2])
+                new_priority = (0 if active else 1, descendant)
+                if new_priority < worst_priority:
                     truncated = True
                     removed = heapq.heapreplace(
-                        largest_first, _ReverseId(descendant)
+                        worst_first,
+                        (
+                            0 if not active else 1,
+                            _ReverseId(descendant),
+                            descendant,
+                        ),
                     )
-                    descendants.remove(removed.value)
-                    descendants.add(descendant)
+                    del descendants[removed[2]]
+                    descendants[descendant] = active
                 else:
                     truncated = True
-        return tuple(sorted(descendants)), truncated
+        ordered = sorted(
+            descendants, key=lambda descendant: (not descendants[descendant], descendant)
+        )
+        return tuple(ordered), truncated
 
     def _neighbors(
         self, active_table: str, cell_id: str, deadline: int
@@ -898,7 +1088,13 @@ class CategoryCompiler:
             try:
                 decoded = json.loads(value)
                 embedding = tuple(float(item) for item in decoded)
-            except (TypeError, ValueError, json.JSONDecodeError):
+            except (
+                TypeError,
+                ValueError,
+                OverflowError,
+                RecursionError,
+                json.JSONDecodeError,
+            ):
                 return None, True
         elif isinstance(value, (bytes, bytearray, memoryview)):
             raw = bytes(value)
@@ -908,7 +1104,7 @@ class CategoryCompiler:
         else:
             try:
                 embedding = tuple(float(item) for item in value)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError, RecursionError):
                 return None, True
         if (
             len(embedding) > _MAX_EMBEDDING_DIMENSIONS
