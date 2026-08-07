@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from resources import resource_path
+
 logger = logging.getLogger("engram.storage")
 
 
@@ -68,7 +70,7 @@ class Storage:
 
         # Run migrations
         if migrations_dir is None:
-            migrations_dir = str(Path(__file__).resolve().parent / "migrations")
+            migrations_dir = str(resource_path("migrations"))
         self._migrations_dir = migrations_dir
         self._run_migrations()
 

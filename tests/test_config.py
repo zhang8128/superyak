@@ -5,6 +5,38 @@ from __future__ import annotations
 from config import EngramConfig, SignalsConfig, load_config
 
 
+def test_resource_path_uses_installed_share_when_source_asset_is_absent(
+    tmp_path, monkeypatch,
+):
+    import resources
+
+    installed_root = tmp_path / "share" / "engram"
+    marker = installed_root / "migrations" / "001.sql"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("SELECT 1;")
+    monkeypatch.setattr(resources, "_SOURCE_ROOT", tmp_path / "missing-source")
+    monkeypatch.setattr(resources, "_INSTALL_ROOT", installed_root)
+
+    assert resources.resource_path("migrations/001.sql") == marker
+
+
+def test_resource_path_prefers_checked_out_source_asset(tmp_path, monkeypatch):
+    import resources
+
+    source_root = tmp_path / "source"
+    installed_root = tmp_path / "share" / "engram"
+    source_marker = source_root / "prompts" / "classify.txt"
+    installed_marker = installed_root / "prompts" / "classify.txt"
+    source_marker.parent.mkdir(parents=True)
+    installed_marker.parent.mkdir(parents=True)
+    source_marker.write_text("source")
+    installed_marker.write_text("installed")
+    monkeypatch.setattr(resources, "_SOURCE_ROOT", source_root)
+    monkeypatch.setattr(resources, "_INSTALL_ROOT", installed_root)
+
+    assert resources.resource_path("prompts/classify.txt") == source_marker
+
+
 def test_config_has_watcher_defaults():
     cfg = EngramConfig()
     assert cfg.watcher.enabled is True

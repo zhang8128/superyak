@@ -1197,6 +1197,43 @@ class TestModelAssistedClassification:
         )
         assert result is None
 
+    def test_classify_uses_installed_prompt_when_checkout_and_home_are_absent(
+        self, tmp_path, monkeypatch,
+    ):
+        import sys
+        from types import SimpleNamespace
+
+        import resources
+
+        source_root = tmp_path / "missing-source"
+        install_root = tmp_path / "installed" / "share" / "engram"
+        prompt = install_root / "prompts" / "classify.txt"
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text("Classify {content} with {context}")
+        engram_home = tmp_path / "home"
+        engram_home.mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ENGRAM_HOME", str(engram_home))
+        monkeypatch.setattr(resources, "_SOURCE_ROOT", source_root)
+        monkeypatch.setattr(resources, "_INSTALL_ROOT", install_root)
+        monkeypatch.setitem(
+            sys.modules,
+            "requests",
+            SimpleNamespace(
+                post=lambda *args, **kwargs: SimpleNamespace(
+                    status_code=200,
+                    json=lambda: {"response": "factual"},
+                )
+            ),
+        )
+
+        result = classify_episode_kind_with_model(
+            {"content": "wheel startup", "context": "{}"},
+            prompt_path="prompts/classify.txt",
+        )
+
+        assert result == ["factual"]
+
 
 class TestSingletonPromotion:
     @pytest.fixture

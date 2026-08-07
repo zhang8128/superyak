@@ -146,6 +146,9 @@ def classify_episode_kind_with_model(
         engram_home = Path(os.environ.get("ENGRAM_HOME", Path(__file__).parent))
         template_file = engram_home / prompt_path
     if not template_file.exists():
+        from resources import resource_path
+        template_file = resource_path(prompt_path)
+    if not template_file.exists():
         return None
 
     template = template_file.read_text()

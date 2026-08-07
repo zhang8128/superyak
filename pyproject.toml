@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "Memory across sessions — episodes, semantics, instincts"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp>=1.9",
+    "mcp>=1.9,<2",
     "sqlite-vec>=0.1.6",
     "onnxruntime>=1.18",
     "fastembed>=0.7",
@@ -28,7 +28,51 @@ dev = ["pytest>=9.0"]
 llm = ["anthropic"]
 
 [tool.setuptools]
-py-modules = ["server", "storage", "embeddings", "compress", "reflection", "indexer", "config", "logging_config", "watcher", "dedup", "knowledge"]
+py-modules = [
+    "ask",
+    "categories",
+    "cli",
+    "clipboard",
+    "clusters",
+    "coherence",
+    "compress",
+    "config",
+    "daemon",
+    "dedup",
+    "deep_pass",
+    "divergence",
+    "dreaming",
+    "embeddings",
+    "engine",
+    "federation",
+    "framing",
+    "graph",
+    "graphiti_local",
+    "indexer",
+    "knowledge",
+    "local_agent",
+    "logging_config",
+    "maintenance",
+    "mirror",
+    "notepad",
+    "operation_audit",
+    "persistence",
+    "reflection",
+    "resonance",
+    "resources",
+    "server",
+    "session_bindings",
+    "sheaf",
+    "storage",
+    "transitions",
+    "watcher",
+]
+
+[tool.setuptools.data-files]
+"share/engram/migrations" = ["migrations/*.sql"]
+"share/engram/prompts" = ["prompts/*.txt"]
+"share/engram/hooks" = ["hooks/*.py", "hooks/hooks.json"]
+"share/engram/skills/engram" = ["skills/engram/skill.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

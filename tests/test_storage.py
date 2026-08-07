@@ -8,6 +8,7 @@ import sqlite3
 import pytest
 from datetime import datetime, timezone
 
+import storage as storage_module
 from storage import Storage
 
 
@@ -177,6 +178,31 @@ class TestMigration:
         ).fetchone()
         assert row is not None
         assert row[0] >= 1
+
+
+def test_storage_uses_resource_migrations_when_directory_is_not_explicit(
+    tmp_path, monkeypatch,
+):
+    migrations = tmp_path / "installed" / "migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "001_marker.sql").write_text(
+        "CREATE TABLE installed_migration_marker(id INTEGER);\n"
+    )
+    monkeypatch.setattr(
+        storage_module,
+        "resource_path",
+        lambda relative: migrations if relative == "migrations" else None,
+    )
+
+    store = Storage(str(tmp_path / "graph.db"))
+    try:
+        marker = store.conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='installed_migration_marker'"
+        ).fetchone()
+        assert marker is not None
+    finally:
+        store.close()
 
 
 def test_failed_migration_rolls_back_schema_and_version(tmp_path):
