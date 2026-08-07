@@ -7,7 +7,14 @@ import sqlite3
 
 import pytest
 
-from categories import Boundary, CellDraft, EvolvingCategoryStore, WeightVector
+from categories import (
+    ArchivePressure,
+    Boundary,
+    CategoryQuotaExceeded,
+    CellDraft,
+    EvolvingCategoryStore,
+    WeightVector,
+)
 
 
 @pytest.fixture
@@ -15,6 +22,109 @@ def v2_store(tmp_path):
     connection = sqlite3.connect(tmp_path / "categories_v2.db")
     store = EvolvingCategoryStore(connection)
     yield store
+    store.close()
+
+
+def make_v2_store(database, **kwargs):
+    return EvolvingCategoryStore(sqlite3.connect(database), **kwargs)
+
+
+def test_archive_pressure_stages(tmp_path):
+    """Catches a quota boundary that classifies either 90% threshold incorrectly."""
+    size = {"value": 0}
+    store = make_v2_store(
+        tmp_path / "quota.db",
+        quota_bytes=1_000,
+        high_watermark_ratio=0.90,
+        size_provider=lambda _path: size["value"],
+    )
+
+    size["value"] = 899
+    assert store.pressure() == ArchivePressure("normal", 899, 1_000)
+    size["value"] = 900
+    assert store.pressure() == ArchivePressure("derived_blocked", 900, 1_000)
+    size["value"] = 1_000
+    assert store.pressure() == ArchivePressure("writes_blocked", 1_000, 1_000)
+    store.close()
+
+
+def test_hard_quota_blocks_cell_write_without_hiding_existing_reads(tmp_path):
+    """Catches a hard-limit write path that commits a cell or blocks reads."""
+    size = {"value": 0}
+    store = make_v2_store(
+        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: size["value"]
+    )
+    store.create_cell(CellDraft("existing", 0, "existing"))
+
+    size["value"] = 100
+    with pytest.raises(CategoryQuotaExceeded):
+        store.create_cell(CellDraft("new", 0, "new"))
+
+    assert store.get_cell("existing")["content"] == "existing"
+    assert store.get_cell("new") is None
+    store.close()
+
+
+def test_derived_transaction_explicitly_skips_at_high_water_mark(tmp_path):
+    """Catches derived maintenance that presents a high-water skip as a write."""
+    size = {"value": 90}
+    store = make_v2_store(
+        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: size["value"]
+    )
+
+    with store.derived_transaction() as connection:
+        assert connection is None
+
+    assert store.connection.execute("SELECT COUNT(*) FROM cat_snapshots").fetchone()[0] == 0
+    store.close()
+
+
+def test_failed_quota_check_preserves_caller_transaction(tmp_path):
+    """Catches quota denial committing or rolling back caller-owned work."""
+    size = {"value": 0}
+    store = make_v2_store(
+        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: size["value"]
+    )
+    connection = store.connection
+    connection.execute("BEGIN")
+    connection.execute(
+        "INSERT INTO cat_events (id, kind, payload_json, created_at) VALUES ('caller', 'work', '{}', 'now')"
+    )
+    size["value"] = 100
+
+    with pytest.raises(CategoryQuotaExceeded):
+        store.create_cell(CellDraft("blocked", 0, "blocked"))
+
+    assert connection.in_transaction
+    assert connection.execute("SELECT kind FROM cat_events WHERE id = 'caller'").fetchone()[0] == "work"
+    connection.rollback()
+    assert connection.execute("SELECT COUNT(*) FROM cat_events WHERE id = 'caller'").fetchone()[0] == 0
+    store.close()
+
+
+def test_default_size_provider_counts_only_current_database_and_sidecars(tmp_path):
+    """Catches size accounting that misses WAL/SHM data or follows a replaced database."""
+    database = tmp_path / "quota.db"
+    store = make_v2_store(database, quota_bytes=1_000_000)
+    wal = database.with_name(f"{database.name}-wal")
+    shm = database.with_name(f"{database.name}-shm")
+    wal.write_bytes(b"wal-bytes")
+    shm.write_bytes(b"shm-bytes")
+
+    expected = database.stat().st_size + wal.stat().st_size + shm.stat().st_size
+    assert store.pressure().used_bytes == expected
+    store.close()
+
+
+def test_invalid_size_provider_fails_closed_without_disabling_pressure_reads(tmp_path):
+    """Catches malformed measurements being interpreted as free archive capacity."""
+    store = make_v2_store(
+        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: -1
+    )
+
+    assert store.pressure() == ArchivePressure("writes_blocked", 100, 100)
+    with pytest.raises(CategoryQuotaExceeded):
+        store.append_event("blocked", {})
     store.close()
 
 

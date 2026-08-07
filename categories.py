@@ -12,14 +12,18 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import sqlite3
+import stat
 import struct
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Iterable, Iterator, Literal, Mapping
+from pathlib import Path
+from typing import Callable, Iterable, Iterator, Literal, Mapping
 
 logger = logging.getLogger("engram.categories")
 
@@ -255,6 +259,23 @@ class WeightVector:
     cost: float
 
 
+@dataclass(frozen=True)
+class ArchivePressure:
+    """The archive's current capacity stage, based on its on-disk footprint."""
+
+    state: Literal["normal", "derived_blocked", "writes_blocked"]
+    used_bytes: int
+    quota_bytes: int
+
+
+class CategoryQuotaExceeded(RuntimeError):
+    """Raised when an append-only category write would exceed the archive quota."""
+
+
+class _DerivedArchiveWriteSkipped(RuntimeError):
+    """Internal signal used to turn a derived high-water write into an explicit skip."""
+
+
 _EVOLVING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS cat_schema_version (
     version INTEGER PRIMARY KEY,
@@ -384,7 +405,14 @@ def _content_hash(content: str) -> str:
 class EvolvingCategoryStore:
     """An isolated, append-only store for evolving category structures."""
 
-    def __init__(self, connection: sqlite3.Connection):
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        quota_bytes: int = 3_000_000_000_000,
+        high_watermark_ratio: float = 0.90,
+        size_provider: Callable[[Path], int] | None = None,
+    ):
         if connection.in_transaction:
             raise ValueError(
                 "cannot initialize EvolvingCategoryStore with an active transaction"
@@ -395,6 +423,10 @@ class EvolvingCategoryStore:
         if self._connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise RuntimeError("EvolvingCategoryStore requires foreign keys to be enabled")
         self._ensure_schema()
+        self._quota_bytes = quota_bytes
+        self._high_watermark_ratio = high_watermark_ratio
+        self._database_path, self._database_identity = self._main_database_identity()
+        self._size_provider = size_provider or self._default_size_provider
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -430,17 +462,117 @@ class EvolvingCategoryStore:
         )
         self._connection.commit()
 
+    def _main_database_identity(self) -> tuple[Path | None, tuple[int, int] | None]:
+        row = self._connection.execute("PRAGMA database_list").fetchone()
+        if row is None or not row[2] or row[2] == ":memory:":
+            return None, None
+        path = Path(str(row[2]))
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except OSError:
+            return path, None
+        if not stat.S_ISREG(metadata.st_mode):
+            return path, None
+        return path, (metadata.st_dev, metadata.st_ino)
+
+    @staticmethod
+    def _regular_file_size(
+        path: Path, identity: tuple[int, int] | None = None
+    ) -> int | None:
+        try:
+            metadata = os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            return 0
+        except OSError:
+            return None
+        if not stat.S_ISREG(metadata.st_mode):
+            return None
+        if identity is not None and (metadata.st_dev, metadata.st_ino) != identity:
+            return None
+        return metadata.st_size
+
+    def _default_size_provider(self, _path: Path) -> int | None:
+        """Measure only this store's original DB file and named SQLite sidecars."""
+        if self._database_path is None:
+            return 0
+        if self._database_identity is None:
+            return None
+        main_size = self._regular_file_size(
+            self._database_path, self._database_identity
+        )
+        if main_size is None:
+            return None
+        total = main_size
+        for suffix in ("-wal", "-shm"):
+            sidecar_size = self._regular_file_size(
+                Path(f"{self._database_path}{suffix}")
+            )
+            if sidecar_size is None:
+                return None
+            total += sidecar_size
+        return total
+
+    def pressure(self) -> ArchivePressure:
+        """Return capacity pressure without changing archive state.
+
+        An unavailable or malformed measurement is hard pressure, preventing a
+        failed capacity check from being treated as free space.
+        """
+        quota_is_valid = (
+            isinstance(self._quota_bytes, int)
+            and not isinstance(self._quota_bytes, bool)
+            and self._quota_bytes > 0
+        )
+        ratio_is_valid = (
+            isinstance(self._high_watermark_ratio, (int, float))
+            and not isinstance(self._high_watermark_ratio, bool)
+            and math.isfinite(self._high_watermark_ratio)
+            and 0 <= self._high_watermark_ratio <= 1
+        )
+        quota = self._quota_bytes if quota_is_valid else 0
+        if not quota_is_valid or not ratio_is_valid:
+            return ArchivePressure("writes_blocked", quota, quota)
+        if self._database_path is None:
+            return ArchivePressure("normal", 0, quota)
+        try:
+            used = self._size_provider(self._database_path)
+        except Exception:
+            used = None
+        if not isinstance(used, int) or isinstance(used, bool) or used < 0:
+            return ArchivePressure("writes_blocked", quota, quota)
+        if used >= quota:
+            return ArchivePressure("writes_blocked", used, quota)
+        if used >= quota * self._high_watermark_ratio:
+            return ArchivePressure("derived_blocked", used, quota)
+        return ArchivePressure("normal", used, quota)
+
+    def _enforce_quota(self, quota_class: Literal["immutable", "derived"]) -> None:
+        pressure = self.pressure()
+        if pressure.state == "writes_blocked":
+            raise CategoryQuotaExceeded(
+                f"category archive quota reached ({pressure.used_bytes}/{pressure.quota_bytes} bytes)"
+            )
+        if quota_class == "derived" and pressure.state == "derived_blocked":
+            raise _DerivedArchiveWriteSkipped()
+
     @contextmanager
-    def transaction(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
-        """Run writes atomically without committing an enclosing transaction."""
+    def transaction(
+        self,
+        *,
+        immediate: bool = False,
+        quota_class: Literal["immutable", "derived"] = "immutable",
+    ) -> Iterator[sqlite3.Connection]:
+        """Run quota-protected writes without committing caller-owned work."""
+        if quota_class not in ("immutable", "derived"):
+            raise ValueError("quota_class must be 'immutable' or 'derived'")
         if self._connection.in_transaction:
             savepoint = f"cat_write_{uuid.uuid4().hex}"
             self._connection.execute(f"SAVEPOINT {savepoint}")
             try:
-                if immediate:
-                    # A no-row write acquires SQLite's write reservation before
-                    # policy reads without changing caller-owned state.
-                    self._connection.execute("DELETE FROM cat_snapshots WHERE 0")
+                # This no-row statement obtains SQLite's writer reservation
+                # before the size read, without changing caller-owned rows.
+                self._connection.execute("DELETE FROM cat_snapshots WHERE 0")
+                self._enforce_quota(quota_class)
                 yield self._connection
             except Exception:
                 self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
@@ -450,14 +582,26 @@ class EvolvingCategoryStore:
                 self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
             return
 
-        self._connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        # Checking beneath SQLite's writer reservation prevents concurrent
+        # writers from both admitting the same stale filesystem measurement.
+        self._connection.execute("BEGIN IMMEDIATE")
         try:
+            self._enforce_quota(quota_class)
             yield self._connection
         except Exception:
             self._connection.rollback()
             raise
         else:
             self._connection.commit()
+
+    @contextmanager
+    def derived_transaction(self) -> Iterator[sqlite3.Connection | None]:
+        """Yield a connection, or ``None`` when replaceable work is skipped."""
+        try:
+            with self.transaction(immediate=True, quota_class="derived") as connection:
+                yield connection
+        except _DerivedArchiveWriteSkipped:
+            yield None
 
     def append_event(
         self, kind: str, payload: Mapping[str, object], *, event_id: str | None = None
