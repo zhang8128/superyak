@@ -342,6 +342,104 @@ def test_commit_late_failure_rolls_back_vectors_sources_and_episode_flags(
     assert compress_id not in compressor._pending
 
 
+def test_commit_rejects_active_outer_transaction_without_state_divergence(
+    tmp_db, embedder,
+):
+    class RecordingGraph:
+        def __init__(self):
+            self.feeds = []
+
+        def feed(self, episodes, semantic_content=None):
+            self.feeds.append((episodes, semantic_content))
+
+    graph = RecordingGraph()
+    compressor = Compressor(tmp_db, embedder, config=None, knowledge_graph=graph)
+    compress_id, episode_ids = _set_pending_new_clusters(
+        tmp_db, compressor, embedder, ["nested transaction cluster"],
+    )
+    summaries = [
+        {"content": "nested transaction summary", "kind": "fact", "action": "new"}
+    ]
+    commit_error = None
+
+    with pytest.raises(RuntimeError, match="force outer rollback"):
+        with tmp_db.transaction():
+            try:
+                compressor.commit(compress_id, summaries)
+            except RuntimeError as exc:
+                commit_error = exc
+            tmp_db.add_log_entry(
+                id=str(uuid.uuid4()),
+                event_type="outer-transaction-probe",
+                layer="semantic",
+                target_ids=[],
+            )
+            assert tmp_db.conn.in_transaction is True
+            raise RuntimeError("force outer rollback")
+
+    assert commit_error is not None
+    assert "active storage transaction" in str(commit_error)
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0] == 0
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM memory_log").fetchone()[0] == 0
+    assert tmp_db.get_episode(episode_ids[0])["compressed"] == 0
+    assert compress_id in compressor._pending
+    assert graph.feeds == []
+    assert tmp_db.conn.in_transaction is False
+
+
+@pytest.mark.parametrize("field", ["lane", "semantic_id"])
+def test_commit_rejects_explicit_false_string_fields_without_mutation(
+    tmp_db, compressor, embedder, field,
+):
+    existing_id = str(uuid.uuid4())
+    existing_embedding = embedder.embed(["existing semantic"])[0]
+    tmp_db.add_semantic(
+        id=existing_id,
+        content="existing semantic",
+        kind="fact",
+        confidence=0.6,
+        embedding=existing_embedding,
+        source_episode_ids=[],
+    )
+    compress_id, episode_ids = _set_pending_new_clusters(
+        tmp_db, compressor, embedder, [f"explicit false {field}"],
+    )
+    cluster = compressor._pending[compress_id]["clusters"][0]
+    summary = {"content": "valid summary", "kind": "fact", "action": "new"}
+    if field == "lane":
+        summary["lane"] = False
+    else:
+        cluster["action"] = "reinforce"
+        cluster["match"] = {"id": existing_id}
+        summary["action"] = "reinforce"
+        summary["semantic_id"] = False
+
+    before = {
+        "semantics": [
+            tuple(row) for row in tmp_db.conn.execute(
+                "SELECT id, confidence, reinforced_count FROM semantics ORDER BY id"
+            ).fetchall()
+        ],
+        "sources": tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_sources").fetchone()[0],
+        "compressed": tmp_db.get_episode(episode_ids[0])["compressed"],
+    }
+
+    with pytest.raises(ValueError, match=field):
+        compressor.commit(compress_id, [summary])
+
+    after = {
+        "semantics": [
+            tuple(row) for row in tmp_db.conn.execute(
+                "SELECT id, confidence, reinforced_count FROM semantics ORDER BY id"
+            ).fetchall()
+        ],
+        "sources": tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_sources").fetchone()[0],
+        "compressed": tmp_db.get_episode(episode_ids[0])["compressed"],
+    }
+    assert after == before
+    assert compress_id in compressor._pending
+
+
 def test_commit_creates_instinct_from_high_confidence(tmp_db, compressor, embedder):
     """A high-confidence preference semantic should trigger instinct creation."""
     text = "always use type hints"

@@ -436,6 +436,16 @@ class Compressor:
         Returns: {episodes_processed, semantics_created, semantics_reinforced,
         clusters_discarded, instincts_created}
         """
+        transaction_depth = getattr(self._storage, "_transaction_depth", 0)
+        if (
+            isinstance(transaction_depth, int)
+            and not isinstance(transaction_depth, bool)
+            and transaction_depth > 0
+        ):
+            raise RuntimeError(
+                "Compression commit cannot run inside an active storage transaction"
+            )
+
         state = self._pending.get(compress_id)
         if state is None:
             raise ValueError(f"Unknown compress_id: {compress_id}")
@@ -475,7 +485,11 @@ class Compressor:
             centroid = cluster["centroid"]
             action = summary.get("action", cluster["action"])
 
-            lane = summary.get("lane") or cluster.get("lane") or "personal"
+            lane = (
+                summary["lane"]
+                if "lane" in summary
+                else cluster.get("lane") or "personal"
+            )
             if summary.get("lane") and summary["lane"] != (cluster.get("lane") or "personal"):
                 # Compression review corrected the lane — re-lane the evidence too
                 self._storage.set_episode_lanes(all_episode_ids, summary["lane"])
@@ -739,7 +753,11 @@ class Compressor:
             if not isinstance(action, str) or action not in _VALID_COMMIT_ACTIONS:
                 raise ValueError(f"Invalid action at summary index {index}: {action!r}")
 
-            lane = summary.get("lane") or cluster.get("lane") or "personal"
+            lane = (
+                summary["lane"]
+                if "lane" in summary
+                else cluster.get("lane") or "personal"
+            )
             if not isinstance(lane, str) or lane not in _VALID_LANES:
                 raise ValueError(f"Invalid lane at summary index {index}: {lane!r}")
 
@@ -755,7 +773,11 @@ class Compressor:
             if action == "reinforce":
                 match = cluster.get("match")
                 match_id = match.get("id") if isinstance(match, dict) else None
-                semantic_id = summary.get("semantic_id") or match_id
+                semantic_id = (
+                    summary["semantic_id"]
+                    if "semantic_id" in summary
+                    else match_id
+                )
                 if not isinstance(semantic_id, str) or not semantic_id:
                     raise ValueError(
                         f"Invalid semantic_id at summary index {index}: required for reinforce"
