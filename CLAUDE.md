@@ -127,7 +127,13 @@ docs/superpowers/specs/2026-06-12-off-device-assessment-design.md.
 **Knowledge graph:** Graphiti (Kuzu embedded) runs alongside engram for applied
 knowledge — entities, relationships, temporal facts. Fed during compression,
 queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var (default: nemotron-nano).
-Separate from identity layers.
+Extraction, embedding, and reranking stay local: Graphiti uses Ollama for
+extraction and explicit FastEmbed-backed clients for embedding and cosine
+reranking. Separate from identity layers.
+
+**Operation attribution:** Mutation audit rows retain approved metadata only,
+never submitted content. Migration 026 scrubs historical `operation_log.details`
+payloads down to the same metadata-only representation.
 
 ## MCP Tools
 
@@ -180,7 +186,7 @@ Separate from identity layers.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest tests/ -q   # 624 tests
+.venv/bin/python -m pytest tests/ -q   # full test suite
 ```
 
 ## Part of a System
