@@ -45,6 +45,23 @@ def test_schema_uses_prefixed_tables_and_enforces_foreign_keys(v2_store):
         v2_store.create_cell(CellDraft("orphan", 0, "orphan", context_id="missing"))
 
 
+def test_constructor_rejects_active_transaction_without_mutating_caller(tmp_path):
+    connection = sqlite3.connect(tmp_path / "caller.db")
+    connection.execute("CREATE TABLE caller_sentinel (value TEXT)")
+    connection.execute("BEGIN")
+    connection.execute("INSERT INTO caller_sentinel VALUES ('pending')")
+
+    with pytest.raises(ValueError, match="active transaction"):
+        EvolvingCategoryStore(connection)
+
+    assert connection.in_transaction
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+    assert connection.execute("SELECT value FROM caller_sentinel").fetchone()[0] == "pending"
+    connection.rollback()
+    assert connection.execute("SELECT COUNT(*) FROM caller_sentinel").fetchone()[0] == 0
+    connection.close()
+
+
 def test_dimension_one_requires_zero_cell_boundaries(v2_store):
     v2_store.create_cell(CellDraft("a", 0, "a"))
     v2_store.create_cell(CellDraft("b", 0, "b"))
@@ -121,6 +138,88 @@ def test_cell_is_sql_immutable(v2_store):
         v2_store.connection.execute("UPDATE cat_schema_version SET version = 2")
 
 
+@pytest.fixture
+def immutable_rows(v2_store):
+    event_id = v2_store.append_event("created", {})
+    context_id = v2_store.create_context({"mode": "test"})
+    v2_store.create_cell(CellDraft("cell", 0, "cell", context_id=context_id))
+    observation_id = v2_store.observe_weight(
+        "cell", context_id, WeightVector(0, 0, 0, 0, 0, 0, 0), evidence_event_id=event_id
+    )
+    connection = v2_store.connection
+    connection.execute(
+        "INSERT INTO cat_boundaries (cell_id, side, position, boundary_id) "
+        "VALUES ('cell', 'source', 0, 'cell')"
+    )
+    connection.execute("INSERT INTO cat_rewrites (id, created_at) VALUES ('rewrite', 'now')")
+    connection.execute(
+        """
+        INSERT INTO cat_rewrite_members (rewrite_id, role, position, external_id)
+        VALUES ('rewrite', 'input', 0, 'external')
+        """
+    )
+    connection.execute("INSERT INTO cat_epochs (id, created_at) VALUES ('parent', 'now')")
+    connection.execute("INSERT INTO cat_epochs (id, created_at) VALUES ('child', 'now')")
+    connection.execute(
+        "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) "
+        "VALUES ('child', 0, 'parent')"
+    )
+    return {
+        "cat_schema_version": ("version = 1", ()),
+        "cat_events": ("id = ?", (event_id,)),
+        "cat_contexts": ("id = ?", (context_id,)),
+        "cat_cells": ("id = 'cell'", ()),
+        "cat_boundaries": ("cell_id = 'cell' AND side = 'source' AND position = 0", ()),
+        "cat_weight_observations": ("id = ?", (observation_id,)),
+        "cat_rewrites": ("id = 'rewrite'", ()),
+        "cat_rewrite_members": ("rewrite_id = 'rewrite' AND role = 'input' AND position = 0", ()),
+        "cat_epochs": ("id = 'child'", ()),
+        "cat_epoch_parents": ("epoch_id = 'child' AND position = 0", ()),
+    }
+
+
+@pytest.mark.parametrize("table", [
+    "cat_schema_version",
+    "cat_events",
+    "cat_contexts",
+    "cat_cells",
+    "cat_boundaries",
+    "cat_weight_observations",
+    "cat_rewrites",
+    "cat_rewrite_members",
+    "cat_epochs",
+    "cat_epoch_parents",
+])
+def test_every_immutable_table_rejects_update_and_delete(v2_store, immutable_rows, table):
+    where, parameters = immutable_rows[table]
+
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute(
+            f"UPDATE {table} SET rowid = rowid WHERE {where}", parameters
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.connection.execute(f"DELETE FROM {table} WHERE {where}", parameters)
+
+
+def test_snapshots_are_replaceable(v2_store):
+    v2_store.connection.execute(
+        """
+        INSERT INTO cat_snapshots (id, active_cell_ids_json, content_hash, created_at)
+        VALUES ('snapshot', '[]', 'original', 'now')
+        """
+    )
+
+    v2_store.connection.execute(
+        "UPDATE cat_snapshots SET content_hash = 'replacement' WHERE id = 'snapshot'"
+    )
+    assert v2_store.connection.execute(
+        "SELECT content_hash FROM cat_snapshots WHERE id = 'snapshot'"
+    ).fetchone()[0] == "replacement"
+    v2_store.connection.execute("DELETE FROM cat_snapshots WHERE id = 'snapshot'")
+    assert v2_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_snapshots WHERE id = 'snapshot'"
+    ).fetchone()[0] == 0
+
 def test_contexts_deduplicate_canonical_feature_maps(v2_store):
     first = v2_store.create_context({"z": [2, 1], "a": {"b": True}})
     second = v2_store.create_context({"a": {"b": True}, "z": [2, 1]})
@@ -163,6 +262,25 @@ def test_append_event_canonicalizes_payload_and_transaction_does_not_commit_call
     assert v2_store.connection.in_transaction
     v2_store.connection.rollback()
     assert v2_store.get_cell("rolled-back") is None
+
+
+def test_failed_nested_write_rolls_back_only_its_savepoint(v2_store):
+    connection = v2_store.connection
+    connection.execute("BEGIN")
+    v2_store.append_event("caller-work", {}, event_id="caller-event")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        v2_store.create_cell(CellDraft("invalid", 0, "invalid", context_id="missing"))
+
+    assert connection.in_transaction
+    assert connection.execute(
+        "SELECT kind FROM cat_events WHERE id = 'caller-event'"
+    ).fetchone()[0] == "caller-work"
+    assert v2_store.get_cell("invalid") is None
+    connection.rollback()
+    assert connection.execute(
+        "SELECT COUNT(*) FROM cat_events WHERE id = 'caller-event'"
+    ).fetchone()[0] == 0
 
 
 def test_rewrite_members_and_epochs_have_schema_constraints(v2_store):

@@ -383,9 +383,15 @@ class EvolvingCategoryStore:
     """An isolated, append-only store for evolving category structures."""
 
     def __init__(self, connection: sqlite3.Connection):
+        if connection.in_transaction:
+            raise ValueError(
+                "cannot initialize EvolvingCategoryStore with an active transaction"
+            )
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
+        if self._connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+            raise RuntimeError("EvolvingCategoryStore requires foreign keys to be enabled")
         self._ensure_schema()
 
     @property
