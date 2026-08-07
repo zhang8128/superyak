@@ -68,6 +68,41 @@ def test_goal_only_change_is_soft_then_hard_after_confirmation():
     assert (second.kind, second.score, second.confirmations) == ("hard", 0.40, 2)
 
 
+def test_custom_soft_and_hard_thresholds_drive_moderate_and_strong_paths():
+    """Catches configured threshold knobs being accepted but behaviorally inert."""
+    moderate = ContextTracker(
+        soft_threshold=0.19, hard_threshold=0.50, hard_confirmations=2
+    )
+    moderate.observe(ContextObservation(entities={"before": 1.0}))
+    first = moderate.observe(ContextObservation(entities={"after": 1.0}))
+    assert (first.kind, first.score, first.confirmations) == ("soft", 0.20, 1)
+
+    strong = ContextTracker(
+        soft_threshold=0.10, hard_threshold=0.35, hard_confirmations=2
+    )
+    strong.observe(ContextObservation(goal={"before": 1.0}))
+    assert strong.observe(ContextObservation(goal={"after": 1.0})).kind == "soft"
+    hardened = strong.observe(ContextObservation(goal={"after": 1.0}))
+    assert (hardened.kind, hardened.score, hardened.confirmations) == ("hard", 0.40, 2)
+
+
+@pytest.mark.parametrize(
+    "soft,hard,error",
+    [
+        (0.35, 0.35, ValueError),
+        (0.70, 0.65, ValueError),
+        (-0.01, 0.65, ValueError),
+        (0.35, 1.01, ValueError),
+        (True, 0.65, TypeError),
+        (0.35, "0.65", TypeError),
+    ],
+)
+def test_context_thresholds_require_finite_ordered_real_values(soft, hard, error):
+    """Catches unsafe or contradictory boundary threshold configuration."""
+    with pytest.raises(error):
+        ContextTracker(soft_threshold=soft, hard_threshold=hard)
+
+
 def test_source_only_change_does_not_cross_the_soft_threshold():
     """Sources alone contribute only their configured 0.15 weight."""
     tracker = ContextTracker()

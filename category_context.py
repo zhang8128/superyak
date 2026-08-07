@@ -49,11 +49,11 @@ class _Snapshot:
 class ContextTracker:
     """Tracks a stable context and confirms inferred changes before switching IDs.
 
-    A strong score (at least 0.65) needs consecutive evidence for one canonical
-    candidate.  Moderate scores (0.35 to 0.65) also need one candidate, plus a
-    cumulative score of 0.40 for every configured confirmation.  This confirms
-    two repeated 0.40 observations without allowing unrelated changes to pool
-    their evidence.
+    A score at or above the configured hard threshold needs consecutive evidence
+    for one canonical candidate. Scores from the configured soft threshold up to
+    the hard threshold also need one candidate, plus a cumulative score of 0.40
+    for every configured confirmation. This preserves the moderate-evidence
+    policy without allowing unrelated changes to pool their evidence.
     """
 
     def __init__(
@@ -61,6 +61,8 @@ class ContextTracker:
         *,
         hard_confirmations: int = 2,
         temporal_gap: timedelta = timedelta(minutes=30),
+        soft_threshold: float = _SOFT_THRESHOLD,
+        hard_threshold: float = _HARD_THRESHOLD,
     ) -> None:
         if isinstance(hard_confirmations, bool) or not isinstance(hard_confirmations, int):
             raise TypeError("hard_confirmations must be an integer")
@@ -68,9 +70,21 @@ class ContextTracker:
             raise ValueError("hard_confirmations must be an integer of at least 2")
         if not isinstance(temporal_gap, timedelta) or temporal_gap <= timedelta(0):
             raise ValueError("temporal_gap must be a positive timedelta")
+        for name, value in (
+            ("soft_threshold", soft_threshold),
+            ("hard_threshold", hard_threshold),
+        ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a real number")
+            if not isfinite(float(value)):
+                raise ValueError(f"{name} must be finite")
+        if not 0 <= soft_threshold < hard_threshold <= 1:
+            raise ValueError("thresholds must satisfy 0 <= soft < hard <= 1")
 
         self._hard_confirmations = hard_confirmations
         self._temporal_gap = temporal_gap
+        self._soft_threshold = float(soft_threshold)
+        self._hard_threshold = float(hard_threshold)
         self._anchor: _Snapshot | None = None
         self._last_observed_at: datetime | None = None
         self._pending_candidate: _Fingerprint | None = None
@@ -80,6 +94,25 @@ class ContextTracker:
         self._context_id: str | None = None
         self._next_context_number = 1
         self._fingerprints: OrderedDict[_Fingerprint, str] = OrderedDict()
+
+    def clone(self) -> ContextTracker:
+        """Return an independent snapshot suitable for transactional publication."""
+        cloned = ContextTracker(
+            hard_confirmations=self._hard_confirmations,
+            temporal_gap=self._temporal_gap,
+            soft_threshold=self._soft_threshold,
+            hard_threshold=self._hard_threshold,
+        )
+        cloned._anchor = self._anchor
+        cloned._last_observed_at = self._last_observed_at
+        cloned._pending_candidate = self._pending_candidate
+        cloned._pending_path = self._pending_path
+        cloned._pending_confirmations = self._pending_confirmations
+        cloned._pending_scores = list(self._pending_scores)
+        cloned._context_id = self._context_id
+        cloned._next_context_number = self._next_context_number
+        cloned._fingerprints = OrderedDict(self._fingerprints)
+        return cloned
 
     def observe(self, observation: ContextObservation) -> BoundaryDecision:
         """Record one observation and return its relationship to the stable context.
@@ -117,14 +150,14 @@ class ContextTracker:
                 "hard", 1.0, self._hard_confirmations, components, self._context_id
             )
 
-        if inferred_score < _SOFT_THRESHOLD:
+        if inferred_score < self._soft_threshold:
             self._clear_pending()
             self._anchor = snapshot
             self._remember(snapshot.maps, self._context_id)
             return self._decision("same", inferred_score, 0, components, self._context_id)
 
         path: Literal["strong", "moderate"] = (
-            "strong" if inferred_score >= _HARD_THRESHOLD else "moderate"
+            "strong" if inferred_score >= self._hard_threshold else "moderate"
         )
         if snapshot.maps != self._pending_candidate or path != self._pending_path:
             self._pending_candidate = snapshot.maps

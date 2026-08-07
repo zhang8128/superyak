@@ -72,6 +72,8 @@ def server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_reflector", reflector)
     monkeypatch.setattr(server, "_watcher", None)
     monkeypatch.setattr(server, "_category_observer", None, raising=False)
+    monkeypatch.setattr(server, "_category_status", None, raising=False)
+    monkeypatch.setattr(server, "_category_atexit_callback", None, raising=False)
     monkeypatch.setattr(server, "_session_id", session_id)
     monkeypatch.setattr(server, "_session_episode_count", 0)
     monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)

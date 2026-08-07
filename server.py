@@ -1,10 +1,12 @@
 """Engram MCP Server v3 — layered memory with compression and reflection."""
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
 import sqlite3
+import threading
 import uuid
 from functools import wraps
 from datetime import datetime, timezone
@@ -166,7 +168,15 @@ _knowledge_graph = None
 _wander_visits: dict[str, int] = {}  # memory_id -> visit count this session
 _clipboard = None
 _category_store = None
-_category_observer = None
+# Preserve the live observer across importlib.reload so the next initializer can
+# close it before replacement. On first import these names are absent.
+_category_observer = globals().get("_category_observer")
+_category_status = globals().get("_category_status")
+_category_atexit_callback = globals().get("_category_atexit_callback")
+_init_lock = threading.RLock()
+_init_lock_pid = os.getpid()
+_category_recall_lock = threading.RLock()
+_category_recall_lock_pid = os.getpid()
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -281,7 +291,9 @@ def _remember_category_error(exc: BaseException) -> None:
         pass
 
 
-def _observe_category_recall(query: str, results: list[dict]) -> list[dict]:
+def _observe_category_recall(
+    query: str, results: list[dict], recall_id: str
+) -> list[dict]:
     """Observe and optionally rerank one recall without changing response shape."""
     category_config = getattr(_config, "category_evolution", None)
     if (
@@ -291,16 +303,19 @@ def _observe_category_recall(query: str, results: list[dict]) -> list[dict]:
     ):
         return results
     result_ids = [str(result.get("id", "")) for result in results if result.get("id") is not None]
-    try:
-        _category_observer.observe_recall(
-            query,
-            result_ids,
-            source=os.getcwd(),
-            observed_at=datetime.now(timezone.utc),
-        )
-    except Exception as exc:
-        _remember_category_error(exc)
-        logger.warning("Category observer recall failed (%s)", type(exc).__name__)
+    _prepare_category_recall_lock()
+    with _category_recall_lock:
+        try:
+            _category_observer.observe_recall(
+                query,
+                result_ids,
+                source=os.getcwd(),
+                observed_at=datetime.now(timezone.utc),
+                recall_id=recall_id,
+            )
+        except Exception as exc:
+            _remember_category_error(exc)
+            logger.warning("Category observer recall failed (%s)", type(exc).__name__)
 
     compiled = None
     try:
@@ -324,10 +339,59 @@ def _observe_category_recall(query: str, results: list[dict]) -> list[dict]:
     return results
 
 
+def _prepare_category_recall_lock() -> None:
+    global _category_recall_lock, _category_recall_lock_pid
+    current_pid = os.getpid()
+    if current_pid != _category_recall_lock_pid:
+        _category_recall_lock = threading.RLock()
+        _category_recall_lock_pid = current_pid
+
+
 def _init():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer
+    global _init_lock, _init_lock_pid
+    current_pid = os.getpid()
+    if current_pid != _init_lock_pid:
+        _init_lock = threading.RLock()
+        _init_lock_pid = current_pid
+    with _init_lock:
+        return _init_unlocked()
+
+
+def _make_category_cleanup(observer):
+    """Bind one observer to fail-soft, content-safe process cleanup."""
+    def cleanup() -> None:
+        try:
+            observer.close()
+        except Exception as exc:
+            logger.warning("Category observer close failed (%s)", type(exc).__name__)
+
+    cleanup._category_observer = observer
+    return cleanup
+
+
+def _init_unlocked():
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_status, _category_atexit_callback
     if _initialized:
         return
+    old_observer = _category_observer
+    old_callback = _category_atexit_callback
+    _category_observer = None
+    _category_status = None
+    _category_atexit_callback = None
+    old_observer_closed = old_observer is None
+    if old_observer is not None:
+        try:
+            old_observer.close()
+            old_observer_closed = True
+        except Exception as exc:
+            logger.warning("Category observer replacement close failed (%s)", type(exc).__name__)
+    # Keep a failed observer's exact cleanup callback registered so interpreter
+    # shutdown can retry a partial close. Successful replacements unregister it.
+    if old_callback is not None and old_observer_closed:
+        try:
+            atexit.unregister(old_callback)
+        except Exception:
+            pass
     from embeddings import NomicEmbedProvider
     from storage import Storage
 
@@ -374,9 +438,14 @@ def _init():
         logger.warning("sqlite-vec not available for categories: %s", e)
     _category_store = CategoryStore(cat_conn, dimension=768)
 
-    _category_observer = None
     category_config = getattr(_config, "category_evolution", None)
     if category_config is not None and category_config.enabled is True:
+        category_flags = {
+            "enabled": True,
+            "shadow": category_config.shadow is not False,
+            "influence_recall": category_config.influence_recall is True,
+            "auto_commit": category_config.auto_commit is True,
+        }
         try:
             from category_evolution import CategoryObserver
 
@@ -399,10 +468,19 @@ def _init():
                 consolidation_rewrite_budget=category_config.consolidation_rewrite_budget,
                 max_rewrite_members=category_config.max_rewrite_members,
                 max_active_branches=category_config.max_active_branches,
+                soft_boundary_threshold=category_config.soft_boundary_threshold,
+                hard_boundary_threshold=category_config.hard_boundary_threshold,
                 hard_boundary_confirmations=category_config.hard_boundary_confirmations,
             )
         except Exception as exc:
             _category_observer = None
+            error_type = type(exc).__name__
+            _category_status = {
+                "available": False,
+                "flags": category_flags,
+                "error": error_type,
+                "last_error": error_type,
+            }
             logger.warning("Category observer init failed (%s)", type(exc).__name__)
 
     from compress import Compressor
@@ -454,19 +532,22 @@ def _init():
         cohesion_config=_config.cohesion if _config else None,
         persistence_config=_config.persistence if _config else None,
         category_reporter=(
-            _category_observer.report if _category_observer is not None else None
+            _category_observer.report
+            if _category_observer is not None
+            else ((lambda status=_category_status: dict(status)) if _category_status else None)
         ),
     )
 
     # Watcher is created but NOT started — lazy-started on first code search
     from watcher import FileWatcher
     _watcher = FileWatcher(PROJECT_ROOT, _config.watcher, _storage, _embeddings)
-    import atexit
     atexit.register(lambda: _watcher.stop() if _watcher else None)
     atexit.register(lambda: _storage.close() if _storage else None)
     atexit.register(lambda: _knowledge_graph.close() if _knowledge_graph else None)
     atexit.register(lambda: _category_store._conn.close() if _category_store else None)
-    atexit.register(lambda: _category_observer.close() if _category_observer else None)
+    if _category_observer is not None:
+        _category_atexit_callback = _make_category_cleanup(_category_observer)
+        atexit.register(_category_atexit_callback)
 
     # Federation: genome sync + inbox processing
     if _config and _config.instance:
@@ -984,7 +1065,7 @@ def recall(
                 target_ids=[],
                 context={"recall_id": recall_id, "query": query, "session_id": _session_id},
             )
-            results = _observe_category_recall(query, [])
+            results = _observe_category_recall(query, [], recall_id)
             return {"results": results, "recall_id": recall_id}
 
         embedding = _embeddings.embed([query], prefix="search_query")[0]
@@ -1063,7 +1144,7 @@ def recall(
             target_ids=[r["id"] for r in results],
             context={"recall_id": recall_id, "query": query, "session_id": _session_id},
         )
-        results = _observe_category_recall(query, results)
+        results = _observe_category_recall(query, results, recall_id)
         return {"results": results, "recall_id": recall_id}
 
     embedding = _embeddings.embed([query], prefix="search_query")[0]
@@ -1472,7 +1553,7 @@ def recall(
         except Exception:
             logger.warning("Category search failed (non-fatal)", exc_info=True)
 
-    results = _observe_category_recall(query, results)
+    results = _observe_category_recall(query, results, recall_id)
     response = {"results": results, "recall_id": recall_id}
     if resonant_results:
         response["resonant"] = resonant_results

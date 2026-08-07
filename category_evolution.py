@@ -7,14 +7,76 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 import hashlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import threading
 from typing import Iterable, Literal, Mapping, Sequence
 import uuid
+import weakref
+
+
+logger = logging.getLogger(__name__)
+
+
+_FORK_OBSERVERS: weakref.WeakSet = globals().get(
+    "_FORK_OBSERVERS", weakref.WeakSet()
+)
+_FORK_REGISTRY_LOCK = globals().get("_FORK_REGISTRY_LOCK", threading.RLock())
+_FORK_ACQUIRED: list[object] = globals().get("_FORK_ACQUIRED", [])
+_CATEGORY_AT_FORK_REGISTERED = globals().get(
+    "_CATEGORY_AT_FORK_REGISTERED", False
+)
+
+
+def _before_category_fork() -> None:
+    """Quiesce observer-owned SQLite work before duplicating process state."""
+    global _FORK_ACQUIRED
+    _FORK_REGISTRY_LOCK.acquire()
+    observers = sorted(tuple(_FORK_OBSERVERS), key=id)
+    acquired: list[object] = []
+    try:
+        for observer in observers:
+            observer._lock.acquire()
+            acquired.append(observer)
+    except BaseException:
+        for observer in reversed(acquired):
+            observer._lock.release()
+        _FORK_REGISTRY_LOCK.release()
+        raise
+    _FORK_ACQUIRED = acquired
+
+
+def _after_category_fork_parent() -> None:
+    global _FORK_ACQUIRED
+    for observer in reversed(_FORK_ACQUIRED):
+        observer._lock.release()
+    _FORK_ACQUIRED = []
+    _FORK_REGISTRY_LOCK.release()
+
+
+def _after_category_fork_child() -> None:
+    global _FORK_ACQUIRED, _FORK_REGISTRY_LOCK
+    # The forking thread acquired every observer lock, so no SQLite operation
+    # was active at the split. Replace synchronization objects before child
+    # recovery closes and reopens the quiesced inherited handles.
+    for observer in _FORK_ACQUIRED:
+        observer._lock = threading.RLock()
+    _FORK_ACQUIRED = []
+    _FORK_REGISTRY_LOCK = threading.RLock()
+
+
+if hasattr(os, "register_at_fork") and not _CATEGORY_AT_FORK_REGISTERED:
+    os.register_at_fork(
+        before=_before_category_fork,
+        after_in_parent=_after_category_fork_parent,
+        after_in_child=_after_category_fork_child,
+    )
+    _CATEGORY_AT_FORK_REGISTERED = True
 
 from categories import Boundary, CategoryQuotaExceeded, CellDraft, EvolvingCategoryStore, _now_iso
 from category_compile import CategoryCompiler, CompiledCategory, CompileBudget
@@ -702,6 +764,8 @@ class CategoryObserver:
         consolidation_rewrite_budget: int = 32,
         max_rewrite_members: int = 32,
         max_active_branches: int = 4,
+        soft_boundary_threshold: float = 0.35,
+        hard_boundary_threshold: float = 0.65,
         hard_boundary_confirmations: int = 2,
     ) -> None:
         # Malformed configuration must fail closed: only exact booleans can
@@ -712,49 +776,114 @@ class CategoryObserver:
         self._last_error: str | None = None
         self._compiler_truncations = 0
         self._closed = False
+        self._lock = threading.RLock()
+        self._database_path = Path(database_path)
+        self._store_options = {
+            "quota_bytes": archive_quota_bytes,
+            "high_watermark_ratio": archive_high_watermark_ratio,
+        }
+        self._compile_budget = CompileBudget(
+            max_depth=max_traversal_depth,
+            max_neighbors=max_neighbors,
+            max_candidates=max_candidates,
+            wall_time_ms=compile_wall_time_ms,
+        )
+        self._evolution_policy = EvolutionPolicy(
+            rewrite_budget=consolidation_rewrite_budget,
+            max_members=max_rewrite_members,
+            max_active_branches=max_active_branches,
+        )
+        self._tracker_options = {
+            "hard_confirmations": hard_boundary_confirmations,
+            "soft_threshold": soft_boundary_threshold,
+            "hard_threshold": hard_boundary_threshold,
+        }
+        self._creator_pid = os.getpid()
+        self._tracker_resets = 0
         self.store: EvolvingCategoryStore | None = None
         self.compiler: CategoryCompiler | None = None
         self.engine: EvolutionEngine | None = None
-        connection: sqlite3.Connection | None = None
         try:
-            path = Path(database_path)
-            connection = sqlite3.connect(path)
-            self.store = EvolvingCategoryStore(
-                connection,
-                quota_bytes=archive_quota_bytes,
-                high_watermark_ratio=archive_high_watermark_ratio,
-            )
-            connection = None
-            self.compiler = CategoryCompiler(
-                self.store,
-                CompileBudget(
-                    max_depth=max_traversal_depth,
-                    max_neighbors=max_neighbors,
-                    max_candidates=max_candidates,
-                    wall_time_ms=compile_wall_time_ms,
-                ),
-            )
-            self.engine = EvolutionEngine(
-                self.store,
-                EvolutionPolicy(
-                    rewrite_budget=consolidation_rewrite_budget,
-                    max_members=max_rewrite_members,
-                    max_active_branches=max_active_branches,
-                ),
-            )
-            self._tracker = ContextTracker(
-                hard_confirmations=hard_boundary_confirmations
-            )
-            if self.auto_commit and not self.shadow:
-                self._consolidate_startup()
+            self._open_resources()
+            if self.auto_commit:
+                try:
+                    self._consolidate_startup()
+                except Exception as exc:
+                    self._record_error(exc)
+                    logger.warning(
+                        "Category startup consolidation failed (%s)",
+                        type(exc).__name__,
+                    )
+            _FORK_OBSERVERS.add(self)
         except Exception:
             if self.compiler is not None:
                 self.compiler.close()
             if self.store is not None:
                 self.store.close()
-            elif connection is not None:
-                connection.close()
             raise
+
+    def _open_resources(self) -> None:
+        connection: sqlite3.Connection | None = sqlite3.connect(
+            self._database_path, check_same_thread=False
+        )
+        store: EvolvingCategoryStore | None = None
+        try:
+            store = EvolvingCategoryStore(connection, **self._store_options)
+            connection = None
+            compiler = CategoryCompiler(store, self._compile_budget)
+            self.store = store
+            self.compiler = compiler
+            self.engine = EvolutionEngine(store, self._evolution_policy)
+            self._tracker = ContextTracker(**self._tracker_options)
+        except Exception:
+            if connection is not None:
+                connection.close()
+            elif store is not None:
+                store.close()
+            raise
+
+    def _ensure_process(self) -> None:
+        current_pid = os.getpid()
+        if current_pid == self._creator_pid or self._closed:
+            return
+        old_compiler, old_store = self.compiler, self.store
+        self.compiler = None
+        self.store = None
+        self.engine = None
+        try:
+            if old_compiler is not None:
+                # Conditions owned by threads that vanished at fork remain
+                # locked forever in the child. No compiler operation can be in
+                # flight here, so replace the inherited synchronization shell
+                # before closing its child-side connections.
+                old_compiler._pool_condition = threading.Condition()
+                old_compiler.close()
+        except Exception as exc:
+            self._record_error(exc)
+        try:
+            if old_store is not None:
+                old_store.close()
+        except Exception as exc:
+            self._record_error(exc)
+        self._open_resources()
+        self._creator_pid = current_pid
+        self._tracker_resets += 1
+        if self.auto_commit:
+            try:
+                self._consolidate_startup()
+            except Exception as exc:
+                self._record_error(exc)
+                logger.warning(
+                    "Category startup consolidation failed (%s)",
+                    type(exc).__name__,
+                )
+
+    def _prepare_public_lock(self) -> None:
+        # A lock held by another thread at fork stays permanently held in the
+        # child. PID comparison is safe before locking because only a forked
+        # process can take this branch during normal operation.
+        if os.getpid() != self._creator_pid:
+            self._lock = threading.RLock()
 
     @staticmethod
     def proxy_id(memory_id: str) -> str:
@@ -780,12 +909,22 @@ class CategoryObserver:
         *,
         source: str,
         observed_at,
+        recall_id: str | None = None,
     ) -> None:
-        try:
-            self._observe_recall(query, result_ids, source=source, observed_at=observed_at)
-        except Exception as exc:
-            self.record_error(exc)
-            raise
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                self._observe_recall(
+                    query,
+                    result_ids,
+                    source=source,
+                    observed_at=observed_at,
+                    recall_id=recall_id,
+                )
+            except Exception as exc:
+                self._record_error(exc)
+                raise
 
     def _observe_recall(
         self,
@@ -794,10 +933,11 @@ class CategoryObserver:
         *,
         source: str,
         observed_at,
+        recall_id: str | None,
     ) -> None:
         if self._closed or self.store is None:
             raise RuntimeError("category observer is closed")
-        ids = tuple(sorted(set(str(result_id) for result_id in result_ids)))
+        ids = tuple(dict.fromkeys(str(result_id) for result_id in result_ids))
         terms = self._terms(query)
         timestamp = observed_at.isoformat()
         recall_material = {
@@ -805,20 +945,25 @@ class CategoryObserver:
             "result_ids": ids,
             "source": str(source),
             "observed_at": timestamp,
+            "recall_id": recall_id,
         }
-        recall_event_id = self._stable_id("recall", recall_material)
+        recall_identity = (
+            {"recall_id": recall_id} if recall_id is not None else recall_material
+        )
+        recall_event_id = self._stable_id("recall", recall_identity)
         with self.store.transaction(immediate=True) as connection:
             if connection.execute(
                 "SELECT 1 FROM cat_events WHERE id = ?", (recall_event_id,)
             ).fetchone():
                 return
 
+            next_tracker = self._tracker.clone()
             observation = ContextObservation(
                 goal={term: 1.0 for term in terms},
                 sources={str(source): 1.0} if source else {},
                 observed_at=observed_at,
             )
-            decision = self._tracker.observe(observation)
+            decision = next_tracker.observe(observation)
             context_features = {
                 "goal": {term: 1.0 for term in terms},
                 "sources": {str(source): 1.0} if source else {},
@@ -830,6 +975,8 @@ class CategoryObserver:
                     "context_id": context_id,
                     "observed_at": timestamp,
                     "result_count": len(ids),
+                    "result_ids": ids,
+                    "recall_id": recall_id,
                     "source": str(source),
                     "terms": terms,
                 },
@@ -849,11 +996,13 @@ class CategoryObserver:
                 boundary_payload,
                 event_id=self._stable_id("boundary", boundary_payload),
             )
-            for memory_id in ids:
+            for rank, memory_id in enumerate(ids):
                 proxy_event_payload = {
                     "recall_event_id": recall_event_id,
+                    "recall_id": recall_id,
                     "memory_id": memory_id,
                     "proxy_id": self.proxy_id(memory_id),
+                    "rank": rank,
                 }
                 proxy_event_id = self._stable_id("proxy-event", proxy_event_payload)
                 self.store.append_event(
@@ -871,34 +1020,60 @@ class CategoryObserver:
                         ),
                         created_event_id=proxy_event_id,
                     )
+        self._tracker = next_tracker
 
     def observe_outcome(self, recall_id: str, used: bool, note: str | None) -> None:
-        try:
-            self._observe_outcome(recall_id, used, note)
-        except Exception as exc:
-            self.record_error(exc)
-            raise
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                self._observe_outcome(recall_id, used, note)
+            except Exception as exc:
+                self._record_error(exc)
+                raise
 
     def _observe_outcome(self, recall_id: str, used: bool, note: str | None) -> None:
         if self._closed or self.store is None:
             raise RuntimeError("category observer is closed")
-        payload = {"recall_id": str(recall_id), "used": bool(used), "note": note}
-        event_id = self._stable_id("outcome", payload)
+        outcome_material = {
+            "recall_id": str(recall_id),
+            "used": bool(used),
+            "note": note,
+        }
+        event_id = self._stable_id("outcome", outcome_material)
         with self.store.transaction(immediate=True) as connection:
             if connection.execute(
                 "SELECT 1 FROM cat_events WHERE id = ?", (event_id,)
             ).fetchone():
                 return
+            recall_event = connection.execute(
+                "SELECT id FROM cat_events WHERE kind='recall_observed' "
+                "AND json_extract(payload_json, '$.recall_id') = ? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (str(recall_id),),
+            ).fetchone()
+            recall_event_id = (
+                str(recall_event[0]) if recall_event is not None else None
+            )
+            payload = {
+                **outcome_material,
+                "recall_event_id": recall_event_id,
+                "correlated": recall_event_id is not None,
+                "orphaned": recall_event_id is None,
+            }
             self.store.append_event("recall_outcome", payload, event_id=event_id)
 
     def compile_for_recall(
         self, seed_ids: Iterable[str], base_tokens: int = 0
     ) -> CompiledCategory:
-        try:
-            return self._compile_for_recall(seed_ids, base_tokens)
-        except Exception as exc:
-            self.record_error(exc)
-            raise
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                return self._compile_for_recall(seed_ids, base_tokens)
+            except Exception as exc:
+                self._record_error(exc)
+                raise
 
     def _compile_for_recall(
         self, seed_ids: Iterable[str], base_tokens: int = 0
@@ -955,9 +1130,28 @@ class CategoryObserver:
 
     def record_error(self, exc: BaseException) -> None:
         """Retain only an error type for content-safe reflection diagnostics."""
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+            except Exception:
+                pass
+            self._record_error(exc)
+
+    def _record_error(self, exc: BaseException) -> None:
         self._last_error = type(exc).__name__
 
     def report(self) -> dict:
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                return self._report()
+            except Exception as exc:
+                self._record_error(exc)
+                raise
+
+    def _report(self) -> dict:
         if self._closed or self.store is None or self.engine is None:
             raise RuntimeError("category observer is closed")
         connection = self.store.connection
@@ -968,10 +1162,26 @@ class CategoryObserver:
             )
         }
         dispositions = {name: 0 for name in ("proposed", "committed", "rejected", "superseded")}
-        for row in connection.execute("SELECT id FROM cat_rewrites ORDER BY id"):
-            disposition = self.engine.latest_disposition(str(row[0]))
-            if disposition in dispositions:
-                dispositions[disposition] += 1
+        latest_dispositions: dict[str, str] = {}
+        disposition_names = {
+            "rewrite_proposed": "proposed",
+            "rewrite_committed": "committed",
+            "rewrite_rejected": "rejected",
+            "rewrite_superseded": "superseded",
+        }
+        for row in connection.execute(
+            "SELECT kind, payload_json FROM cat_events WHERE kind IN "
+            "('rewrite_proposed','rewrite_committed','rewrite_rejected','rewrite_superseded') "
+            "ORDER BY rowid"
+        ):
+            try:
+                rewrite_id = json.loads(row[1]).get("rewrite_id")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(rewrite_id, str):
+                latest_dispositions[rewrite_id] = disposition_names[str(row[0])]
+        for disposition in latest_dispositions.values():
+            dispositions[disposition] += 1
         recent_boundaries = []
         for row in connection.execute(
             "SELECT payload_json FROM cat_events WHERE kind='context_boundary' "
@@ -987,6 +1197,12 @@ class CategoryObserver:
                 }
             )
         pressure = self.store.pressure()
+        outcome_counts = connection.execute(
+            "SELECT "
+            "SUM(CASE WHEN json_extract(payload_json, '$.correlated') = 1 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN json_extract(payload_json, '$.orphaned') = 1 THEN 1 ELSE 0 END) "
+            "FROM cat_events WHERE kind='recall_outcome'"
+        ).fetchone()
         return {
             "available": True,
             "flags": {
@@ -1002,6 +1218,14 @@ class CategoryObserver:
             "compiler_truncations": self._compiler_truncations,
             "quota_pressure": asdict(pressure),
             "last_error": self._last_error,
+            "outcomes": {
+                "correlated": int(outcome_counts[0] or 0),
+                "orphaned": int(outcome_counts[1] or 0),
+            },
+            "tracker_state": {
+                "scope": "process_local",
+                "resets": self._tracker_resets,
+            },
         }
 
     def _current_epoch(self) -> str | None:
@@ -1028,15 +1252,28 @@ class CategoryObserver:
             self.engine.consolidate(rewrite_ids, epoch_id)
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
+        self._prepare_public_lock()
+        with self._lock:
+            if self._closed:
+                return
+            self._ensure_process()
             if self.compiler is not None:
-                self.compiler.close()
-        finally:
+                try:
+                    self.compiler.close()
+                except Exception as exc:
+                    self._record_error(exc)
+                    raise
+                self.compiler = None
             if self.store is not None:
-                self.store.close()
+                try:
+                    self.store.close()
+                except Exception as exc:
+                    self._record_error(exc)
+                    raise
+                self.store = None
+            self.engine = None
+            self._closed = True
+            _FORK_OBSERVERS.discard(self)
 
 
 @dataclass(frozen=True)

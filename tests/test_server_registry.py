@@ -73,9 +73,16 @@ def engram_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_signals_db_path", None)
     monkeypatch.setattr(server, "_knowledge_graph", None)
     monkeypatch.setattr(server, "_category_store", None)
+    monkeypatch.setattr(server, "_category_observer", None)
+    monkeypatch.setattr(server, "_category_status", None)
+    monkeypatch.setattr(server, "_category_atexit_callback", None)
 
     yield server
 
+    if server._category_observer is not None:
+        server._category_observer.close()
+    if server._category_store is not None:
+        server._category_store._conn.close()
     if server._storage is not None:
         server._storage.close()
 
