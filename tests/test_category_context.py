@@ -227,6 +227,65 @@ def test_configured_confirmation_count_applies_to_moderate_path():
     assert (decision.kind, decision.confirmations, decision.score) == ("hard", 3, 0.40)
 
 
+@pytest.mark.parametrize("confirmations", [6, 10])
+def test_moderate_evidence_hardens_on_exact_configured_confirmation_count(confirmations):
+    """Repeated 0.40 evidence must harden on N, never N-1 or N+1, observations."""
+    tracker = ContextTracker(hard_confirmations=confirmations)
+    tracker.observe(ContextObservation(goal={"anchor": 1.0}))
+    candidate = ContextObservation(goal={"candidate": 1.0})
+
+    for expected_count in range(1, confirmations):
+        decision = tracker.observe(candidate)
+        assert (decision.kind, decision.confirmations, decision.score) == (
+            "soft",
+            expected_count,
+            0.40,
+        )
+
+    decision = tracker.observe(candidate)
+
+    assert (decision.kind, decision.confirmations, decision.score) == (
+        "hard",
+        confirmations,
+        0.40,
+    )
+
+
+@pytest.mark.parametrize(
+    "field,component,expected_score",
+    [
+        ("entities", "entity_turnover", 0.20),
+        ("participants", "participant_turnover", 0.15),
+        ("tools", "tool_turnover", 0.15),
+    ],
+)
+def test_isolated_component_uses_its_configured_coefficient(field, component, expected_score):
+    """Each isolated turnover component must contribute its documented coefficient."""
+    tracker = ContextTracker()
+    tracker.observe(ContextObservation(**{field: {"before": 1.0}}))
+
+    decision = tracker.observe(ContextObservation(**{field: {"after": 1.0}}))
+
+    assert decision.components[component] == 1.0
+    assert decision.score == expected_score
+
+
+def test_simultaneous_participant_and_tool_turnover_uses_max_not_sum():
+    """Participant and tool divergence together must still contribute only 0.15."""
+    tracker = ContextTracker()
+    tracker.observe(
+        ContextObservation(participants={"before": 1.0}, tools={"before": 1.0})
+    )
+
+    decision = tracker.observe(
+        ContextObservation(participants={"after": 1.0}, tools={"after": 1.0})
+    )
+
+    assert decision.components["participant_turnover"] == 1.0
+    assert decision.components["tool_turnover"] == 1.0
+    assert decision.score == 0.15
+
+
 def test_large_weighted_maps_produce_finite_weighted_jaccard_scores():
     """Finite input weights near float limits must not overflow the Jaccard sums."""
     tracker = ContextTracker()

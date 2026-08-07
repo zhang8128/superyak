@@ -76,7 +76,7 @@ class ContextTracker:
         self._pending_candidate: _Fingerprint | None = None
         self._pending_path: Literal["strong", "moderate"] | None = None
         self._pending_confirmations = 0
-        self._pending_score = 0.0
+        self._pending_scores: list[float] = []
         self._context_id: str | None = None
         self._next_context_number = 1
         self._fingerprints: OrderedDict[_Fingerprint, str] = OrderedDict()
@@ -130,12 +130,13 @@ class ContextTracker:
             self._pending_candidate = snapshot.maps
             self._pending_path = path
             self._pending_confirmations = 0
-            self._pending_score = 0.0
+            self._pending_scores = []
         self._pending_confirmations += 1
-        self._pending_score += inferred_score
+        self._pending_scores.append(inferred_score)
         confirmed = self._pending_confirmations >= self._hard_confirmations and (
             path == "strong"
-            or self._pending_score >= _MODERATE_REQUIRED_SCORE * self._hard_confirmations
+            or fsum(self._pending_scores)
+            >= fsum((_MODERATE_REQUIRED_SCORE,) * self._hard_confirmations)
         )
         if not confirmed:
             return self._decision(
@@ -181,7 +182,7 @@ class ContextTracker:
         self._pending_candidate = None
         self._pending_path = None
         self._pending_confirmations = 0
-        self._pending_score = 0.0
+        self._pending_scores = []
 
     @staticmethod
     def _decision(
