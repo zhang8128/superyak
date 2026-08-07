@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from config import load_config
 from indexer import incremental_index
 from logging_config import setup_logging
+from operation_audit import sanitize_operation_details
 from storage import vec0_distance_to_similarity, _pack_embedding
 
 logger = logging.getLogger("engram.server")
@@ -67,7 +68,8 @@ def _record_operation(operation, bound, result, outcome):
     collect(result)
     row = _storage.conn.execute("SELECT harness, model, repo FROM session_registry WHERE session_id = ?", (_session_id,)).fetchone()
     harness, model, repo = (row[0], row[1], row[2]) if row else (os.environ.get("ENGRAM_HARNESS"), None, os.getcwd())
-    _storage.add_operation(operation, _session_id, harness, model, repo, list(dict.fromkeys(str(i) for i in ids if i)), values, outcome)
+    details = sanitize_operation_details(operation, values)
+    _storage.add_operation(operation, _session_id, harness, model, repo, list(dict.fromkeys(str(i) for i in ids if i)), details, outcome)
 
 
 def _generate_perceptual_framing(content: str, kind: str) -> tuple[str, str]:
