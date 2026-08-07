@@ -1,5 +1,6 @@
 """Tests for the Graphiti knowledge graph bridge."""
 
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -265,3 +266,89 @@ class TestKnowledgeGraphIntegration:
             summaries = [{"content": "Vin's Allomancy training", "kind": "fact", "action": "new"}]
             compressor.commit(result["compress_id"], summaries)
             kg.feed.assert_called_once()
+
+    def test_compression_feeds_graph_only_after_local_commit(self, tmp_path):
+        from compress import Compressor
+        from storage import Storage
+
+        storage = Storage(str(tmp_path / "graph-order.db"))
+        embeddings = MagicMock()
+        embeddings.embed.side_effect = lambda texts, prefix=None: [
+            [float(i + 1) * 0.1] * 768 for i in range(len(texts))
+        ]
+
+        class TransactionCheckingGraph:
+            def __init__(self):
+                self.transaction_states = []
+
+            def feed(self, episodes, semantic_content=None):
+                self.transaction_states.append(storage.conn.in_transaction)
+
+        graph = TransactionCheckingGraph()
+        compressor = Compressor(storage, embeddings, knowledge_graph=graph)
+        episode_id = str(uuid.uuid4())
+        storage.add_episode(
+            id=episode_id,
+            session_id="graph-order",
+            content="graph ordering episode",
+            embedding=[0.1] * 768,
+        )
+        compress_id = str(uuid.uuid4())
+        compressor._pending[compress_id] = {"clusters": [{
+            "episodes": [storage.get_episode(episode_id)],
+            "centroid": [0.1] * 768,
+            "action": "new",
+            "match": None,
+            "lane": "personal",
+        }]}
+
+        try:
+            compressor.commit(compress_id, [
+                {"content": "graph ordering summary", "kind": "fact", "action": "new"}
+            ])
+            assert graph.transaction_states == [False]
+        finally:
+            storage.close()
+
+    def test_compression_skips_graph_feed_when_local_commit_fails(
+        self, tmp_path, monkeypatch,
+    ):
+        from compress import Compressor
+        from storage import Storage
+
+        storage = Storage(str(tmp_path / "graph-failure.db"))
+        embeddings = MagicMock()
+        embeddings.embed.side_effect = lambda texts, prefix=None: [
+            [float(i + 1) * 0.1] * 768 for i in range(len(texts))
+        ]
+        graph = MagicMock()
+        compressor = Compressor(storage, embeddings, knowledge_graph=graph)
+        episode_id = str(uuid.uuid4())
+        storage.add_episode(
+            id=episode_id,
+            session_id="graph-failure",
+            content="graph failure episode",
+            embedding=[0.1] * 768,
+        )
+        compress_id = str(uuid.uuid4())
+        compressor._pending[compress_id] = {"clusters": [{
+            "episodes": [storage.get_episode(episode_id)],
+            "centroid": [0.1] * 768,
+            "action": "new",
+            "match": None,
+            "lane": "personal",
+        }]}
+
+        def fail_after_local_writes(**_kwargs):
+            raise RuntimeError("injected local failure")
+
+        monkeypatch.setattr(storage, "add_log_entry", fail_after_local_writes)
+        try:
+            with pytest.raises(RuntimeError, match="injected local failure"):
+                compressor.commit(compress_id, [
+                    {"content": "graph failure summary", "kind": "fact", "action": "new"}
+                ])
+            graph.feed.assert_not_called()
+            assert compress_id in compressor._pending
+        finally:
+            storage.close()

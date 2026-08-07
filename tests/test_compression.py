@@ -180,6 +180,168 @@ def test_commit_reinforces_existing(tmp_db, compressor, embedder):
     assert sem["confidence"] == pytest.approx(0.7, abs=0.01)
 
 
+def test_commit_rejects_summary_count_mismatch_without_consuming_pending(
+    tmp_db, compressor, embedder,
+):
+    text = "validation episode"
+    _add_episode(tmp_db, text, embedder.embed([text])[0])
+    result = compressor.cluster_episodes()
+
+    with pytest.raises(ValueError, match="summary count"):
+        compressor.commit(result["compress_id"], [])
+
+    assert result["compress_id"] in compressor._pending
+    assert tmp_db.get_uncompressed_episodes()
+
+
+@pytest.mark.parametrize(
+    ("summary", "message"),
+    [
+        ({"content": "valid", "kind": "fact", "action": "merge"}, "action"),
+        ({"content": "valid", "kind": "opinion", "action": "new"}, "kind"),
+        ({"content": "valid", "kind": "fact", "action": "new", "lane": "archive"}, "lane"),
+        ({"content": "   ", "kind": "fact", "action": "new"}, "content"),
+        ({"content": True, "kind": "fact", "action": "new"}, "content"),
+        ({"content": "valid", "kind": "fact", "action": "reinforce"}, "semantic_id"),
+        (
+            {
+                "content": "valid",
+                "kind": "fact",
+                "action": "reinforce",
+                "semantic_id": "missing-semantic",
+            },
+            "semantic_id",
+        ),
+    ],
+)
+def test_invalid_commit_summary_preserves_database_and_pending_state(
+    tmp_db, compressor, embedder, summary, message,
+):
+    text = "invalid summary episode"
+    episode_id = _add_episode(tmp_db, text, embedder.embed([text])[0])
+    result = compressor.cluster_episodes()
+
+    before = {
+        "semantics": tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0],
+        "vectors": tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_vectors").fetchone()[0],
+        "sources": tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_sources").fetchone()[0],
+        "compressed": tmp_db.get_episode(episode_id)["compressed"],
+    }
+
+    with pytest.raises(ValueError, match=message):
+        compressor.commit(result["compress_id"], [summary])
+
+    after = {
+        "semantics": tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0],
+        "vectors": tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_vectors").fetchone()[0],
+        "sources": tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_sources").fetchone()[0],
+        "compressed": tmp_db.get_episode(episode_id)["compressed"],
+    }
+    assert after == before
+    assert result["compress_id"] in compressor._pending
+
+
+def _set_pending_new_clusters(storage, compressor, embedder, texts):
+    """Install deterministic one-episode clusters for commit failure tests."""
+    clusters = []
+    episode_ids = []
+    for text in texts:
+        embedding = embedder.embed([text])[0]
+        episode_id = _add_episode(storage, text, embedding)
+        episode_ids.append(episode_id)
+        clusters.append({
+            "episodes": [storage.get_episode(episode_id)],
+            "centroid": embedding,
+            "action": "new",
+            "match": None,
+            "lane": "personal",
+        })
+    compress_id = str(uuid.uuid4())
+    compressor._pending[compress_id] = {"clusters": clusters}
+    return compress_id, episode_ids
+
+
+def test_commit_rolls_back_every_write_and_remains_retryable(
+    tmp_db, compressor, embedder, monkeypatch,
+):
+    compress_id, episode_ids = _set_pending_new_clusters(
+        tmp_db, compressor, embedder, ["first atomic cluster", "second atomic cluster"],
+    )
+    summaries = [
+        {"content": "first summary", "kind": "fact", "action": "new"},
+        {"content": "second summary", "kind": "fact", "action": "new"},
+    ]
+    real_add_semantic = tmp_db.add_semantic
+    calls = 0
+
+    def fail_on_second_semantic(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected second cluster")
+        return real_add_semantic(**kwargs)
+
+    monkeypatch.setattr(tmp_db, "add_semantic", fail_on_second_semantic)
+
+    with pytest.raises(RuntimeError, match="injected second cluster"):
+        compressor.commit(compress_id, summaries)
+
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0] == 0
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_vectors").fetchone()[0] == 0
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_sources").fetchone()[0] == 0
+    assert [
+        tmp_db.get_episode(episode_id)["compressed"] for episode_id in episode_ids
+    ] == [0, 0]
+    assert tmp_db.conn.in_transaction is False
+    assert compress_id in compressor._pending
+
+    monkeypatch.setattr(tmp_db, "add_semantic", real_add_semantic)
+    stats = compressor.commit(compress_id, summaries)
+
+    assert stats["semantics_created"] == 2
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0] == 2
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_vectors").fetchone()[0] == 2
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_sources").fetchone()[0] == 2
+    assert [
+        tmp_db.get_episode(episode_id)["compressed"] for episode_id in episode_ids
+    ] == [1, 1]
+    assert compress_id not in compressor._pending
+
+
+def test_commit_late_failure_rolls_back_vectors_sources_and_episode_flags(
+    tmp_db, compressor, embedder, monkeypatch,
+):
+    compress_id, episode_ids = _set_pending_new_clusters(
+        tmp_db, compressor, embedder, ["late atomic cluster"],
+    )
+    summaries = [{"content": "late summary", "kind": "fact", "action": "new"}]
+    real_add_log_entry = tmp_db.add_log_entry
+
+    def fail_after_local_writes(**_kwargs):
+        raise RuntimeError("injected late log")
+
+    monkeypatch.setattr(tmp_db, "add_log_entry", fail_after_local_writes)
+
+    with pytest.raises(RuntimeError, match="injected late log"):
+        compressor.commit(compress_id, summaries)
+
+    for table in ("semantics", "semantic_vectors", "semantic_sources", "memory_log"):
+        assert tmp_db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    assert tmp_db.get_episode(episode_ids[0])["compressed"] == 0
+    assert tmp_db.conn.in_transaction is False
+    assert compress_id in compressor._pending
+
+    monkeypatch.setattr(tmp_db, "add_log_entry", real_add_log_entry)
+    stats = compressor.commit(compress_id, summaries)
+
+    assert stats["semantics_created"] == 1
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantics").fetchone()[0] == 1
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_vectors").fetchone()[0] == 1
+    assert tmp_db.conn.execute("SELECT COUNT(*) FROM semantic_sources").fetchone()[0] == 1
+    assert tmp_db.get_episode(episode_ids[0])["compressed"] == 1
+    assert compress_id not in compressor._pending
+
+
 def test_commit_creates_instinct_from_high_confidence(tmp_db, compressor, embedder):
     """A high-confidence preference semantic should trigger instinct creation."""
     text = "always use type hints"

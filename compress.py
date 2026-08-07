@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger("engram.compression")
 
 _KNOWN_NAMES = {"andy", "kairos", "vaughn", "emma", "koan", "vin", "kelsier"}
+_VALID_COMMIT_ACTIONS = frozenset({"new", "reinforce", "discard"})
+_VALID_SEMANTIC_KINDS = frozenset(
+    {"fact", "relationship", "preference", "constraint", "disposition"}
+)
+_VALID_LANES = frozenset({"personal", "work"})
 
 
 def _innovation_permits_core(innovation: float | None, floor: float) -> bool:
@@ -431,9 +436,27 @@ class Compressor:
         Returns: {episodes_processed, semantics_created, semantics_reinforced,
         clusters_discarded, instincts_created}
         """
-        state = self._pending.pop(compress_id, None)
+        state = self._pending.get(compress_id)
         if state is None:
             raise ValueError(f"Unknown compress_id: {compress_id}")
+        self._validate_commit(state, summaries)
+
+        knowledge_feeds: list[tuple[list[dict], str]] = []
+        commit_state = {**state, "compress_id": compress_id}
+        with self._storage.transaction():
+            result = self._commit_state(commit_state, summaries, knowledge_feeds)
+        self._pending.pop(compress_id, None)
+        self._feed_knowledge_graph(knowledge_feeds)
+        return result
+
+    def _commit_state(
+        self,
+        state: dict,
+        summaries: list[dict],
+        knowledge_feeds: list[tuple[list[dict], str]],
+    ) -> dict:
+        """Apply a pre-validated compression request inside one transaction."""
+        compress_id = state["compress_id"]
 
         clusters = state["clusters"]
         episodes_processed = 0
@@ -567,15 +590,8 @@ class Compressor:
                         weight=weight,
                     )
 
-                # Feed episode cluster to knowledge graph for entity extraction
-                if self._knowledge_graph is not None:
-                    try:
-                        self._knowledge_graph.feed(
-                            cluster["episodes"],
-                            semantic_content=semantic_content,
-                        )
-                    except Exception:
-                        logger.warning("Knowledge graph feed failed", exc_info=True)
+                # External graph writes run only after the local transaction commits.
+                knowledge_feeds.append((cluster["episodes"], semantic_content))
 
             self._storage.mark_episodes_compressed(all_episode_ids)
             episodes_processed += len(all_episode_ids)
@@ -688,6 +704,66 @@ class Compressor:
             "multi_links": multi_links,
             "singletons_created": singletons_created,
         }
+
+    def _feed_knowledge_graph(
+        self, knowledge_feeds: list[tuple[list[dict], str]],
+    ) -> None:
+        """Run queued external graph writes after the local commit succeeds."""
+        if self._knowledge_graph is None:
+            return
+        for episodes, semantic_content in knowledge_feeds:
+            try:
+                self._knowledge_graph.feed(
+                    episodes,
+                    semantic_content=semantic_content,
+                )
+            except Exception:
+                logger.warning("Knowledge graph feed failed", exc_info=True)
+
+    def _validate_commit(self, state: dict, summaries: list[dict]) -> None:
+        """Validate a complete compression request before any state is changed."""
+        clusters = state.get("clusters")
+        if not isinstance(clusters, list):
+            raise ValueError("Invalid pending cluster state")
+        if not isinstance(summaries, list) or len(summaries) != len(clusters):
+            count = len(summaries) if isinstance(summaries, list) else "invalid"
+            raise ValueError(
+                f"Invalid summary count: expected {len(clusters)}, got {count}"
+            )
+
+        for index, (cluster, summary) in enumerate(zip(clusters, summaries)):
+            if not isinstance(summary, dict):
+                raise ValueError(f"Invalid summary at index {index}: expected an object")
+
+            action = summary.get("action", cluster.get("action"))
+            if not isinstance(action, str) or action not in _VALID_COMMIT_ACTIONS:
+                raise ValueError(f"Invalid action at summary index {index}: {action!r}")
+
+            lane = summary.get("lane") or cluster.get("lane") or "personal"
+            if not isinstance(lane, str) or lane not in _VALID_LANES:
+                raise ValueError(f"Invalid lane at summary index {index}: {lane!r}")
+
+            kind = summary.get("kind", "fact")
+            if not isinstance(kind, str) or kind not in _VALID_SEMANTIC_KINDS:
+                raise ValueError(f"Invalid kind at summary index {index}: {kind!r}")
+
+            if action != "discard":
+                content = summary.get("content")
+                if not isinstance(content, str) or not content.strip():
+                    raise ValueError(f"Invalid content at summary index {index}")
+
+            if action == "reinforce":
+                match = cluster.get("match")
+                match_id = match.get("id") if isinstance(match, dict) else None
+                semantic_id = summary.get("semantic_id") or match_id
+                if not isinstance(semantic_id, str) or not semantic_id:
+                    raise ValueError(
+                        f"Invalid semantic_id at summary index {index}: required for reinforce"
+                    )
+                if self._storage.get_semantic(semantic_id) is None:
+                    raise ValueError(
+                        f"Invalid semantic_id at summary index {index}: unknown semantic"
+                    )
 
     def auto_compress(self) -> dict:
         """Automatic compression using centroid selection (no AI needed).
@@ -1130,7 +1206,7 @@ class Compressor:
                 "UPDATE semantic_sources SET similarity = 1.0 WHERE semantic_id = ? AND episode_id = ?",
                 (sem_id, ep_id),
             )
-            self._storage.conn.commit()
+            self._storage._commit()
             created += 1
 
         return created
@@ -1198,7 +1274,7 @@ class Compressor:
                         links_created += 1
 
         if links_created:
-            self._storage.conn.commit()
+            self._storage._commit()
         return links_created
 
     def _find_semantic_match(self, centroid: list[float], lane: str = "personal") -> tuple[str, dict | None, dict | None]:
