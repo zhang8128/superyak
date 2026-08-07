@@ -256,6 +256,56 @@ def test_legacy_replay_is_atomic_when_an_existing_cell_conflicts(tmp_path):
     }
 
 
+def test_legacy_replay_publishes_new_output_only_after_schema_stage_succeeds(tmp_path, monkeypatch):
+    """Catches schema bootstrap mutating a pre-existing empty output before replay succeeds."""
+    legacy = tmp_path / "categories.db"
+    output = tmp_path / "v2.db"
+    _make_legacy_history(legacy)
+    sqlite3.connect(output).close()
+    output_bytes = output.read_bytes()
+    legacy_bytes = legacy.read_bytes()
+    legacy_mtime_ns = legacy.stat().st_mtime_ns
+
+    def fail_after_schema(*_args, **_kwargs):
+        raise RuntimeError("injected after schema initialization")
+
+    monkeypatch.setattr(EvolvingCategoryStore, "append_event", fail_after_schema)
+    with pytest.raises(RuntimeError, match="injected after schema"):
+        _importer().import_legacy_category(legacy, output)
+
+    assert output.read_bytes() == output_bytes
+    assert legacy.read_bytes() == legacy_bytes
+    assert legacy.stat().st_mtime_ns == legacy_mtime_ns
+    assert not list(tmp_path.glob(".v2.db.*.replay.tmp*"))
+
+
+def test_legacy_replay_discards_staged_output_after_partial_write_failure(tmp_path, monkeypatch):
+    """Catches replay writes publishing a new output after a later staged cell failure."""
+    legacy = tmp_path / "categories.db"
+    output = tmp_path / "v2.db"
+    _make_legacy_history(legacy)
+    legacy_bytes = legacy.read_bytes()
+    legacy_mtime_ns = legacy.stat().st_mtime_ns
+    original_create_cell = EvolvingCategoryStore.create_cell
+    calls = 0
+
+    def fail_after_two_cells(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("injected after replay writes")
+        return original_create_cell(self, *args, **kwargs)
+
+    monkeypatch.setattr(EvolvingCategoryStore, "create_cell", fail_after_two_cells)
+    with pytest.raises(RuntimeError, match="injected after replay writes"):
+        _importer().import_legacy_category(legacy, output)
+
+    assert not output.exists()
+    assert legacy.read_bytes() == legacy_bytes
+    assert legacy.stat().st_mtime_ns == legacy_mtime_ns
+    assert not list(tmp_path.glob(".v2.db.*.replay.tmp*"))
+
+
 def test_legacy_replay_rejects_incompatible_output_before_schema_bootstrap(tmp_path):
     """Catches compatibility validation mutating an output it is about to reject."""
     legacy = tmp_path / "categories.db"
@@ -304,6 +354,50 @@ def test_legacy_replay_rejects_stale_output_with_same_active_ids(tmp_path):
         "cat_epochs": 1,
         "cat_snapshots": 1,
     }
+
+
+@pytest.mark.parametrize("changed_content", ["changed lost content", "other lost content"])
+def test_legacy_replay_fingerprints_every_lost_source_row(tmp_path, changed_content):
+    """Catches idempotence ignoring raw content from an unimportable legacy row."""
+    first_legacy = tmp_path / "first.db"
+    changed_legacy = tmp_path / "changed.db"
+    output = tmp_path / "v2.db"
+    first = _legacy_connection(first_legacy)
+    _insert_legacy_cell(first, "lost", 1, "memory-a", None, "original lost content")
+    first.commit()
+    first.close()
+    changed = _legacy_connection(changed_legacy)
+    _insert_legacy_cell(changed, "lost", 1, "memory-a", None, changed_content)
+    changed.commit()
+    changed.close()
+
+    _importer().import_legacy_category(first_legacy, output)
+    with pytest.raises(ValueError, match="does not match source"):
+        _importer().import_legacy_category(changed_legacy, output)
+
+
+def test_legacy_replay_fingerprints_loss_row_blob_values(tmp_path):
+    """Catches type-erasing raw fingerprints for malformed legacy SQLite values."""
+    first_legacy = tmp_path / "first.db"
+    changed_legacy = tmp_path / "changed.db"
+    output = tmp_path / "v2.db"
+    for path, blob in ((first_legacy, b"first"), (changed_legacy, b"second")):
+        connection = _legacy_connection(path)
+        _insert_legacy_cell(
+            connection,
+            "lost",
+            1,
+            "memory-a",
+            None,
+            "lost",
+            sqlite3.Binary(blob),
+        )
+        connection.commit()
+        connection.close()
+
+    _importer().import_legacy_category(first_legacy, output)
+    with pytest.raises(ValueError, match="does not match source"):
+        _importer().import_legacy_category(changed_legacy, output)
 
 
 def test_legacy_replay_rejects_a_completed_output_with_unrelated_rows(tmp_path):
@@ -363,6 +457,47 @@ def test_legacy_replay_rejects_an_unsupported_output_schema_version(tmp_path):
         _importer().import_legacy_category(legacy, output)
 
 
+def test_legacy_replay_rejects_a_same_named_noop_immutability_trigger(tmp_path):
+    """Catches compatibility checks that trust immutable-trigger names but not bodies."""
+    legacy = tmp_path / "categories.db"
+    output = tmp_path / "v2.db"
+    _make_legacy_history(legacy)
+    _importer().import_legacy_category(legacy, output)
+    connection = sqlite3.connect(output)
+    connection.execute("DROP TRIGGER cat_cells_no_update")
+    connection.execute(
+        "CREATE TRIGGER cat_cells_no_update BEFORE UPDATE ON cat_cells BEGIN SELECT 1; END"
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(ValueError, match="incompatible"):
+        _importer().import_legacy_category(legacy, output)
+
+
+def test_legacy_replay_rejects_an_altered_same_named_table_definition(tmp_path):
+    """Catches preflight accepting a table whose name matches but constraints differ."""
+    legacy = tmp_path / "categories.db"
+    output = tmp_path / "v2.db"
+    _make_legacy_history(legacy)
+    _importer().import_legacy_category(legacy, output)
+    connection = sqlite3.connect(output)
+    connection.execute("PRAGMA writable_schema = ON")
+    connection.execute(
+        """
+        UPDATE sqlite_master
+        SET sql = REPLACE(sql, 'dimension INTEGER NOT NULL CHECK (dimension >= 0)', 'dimension INTEGER NOT NULL')
+        WHERE type = 'table' AND name = 'cat_cells'
+        """
+    )
+    connection.execute("PRAGMA writable_schema = OFF")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(ValueError, match="incompatible"):
+        _importer().import_legacy_category(legacy, output)
+
+
 def test_legacy_replay_rejects_contaminated_or_invalid_vector_state(tmp_path):
     """Catches optional vector storage bypassing exact replay preflight checks."""
     legacy = tmp_path / "categories.db"
@@ -399,6 +534,31 @@ def test_legacy_replay_accepts_an_empty_valid_vec0_table(tmp_path):
     connection.close()
 
     assert _importer().import_legacy_category(legacy, output) == first
+
+
+def test_legacy_replay_rejects_an_altered_empty_vec0_definition(tmp_path):
+    """Catches vector preflight accepting changed vec0 ordering or distance semantics."""
+    import sqlite_vec
+
+    legacy = tmp_path / "categories.db"
+    output = tmp_path / "v2.db"
+    _make_legacy_history(legacy)
+    _importer().import_legacy_category(legacy, output)
+    connection = sqlite3.connect(output)
+    connection.enable_load_extension(True)
+    sqlite_vec.load(connection)
+    connection.enable_load_extension(False)
+    connection.execute(
+        """
+        CREATE VIRTUAL TABLE cat_vectors
+        USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768] distance_metric=cosine)
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(ValueError, match="incompatible"):
+        _importer().import_legacy_category(legacy, output)
 
 
 def test_legacy_replay_rejects_a_completed_output_with_changed_context_id(tmp_path):

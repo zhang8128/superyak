@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 from typing import Iterable, Mapping, Sequence
 import uuid
 
@@ -59,6 +62,9 @@ _VEC_SHADOW_TABLES = frozenset(
         "cat_vectors_vector_chunks00",
         "sqlite_sequence",
     }
+)
+_SUPPORTED_VEC0_DDL = (
+    "create virtual table cat_vectors using vec0(cell_id text primary key, embedding float[768])"
 )
 
 
@@ -118,6 +124,60 @@ def _canonical_json(value: object) -> str:
 
 def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _type_tagged_sqlite_value(value: object) -> list[str]:
+    """Encode SQLite values without collapsing distinct source representations."""
+    if value is None:
+        return ["null", ""]
+    if isinstance(value, bool):
+        return ["bool", "true" if value else "false"]
+    if isinstance(value, int):
+        return ["int", str(value)]
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("legacy source contains a non-finite floating-point value")
+        return ["float", value.hex()]
+    if isinstance(value, str):
+        return ["text", value]
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return ["blob", bytes(value).hex()]
+    raise ValueError(f"unsupported SQLite value type: {type(value).__name__}")
+
+
+def _raw_source_fingerprint(rows: Sequence[_LegacyCell]) -> str:
+    """Fingerprint every selected legacy field, including rows that become loss."""
+    payload = {
+        "columns": [
+            "id",
+            "level",
+            "source_id",
+            "target_id",
+            "content",
+            "context",
+            "created_at",
+            "accessed_at",
+            "access_count",
+        ],
+        "rows": [
+            [
+                _type_tagged_sqlite_value(value)
+                for value in (
+                    row.id,
+                    row.level,
+                    row.source_id,
+                    row.target_id,
+                    row.content,
+                    row.context,
+                    row.created_at,
+                    row.accessed_at,
+                    row.access_count,
+                )
+            ]
+            for row in rows
+        ],
+    }
+    return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
 
 def _read_legacy_rows(legacy_path: Path) -> list[_LegacyCell]:
@@ -325,12 +385,14 @@ def _replay_manifest(
     plan: _ReplayPlan,
     *,
     legacy_total: int,
+    raw_source_fingerprint: str,
     snapshot_id: str,
     root_epoch_id: str,
     snapshot_hash: str,
 ) -> dict[str, object]:
     """Describe every persisted replay artifact that must match on re-run."""
     return {
+        "raw_source_fingerprint": raw_source_fingerprint,
         "cells": [
             {
                 "id": draft.id,
@@ -362,6 +424,42 @@ def _replay_manifest(
 
 def _manifest_fingerprint(manifest: Mapping[str, object]) -> str:
     return hashlib.sha256(_canonical_json(manifest).encode()).hexdigest()
+
+
+def _canonical_ddl(sql: str) -> str:
+    return " ".join(sql.lower().split())
+
+
+def _schema_definitions(connection: sqlite3.Connection) -> tuple[tuple[str, str, str], ...]:
+    """Return all non-vector schema objects whose definitions affect replay safety."""
+    definitions = []
+    for row in connection.execute(
+        "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL"
+    ):
+        object_type, name, sql = row
+        if (
+            (object_type == "table" and name in _V2_TABLES)
+            or object_type == "index"
+            or object_type == "trigger"
+        ):
+            definitions.append((object_type, name, _canonical_ddl(sql)))
+    return tuple(sorted(definitions))
+
+
+@lru_cache(maxsize=1)
+def _supported_schema_definitions() -> tuple[tuple[str, str, str], ...]:
+    """Build the exact supported core schema from the v2 store itself."""
+    connection = sqlite3.connect(":memory:")
+    try:
+        EvolvingCategoryStore(connection)
+        return _schema_definitions(connection)
+    finally:
+        connection.close()
+
+
+def _validate_schema_definitions(connection: sqlite3.Connection) -> None:
+    if _schema_definitions(connection) != _supported_schema_definitions():
+        raise ValueError("output is incompatible with legacy replay")
 
 
 def _validate_completed_replay(
@@ -519,6 +617,7 @@ def _preflight_existing_output(
         if not _V2_TABLES <= tables:
             raise ValueError("output is incompatible with legacy replay")
         try:
+            _validate_schema_definitions(connection)
             if "cat_vectors" in tables:
                 permitted_tables = _V2_TABLES | {"cat_vectors"} | _VEC_SHADOW_TABLES
                 if not _VEC_SHADOW_TABLES <= tables or not tables <= permitted_tables:
@@ -527,15 +626,8 @@ def _preflight_existing_output(
                     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cat_vectors'"
                 ).fetchone()["sql"]
                 normalized_vector_sql = " ".join((vector_sql or "").lower().split())
-                expected_vector_tokens = (
-                    "create virtual table",
-                    "cat_vectors",
-                    "using vec0",
-                    "cell_id text primary key",
-                    "embedding float[768]",
-                )
                 if (
-                    not all(token in normalized_vector_sql for token in expected_vector_tokens)
+                    normalized_vector_sql != _SUPPORTED_VEC0_DDL
                     or connection.execute(
                         "SELECT COUNT(*) FROM cat_vectors_chunks"
                     ).fetchone()[0]
@@ -590,6 +682,74 @@ def _report(
     )
 
 
+def _remove_staged_sqlite_files(path: Path) -> None:
+    for candidate in (path, Path(f"{path}-journal"), Path(f"{path}-wal"), Path(f"{path}-shm")):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _fsync_staged_database(path: Path) -> None:
+    with path.open("rb") as database:
+        os.fsync(database.fileno())
+    try:
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _bootstrap_staged_output(
+    staged_output: Path,
+    plan: _ReplayPlan,
+    *,
+    event_id: str,
+    event_payload: Mapping[str, object],
+    root_epoch_id: str,
+    snapshot_id: str,
+    active_cell_ids_json: str,
+    snapshot_hash: str,
+) -> None:
+    connection = sqlite3.connect(staged_output)
+    store: EvolvingCategoryStore | None = None
+    try:
+        store = EvolvingCategoryStore(connection)
+        with store.transaction() as transaction:
+            store.append_event(
+                "legacy_import_summary", event_payload, event_id=event_id
+            )
+            for draft in plan.drafts:
+                store.create_cell(draft, created_event_id=event_id)
+            transaction.execute(
+                """
+                INSERT INTO cat_epochs (id, created_event_id, created_at)
+                VALUES (?, ?, datetime('now'))
+                """,
+                (root_epoch_id, event_id),
+            )
+            transaction.execute(
+                """
+                INSERT INTO cat_snapshots (id, epoch_id, active_cell_ids_json, content_hash, created_at)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                """,
+                (
+                    snapshot_id,
+                    root_epoch_id,
+                    active_cell_ids_json,
+                    snapshot_hash,
+                ),
+            )
+    finally:
+        if store is None:
+            connection.close()
+        else:
+            store.close()
+
+
 def import_legacy_category(
     legacy_path: str | Path, output_path: str | Path
 ) -> LegacyImportReport:
@@ -604,6 +764,7 @@ def import_legacy_category(
         raise ValueError("legacy input and v2 output must resolve to different paths")
 
     rows = _read_legacy_rows(legacy)
+    raw_source_fingerprint = _raw_source_fingerprint(rows)
     plan = _plan_cells(rows)
     active_cell_ids_json = json.dumps(
         sorted(draft.id for draft in plan.drafts), separators=(",", ":")
@@ -614,56 +775,68 @@ def import_legacy_category(
     manifest = _replay_manifest(
         plan,
         legacy_total=len(rows),
+        raw_source_fingerprint=raw_source_fingerprint,
         snapshot_id=snapshot_id,
         root_epoch_id=root_epoch_id,
         snapshot_hash=snapshot_hash,
     )
     manifest_fingerprint = _manifest_fingerprint(manifest)
     event_id = _stable_id("legacy-import-summary", manifest_fingerprint)
-    event_payload = {"manifest_fingerprint": manifest_fingerprint}
+    event_payload = {
+        "manifest_fingerprint": manifest_fingerprint,
+        "raw_source_fingerprint": raw_source_fingerprint,
+    }
     event_payload_json = _canonical_json(event_payload)
-    if _preflight_existing_output(
-        output,
-        plan,
-        event_id=event_id,
-        event_payload_json=event_payload_json,
-        root_epoch_id=root_epoch_id,
-        snapshot_id=snapshot_id,
-        active_cell_ids_json=active_cell_ids_json,
-        snapshot_hash=snapshot_hash,
-    ):
+    if output.exists() and output.stat().st_size == 0:
+        preflight_matches = False
+    else:
+        preflight_matches = _preflight_existing_output(
+            output,
+            plan,
+            event_id=event_id,
+            event_payload_json=event_payload_json,
+            root_epoch_id=root_epoch_id,
+            snapshot_id=snapshot_id,
+            active_cell_ids_json=active_cell_ids_json,
+            snapshot_hash=snapshot_hash,
+        )
+    if preflight_matches:
         return _report(plan, len(rows), root_epoch_id, snapshot_hash)
-    output_connection = sqlite3.connect(output)
-    store = EvolvingCategoryStore(output_connection)
+
+    descriptor, staged_name = tempfile.mkstemp(
+        dir=output.parent,
+        prefix=f".{output.name}.",
+        suffix=".replay.tmp",
+    )
+    os.close(descriptor)
+    staged_output = Path(staged_name)
     try:
-        with store.transaction() as connection:
-            store.append_event(
-                "legacy_import_summary", event_payload, event_id=event_id
-            )
-            for draft in plan.drafts:
-                store.create_cell(draft, created_event_id=event_id)
-            connection.execute(
-                """
-                INSERT INTO cat_epochs (id, created_event_id, created_at)
-                VALUES (?, ?, datetime('now'))
-                """,
-                (root_epoch_id, event_id),
-            )
-            connection.execute(
-                """
-                INSERT INTO cat_snapshots (id, epoch_id, active_cell_ids_json, content_hash, created_at)
-                VALUES (?, ?, ?, ?, datetime('now'))
-                """,
-                (
-                    snapshot_id,
-                    root_epoch_id,
-                    active_cell_ids_json,
-                    snapshot_hash,
-                ),
-            )
+        _bootstrap_staged_output(
+            staged_output,
+            plan,
+            event_id=event_id,
+            event_payload=event_payload,
+            root_epoch_id=root_epoch_id,
+            snapshot_id=snapshot_id,
+            active_cell_ids_json=active_cell_ids_json,
+            snapshot_hash=snapshot_hash,
+        )
+        if not _preflight_existing_output(
+            staged_output,
+            plan,
+            event_id=event_id,
+            event_payload_json=event_payload_json,
+            root_epoch_id=root_epoch_id,
+            snapshot_id=snapshot_id,
+            active_cell_ids_json=active_cell_ids_json,
+            snapshot_hash=snapshot_hash,
+        ):
+            raise RuntimeError("staged legacy replay did not validate")
+        _fsync_staged_database(staged_output)
+        os.replace(staged_output, output)
         return _report(plan, len(rows), root_epoch_id, snapshot_hash)
     finally:
-        store.close()
+        _remove_staged_sqlite_files(staged_output)
 
 
 def _build_parser() -> argparse.ArgumentParser:
