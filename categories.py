@@ -395,18 +395,9 @@ _IMMUTABLE_TABLES = (
     "cat_epoch_parents",
 )
 
-_OPTIONAL_VECTOR_OBJECTS = frozenset(
-    {
-        "cat_vectors",
-        "cat_vectors_chunks",
-        "cat_vectors_info",
-        "cat_vectors_rowids",
-        "cat_vectors_vector_chunks00",
-        "sqlite_sequence",
-    }
-)
-_SUPPORTED_VEC0_DDL = (
-    "create virtual table cat_vectors using vec0(cell_id text primary key, embedding float[768])"
+_CATEGORY_VECTOR_DDL = (
+    "CREATE VIRTUAL TABLE cat_vectors "
+    "USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768])"
 )
 
 
@@ -488,6 +479,62 @@ def _expected_core_schema_definitions() -> tuple[tuple[str, str, str], ...]:
         connection.close()
 
 
+def _is_category_vector_object(name: object, table_name: object) -> bool:
+    return any(
+        isinstance(candidate, str)
+        and (candidate == "cat_vectors" or candidate.startswith("cat_vectors_"))
+        for candidate in (name, table_name)
+    )
+
+
+def _vector_schema_definitions(
+    connection: sqlite3.Connection,
+) -> tuple[tuple[str, str, str, str | None], ...]:
+    """Return the complete sqlite-vec object layout, including implicit indexes."""
+    rows = tuple(
+        connection.execute("SELECT type, name, tbl_name, sql FROM sqlite_master")
+    )
+    has_vector_object = any(_is_category_vector_object(row[1], row[2]) for row in rows)
+    if not has_vector_object:
+        return ()
+    definitions = (
+        (
+            str(row[0]),
+            str(row[1]),
+            str(row[2]),
+            _normalized_schema_sql(row[3]) if row[3] is not None else None,
+        )
+        for row in rows
+        if _is_category_vector_object(row[1], row[2]) or row[1] == "sqlite_sequence"
+    )
+    return tuple(sorted(definitions, key=lambda definition: definition[:3]))
+
+
+@lru_cache(maxsize=1)
+def _expected_vector_schema_definitions() -> tuple[tuple[str, str, str, str | None], ...]:
+    """Build the supported layout from the sqlite-vec version installed by the project."""
+    import sqlite_vec
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.enable_load_extension(True)
+        sqlite_vec.load(connection)
+        connection.enable_load_extension(False)
+        connection.execute(_CATEGORY_VECTOR_DDL)
+        return _vector_schema_definitions(connection)
+    finally:
+        connection.close()
+
+
+def _category_vector_schema_state(
+    connection: sqlite3.Connection,
+) -> Literal["absent", "current", "incoherent"]:
+    actual = _vector_schema_definitions(connection)
+    if not actual:
+        return "absent"
+    return "current" if actual == _expected_vector_schema_definitions() else "incoherent"
+
+
 def _canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -544,19 +591,21 @@ class EvolvingCategoryStore:
         _execute_schema_statements(self._connection, sql)
 
     def _has_current_core_schema(self) -> bool:
-        """Read-only fingerprint check; optional vector state is deliberately excluded."""
+        """Read-only fingerprint check accepting absent or exact optional vectors."""
         expected = _expected_core_schema_definitions()
         expected_names = {name for _kind, name, _sql in expected}
         try:
             rows = tuple(self._connection.execute(
                 "SELECT type, name, sql FROM sqlite_master"
             ))
+            if _category_vector_schema_state(self._connection) == "incoherent":
+                return False
             for row in rows:
                 name = str(row[1])
-                if name.startswith("cat_") and name not in expected_names | _OPTIONAL_VECTOR_OBJECTS:
-                    return False
-                if name == "cat_vectors" and (
-                    row[2] is None or _normalized_schema_sql(row[2]) != _SUPPORTED_VEC0_DDL
+                if (
+                    name.startswith("cat_")
+                    and name not in expected_names
+                    and not _is_category_vector_object(name, name)
                 ):
                     return False
             actual = tuple(sorted(
@@ -579,6 +628,8 @@ class EvolvingCategoryStore:
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             self._enforce_quota("immutable")
+            if _category_vector_schema_state(self._connection) == "incoherent":
+                raise RuntimeError("incoherent optional vector schema")
             self._execute_complete_statements(_EVOLVING_SCHEMA)
             _install_immutability_triggers(self._connection)
             self._connection.execute("SAVEPOINT cat_optional_vec")
@@ -609,27 +660,36 @@ class EvolvingCategoryStore:
 
     def _provision_optional_vectors(self) -> None:
         """Best-effort derived provisioning; never upgrades a pressured reopen."""
-        if self._connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name = 'cat_vectors'"
-        ).fetchone() is not None:
+        vector_state = _category_vector_schema_state(self._connection)
+        if vector_state == "current":
             return
+        if vector_state == "incoherent":
+            raise RuntimeError("incoherent optional vector schema")
         if self.pressure().state != "normal":
             return
-        with self.derived_transaction() as connection:
-            if connection is None:
-                return
-            connection.execute("SAVEPOINT cat_optional_vec")
-            try:
-                connection.execute(
-                    "CREATE VIRTUAL TABLE cat_vectors "
-                    "USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768])"
-                )
-            except sqlite3.OperationalError as exc:
-                connection.execute("ROLLBACK TO SAVEPOINT cat_optional_vec")
-                if "no such module: vec0" not in str(exc).lower():
-                    raise
-            finally:
-                connection.execute("RELEASE SAVEPOINT cat_optional_vec")
+        try:
+            with self.derived_transaction() as connection:
+                if connection is None:
+                    return
+                vector_state = _category_vector_schema_state(connection)
+                if vector_state == "current":
+                    return
+                if vector_state == "incoherent":
+                    raise RuntimeError("incoherent optional vector schema")
+                connection.execute("SAVEPOINT cat_optional_vec")
+                try:
+                    connection.execute(_CATEGORY_VECTOR_DDL)
+                except sqlite3.OperationalError as exc:
+                    connection.execute("ROLLBACK TO SAVEPOINT cat_optional_vec")
+                    if "no such module: vec0" not in str(exc).lower():
+                        raise
+                    return
+                finally:
+                    connection.execute("RELEASE SAVEPOINT cat_optional_vec")
+                if _category_vector_schema_state(connection) != "current":
+                    raise RuntimeError("incoherent optional vector schema")
+        except CategoryQuotaExceeded:
+            return
 
     def _main_database_identity(self) -> tuple[Path | None, tuple[int, int] | None]:
         row = self._connection.execute("PRAGMA database_list").fetchone()

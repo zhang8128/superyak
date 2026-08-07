@@ -33,6 +33,34 @@ def make_v2_store(database, **kwargs):
     return EvolvingCategoryStore(sqlite3.connect(database), **kwargs)
 
 
+def create_supported_cat_vectors(database):
+    sqlite_vec = pytest.importorskip("sqlite_vec")
+    connection = sqlite3.connect(database)
+    connection.enable_load_extension(True)
+    sqlite_vec.load(connection)
+    connection.enable_load_extension(False)
+    connection.execute(
+        "CREATE VIRTUAL TABLE cat_vectors "
+        "USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768])"
+    )
+    connection.commit()
+    connection.close()
+
+
+def assert_vector_layout_rejected_at_hard_quota(database):
+    before_bytes = database.read_bytes()
+    before_mtime = database.stat().st_mtime_ns
+    connection = sqlite3.connect(database)
+    try:
+        with pytest.raises(CategoryQuotaExceeded):
+            EvolvingCategoryStore(connection, quota_bytes=1, size_provider=lambda _path: 1)
+        assert not connection.in_transaction
+    finally:
+        connection.close()
+    assert database.read_bytes() == before_bytes
+    assert database.stat().st_mtime_ns == before_mtime
+
+
 def test_archive_pressure_stages(tmp_path):
     """Catches a quota boundary that classifies either 90% threshold incorrectly."""
     size = {"value": 0}
@@ -340,6 +368,195 @@ def test_current_core_schema_skips_missing_vector_provisioning_under_pressure(tm
     ).fetchone()[0] == 0
     reopened.close()
     assert database.stat().st_mtime_ns == before
+
+
+@pytest.mark.parametrize(
+    ("admission_used", "expected_state"),
+    [(90, "derived_blocked"), (100, "writes_blocked")],
+)
+def test_optional_vector_admission_race_is_a_read_only_skip(
+    tmp_path, admission_used, expected_state
+):
+    """Catches normal preflight racing to high or hard pressure during admission."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.create_cell(CellDraft("existing", 0, "existing"))
+    seeded.close()
+    before = database.stat().st_mtime_ns
+    measurements = [0, admission_used, admission_used]
+    measurement_paths = []
+
+    def sequence_provider(path):
+        measurement_paths.append(path)
+        return measurements[len(measurement_paths) - 1]
+
+    reopened = make_v2_store(
+        database,
+        quota_bytes=100,
+        size_provider=sequence_provider,
+    )
+
+    assert reopened.get_cell("existing")["content"] == "existing"
+    assert reopened.pressure().state == expected_state
+    assert measurement_paths == [database, database, database]
+    assert not reopened.connection.in_transaction
+    assert reopened.connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE name = 'cat_vectors' OR name LIKE 'cat_vectors_%'"
+    ).fetchone()[0] == 0
+    reopened.close()
+    assert database.stat().st_mtime_ns == before
+
+
+def test_lone_bogus_vector_shadow_requires_migration_at_hard_quota(tmp_path):
+    """Catches a same-named shadow being treated as supported vector absence."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE cat_vectors_chunks (value TEXT)")
+    connection.commit()
+    connection.close()
+
+    assert_vector_layout_rejected_at_hard_quota(database)
+
+
+def test_real_vector_shadows_without_the_main_table_require_migration_at_hard_quota(tmp_path):
+    """Catches a partial real vec0 layout being accepted without its virtual table."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    create_supported_cat_vectors(database)
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA writable_schema = ON")
+    connection.execute("DELETE FROM sqlite_master WHERE name = 'cat_vectors'")
+    connection.execute("PRAGMA writable_schema = OFF")
+    connection.commit()
+    connection.close()
+
+    assert_vector_layout_rejected_at_hard_quota(database)
+
+
+def test_vec0_layout_missing_one_shadow_requires_migration_at_hard_quota(tmp_path):
+    """Catches a damaged real vec0 layout being accepted from main-table DDL alone."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    create_supported_cat_vectors(database)
+    connection = sqlite3.connect(database)
+    connection.execute("DROP TABLE cat_vectors_vector_chunks00")
+    connection.commit()
+    connection.close()
+
+    assert_vector_layout_rejected_at_hard_quota(database)
+
+
+def test_vec0_shadow_with_the_wrong_object_type_requires_migration_at_hard_quota(tmp_path):
+    """Catches a permitted shadow name bypassing its required SQLite object type."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    create_supported_cat_vectors(database)
+    connection = sqlite3.connect(database)
+    connection.execute("DROP TABLE cat_vectors_info")
+    connection.execute(
+        "CREATE VIEW cat_vectors_info AS "
+        "SELECT 'CREATE_VERSION' AS key, 'v0.1.7' AS value"
+    )
+    connection.commit()
+    connection.close()
+
+    assert_vector_layout_rejected_at_hard_quota(database)
+
+
+def test_tampered_real_vec0_shadow_definition_requires_migration_at_hard_quota(tmp_path):
+    """Catches writable_schema edits to a vec0 shadow definition being ignored."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    create_supported_cat_vectors(database)
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA writable_schema = ON")
+    cursor = connection.execute(
+        "UPDATE sqlite_master SET sql = REPLACE(sql, 'value any', 'value blob') "
+        "WHERE type = 'table' AND name = 'cat_vectors_info'"
+    )
+    assert cursor.rowcount == 1
+    connection.execute("PRAGMA writable_schema = OFF")
+    connection.commit()
+    connection.close()
+
+    assert_vector_layout_rejected_at_hard_quota(database)
+
+
+def test_extra_known_vec0_shadow_requires_migration_at_hard_quota(tmp_path):
+    """Catches a metadata-layout shadow being accepted by the non-metadata schema."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    create_supported_cat_vectors(database)
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "CREATE TABLE cat_vectors_metadatachunks00(rowid PRIMARY KEY, data BLOB NOT NULL)"
+    )
+    connection.commit()
+    connection.close()
+
+    assert_vector_layout_rejected_at_hard_quota(database)
+
+
+def test_ordinary_cat_vectors_table_requires_migration_at_hard_quota(tmp_path):
+    """Catches an ordinary same-named table being mistaken for the vec0 virtual table."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE cat_vectors (cell_id TEXT PRIMARY KEY, embedding BLOB)")
+    connection.commit()
+    connection.close()
+
+    assert_vector_layout_rejected_at_hard_quota(database)
+
+
+def test_genuine_vec0_layout_is_current_and_reopens_without_a_write(tmp_path):
+    """Catches exact preflight rejecting sqlite-vec's complete supported layout."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.create_cell(CellDraft("existing", 0, "existing"))
+    seeded.close()
+    create_supported_cat_vectors(database)
+    before = database.stat().st_mtime_ns
+
+    reopened = make_v2_store(database, quota_bytes=1, size_provider=lambda _path: 1)
+
+    assert reopened.get_cell("existing")["content"] == "existing"
+    assert not reopened.connection.in_transaction
+    reopened.close()
+    assert database.stat().st_mtime_ns == before
+
+
+def test_incoherent_vec0_layout_fails_closed_at_normal_pressure_before_schema_ddl(tmp_path):
+    """Catches normal migration layering IF NOT EXISTS over damaged vector state."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    create_supported_cat_vectors(database)
+    connection = sqlite3.connect(database)
+    connection.execute("DROP TABLE cat_vectors_vector_chunks00")
+    connection.commit()
+    before_bytes = database.read_bytes()
+    before_mtime = database.stat().st_mtime_ns
+    statements = []
+    connection.set_trace_callback(statements.append)
+
+    with pytest.raises(RuntimeError, match="incoherent optional vector schema"):
+        EvolvingCategoryStore(connection, quota_bytes=100, size_provider=lambda _path: 0)
+
+    assert not connection.in_transaction
+    assert not any(statement.lstrip().upper().startswith("CREATE") for statement in statements)
+    connection.close()
+    assert database.read_bytes() == before_bytes
+    assert database.stat().st_mtime_ns == before_mtime
 
 
 def test_unexpected_category_object_is_not_a_current_core_schema(tmp_path):
