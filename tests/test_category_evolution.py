@@ -182,6 +182,20 @@ def test_legacy_replay_aborts_when_required_snapshot_is_derived_skipped(tmp_path
     assert not output.exists()
 
 
+def test_replay_cli_reports_quota_errors_without_a_traceback(monkeypatch, capsys):
+    """Catches quota denial escaping the replay CLI as an uncaught traceback."""
+    import category_evolution as evolution
+
+    def blocked(*_args, **_kwargs):
+        raise CategoryQuotaExceeded("category archive quota reached")
+
+    monkeypatch.setattr(evolution, "import_legacy_category", blocked)
+    assert evolution.main(["replay", "--legacy", "legacy.db", "--output", "output.db"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "error: category archive quota reached\n"
+
+
 def _proposal(
     proposal_id,
     kind,

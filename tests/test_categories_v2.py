@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -191,6 +192,38 @@ def test_default_size_provider_detects_replacement_between_path_resolution_and_o
     store.close()
 
 
+@pytest.mark.parametrize("suffix", ["", "-wal", "-shm"])
+def test_default_size_provider_rejects_fifo_without_blocking(tmp_path, suffix):
+    """Catches quota measurement hanging while opening an attacker-controlled FIFO."""
+    database = tmp_path / "quota.db"
+    store = make_v2_store(database, quota_bytes=1_000_000)
+    candidate = Path(f"{database}{suffix}")
+    if suffix:
+        candidate.unlink(missing_ok=True)
+    else:
+        database.unlink()
+    os.mkfifo(candidate)
+
+    assert store.pressure().state == "writes_blocked"
+    with pytest.raises(CategoryQuotaExceeded):
+        store.append_event("blocked", {})
+    store.close()
+
+
+def test_default_size_provider_fallback_rejects_symlink(tmp_path, monkeypatch):
+    """Catches platforms without O_NOFOLLOW following a sidecar symlink."""
+    database = tmp_path / "quota.db"
+    store = make_v2_store(database, quota_bytes=1_000_000)
+    target = tmp_path / "target"
+    target.write_bytes(b"target")
+    wal = Path(f"{database}-wal")
+    wal.symlink_to(target)
+    monkeypatch.delattr(categories_module.os, "O_NOFOLLOW", raising=False)
+
+    assert store.pressure().state == "writes_blocked"
+    store.close()
+
+
 def test_pressure_uses_exact_decimal_watermark_math_for_large_quotas(tmp_path):
     """Catches floating-point rounding admitting a huge archive above 90%."""
     quota = 10**40 + 7
@@ -230,6 +263,45 @@ def test_hard_quota_rejects_fresh_store_before_creating_schema(tmp_path):
     try:
         assert connection.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'cat_*'"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_current_schema_reopens_at_hard_quota_without_a_schema_write(tmp_path):
+    """Catches restart migration attempting DDL after the archive is already full."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.create_cell(CellDraft("existing", 0, "existing"))
+    seeded.close()
+    before = database.stat().st_mtime_ns
+
+    reopened = make_v2_store(database, quota_bytes=1, size_provider=lambda _path: 1)
+    assert reopened.get_cell("existing")["content"] == "existing"
+    assert reopened.pressure().state == "writes_blocked"
+    with pytest.raises(CategoryQuotaExceeded):
+        reopened.create_cell(CellDraft("blocked", 0, "blocked"))
+    reopened.close()
+    assert database.stat().st_mtime_ns == before
+
+
+def test_incomplete_schema_still_requires_quota_before_migration(tmp_path):
+    """Catches a partial current-looking schema bypassing the hard-quota migration gate."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    connection = sqlite3.connect(database)
+    connection.execute("DROP INDEX idx_cat_epochs_rewrite_unique")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(CategoryQuotaExceeded):
+        make_v2_store(database, quota_bytes=1, size_provider=lambda _path: 1)
+
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_cat_epochs_rewrite_unique'"
         ).fetchone()[0] == 0
     finally:
         connection.close()

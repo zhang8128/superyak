@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from fractions import Fraction
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Literal, Mapping
@@ -395,6 +396,84 @@ _IMMUTABLE_TABLES = (
 )
 
 
+def _normalized_schema_sql(sql: str) -> str:
+    """Compare DDL deterministically without changing quoted SQL literals."""
+    result: list[str] = []
+    quote: str | None = None
+    pending_space = False
+    for character in sql:
+        if quote is None:
+            if character.isspace():
+                pending_space = bool(result)
+                continue
+            if pending_space:
+                result.append(" ")
+                pending_space = False
+            result.append(character if character in "'\"`[" else character.lower())
+            if character == "'":
+                quote = "'"
+            elif character == '"':
+                quote = '"'
+            elif character == "`":
+                quote = "`"
+            elif character == "[":
+                quote = "]"
+        else:
+            result.append(character)
+            if character == quote:
+                quote = None
+    return "".join(result).strip()
+
+
+def _execute_schema_statements(connection: sqlite3.Connection, sql: str) -> None:
+    statement = ""
+    for line in sql.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            if statement.strip():
+                connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise ValueError("incomplete schema statement")
+
+
+def _install_immutability_triggers(connection: sqlite3.Connection) -> None:
+    for table in _IMMUTABLE_TABLES:
+        _execute_schema_statements(
+            connection,
+            f"""
+            CREATE TRIGGER IF NOT EXISTS {table}_no_update
+            BEFORE UPDATE ON {table}
+            BEGIN
+                SELECT RAISE(ABORT, '{table} is immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS {table}_no_delete
+            BEFORE DELETE ON {table}
+            BEGIN
+                SELECT RAISE(ABORT, '{table} is immutable');
+            END;
+            """,
+        )
+
+
+def _core_schema_definitions(connection: sqlite3.Connection) -> tuple[tuple[str, str, str], ...]:
+    rows = connection.execute(
+        "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL"
+    ).fetchall()
+    return tuple(sorted((row[0], row[1], _normalized_schema_sql(row[2])) for row in rows))
+
+
+@lru_cache(maxsize=1)
+def _expected_core_schema_definitions() -> tuple[tuple[str, str, str], ...]:
+    connection = sqlite3.connect(":memory:")
+    try:
+        _execute_schema_statements(connection, _EVOLVING_SCHEMA)
+        _install_immutability_triggers(connection)
+        return _core_schema_definitions(connection)
+    finally:
+        connection.close()
+
+
 def _canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -448,36 +527,37 @@ class EvolvingCategoryStore:
         return ratio if 0 <= ratio <= 1 else None
 
     def _execute_complete_statements(self, sql: str) -> None:
-        statement = ""
-        for line in sql.splitlines(keepends=True):
-            statement += line
-            if sqlite3.complete_statement(statement):
-                if statement.strip():
-                    self._connection.execute(statement)
-                statement = ""
-        if statement.strip():
-            raise ValueError("incomplete schema statement")
+        _execute_schema_statements(self._connection, sql)
+
+    def _has_current_core_schema(self) -> bool:
+        """Read-only fingerprint check; optional vector state is deliberately excluded."""
+        expected = _expected_core_schema_definitions()
+        expected_names = {name for _kind, name, _sql in expected}
+        try:
+            actual = tuple(sorted(
+                (row[0], row[1], _normalized_schema_sql(row[2]))
+                for row in self._connection.execute(
+                    "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL"
+                )
+                if row[1] in expected_names
+            ))
+            versions = tuple(
+                row[0] for row in self._connection.execute(
+                    "SELECT version FROM cat_schema_version ORDER BY version"
+                )
+            )
+        except sqlite3.Error:
+            return False
+        return actual == expected and versions == (1,)
 
     def _ensure_schema(self) -> None:
+        if self._has_current_core_schema():
+            return
         self._connection.execute("BEGIN IMMEDIATE")
         try:
             self._enforce_quota("immutable")
             self._execute_complete_statements(_EVOLVING_SCHEMA)
-            for table in _IMMUTABLE_TABLES:
-                self._execute_complete_statements(
-                    f"""
-                    CREATE TRIGGER IF NOT EXISTS {table}_no_update
-                    BEFORE UPDATE ON {table}
-                    BEGIN
-                        SELECT RAISE(ABORT, '{table} is immutable');
-                    END;
-                    CREATE TRIGGER IF NOT EXISTS {table}_no_delete
-                    BEFORE DELETE ON {table}
-                    BEGIN
-                        SELECT RAISE(ABORT, '{table} is immutable');
-                    END;
-                    """
-                )
+            _install_immutability_triggers(self._connection)
             self._connection.execute("SAVEPOINT cat_optional_vec")
             try:
                 self._connection.execute(
@@ -494,6 +574,9 @@ class EvolvingCategoryStore:
                 "INSERT OR IGNORE INTO cat_schema_version (version, applied_at) VALUES (1, ?)",
                 (_now_iso(),),
             )
+            # A fresh database can grow while DDL is staged; reject it before
+            # publication when the provider can observe that growth.
+            self._enforce_quota("immutable")
             self._connection.commit()
         except Exception:
             self._connection.rollback()
@@ -516,11 +599,22 @@ class EvolvingCategoryStore:
     def _regular_file_size(
         path: Path, identity: tuple[int, int] | None = None, *, required: bool = False
     ) -> int | None:
-        flags = os.O_RDONLY
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
+        nofollow = hasattr(os, "O_NOFOLLOW")
+        if nofollow:
             flags |= os.O_NOFOLLOW
+        before = None
+        if not nofollow:
+            try:
+                before = os.lstat(path)
+            except FileNotFoundError:
+                return None if required else 0
+            except OSError:
+                return None
+            if not stat.S_ISREG(before.st_mode):
+                return None
         try:
             descriptor = os.open(path, flags)
         except FileNotFoundError:
@@ -531,6 +625,17 @@ class EvolvingCategoryStore:
             metadata = os.fstat(descriptor)
             if not stat.S_ISREG(metadata.st_mode):
                 return None
+            if before is not None:
+                try:
+                    after = os.lstat(path)
+                except OSError:
+                    return None
+                if (
+                    not stat.S_ISREG(after.st_mode)
+                    or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+                    or (before.st_dev, before.st_ino) != (metadata.st_dev, metadata.st_ino)
+                ):
+                    return None
             if identity is not None and (metadata.st_dev, metadata.st_ino) != identity:
                 return None
             return metadata.st_size

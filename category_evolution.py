@@ -1522,7 +1522,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command != "replay":
             raise ValueError("a command is required")
         report = import_legacy_category(args.legacy, args.output)
-    except (OSError, sqlite3.Error, ValueError) as exc:
+    except (CategoryQuotaExceeded, OSError, sqlite3.Error, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     if args.as_json:
