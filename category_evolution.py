@@ -1074,9 +1074,25 @@ def _supported_schema_definitions() -> tuple[tuple[str, str, str], ...]:
         connection.close()
 
 
-def _validate_schema_definitions(connection: sqlite3.Connection) -> None:
-    if _schema_definitions(connection) != _supported_schema_definitions():
-        raise ValueError("output is incompatible with legacy replay")
+def _validate_schema_definitions(
+    connection: sqlite3.Connection,
+) -> Literal["current", "pre-unique-index"]:
+    """Accept current DDL or its one safe, immediately preceding fingerprint."""
+    actual = _schema_definitions(connection)
+    supported = _supported_schema_definitions()
+    if actual == supported:
+        return "current"
+    predecessor = tuple(
+        definition
+        for definition in supported
+        if not (
+            definition[0] == "index"
+            and definition[1] == "idx_cat_epochs_rewrite_unique"
+        )
+    )
+    if actual == predecessor:
+        return "pre-unique-index"
+    raise ValueError("output is incompatible with legacy replay")
 
 
 def _validate_completed_replay(
@@ -1234,7 +1250,7 @@ def _preflight_existing_output(
         if not _V2_TABLES <= tables:
             raise ValueError("output is incompatible with legacy replay")
         try:
-            _validate_schema_definitions(connection)
+            schema_version = _validate_schema_definitions(connection)
             if "cat_vectors" in tables:
                 permitted_tables = _V2_TABLES | {"cat_vectors"} | _VEC_SHADOW_TABLES
                 if not _VEC_SHADOW_TABLES <= tables or not tables <= permitted_tables:
@@ -1265,7 +1281,7 @@ def _preflight_existing_output(
                     raise ValueError("output is incompatible with legacy replay")
             elif not tables <= _V2_TABLES:
                 raise ValueError("output is incompatible with legacy replay")
-            return _validate_completed_replay(
+            completed = _validate_completed_replay(
                 connection,
                 plan,
                 event_id=event_id,
@@ -1275,6 +1291,9 @@ def _preflight_existing_output(
                 active_cell_ids_json=active_cell_ids_json,
                 snapshot_hash=snapshot_hash,
             )
+            if schema_version == "pre-unique-index" and not completed:
+                raise ValueError("output is incompatible with legacy replay")
+            return completed
         except sqlite3.Error as exc:
             raise ValueError("output is incompatible with legacy replay") from exc
     finally:

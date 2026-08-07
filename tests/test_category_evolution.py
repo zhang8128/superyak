@@ -517,10 +517,12 @@ def test_root_epoch_enforces_four_branch_limit_atomically(evolution_store):
     } == before
 
 
-def test_latest_disposition_uses_append_order_under_backward_clock_skew(evolution_store):
+def test_latest_disposition_uses_append_order_under_backward_clock_skew(tmp_path):
     """Catches a later durable event losing to an earlier wall-clock timestamp."""
-    engine = EvolutionEngine(evolution_store)
-    _root(engine, evolution_store, "old")
+    database = tmp_path / "clock-skew.db"
+    store = EvolvingCategoryStore(sqlite3.connect(database))
+    engine = EvolutionEngine(store)
+    _root(engine, store, "old")
     engine.propose(
         _proposal(
             "clock-skew",
@@ -529,12 +531,18 @@ def test_latest_disposition_uses_append_order_under_backward_clock_skew(evolutio
             outputs=(CellDraft("clock-output", 0, "clock"),),
         )
     )
-    evolution_store.connection.execute(
+    store.connection.execute(
         "INSERT INTO cat_events (id, kind, payload_json, created_at) VALUES (?, ?, ?, ?)",
         ("later-row", "rewrite_rejected", '{"rewrite_id":"clock-skew"}', "1900-01-01"),
     )
+    store.connection.commit()
+    store.close()
 
-    assert engine.latest_disposition("clock-skew") == "rejected"
+    reopened = EvolvingCategoryStore(sqlite3.connect(database))
+    try:
+        assert EvolutionEngine(reopened).latest_disposition("clock-skew") == "rejected"
+    finally:
+        reopened.close()
 
 
 def test_multi_parent_commit_preserves_parent_order_and_unions_active_state(tmp_path):
@@ -565,28 +573,36 @@ def test_multi_parent_commit_preserves_parent_order_and_unions_active_state(tmp_
         store.close()
 
 
-def test_corrupt_cyclic_epoch_history_rejects_commit_without_epoch(evolution_store):
+def test_corrupt_cyclic_epoch_history_rejects_commit_without_epoch(tmp_path):
     """Catches validation traversing a corrupt parent cycle as if it were a DAG."""
-    engine = EvolutionEngine(evolution_store)
+    database = tmp_path / "durable-cycle.db"
+    store = EvolvingCategoryStore(sqlite3.connect(database))
+    engine = EvolutionEngine(store)
     engine.create_root_epoch("cycle-a", ())
     engine.create_root_epoch("cycle-b", ())
-    evolution_store.connection.execute(
+    store.connection.execute(
         "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) VALUES (?, 0, ?)",
         ("cycle-a", "cycle-b"),
     )
-    evolution_store.connection.execute(
+    store.connection.execute(
         "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) VALUES (?, 0, ?)",
         ("cycle-b", "cycle-a"),
     )
+    store.connection.commit()
+    store.close()
+
+    reopened = EvolvingCategoryStore(sqlite3.connect(database))
+    engine = EvolutionEngine(reopened)
     engine.propose(
         _proposal("after-cycle", "create", outputs=(CellDraft("cycle-out", 0, "out"),))
     )
 
     assert engine.commit("after-cycle", ("cycle-a",), epoch_id="must-not-exist") is None
     assert engine.latest_disposition("after-cycle") == "rejected"
-    assert evolution_store.connection.execute(
+    assert reopened.connection.execute(
         "SELECT COUNT(*) FROM cat_epochs WHERE id='must-not-exist'"
     ).fetchone()[0] == 0
+    reopened.close()
 
 
 def test_missing_parent_and_inactive_lineage_reject_without_epoch(evolution_store):
@@ -790,6 +806,111 @@ def test_legacy_replay_has_one_snapshot_hash_across_three_independent_outputs(tm
     assert {report.snapshot_hash for report in reports} == {reports[0].snapshot_hash}
     assert {report.root_epoch_id for report in reports} == {reports[0].root_epoch_id}
     assert all(_v2_cell_count(tmp_path / f"v2-{index}.db") == 5 for index in range(3))
+
+
+def _model_pre_unique_index_output(path: Path) -> None:
+    connection = sqlite3.connect(path)
+    connection.execute("DROP INDEX idx_cat_epochs_rewrite_unique")
+    connection.commit()
+    connection.close()
+
+
+def test_legacy_replay_accepts_exact_pre_unique_index_output_read_only(tmp_path):
+    """Catches a new integrity index breaking idempotence for the exact predecessor DDL."""
+    legacy = tmp_path / "legacy.db"
+    output = tmp_path / "predecessor.db"
+    _make_legacy_history(legacy)
+    expected = _importer().import_legacy_category(legacy, output)
+    _model_pre_unique_index_output(output)
+    predecessor_bytes = output.read_bytes()
+    predecessor_mtime = output.stat().st_mtime_ns
+
+    actual = _importer().import_legacy_category(legacy, output)
+
+    assert actual == expected
+    assert output.read_bytes() == predecessor_bytes
+    assert output.stat().st_mtime_ns == predecessor_mtime
+    connection = sqlite3.connect(output)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='index' AND name='idx_cat_epochs_rewrite_unique'"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_pre_unique_index_output_still_rejects_changed_legacy_source(tmp_path):
+    """Catches compatibility mode blessing a predecessor output for different input."""
+    legacy = tmp_path / "legacy.db"
+    changed = tmp_path / "changed.db"
+    output = tmp_path / "predecessor.db"
+    _make_legacy_history(legacy)
+    changed_connection = _legacy_connection(changed)
+    _insert_legacy_cell(
+        changed_connection,
+        "arrow-alpha",
+        1,
+        "memory-alpha",
+        "memory-beta",
+        "changed alpha",
+    )
+    _insert_legacy_cell(
+        changed_connection,
+        "arrow-beta",
+        1,
+        "memory-beta",
+        "memory-alpha",
+        "beta to alpha",
+    )
+    _insert_legacy_cell(
+        changed_connection, "transfer", 2, "arrow-alpha", "arrow-beta", "transfer"
+    )
+    changed_connection.commit()
+    changed_connection.close()
+    _importer().import_legacy_category(legacy, output)
+    _model_pre_unique_index_output(output)
+    predecessor_bytes = output.read_bytes()
+
+    with pytest.raises(ValueError, match="does not match source"):
+        _importer().import_legacy_category(changed, output)
+
+    assert output.read_bytes() == predecessor_bytes
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ("rewrite-row", "rewrite-epoch", "additional-ddl"),
+)
+def test_pre_unique_index_compatibility_rejects_history_or_other_schema_drift(
+    tmp_path, drift
+):
+    """Catches predecessor compatibility accepting online history or broader DDL drift."""
+    legacy = tmp_path / f"legacy-{drift}.db"
+    output = tmp_path / f"predecessor-{drift}.db"
+    _make_legacy_history(legacy)
+    _importer().import_legacy_category(legacy, output)
+    _model_pre_unique_index_output(output)
+    connection = sqlite3.connect(output)
+    if drift in ("rewrite-row", "rewrite-epoch"):
+        connection.execute(
+            "INSERT INTO cat_rewrites (id, created_at) VALUES ('online', 'now')"
+        )
+    if drift == "rewrite-epoch":
+        connection.execute(
+            "INSERT INTO cat_epochs (id, rewrite_id, created_at) "
+            "VALUES ('online-epoch', 'online', 'now')"
+        )
+    if drift == "additional-ddl":
+        connection.execute("DROP INDEX idx_cat_epoch_parents_parent")
+    connection.commit()
+    connection.close()
+    drifted_bytes = output.read_bytes()
+
+    with pytest.raises(ValueError, match="incompatible|does not match source"):
+        _importer().import_legacy_category(legacy, output)
+
+    assert output.read_bytes() == drifted_bytes
 
 
 def test_legacy_replay_counts_missing_level_two_reference_as_loss_without_proxy(tmp_path):
