@@ -305,6 +305,21 @@ def test_rewrite_members_and_epochs_have_schema_constraints(v2_store):
         )
 
 
+def test_one_committed_epoch_per_rewrite_is_database_enforced(v2_store):
+    """Catches application races creating two epochs for one immutable rewrite."""
+    connection = v2_store.connection
+    connection.execute("INSERT INTO cat_rewrites (id, created_at) VALUES ('once', 'now')")
+    connection.execute(
+        "INSERT INTO cat_epochs (id, rewrite_id, created_at) VALUES ('first', 'once', 'now')"
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+        connection.execute(
+            "INSERT INTO cat_epochs (id, rewrite_id, created_at) "
+            "VALUES ('second', 'once', 'now')"
+        )
+
+
 def _arrow(store, cell_id, source, target):
     store.create_cell(
         CellDraft(

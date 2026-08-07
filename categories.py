@@ -355,6 +355,8 @@ CREATE INDEX IF NOT EXISTS idx_cat_weight_latest
     ON cat_weight_observations(cell_id, context_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_rewrite_members_cell ON cat_rewrite_members(cell_id);
 CREATE INDEX IF NOT EXISTS idx_cat_epoch_parents_parent ON cat_epoch_parents(parent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cat_epochs_rewrite_unique
+    ON cat_epochs(rewrite_id) WHERE rewrite_id IS NOT NULL;
 """
 
 _IMMUTABLE_TABLES = (
@@ -429,12 +431,16 @@ class EvolvingCategoryStore:
         self._connection.commit()
 
     @contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
+    def transaction(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
         """Run writes atomically without committing an enclosing transaction."""
         if self._connection.in_transaction:
             savepoint = f"cat_write_{uuid.uuid4().hex}"
             self._connection.execute(f"SAVEPOINT {savepoint}")
             try:
+                if immediate:
+                    # A no-row write acquires SQLite's write reservation before
+                    # policy reads without changing caller-owned state.
+                    self._connection.execute("DELETE FROM cat_snapshots WHERE 0")
                 yield self._connection
             except Exception:
                 self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
@@ -444,7 +450,7 @@ class EvolvingCategoryStore:
                 self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
             return
 
-        self._connection.execute("BEGIN")
+        self._connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
         try:
             yield self._connection
         except Exception:

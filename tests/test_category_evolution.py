@@ -11,6 +11,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import threading
 import uuid
 
 import pytest
@@ -386,6 +387,324 @@ def test_commit_respects_caller_transaction_ownership(evolution_store):
         "SELECT COUNT(*) FROM cat_epochs WHERE id='nested-epoch'"
     ).fetchone()[0] == 0
     assert engine.latest_disposition("nested") == "proposed"
+
+
+def test_concurrent_commit_is_exactly_once_across_two_connections(tmp_path, monkeypatch):
+    """Catches two readers both observing proposed state before either publishes."""
+    database = tmp_path / "concurrent.db"
+    setup = EvolvingCategoryStore(sqlite3.connect(database))
+    engine = EvolutionEngine(setup)
+    _root(engine, setup, "old")
+    engine.propose(
+        _proposal(
+            "concurrent",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("new", 0, "new"),),
+        )
+    )
+    setup.close()
+
+    disposition_barrier = threading.Barrier(2)
+    start_barrier = threading.Barrier(2)
+    original_disposition = EvolutionEngine.latest_disposition
+
+    def synchronize_pretransaction_read(self, rewrite_id):
+        if not self.connection.in_transaction:
+            disposition_barrier.wait(timeout=5)
+        return original_disposition(self, rewrite_id)
+
+    monkeypatch.setattr(
+        EvolutionEngine, "latest_disposition", synchronize_pretransaction_read
+    )
+    results = []
+    errors = []
+
+    def worker():
+        connection = sqlite3.connect(database, timeout=5)
+        store = EvolvingCategoryStore(connection)
+        try:
+            start_barrier.wait(timeout=5)
+            results.append(EvolutionEngine(store).commit("concurrent", ("root",)))
+        except Exception as exc:  # captured for an assertion in the parent thread
+            errors.append(exc)
+        finally:
+            store.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(set(results)) == 1
+
+    connection = sqlite3.connect(database)
+    try:
+        epoch = connection.execute(
+            "SELECT id FROM cat_epochs WHERE rewrite_id='concurrent'"
+        ).fetchall()
+        committed_events = [
+            row[0]
+            for row in connection.execute(
+                "SELECT payload_json FROM cat_events WHERE kind='rewrite_committed'"
+            )
+            if json.loads(row[0])["rewrite_id"] == "concurrent"
+        ]
+        assert epoch == [(results[0],)]
+        assert len(committed_events) == 1
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("reject_first", [False, True])
+def test_root_epoch_cannot_activate_archived_rewrite_outputs(
+    evolution_store, reject_first
+):
+    """Catches root publication bypassing proposal and rejection policy."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    engine.propose(
+        _proposal(
+            "archived-output",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("archived", 0, "archived"),),
+            evidence=_evidence(persistence=0.0),
+        )
+    )
+    if reject_first:
+        assert engine.commit("archived-output", ("root",)) is None
+
+    before = {
+        table: evolution_store.connection.execute(
+            f"SELECT COUNT(*) FROM {table}"
+        ).fetchone()[0]
+        for table in ("cat_events", "cat_epochs", "cat_snapshots")
+    }
+    with pytest.raises(ValueError, match="rewrite output"):
+        engine.create_root_epoch("bypass", ("archived",))
+    after = {
+        table: evolution_store.connection.execute(
+            f"SELECT COUNT(*) FROM {table}"
+        ).fetchone()[0]
+        for table in before
+    }
+    assert after == before
+
+
+def test_root_epoch_enforces_four_branch_limit_atomically(evolution_store):
+    """Catches root creation bypassing the exact leaf-branch policy."""
+    engine = EvolutionEngine(evolution_store)
+    for index in range(4):
+        assert engine.create_root_epoch(f"root-{index}", ()) == f"root-{index}"
+    before = {
+        table: evolution_store.connection.execute(
+            f"SELECT COUNT(*) FROM {table}"
+        ).fetchone()[0]
+        for table in ("cat_events", "cat_epochs", "cat_snapshots")
+    }
+
+    with pytest.raises(ValueError, match="branch"):
+        engine.create_root_epoch("root-4", ())
+
+    assert {
+        table: evolution_store.connection.execute(
+            f"SELECT COUNT(*) FROM {table}"
+        ).fetchone()[0]
+        for table in before
+    } == before
+
+
+def test_latest_disposition_uses_append_order_under_backward_clock_skew(evolution_store):
+    """Catches a later durable event losing to an earlier wall-clock timestamp."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    engine.propose(
+        _proposal(
+            "clock-skew",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("clock-output", 0, "clock"),),
+        )
+    )
+    evolution_store.connection.execute(
+        "INSERT INTO cat_events (id, kind, payload_json, created_at) VALUES (?, ?, ?, ?)",
+        ("later-row", "rewrite_rejected", '{"rewrite_id":"clock-skew"}', "1900-01-01"),
+    )
+
+    assert engine.latest_disposition("clock-skew") == "rejected"
+
+
+def test_multi_parent_commit_preserves_parent_order_and_unions_active_state(tmp_path):
+    """Catches multi-parent lineage reordering or dropping one parent's active cells."""
+    store = EvolvingCategoryStore(sqlite3.connect(tmp_path / "multi-parent.db"))
+    try:
+        engine = EvolutionEngine(store)
+        store.create_cell(CellDraft("left", 0, "left"))
+        store.create_cell(CellDraft("right", 0, "right"))
+        engine.create_root_epoch("left-root", ("left",))
+        engine.create_root_epoch("right-root", ("right",))
+        engine.propose(
+            _proposal(
+                "join",
+                "create",
+                outputs=(CellDraft("joined", 0, "joined"),),
+            )
+        )
+
+        epoch_id = engine.commit(
+            "join", ("right-root", "left-root"), epoch_id="joined-epoch"
+        )
+
+        assert epoch_id == "joined-epoch"
+        assert engine.epoch_parents(epoch_id) == ("right-root", "left-root")
+        assert engine.active_cell_ids(epoch_id) == ("joined", "left", "right")
+    finally:
+        store.close()
+
+
+def test_corrupt_cyclic_epoch_history_rejects_commit_without_epoch(evolution_store):
+    """Catches validation traversing a corrupt parent cycle as if it were a DAG."""
+    engine = EvolutionEngine(evolution_store)
+    engine.create_root_epoch("cycle-a", ())
+    engine.create_root_epoch("cycle-b", ())
+    evolution_store.connection.execute(
+        "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) VALUES (?, 0, ?)",
+        ("cycle-a", "cycle-b"),
+    )
+    evolution_store.connection.execute(
+        "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) VALUES (?, 0, ?)",
+        ("cycle-b", "cycle-a"),
+    )
+    engine.propose(
+        _proposal("after-cycle", "create", outputs=(CellDraft("cycle-out", 0, "out"),))
+    )
+
+    assert engine.commit("after-cycle", ("cycle-a",), epoch_id="must-not-exist") is None
+    assert engine.latest_disposition("after-cycle") == "rejected"
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id='must-not-exist'"
+    ).fetchone()[0] == 0
+
+
+def test_missing_parent_and_inactive_lineage_reject_without_epoch(evolution_store):
+    """Catches commit accepting absent parents or inputs outside parent snapshots."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "active", "inactive")
+    engine.create_root_epoch("other-root", ("active",))
+    engine.propose(
+        _proposal(
+            "missing-parent",
+            "retype",
+            inputs=("active",),
+            outputs=(CellDraft("missing-out", 0, "out"),),
+        )
+    )
+    assert engine.commit(
+        "missing-parent", ("absent",), epoch_id="missing-epoch"
+    ) is None
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id='missing-epoch'"
+    ).fetchone()[0] == 0
+
+    engine.propose(
+        _proposal(
+            "inactive-input",
+            "retype",
+            inputs=("inactive",),
+            outputs=(CellDraft("inactive-out", 0, "out"),),
+        )
+    )
+    assert engine.commit(
+        "inactive-input", ("other-root",), epoch_id="inactive-epoch"
+    ) is None
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id='inactive-epoch'"
+    ).fetchone()[0] == 0
+
+
+def test_exact_mixed_role_member_boundary_is_32(evolution_store):
+    """Catches per-role counting that lets the aggregate rewrite exceed policy."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, *(f"w-{index}" for index in range(31)))
+    evidence_event = evolution_store.append_event("evidence", {})
+    exact = _proposal(
+        "mixed-32",
+        "create",
+        outputs=(CellDraft("mixed-output", 0, "out"),),
+        witnesses=tuple(f"w-{index}" for index in range(30)),
+        evidence=_evidence(events=(evidence_event,)),
+    )
+    assert engine.propose(exact) == "mixed-32"
+    assert sum(len(values) for values in engine.lineage("mixed-32").values()) == 32
+
+    with pytest.raises(ValueError, match="member"):
+        engine.propose(
+            _proposal(
+                "mixed-33",
+                "create",
+                outputs=(CellDraft("mixed-too-many", 0, "out"),),
+                witnesses=tuple(f"w-{index}" for index in range(31)),
+                evidence=_evidence(events=(evidence_event,)),
+            )
+        )
+    assert evolution_store.get_cell("mixed-too-many") is None
+
+
+def test_explicit_correction_proposal_commits_despite_ordinary_ineligibility(
+    evolution_store,
+):
+    """Catches explicit correction being honored only by the helper, not commit."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    engine.propose(
+        _proposal(
+            "explicit",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("corrected", 0, "corrected"),),
+            evidence=_evidence(explicit=True, persistence=0.0, gain=0.0, cost=1.0),
+        )
+    )
+
+    assert engine.commit("explicit", ("root",), epoch_id="corrected-epoch") == "corrected-epoch"
+    assert engine.active_cell_ids("corrected-epoch") == ("corrected",)
+
+
+def test_equal_gain_consolidation_orders_by_creation_time_then_id(
+    tmp_path, monkeypatch
+):
+    """Catches caller order deciding equal-gain consolidation ties."""
+    store = EvolvingCategoryStore(sqlite3.connect(tmp_path / "ties.db"))
+    try:
+        engine = EvolutionEngine(store)
+        _root(engine, store)
+        created_times = iter(("2026-01-01", "2026-01-02", "2026-01-03", "2026-01-03"))
+        monkeypatch.setattr(
+            "category_evolution._now_iso", lambda: next(created_times, "2026-01-04")
+        )
+        for proposal_id in ("z", "a", "c", "b"):
+            engine.propose(
+                _proposal(
+                    proposal_id,
+                    "create",
+                    outputs=(CellDraft(f"out-{proposal_id}", 0, proposal_id),),
+                    evidence=_evidence(gain=0.7, cost=0.2),
+                )
+            )
+
+        committed = engine.consolidate(("b", "c", "a", "z"), "root")
+
+        assert tuple(rewrite_id for rewrite_id, _epoch_id in committed) == (
+            "z",
+            "a",
+            "b",
+            "c",
+        )
+    finally:
+        store.close()
 
 
 def test_consolidation_order_and_budget_are_deterministic(tmp_path):

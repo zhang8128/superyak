@@ -262,7 +262,7 @@ class EvolutionEngine:
             SELECT kind, payload_json FROM cat_events
             WHERE kind IN ('rewrite_proposed','rewrite_committed',
                            'rewrite_rejected','rewrite_superseded')
-            ORDER BY created_at DESC, rowid DESC
+            ORDER BY rowid DESC
             """
         ).fetchall()
         for row in rows:
@@ -297,48 +297,49 @@ class EvolutionEngine:
         epoch_id: str | None = None,
     ) -> str | None:
         """Commit an eligible proposal, or append a rejection without publishing it."""
-        rewrite = self.connection.execute(
-            "SELECT payload_json FROM cat_rewrites WHERE id = ?", (rewrite_id,)
-        ).fetchone()
-        if rewrite is None:
-            raise ValueError("rewrite proposal does not exist")
-        disposition = self.latest_disposition(rewrite_id)
-        if disposition == "committed":
-            row = self.connection.execute(
-                "SELECT id FROM cat_epochs WHERE rewrite_id = ? ORDER BY rowid DESC LIMIT 1",
-                (rewrite_id,),
-            ).fetchone()
-            return str(row["id"]) if row else None
-        if disposition != "proposed":
-            return None
-
         parents = tuple(parent_epoch_ids)
         identifier = epoch_id or self._epoch_id(rewrite_id, parents)
-        rejection: str | None = None
-        active: tuple[str, ...] = ()
-        with self.store.transaction() as connection:
-            try:
-                payload = json.loads(rewrite["payload_json"])
-                evidence = RewriteEvidence(**payload["evidence"])
-                self._validate_commit(rewrite_id, payload["kind"], evidence, parents, identifier)
-                parent_active: set[str] = set()
-                for parent_id in parents:
-                    parent_active.update(self.active_cell_ids(parent_id))
-                lineage = self.lineage(rewrite_id)
-                if not set(lineage["input"]) <= parent_active:
-                    raise ValueError("rewrite inputs are not active in the parent epochs")
-                active_set = parent_active.difference(lineage["input"])
-                active_set.update(lineage["output"])
-                active = tuple(sorted(active_set))
-            except (KeyError, TypeError, ValueError) as exc:
-                rejection = str(exc)
+        try:
+            with self.store.transaction(immediate=True) as connection:
+                rewrite = connection.execute(
+                    "SELECT payload_json FROM cat_rewrites WHERE id = ?", (rewrite_id,)
+                ).fetchone()
+                if rewrite is None:
+                    raise ValueError("rewrite proposal does not exist")
+                disposition = self.latest_disposition(rewrite_id)
+                if disposition == "committed":
+                    committed = connection.execute(
+                        "SELECT id FROM cat_epochs WHERE rewrite_id = ?",
+                        (rewrite_id,),
+                    ).fetchone()
+                    return str(committed["id"]) if committed else None
+                if disposition != "proposed":
+                    return None
 
-            if rejection is not None:
-                self.store.append_event(
-                    "rewrite_rejected",
-                    {"rewrite_id": rewrite_id, "reason": rejection},
-                )
-            else:
+                try:
+                    payload = json.loads(rewrite["payload_json"])
+                    evidence = RewriteEvidence(**payload["evidence"])
+                    self._validate_commit(
+                        rewrite_id, payload["kind"], evidence, parents, identifier
+                    )
+                    parent_active: set[str] = set()
+                    for parent_id in parents:
+                        parent_active.update(self.active_cell_ids(parent_id))
+                    lineage = self.lineage(rewrite_id)
+                    if not set(lineage["input"]) <= parent_active:
+                        raise ValueError(
+                            "rewrite inputs are not active in the parent epochs"
+                        )
+                    active_set = parent_active.difference(lineage["input"])
+                    active_set.update(lineage["output"])
+                    active = tuple(sorted(active_set))
+                except (KeyError, TypeError, ValueError) as exc:
+                    self.store.append_event(
+                        "rewrite_rejected",
+                        {"rewrite_id": rewrite_id, "reason": str(exc)},
+                    )
+                    return None
+
                 content_hash = canonical_snapshot_hash(active)
                 event_id = self.store.append_event(
                     "rewrite_committed",
@@ -366,7 +367,16 @@ class EvolutionEngine:
                         (identifier, position, parent_id),
                     )
                 self._write_snapshot(connection, identifier, active)
-        return None if rejection is not None else identifier
+                return identifier
+        except sqlite3.IntegrityError:
+            # The unique rewrite index is the final race backstop.  The failed
+            # transaction (including its event) is already rolled back here.
+            committed = self.connection.execute(
+                "SELECT id FROM cat_epochs WHERE rewrite_id = ?", (rewrite_id,)
+            ).fetchone()
+            if committed is not None:
+                return str(committed["id"])
+            raise
 
     commit_rewrite = commit
 
@@ -462,14 +472,33 @@ class EvolutionEngine:
     ) -> str:
         """Create a parentless epoch for an imported or newly seeded active set."""
         active = tuple(sorted(set(active_cell_ids)))
-        if self.connection.execute(
-            "SELECT 1 FROM cat_epochs WHERE id = ?", (epoch_id,)
-        ).fetchone():
-            raise ValueError("epoch parent identity already exists")
-        for cell_id in active:
-            if self.store.get_cell(cell_id) is None:
-                raise ValueError("root epoch active cell does not exist")
-        with self.store.transaction() as connection:
+        with self.store.transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cat_epochs WHERE id = ?", (epoch_id,)
+            ).fetchone():
+                raise ValueError("epoch parent identity already exists")
+            leaf_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM cat_epochs AS epoch
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM cat_epoch_parents AS edge
+                    WHERE edge.parent_id = epoch.id
+                )
+                """
+            ).fetchone()[0]
+            if leaf_count + 1 > self.policy.max_active_branches:
+                raise ValueError("active branch limit exceeded")
+            for cell_id in active:
+                if self.store.get_cell(cell_id) is None:
+                    raise ValueError("root epoch active cell does not exist")
+                if connection.execute(
+                    """
+                    SELECT 1 FROM cat_rewrite_members
+                    WHERE role = 'output' AND cell_id = ? LIMIT 1
+                    """,
+                    (cell_id,),
+                ).fetchone():
+                    raise ValueError("root epoch cannot activate a rewrite output")
             if event_id is not None and connection.execute(
                 "SELECT 1 FROM cat_events WHERE id = ?", (event_id,)
             ).fetchone() is None:
