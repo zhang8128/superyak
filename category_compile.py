@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from collections.abc import Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 import heapq
 import json
 import math
+from pathlib import Path
 import re
 import sqlite3
 import struct
@@ -20,7 +22,9 @@ from categories import WeightVector
 
 _MMR_LAMBDA = 0.75
 _TIME_CHECK_BATCH = 32
-_MAX_WALL_TIME_MS = 60_000
+_MAX_WALL_TIME_MS = 500
+_MAX_ACTIVE_SNAPSHOT_BYTES = 64 * 1024 * 1024
+_MAX_ACTIVE_MEMBERS = 1_000_000
 _MAX_CONTENT_BYTES = 1024 * 1024
 _MAX_EMBEDDING_BYTES = 64 * 1024
 _MAX_EMBEDDING_DIMENSIONS = 4096
@@ -109,7 +113,7 @@ class CompileBudget:
         if not 0 <= self.max_candidates <= 50_000:
             raise ValueError("max candidates must be between 0 and 50000")
         if not 1 <= self.wall_time_ms <= _MAX_WALL_TIME_MS:
-            raise ValueError("wall time must be between 1 and 60000 milliseconds")
+            raise ValueError("wall time must be between 1 and 500 milliseconds")
 
 
 @dataclass(frozen=True)
@@ -152,6 +156,10 @@ class _DeadlineExceeded(RuntimeError):
     pass
 
 
+class _ResourceLimitExceeded(RuntimeError):
+    pass
+
+
 def _weighted(value: float) -> float:
     """Suppress binary floating noise while retaining meaningful precision."""
     return round(value, 12)
@@ -182,11 +190,19 @@ class CategoryCompiler:
     def __init__(self, store: Any, budget: CompileBudget | None = None):
         self.store = store
         self.budget = budget or CompileBudget()
-        self.connection = getattr(store, "connection", None)
-        if self.connection is None:
-            self.connection = getattr(store, "conn", None)
-        if self.connection is None:
+        self.store_connection = getattr(store, "connection", None)
+        if self.store_connection is None:
+            self.store_connection = getattr(store, "conn", None)
+        if self.store_connection is None:
             raise TypeError("category compiler requires a SQLite-backed store")
+        self._compile_connection: ContextVar[sqlite3.Connection | None] = ContextVar(
+            f"category_compile_connection_{id(self)}", default=None
+        )
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """Return the connection owned by this invocation's execution context."""
+        return self._compile_connection.get() or self.store_connection
 
     def compile(
         self,
@@ -209,67 +225,124 @@ class CategoryCompiler:
         started = time.monotonic_ns()
         deadline = started + self.budget.wall_time_ms * 1_000_000
         active_table = f"category_compile_active_{uuid.uuid4().hex}"
-        caller_in_transaction = self.connection.in_transaction
-        self.connection.set_progress_handler(
-            lambda: int(self._expired(deadline)), _SQL_PROGRESS_OPCODES
-        )
+        compile_connection = self._open_compile_connection(deadline)
+        connection_token = self._compile_connection.set(compile_connection)
         try:
+            compile_connection.set_progress_handler(
+                lambda: int(self._expired(deadline)), _SQL_PROGRESS_OPCODES
+            )
+            bounded_seeds, seed_truncated = self._bounded_seed_ids(
+                seed_cell_ids, deadline
+            )
+            if not bounded_seeds:
+                return self._empty_result(
+                    epoch_id, context_id, seed_truncated, rotation_at_start
+                )
             self._stage_active_membership(epoch_id, active_table, deadline)
             return self._compile_active(
                 epoch_id,
                 context_id,
-                seed_cell_ids,
+                bounded_seeds,
+                seed_truncated,
                 base,
                 deadline,
                 active_table,
             )
-        except _DeadlineExceeded:
+        except (_DeadlineExceeded, _ResourceLimitExceeded):
             return self._empty_result(epoch_id, context_id, True, rotation_at_start)
         except sqlite3.OperationalError as exc:
             if not self._is_sql_interrupt(exc):
                 raise
             return self._empty_result(epoch_id, context_id, True, rotation_at_start)
         finally:
-            self.connection.set_progress_handler(None, 0)
-            self.connection.execute(f'DROP TABLE IF EXISTS temp."{active_table}"')
-            if not caller_in_transaction and self.connection.in_transaction:
-                self.connection.commit()
+            try:
+                compile_connection.set_progress_handler(None, 0)
+                compile_connection.execute(
+                    f'DROP TABLE IF EXISTS temp."{active_table}"'
+                )
+            finally:
+                try:
+                    compile_connection.close()
+                finally:
+                    self._compile_connection.reset(connection_token)
+
+    def _open_compile_connection(self, deadline: int) -> sqlite3.Connection:
+        main_rows = self.store_connection.execute("PRAGMA database_list")
+        main_path = next(
+            (str(row[2]) for row in main_rows if str(row[1]) == "main"), ""
+        )
+        if not main_path:
+            raise ValueError("category compilation requires a file-backed SQLite store")
+        database_uri = f"{Path(main_path).resolve().as_uri()}?mode=ro"
+        connection = sqlite3.connect(database_uri, uri=True, timeout=0)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA temp_store = FILE")
+            connection.set_progress_handler(
+                lambda: int(self._expired(deadline)), _SQL_PROGRESS_OPCODES
+            )
+            vector_schema = connection.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'cat_vectors'"
+            ).fetchone()
+            if vector_schema is not None and "using vec0" in str(vector_schema[0]).lower():
+                import sqlite_vec
+
+                connection.enable_load_extension(True)
+                try:
+                    sqlite_vec.load(connection)
+                finally:
+                    connection.enable_load_extension(False)
+            return connection
+        except Exception:
+            connection.set_progress_handler(None, 0)
+            connection.close()
+            raise
 
     def _compile_active(
         self,
         epoch_id: str,
         context_id: str | None,
-        seed_cell_ids: Sequence[str],
+        seed_cell_ids: tuple[str, ...],
+        seed_truncated: bool,
         base: int,
         deadline: int,
         active_table: str,
     ) -> CompiledCategory:
-        if self.budget.max_candidates == 0:
-            return self._empty_result(
-                epoch_id,
-                context_id,
-                bool(seed_cell_ids),
-                base >= self.budget.rotation_watermark,
-            )
         candidate_heap: list[tuple[float, str, _Candidate]] = []
         queue: deque[tuple[str, int]] = deque()
         visited: set[str] = set()
         retained_feature_bytes = [0]
-        truncated = False
+        truncated = seed_truncated
         stopped = False
 
-        ancestor_ids, ancestry_truncated = self._ancestor_epoch_ids(epoch_id, deadline)
-        truncated |= ancestry_truncated
-        translated, lineage_truncated, timed_out = self._translate_seeds(
-            seed_cell_ids, deadline, active_table, ancestor_ids
+        active_seeds = tuple(
+            cell_id
+            for cell_id in seed_cell_ids
+            if self._is_active(active_table, cell_id)
         )
-        truncated |= lineage_truncated or timed_out
+        active_seed_set = set(active_seeds)
+        inactive_seeds = tuple(
+            cell_id for cell_id in seed_cell_ids if cell_id not in active_seed_set
+        )
+        translated = active_seeds
+        timed_out = False
+        if inactive_seeds:
+            ancestor_ids, ancestry_truncated = self._ancestor_epoch_ids(
+                epoch_id, deadline
+            )
+            translated_inactive, lineage_truncated, timed_out = self._translate_seeds(
+                inactive_seeds, deadline, active_table, ancestor_ids
+            )
+            translated = tuple(sorted(set(active_seeds) | set(translated_inactive)))
+            truncated |= ancestry_truncated or lineage_truncated or timed_out
         if not timed_out:
             for index, cell_id in enumerate(translated):
                 if index % _TIME_CHECK_BATCH == 0 and self._expired(deadline):
                     truncated = True
                     break
-                admitted, cap_hit = self._admit(
+                admitted, cap_hit, resource_truncated = self._admit(
                     cell_id,
                     0,
                     context_id,
@@ -279,6 +352,7 @@ class CategoryCompiler:
                     retained_feature_bytes,
                     deadline,
                 )
+                truncated |= resource_truncated
                 if cap_hit:
                     truncated = True
                     stopped = True
@@ -292,10 +366,10 @@ class CategoryCompiler:
                 truncated = True
                 break
             cell_id, hops = queue.popleft()
-            neighbors, neighbor_limited = self._neighbors(
+            neighbors, neighbor_limited, neighbor_resource_limited = self._neighbors(
                 active_table, cell_id, deadline
             )
-            truncated |= neighbor_limited
+            truncated |= neighbor_limited or neighbor_resource_limited
             unseen = [neighbor for neighbor in neighbors if neighbor not in visited]
             if hops >= self.budget.max_depth:
                 if unseen:
@@ -304,7 +378,7 @@ class CategoryCompiler:
                 continue
 
             for neighbor in unseen:
-                _admitted, cap_hit = self._admit(
+                _admitted, cap_hit, resource_truncated = self._admit(
                     neighbor,
                     hops + 1,
                     context_id,
@@ -314,6 +388,7 @@ class CategoryCompiler:
                     retained_feature_bytes,
                     deadline,
                 )
+                truncated |= resource_truncated
                 if cap_hit:
                     truncated = True
                     stopped = True
@@ -363,24 +438,42 @@ class CategoryCompiler:
     def _stage_active_membership(
         self, epoch_id: str, active_table: str, deadline: int
     ) -> None:
+        size_row = self.connection.execute(
+            "SELECT length(CAST(active_cell_ids_json AS BLOB)) "
+            "FROM cat_snapshots WHERE epoch_id = ? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (epoch_id,),
+        ).fetchone()
+        if size_row is not None and int(size_row[0]) > _MAX_ACTIVE_SNAPSHOT_BYTES:
+            raise _ResourceLimitExceeded
         self.connection.execute(
             f'CREATE TEMP TABLE "{active_table}" '
             "(id TEXT PRIMARY KEY) WITHOUT ROWID"
         )
+        if size_row is None:
+            return
         if self._expired(deadline):
             raise _DeadlineExceeded
         self.connection.execute(
             f"""
             INSERT OR IGNORE INTO temp."{active_table}" (id)
-            SELECT CAST(active.value AS TEXT)
-            FROM cat_snapshots AS snapshot,
-                 json_each(snapshot.active_cell_ids_json) AS active
-            WHERE snapshot.rowid = (
-                SELECT MAX(rowid) FROM cat_snapshots WHERE epoch_id = ?
+            SELECT id FROM (
+                SELECT DISTINCT CAST(active.value AS TEXT) AS id
+                FROM cat_snapshots AS snapshot,
+                     json_each(snapshot.active_cell_ids_json) AS active
+                WHERE snapshot.rowid = (
+                    SELECT MAX(rowid) FROM cat_snapshots WHERE epoch_id = ?
+                )
+                LIMIT ?
             )
             """,
-            (epoch_id,),
+            (epoch_id, _MAX_ACTIVE_MEMBERS + 1),
         )
+        count = self.connection.execute(
+            f'SELECT COUNT(*) FROM temp."{active_table}"'
+        ).fetchone()[0]
+        if int(count) > _MAX_ACTIVE_MEMBERS:
+            raise _ResourceLimitExceeded
         if self._expired(deadline):
             raise _DeadlineExceeded
 
@@ -391,9 +484,9 @@ class CategoryCompiler:
         active_table: str,
         ancestor_ids: set[str],
     ) -> tuple[tuple[str, ...], bool, bool]:
-        bounded_seeds, truncated = self._bounded_seed_ids(seed_cell_ids, deadline)
-        pending = deque(bounded_seeds)
-        discovered = set(bounded_seeds)
+        truncated = False
+        pending = deque(seed_cell_ids)
+        discovered = set(seed_cell_ids)
         active: set[str] = set()
         steps = 0
         while pending:
@@ -542,14 +635,16 @@ class CategoryCompiler:
 
     def _neighbors(
         self, active_table: str, cell_id: str, deadline: int
-    ) -> tuple[tuple[str, ...], bool]:
+    ) -> tuple[tuple[str, ...], bool, bool]:
         limit = self.budget.max_neighbors + 1
         selected: set[str] = set()
         largest_first: list[_ReverseId] = []
         overflow = False
+        resource_truncated = False
         queries = (
             (
-                f"SELECT boundary.boundary_id FROM cat_boundaries AS boundary "
+                f"SELECT boundary.boundary_id, length(CAST(cell.content AS BLOB)) "
+                "FROM cat_boundaries AS boundary "
                 f'JOIN temp."{active_table}" AS active '
                 "ON active.id = boundary.boundary_id "
                 "JOIN cat_cells AS cell ON cell.id = boundary.boundary_id "
@@ -557,7 +652,8 @@ class CategoryCompiler:
                 cell_id,
             ),
             (
-                f"SELECT boundary.cell_id FROM cat_boundaries AS boundary "
+                f"SELECT boundary.cell_id, length(CAST(cell.content AS BLOB)) "
+                "FROM cat_boundaries AS boundary "
                 f'JOIN temp."{active_table}" AS active ON active.id = boundary.cell_id '
                 "JOIN cat_cells AS cell ON cell.id = boundary.cell_id "
                 "WHERE boundary.boundary_id = ? AND cell.dimension BETWEEN 0 AND 2",
@@ -572,6 +668,9 @@ class CategoryCompiler:
                     raise _DeadlineExceeded
                 scanned += 1
                 neighbor = str(row[0])
+                if int(row[1]) > _MAX_CONTENT_BYTES:
+                    resource_truncated = True
+                    continue
                 if neighbor in selected or not self._is_interpretable(neighbor, deadline):
                     continue
                 if len(selected) < limit:
@@ -587,7 +686,11 @@ class CategoryCompiler:
                         selected.add(neighbor)
         neighbors = tuple(sorted(selected))
         limited = overflow or len(neighbors) > self.budget.max_neighbors
-        return neighbors[: self.budget.max_neighbors], limited
+        return (
+            neighbors[: self.budget.max_neighbors],
+            limited,
+            resource_truncated,
+        )
 
     def _admit(
         self,
@@ -599,20 +702,20 @@ class CategoryCompiler:
         candidate_heap: list[tuple[float, str, _Candidate]],
         retained_feature_bytes: list[int],
         deadline: int,
-    ) -> tuple[bool, bool]:
+    ) -> tuple[bool, bool, bool]:
         if cell_id in visited:
-            return False, False
+            return False, False, False
         if len(visited) >= self.budget.max_candidates:
-            return False, True
+            return False, True, False
         candidate, resource_limited, feature_bytes = self._candidate(
             cell_id, hops, context_id, deadline
         )
         if candidate is None:
-            return False, resource_limited
+            return False, False, resource_limited
         if len(candidate_heap) >= self.budget.max_candidates:
-            return False, True
+            return False, True, resource_limited
         if retained_feature_bytes[0] + feature_bytes > _MAX_RETAINED_FEATURE_BYTES:
-            return False, True
+            return False, True, resource_limited
         visited.add(cell_id)
         queue.append((cell_id, hops))
         retained_feature_bytes[0] += feature_bytes
@@ -620,7 +723,7 @@ class CategoryCompiler:
             candidate_heap,
             (candidate.cell.score, candidate.cell.id, candidate),
         )
-        return True, False
+        return True, False, resource_limited
 
     def _candidate(
         self, cell_id: str, hops: int, context_id: str | None, deadline: int
@@ -663,9 +766,8 @@ class CategoryCompiler:
             raise _DeadlineExceeded
         words = self._word_counts(content, deadline)
         embedding, embedding_limited = self._embedding(cell_id, deadline)
-        if embedding_limited:
-            return None, True, 0
-        embedding_norm = self._embedding_norm(embedding, deadline)
+        embedding = self._normalize_embedding(embedding, deadline)
+        embedding_norm = 1.0 if embedding is not None else None
         # Counters can retain many short token objects; a conservative 64x
         # multiplier keeps total Python-side candidate state well below 1 GiB.
         feature_bytes = content_bytes * 64 + (len(embedding or ()) * 32)
@@ -797,17 +899,17 @@ class CategoryCompiler:
                 decoded = json.loads(value)
                 embedding = tuple(float(item) for item in decoded)
             except (TypeError, ValueError, json.JSONDecodeError):
-                return None, False
+                return None, True
         elif isinstance(value, (bytes, bytearray, memoryview)):
             raw = bytes(value)
             if not raw or len(raw) % 4:
-                return None, False
+                return None, True
             embedding = tuple(struct.unpack(f"<{len(raw) // 4}f", raw))
         else:
             try:
                 embedding = tuple(float(item) for item in value)
             except (TypeError, ValueError):
-                return None, False
+                return None, True
         if (
             len(embedding) > _MAX_EMBEDDING_DIMENSIONS
             or any(not math.isfinite(item) for item in embedding)
@@ -817,17 +919,27 @@ class CategoryCompiler:
             raise _DeadlineExceeded
         return embedding, False
 
-    def _embedding_norm(
+    def _normalize_embedding(
         self, embedding: tuple[float, ...] | None, deadline: int
-    ) -> float | None:
+    ) -> tuple[float, ...] | None:
         if embedding is None:
+            return None
+        scale = max((abs(value) for value in embedding), default=0.0)
+        if not scale:
             return None
         squared = 0.0
         for index, value in enumerate(embedding):
             if index % (_TIME_CHECK_BATCH * 8) == 0 and self._expired(deadline):
                 raise _DeadlineExceeded
-            squared += value * value
-        return math.sqrt(squared)
+            scaled = value / scale
+            squared += scaled * scaled
+        norm = math.sqrt(squared)
+        normalized: list[float] = []
+        for index, value in enumerate(embedding):
+            if index % (_TIME_CHECK_BATCH * 8) == 0 and self._expired(deadline):
+                raise _DeadlineExceeded
+            normalized.append((value / scale) / norm)
+        return tuple(normalized)
 
     def _pack(
         self,
@@ -899,7 +1011,9 @@ class CategoryCompiler:
                 left_norm = left.embedding_norm
                 right_norm = right.embedding_norm
                 if left_norm and right_norm:
-                    return dot / (left_norm * right_norm)
+                    cosine = dot / (left_norm * right_norm)
+                    if math.isfinite(cosine):
+                        return max(-1.0, min(1.0, cosine))
         if not left.words and not right.words:
             return 0.0
         overlap = 0

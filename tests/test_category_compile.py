@@ -106,7 +106,7 @@ def test_budget_defaults_and_utf8_token_estimator_are_exact():
         ("max_neighbors", 65),
         ("max_candidates", 50_001),
         ("wall_time_ms", 0),
-        ("wall_time_ms", 60_001),
+        ("wall_time_ms", 501),
     ],
 )
 def test_budget_rejects_non_integer_oversized_and_nonpositive_limits(field, value):
@@ -139,6 +139,7 @@ def test_budget_allows_equal_token_boundaries():
         base_tokens=0,
         wall_time_ms=1,
     ).hard_ceiling == 0
+    assert CompileBudget(wall_time_ms=500).wall_time_ms == 500
 
 
 def test_traversal_stops_at_depth_four_without_marking_graph_exhaustion(store):
@@ -359,19 +360,31 @@ def test_sql_deadline_interrupt_cleans_progress_handler_and_temp_state(store, mo
         "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
         (large_active,),
     )
+    store.connection.commit()
     persistent_before = tuple(
         store.connection.execute(
             "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
         )
     )
-    readings = iter((0, 0, 2_000_000))
+    clock_calls = 0
+
+    def expires_during_staging():
+        nonlocal clock_calls
+        clock_calls += 1
+        return 0 if clock_calls < 8 else 2_000_000
+
     monkeypatch.setattr(
         "category_compile.time.monotonic_ns",
-        lambda: next(readings, 2_000_000),
+        expires_during_staging,
+    )
+    monkeypatch.setattr(
+        CategoryCompiler,
+        "_compile_active",
+        lambda *_args, **_kwargs: pytest.fail("staging was not interrupted"),
     )
 
     result = CategoryCompiler(store, CompileBudget(wall_time_ms=1)).compile(
-        "root", None, (), 0
+        "root", None, ("seed",), 0
     )
 
     assert result.cells == ()
@@ -390,6 +403,111 @@ def test_sql_deadline_interrupt_cleans_progress_handler_and_temp_state(store, mo
         "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) "
         "SELECT MAX(x) FROM n"
     ).fetchone()[0] == 10_000
+
+
+def test_dedicated_connection_preserves_caller_transaction_and_progress_handler(
+    store, monkeypatch
+):
+    _root(store, CellDraft("seed", 0, "seed"))
+    large_active = json.dumps([f"missing-{index}" for index in range(20_000)])
+    store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
+        (large_active,),
+    )
+    store.connection.commit()
+    progress_calls = 0
+
+    def caller_progress():
+        nonlocal progress_calls
+        progress_calls += 1
+        return 0
+
+    store.connection.set_progress_handler(caller_progress, 1)
+    store.connection.execute("BEGIN")
+    store.connection.execute(
+        "INSERT INTO cat_events VALUES ('caller-pending', 'test', '{}', 'now')"
+    )
+    clock_calls = 0
+
+    def expires_during_staging():
+        nonlocal clock_calls
+        clock_calls += 1
+        return 0 if clock_calls < 8 else 2_000_000
+
+
+    monkeypatch.setattr(
+        "category_compile.time.monotonic_ns",
+        expires_during_staging,
+    )
+    monkeypatch.setattr(
+        CategoryCompiler,
+        "_compile_active",
+        lambda *_args, **_kwargs: pytest.fail("staging was not interrupted"),
+    )
+    try:
+        result = CategoryCompiler(store, CompileBudget(wall_time_ms=1)).compile(
+            "root", None, ("seed",), 0
+        )
+        calls_after_compile = progress_calls
+        assert store.connection.execute("SELECT COUNT(*) FROM cat_cells").fetchone()[0] == 1
+        assert progress_calls > calls_after_compile
+    finally:
+        store.connection.set_progress_handler(None, 0)
+
+    assert result.cells == ()
+    assert result.truncated
+    assert store.connection.in_transaction
+    assert store.connection.execute(
+        "SELECT kind FROM cat_events WHERE id = 'caller-pending'"
+    ).fetchone()[0] == "test"
+    store.connection.rollback()
+
+
+def test_file_compile_reads_committed_snapshot_without_touching_caller_write(store):
+    _root(store, CellDraft("seed", 0, "seed"))
+    store.connection.execute("BEGIN")
+    store.connection.execute(
+        "INSERT INTO cat_events VALUES ('pending', 'test', '{}', 'now')"
+    )
+
+    result = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+
+    assert tuple(cell.id for cell in result.cells) == ("seed",)
+    assert store.connection.in_transaction
+    assert store.connection.execute(
+        "SELECT kind FROM cat_events WHERE id = 'pending'"
+    ).fetchone()[0] == "test"
+    store.connection.rollback()
+
+
+def test_reentrant_seed_iteration_keeps_each_compile_connection_isolated(store):
+    _root(store, CellDraft("seed", 0, "seed"))
+    compiler = CategoryCompiler(store)
+    nested_results = []
+
+    def reentrant_seeds():
+        nested_results.append(compiler.compile("root", None, ("seed",), 0))
+        yield "seed"
+
+    outer = compiler.compile("root", None, reentrant_seeds(), 0)
+
+    assert tuple(cell.id for cell in outer.cells) == ("seed",)
+    assert tuple(cell.id for cell in nested_results[0].cells) == ("seed",)
+    assert not store.connection.in_transaction
+    assert store.connection.execute(
+        "SELECT name FROM sqlite_temp_master "
+        "WHERE name LIKE 'category_compile_active_%'"
+    ).fetchall() == []
+
+
+def test_in_memory_store_is_rejected_without_mutation():
+    memory_store = EvolvingCategoryStore(sqlite3.connect(":memory:"))
+    try:
+        with pytest.raises(ValueError, match="file-backed"):
+            CategoryCompiler(memory_store).compile("root", None, (), 0)
+        assert not memory_store.connection.in_transaction
+    finally:
+        memory_store.close()
 
 
 def test_temp_membership_preserves_caller_transaction(store):
@@ -427,10 +545,12 @@ def test_temp_membership_does_not_leave_an_idle_connection_in_transaction(store)
 
 
 def test_non_interrupt_sql_errors_propagate_and_temp_state_is_clean(store):
+    _root(store, CellDraft("seed", 0, "seed"))
     store.connection.execute("DROP TABLE cat_snapshots")
+    store.connection.commit()
 
     with pytest.raises(sqlite3.OperationalError, match="no such table"):
-        CategoryCompiler(store).compile("missing", None, (), 0)
+        CategoryCompiler(store).compile("missing", None, ("seed",), 0)
 
     assert store.connection.execute(
         "SELECT name FROM sqlite_temp_master "
@@ -534,6 +654,17 @@ def test_deep_ancestry_is_iterative_bounded_and_marks_truncation(store):
     assert result.truncated
     assert not any("WITH RECURSIVE ancestors" in sql for sql in traced_sql)
 
+    empty = CategoryCompiler(
+        store, CompileBudget(max_candidates=4)
+    ).compile("epoch-8", None, (), 0)
+    active = CategoryCompiler(
+        store, CompileBudget(max_candidates=4)
+    ).compile("epoch-8", None, ("cell-8",), 0)
+    assert empty.cells == ()
+    assert not empty.truncated
+    assert tuple(cell.id for cell in active.cells) == ("cell-8",)
+    assert not active.truncated
+
 
 def test_multi_parent_ancestry_translates_both_inputs_once(store):
     store.create_cell(CellDraft("left", 0, "left"))
@@ -574,20 +705,72 @@ def test_oversized_content_is_not_retained_as_a_candidate(store):
     assert result.truncated
 
 
-def test_oversized_embedding_is_not_retained_as_a_candidate(store):
-    _root(store, CellDraft("seed", 0, "seed"))
+def test_oversized_content_does_not_stop_valid_sibling(store):
+    _root(
+        store,
+        CellDraft("a-huge", 0, "x" * (2 * 1024 * 1024)),
+        CellDraft("b-valid", 0, "valid sibling"),
+    )
+
+    result = CategoryCompiler(store).compile(
+        "root", None, ("a-huge", "b-valid"), 0
+    )
+
+    assert tuple(cell.id for cell in result.cells) == ("b-valid",)
+    assert result.truncated
+
+
+def test_lexically_first_oversized_embedding_keeps_valid_sibling_eligible(store):
+    _root(
+        store,
+        CellDraft("a-oversized", 0, "oversized vector"),
+        CellDraft("b-valid", 0, "valid vector"),
+    )
+    store.connection.execute("DROP TABLE IF EXISTS cat_vectors")
+    store.connection.execute(
+        "CREATE TABLE cat_vectors (cell_id TEXT PRIMARY KEY, embedding BLOB)"
+    )
+    store.connection.executemany(
+        "INSERT INTO cat_vectors VALUES (?, ?)",
+        (
+            ("a-oversized", b"x" * (64 * 1024 + 1)),
+            ("b-valid", struct.pack("<2f", 1.0, 0.0)),
+        ),
+    )
+    store.connection.commit()
+
+    result = CategoryCompiler(store).compile(
+        "root", None, ("a-oversized", "b-valid"), 0
+    )
+
+    assert tuple(cell.id for cell in result.cells) == ("a-oversized", "b-valid")
+    assert result.candidate_count == 2
+    assert result.truncated
+
+
+@pytest.mark.parametrize(
+    "embedding",
+    [
+        struct.pack("<3f", 1.0, float("nan"), 0.0),
+        struct.pack("<4097f", *([1.0] * 4097)),
+        b"malformed",
+    ],
+)
+def test_invalid_embedding_falls_back_without_excluding_cell(store, embedding):
+    _root(store, CellDraft("seed", 0, "seed words"))
     store.connection.execute("DROP TABLE IF EXISTS cat_vectors")
     store.connection.execute(
         "CREATE TABLE cat_vectors (cell_id TEXT PRIMARY KEY, embedding BLOB)"
     )
     store.connection.execute(
-        "INSERT INTO cat_vectors VALUES ('seed', ?)", (b"x" * (64 * 1024 + 1),)
+        "INSERT INTO cat_vectors VALUES ('seed', ?)", (embedding,)
     )
+    store.connection.commit()
 
     result = CategoryCompiler(store).compile("root", None, ("seed",), 0)
 
-    assert result.cells == ()
-    assert result.candidate_count == 0
+    assert tuple(cell.id for cell in result.cells) == ("seed",)
+    assert result.candidate_count == 1
     assert result.truncated
 
 
@@ -615,11 +798,74 @@ def test_cosine_mmr_uses_lambda_point_seven_five(store):
             ("c", struct.pack("<2f", 0.0, 1.0)),
         ),
     )
+    store.connection.commit()
     budget = CompileBudget(normal_target=2, rotation_watermark=3, hard_ceiling=3)
 
     result = CategoryCompiler(store, budget).compile("root", None, ("c", "b", "a"), 0)
 
     assert tuple(cell.id for cell in result.cells) == ("a", "c")
+
+
+def test_cosine_is_stable_for_huge_finite_components(store):
+    drafts = (
+        CellDraft("a", 0, "alpha"),
+        CellDraft("b", 0, "beta"),
+        CellDraft("c", 0, "gamma"),
+    )
+    _root(store, *drafts)
+    _observe(store, "a", relevance=1, evidence=1, recency=1,
+             affect=1, adoption=1, novelty=1)
+    _observe(store, "b", relevance=1, evidence=1, recency=1,
+             affect=1, adoption=0, novelty=1)
+    _observe(store, "c", relevance=1, evidence=1, novelty=7 / 15)
+    store.connection.execute("DROP TABLE IF EXISTS cat_vectors")
+    store.connection.execute(
+        "CREATE TABLE cat_vectors (cell_id TEXT PRIMARY KEY, embedding TEXT)"
+    )
+    store.connection.executemany(
+        "INSERT INTO cat_vectors VALUES (?, ?)",
+        (
+            ("a", json.dumps([1e308, 0.0])),
+            ("b", json.dumps([1e308, 0.0])),
+            ("c", json.dumps([0.0, 1e308])),
+        ),
+    )
+    store.connection.commit()
+    budget = CompileBudget(normal_target=4, rotation_watermark=5, hard_ceiling=5)
+
+    result = CategoryCompiler(store, budget).compile("root", None, ("a", "b", "c"), 0)
+
+    assert tuple(cell.id for cell in result.cells[:2]) == ("a", "c")
+
+
+def test_active_snapshot_byte_and_cardinality_bounds_truncate_safely(store, monkeypatch):
+    _root(store, CellDraft("seed", 0, "seed"))
+    monkeypatch.setattr("category_compile._MAX_ACTIVE_SNAPSHOT_BYTES", 32, raising=False)
+    store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
+        (json.dumps(["seed", "a-long-missing-id", "b-long-missing-id"]),),
+    )
+    store.connection.commit()
+
+    too_many_bytes = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+    assert too_many_bytes.cells == ()
+    assert too_many_bytes.truncated
+
+    monkeypatch.setattr("category_compile._MAX_ACTIVE_SNAPSHOT_BYTES", 1024, raising=False)
+    monkeypatch.setattr("category_compile._MAX_ACTIVE_MEMBERS", 2, raising=False)
+    store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
+        (json.dumps(["seed", "missing-a", "missing-b"]),),
+    )
+    store.connection.commit()
+
+    too_many_members = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+    assert too_many_members.cells == ()
+    assert too_many_members.truncated
+    assert store.connection.execute(
+        "SELECT name FROM sqlite_temp_master "
+        "WHERE name LIKE 'category_compile_active_%'"
+    ).fetchall() == []
 
 
 def test_equal_contribution_mappings_have_equal_hashes():
