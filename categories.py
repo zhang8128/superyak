@@ -395,6 +395,20 @@ _IMMUTABLE_TABLES = (
     "cat_epoch_parents",
 )
 
+_OPTIONAL_VECTOR_OBJECTS = frozenset(
+    {
+        "cat_vectors",
+        "cat_vectors_chunks",
+        "cat_vectors_info",
+        "cat_vectors_rowids",
+        "cat_vectors_vector_chunks00",
+        "sqlite_sequence",
+    }
+)
+_SUPPORTED_VEC0_DDL = (
+    "create virtual table cat_vectors using vec0(cell_id text primary key, embedding float[768])"
+)
+
 
 def _normalized_schema_sql(sql: str) -> str:
     """Compare DDL deterministically without changing quoted SQL literals."""
@@ -534,12 +548,20 @@ class EvolvingCategoryStore:
         expected = _expected_core_schema_definitions()
         expected_names = {name for _kind, name, _sql in expected}
         try:
+            rows = tuple(self._connection.execute(
+                "SELECT type, name, sql FROM sqlite_master"
+            ))
+            for row in rows:
+                name = str(row[1])
+                if name.startswith("cat_") and name not in expected_names | _OPTIONAL_VECTOR_OBJECTS:
+                    return False
+                if name == "cat_vectors" and (
+                    row[2] is None or _normalized_schema_sql(row[2]) != _SUPPORTED_VEC0_DDL
+                ):
+                    return False
             actual = tuple(sorted(
                 (row[0], row[1], _normalized_schema_sql(row[2]))
-                for row in self._connection.execute(
-                    "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL"
-                )
-                if row[1] in expected_names
+                for row in rows if row[2] is not None and row[1] in expected_names
             ))
             versions = tuple(
                 row[0] for row in self._connection.execute(
@@ -552,6 +574,7 @@ class EvolvingCategoryStore:
 
     def _ensure_schema(self) -> None:
         if self._has_current_core_schema():
+            self._provision_optional_vectors()
             return
         self._connection.execute("BEGIN IMMEDIATE")
         try:
@@ -574,6 +597,8 @@ class EvolvingCategoryStore:
                 "INSERT OR IGNORE INTO cat_schema_version (version, applied_at) VALUES (1, ?)",
                 (_now_iso(),),
             )
+            if not self._has_current_core_schema():
+                raise RuntimeError("category schema is not an exact supported core schema")
             # A fresh database can grow while DDL is staged; reject it before
             # publication when the provider can observe that growth.
             self._enforce_quota("immutable")
@@ -581,6 +606,30 @@ class EvolvingCategoryStore:
         except Exception:
             self._connection.rollback()
             raise
+
+    def _provision_optional_vectors(self) -> None:
+        """Best-effort derived provisioning; never upgrades a pressured reopen."""
+        if self._connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'cat_vectors'"
+        ).fetchone() is not None:
+            return
+        if self.pressure().state != "normal":
+            return
+        with self.derived_transaction() as connection:
+            if connection is None:
+                return
+            connection.execute("SAVEPOINT cat_optional_vec")
+            try:
+                connection.execute(
+                    "CREATE VIRTUAL TABLE cat_vectors "
+                    "USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768])"
+                )
+            except sqlite3.OperationalError as exc:
+                connection.execute("ROLLBACK TO SAVEPOINT cat_optional_vec")
+                if "no such module: vec0" not in str(exc).lower():
+                    raise
+            finally:
+                connection.execute("RELEASE SAVEPOINT cat_optional_vec")
 
     def _main_database_identity(self) -> tuple[Path | None, tuple[int, int] | None]:
         row = self._connection.execute("PRAGMA database_list").fetchone()

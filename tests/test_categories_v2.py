@@ -307,6 +307,55 @@ def test_incomplete_schema_still_requires_quota_before_migration(tmp_path):
         connection.close()
 
 
+def test_current_core_schema_provisions_missing_vectors_only_when_normal(tmp_path):
+    """Catches fast-path reopen leaving an available optional vector table absent."""
+    sqlite_vec = pytest.importorskip("sqlite_vec")
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+
+    connection = sqlite3.connect(database)
+    connection.enable_load_extension(True)
+    sqlite_vec.load(connection)
+    connection.enable_load_extension(False)
+    reopened = EvolvingCategoryStore(connection, quota_bytes=1_000_000, size_provider=lambda _path: 0)
+    assert reopened.connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name = 'cat_vectors'"
+    ).fetchone()[0] == 1
+    reopened.close()
+
+
+@pytest.mark.parametrize("used", [90, 100])
+def test_current_core_schema_skips_missing_vector_provisioning_under_pressure(tmp_path, used):
+    """Catches high/hard reopen issuing optional vector DDL or changing the database."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    before = database.stat().st_mtime_ns
+
+    reopened = make_v2_store(database, quota_bytes=100, size_provider=lambda _path: used)
+    assert reopened.get_cell("absent") is None
+    assert reopened.connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name = 'cat_vectors'"
+    ).fetchone()[0] == 0
+    reopened.close()
+    assert database.stat().st_mtime_ns == before
+
+
+def test_unexpected_category_object_is_not_a_current_core_schema(tmp_path):
+    """Catches exact-core preflight silently accepting an extra cat_* trigger/table."""
+    database = tmp_path / "quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE cat_unexpected (value TEXT)")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(CategoryQuotaExceeded):
+        make_v2_store(database, quota_bytes=1, size_provider=lambda _path: 1)
+
+
 def test_store_owned_commit_failure_rolls_back_pending_rows(tmp_path):
     """Catches a deferred-FK COMMIT error leaving an owned transaction open."""
     store = make_v2_store(tmp_path / "quota.db")
