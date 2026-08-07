@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Iterator, Literal, Mapping
+from typing import Iterable, Iterator, Literal, Mapping
 
 logger = logging.getLogger("engram.categories")
 
@@ -579,7 +579,53 @@ class EvolvingCategoryStore:
         row = self._connection.execute(
             "SELECT dimension FROM cat_cells WHERE id = ?", (cell_id,)
         ).fetchone()
-        return row is not None and row["dimension"] in (0, 1)
+        if row is None:
+            return False
+        if row["dimension"] in (0, 1):
+            return True
+        if row["dimension"] != 2:
+            return False
+
+        sources = self.get_boundaries(cell_id, "source")
+        targets = self.get_boundaries(cell_id, "target")
+        if (
+            [boundary.position for boundary in sources] != list(range(len(sources)))
+            or [boundary.position for boundary in targets] != list(range(len(targets)))
+        ):
+            return False
+        try:
+            source_endpoints = self.validate_path(
+                boundary.cell_id for boundary in sources
+            )
+            target_endpoints = self.validate_path(
+                boundary.cell_id for boundary in targets
+            )
+        except ValueError:
+            return False
+        return source_endpoints == target_endpoints
+
+    def validate_path(self, cell_ids: Iterable[str]) -> tuple[str, str]:
+        """Return endpoints for one nonempty composable path of 1-cells."""
+        path = tuple(cell_ids)
+        if not path:
+            raise ValueError("a categorical path must be nonempty")
+
+        endpoints: list[tuple[str, str]] = []
+        for cell_id in path:
+            row = self._connection.execute(
+                "SELECT dimension FROM cat_cells WHERE id = ?", (cell_id,)
+            ).fetchone()
+            if row is None or row["dimension"] != 1:
+                raise ValueError("a categorical path requires dimension-1 members")
+            sources = self.get_boundaries(cell_id, "source")
+            targets = self.get_boundaries(cell_id, "target")
+            if len(sources) != 1 or len(targets) != 1:
+                raise ValueError("a categorical path requires bounded dimension-1 members")
+            endpoints.append((sources[0].cell_id, targets[0].cell_id))
+
+        if any(left[1] != right[0] for left, right in zip(endpoints, endpoints[1:])):
+            raise ValueError("categorical path members are not composable")
+        return endpoints[0][0], endpoints[-1][1]
 
     def observe_weight(
         self,

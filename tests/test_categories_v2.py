@@ -303,3 +303,58 @@ def test_rewrite_members_and_epochs_have_schema_constraints(v2_store):
             "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) "
             "VALUES ('epoch', -1, 'parent')"
         )
+
+
+def _arrow(store, cell_id, source, target):
+    store.create_cell(
+        CellDraft(
+            cell_id,
+            1,
+            cell_id,
+            (Boundary("source", 0, source), Boundary("target", 0, target)),
+        )
+    )
+
+
+def test_dimension_two_interpretation_requires_nonempty_composable_equal_endpoint_paths(v2_store):
+    """Catches dimension-2 interpretation accepting gaps, empties, or unequal endpoints."""
+    for cell_id in ("a", "b", "c"):
+        v2_store.create_cell(CellDraft(cell_id, 0, cell_id))
+    _arrow(v2_store, "ab", "a", "b")
+    _arrow(v2_store, "bc", "b", "c")
+    _arrow(v2_store, "ac", "a", "c")
+    _arrow(v2_store, "ca", "c", "a")
+
+    assert v2_store.validate_path(("ab", "bc")) == ("a", "c")
+    with pytest.raises(ValueError, match="nonempty"):
+        v2_store.validate_path(())
+    with pytest.raises(ValueError, match="composable"):
+        v2_store.validate_path(("ab", "ca"))
+
+    v2_store.create_cell(
+        CellDraft(
+            "valid-two",
+            2,
+            "two paths a to c",
+            (
+                Boundary("source", 0, "ab"),
+                Boundary("source", 1, "bc"),
+                Boundary("target", 0, "ac"),
+            ),
+        )
+    )
+    v2_store.create_cell(
+        CellDraft(
+            "invalid-two",
+            2,
+            "different endpoints",
+            (Boundary("source", 0, "ab"), Boundary("target", 0, "ca")),
+        )
+    )
+    v2_store.create_cell(CellDraft("empty-two", 2, "no paths"))
+    v2_store.create_cell(CellDraft("opaque-three", 3, "opaque"))
+
+    assert v2_store.is_interpretable("valid-two") is True
+    assert v2_store.is_interpretable("invalid-two") is False
+    assert v2_store.is_interpretable("empty-two") is False
+    assert v2_store.is_interpretable("opaque-three") is False

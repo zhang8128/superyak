@@ -15,7 +15,15 @@ import uuid
 
 import pytest
 
-from categories import CellDraft, EvolvingCategoryStore
+from categories import Boundary, CellDraft, EvolvingCategoryStore
+from category_evolution import (
+    EvolutionEngine,
+    EvolutionPolicy,
+    RewriteEvidence,
+    RewriteProposal,
+    canonical_snapshot_hash,
+    is_eligible,
+)
 
 def _legacy_connection(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path)
@@ -86,6 +94,327 @@ def _v2_counts(path: Path) -> dict[str, int]:
         }
     finally:
         connection.close()
+
+
+@pytest.fixture
+def evolution_store(tmp_path):
+    store = EvolvingCategoryStore(sqlite3.connect(tmp_path / "evolution.db"))
+    yield store
+    store.close()
+
+
+def _evidence(*, explicit=False, persistence=0.5, gain=0.8, cost=0.2, events=()):
+    return RewriteEvidence(tuple(events), gain, persistence, cost, explicit)
+
+
+def _proposal(
+    proposal_id,
+    kind,
+    *,
+    inputs=(),
+    outputs=(),
+    witnesses=(),
+    evidence=None,
+    locus="locus",
+):
+    return RewriteProposal(
+        proposal_id,
+        kind,
+        locus,
+        None,
+        tuple(inputs),
+        tuple(outputs),
+        tuple(witnesses),
+        evidence or _evidence(),
+    )
+
+
+def _root(engine, store, *cell_ids):
+    event_id = store.append_event("seed", {}, event_id="seed-event")
+    for cell_id in cell_ids:
+        store.create_cell(CellDraft(cell_id, 0, cell_id), created_event_id=event_id)
+    return engine.create_root_epoch("root", cell_ids, event_id=event_id)
+
+
+def test_rewrite_proposal_archives_outputs_without_changing_active_cells(evolution_store):
+    """Catches proposal-time publication or mutable rewrite status."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    proposal = _proposal(
+        "split-1",
+        "split",
+        inputs=("old",),
+        outputs=(CellDraft("new-a", 0, "a"), CellDraft("new-b", 0, "b")),
+    )
+
+    assert engine.propose(proposal) == "split-1"
+    assert engine.active_cell_ids("root") == ("old",)
+    assert evolution_store.get_cell("new-a") is not None
+    assert evolution_store.get_cell("new-b") is not None
+    assert engine.latest_disposition("split-1") == "proposed"
+    columns = {
+        row[1]
+        for row in evolution_store.connection.execute("PRAGMA table_info(cat_rewrites)")
+    }
+    assert "status" not in columns and "disposition" not in columns
+
+
+def test_supported_split_commit_is_atomic_and_replay_hash_is_deterministic(evolution_store):
+    """Catches a commit exposing partial active state or nondeterministic snapshots."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old", "kept")
+    engine.propose(
+        _proposal(
+            "split-1",
+            "split",
+            inputs=("old",),
+            outputs=(CellDraft("new-b", 0, "b"), CellDraft("new-a", 0, "a")),
+        )
+    )
+
+    epoch_id = engine.commit("split-1", ("root",), epoch_id="epoch-1")
+
+    assert epoch_id == "epoch-1"
+    assert engine.active_cell_ids("epoch-1") == ("kept", "new-a", "new-b")
+    assert engine.latest_disposition("split-1") == "committed"
+    snapshot = evolution_store.connection.execute(
+        "SELECT active_cell_ids_json, content_hash FROM cat_snapshots WHERE epoch_id='epoch-1'"
+    ).fetchone()
+    assert snapshot[0] == '["kept","new-a","new-b"]'
+    assert snapshot[1] == canonical_snapshot_hash(("new-b", "kept", "new-a"))
+
+
+def test_failed_proposal_and_rejected_commit_preserve_canonical_state(evolution_store):
+    """Catches validation failure leaking cells or policy rejection changing activity."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    with pytest.raises(ValueError, match="member"):
+        engine.propose(
+            _proposal(
+                "too-many",
+                "split",
+                inputs=("old",),
+                outputs=tuple(CellDraft(f"n-{i}", 0, str(i)) for i in range(32)),
+            )
+        )
+    assert engine.active_cell_ids("root") == ("old",)
+    assert evolution_store.get_cell("n-0") is None
+
+    engine.propose(
+        _proposal(
+            "noise",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("noise-output", 0, "noise"),),
+            evidence=_evidence(persistence=0.09, gain=1.0, cost=0.0),
+        )
+    )
+    assert engine.commit("noise", ("root",), epoch_id="never") is None
+    assert engine.latest_disposition("noise") == "rejected"
+    assert engine.active_cell_ids("root") == ("old",)
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id='never'"
+    ).fetchone()[0] == 0
+
+
+def test_eligibility_rejects_noise_but_allows_explicit_correction():
+    """Catches threshold drift and bypass of the exact explicit-correction rule."""
+    policy = EvolutionPolicy()
+    assert not is_eligible(_evidence(persistence=0.09, gain=1.0, cost=0.0), policy)
+    assert not is_eligible(_evidence(persistence=1.0, gain=0.2, cost=0.2), policy)
+    assert is_eligible(_evidence(explicit=True, persistence=0.0, gain=0.0, cost=1.0), policy)
+
+
+@pytest.mark.parametrize(
+    ("kind", "inputs", "outputs", "expected"),
+    [
+        ("retire", ("a",), (), ("b",)),
+        ("retype", ("a",), (CellDraft("typed", 0, "typed"),), ("b", "typed")),
+        ("merge", ("a", "b"), (CellDraft("merged", 0, "merged"),), ("merged",)),
+    ],
+)
+def test_rewrite_kinds_preserve_lineage(kind, inputs, outputs, expected, tmp_path):
+    """Catches retire/retype/merge losing immutable input/output lineage."""
+    store = EvolvingCategoryStore(sqlite3.connect(tmp_path / f"{kind}.db"))
+    try:
+        engine = EvolutionEngine(store)
+        _root(engine, store, "a", "b")
+        engine.propose(_proposal(kind, kind, inputs=inputs, outputs=outputs))
+        assert engine.commit(kind, ("root",), epoch_id=f"{kind}-epoch") == f"{kind}-epoch"
+        assert engine.active_cell_ids(f"{kind}-epoch") == expected
+        lineage = engine.lineage(kind)
+        assert lineage["input"] == inputs
+        assert lineage["output"] == tuple(draft.id for draft in outputs)
+    finally:
+        store.close()
+
+
+def test_member_branch_and_epoch_parent_limits_are_exact(evolution_store):
+    """Catches off-by-one limits and cyclic or over-wide epoch graphs."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, *(f"c-{i}" for i in range(32)))
+    exact = _proposal("exact", "retire", inputs=tuple(f"c-{i}" for i in range(32)))
+    assert engine.propose(exact) == "exact"
+
+    for index in range(4):
+        proposal_id = f"fork-{index}"
+        engine.propose(
+            _proposal(
+                proposal_id,
+                "create",
+                outputs=(CellDraft(f"fork-cell-{index}", 0, str(index)),),
+            )
+        )
+        assert engine.commit(proposal_id, ("root",), epoch_id=f"fork-epoch-{index}")
+    engine.propose(
+        _proposal("fifth", "create", outputs=(CellDraft("fifth-cell", 0, "fifth"),))
+    )
+    assert engine.commit("fifth", ("root",), epoch_id="fifth-epoch") is None
+    assert engine.latest_disposition("fifth") == "rejected"
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id='fifth-epoch'"
+    ).fetchone()[0] == 0
+
+    with pytest.raises(ValueError, match="parent"):
+        engine.create_root_epoch("root", ())
+    assert engine.epoch_parents("fork-epoch-0") == ("root",)
+
+
+def test_old_epoch_selection_is_logical_and_corrupt_snapshot_rebuilds(evolution_store):
+    """Catches rollback mutating history and trusting corrupt derived snapshots."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    engine.propose(
+        _proposal(
+            "replace",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("new", 0, "new"),),
+        )
+    )
+    engine.commit("replace", ("root",), epoch_id="next")
+    assert engine.select_epoch("root") == ("old",)
+    assert engine.select_epoch("next") == ("new",)
+
+    evolution_store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json='[\"bogus\"]', content_hash='bad' "
+        "WHERE epoch_id='next'"
+    )
+    rebuilt = engine.active_cell_ids("next")
+    assert rebuilt == ("new",)
+    snapshot = evolution_store.connection.execute(
+        "SELECT active_cell_ids_json, content_hash FROM cat_snapshots WHERE epoch_id='next'"
+    ).fetchone()
+    assert snapshot[0] == '["new"]'
+    assert snapshot[1] == canonical_snapshot_hash(("new",))
+
+
+def test_root_snapshot_rebuild_uses_immutable_explicit_active_history(evolution_store):
+    """Catches root snapshot repair losing cells created by an earlier event."""
+    engine = EvolutionEngine(evolution_store)
+    creation_event = evolution_store.append_event("cells-created", {})
+    evolution_store.create_cell(
+        CellDraft("preexisting", 0, "preexisting"), created_event_id=creation_event
+    )
+    root_event = evolution_store.append_event("root-requested", {})
+    engine.create_root_epoch("explicit-root", ("preexisting",), event_id=root_event)
+    evolution_store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json='[]', content_hash='bad' "
+        "WHERE epoch_id='explicit-root'"
+    )
+
+    assert engine.active_cell_ids("explicit-root") == ("preexisting",)
+
+
+def test_commit_failure_rolls_back_epoch_snapshot_and_disposition_atomically(
+    evolution_store, monkeypatch
+):
+    """Catches a late snapshot failure publishing any fragment of a commit."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    engine.propose(
+        _proposal(
+            "atomic",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("archived", 0, "archived"),),
+        )
+    )
+
+    def fail_snapshot(*_args, **_kwargs):
+        raise RuntimeError("injected snapshot failure")
+
+    monkeypatch.setattr(engine, "_write_snapshot", fail_snapshot)
+    with pytest.raises(RuntimeError, match="snapshot failure"):
+        engine.commit("atomic", ("root",), epoch_id="partial")
+
+    assert engine.latest_disposition("atomic") == "proposed"
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id='partial'"
+    ).fetchone()[0] == 0
+    assert evolution_store.get_cell("archived") is not None
+    assert engine.active_cell_ids("root") == ("old",)
+
+
+def test_commit_respects_caller_transaction_ownership(evolution_store):
+    """Catches a nested commit that commits or rolls back its caller's work."""
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "old")
+    engine.propose(
+        _proposal(
+            "nested",
+            "retype",
+            inputs=("old",),
+            outputs=(CellDraft("new", 0, "new"),),
+        )
+    )
+    connection = evolution_store.connection
+    connection.execute("BEGIN")
+    connection.execute(
+        "INSERT INTO cat_events (id, kind, payload_json, created_at) "
+        "VALUES ('caller', 'caller', '{}', 'now')"
+    )
+
+    assert engine.commit("nested", ("root",), epoch_id="nested-epoch") == "nested-epoch"
+    assert connection.in_transaction
+    connection.rollback()
+
+    assert connection.execute(
+        "SELECT COUNT(*) FROM cat_events WHERE id='caller'"
+    ).fetchone()[0] == 0
+    assert connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id='nested-epoch'"
+    ).fetchone()[0] == 0
+    assert engine.latest_disposition("nested") == "proposed"
+
+
+def test_consolidation_order_and_budget_are_deterministic(tmp_path):
+    """Catches LLM/input order bypassing deterministic policy or the 32 rewrite budget."""
+    store = EvolvingCategoryStore(sqlite3.connect(tmp_path / "consolidate.db"))
+    try:
+        engine = EvolutionEngine(store)
+        _root(engine, store)
+        for index in range(34):
+            proposal_id = f"p-{index:02d}"
+            engine.propose(
+                _proposal(
+                    proposal_id,
+                    "create",
+                    outputs=(CellDraft(f"out-{index:02d}", 0, str(index)),),
+                    evidence=_evidence(explicit=index == 33, gain=0.5 + index / 100, cost=0.1),
+                )
+            )
+        committed = engine.consolidate(tuple(reversed([f"p-{i:02d}" for i in range(34)])), "root")
+        assert len(committed) == 32
+        assert committed[0][0] == "p-33"
+        assert {proposal_id for proposal_id, _ in committed} == {
+            "p-33",
+            *(f"p-{i:02d}" for i in range(2, 33)),
+        }
+        assert engine.latest_disposition("p-00") == "superseded"
+        assert engine.latest_disposition("p-01") == "superseded"
+    finally:
+        store.close()
 
 
 def test_legacy_importer_module_is_available():
