@@ -342,7 +342,9 @@ def _init():
                 graph_config.model = graph_model
             if not graph_config.db_path:
                 graph_config.db_path = str(db_path.parent / "knowledge.kuzu")
-            _knowledge_graph = KnowledgeGraph(graph_config)
+            _knowledge_graph = KnowledgeGraph(
+                graph_config, embedding_provider=_embeddings
+            )
         except Exception as e:
             logger.warning("Knowledge graph init failed (non-fatal): %s", e)
 

@@ -40,8 +40,9 @@ class KnowledgeGraph:
     - search(): called during recall to get entities and facts
     """
 
-    def __init__(self, config: GraphConfig):
+    def __init__(self, config: GraphConfig, embedding_provider=None):
         self._config = config
+        self._embedding_provider = embedding_provider
         self._graphiti = None
         self._executor = None
 
@@ -51,8 +52,11 @@ class KnowledgeGraph:
 
         try:
             self._init_graphiti()
-        except Exception:
-            logger.warning("Knowledge graph init failed — continuing without", exc_info=True)
+        except Exception as exc:
+            self._shutdown_executor()
+            logger.warning(
+                "Knowledge graph init failed — continuing without: %s", exc
+            )
             self._graphiti = None
             self._config.enabled = False
 
@@ -66,6 +70,10 @@ class KnowledgeGraph:
         from graphiti_core.driver.kuzu_driver import KuzuDriver
         from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
         from graphiti_core.llm_client.config import LLMConfig
+        from graphiti_local import GraphitiEmbedder, GraphitiReranker
+
+        if self._embedding_provider is None:
+            raise ValueError("Knowledge graph requires an embedding provider")
 
         db_path = self._config.db_path
         if not db_path:
@@ -74,32 +82,37 @@ class KnowledgeGraph:
 
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        driver = KuzuDriver(db=db_path)
-
-        # Ollama exposes an OpenAI-compatible API
-        model = os.environ.get("ENGRAM_GRAPH_MODEL", self._config.model)
-        ollama_url = self._config.ollama_url
-
-        llm_client = OpenAIGenericClient(
-            config=LLMConfig(
-                base_url=f"{ollama_url}/v1",
-                api_key="ollama",
-                model=model,
-                small_model=model,
-            ),
-        )
-
-        graphiti = Graphiti(
-            graph_driver=driver,
-            llm_client=llm_client,
-        )
-
-        # Build indices — if this fails, close the driver before re-raising
+        driver = None
+        graphiti = None
         try:
+            driver = KuzuDriver(db=db_path)
+
+            # Ollama exposes an OpenAI-compatible API
+            model = os.environ.get("ENGRAM_GRAPH_MODEL", self._config.model)
+            ollama_url = self._config.ollama_url
+
+            llm_client = OpenAIGenericClient(
+                config=LLMConfig(
+                    base_url=f"{ollama_url}/v1",
+                    api_key="ollama",
+                    model=model,
+                    small_model=model,
+                ),
+            )
+
+            graphiti = Graphiti(
+                graph_driver=driver,
+                llm_client=llm_client,
+                embedder=GraphitiEmbedder(self._embedding_provider),
+                cross_encoder=GraphitiReranker(self._embedding_provider),
+            )
+
             self._run_async(graphiti.build_indices_and_constraints())
         except Exception:
+            resource = graphiti if graphiti is not None else driver
             try:
-                self._run_async(graphiti.close())
+                if resource is not None:
+                    self._run_async(resource.close())
             except Exception:
                 pass
             raise
@@ -126,6 +139,11 @@ class KnowledgeGraph:
             return self._executor.submit(asyncio.run, coro).result(timeout=900)
         else:
             return asyncio.run(coro)
+
+    def _shutdown_executor(self):
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
 
     def feed(
         self,
@@ -286,6 +304,4 @@ class KnowledgeGraph:
                 self._run_async(self._graphiti.close())
             except Exception:
                 logger.debug("Knowledge graph close failed", exc_info=True)
-        if self._executor is not None:
-            self._executor.shutdown(wait=False)
-            self._executor = None
+        self._shutdown_executor()

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from config import GraphConfig
+from graphiti_local import GraphitiEmbedder, GraphitiReranker
 
 
 @pytest.fixture
@@ -34,6 +35,185 @@ class TestKnowledgeGraphInit:
 
         kg = KnowledgeGraph(config)
         assert kg.enabled is False
+
+    def test_explicit_local_clients_avoid_graphiti_openai_defaults(
+        self, graph_config, monkeypatch
+    ):
+        import graphiti_core
+        import graphiti_core.driver.kuzu_driver as kuzu_driver
+        import graphiti_core.graphiti as graphiti_module
+        from graphiti_core.driver.driver import GraphDriver
+        from graphiti_local import GraphitiEmbedder, GraphitiReranker
+        from knowledge import KnowledgeGraph
+
+        class FakeDriver(GraphDriver):
+            def __init__(self, *, db):
+                self.db = db
+
+            def execute_query(self, cypher_query_, **kwargs):
+                raise NotImplementedError
+
+            def session(self, database=None):
+                raise NotImplementedError
+
+            async def close(self):
+                pass
+
+            def delete_all_indexes(self):
+                raise NotImplementedError
+
+            async def build_indices_and_constraints(self, delete_existing=False):
+                pass
+
+        async def build_indices(_self):
+            pass
+
+        def openai_default_was_used(*_args, **_kwargs):
+            raise AssertionError("Graphiti OpenAI embedding/reranking default was used")
+
+        monkeypatch.setattr(kuzu_driver, "KuzuDriver", FakeDriver)
+        monkeypatch.setattr(
+            graphiti_module, "OpenAIEmbedder", openai_default_was_used
+        )
+        monkeypatch.setattr(
+            graphiti_module, "OpenAIRerankerClient", openai_default_was_used
+        )
+        monkeypatch.setattr(
+            graphiti_core.Graphiti, "build_indices_and_constraints", build_indices
+        )
+        monkeypatch.setattr(
+            graphiti_core.Graphiti,
+            "_capture_initialization_telemetry",
+            lambda _self: None,
+        )
+
+        provider = FakeGraphEmbeddingProvider()
+        kg = KnowledgeGraph(graph_config, embedding_provider=provider)
+        try:
+            assert kg.enabled is True
+            assert isinstance(kg._graphiti.embedder, GraphitiEmbedder)
+            assert isinstance(kg._graphiti.cross_encoder, GraphitiReranker)
+        finally:
+            kg.close()
+
+    def test_constructor_failure_closes_partial_driver_once(
+        self, graph_config, monkeypatch, caplog
+    ):
+        import graphiti_core
+        import graphiti_core.driver.kuzu_driver as kuzu_driver
+        from knowledge import KnowledgeGraph
+
+        closed = []
+
+        class FakeDriver:
+            def __init__(self, *, db):
+                self.db = db
+
+            async def close(self):
+                closed.append(self)
+
+        class FailingGraphiti:
+            def __init__(self, **_kwargs):
+                raise RuntimeError("injected constructor failure")
+
+        monkeypatch.setattr(kuzu_driver, "KuzuDriver", FakeDriver)
+        monkeypatch.setattr(graphiti_core, "Graphiti", FailingGraphiti)
+
+        with caplog.at_level("WARNING", logger="engram.knowledge"):
+            kg = KnowledgeGraph(
+                graph_config, embedding_provider=FakeGraphEmbeddingProvider()
+            )
+
+        assert kg.enabled is False
+        assert len(closed) == 1
+        assert kg._executor is None
+        warnings = [
+            record for record in caplog.records
+            if record.name == "engram.knowledge" and record.levelname == "WARNING"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0].exc_info is None
+
+    def test_index_failure_closes_graphiti_once(
+        self, graph_config, monkeypatch
+    ):
+        import graphiti_core
+        import graphiti_core.driver.kuzu_driver as kuzu_driver
+        from knowledge import KnowledgeGraph
+
+        graph_closes = []
+        driver_closes = []
+
+        class FakeDriver:
+            def __init__(self, *, db):
+                self.db = db
+
+            async def close(self):
+                driver_closes.append(self)
+
+        class FailingGraphiti:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def build_indices_and_constraints(self):
+                raise RuntimeError("injected index failure")
+
+            async def close(self):
+                graph_closes.append(self)
+
+        monkeypatch.setattr(kuzu_driver, "KuzuDriver", FakeDriver)
+        monkeypatch.setattr(graphiti_core, "Graphiti", FailingGraphiti)
+
+        kg = KnowledgeGraph(
+            graph_config, embedding_provider=FakeGraphEmbeddingProvider()
+        )
+
+        assert kg.enabled is False
+        assert len(graph_closes) == 1
+        assert driver_closes == []
+        assert kg._executor is None
+
+
+class FakeGraphEmbeddingProvider:
+    def __init__(self):
+        self.calls = []
+
+    def dimension(self):
+        return 2
+
+    def embed(self, texts, *, prefix="search_document"):
+        self.calls.append((list(texts), prefix))
+        vectors = {
+            "query": [1.0, 0.0],
+            "related": [0.8, 0.6],
+            "unrelated": [0.0, 1.0],
+        }
+        return [vectors[text] for text in texts]
+
+
+@pytest.mark.anyio
+async def test_graphiti_local_clients_use_engram_embeddings():
+    provider = FakeGraphEmbeddingProvider()
+    embedder = GraphitiEmbedder(provider)
+    reranker = GraphitiReranker(provider)
+
+    assert await embedder.create("query") == [1.0, 0.0]
+    assert await embedder.create_batch(["related", "unrelated"]) == [
+        [0.8, 0.6],
+        [0.0, 1.0],
+    ]
+    assert await reranker.rank("query", ["unrelated", "related"]) == [
+        ("related", pytest.approx(0.8)),
+        ("unrelated", pytest.approx(0.0)),
+    ]
+    assert provider.calls[:2] == [
+        (["query"], "search_document"),
+        (["related", "unrelated"], "search_document"),
+    ]
+    assert sorted(provider.calls[2:]) == sorted([
+        (["query"], "search_query"),
+        (["unrelated", "related"], "search_document"),
+    ])
 
 
 class TestKnowledgeGraphFeed:
