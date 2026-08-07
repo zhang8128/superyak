@@ -7,6 +7,7 @@ import importlib
 import json
 import math
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -16,7 +17,7 @@ import uuid
 
 import pytest
 
-from categories import Boundary, CellDraft, EvolvingCategoryStore
+from categories import Boundary, CategoryQuotaExceeded, CellDraft, EvolvingCategoryStore
 from category_evolution import (
     EvolutionEngine,
     EvolutionPolicy,
@@ -106,6 +107,79 @@ def evolution_store(tmp_path):
 
 def _evidence(*, explicit=False, persistence=0.5, gain=0.8, cost=0.2, events=()):
     return RewriteEvidence(tuple(events), gain, persistence, cost, explicit)
+
+
+def test_root_epoch_keeps_immutable_history_when_snapshot_is_high_water_skipped(tmp_path):
+    """Catches high-water snapshot maintenance rolling back a valid root epoch."""
+    size = {"value": 0}
+    store = EvolvingCategoryStore(
+        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=100,
+        size_provider=lambda _path: size["value"],
+    )
+    engine = EvolutionEngine(store)
+    store.create_cell(CellDraft("cell", 0, "cell"))
+    size["value"] = 90
+
+    assert engine.create_root_epoch("root", ("cell",)) == "root"
+    assert engine.active_cell_ids("root") == ("cell",)
+    assert store.connection.execute("SELECT COUNT(*) FROM cat_snapshots").fetchone()[0] == 0
+    store.close()
+
+
+def test_snapshot_repair_at_hard_pressure_returns_immutable_active_state(tmp_path):
+    """Catches a full archive turning an optional snapshot repair into a read failure."""
+    size = {"value": 0}
+    store = EvolvingCategoryStore(
+        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=100,
+        size_provider=lambda _path: size["value"],
+    )
+    engine = EvolutionEngine(store)
+    store.create_cell(CellDraft("cell", 0, "cell"))
+    engine.create_root_epoch("root", ("cell",))
+    store.connection.execute("DELETE FROM cat_snapshots WHERE epoch_id = 'root'")
+    size["value"] = 100
+
+    assert engine.active_cell_ids("root") == ("cell",)
+    assert store.connection.execute("SELECT COUNT(*) FROM cat_snapshots").fetchone()[0] == 0
+    store.close()
+
+
+def test_commit_keeps_immutable_epoch_when_snapshot_is_high_water_skipped(tmp_path):
+    """Catches a high-water snapshot skip rolling back a committed rewrite epoch."""
+    size = {"value": 0}
+    store = EvolvingCategoryStore(
+        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=100,
+        size_provider=lambda _path: size["value"],
+    )
+    engine = EvolutionEngine(store)
+    store.create_cell(CellDraft("old", 0, "old"))
+    engine.create_root_epoch("root", ("old",))
+    engine.propose(_proposal("retire", "retire", inputs=("old",)))
+    size["value"] = 90
+
+    assert engine.commit("retire", ("root",), epoch_id="next") == "next"
+    assert engine.active_cell_ids("next") == ()
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_snapshots WHERE epoch_id = 'next'"
+    ).fetchone()[0] == 0
+    store.close()
+
+
+def test_legacy_replay_aborts_when_required_snapshot_is_derived_skipped(tmp_path, monkeypatch):
+    """Catches replay publishing history when its required snapshot artifact is absent."""
+    legacy = tmp_path / "legacy.db"
+    output = tmp_path / "output.db"
+    _make_legacy_history(legacy)
+
+    @contextmanager
+    def skipped_snapshot(_self):
+        yield None
+
+    monkeypatch.setattr(EvolvingCategoryStore, "derived_transaction", skipped_snapshot)
+    with pytest.raises(CategoryQuotaExceeded, match="requires a snapshot"):
+        _importer().import_legacy_category(legacy, output)
+
+    assert not output.exists()
 
 
 def _proposal(

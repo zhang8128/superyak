@@ -16,7 +16,7 @@ import tempfile
 from typing import Iterable, Literal, Mapping, Sequence
 import uuid
 
-from categories import Boundary, CellDraft, EvolvingCategoryStore, _now_iso
+from categories import Boundary, CategoryQuotaExceeded, CellDraft, EvolvingCategoryStore, _now_iso
 
 
 LEGACY_NAMESPACE = uuid.UUID("f4210ab5-b9e8-53ba-b3ca-261db44a9223")
@@ -366,7 +366,7 @@ class EvolutionEngine:
                         """,
                         (identifier, position, parent_id),
                     )
-                self._write_snapshot(connection, identifier, active)
+                self._write_derived_snapshot(identifier, active)
                 return identifier
         except sqlite3.IntegrityError:
             # The unique rewrite index is the final race backstop.  The failed
@@ -515,7 +515,7 @@ class EvolutionEngine:
                 "INSERT INTO cat_epochs (id, created_event_id, created_at) VALUES (?, ?, ?)",
                 (epoch_id, created_event_id, _now_iso()),
             )
-            self._write_snapshot(connection, epoch_id, active)
+            self._write_derived_snapshot(epoch_id, active)
         return epoch_id
 
     def active_cell_ids(self, epoch_id: str) -> tuple[str, ...]:
@@ -536,9 +536,12 @@ class EvolutionEngine:
             and snapshot["content_hash"] == content_hash
         )
         if not valid:
-            with self.store.transaction() as connection:
-                connection.execute("DELETE FROM cat_snapshots WHERE epoch_id = ?", (epoch_id,))
-                self._write_snapshot(connection, epoch_id, rebuilt)
+            try:
+                self._write_derived_snapshot(epoch_id, rebuilt, replace=True)
+            except CategoryQuotaExceeded:
+                # Reads derive canonical state from immutable events/epochs;
+                # a full archive must not turn a cache repair into a read failure.
+                pass
         return rebuilt
 
     select_epoch = active_cell_ids
@@ -610,6 +613,18 @@ class EvolutionEngine:
                 _now_iso(),
             ),
         )
+
+    def _write_derived_snapshot(
+        self, epoch_id: str, active_cell_ids: Iterable[str], *, replace: bool = False
+    ) -> bool:
+        """Write replaceable snapshot state, returning false when high-water skips it."""
+        with self.store.derived_transaction() as connection:
+            if connection is None:
+                return False
+            if replace:
+                connection.execute("DELETE FROM cat_snapshots WHERE epoch_id = ?", (epoch_id,))
+            self._write_snapshot(connection, epoch_id, active_cell_ids)
+            return True
 
     @staticmethod
     def _epoch_id(rewrite_id: str, parents: tuple[str, ...]) -> str:
@@ -1376,18 +1391,21 @@ def _bootstrap_staged_output(
                 """,
                 (root_epoch_id, event_id),
             )
-            transaction.execute(
-                """
-                INSERT INTO cat_snapshots (id, epoch_id, active_cell_ids_json, content_hash, created_at)
-                VALUES (?, ?, ?, ?, datetime('now'))
-                """,
-                (
-                    snapshot_id,
-                    root_epoch_id,
-                    active_cell_ids_json,
-                    snapshot_hash,
-                ),
-            )
+            with store.derived_transaction() as derived:
+                if derived is None:
+                    raise CategoryQuotaExceeded("legacy replay requires a snapshot artifact")
+                derived.execute(
+                    """
+                    INSERT INTO cat_snapshots (id, epoch_id, active_cell_ids_json, content_hash, created_at)
+                    VALUES (?, ?, ?, ?, datetime('now'))
+                    """,
+                    (
+                        snapshot_id,
+                        root_epoch_id,
+                        active_cell_ids_json,
+                        snapshot_hash,
+                    ),
+                )
     finally:
         if store is None:
             connection.close()

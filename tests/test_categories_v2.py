@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 
 import pytest
+
+import categories as categories_module
 
 from categories import (
     ArchivePressure,
@@ -118,13 +121,133 @@ def test_default_size_provider_counts_only_current_database_and_sidecars(tmp_pat
 
 def test_invalid_size_provider_fails_closed_without_disabling_pressure_reads(tmp_path):
     """Catches malformed measurements being interpreted as free archive capacity."""
+    with pytest.raises(CategoryQuotaExceeded):
+        make_v2_store(tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: -1)
+
+
+def test_default_size_provider_fails_closed_when_original_database_is_unlinked(tmp_path):
+    """Catches an unlinked live archive being measured as zero bytes."""
+    database = tmp_path / "quota.db"
+    store = make_v2_store(database, quota_bytes=1_000_000)
+
+    database.unlink()
+
+    assert store.pressure() == ArchivePressure("writes_blocked", 1_000_000, 1_000_000)
+    store.close()
+
+
+@pytest.mark.parametrize("mutation", ["renamed", "replacement", "symlink"])
+def test_default_size_provider_rejects_retargeted_main_database_path(tmp_path, mutation):
+    """Catches path retargeting that measures a different file as this archive."""
+    database = tmp_path / "quota.db"
+    store = make_v2_store(database, quota_bytes=1_000_000)
+    original = tmp_path / "original.db"
+    database.rename(original)
+    if mutation == "renamed":
+        pass
+    elif mutation == "replacement":
+        replacement = tmp_path / "replacement.db"
+        replacement.write_bytes(b"replacement")
+        replacement.replace(database)
+    else:
+        target = tmp_path / "target.db"
+        target.write_bytes(b"target")
+        database.symlink_to(target)
+
+    assert store.pressure().state == "writes_blocked"
+    store.close()
+
+
+def test_default_size_provider_accepts_a_hardlink_to_the_original_database(tmp_path):
+    """Catches identity checks that reject the same live database under a hard link."""
+    database = tmp_path / "quota.db"
+    store = make_v2_store(database, quota_bytes=1_000_000)
+    original = tmp_path / "original.db"
+    database.rename(original)
+    os.link(original, database)
+
+    assert store.pressure().state == "normal"
+    store.close()
+
+
+def test_default_size_provider_detects_replacement_between_path_resolution_and_open(tmp_path, monkeypatch):
+    """Catches a pathname race that switches databases after identity capture."""
+    database = tmp_path / "quota.db"
+    store = make_v2_store(database, quota_bytes=1_000_000)
+    replacement = tmp_path / "replacement.db"
+    replacement.write_bytes(b"replacement")
+    real_open = categories_module.os.open
+    replaced = False
+
+    def race_open(path, flags, *args):
+        nonlocal replaced
+        if Path(path) == database and not replaced:
+            replaced = True
+            replacement.replace(database)
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr(categories_module.os, "open", race_open)
+    assert store.pressure().state == "writes_blocked"
+    store.close()
+
+
+def test_pressure_uses_exact_decimal_watermark_math_for_large_quotas(tmp_path):
+    """Catches floating-point rounding admitting a huge archive above 90%."""
+    quota = 10**40 + 7
+    threshold = (quota * 9 + 9) // 10
+    size = {"value": threshold - 1}
     store = make_v2_store(
-        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: -1
+        tmp_path / "quota.db", quota_bytes=quota, size_provider=lambda _path: size["value"]
     )
 
-    assert store.pressure() == ArchivePressure("writes_blocked", 100, 100)
+    assert store.pressure().state == "normal"
+    size["value"] = threshold
+    assert store.pressure().state == "derived_blocked"
+    store.close()
+
+
+def test_falsey_size_provider_is_used_instead_of_replaced_by_default(tmp_path):
+    """Catches a valid falsey provider being silently discarded."""
+    class FalseyProvider:
+        def __bool__(self):
+            return False
+
+        def __call__(self, _path):
+            return 9
+
+    store = make_v2_store(tmp_path / "quota.db", quota_bytes=10, size_provider=FalseyProvider())
+    assert store.pressure().state == "derived_blocked"
+    store.close()
+
+
+def test_hard_quota_rejects_fresh_store_before_creating_schema(tmp_path):
+    """Catches constructor schema DDL bypassing a hard archive quota."""
+    database = tmp_path / "quota.db"
     with pytest.raises(CategoryQuotaExceeded):
-        store.append_event("blocked", {})
+        make_v2_store(database, quota_bytes=1, size_provider=lambda _path: 1)
+
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'cat_*'"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_store_owned_commit_failure_rolls_back_pending_rows(tmp_path):
+    """Catches a deferred-FK COMMIT error leaving an owned transaction open."""
+    store = make_v2_store(tmp_path / "quota.db")
+    with pytest.raises(sqlite3.IntegrityError):
+        with store.transaction() as connection:
+            connection.execute("PRAGMA defer_foreign_keys = ON")
+            connection.execute(
+                "INSERT INTO cat_cells (id, dimension, content, payload_json, content_hash, created_at, context_id) "
+                "VALUES ('bad', 0, 'bad', '{}', 'hash', 'now', 'missing')"
+            )
+
+    assert not store.connection.in_transaction
+    assert store.get_cell("bad") is None
     store.close()
 
 

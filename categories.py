@@ -21,6 +21,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from fractions import Fraction
 from hashlib import sha256
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Literal, Mapping
@@ -411,7 +412,7 @@ class EvolvingCategoryStore:
         *,
         quota_bytes: int = 3_000_000_000_000,
         high_watermark_ratio: float = 0.90,
-        size_provider: Callable[[Path], int] | None = None,
+        size_provider: Callable[[Path], int | None] | None = None,
     ):
         if connection.in_transaction:
             raise ValueError(
@@ -422,45 +423,81 @@ class EvolvingCategoryStore:
         self._connection.execute("PRAGMA foreign_keys = ON")
         if self._connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise RuntimeError("EvolvingCategoryStore requires foreign keys to be enabled")
-        self._ensure_schema()
+        if size_provider is not None and not callable(size_provider):
+            raise TypeError("size_provider must be callable")
         self._quota_bytes = quota_bytes
-        self._high_watermark_ratio = high_watermark_ratio
+        self._high_watermark = self._validate_watermark(high_watermark_ratio)
         self._database_path, self._database_identity = self._main_database_identity()
-        self._size_provider = size_provider or self._default_size_provider
+        self._size_provider = size_provider if size_provider is not None else self._default_size_provider
+        self._ensure_schema()
 
     @property
     def connection(self) -> sqlite3.Connection:
         return self._connection
 
-    def _ensure_schema(self) -> None:
-        self._connection.executescript(_EVOLVING_SCHEMA)
-        for table in _IMMUTABLE_TABLES:
-            self._connection.executescript(
-                f"""
-                CREATE TRIGGER IF NOT EXISTS {table}_no_update
-                BEFORE UPDATE ON {table}
-                BEGIN
-                    SELECT RAISE(ABORT, '{table} is immutable');
-                END;
-                CREATE TRIGGER IF NOT EXISTS {table}_no_delete
-                BEFORE DELETE ON {table}
-                BEGIN
-                    SELECT RAISE(ABORT, '{table} is immutable');
-                END;
-                """
-            )
+    @staticmethod
+    def _validate_watermark(value: float) -> Fraction | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
         try:
+            ratio = Fraction(str(value))
+        except (ValueError, ZeroDivisionError):
+            return None
+        return ratio if 0 <= ratio <= 1 else None
+
+    def _execute_complete_statements(self, sql: str) -> None:
+        statement = ""
+        for line in sql.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                if statement.strip():
+                    self._connection.execute(statement)
+                statement = ""
+        if statement.strip():
+            raise ValueError("incomplete schema statement")
+
+    def _ensure_schema(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._enforce_quota("immutable")
+            self._execute_complete_statements(_EVOLVING_SCHEMA)
+            for table in _IMMUTABLE_TABLES:
+                self._execute_complete_statements(
+                    f"""
+                    CREATE TRIGGER IF NOT EXISTS {table}_no_update
+                    BEFORE UPDATE ON {table}
+                    BEGIN
+                        SELECT RAISE(ABORT, '{table} is immutable');
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS {table}_no_delete
+                    BEFORE DELETE ON {table}
+                    BEGIN
+                        SELECT RAISE(ABORT, '{table} is immutable');
+                    END;
+                    """
+                )
+            self._connection.execute("SAVEPOINT cat_optional_vec")
+            try:
+                self._connection.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS cat_vectors "
+                    "USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768])"
+                )
+            except sqlite3.OperationalError as exc:
+                self._connection.execute("ROLLBACK TO SAVEPOINT cat_optional_vec")
+                if "no such module: vec0" not in str(exc).lower():
+                    raise
+            finally:
+                self._connection.execute("RELEASE SAVEPOINT cat_optional_vec")
             self._connection.execute(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS cat_vectors "
-                "USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768])"
+                "INSERT OR IGNORE INTO cat_schema_version (version, applied_at) VALUES (1, ?)",
+                (_now_iso(),),
             )
-        except sqlite3.OperationalError:
-            pass
-        self._connection.execute(
-            "INSERT OR IGNORE INTO cat_schema_version (version, applied_at) VALUES (1, ?)",
-            (_now_iso(),),
-        )
-        self._connection.commit()
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
 
     def _main_database_identity(self) -> tuple[Path | None, tuple[int, int] | None]:
         row = self._connection.execute("PRAGMA database_list").fetchone()
@@ -477,19 +514,28 @@ class EvolvingCategoryStore:
 
     @staticmethod
     def _regular_file_size(
-        path: Path, identity: tuple[int, int] | None = None
+        path: Path, identity: tuple[int, int] | None = None, *, required: bool = False
     ) -> int | None:
+        flags = os.O_RDONLY
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
         try:
-            metadata = os.stat(path, follow_symlinks=False)
+            descriptor = os.open(path, flags)
         except FileNotFoundError:
-            return 0
+            return None if required else 0
         except OSError:
             return None
-        if not stat.S_ISREG(metadata.st_mode):
-            return None
-        if identity is not None and (metadata.st_dev, metadata.st_ino) != identity:
-            return None
-        return metadata.st_size
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                return None
+            if identity is not None and (metadata.st_dev, metadata.st_ino) != identity:
+                return None
+            return metadata.st_size
+        finally:
+            os.close(descriptor)
 
     def _default_size_provider(self, _path: Path) -> int | None:
         """Measure only this store's original DB file and named SQLite sidecars."""
@@ -498,7 +544,7 @@ class EvolvingCategoryStore:
         if self._database_identity is None:
             return None
         main_size = self._regular_file_size(
-            self._database_path, self._database_identity
+            self._database_path, self._database_identity, required=True
         )
         if main_size is None:
             return None
@@ -523,12 +569,7 @@ class EvolvingCategoryStore:
             and not isinstance(self._quota_bytes, bool)
             and self._quota_bytes > 0
         )
-        ratio_is_valid = (
-            isinstance(self._high_watermark_ratio, (int, float))
-            and not isinstance(self._high_watermark_ratio, bool)
-            and math.isfinite(self._high_watermark_ratio)
-            and 0 <= self._high_watermark_ratio <= 1
-        )
+        ratio_is_valid = self._high_watermark is not None
         quota = self._quota_bytes if quota_is_valid else 0
         if not quota_is_valid or not ratio_is_valid:
             return ArchivePressure("writes_blocked", quota, quota)
@@ -542,16 +583,15 @@ class EvolvingCategoryStore:
             return ArchivePressure("writes_blocked", quota, quota)
         if used >= quota:
             return ArchivePressure("writes_blocked", used, quota)
-        if used >= quota * self._high_watermark_ratio:
+        assert self._high_watermark is not None
+        if used * self._high_watermark.denominator >= quota * self._high_watermark.numerator:
             return ArchivePressure("derived_blocked", used, quota)
         return ArchivePressure("normal", used, quota)
 
     def _enforce_quota(self, quota_class: Literal["immutable", "derived"]) -> None:
         pressure = self.pressure()
         if pressure.state == "writes_blocked":
-            raise CategoryQuotaExceeded(
-                f"category archive quota reached ({pressure.used_bytes}/{pressure.quota_bytes} bytes)"
-            )
+            raise CategoryQuotaExceeded("category archive quota reached")
         if quota_class == "derived" and pressure.state == "derived_blocked":
             raise _DerivedArchiveWriteSkipped()
 
@@ -579,7 +619,14 @@ class EvolvingCategoryStore:
                 self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
                 raise
             else:
-                self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                try:
+                    self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                except Exception:
+                    try:
+                        self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    finally:
+                        self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+                    raise
             return
 
         # Checking beneath SQLite's writer reservation prevents concurrent
@@ -592,7 +639,11 @@ class EvolvingCategoryStore:
             self._connection.rollback()
             raise
         else:
-            self._connection.commit()
+            try:
+                self._connection.commit()
+            except Exception:
+                self._connection.rollback()
+                raise
 
     @contextmanager
     def derived_transaction(self) -> Iterator[sqlite3.Connection | None]:
