@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -496,6 +497,83 @@ def test_legacy_replay_rejects_an_altered_same_named_table_definition(tmp_path):
 
     with pytest.raises(ValueError, match="incompatible"):
         _importer().import_legacy_category(legacy, output)
+
+
+def test_legacy_replay_rejects_changed_quoted_check_literals(tmp_path):
+    """Catches DDL normalization folding the case of quoted CHECK values."""
+    legacy = tmp_path / "categories.db"
+    output = tmp_path / "v2.db"
+    _make_legacy_history(legacy)
+    _importer().import_legacy_category(legacy, output)
+    connection = sqlite3.connect(output)
+    connection.execute("PRAGMA writable_schema = ON")
+    connection.execute(
+        """
+        UPDATE sqlite_master
+        SET sql = REPLACE(sql, "'source','target'", "'SOURCE','TARGET'")
+        WHERE type = 'table' AND name = 'cat_boundaries'
+        """
+    )
+    connection.execute("PRAGMA writable_schema = OFF")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(ValueError, match="incompatible"):
+        _importer().import_legacy_category(legacy, output)
+
+
+def test_staged_publication_fsyncs_file_then_replaces_then_syncs_directory(tmp_path, monkeypatch):
+    """Catches rename publication that misses the required post-rename directory sync."""
+    evolution = _importer()
+    staged = tmp_path / "staged.db"
+    output = tmp_path / "output.db"
+    staged.write_bytes(b"complete replay")
+    calls: list[tuple[str, Path]] = []
+    real_replace = evolution.os.replace
+
+    def sync_file(path: Path) -> None:
+        calls.append(("file", path))
+
+    def replace(source: Path, destination: Path) -> None:
+        calls.append(("replace", Path(destination)))
+        real_replace(source, destination)
+
+    def sync_directory(path: Path) -> None:
+        calls.append(("directory", path))
+
+    monkeypatch.setattr(evolution, "_fsync_file", sync_file)
+    monkeypatch.setattr(evolution.os, "replace", replace)
+    monkeypatch.setattr(evolution, "_fsync_directory", sync_directory)
+
+    evolution._publish_staged_output(staged, output)
+
+    assert output.read_bytes() == b"complete replay"
+    assert calls == [
+        ("file", staged),
+        ("replace", output),
+        ("directory", output.parent),
+    ]
+
+
+@pytest.mark.parametrize("value", [math.inf, -math.inf])
+def test_legacy_replay_rejects_infinite_raw_values_before_creating_output(tmp_path, value):
+    """Catches non-finite raw SQLite values being fingerprinted or published ambiguously."""
+    legacy = tmp_path / "categories.db"
+    output = tmp_path / "v2.db"
+    _make_legacy_history(legacy)
+    connection = sqlite3.connect(legacy)
+    connection.execute("UPDATE cells SET access_count = ?", (value,))
+    connection.commit()
+    connection.close()
+    legacy_bytes = legacy.read_bytes()
+    legacy_mtime_ns = legacy.stat().st_mtime_ns
+
+    with pytest.raises(ValueError, match="non-finite"):
+        _importer().import_legacy_category(legacy, output)
+
+    assert not output.exists()
+    assert legacy.read_bytes() == legacy_bytes
+    assert legacy.stat().st_mtime_ns == legacy_mtime_ns
 
 
 def test_legacy_replay_rejects_contaminated_or_invalid_vector_state(tmp_path):

@@ -427,7 +427,43 @@ def _manifest_fingerprint(manifest: Mapping[str, object]) -> str:
 
 
 def _canonical_ddl(sql: str) -> str:
-    return " ".join(sql.lower().split())
+    """Normalize only unquoted SQL syntax while preserving literal semantics."""
+    result: list[str] = []
+    quote: str | None = None
+    pending_space = False
+    index = 0
+    while index < len(sql):
+        character = sql[index]
+        if quote is None:
+            if character.isspace():
+                pending_space = bool(result)
+            else:
+                if pending_space:
+                    result.append(" ")
+                    pending_space = False
+                result.append(character if character in "'\"`[" else character.lower())
+                if character == "'":
+                    quote = "'"
+                elif character == '"':
+                    quote = '"'
+                elif character == "`":
+                    quote = "`"
+                elif character == "[":
+                    quote = "]"
+            index += 1
+            continue
+
+        result.append(character)
+        if character == quote:
+            escaped_quote = quote in ("'", '"') and index + 1 < len(sql) and sql[index + 1] == quote
+            escaped_bracket = quote == "]" and index + 1 < len(sql) and sql[index + 1] == "]"
+            if escaped_quote or escaped_bracket:
+                result.append(sql[index + 1])
+                index += 1
+            else:
+                quote = None
+        index += 1
+    return "".join(result).strip()
 
 
 def _schema_definitions(connection: sqlite3.Connection) -> tuple[tuple[str, str, str], ...]:
@@ -625,7 +661,7 @@ def _preflight_existing_output(
                 vector_sql = connection.execute(
                     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cat_vectors'"
                 ).fetchone()["sql"]
-                normalized_vector_sql = " ".join((vector_sql or "").lower().split())
+                normalized_vector_sql = _canonical_ddl(vector_sql or "")
                 if (
                     normalized_vector_sql != _SUPPORTED_VEC0_DDL
                     or connection.execute(
@@ -690,17 +726,26 @@ def _remove_staged_sqlite_files(path: Path) -> None:
             pass
 
 
-def _fsync_staged_database(path: Path) -> None:
+def _fsync_file(path: Path) -> None:
     with path.open("rb") as database:
         os.fsync(database.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
     try:
-        directory_fd = os.open(path.parent, os.O_RDONLY)
+        directory_fd = os.open(path, os.O_RDONLY)
     except OSError:
         return
     try:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+
+
+def _publish_staged_output(staged_output: Path, output: Path) -> None:
+    _fsync_file(staged_output)
+    os.replace(staged_output, output)
+    _fsync_directory(output.parent)
 
 
 def _bootstrap_staged_output(
@@ -832,8 +877,7 @@ def import_legacy_category(
             snapshot_hash=snapshot_hash,
         ):
             raise RuntimeError("staged legacy replay did not validate")
-        _fsync_staged_database(staged_output)
-        os.replace(staged_output, output)
+        _publish_staged_output(staged_output, output)
         return _report(plan, len(rows), root_epoch_id, snapshot_hash)
     finally:
         _remove_staged_sqlite_files(staged_output)
