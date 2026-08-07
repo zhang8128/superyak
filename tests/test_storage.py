@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import uuid
+import sqlite3
 
 import pytest
 from datetime import datetime, timezone
+
+from storage import Storage
 
 
 def _now() -> str:
@@ -174,6 +177,41 @@ class TestMigration:
         ).fetchone()
         assert row is not None
         assert row[0] >= 1
+
+
+def test_failed_migration_rolls_back_schema_and_version(tmp_path):
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "001_partial.sql").write_text(
+        "CREATE TABLE half_applied(id INTEGER);\nTHIS IS NOT SQL;\n"
+    )
+    db_path = tmp_path / "graph.db"
+
+    with pytest.raises(sqlite3.OperationalError, match='near "THIS"'):
+        Storage(str(db_path), migrations_dir=str(migrations))
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='half_applied'"
+    ).fetchone() is None
+    assert conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0
+    conn.close()
+
+
+def test_storage_transaction_defers_helper_commits_and_rolls_back(tmp_db):
+    episode_id = str(uuid.uuid4())
+    with pytest.raises(RuntimeError, match="injected"):
+        with tmp_db.transaction():
+            tmp_db.add_episode(
+                id=episode_id,
+                session_id="transaction-test",
+                content="This write must roll back with the outer unit of work.",
+                embedding=[0.0] * 768,
+            )
+            raise RuntimeError("injected")
+
+    assert tmp_db.get_episode(episode_id) is None
+    assert tmp_db.conn.in_transaction is False
 
 
 def test_v3_migration_creates_tables(tmp_db):

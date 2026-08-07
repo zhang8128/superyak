@@ -8,9 +8,11 @@ import logging
 import re
 import sqlite3
 import struct
+from contextlib import contextmanager
 from session_bindings import valid_codex_run_key
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 logger = logging.getLogger("engram.storage")
 
@@ -52,6 +54,7 @@ class Storage:
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
+        self._transaction_depth = 0
 
         # Load sqlite-vec extension
         self.conn.enable_load_extension(True)
@@ -60,10 +63,7 @@ class Storage:
         self.conn.enable_load_extension(False)
 
         # Set pragmas
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA busy_timeout=5000")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self._restore_pragmas()
         # Note: migration 015 extends the semantic kind CHECK constraint to include 'disposition'
 
         # Run migrations
@@ -74,6 +74,37 @@ class Storage:
 
         # Verify vec0 tables are healthy — rebuild if WAL recovery corrupted them
         self._check_vec0_health()
+
+    def _restore_pragmas(self) -> None:
+        """Restore connection pragmas reset by ``executescript``."""
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Group storage writes into one atomic SQLite transaction."""
+        outermost = self._transaction_depth == 0
+        if outermost:
+            self.conn.execute("BEGIN IMMEDIATE")
+        self._transaction_depth += 1
+        try:
+            yield
+        except Exception:
+            if outermost and self.conn.in_transaction:
+                self.conn.rollback()
+            raise
+        else:
+            if outermost:
+                self.conn.commit()
+        finally:
+            self._transaction_depth -= 1
+
+    def _commit(self) -> None:
+        """Commit immediately unless an outer storage transaction owns it."""
+        if self._transaction_depth == 0:
+            self.conn.commit()
 
     def _run_migrations(self) -> None:
         """Apply any unapplied SQL migrations from the migrations directory."""
@@ -105,17 +136,19 @@ class Storage:
 
         for ver, path in sorted(migrations):
             sql = path.read_text()
-            self.conn.executescript(sql)
-            # executescript resets all pragmas — restore them
-            self.conn.execute("PRAGMA journal_mode=WAL")
-            self.conn.execute("PRAGMA foreign_keys=ON")
-            self.conn.execute("PRAGMA busy_timeout=5000")
-            self.conn.execute("PRAGMA synchronous=NORMAL")
-            self.conn.execute(
-                "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-                (ver, _now_iso()),
-            )
-            self.conn.commit()
+            try:
+                self.conn.executescript("BEGIN IMMEDIATE;\n" + sql)
+                self.conn.execute(
+                    "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                    (ver, _now_iso()),
+                )
+                self.conn.commit()
+            except Exception:
+                if self.conn.in_transaction:
+                    self.conn.rollback()
+                raise
+            finally:
+                self._restore_pragmas()
             logger.info("Migration %d applied: %s", ver, path.name)
             if ver == 7:
                 self._backfill_content_hashes()
@@ -137,7 +170,7 @@ class Storage:
                 self.conn.execute(
                     f"UPDATE {table} SET content_hash = ? WHERE id = ?", (h, row["id"])
                 )
-        self.conn.commit()
+        self._commit()
 
     _VEC0_TABLES = ("entity_vectors", "episode_vectors", "semantic_vectors", "instinct_vectors")
 
@@ -211,7 +244,7 @@ class Storage:
                     f"CREATE VIRTUAL TABLE {vec_table} USING vec0("
                     f"id TEXT PRIMARY KEY, embedding float[{dim}])"
                 )
-                self.conn.commit()
+                self._commit()
                 logger.warning(
                     "Rebuilt %s — vectors lost, will be re-embedded on next write/reindex",
                     vec_table,
@@ -237,7 +270,7 @@ class Storage:
             "DELETE FROM sqlite_master WHERE name=?", (vec_table,)
         )
         self.conn.execute("PRAGMA writable_schema=OFF")
-        self.conn.commit()
+        self._commit()
 
     def close(self) -> None:
         """Checkpoint WAL and close. Prevents vec0 corruption on unclean restart."""
@@ -275,7 +308,7 @@ class Storage:
                 "INSERT INTO entity_vectors (id, embedding) VALUES (?, ?)",
                 (id, _pack_embedding(embedding)),
             )
-        self.conn.commit()
+        self._commit()
         logger.debug("Entity added: %s (type=%s)", name, entity_type)
         return id
 
@@ -302,13 +335,13 @@ class Storage:
         cols = ", ".join(f"{k} = ?" for k in fields)
         vals = list(fields.values()) + [id]
         self.conn.execute(f"UPDATE entities SET {cols} WHERE id = ?", vals)
-        self.conn.commit()
+        self._commit()
 
     def delete_entity(self, id: str) -> None:
         # Delete from vec0 table (not covered by CASCADE)
         self.conn.execute("DELETE FROM entity_vectors WHERE id = ?", (id,))
         self.conn.execute("DELETE FROM entities WHERE id = ?", (id,))
-        self.conn.commit()
+        self._commit()
 
     # --- Relationships ---
 
@@ -328,7 +361,7 @@ class Storage:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (id, source_id, target_id, rel_type, description, weight, valid_from or now, now),
         )
-        self.conn.commit()
+        self._commit()
         logger.debug("Relationship added: %s -> %s (%s)", source_id, target_id, rel_type)
         return id
 
@@ -339,7 +372,7 @@ class Storage:
             "UPDATE relationships SET invalid_at = ? WHERE id = ? AND invalid_at IS NULL",
             (now, id),
         )
-        self.conn.commit()
+        self._commit()
         return cursor.rowcount > 0
 
     def get_relationships(self, entity_id: str, valid_only: bool = True) -> list[dict]:
@@ -415,7 +448,7 @@ class Storage:
                 "INSERT INTO episode_entities (episode_id, entity_id) VALUES (?, ?)",
                 [(id, eid) for eid in entity_ids],
             )
-        self.conn.commit()
+        self._commit()
         logger.debug("Episode added: %s (entities=%d)", id, len(entity_ids) if entity_ids else 0)
         return id
 
@@ -428,7 +461,7 @@ class Storage:
             f"UPDATE episodes SET compressed = 1 WHERE id IN ({placeholders})",
             ids,
         )
-        self.conn.commit()
+        self._commit()
 
     def set_episode_lanes(self, ids: list[str], lane: str) -> int:
         """Re-lane episodes (e.g. when compression review reveals work content)."""
@@ -441,7 +474,7 @@ class Storage:
             f"UPDATE episodes SET lane = ? WHERE id IN ({placeholders})",
             [lane, *ids],
         )
-        self.conn.commit()
+        self._commit()
         return cur.rowcount
 
     def get_uncompressed_episodes(self) -> list[dict]:
@@ -471,7 +504,7 @@ class Storage:
             "WHERE id = ?",
             (_now_iso(), id),
         )
-        self.conn.commit()
+        self._commit()
 
     def apply_decay(self, decay_exponent: float = 0.5, min_interval_minutes: int = 30,
                     exponent_multipliers: dict[str, float] | None = None) -> int:
@@ -549,7 +582,7 @@ class Storage:
                 )
                 count += 1
 
-        self.conn.commit()
+        self._commit()
         logger.debug("Decay recomputed (d=%.2f): %d episodes updated", decay_exponent, count)
         return count
 
@@ -596,7 +629,7 @@ class Storage:
             f"DELETE FROM persistence_scores WHERE episode_id IN ({placeholders})", ids
         )
         self.cleanup_resonances(ids)
-        self.conn.commit()
+        self._commit()
         logger.info("Moved %d episodes to cold storage", len(ids))
         return len(ids)
 
@@ -737,7 +770,7 @@ class Storage:
                 "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
                 (ep["id"], _pack_embedding(embedding)),
             )
-            self.conn.commit()
+            self._commit()
         except Exception:
             self.conn.rollback()
             raise
@@ -766,7 +799,7 @@ class Storage:
             "last_accessed = ? WHERE id = ?",
             (_now_iso(), id),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_orphaned_episodes(self) -> list[dict]:
         """Find episodes that have no vector embedding (invisible to search)."""
@@ -796,7 +829,7 @@ class Storage:
             "UPDATE episodes SET core = ?, decay_strength = 1.0 WHERE id = ?",
             (tier, episode_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def unmark_core(self, episode_id: str) -> None:
         """Demote a core episode back to normal — re-enables decay.
@@ -810,7 +843,7 @@ class Storage:
             "UPDATE episodes SET core = 0, last_accessed = ? WHERE id = ?",
             (now, episode_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def unmark_core_batch(self, episode_ids: list[str]) -> int:
         """Demote multiple core episodes with decay grace. Returns count updated."""
@@ -822,7 +855,7 @@ class Storage:
             f"UPDATE episodes SET core = 0, last_accessed = ? WHERE id IN ({placeholders})",
             [now, *episode_ids],
         )
-        self.conn.commit()
+        self._commit()
         return cursor.rowcount
 
     def mark_core_batch(self, episode_ids: list[str], tier: int = 1) -> int:
@@ -839,7 +872,7 @@ class Storage:
             f"WHERE id IN ({placeholders})",
             [tier, *episode_ids],
         )
-        self.conn.commit()
+        self._commit()
         return cursor.rowcount
 
     def get_core_episodes(self) -> list[dict]:
@@ -856,7 +889,7 @@ class Storage:
             "UPDATE episodes SET source = ? WHERE id = ?",
             (source, episode_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def search_episode_fts(self, query: str) -> list[str]:
         """Full-text search on episode content. Returns episode IDs."""
@@ -897,7 +930,7 @@ class Storage:
                 "INSERT INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)",
                 [(id, eid) for eid in source_episode_ids],
             )
-        self.conn.commit()
+        self._commit()
         logger.debug("Semantic added: %s (kind=%s)", id, kind)
         return id
 
@@ -925,7 +958,7 @@ class Storage:
                 "INSERT OR IGNORE INTO semantic_sources (semantic_id, episode_id) VALUES (?, ?)",
                 [(id, eid) for eid in additional_episode_ids],
             )
-        self.conn.commit()
+        self._commit()
 
     def get_semantic_neighbors(self, semantic_id: str) -> list[dict]:
         """Find semantics that share episodes with this one, weighted by co-occurrence."""
@@ -947,7 +980,7 @@ class Storage:
             "UPDATE semantics SET contradicted_by = ? WHERE id = ?",
             (contradicted_by, id),
         )
-        self.conn.commit()
+        self._commit()
 
     def search_semantic_fts(self, query: str) -> list[str]:
         """Full-text search on semantic content. Returns semantic IDs."""
@@ -1113,7 +1146,7 @@ class Storage:
                     "INSERT INTO instinct_sources (instinct_id, semantic_id) VALUES (?, ?)",
                     [(id, sid) for sid in valid_ids],
                 )
-        self.conn.commit()
+        self._commit()
         logger.debug("Instinct added: %s (trigger=%r)", id, trigger)
         return id
 
@@ -1172,7 +1205,7 @@ class Storage:
             "VALUES (?, ?, ?, ?, ?, ?)",
             (id, instinct_id, context_text, context_embedding, followed, now),
         )
-        self.conn.commit()
+        self._commit()
         logger.debug("Context feedback stored: instinct=%s followed=%s", instinct_id, followed)
         return id
 
@@ -1202,7 +1235,7 @@ class Storage:
             "INSERT INTO instinct_context_vectors (id, embedding) VALUES (?, ?)",
             (id, _pack_embedding(embedding)),
         )
-        self.conn.commit()
+        self._commit()
         logger.debug("Instinct context vector stored: %s", id)
 
     def update_instinct_followed(self, id: str) -> None:
@@ -1212,7 +1245,7 @@ class Storage:
             "WHERE id = ?",
             (id,),
         )
-        self.conn.commit()
+        self._commit()
 
     def update_instinct_overridden(self, id: str) -> None:
         self.conn.execute(
@@ -1221,7 +1254,7 @@ class Storage:
             "WHERE id = ?",
             (id,),
         )
-        self.conn.commit()
+        self._commit()
 
     def prune_weak_instincts(self, strength_threshold: float = 0.1) -> int:
         """Remove instincts that have weakened below threshold.
@@ -1247,7 +1280,7 @@ class Storage:
         for iid in ids:
             self.conn.execute("DELETE FROM instinct_context_feedback WHERE instinct_id = ?", (iid,))
         self.conn.execute(f"DELETE FROM instincts WHERE id IN ({placeholders})", ids)
-        self.conn.commit()
+        self._commit()
         logger.info("Pruned %d weak instincts (threshold=%.2f)", len(ids), strength_threshold)
         return len(ids)
 
@@ -1265,7 +1298,7 @@ class Storage:
             "UPDATE instincts SET strength = ? WHERE id = ?",
             (new_strength, id),
         )
-        self.conn.commit()
+        self._commit()
         logger.info("Instinct challenged: %s (%.2f → %.2f)", id, inst["strength"], new_strength)
         return True
 
@@ -1283,7 +1316,7 @@ class Storage:
         self.conn.execute("DELETE FROM instinct_context_vectors WHERE id = ?", (id,))
         self.conn.execute("DELETE FROM instinct_context_feedback WHERE instinct_id = ?", (id,))
         self.conn.execute("DELETE FROM instincts WHERE id = ?", (id,))
-        self.conn.commit()
+        self._commit()
         logger.info("Instinct retired: %s (%s)", id, inst["action"][:60])
         return True
 
@@ -1320,7 +1353,7 @@ class Storage:
                 "VALUES (?, ?, 1, ?, ?, ?)",
                 (a, b, 1 if followed is True else 0, 1 if followed is False else 0, now),
             )
-        self.conn.commit()
+        self._commit()
 
     def update_co_fire_feedback(
         self, instinct_a: str, instinct_b: str, followed: bool
@@ -1336,7 +1369,7 @@ class Storage:
             "WHERE instinct_a = ? AND instinct_b = ?",
             (follow_delta, override_delta, a, b),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_co_firing_edge(self, instinct_a: str, instinct_b: str) -> dict | None:
         """Get the co-firing edge between two instincts."""
@@ -1379,7 +1412,7 @@ class Storage:
             "VALUES (?, ?, ?, ?, 0)",
             (id, maturity, temperament, now),
         )
-        self.conn.commit()
+        self._commit()
         return id
 
     def get_cluster(self, id: str) -> dict | None:
@@ -1404,11 +1437,11 @@ class Storage:
             f"UPDATE instinct_clusters SET {set_clause} WHERE id = ?",
             (*updates.values(), id),
         )
-        self.conn.commit()
+        self._commit()
 
     def delete_cluster(self, id: str) -> None:
         self.conn.execute("DELETE FROM instinct_clusters WHERE id = ?", (id,))
-        self.conn.commit()
+        self._commit()
 
     def add_to_cluster(
         self, instinct_id: str, cluster_id: str, strength: float = 0.5
@@ -1424,7 +1457,7 @@ class Storage:
             "WHERE id = ?",
             (cluster_id, cluster_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_cluster_members(self, cluster_id: str) -> list[dict]:
         rows = self.conn.execute(
@@ -1448,7 +1481,7 @@ class Storage:
             "WHERE instinct_id = ? AND cluster_id = ?",
             (strength, instinct_id, cluster_id),
         )
-        self.conn.commit()
+        self._commit()
 
     # --- Memory Log ---
 
@@ -1474,7 +1507,7 @@ class Storage:
                 outcome,
             ),
         )
-        self.conn.commit()
+        self._commit()
         logger.debug("Log entry added: %s (event_type=%s, layer=%s)", id, event_type, layer)
         return id
 
@@ -1505,7 +1538,7 @@ class Storage:
             "UPDATE memory_log SET outcome = ? WHERE json_extract(context, '$.recall_id') = ?",
             (outcome, recall_id),
         )
-        self.conn.commit()
+        self._commit()
 
     # --- Assessments (off-device function measurement) ---
 
@@ -1519,7 +1552,7 @@ class Storage:
             "VALUES (?, 'scheduled', ?, ?, ?)",
             (id, scheduled_by, reason, _now_iso()),
         )
-        self.conn.commit()
+        self._commit()
         return id
 
     def get_scheduled_assessment(self) -> dict | None:
@@ -1546,7 +1579,7 @@ class Storage:
         if cur.rowcount == 0:
             self.conn.rollback()
             raise ValueError(f"No active assessment with id {id!r}")
-        self.conn.commit()
+        self._commit()
 
     def list_assessments(self, status: str | None = None) -> list[dict]:
         if status is None:
@@ -1609,7 +1642,7 @@ class Storage:
                 (session_id, harness, model, repo,
                  datetime.now(timezone.utc).isoformat()),
             )
-            self.conn.commit()
+            self._commit()
         except sqlite3.Error:
             # Provenance is never a gate — failures including bad payloads or
             # missing tables must never block writes.
@@ -1626,7 +1659,7 @@ class Storage:
                  json.dumps(target_ids if target_ids is not None else []),
                  json.dumps(details if details is not None else {}, default=str), str(outcome)),
             )
-            self.conn.commit()
+            self._commit()
         except Exception:
             logger.debug("operation attribution skipped", exc_info=True)
         return op_id
@@ -1642,7 +1675,7 @@ class Storage:
                 "session_id = excluded.session_id, bound_at = excluded.bound_at",
                 (run_key, session_id, _now_iso()),
             )
-            self.conn.commit()
+            self._commit()
         except sqlite3.Error:
             logger.debug("session binding skipped", exc_info=True)
 
@@ -1672,7 +1705,7 @@ class Storage:
                 )
             else:
                 self.conn.execute("DELETE FROM session_bindings WHERE run_key = ?", (run_key,))
-            self.conn.commit()
+            self._commit()
         except sqlite3.Error:
             logger.debug("session binding cleanup skipped", exc_info=True)
 
@@ -1700,7 +1733,7 @@ class Storage:
             "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
-        self.conn.commit()
+        self._commit()
 
     # --- Task Contexts ---
 
@@ -1727,7 +1760,7 @@ class Storage:
             "content = excluded.content, status = 'active', updated_at = excluded.updated_at",
             (id, name, content, now, now),
         )
-        self.conn.commit()
+        self._commit()
 
     def update_task_context(self, content: str) -> dict | None:
         """Update the active task context's content. Returns updated context or None."""
@@ -1736,7 +1769,7 @@ class Storage:
             "UPDATE task_contexts SET content = ?, updated_at = ? WHERE status = 'active'",
             (content, now),
         )
-        self.conn.commit()
+        self._commit()
         return self.get_active_task_context()
 
     def archive_task_context(self) -> dict | None:
@@ -1748,7 +1781,7 @@ class Storage:
                 "UPDATE task_contexts SET status = 'archived', updated_at = ? WHERE id = ?",
                 (now, ctx["id"]),
             )
-            self.conn.commit()
+            self._commit()
         return ctx
 
     def get_task_context_by_name(self, name: str) -> dict | None:
@@ -1798,7 +1831,7 @@ class Storage:
             """,
             (rid, id_a, layer_a, id_b, layer_b, similarity, weight, now, now),
         )
-        self.conn.commit()
+        self._commit()
 
         # Return the actual ID (may be the existing one on conflict)
         row = self.conn.execute(
@@ -1969,7 +2002,7 @@ class Storage:
             "UPDATE resonances SET strength = MIN(1.0, strength + ?) WHERE id = ?",
             (delta, resonance_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def weaken_resonance(self, resonance_id: str, delta: float = 0.05) -> None:
         """Decrease resonance strength, floored at 0.05."""
@@ -1977,7 +2010,7 @@ class Storage:
             "UPDATE resonances SET strength = MAX(0.05, strength - ?) WHERE id = ?",
             (delta, resonance_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def cleanup_resonances(self, pruned_ids: list[str]) -> None:
         """Delete resonances where either memory has been pruned."""
@@ -1989,7 +2022,7 @@ class Storage:
             f"OR memory_b IN ({placeholders})",
             pruned_ids + pruned_ids,
         )
-        self.conn.commit()
+        self._commit()
 
     def get_recall_cooccurrences(self) -> dict[tuple[str, str], int]:
         """Count how many recall events each pair of memories co-occurred in.
@@ -2076,7 +2109,7 @@ class Storage:
             "VALUES (?, ?, ?, ?, ?, ?)",
             (aid, type, content, expected, baseline_score, now),
         )
-        self.conn.commit()
+        self._commit()
         return aid
 
     def get_anchor(self, anchor_id: str) -> dict | None:
@@ -2103,7 +2136,7 @@ class Storage:
             "UPDATE anchors SET last_checked = ?, last_result = ? WHERE id = ?",
             (_now_iso(), result_json, anchor_id),
         )
-        self.conn.commit()
+        self._commit()
 
     def propose_anchor_retirement(self, anchor_id: str) -> None:
         """Propose retirement. After 2 proposals, anchor is retired."""
@@ -2114,7 +2147,7 @@ class Storage:
             "WHERE id = ? AND status != 'retired'",
             (anchor_id,),
         )
-        self.conn.commit()
+        self._commit()
 
     # --- Coherence: Drift Reports ---
 
@@ -2143,7 +2176,7 @@ class Storage:
                 summary,
             ),
         )
-        self.conn.commit()
+        self._commit()
         return rid
 
     def get_latest_drift_report(self) -> dict | None:
@@ -2173,7 +2206,7 @@ class Storage:
              dl_cost, int(persistence_checked), site,
              datetime.now(timezone.utc).isoformat()),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_subdivision_events(self, limit: int = 20) -> list[dict]:
         rows = self.conn.execute(
@@ -2189,7 +2222,7 @@ class Storage:
             (peer_id, parent_id, residual_energy,
              datetime.now(timezone.utc).isoformat()),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_semantic_peers(self, parent_id: str) -> list[dict]:
         rows = self.conn.execute(
@@ -2202,7 +2235,7 @@ class Storage:
             " VALUES (?, ?, ?)",
             (parent_id, json.dumps(verdict), datetime.now(timezone.utc).isoformat()),
         )
-        self.conn.commit()
+        self._commit()
 
     def get_queued_subdivisions(self) -> list[dict]:
         rows = self.conn.execute(
@@ -2212,7 +2245,7 @@ class Storage:
     def dequeue_subdivision(self, parent_id: str) -> None:
         self.conn.execute(
             "DELETE FROM subdivision_queue WHERE parent_id = ?", (parent_id,))
-        self.conn.commit()
+        self._commit()
 
     # --- Persistence (migration 021) -----------------------------------------
 
@@ -2225,7 +2258,7 @@ class Storage:
             [(s["episode_id"], s["redundancy"], s["uniqueness"],
               s["generativity"], now) for s in scores],
         )
-        self.conn.commit()
+        self._commit()
 
     def get_persistence_scores(self) -> dict[str, dict]:
         rows = self.conn.execute("SELECT * FROM persistence_scores").fetchall()
