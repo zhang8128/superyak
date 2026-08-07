@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from math import isfinite
+from math import fsum, isfinite
 from types import MappingProxyType
 from typing import Literal
 
@@ -15,6 +15,8 @@ _MAP_FIELDS = ("goal", "entities", "participants", "tools", "sources", "attentio
 _SOFT_THRESHOLD = 0.35
 _HARD_THRESHOLD = 0.65
 _MAX_FINGERPRINTS = 16
+_MODERATE_REQUIRED_SCORE = 0.40
+_Fingerprint = tuple[tuple[tuple[str, float], ...], ...]
 
 
 @dataclass(frozen=True)
@@ -40,18 +42,18 @@ class BoundaryDecision:
 
 @dataclass(frozen=True)
 class _Snapshot:
-    maps: tuple[tuple[tuple[str, float], ...], ...]
+    maps: _Fingerprint
     observed_at: datetime
 
 
 class ContextTracker:
     """Tracks a stable context and confirms inferred changes before switching IDs.
 
-    Scores at or above the soft threshold are qualifying observations.  A hard
-    decision is emitted only once the configured number of consecutive
-    qualifying observations has been received against the current stable
-    anchor.  The 0.65 threshold is retained as the severity boundary for
-    callers that inspect scores; it never bypasses confirmation.
+    A strong score (at least 0.65) needs consecutive evidence for one canonical
+    candidate.  Moderate scores (0.35 to 0.65) also need one candidate, plus a
+    cumulative score of 0.40 for every configured confirmation.  This confirms
+    two repeated 0.40 observations without allowing unrelated changes to pool
+    their evidence.
     """
 
     def __init__(
@@ -71,12 +73,13 @@ class ContextTracker:
         self._temporal_gap = temporal_gap
         self._anchor: _Snapshot | None = None
         self._last_observed_at: datetime | None = None
-        self._confirmations = 0
+        self._pending_candidate: _Fingerprint | None = None
+        self._pending_path: Literal["strong", "moderate"] | None = None
+        self._pending_confirmations = 0
+        self._pending_score = 0.0
         self._context_id: str | None = None
         self._next_context_number = 1
-        self._fingerprints: deque[tuple[tuple[tuple[str, float], ...], ...], str] = deque(
-            maxlen=_MAX_FINGERPRINTS
-        )
+        self._fingerprints: OrderedDict[_Fingerprint, str] = OrderedDict()
 
     def observe(self, observation: ContextObservation) -> BoundaryDecision:
         """Record one observation and return its relationship to the stable context.
@@ -108,30 +111,47 @@ class ContextTracker:
         if observation.explicit_boundary:
             self._context_id = self._new_context_id()
             self._anchor = snapshot
-            self._confirmations = 0
+            self._clear_pending()
             self._remember(snapshot.maps, self._context_id)
             return self._decision(
                 "hard", 1.0, self._hard_confirmations, components, self._context_id
             )
 
         if inferred_score < _SOFT_THRESHOLD:
-            self._confirmations = 0
+            self._clear_pending()
             self._anchor = snapshot
             self._remember(snapshot.maps, self._context_id)
             return self._decision("same", inferred_score, 0, components, self._context_id)
 
-        self._confirmations += 1
-        if self._confirmations < self._hard_confirmations:
+        path: Literal["strong", "moderate"] = (
+            "strong" if inferred_score >= _HARD_THRESHOLD else "moderate"
+        )
+        if snapshot.maps != self._pending_candidate or path != self._pending_path:
+            self._pending_candidate = snapshot.maps
+            self._pending_path = path
+            self._pending_confirmations = 0
+            self._pending_score = 0.0
+        self._pending_confirmations += 1
+        self._pending_score += inferred_score
+        confirmed = self._pending_confirmations >= self._hard_confirmations and (
+            path == "strong"
+            or self._pending_score >= _MODERATE_REQUIRED_SCORE * self._hard_confirmations
+        )
+        if not confirmed:
             return self._decision(
-                "soft", inferred_score, self._confirmations, components, self._context_id
+                "soft",
+                inferred_score,
+                self._pending_confirmations,
+                components,
+                self._context_id,
             )
 
         self._context_id = self._known_context_id(snapshot.maps) or self._new_context_id()
         self._anchor = snapshot
-        confirmed = self._confirmations
-        self._confirmations = 0
+        confirmations = self._pending_confirmations
+        self._clear_pending()
         self._remember(snapshot.maps, self._context_id)
-        return self._decision("hard", inferred_score, confirmed, components, self._context_id)
+        return self._decision("hard", inferred_score, confirmations, components, self._context_id)
 
     def _time_component(self, snapshot: _Snapshot) -> float:
         assert self._last_observed_at is not None
@@ -143,19 +163,25 @@ class ContextTracker:
         return context_id
 
     def _known_context_id(
-        self, fingerprint: tuple[tuple[tuple[str, float], ...], ...]
+        self, fingerprint: _Fingerprint
     ) -> str | None:
-        for known_fingerprint, context_id in reversed(self._fingerprints):
-            if known_fingerprint == fingerprint:
-                return context_id
-        return None
+        return self._fingerprints.get(fingerprint)
 
     def _remember(
         self,
-        fingerprint: tuple[tuple[tuple[str, float], ...], ...],
+        fingerprint: _Fingerprint,
         context_id: str,
     ) -> None:
-        self._fingerprints.append((fingerprint, context_id))
+        self._fingerprints[fingerprint] = context_id
+        self._fingerprints.move_to_end(fingerprint)
+        if len(self._fingerprints) > _MAX_FINGERPRINTS:
+            self._fingerprints.popitem(last=False)
+
+    def _clear_pending(self) -> None:
+        self._pending_candidate = None
+        self._pending_path = None
+        self._pending_confirmations = 0
+        self._pending_score = 0.0
 
     @staticmethod
     def _decision(
@@ -201,7 +227,8 @@ def _normalise_map(values: Mapping[str, float], field_name: str) -> tuple[tuple[
         weight = float(value)
         if not isfinite(weight) or weight < 0:
             raise ValueError(f"{field_name} values must be finite and non-negative")
-        normalised.append((key, weight))
+        if weight:
+            normalised.append((key, weight))
     return tuple(sorted(normalised))
 
 
@@ -211,11 +238,22 @@ def _divergence(
     before_values = dict(before)
     after_values = dict(after)
     keys = before_values.keys() | after_values.keys()
-    denominator = sum(max(before_values.get(key, 0.0), after_values.get(key, 0.0)) for key in keys)
-    if denominator == 0:
+    scale = max(
+        (max(before_values.get(key, 0.0), after_values.get(key, 0.0)) for key in keys),
+        default=0.0,
+    )
+    if scale == 0:
         return 0.0
-    numerator = sum(min(before_values.get(key, 0.0), after_values.get(key, 0.0)) for key in keys)
-    return 1.0 - numerator / denominator
+    denominator = fsum(
+        max(before_values.get(key, 0.0), after_values.get(key, 0.0)) / scale for key in keys
+    )
+    numerator = fsum(
+        min(before_values.get(key, 0.0), after_values.get(key, 0.0)) / scale for key in keys
+    )
+    divergence = 1.0 - numerator / denominator
+    if not isfinite(divergence):
+        raise ArithmeticError("weighted-Jaccard divergence must be finite")
+    return min(1.0, max(0.0, divergence))
 
 
 def _components(
@@ -246,11 +284,17 @@ def _zero_components() -> dict[str, float]:
 
 
 def _score(components: Mapping[str, float]) -> float:
-    return (
-        0.40 * components["goal_divergence"]
-        + 0.20 * components["entity_turnover"]
-        + 0.15
-        * max(components["participant_turnover"], components["tool_turnover"])
-        + 0.15 * components["source_change"]
-        + 0.10 * components["temporal_discontinuity"]
+    if not all(isfinite(value) and 0.0 <= value <= 1.0 for value in components.values()):
+        raise ArithmeticError("boundary components must be finite values from zero to one")
+    score = fsum(
+        (
+            0.40 * components["goal_divergence"],
+            0.20 * components["entity_turnover"],
+            0.15 * max(components["participant_turnover"], components["tool_turnover"]),
+            0.15 * components["source_change"],
+            0.10 * components["temporal_discontinuity"],
+        )
     )
+    if not isfinite(score):
+        raise ArithmeticError("boundary score must be finite")
+    return min(1.0, max(0.0, score))
