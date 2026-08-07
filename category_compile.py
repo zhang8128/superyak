@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter, deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import heapq
+from itertools import chain
 import json
 import math
 import os
@@ -234,7 +235,7 @@ class CategoryCompiler:
         self,
         epoch_id: str,
         context_id: str | None = None,
-        seed_cell_ids: Sequence[str] = (),
+        seed_cell_ids: Iterable[str] = (),
         base_tokens: int | None = None,
     ) -> CompiledCategory:
         base = self.budget.base_tokens if base_tokens is None else base_tokens
@@ -243,13 +244,21 @@ class CategoryCompiler:
         if not 0 <= base <= self.budget.hard_ceiling:
             raise ValueError("base tokens must be within the hard ceiling")
         rotation_at_start = base >= self.budget.rotation_watermark
-        if base >= self.budget.hard_ceiling:
-            return self._empty_result(
-                epoch_id, context_id, bool(seed_cell_ids), rotation_at_start
-            )
-
         started = time.monotonic_ns()
         deadline = started + self.budget.wall_time_ms * 1_000_000
+        seed_iterator = iter(seed_cell_ids)
+        if self._expired(deadline):
+            return self._empty_result(epoch_id, context_id, True, rotation_at_start)
+        try:
+            first_seed = next(seed_iterator)
+        except StopIteration:
+            return self._empty_result(epoch_id, context_id, False, rotation_at_start)
+        if self._expired(deadline):
+            return self._empty_result(epoch_id, context_id, True, rotation_at_start)
+        if base >= self.budget.hard_ceiling:
+            return self._empty_result(epoch_id, context_id, True, rotation_at_start)
+
+        seed_stream = chain((first_seed,), seed_iterator)
         active_table = f"category_compile_active_{uuid.uuid4().hex}"
         try:
             compile_connection = self._acquire_compile_connection(deadline)
@@ -263,7 +272,7 @@ class CategoryCompiler:
             compile_connection.execute("BEGIN")
             self._stage_active_membership(epoch_id, active_table, deadline)
             bounded_seeds, seed_truncated = self._bounded_seed_ids(
-                seed_cell_ids, deadline, active_table
+                seed_stream, deadline, active_table
             )
             if not bounded_seeds:
                 self._assert_database_identity()
@@ -336,16 +345,17 @@ class CategoryCompiler:
                     0,
                     0,
                 )
+            self._assert_database_identity()
             database_uri = f"{self.database_path.as_uri()}?mode=ro"
             with _CONNECTION_OPEN_LOCK:
                 connection = sqlite3.connect(
                     database_uri, uri=True, timeout=0, check_same_thread=False
                 )
+                self._assert_database_identity()
                 if vnode_queue is not None and vnode_queue.control(None, 1, 0):
                     raise ValueError("category database file identity changed")
-                # Platforms without kqueue retain the pre/post stat checks below.
+                # Platforms without kqueue retain the pathname checks above.
                 # That fallback detects ordinary replacement but cannot latch ABA.
-            self._assert_database_identity()
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA temp_store = FILE")
@@ -640,7 +650,7 @@ class CategoryCompiler:
         return tuple(sorted(active)), truncated, False
 
     def _bounded_seed_ids(
-        self, seed_cell_ids: Sequence[str], deadline: int, active_table: str
+        self, seed_cell_ids: Iterable[str], deadline: int, active_table: str
     ) -> tuple[tuple[str, ...], bool]:
         """Keep active-first viable seeds without letting invalid IDs use the cap."""
         limit = self.budget.max_candidates

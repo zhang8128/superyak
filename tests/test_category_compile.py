@@ -72,6 +72,25 @@ def _observe_dedicated_connections(monkeypatch):
     return traced_sql, close_states
 
 
+def _observe_compile_boundary_calls(compiler, monkeypatch):
+    """Record lease/staging calls while retaining their real side effects."""
+    calls = []
+    original_acquire = compiler._acquire_compile_connection
+    original_stage = compiler._stage_active_membership
+
+    def observe_acquire(deadline):
+        calls.append("lease")
+        return original_acquire(deadline)
+
+    def observe_stage(epoch_id, active_table, deadline):
+        calls.append("stage")
+        return original_stage(epoch_id, active_table, deadline)
+
+    monkeypatch.setattr(compiler, "_acquire_compile_connection", observe_acquire)
+    monkeypatch.setattr(compiler, "_stage_active_membership", observe_stage)
+    return calls
+
+
 def test_weight_channels_remain_separate():
     weights = WeightVector(0.8, 0.9, 0.5, -0.7, 0.2, 0.6, 0.4)
 
@@ -365,8 +384,26 @@ def test_token_packing_never_crosses_hard_ceiling_and_rotation_is_exact(store):
     assert at_hard.rotation_required
     assert at_hard.truncated
 
+    at_hard_empty = CategoryCompiler(store).compile(
+        "missing-epoch", None, (cell_id for cell_id in ()), 65_536
+    )
+    assert at_hard_empty.cells == ()
+    assert at_hard_empty.token_count == 0
+    assert at_hard_empty.rotation_required
+    assert not at_hard_empty.truncated
+
+    peeked = False
+
+    def seeds_for_invalid_base():
+        nonlocal peeked
+        peeked = True
+        yield "a"
+
     with pytest.raises(ValueError, match="base tokens"):
-        CategoryCompiler(store).compile("root", None, ("a",), 65_537)
+        CategoryCompiler(store).compile(
+            "root", None, seeds_for_invalid_base(), 65_537
+        )
+    assert not peeked
     with pytest.raises(TypeError, match="base tokens"):
         CategoryCompiler(store).compile("root", None, ("a",), True)
 
@@ -736,6 +773,82 @@ def test_constructor_rejects_aba_swap_around_each_pooled_connection_open(
     assert connect_calls == 1
 
 
+@pytest.mark.skipif(
+    not hasattr(select, "kqueue"),
+    reason="constructor ABA latching is a macOS kqueue guarantee",
+)
+def test_constructor_rechecks_identity_before_open_and_polls_watcher_last(
+    store, tmp_path, monkeypatch
+):
+    _root(store, CellDraft("seed", 0, "ORIGINAL"))
+    database_path = Path(
+        store.connection.execute("PRAGMA database_list").fetchone()[2]
+    )
+    replacement_path = tmp_path / "pre-registration-replacement.db"
+    original_away = tmp_path / "pre-registration-original-away.db"
+    replacement = EvolvingCategoryStore(sqlite3.connect(replacement_path))
+    try:
+        _root(replacement, CellDraft("seed", 0, "REPLACEMENT"))
+    finally:
+        replacement.close()
+
+    real_kqueue = select.kqueue
+    real_connect = sqlite3.connect
+    swapped = False
+    restored = False
+    opened_connections = []
+
+    def restore_original():
+        nonlocal restored
+        if not swapped or restored:
+            return
+        os.replace(database_path, replacement_path)
+        os.replace(original_away, database_path)
+        restored = True
+
+    class SwapBeforeRegistrationQueue:
+        def __init__(self):
+            self.queue = real_kqueue()
+
+        def control(self, changelist, max_events, timeout=None):
+            nonlocal swapped
+            if changelist is not None and not swapped:
+                os.replace(database_path, original_away)
+                os.replace(replacement_path, database_path)
+                swapped = True
+            if timeout is None:
+                events = self.queue.control(changelist, max_events)
+            else:
+                events = self.queue.control(changelist, max_events, timeout)
+            if changelist is None:
+                # Restore just after the old, prematurely placed watcher poll.
+                restore_original()
+            return events
+
+        def close(self):
+            self.queue.close()
+
+    def observe_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        opened_connections.append(connection)
+        return connection
+
+    monkeypatch.setattr("category_compile.select.kqueue", SwapBeforeRegistrationQueue)
+    monkeypatch.setattr("category_compile.sqlite3.connect", observe_connect)
+    compiler = None
+    try:
+        with pytest.raises(ValueError, match="database file identity changed"):
+            compiler = CategoryCompiler(store)
+    finally:
+        if compiler is not None:
+            compiler.close()
+        restore_original()
+
+    assert swapped
+    assert restored
+    assert opened_connections == []
+
+
 def test_symlinked_wal_database_supports_two_concurrent_compile_threads(tmp_path):
     database_path = tmp_path / "threaded.db"
     symlink_path = tmp_path / "threaded-link.db"
@@ -790,12 +903,12 @@ def test_connection_pool_acquisition_obeys_compile_deadline(store):
 
     def holding_seeds():
         nonlocal entered
+        yield "seed"
         with entered_lock:
             entered += 1
             if entered == 4:
                 all_leases_held.set()
         assert release_leases.wait(5)
-        yield "seed"
 
     def hold_connection():
         worker_results.append(
@@ -817,6 +930,126 @@ def test_connection_pool_acquisition_obeys_compile_deadline(store):
     assert all(not worker.is_alive() for worker in workers)
     assert len(worker_results) == 4
     compiler.close()
+
+
+def test_empty_tuple_skips_oversized_snapshot_pool_lease_and_staging(
+    store, monkeypatch
+):
+    _root(store, CellDraft("seed", 0, "seed"))
+    compiler = CategoryCompiler(store)
+    store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
+        (json.dumps(["seed"]),),
+    )
+    store.connection.commit()
+    monkeypatch.setattr(
+        "category_compile._MAX_ACTIVE_SNAPSHOT_BYTES", 1, raising=False
+    )
+    calls = _observe_compile_boundary_calls(compiler, monkeypatch)
+    try:
+        result = compiler.compile("root", "context", (), 0)
+    finally:
+        compiler.close()
+
+    assert result.epoch_id == "root"
+    assert result.context_id == "context"
+    assert result.cells == ()
+    assert result.token_count == 0
+    assert result.candidate_count == 0
+    assert not result.truncated
+    assert not result.rotation_required
+    assert calls == []
+
+
+def test_empty_generator_skips_malformed_snapshot_pool_lease_and_staging(
+    store, monkeypatch
+):
+    _root(store, CellDraft("seed", 0, "seed"))
+    compiler = CategoryCompiler(store)
+    store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
+        ("not valid JSON",),
+    )
+    store.connection.commit()
+    calls = _observe_compile_boundary_calls(compiler, monkeypatch)
+    try:
+        result = compiler.compile(
+            "root", None, (cell_id for cell_id in ()), 0
+        )
+    finally:
+        compiler.close()
+
+    assert result.cells == ()
+    assert result.token_count == 0
+    assert result.candidate_count == 0
+    assert not result.truncated
+    assert not result.rotation_required
+    assert calls == []
+
+
+def test_empty_generator_ignores_closed_connection_pool(store, monkeypatch):
+    _root(store, CellDraft("seed", 0, "seed"))
+    compiler = CategoryCompiler(store)
+    compiler.close()
+    calls = _observe_compile_boundary_calls(compiler, monkeypatch)
+
+    result = compiler.compile("root", None, (cell_id for cell_id in ()), 0)
+
+    assert result.cells == ()
+    assert not result.truncated
+    assert calls == []
+
+
+def test_empty_tuple_does_not_wait_for_saturated_connection_pool(store, monkeypatch):
+    _root(store, CellDraft("seed", 0, "seed"))
+    compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=1))
+    leases = [
+        compiler._acquire_compile_connection(10**30)
+        for _index in range(4)
+    ]
+    calls = _observe_compile_boundary_calls(compiler, monkeypatch)
+    try:
+        result = compiler.compile("root", None, (), 0)
+    finally:
+        for connection in leases:
+            compiler._release_compile_connection(connection)
+        compiler.close()
+
+    assert result.cells == ()
+    assert not result.truncated
+    assert calls == []
+
+
+def test_seed_peek_precedes_pool_lease_without_eagerly_consuming_tail(
+    store, monkeypatch
+):
+    _root(
+        store,
+        CellDraft("first", 0, "first"),
+        CellDraft("second", 0, "second"),
+    )
+    compiler = CategoryCompiler(store)
+    events = []
+    original_acquire = compiler._acquire_compile_connection
+
+    def seeds():
+        events.append("first")
+        yield "first"
+        events.append("tail")
+        yield "second"
+
+    def observe_acquire(deadline):
+        events.append("lease")
+        return original_acquire(deadline)
+
+    monkeypatch.setattr(compiler, "_acquire_compile_connection", observe_acquire)
+    try:
+        result = compiler.compile("root", None, seeds(), 0)
+    finally:
+        compiler.close()
+
+    assert events == ["first", "lease", "tail"]
+    assert tuple(cell.id for cell in result.cells) == ("first", "second")
 
 
 def test_in_memory_store_is_rejected_without_mutation():
