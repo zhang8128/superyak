@@ -89,6 +89,11 @@ SET details = CASE
     WHEN operation = 'compress_commit' THEN
         CASE WHEN json_type(details, '$.summaries') = 'array'
             THEN json_object('summary_count', json_array_length(details, '$.summaries'))
+            WHEN json_type(details, '$.summary_count') = 'integer'
+                    AND json_extract(details, '$.summary_count') >= 0
+                THEN json_object(
+                    'summary_count', json_extract(details, '$.summary_count')
+                )
             ELSE json_object() END
     ELSE json_object()
 END;

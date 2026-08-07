@@ -1653,7 +1653,11 @@ class Storage:
                       repo=None, target_ids=None, details=None, outcome="success") -> str:
         """Append an observational operation record; attribution is fail-open."""
         op_id = str(__import__('uuid').uuid4())
+        owns_transaction = False
         try:
+            owns_transaction = (
+                self._transaction_depth == 0 and not self.conn.in_transaction
+            )
             self.conn.execute(
                 "INSERT INTO operation_log (id,timestamp,operation,session_id,harness,model,repo,target_ids,details,outcome) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (op_id, _now_iso(), str(operation), session_id, harness, model, repo,
@@ -1662,6 +1666,13 @@ class Storage:
             )
             self._commit()
         except Exception:
+            if owns_transaction and self.conn.in_transaction:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    logger.debug(
+                        "operation attribution rollback skipped", exc_info=True
+                    )
             logger.debug("operation attribution skipped", exc_info=True)
         return op_id
 

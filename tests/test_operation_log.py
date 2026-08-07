@@ -1,5 +1,7 @@
 import json
 import math
+import sqlite3
+from pathlib import Path
 
 import pytest
 from storage import Storage
@@ -178,8 +180,91 @@ def test_operation_schema_and_append(tmp_path):
 def test_operation_fail_open(tmp_path):
     s = Storage(str(tmp_path / 'g.db'))
     s.conn.execute('drop table operation_log')
+    s.conn.commit()
     assert s.add_operation('x','s')
+    assert s.conn.in_transaction is False
     s.close()
+
+
+def test_operation_commit_failure_rolls_back_owned_transaction_and_domain_survives(
+    operation_server_env,
+):
+    class OneShotCommitFailingConnection:
+        def __init__(self, conn):
+            self._conn = conn
+            self.fail_next_commit = True
+            self.rollback_calls = 0
+
+        @property
+        def in_transaction(self):
+            return self._conn.in_transaction
+
+        def commit(self):
+            if self.fail_next_commit:
+                self.fail_next_commit = False
+                raise sqlite3.OperationalError("injected audit commit failure")
+            self._conn.commit()
+
+        def rollback(self):
+            self.rollback_calls += 1
+            self._conn.rollback()
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    srv, storage = operation_server_env
+    failing_conn = OneShotCommitFailingConnection(storage.conn)
+    storage.conn = failing_conn
+    domain_side_effects = []
+
+    @srv._mutation_logged
+    def domain_mutation(value):
+        domain_side_effects.append(value)
+        return {"id": "domain-result", "ok": True}
+
+    result = domain_mutation("durable side effect")
+
+    assert result == {"id": "domain-result", "ok": True}
+    assert domain_side_effects == ["durable side effect"]
+    assert failing_conn.rollback_calls == 1
+    assert failing_conn.in_transaction is False
+
+    with storage.transaction():
+        storage.add_episode(
+            id="post-audit-transaction",
+            session_id="operation-audit-session",
+            content="A subsequent real storage transaction must succeed.",
+        )
+
+    assert storage.get_episode("post-audit-transaction") is not None
+
+
+def test_operation_failure_never_rolls_back_caller_owned_transaction(tmp_path):
+    storage = Storage(str(tmp_path / "caller-owned.db"))
+    storage.conn.execute(
+        "CREATE TRIGGER reject_operation_audit "
+        "BEFORE INSERT ON operation_log BEGIN "
+        "SELECT RAISE(ABORT, 'injected audit execute failure'); END"
+    )
+    storage.conn.commit()
+
+    with storage.transaction():
+        storage.add_episode(
+            id="caller-owned-before-audit",
+            session_id="caller-session",
+            content="Caller-owned write before failed audit.",
+        )
+        storage.add_operation("remember", "caller-session")
+        assert storage.conn.in_transaction is True
+        storage.add_episode(
+            id="caller-owned-after-audit",
+            session_id="caller-session",
+            content="Caller-owned write after failed audit.",
+        )
+
+    assert storage.get_episode("caller-owned-before-audit") is not None
+    assert storage.get_episode("caller-owned-after-audit") is not None
+    storage.close()
 
 
 def test_operation_details_migration_scrubs_historical_content(tmp_path):
@@ -305,6 +390,90 @@ def test_operation_details_migration_scrubs_historical_content(tmp_path):
         (inserted[0][0],),
     ).fetchone()[0] == "true"
     migrated.close()
+
+
+def test_operation_details_migration_preserves_derived_summary_count_on_rerun(
+    tmp_path,
+):
+    storage = Storage(str(tmp_path / "derived-summary-count.db"))
+    operation_id = storage.add_operation(
+        "compress_commit",
+        "migration-idempotence",
+        details={
+            "compress_id": "SECRET-COMPRESS-ID",
+            "summaries": [
+                {"content": "SECRET-SUMMARY-ONE"},
+                {"content": "SECRET-SUMMARY-TWO"},
+            ],
+        },
+    )
+    scrub_sql = (
+        Path(__file__).resolve().parent.parent
+        / "migrations"
+        / "026_scrub_operation_details.sql"
+    ).read_text()
+
+    storage.conn.executescript(scrub_sql)
+    first_details = storage.conn.execute(
+        "SELECT details FROM operation_log WHERE id = ?", (operation_id,)
+    ).fetchone()[0]
+    storage.conn.executescript(scrub_sql)
+    second_details = storage.conn.execute(
+        "SELECT details FROM operation_log WHERE id = ?", (operation_id,)
+    ).fetchone()[0]
+
+    assert json.loads(first_details) == {"summary_count": 2}
+    assert json.loads(second_details) == {"summary_count": 2}
+    assert storage.conn.execute(
+        "SELECT COUNT(*) FROM operation_log WHERE details LIKE '%SECRET%'"
+    ).fetchone()[0] == 0
+    storage.close()
+
+
+def test_operation_details_migration_keeps_only_valid_summary_counts(tmp_path):
+    storage = Storage(str(tmp_path / "sanitized-summary-count.db"))
+    cases = [
+        ({"summary_count": 0}, {"summary_count": 0}),
+        ({"summary_count": 4}, {"summary_count": 4}),
+        (
+            {"summary_count": 5, "content": "SECRET-PRE-SANITIZED-CONTENT"},
+            {"summary_count": 5},
+        ),
+        ({"summary_count": -1}, {}),
+        ({"summary_count": True}, {}),
+        ({"summary_count": 2.0}, {}),
+        ({"summary_count": "2"}, {}),
+        ({"content": "SECRET-CONTENT-ONLY"}, {}),
+    ]
+    inserted = [
+        (
+            storage.add_operation(
+                "compress_commit",
+                "migration-idempotence",
+                details=details,
+            ),
+            expected,
+        )
+        for details, expected in cases
+    ]
+    scrub_sql = (
+        Path(__file__).resolve().parent.parent
+        / "migrations"
+        / "026_scrub_operation_details.sql"
+    ).read_text()
+
+    storage.conn.executescript(scrub_sql)
+    storage.conn.executescript(scrub_sql)
+
+    for operation_id, expected in inserted:
+        details = storage.conn.execute(
+            "SELECT details FROM operation_log WHERE id = ?", (operation_id,)
+        ).fetchone()[0]
+        assert json.loads(details) == expected
+    assert storage.conn.execute(
+        "SELECT COUNT(*) FROM operation_log WHERE details LIKE '%SECRET%'"
+    ).fetchone()[0] == 0
+    storage.close()
 
 
 def test_content_bearing_tool_families_log_only_attribution_metadata(
