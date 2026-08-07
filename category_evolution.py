@@ -17,9 +17,12 @@ from typing import Iterable, Literal, Mapping, Sequence
 import uuid
 
 from categories import Boundary, CategoryQuotaExceeded, CellDraft, EvolvingCategoryStore, _now_iso
+from category_compile import CategoryCompiler, CompiledCategory, CompileBudget
+from category_context import ContextObservation, ContextTracker
 
 
 LEGACY_NAMESPACE = uuid.UUID("f4210ab5-b9e8-53ba-b3ca-261db44a9223")
+OBSERVER_NAMESPACE = uuid.UUID("ed05cb22-d6e4-54c1-8f92-0f4d74556a07")
 _V2_TABLES = frozenset(
     {
         "cat_schema_version",
@@ -674,6 +677,366 @@ class EvolutionEngine:
                     {"rewrite_id": rewrite_id, "reason": "consolidation budget"},
                 )
         return tuple(committed)
+
+
+class CategoryObserver:
+    """Best-effort v2 observation and bounded recall compilation.
+
+    Request-path methods append observations only. Structural rewrite commits
+    are confined to optional startup consolidation.
+    """
+
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        shadow: bool = True,
+        influence_recall: bool = False,
+        auto_commit: bool = False,
+        archive_quota_bytes: int = 3_000_000_000_000,
+        archive_high_watermark_ratio: float = 0.90,
+        max_traversal_depth: int = 4,
+        max_neighbors: int = 64,
+        max_candidates: int = 50_000,
+        compile_wall_time_ms: int = 500,
+        consolidation_rewrite_budget: int = 32,
+        max_rewrite_members: int = 32,
+        max_active_branches: int = 4,
+        hard_boundary_confirmations: int = 2,
+    ) -> None:
+        # Malformed configuration must fail closed: only exact booleans can
+        # disable shadowing or activate influence/consolidation.
+        self.shadow = shadow is not False
+        self.influence_recall = influence_recall is True
+        self.auto_commit = auto_commit is True
+        self._last_error: str | None = None
+        self._compiler_truncations = 0
+        self._closed = False
+        self.store: EvolvingCategoryStore | None = None
+        self.compiler: CategoryCompiler | None = None
+        self.engine: EvolutionEngine | None = None
+        connection: sqlite3.Connection | None = None
+        try:
+            path = Path(database_path)
+            connection = sqlite3.connect(path)
+            self.store = EvolvingCategoryStore(
+                connection,
+                quota_bytes=archive_quota_bytes,
+                high_watermark_ratio=archive_high_watermark_ratio,
+            )
+            connection = None
+            self.compiler = CategoryCompiler(
+                self.store,
+                CompileBudget(
+                    max_depth=max_traversal_depth,
+                    max_neighbors=max_neighbors,
+                    max_candidates=max_candidates,
+                    wall_time_ms=compile_wall_time_ms,
+                ),
+            )
+            self.engine = EvolutionEngine(
+                self.store,
+                EvolutionPolicy(
+                    rewrite_budget=consolidation_rewrite_budget,
+                    max_members=max_rewrite_members,
+                    max_active_branches=max_active_branches,
+                ),
+            )
+            self._tracker = ContextTracker(
+                hard_confirmations=hard_boundary_confirmations
+            )
+            if self.auto_commit and not self.shadow:
+                self._consolidate_startup()
+        except Exception:
+            if self.compiler is not None:
+                self.compiler.close()
+            if self.store is not None:
+                self.store.close()
+            elif connection is not None:
+                connection.close()
+            raise
+
+    @staticmethod
+    def proxy_id(memory_id: str) -> str:
+        # Reuse replay identities so observed recalls compile against migrated
+        # active epochs instead of creating a parallel proxy namespace.
+        return legacy_proxy_id(memory_id)
+
+    @staticmethod
+    def _stable_id(kind: str, material: Mapping[str, object]) -> str:
+        encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
+        return str(uuid.uuid5(OBSERVER_NAMESPACE, f"{kind}:{encoded}"))
+
+    @staticmethod
+    def _terms(query: str) -> tuple[str, ...]:
+        import re
+
+        return tuple(sorted(set(re.findall(r"[^\W_]+", query.casefold(), re.UNICODE))))[:32]
+
+    def observe_recall(
+        self,
+        query: str,
+        result_ids: Iterable[str],
+        *,
+        source: str,
+        observed_at,
+    ) -> None:
+        try:
+            self._observe_recall(query, result_ids, source=source, observed_at=observed_at)
+        except Exception as exc:
+            self.record_error(exc)
+            raise
+
+    def _observe_recall(
+        self,
+        query: str,
+        result_ids: Iterable[str],
+        *,
+        source: str,
+        observed_at,
+    ) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        ids = tuple(sorted(set(str(result_id) for result_id in result_ids)))
+        terms = self._terms(query)
+        timestamp = observed_at.isoformat()
+        recall_material = {
+            "terms": terms,
+            "result_ids": ids,
+            "source": str(source),
+            "observed_at": timestamp,
+        }
+        recall_event_id = self._stable_id("recall", recall_material)
+        with self.store.transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (recall_event_id,)
+            ).fetchone():
+                return
+
+            observation = ContextObservation(
+                goal={term: 1.0 for term in terms},
+                sources={str(source): 1.0} if source else {},
+                observed_at=observed_at,
+            )
+            decision = self._tracker.observe(observation)
+            context_features = {
+                "goal": {term: 1.0 for term in terms},
+                "sources": {str(source): 1.0} if source else {},
+            }
+            context_id = self.store.create_context(context_features)
+            self.store.append_event(
+                "recall_observed",
+                {
+                    "context_id": context_id,
+                    "observed_at": timestamp,
+                    "result_count": len(ids),
+                    "source": str(source),
+                    "terms": terms,
+                },
+                event_id=recall_event_id,
+            )
+            boundary_payload = {
+                "recall_event_id": recall_event_id,
+                "context_id": context_id,
+                "tracker_context_id": decision.context_id,
+                "kind": decision.kind,
+                "score": decision.score,
+                "confirmations": decision.confirmations,
+                "components": dict(decision.components),
+            }
+            self.store.append_event(
+                "context_boundary",
+                boundary_payload,
+                event_id=self._stable_id("boundary", boundary_payload),
+            )
+            for memory_id in ids:
+                proxy_event_payload = {
+                    "recall_event_id": recall_event_id,
+                    "memory_id": memory_id,
+                    "proxy_id": self.proxy_id(memory_id),
+                }
+                proxy_event_id = self._stable_id("proxy-event", proxy_event_payload)
+                self.store.append_event(
+                    "proxy_observed", proxy_event_payload, event_id=proxy_event_id
+                )
+                proxy_id = self.proxy_id(memory_id)
+                if self.store.get_cell(proxy_id) is None:
+                    self.store.create_cell(
+                        CellDraft(
+                            proxy_id,
+                            0,
+                            "memory proxy",
+                            context_id=context_id,
+                            payload={"external_id": memory_id, "proxy": True},
+                        ),
+                        created_event_id=proxy_event_id,
+                    )
+
+    def observe_outcome(self, recall_id: str, used: bool, note: str | None) -> None:
+        try:
+            self._observe_outcome(recall_id, used, note)
+        except Exception as exc:
+            self.record_error(exc)
+            raise
+
+    def _observe_outcome(self, recall_id: str, used: bool, note: str | None) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        payload = {"recall_id": str(recall_id), "used": bool(used), "note": note}
+        event_id = self._stable_id("outcome", payload)
+        with self.store.transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (event_id,)
+            ).fetchone():
+                return
+            self.store.append_event("recall_outcome", payload, event_id=event_id)
+
+    def compile_for_recall(
+        self, seed_ids: Iterable[str], base_tokens: int = 0
+    ) -> CompiledCategory:
+        try:
+            return self._compile_for_recall(seed_ids, base_tokens)
+        except Exception as exc:
+            self.record_error(exc)
+            raise
+
+    def _compile_for_recall(
+        self, seed_ids: Iterable[str], base_tokens: int = 0
+    ) -> CompiledCategory:
+        if self._closed or self.store is None or self.compiler is None:
+            raise RuntimeError("category observer is closed")
+        epoch_id = self._current_epoch()
+        if epoch_id is None:
+            return CompiledCategory("", None, (), 0, 0, False, False)
+        compiled = self.compiler.compile(
+            epoch_id,
+            None,
+            tuple(self.proxy_id(str(seed_id)) for seed_id in seed_ids),
+            base_tokens,
+        )
+        if compiled.truncated:
+            self._compiler_truncations += 1
+        return compiled
+
+    @classmethod
+    def adjust_results(
+        cls,
+        results: Iterable[dict],
+        compiled: CompiledCategory,
+        influence: float = 0.10,
+    ) -> list[dict]:
+        category_scores = {
+            cell.id: float(cell.score)
+            for cell in compiled.cells
+            if isinstance(cell.score, (int, float))
+            and not isinstance(cell.score, bool)
+            and math.isfinite(float(cell.score))
+        }
+        ranked = []
+        for index, original in enumerate(results):
+            result = dict(original)
+            baseline = result.get("score")
+            category = category_scores.get(cls.proxy_id(str(result.get("id", ""))))
+            valid_baseline = (
+                isinstance(baseline, (int, float))
+                and not isinstance(baseline, bool)
+                and math.isfinite(float(baseline))
+            )
+            if valid_baseline and category is not None:
+                score = (1.0 - influence) * float(baseline) + influence * category
+                result["score"] = score
+                ranked.append((0, -score, str(result.get("id", "")), index, result))
+            elif valid_baseline:
+                ranked.append((0, -float(baseline), str(result.get("id", "")), index, result))
+            else:
+                ranked.append((1, index, "", index, result))
+        ranked.sort(key=lambda item: item[:4])
+        return [item[4] for item in ranked]
+
+    def record_error(self, exc: BaseException) -> None:
+        """Retain only an error type for content-safe reflection diagnostics."""
+        self._last_error = type(exc).__name__
+
+    def report(self) -> dict:
+        if self._closed or self.store is None or self.engine is None:
+            raise RuntimeError("category observer is closed")
+        connection = self.store.connection
+        counts = {
+            str(row[0]): int(row[1])
+            for row in connection.execute(
+                "SELECT dimension, COUNT(*) FROM cat_cells GROUP BY dimension ORDER BY dimension"
+            )
+        }
+        dispositions = {name: 0 for name in ("proposed", "committed", "rejected", "superseded")}
+        for row in connection.execute("SELECT id FROM cat_rewrites ORDER BY id"):
+            disposition = self.engine.latest_disposition(str(row[0]))
+            if disposition in dispositions:
+                dispositions[disposition] += 1
+        recent_boundaries = []
+        for row in connection.execute(
+            "SELECT payload_json FROM cat_events WHERE kind='context_boundary' "
+            "ORDER BY rowid DESC LIMIT 10"
+        ):
+            payload = json.loads(row[0])
+            recent_boundaries.append(
+                {
+                    "kind": payload.get("kind"),
+                    "score": payload.get("score"),
+                    "confirmations": payload.get("confirmations"),
+                    "context_id": payload.get("context_id"),
+                }
+            )
+        pressure = self.store.pressure()
+        return {
+            "available": True,
+            "flags": {
+                "enabled": True,
+                "shadow": self.shadow,
+                "influence_recall": self.influence_recall,
+                "auto_commit": self.auto_commit,
+            },
+            "counts_by_dimension": counts,
+            "proposal_dispositions": dispositions,
+            "current_epoch": self._current_epoch(),
+            "recent_boundaries": recent_boundaries,
+            "compiler_truncations": self._compiler_truncations,
+            "quota_pressure": asdict(pressure),
+            "last_error": self._last_error,
+        }
+
+    def _current_epoch(self) -> str | None:
+        assert self.store is not None
+        row = self.store.connection.execute(
+            "SELECT epoch.id FROM cat_epochs AS epoch "
+            "WHERE NOT EXISTS (SELECT 1 FROM cat_epoch_parents AS edge "
+            "WHERE edge.parent_id = epoch.id) "
+            "ORDER BY epoch.created_at DESC, epoch.id DESC LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row is not None else None
+
+    def _consolidate_startup(self) -> None:
+        assert self.store is not None and self.engine is not None
+        epoch_id = self._current_epoch()
+        if epoch_id is None:
+            return
+        rewrite_ids = tuple(
+            str(row[0])
+            for row in self.store.connection.execute("SELECT id FROM cat_rewrites ORDER BY id")
+            if self.engine.latest_disposition(str(row[0])) == "proposed"
+        )
+        if rewrite_ids:
+            self.engine.consolidate(rewrite_ids, epoch_id)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self.compiler is not None:
+                self.compiler.close()
+        finally:
+            if self.store is not None:
+                self.store.close()
 
 
 @dataclass(frozen=True)

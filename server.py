@@ -166,6 +166,7 @@ _knowledge_graph = None
 _wander_visits: dict[str, int] = {}  # memory_id -> visit count this session
 _clipboard = None
 _category_store = None
+_category_observer = None
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -270,8 +271,61 @@ def _apply_resonance_feedback(storage, recall_id: str, used: bool) -> None:
             storage.weaken_resonance(rid, delta=0.05)
 
 
+def _remember_category_error(exc: BaseException) -> None:
+    """Best-effort type-only diagnostics must never mask the recall path."""
+    try:
+        recorder = getattr(_category_observer, "record_error", None)
+        if recorder is not None:
+            recorder(exc)
+    except Exception:
+        pass
+
+
+def _observe_category_recall(query: str, results: list[dict]) -> list[dict]:
+    """Observe and optionally rerank one recall without changing response shape."""
+    category_config = getattr(_config, "category_evolution", None)
+    if (
+        _category_observer is None
+        or category_config is None
+        or category_config.enabled is not True
+    ):
+        return results
+    result_ids = [str(result.get("id", "")) for result in results if result.get("id") is not None]
+    try:
+        _category_observer.observe_recall(
+            query,
+            result_ids,
+            source=os.getcwd(),
+            observed_at=datetime.now(timezone.utc),
+        )
+    except Exception as exc:
+        _remember_category_error(exc)
+        logger.warning("Category observer recall failed (%s)", type(exc).__name__)
+
+    compiled = None
+    try:
+        compiled = _category_observer.compile_for_recall(result_ids, base_tokens=0)
+    except Exception as exc:
+        _remember_category_error(exc)
+        logger.warning("Category observer compile failed (%s)", type(exc).__name__)
+
+    if (
+        compiled is not None
+        and category_config.shadow is False
+        and category_config.influence_recall is True
+    ):
+        try:
+            return _category_observer.adjust_results(
+                [dict(result) for result in results], compiled, influence=0.10
+            )
+        except Exception as exc:
+            _remember_category_error(exc)
+            logger.warning("Category observer influence failed (%s)", type(exc).__name__)
+    return results
+
+
 def _init():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer
     if _initialized:
         return
     from embeddings import NomicEmbedProvider
@@ -319,6 +373,37 @@ def _init():
     except Exception as e:
         logger.warning("sqlite-vec not available for categories: %s", e)
     _category_store = CategoryStore(cat_conn, dimension=768)
+
+    _category_observer = None
+    category_config = getattr(_config, "category_evolution", None)
+    if category_config is not None and category_config.enabled is True:
+        try:
+            from category_evolution import CategoryObserver
+
+            category_db_path = (
+                Path(category_config.db_path)
+                if category_config.db_path
+                else db_path.parent / "categories_v2.db"
+            )
+            _category_observer = CategoryObserver(
+                category_db_path,
+                shadow=category_config.shadow,
+                influence_recall=category_config.influence_recall,
+                auto_commit=category_config.auto_commit,
+                archive_quota_bytes=category_config.archive_quota_bytes,
+                archive_high_watermark_ratio=category_config.archive_high_watermark_ratio,
+                max_traversal_depth=category_config.max_traversal_depth,
+                max_neighbors=category_config.max_neighbors,
+                max_candidates=category_config.max_candidates,
+                compile_wall_time_ms=category_config.compile_wall_time_ms,
+                consolidation_rewrite_budget=category_config.consolidation_rewrite_budget,
+                max_rewrite_members=category_config.max_rewrite_members,
+                max_active_branches=category_config.max_active_branches,
+                hard_boundary_confirmations=category_config.hard_boundary_confirmations,
+            )
+        except Exception as exc:
+            _category_observer = None
+            logger.warning("Category observer init failed (%s)", type(exc).__name__)
 
     from compress import Compressor
     from dedup import Deduplicator, DedupConfig
@@ -368,6 +453,9 @@ def _init():
         signals_db_path=str(_signals_db_path) if _signals_db_path and _signals_db_path.exists() else None,
         cohesion_config=_config.cohesion if _config else None,
         persistence_config=_config.persistence if _config else None,
+        category_reporter=(
+            _category_observer.report if _category_observer is not None else None
+        ),
     )
 
     # Watcher is created but NOT started — lazy-started on first code search
@@ -378,6 +466,7 @@ def _init():
     atexit.register(lambda: _storage.close() if _storage else None)
     atexit.register(lambda: _knowledge_graph.close() if _knowledge_graph else None)
     atexit.register(lambda: _category_store._conn.close() if _category_store else None)
+    atexit.register(lambda: _category_observer.close() if _category_observer else None)
 
     # Federation: genome sync + inbox processing
     if _config and _config.instance:
@@ -895,7 +984,8 @@ def recall(
                 target_ids=[],
                 context={"recall_id": recall_id, "query": query, "session_id": _session_id},
             )
-            return {"results": [], "recall_id": recall_id}
+            results = _observe_category_recall(query, [])
+            return {"results": results, "recall_id": recall_id}
 
         embedding = _embeddings.embed([query], prefix="search_query")[0]
 
@@ -973,6 +1063,7 @@ def recall(
             target_ids=[r["id"] for r in results],
             context={"recall_id": recall_id, "query": query, "session_id": _session_id},
         )
+        results = _observe_category_recall(query, results)
         return {"results": results, "recall_id": recall_id}
 
     embedding = _embeddings.embed([query], prefix="search_query")[0]
@@ -1381,6 +1472,7 @@ def recall(
         except Exception:
             logger.warning("Category search failed (non-fatal)", exc_info=True)
 
+    results = _observe_category_recall(query, results)
     response = {"results": results, "recall_id": recall_id}
     if resonant_results:
         response["resonant"] = resonant_results
@@ -1419,6 +1511,18 @@ def log_outcome(recall_id: str, used: bool, note: str | None = None) -> dict:
             category_cells = _record_application(_storage, _category_store, _embeddings, recall_id, note)
         except Exception:
             logger.warning("Category recording failed (non-fatal)", exc_info=True)
+
+    category_config = getattr(_config, "category_evolution", None)
+    if (
+        _category_observer is not None
+        and category_config is not None
+        and category_config.enabled is True
+    ):
+        try:
+            _category_observer.observe_outcome(recall_id, used, note)
+        except Exception as exc:
+            _remember_category_error(exc)
+            logger.warning("Category observer outcome failed (%s)", type(exc).__name__)
 
     result = {"logged": True}
     if category_cells:
@@ -2120,7 +2224,7 @@ def assessment_report(
 @mcp.tool()
 @_mutation_logged
 def reflect(focus: str | None = None) -> dict:
-    """Self-observation over memory. Focus: usage, gaps, instincts, contradictions, staleness, vital_signs."""
+    """Self-observation over memory, including explicit category_evolution focus."""
     _init()
     logger.info("Tool called: reflect(focus=%s)", focus)
 
