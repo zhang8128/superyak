@@ -45,6 +45,8 @@ class RankingCase:
     domain: str
     query: str
     direct_query: str
+    relevant_variant: Literal[0, 1]
+    negative_transfer_truth: bool
 
 
 @dataclass(frozen=True)
@@ -65,13 +67,15 @@ def fixture_cohort(name: Literal["development", "holdout"], *, seed: int = _SEED
     cases: list[BoundaryCase] = []
     rankings: list[RankingCase] = []
     vocabulary: set[str] = set()
-    for domain, words in zip(_DOMAINS, _WORDS[name], strict=True):
+    for domain_index, (domain, words) in enumerate(zip(_DOMAINS, _WORDS[name], strict=True)):
         vocabulary.update(words)
         cases.extend(_domain_cases(domain, words))
         rankings.append(RankingCase(
             domain=domain,
             query=f"{words[0]} {words[1]}",
             direct_query=f"{words[2]} {words[3]}",
+            relevant_variant=domain_index // 2,
+            negative_transfer_truth=True,
         ))
     random.Random(seed).shuffle(cases)
     random.Random(seed ^ 0x5A5A).shuffle(rankings)
@@ -158,6 +162,8 @@ def _case_payload(case: BoundaryCase) -> Mapping[str, object]:
 def _ranking_payload(case: RankingCase) -> Mapping[str, object]:
     return {
         "domain": case.domain, "query": case.query, "direct_query": case.direct_query,
+        "relevant_variant": case.relevant_variant,
+        "negative_transfer_truth": case.negative_transfer_truth,
     }
 
 
