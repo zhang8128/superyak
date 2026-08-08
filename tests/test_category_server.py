@@ -103,6 +103,13 @@ def category_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_category_observer", None, raising=False)
     monkeypatch.setattr(server, "_category_pending_close", None, raising=False)
     monkeypatch.setattr(server, "_category_last_observed_at", None, raising=False)
+    monkeypatch.setattr(server, "_server_atexit_callbacks", [], raising=False)
+    monkeypatch.setattr(server, "_server_generation_cleanup", None, raising=False)
+    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
+    monkeypatch.setattr(server, "_server_lifecycle_status", None, raising=False)
+    monkeypatch.setattr(server, "_server_reload_reinitialize", False, raising=False)
+    monkeypatch.setattr(server, "_server_reload_session_id", None, raising=False)
+    monkeypatch.setattr(server, "_server_reload_in_progress", False, raising=False)
     monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid(), raising=False)
     monkeypatch.setattr(server, "_knowledge_graph", None)
     monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
@@ -152,6 +159,12 @@ def category_init_env(tmp_path, monkeypatch):
         "_category_status": None,
         "_category_atexit_callback": None,
         "_category_last_observed_at": None,
+        "_server_generation_cleanup": None,
+        "_server_pending_retirement": None,
+        "_server_lifecycle_status": None,
+        "_server_reload_reinitialize": False,
+        "_server_reload_session_id": None,
+        "_server_reload_in_progress": False,
         "_server_lock_pid": server.os.getpid(),
     }.items():
         monkeypatch.setattr(server, name, value, raising=False)
@@ -1395,34 +1408,63 @@ def test_category_atexit_cleanup_logs_only_failure_type(category_init_env, monke
         monkeypatch.setattr(observer.compiler, "close", original_close)
 
 
-def test_module_reload_retains_observer_until_next_init_can_close_it(monkeypatch):
-    """Reload adopts the exact observer into the generation coordinator."""
+def test_module_reload_retires_unmarked_observer_before_return(monkeypatch):
+    """A missing generation ABI retires, rather than adopts, the observer."""
     import server
 
     class OldObserver:
+        def __init__(self):
+            self.close_calls = 0
+
         def close(self):
-            pass
+            self.close_calls += 1
 
     old = OldObserver()
     callback = server._make_category_cleanup(old)
-    server._category_observer = old
-    server._category_atexit_callback = callback
+    registered = [callback]
+
+    def unregister(item):
+        registered[:] = [entry for entry in registered if entry is not item]
+
+    monkeypatch.setattr(atexit, "register", registered.append)
+    monkeypatch.setattr(atexit, "unregister", unregister)
+    for name, value in {
+        "_initialized": False,
+        "_storage": None,
+        "_watcher": None,
+        "_knowledge_graph": None,
+        "_category_store": None,
+        "_category_observer": old,
+        "_category_pending_close": None,
+        "_category_atexit_callback": callback,
+        "_clipboard": None,
+        "_instinct_graph": None,
+        "_notepad_project": None,
+        "_notepad_global": None,
+        "_server_atexit_callbacks": [],
+        "_server_generation_cleanup": None,
+        "_server_pending_retirement": None,
+        "_server_lifecycle_status": None,
+        "_server_reload_reinitialize": False,
+        "_server_reload_session_id": None,
+        "_server_reload_in_progress": False,
+    }.items():
+        monkeypatch.setattr(server, name, value, raising=False)
+
     reloaded = importlib.reload(server)
-    try:
-        assert reloaded._category_observer is old
-        coordinator = reloaded._category_atexit_callback
-        assert getattr(coordinator, "_server_cleanup_coordinator", False) is True
-        assert coordinator._category_observer is old
-        assert old in coordinator._server_resources
-    finally:
-        reloaded._category_observer = None
-        reloaded._category_atexit_callback = None
+
+    assert old.close_calls == 1
+    assert reloaded._category_observer is None
+    assert reloaded._category_atexit_callback is None
+    assert reloaded._server_pending_retirement is None
+    assert reloaded._initialized is False
+    assert registered == []
 
 
 def test_real_reload_status_remains_usable_when_old_category_close_fails(
     tmp_path, monkeypatch
 ):
-    """Reloaded core initialization completes despite category-only close failure."""
+    """Reload stays unavailable until the exact failed observer retry succeeds."""
     import server
     from config import load_config
 
@@ -1432,13 +1474,37 @@ def test_real_reload_status_remains_usable_when_old_category_close_fails(
     config.category_evolution.enabled = True
 
     class OldObserver:
+        def __init__(self):
+            self.close_calls = 0
+
         def close(self):
-            raise RuntimeError("private reload close detail")
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("private reload close detail")
 
     old = OldObserver()
-    server._category_observer = old
-    server._category_pending_close = None
-    server._category_atexit_callback = server._make_category_cleanup(old)
+    for name, value in {
+        "_initialized": True,
+        "_storage": None,
+        "_watcher": None,
+        "_knowledge_graph": None,
+        "_category_store": None,
+        "_category_observer": old,
+        "_category_pending_close": None,
+        "_category_atexit_callback": server._make_category_cleanup(old),
+        "_clipboard": None,
+        "_instinct_graph": None,
+        "_notepad_project": None,
+        "_notepad_global": None,
+        "_server_atexit_callbacks": [],
+        "_server_generation_cleanup": None,
+        "_server_pending_retirement": None,
+        "_server_lifecycle_status": None,
+        "_server_reload_reinitialize": False,
+        "_server_reload_session_id": None,
+        "_server_reload_in_progress": False,
+    }.items():
+        monkeypatch.setattr(server, name, value, raising=False)
     reloaded = importlib.reload(server)
     monkeypatch.setattr(reloaded, "ENGRAM_HOME", tmp_path)
     monkeypatch.setattr(reloaded, "DB_PATH", tmp_path / ".engram" / "graph.db")
@@ -1446,18 +1512,27 @@ def test_real_reload_status_remains_usable_when_old_category_close_fails(
     monkeypatch.setattr(reloaded, "load_config", lambda _root: config)
     monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
 
-    result = reloaded.status()
-
     try:
+        assert old.close_calls == 1
+        assert reloaded._initialized is False
+        assert reloaded._server_pending_retirement is not None
+        assert reloaded._server_lifecycle_status == {
+            "available": False,
+            "error": "RuntimeError",
+            "last_error": "RuntimeError",
+        }
+        assert "private reload close detail" not in str(
+            reloaded._server_lifecycle_status
+        )
+
+        result = reloaded.status()
+
         assert isinstance(result, dict)
+        assert old.close_calls == 2
         assert reloaded._initialized is True
         assert reloaded._storage is not None
-        assert reloaded._category_observer is None
-        assert reloaded._category_pending_close is old
-        category_report = reloaded._reflector.reflect("category_evolution")
-        assert category_report["category_evolution"]["available"] is False
-        assert category_report["category_evolution"]["error"] == "RuntimeError"
-        assert "private reload close detail" not in str(category_report)
+        assert reloaded._server_pending_retirement is None
+        assert reloaded._server_lifecycle_status is None
     finally:
         for callback in tuple(reloaded._server_atexit_callbacks):
             atexit.unregister(callback)
@@ -1470,6 +1545,9 @@ def test_real_reload_status_remains_usable_when_old_category_close_fails(
         reloaded._category_observer = None
         reloaded._category_pending_close = None
         reloaded._category_atexit_callback = None
+        reloaded._server_generation_cleanup = None
+        reloaded._server_pending_retirement = None
+        reloaded._server_lifecycle_status = None
 
 
 def test_concurrent_server_recalls_timestamp_inside_serialized_observation(
@@ -1587,6 +1665,12 @@ def test_init_guard_serializes_concurrent_initialization(monkeypatch):
             order.append(f"exit-{index}")
 
     monkeypatch.setattr(server, "_init_unlocked", guarded_body)
+    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
+    monkeypatch.setattr(server, "_server_atexit_callbacks", [], raising=False)
+    monkeypatch.setattr(server, "_server_generation_cleanup", None, raising=False)
+    monkeypatch.setattr(server, "_server_lifecycle_lock", threading.RLock())
+    monkeypatch.setattr(server, "_init_lock", threading.RLock())
+    monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid())
     first = threading.Thread(target=server._init)
     second = threading.Thread(target=server._init)
     first.start()
