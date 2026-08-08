@@ -132,6 +132,36 @@ def test_root_epoch_keeps_immutable_history_when_snapshot_is_high_water_skipped(
     store.close()
 
 
+def test_root_epoch_survives_derived_reservation_that_crosses_hard_quota(tmp_path):
+    """Projected cache growth skips before it can unwind immutable publication."""
+    connection = sqlite3.connect(tmp_path / "projected-pressure.db")
+    connection.execute("PRAGMA page_size = 4096")
+    store = EvolvingCategoryStore(
+        connection,
+        quota_bytes=10_000_000,
+        size_provider=lambda _path: 0,
+    )
+    engine = EvolutionEngine(store)
+    store.create_cell(CellDraft("cell", 0, "cell"))
+    store._quota_bytes = 800_000
+
+    assert engine.create_root_epoch("root", ("cell",)) == "root"
+    assert tuple(
+        store.connection.execute(
+            "SELECT event.kind, epoch.id, member.cell_id "
+            "FROM cat_epochs AS epoch "
+            "JOIN cat_events AS event ON event.id = epoch.created_event_id "
+            "JOIN cat_epoch_members AS member ON member.epoch_id = epoch.id "
+            "WHERE epoch.id = 'root'"
+        ).fetchone()
+    ) == ("epoch_created", "root", "cell")
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_snapshots WHERE epoch_id = 'root'"
+    ).fetchone()[0] == 0
+    assert store.pressure().state == "normal"
+    store.close()
+
+
 def test_root_epoch_keeps_immutable_history_when_snapshot_exceeds_derived_byte_cap(
     evolution_store, monkeypatch
 ):

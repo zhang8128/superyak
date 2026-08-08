@@ -1338,8 +1338,6 @@ class EvolvingCategoryStore:
         if pressure.state == "writes_blocked":
             raise CategoryQuotaExceeded("category archive quota reached")
         projected = pressure.used_bytes + self._transaction_reserved_bytes + reserved_bytes
-        if projected >= pressure.quota_bytes:
-            raise CategoryQuotaExceeded("category archive quota reservation exceeded")
         if quota_class == "derived":
             if pressure.state == "derived_blocked":
                 raise _DerivedArchiveWriteSkipped()
@@ -1349,6 +1347,8 @@ class EvolvingCategoryStore:
                 >= pressure.quota_bytes * self._high_watermark.numerator
             ):
                 raise _DerivedArchiveWriteSkipped()
+        if projected >= pressure.quota_bytes:
+            raise CategoryQuotaExceeded("category archive quota reservation exceeded")
         self._transaction_reserved_bytes += reserved_bytes
 
     def _write_reservation_bytes(self, value_bytes: int, *, row_count: int) -> int:
