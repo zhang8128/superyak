@@ -76,13 +76,22 @@ if hasattr(os, "register_at_fork") and not _CATEGORY_AT_FORK_REGISTERED:
     )
     _CATEGORY_AT_FORK_REGISTERED = True
 
-from categories import Boundary, CategoryQuotaExceeded, CellDraft, EvolvingCategoryStore, _now_iso
+from categories import (
+    Boundary,
+    CategoryQuotaExceeded,
+    CellDraft,
+    EvolvingCategoryStore,
+    MAX_CATEGORY_IDENTIFIER_BYTES,
+    _now_iso,
+    _staged_epoch_membership,
+)
 from category_compile import CategoryCompiler, CompiledCategory, CompileBudget
 from category_context import ContextObservation, ContextTracker
 
 
 LEGACY_NAMESPACE = uuid.UUID("f4210ab5-b9e8-53ba-b3ca-261db44a9223")
 OBSERVER_NAMESPACE = uuid.UUID("ed05cb22-d6e4-54c1-8f92-0f4d74556a07")
+_MAX_DERIVED_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _V2_TABLES = frozenset(
     {
         "cat_schema_version",
@@ -92,9 +101,11 @@ _V2_TABLES = frozenset(
         "cat_boundaries",
         "cat_weight_observations",
         "cat_rewrites",
+        "cat_pending_rewrites",
         "cat_rewrite_members",
         "cat_epochs",
         "cat_epoch_parents",
+        "cat_epoch_members",
         "cat_snapshots",
     }
 )
@@ -106,16 +117,48 @@ _REPLAY_STATE_TABLES = (
     "cat_boundaries",
     "cat_weight_observations",
     "cat_rewrites",
+    "cat_pending_rewrites",
     "cat_rewrite_members",
     "cat_epochs",
     "cat_epoch_parents",
+    "cat_epoch_members",
     "cat_snapshots",
 )
-_IMMUTABLE_V2_TABLES = _V2_TABLES - {"cat_snapshots"}
+_PRE_MEMBERSHIP_V2_TABLES = _V2_TABLES - {
+    "cat_pending_rewrites",
+    "cat_epoch_members",
+}
+_PRE_MEMBERSHIP_REPLAY_STATE_TABLES = tuple(
+    table
+    for table in _REPLAY_STATE_TABLES
+    if table in _PRE_MEMBERSHIP_V2_TABLES
+)
+_IMMUTABLE_V2_TABLES = _V2_TABLES - {"cat_pending_rewrites", "cat_snapshots"}
 _EXPECTED_IMMUTABILITY_TRIGGERS = frozenset(
     f"{table}_{operation}"
     for table in _IMMUTABLE_V2_TABLES
     for operation in ("no_update", "no_delete")
+)
+_EXPECTED_V2_TRIGGERS = _EXPECTED_IMMUTABILITY_TRIGGERS | {
+    "cat_events_pending_rewrite_proposed",
+    "cat_events_pending_rewrite_terminal",
+}
+_PRE_MEMBERSHIP_EXPECTED_TRIGGERS = frozenset(
+    f"{table}_{operation}"
+    for table in _PRE_MEMBERSHIP_V2_TABLES - {"cat_snapshots"}
+    for operation in ("no_update", "no_delete")
+)
+_PRE_MEMBERSHIP_SCHEMA_OBJECTS = frozenset(
+    {
+        "cat_pending_rewrites",
+        "cat_epoch_members",
+        "cat_events_pending_rewrite_proposed",
+        "cat_events_pending_rewrite_terminal",
+        "idx_cat_events_rewrite_disposition",
+        "idx_cat_epoch_members_cell",
+        "cat_epoch_members_no_update",
+        "cat_epoch_members_no_delete",
+    }
 )
 _VEC_SHADOW_TABLES = frozenset(
     {
@@ -171,6 +214,31 @@ class EvolutionPolicy:
     max_members: int = 32
     max_active_branches: int = 4
 
+    def __post_init__(self) -> None:
+        _validate_structural_limits(self)
+
+
+_MAX_REWRITE_BUDGET = 32
+_MAX_REWRITE_MEMBERS = 32
+_MAX_ACTIVE_BRANCHES = 4
+
+
+def _validate_structural_limits(policy: EvolutionPolicy) -> None:
+    limits = {
+        "rewrite_budget": policy.rewrite_budget,
+        "max_members": policy.max_members,
+        "max_active_branches": policy.max_active_branches,
+    }
+    for name, value in limits.items():
+        if type(value) is not int:
+            raise TypeError(f"{name} must be an integer")
+    if not 0 <= policy.rewrite_budget <= _MAX_REWRITE_BUDGET:
+        raise ValueError("rewrite_budget must be between 0 and 32")
+    if not 0 <= policy.max_members <= _MAX_REWRITE_MEMBERS:
+        raise ValueError("max_members must be between 0 and 32")
+    if not 1 <= policy.max_active_branches <= _MAX_ACTIVE_BRANCHES:
+        raise ValueError("max_active_branches must be between 1 and 4")
+
 
 def is_eligible(evidence: RewriteEvidence, policy: EvolutionPolicy) -> bool:
     """Apply the non-bypassable rewrite eligibility rule."""
@@ -202,12 +270,9 @@ class EvolutionEngine:
     ):
         self.store = store
         self.policy = policy or EvolutionPolicy()
-        if (
-            self.policy.rewrite_budget < 0
-            or self.policy.max_members < 0
-            or self.policy.max_active_branches < 1
-        ):
-            raise ValueError("evolution policy limits must be non-negative")
+        if not isinstance(self.policy, EvolutionPolicy):
+            raise TypeError("policy must be an EvolutionPolicy")
+        _validate_structural_limits(self.policy)
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -223,7 +288,24 @@ class EvolutionEngine:
             "context_id": proposal.context_id,
             "evidence": asdict(proposal.evidence),
         }
+        payload_json = _canonical_json(payload)
         with self.store.transaction() as connection:
+            member_ids = (
+                *proposal.input_ids,
+                *(draft.id for draft in proposal.outputs),
+                *proposal.witness_ids,
+                *proposal.evidence.evidence_event_ids,
+            )
+            proposal_id_bytes = len(proposal.id.encode("utf-8"))
+            member_bytes = sum(
+                len(str(identifier).encode("utf-8")) for identifier in member_ids
+            )
+            self.store.reserve_write_bytes(
+                proposal_id_bytes * (1 + len(member_ids))
+                + len(payload_json.encode("utf-8"))
+                + member_bytes,
+                row_count=1 + len(member_ids),
+            )
             event_id = self.store.append_event("rewrite_proposed", payload)
             connection.execute(
                 """
@@ -235,7 +317,7 @@ class EvolutionEngine:
                     proposal.id,
                     proposal.context_id,
                     event_id,
-                    _canonical_json(payload),
+                    payload_json,
                     _now_iso(),
                 ),
             )
@@ -247,6 +329,11 @@ class EvolutionEngine:
     propose_rewrite = propose
 
     def _validate_proposal(self, proposal: RewriteProposal) -> None:
+        self.store._bounded_text(
+            proposal.id,
+            MAX_CATEGORY_IDENTIFIER_BYTES,
+            "rewrite identifier",
+        )
         if not proposal.id or proposal.kind not in _REWRITE_KINDS:
             raise ValueError("rewrite proposal requires an id and supported kind")
         if self.connection.execute(
@@ -320,22 +407,17 @@ class EvolutionEngine:
 
     def latest_disposition(self, rewrite_id: str) -> str | None:
         """Derive status from the newest immutable disposition event."""
-        rows = self.connection.execute(
+        row = self.connection.execute(
             """
-            SELECT kind, payload_json FROM cat_events
+            SELECT kind FROM cat_events
             WHERE kind IN ('rewrite_proposed','rewrite_committed',
                            'rewrite_rejected','rewrite_superseded')
-            ORDER BY rowid DESC
-            """
-        ).fetchall()
-        for row in rows:
-            try:
-                payload = json.loads(row["payload_json"])
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if payload.get("rewrite_id") == rewrite_id:
-                return _DISPOSITION_KINDS[row["kind"]]
-        return None
+              AND json_extract(payload_json, '$.rewrite_id') = ?
+            ORDER BY rowid DESC LIMIT 1
+            """,
+            (rewrite_id,),
+        ).fetchone()
+        return _DISPOSITION_KINDS[str(row["kind"])] if row is not None else None
 
     rewrite_disposition = latest_disposition
 
@@ -360,8 +442,20 @@ class EvolutionEngine:
         epoch_id: str | None = None,
     ) -> str | None:
         """Commit an eligible proposal, or append a rejection without publishing it."""
-        parents = tuple(parent_epoch_ids)
-        identifier = epoch_id or self._epoch_id(rewrite_id, parents)
+        rewrite_id = self.store._bounded_text(
+            rewrite_id, MAX_CATEGORY_IDENTIFIER_BYTES, "rewrite identifier"
+        )
+        parents = tuple(
+            self.store._bounded_text(
+                parent_id, MAX_CATEGORY_IDENTIFIER_BYTES, "epoch parent identifier"
+            )
+            for parent_id in parent_epoch_ids
+        )
+        identifier = self.store._bounded_text(
+            epoch_id or self._epoch_id(rewrite_id, parents),
+            MAX_CATEGORY_IDENTIFIER_BYTES,
+            "epoch identifier",
+        )
         try:
             with self.store.transaction(immediate=True) as connection:
                 rewrite = connection.execute(
@@ -404,13 +498,19 @@ class EvolutionEngine:
                     return None
 
                 content_hash = canonical_snapshot_hash(active)
+                identifier_bytes = len(identifier.encode("utf-8"))
+                self.store.reserve_write_bytes(
+                    identifier_bytes * (1 + len(parents))
+                    + len(rewrite_id.encode("utf-8"))
+                    + sum(len(parent.encode("utf-8")) for parent in parents),
+                    row_count=1 + len(parents),
+                )
                 event_id = self.store.append_event(
                     "rewrite_committed",
                     {
                         "rewrite_id": rewrite_id,
                         "epoch_id": identifier,
                         "parent_epoch_ids": parents,
-                        "active_cell_ids": active,
                         "snapshot_hash": content_hash,
                     },
                 )
@@ -464,7 +564,6 @@ class EvolutionEngine:
                 "SELECT 1 FROM cat_epochs WHERE id = ?", (parent_id,)
             ).fetchone() is None:
                 raise ValueError("epoch parent does not exist")
-        self._assert_epoch_graph_acyclic()
         lineage = self.lineage(rewrite_id)
         member_count = sum(len(members) for members in lineage.values())
         if member_count > self.policy.max_members:
@@ -494,29 +593,6 @@ class EvolutionEngine:
         if future_branch_count > self.policy.max_active_branches:
             raise ValueError("active branch limit exceeded")
 
-    def _assert_epoch_graph_acyclic(self) -> None:
-        adjacency: dict[str, list[str]] = {}
-        for row in self.connection.execute(
-            "SELECT epoch_id, parent_id FROM cat_epoch_parents"
-        ):
-            adjacency.setdefault(str(row["epoch_id"]), []).append(str(row["parent_id"]))
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(epoch_id: str) -> None:
-            if epoch_id in visiting:
-                raise ValueError("epoch parents must stay acyclic")
-            if epoch_id in visited:
-                return
-            visiting.add(epoch_id)
-            for parent_id in adjacency.get(epoch_id, ()):
-                visit(parent_id)
-            visiting.remove(epoch_id)
-            visited.add(epoch_id)
-
-        for epoch_id in tuple(adjacency):
-            visit(epoch_id)
-
     def epoch_parents(self, epoch_id: str) -> tuple[str, ...]:
         return tuple(
             str(row["parent_id"])
@@ -534,8 +610,17 @@ class EvolutionEngine:
         event_id: str | None = None,
     ) -> str:
         """Create a parentless epoch for an imported or newly seeded active set."""
+        epoch_id = self.store._bounded_text(
+            epoch_id, MAX_CATEGORY_IDENTIFIER_BYTES, "epoch identifier"
+        )
         active = tuple(sorted(set(active_cell_ids)))
         with self.store.transaction(immediate=True) as connection:
+            epoch_id_bytes = len(epoch_id.encode("utf-8"))
+            self.store.reserve_write_bytes(
+                epoch_id_bytes * (1 + len(active))
+                + sum(len(str(cell_id).encode("utf-8")) for cell_id in active),
+                row_count=1 + len(active),
+            )
             if connection.execute(
                 "SELECT 1 FROM cat_epochs WHERE id = ?", (epoch_id,)
             ).fetchone():
@@ -570,13 +655,22 @@ class EvolutionEngine:
                 "epoch_created",
                 {
                     "epoch_id": epoch_id,
-                    "active_cell_ids": active,
+                    "membership_hash": canonical_snapshot_hash(active),
+                    "member_count": len(active),
                     "source_event_id": event_id,
                 },
             )
             connection.execute(
                 "INSERT INTO cat_epochs (id, created_event_id, created_at) VALUES (?, ?, ?)",
                 (epoch_id, created_event_id, _now_iso()),
+            )
+            connection.executemany(
+                "INSERT INTO cat_epoch_members (epoch_id, position, cell_id) "
+                "VALUES (?, ?, ?)",
+                (
+                    (epoch_id, position, cell_id)
+                    for position, cell_id in enumerate(active)
+                ),
             )
             self._write_derived_snapshot(epoch_id, active)
         return epoch_id
@@ -609,31 +703,56 @@ class EvolutionEngine:
 
     select_epoch = active_cell_ids
 
-    def _rebuild_active(self, epoch_id: str, visiting: set[str]) -> tuple[str, ...]:
-        if epoch_id in visiting:
-            raise ValueError("epoch parents must stay acyclic")
-        epoch = self.connection.execute(
-            "SELECT rewrite_id, created_event_id FROM cat_epochs WHERE id = ?", (epoch_id,)
-        ).fetchone()
-        if epoch is None:
-            raise ValueError("epoch does not exist")
-        visiting.add(epoch_id)
-        try:
-            if epoch["rewrite_id"] is None:
-                active = self._root_active_ids(epoch_id, epoch["created_event_id"])
-            else:
-                active_set: set[str] = set()
-                for parent_id in self.epoch_parents(epoch_id):
-                    active_set.update(self._rebuild_active(parent_id, visiting))
-                lineage = self.lineage(str(epoch["rewrite_id"]))
-                active_set.difference_update(lineage["input"])
-                active_set.update(lineage["output"])
-                active = tuple(sorted(active_set))
-        finally:
-            visiting.remove(epoch_id)
-        return active
+    def _rebuild_active(
+        self, epoch_id: str, _visiting: set[str] | None = None
+    ) -> tuple[str, ...]:
+        """Rebuild one DAG with bounded file-backed state and slot reuse."""
+
+        def load_root(
+            members_table: str,
+            slot_id: int,
+            root_epoch_id: str,
+            event_id: str | None,
+        ) -> int:
+            active = self._root_active_ids(root_epoch_id, event_id)
+            if len(active) > 1_000_000:
+                raise ValueError("epoch reconstruction limit exceeded")
+            self.connection.executemany(
+                f'INSERT INTO temp."{members_table}" VALUES (?, ?)',
+                ((slot_id, cell_id) for cell_id in active),
+            )
+            return len(active)
+
+        with _staged_epoch_membership(
+            self.connection,
+            epoch_id,
+            table_prefix="cat_rebuild",
+            max_epochs=1_000_000,
+            max_members=1_000_000,
+            check_budget=lambda: None,
+            resource_error=lambda: ValueError("epoch reconstruction limit exceeded"),
+            load_root=load_root,
+        ) as (members_table, slot_id, _member_count):
+            return tuple(
+                str(row[0])
+                for row in self.connection.execute(
+                    f'SELECT cell_id FROM temp."{members_table}" '
+                    "WHERE slot_id = ? ORDER BY cell_id",
+                    (slot_id,),
+                )
+            )
 
     def _root_active_ids(self, epoch_id: str, event_id: str | None) -> tuple[str, ...]:
+        members = tuple(
+            str(row[0])
+            for row in self.connection.execute(
+                "SELECT cell_id FROM cat_epoch_members "
+                "WHERE epoch_id = ? ORDER BY position",
+                (epoch_id,),
+            )
+        )
+        if members:
+            return members
         if event_id is None:
             return ()
         event = self.connection.execute(
@@ -642,6 +761,8 @@ class EvolutionEngine:
         if event is not None:
             try:
                 payload = json.loads(event["payload_json"])
+                if payload.get("member_count") == 0:
+                    return ()
                 explicit = payload.get("active_cell_ids")
                 if isinstance(explicit, list) and all(isinstance(item, str) for item in explicit):
                     return tuple(sorted(set(explicit)))
@@ -662,6 +783,9 @@ class EvolutionEngine:
     ) -> None:
         active = tuple(sorted(set(active_cell_ids)))
         snapshot_id = str(uuid.uuid5(EVOLUTION_NAMESPACE, f"snapshot:{epoch_id}"))
+        active_json = json.dumps(active, separators=(",", ":"))
+        if len(active_json.encode("utf-8")) > _MAX_DERIVED_SNAPSHOT_BYTES:
+            raise CategoryQuotaExceeded("category snapshot byte limit exceeded")
         connection.execute(
             """
             INSERT INTO cat_snapshots
@@ -671,7 +795,7 @@ class EvolutionEngine:
             (
                 snapshot_id,
                 epoch_id,
-                json.dumps(active, separators=(",", ":")),
+                active_json,
                 canonical_snapshot_hash(active),
                 _now_iso(),
             ),
@@ -681,13 +805,22 @@ class EvolutionEngine:
         self, epoch_id: str, active_cell_ids: Iterable[str], *, replace: bool = False
     ) -> bool:
         """Write replaceable snapshot state, returning false when high-water skips it."""
-        with self.store.derived_transaction() as connection:
+        active = tuple(sorted(set(active_cell_ids)))
+        active_json = json.dumps(active, separators=(",", ":"))
+        if len(active_json.encode("utf-8")) > _MAX_DERIVED_SNAPSHOT_BYTES:
+            return False
+        reservation = self.store._write_reservation(
+            epoch_id,
+            active_json,
+            row_count=2 if replace else 1,
+        )
+        with self.store.derived_transaction(reserved_bytes=reservation) as connection:
             if connection is None:
                 return False
             if replace:
                 connection.execute("DELETE FROM cat_snapshots WHERE epoch_id = ?", (epoch_id,))
-            self._write_snapshot(connection, epoch_id, active_cell_ids)
-            return True
+            self._write_snapshot(connection, epoch_id, active)
+        return connection.committed
 
     @staticmethod
     def _epoch_id(rewrite_id: str, parents: tuple[str, ...]) -> str:
@@ -724,18 +857,13 @@ class EvolutionEngine:
 
         committed: list[tuple[str, str]] = []
         current_parent = parent_epoch_id
-        selected = candidates[: self.policy.rewrite_budget]
-        for _explicit, _gain, _created, rewrite_id in selected:
+        for _explicit, _gain, _created, rewrite_id in candidates:
+            if len(committed) >= self.policy.rewrite_budget:
+                break
             epoch_id = self.commit(rewrite_id, (current_parent,))
             if epoch_id is not None:
                 committed.append((rewrite_id, epoch_id))
                 current_parent = epoch_id
-        for _explicit, _gain, _created, rewrite_id in candidates[self.policy.rewrite_budget :]:
-            with self.store.transaction():
-                self.store.append_event(
-                    "rewrite_superseded",
-                    {"rewrite_id": rewrite_id, "reason": "consolidation budget"},
-                )
         return tuple(committed)
 
 
@@ -766,6 +894,9 @@ class CategoryObserver:
         soft_boundary_threshold: float = 0.35,
         hard_boundary_threshold: float = 0.65,
         hard_boundary_confirmations: int = 2,
+        protected_database_identities: Iterable[
+            tuple[str | Path, tuple[int, int] | None]
+        ] = (),
     ) -> None:
         # Malformed configuration must fail closed: only exact booleans can
         # disable shadowing or activate influence/consolidation.
@@ -781,6 +912,7 @@ class CategoryObserver:
         self._store_options = {
             "quota_bytes": archive_quota_bytes,
             "high_watermark_ratio": archive_high_watermark_ratio,
+            "protected_database_identities": tuple(protected_database_identities),
         }
         self._compile_budget = CompileBudget(
             max_depth=max_traversal_depth,
@@ -825,7 +957,7 @@ class CategoryObserver:
 
     def _open_resources(self) -> None:
         connection: sqlite3.Connection | None = sqlite3.connect(
-            self._database_path, check_same_thread=False
+            self._database_path, timeout=0, check_same_thread=False
         )
         store: EvolvingCategoryStore | None = None
         try:
@@ -870,6 +1002,11 @@ class CategoryObserver:
         self._resource_pid = current_pid
         self._tracker_resets += 1
 
+    def assert_database_isolated(self) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        self.store.assert_database_isolated()
+
     def _prepare_public_lock(self) -> None:
         current_pid = os.getpid()
         if current_pid == self._lock_pid:
@@ -892,6 +1029,10 @@ class CategoryObserver:
     def _stable_id(kind: str, material: Mapping[str, object]) -> str:
         encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
         return str(uuid.uuid5(OBSERVER_NAMESPACE, f"{kind}:{encoded}"))
+
+    @classmethod
+    def _recall_event_id(cls, recall_id: str) -> str:
+        return cls._stable_id("recall", {"recall_id": str(recall_id)})
 
     @staticmethod
     def _terms(query: str) -> tuple[str, ...]:
@@ -1041,10 +1182,8 @@ class CategoryObserver:
             ).fetchone():
                 return
             recall_event = connection.execute(
-                "SELECT id FROM cat_events WHERE kind='recall_observed' "
-                "AND json_extract(payload_json, '$.recall_id') = ? "
-                "ORDER BY rowid DESC LIMIT 1",
-                (str(recall_id),),
+                "SELECT id FROM cat_events WHERE id = ? AND kind='recall_observed'",
+                (self._recall_event_id(recall_id),),
             ).fetchone()
             recall_event_id = (
                 str(recall_event[0]) if recall_event is not None else None
@@ -1098,10 +1237,8 @@ class CategoryObserver:
             ).fetchone():
                 return
             recall_event = connection.execute(
-                "SELECT id FROM cat_events WHERE kind='recall_observed' "
-                "AND json_extract(payload_json, '$.recall_id') = ? "
-                "ORDER BY rowid DESC LIMIT 1",
-                (str(recall_id),),
+                "SELECT id FROM cat_events WHERE id = ? AND kind='recall_observed'",
+                (self._recall_event_id(recall_id),),
             ).fetchone()
             recall_event_id = (
                 str(recall_event[0]) if recall_event is not None else None
@@ -1115,7 +1252,7 @@ class CategoryObserver:
             self.store.append_event("recall_outcome", payload, event_id=event_id)
 
     def compile_for_recall(
-        self, seed_ids: Iterable[str], base_tokens: int = 0
+        self, seed_ids: tuple[str, ...], base_tokens: int = 0
     ) -> CompiledCategory:
         self._prepare_public_lock()
         with self._lock:
@@ -1127,17 +1264,23 @@ class CategoryObserver:
                 raise
 
     def _compile_for_recall(
-        self, seed_ids: Iterable[str], base_tokens: int = 0
+        self, seed_ids: tuple[str, ...], base_tokens: int = 0
     ) -> CompiledCategory:
         if self._closed or self.store is None or self.compiler is None:
             raise RuntimeError("category observer is closed")
+        if type(seed_ids) is not tuple:
+            raise TypeError("recall seed IDs must be an exact tuple")
+        if len(seed_ids) > 50_000:
+            raise ValueError("recall seed ID limit exceeded")
+        if any(type(seed_id) is not str for seed_id in seed_ids):
+            raise TypeError("recall seed IDs must be exact strings")
         epoch_id = self._current_epoch()
         if epoch_id is None:
             return CompiledCategory("", None, (), 0, 0, False, False)
         compiled = self.compiler.compile(
             epoch_id,
             None,
-            tuple(self.proxy_id(str(seed_id)) for seed_id in seed_ids),
+            tuple(self.proxy_id(seed_id) for seed_id in seed_ids),
             base_tokens,
         )
         if compiled.truncated:
@@ -1212,27 +1355,21 @@ class CategoryObserver:
                 "SELECT dimension, COUNT(*) FROM cat_cells GROUP BY dimension ORDER BY dimension"
             )
         }
-        dispositions = {name: 0 for name in ("proposed", "committed", "rejected", "superseded")}
-        latest_dispositions: dict[str, str] = {}
-        disposition_names = {
-            "rewrite_proposed": "proposed",
-            "rewrite_committed": "committed",
-            "rewrite_rejected": "rejected",
-            "rewrite_superseded": "superseded",
+        dispositions = {
+            name: 0
+            for name in ("proposed", "committed", "rejected", "superseded")
         }
         for row in connection.execute(
-            "SELECT kind, payload_json FROM cat_events WHERE kind IN "
-            "('rewrite_proposed','rewrite_committed','rewrite_rejected','rewrite_superseded') "
-            "ORDER BY rowid"
+            "WITH ranked AS ("
+            " SELECT kind, ROW_NUMBER() OVER ("
+            "   PARTITION BY json_extract(payload_json, '$.rewrite_id') "
+            "   ORDER BY rowid DESC"
+            " ) AS rank FROM cat_events WHERE kind IN "
+            " ('rewrite_proposed','rewrite_committed',"
+            "  'rewrite_rejected','rewrite_superseded')"
+            ") SELECT kind, COUNT(*) FROM ranked WHERE rank = 1 GROUP BY kind"
         ):
-            try:
-                rewrite_id = json.loads(row[1]).get("rewrite_id")
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if isinstance(rewrite_id, str):
-                latest_dispositions[rewrite_id] = disposition_names[str(row[0])]
-        for disposition in latest_dispositions.values():
-            dispositions[disposition] += 1
+            dispositions[_DISPOSITION_KINDS[str(row[0])]] = int(row[1])
         recent_boundaries = []
         for row in connection.execute(
             "SELECT payload_json FROM cat_events WHERE kind='context_boundary' "
@@ -1296,8 +1433,11 @@ class CategoryObserver:
             return
         rewrite_ids = tuple(
             str(row[0])
-            for row in self.store.connection.execute("SELECT id FROM cat_rewrites ORDER BY id")
-            if self.engine.latest_disposition(str(row[0])) == "proposed"
+            for row in self.store.connection.execute(
+                "SELECT pending.rewrite_id FROM cat_pending_rewrites AS pending "
+                "JOIN cat_rewrites AS rewrite ON rewrite.id = pending.rewrite_id "
+                "ORDER BY pending.rewrite_id LIMIT 50000"
+            )
         )
         if rewrite_ids:
             self.engine.consolidate(rewrite_ids, epoch_id)
@@ -1742,7 +1882,7 @@ def _supported_schema_definitions() -> tuple[tuple[str, str, str], ...]:
 
 def _validate_schema_definitions(
     connection: sqlite3.Connection,
-) -> Literal["current", "pre-unique-index"]:
+) -> Literal["current", "pre-unique-index", "pre-membership-projection"]:
     """Accept current DDL or its one safe, immediately preceding fingerprint."""
     actual = _schema_definitions(connection)
     supported = _supported_schema_definitions()
@@ -1758,6 +1898,13 @@ def _validate_schema_definitions(
     )
     if actual == predecessor:
         return "pre-unique-index"
+    pre_membership = tuple(
+        definition
+        for definition in supported
+        if definition[1] not in _PRE_MEMBERSHIP_SCHEMA_OBJECTS
+    )
+    if actual == pre_membership:
+        return "pre-membership-projection"
     raise ValueError("output is incompatible with legacy replay")
 
 
@@ -1771,6 +1918,9 @@ def _validate_completed_replay(
     snapshot_id: str,
     active_cell_ids_json: str,
     snapshot_hash: str,
+    schema_version: Literal[
+        "current", "pre-unique-index", "pre-membership-projection"
+    ],
 ) -> bool:
     """Return true only when an existing output is the exact expected replay."""
     snapshot = connection.execute(
@@ -1788,14 +1938,26 @@ def _validate_completed_replay(
         "cat_boundaries": sum(len(draft.boundaries) for draft in plan.drafts),
         "cat_weight_observations": 0,
         "cat_rewrites": 0,
+        "cat_pending_rewrites": 0,
         "cat_rewrite_members": 0,
         "cat_epochs": 1,
         "cat_epoch_parents": 0,
+        "cat_epoch_members": len(plan.drafts),
         "cat_snapshots": 1,
     }
+    replay_tables = _REPLAY_STATE_TABLES
+    expected_triggers = _EXPECTED_V2_TRIGGERS
+    if schema_version == "pre-membership-projection":
+        replay_tables = _PRE_MEMBERSHIP_REPLAY_STATE_TABLES
+        expected_triggers = _PRE_MEMBERSHIP_EXPECTED_TRIGGERS
+        expected_counts = {
+            table: count
+            for table, count in expected_counts.items()
+            if table in _PRE_MEMBERSHIP_V2_TABLES
+        }
     actual_counts = {
         table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        for table in _REPLAY_STATE_TABLES
+        for table in replay_tables
     }
     schema_versions = [
         row[0]
@@ -1811,7 +1973,7 @@ def _validate_completed_replay(
     }
     if (
         schema_versions != [1]
-        or trigger_names != _EXPECTED_IMMUTABILITY_TRIGGERS
+        or trigger_names != expected_triggers
     ):
         raise ValueError("output is incompatible with legacy replay")
     if snapshot is None:
@@ -1853,6 +2015,24 @@ def _validate_completed_replay(
         != 1
     ):
         raise ValueError("existing legacy replay state does not match source")
+
+    if schema_version != "pre-membership-projection":
+        epoch_members = [
+            (int(row[0]), str(row[1]))
+            for row in connection.execute(
+                "SELECT position, cell_id FROM cat_epoch_members "
+                "WHERE epoch_id = ? ORDER BY position",
+                (root_epoch_id,),
+            )
+        ]
+        expected_members = [
+            (position, cell_id)
+            for position, cell_id in enumerate(
+                sorted(draft.id for draft in plan.drafts)
+            )
+        ]
+        if epoch_members != expected_members:
+            raise ValueError("existing legacy replay membership does not match source")
 
     for draft in plan.drafts:
         cell = connection.execute(
@@ -1913,12 +2093,19 @@ def _preflight_existing_output(
         }
         if not tables:
             return False
-        if not _V2_TABLES <= tables:
+        if not _PRE_MEMBERSHIP_V2_TABLES <= tables:
             raise ValueError("output is incompatible with legacy replay")
         try:
             schema_version = _validate_schema_definitions(connection)
+            core_tables = (
+                _PRE_MEMBERSHIP_V2_TABLES
+                if schema_version == "pre-membership-projection"
+                else _V2_TABLES
+            )
+            if not core_tables <= tables:
+                raise ValueError("output is incompatible with legacy replay")
             if "cat_vectors" in tables:
-                permitted_tables = _V2_TABLES | {"cat_vectors"} | _VEC_SHADOW_TABLES
+                permitted_tables = core_tables | {"cat_vectors"} | _VEC_SHADOW_TABLES
                 if not _VEC_SHADOW_TABLES <= tables or not tables <= permitted_tables:
                     raise ValueError("output is incompatible with legacy replay")
                 vector_sql = connection.execute(
@@ -1945,7 +2132,7 @@ def _preflight_existing_output(
                     != 4
                 ):
                     raise ValueError("output is incompatible with legacy replay")
-            elif not tables <= _V2_TABLES:
+            elif not tables <= core_tables:
                 raise ValueError("output is incompatible with legacy replay")
             completed = _validate_completed_replay(
                 connection,
@@ -1956,8 +2143,9 @@ def _preflight_existing_output(
                 snapshot_id=snapshot_id,
                 active_cell_ids_json=active_cell_ids_json,
                 snapshot_hash=snapshot_hash,
+                schema_version=schema_version,
             )
-            if schema_version == "pre-unique-index" and not completed:
+            if schema_version != "current" and not completed:
                 raise ValueError("output is incompatible with legacy replay")
             return completed
         except sqlite3.Error as exc:
@@ -2035,6 +2223,12 @@ def _bootstrap_staged_output(
             )
             for draft in plan.drafts:
                 store.create_cell(draft, created_event_id=event_id)
+            member_ids = tuple(sorted(draft.id for draft in plan.drafts))
+            store.reserve_write_bytes(
+                len(root_epoch_id.encode("utf-8")) * (1 + len(member_ids))
+                + sum(len(member_id.encode("utf-8")) for member_id in member_ids),
+                row_count=1 + len(member_ids),
+            )
             transaction.execute(
                 """
                 INSERT INTO cat_epochs (id, created_event_id, created_at)
@@ -2042,7 +2236,20 @@ def _bootstrap_staged_output(
                 """,
                 (root_epoch_id, event_id),
             )
-            with store.derived_transaction() as derived:
+            transaction.executemany(
+                "INSERT INTO cat_epoch_members (epoch_id, position, cell_id) "
+                "VALUES (?, ?, ?)",
+                (
+                    (root_epoch_id, position, cell_id)
+                    for position, cell_id in enumerate(member_ids)
+                ),
+            )
+            snapshot_reservation = store._write_reservation(
+                snapshot_id, root_epoch_id, active_cell_ids_json
+            )
+            with store.derived_transaction(
+                reserved_bytes=snapshot_reservation
+            ) as derived:
                 if derived is None:
                     raise CategoryQuotaExceeded("legacy replay requires a snapshot artifact")
                 derived.execute(
@@ -2057,6 +2264,8 @@ def _bootstrap_staged_output(
                         snapshot_hash,
                     ),
                 )
+            if not derived.committed:
+                raise CategoryQuotaExceeded("legacy replay requires a snapshot artifact")
     finally:
         if store is None:
             connection.close()

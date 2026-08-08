@@ -46,6 +46,7 @@ class RankingCase:
     query: str
     direct_query: str
     relevant_variant: Literal[0, 1]
+    history_preferred_variant: Literal[0, 1]
     negative_transfer_truth: bool
 
 
@@ -75,6 +76,7 @@ def fixture_cohort(name: Literal["development", "holdout"], *, seed: int = _SEED
             query=f"{words[0]} {words[1]}",
             direct_query=f"{words[2]} {words[3]}",
             relevant_variant=domain_index // 2,
+            history_preferred_variant=domain_index // 2,
             negative_transfer_truth=True,
         ))
     random.Random(seed).shuffle(cases)
@@ -163,6 +165,7 @@ def _ranking_payload(case: RankingCase) -> Mapping[str, object]:
     return {
         "domain": case.domain, "query": case.query, "direct_query": case.direct_query,
         "relevant_variant": case.relevant_variant,
+        "history_preferred_variant": case.history_preferred_variant,
         "negative_transfer_truth": case.negative_transfer_truth,
     }
 

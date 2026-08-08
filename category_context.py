@@ -6,7 +6,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from math import fsum, isfinite
+from math import fsum, isclose, isfinite
 from types import MappingProxyType
 from typing import Literal
 
@@ -90,7 +90,7 @@ class ContextTracker:
         self._pending_candidate: _Fingerprint | None = None
         self._pending_path: Literal["strong", "moderate"] | None = None
         self._pending_confirmations = 0
-        self._pending_scores: list[float] = []
+        self._pending_score_total = 0.0
         self._context_id: str | None = None
         self._next_context_number = 1
         self._fingerprints: OrderedDict[_Fingerprint, str] = OrderedDict()
@@ -108,7 +108,7 @@ class ContextTracker:
         cloned._pending_candidate = self._pending_candidate
         cloned._pending_path = self._pending_path
         cloned._pending_confirmations = self._pending_confirmations
-        cloned._pending_scores = list(self._pending_scores)
+        cloned._pending_score_total = self._pending_score_total
         cloned._context_id = self._context_id
         cloned._next_context_number = self._next_context_number
         cloned._fingerprints = OrderedDict(self._fingerprints)
@@ -150,7 +150,7 @@ class ContextTracker:
                 "hard", 1.0, self._hard_confirmations, components, self._context_id
             )
 
-        if inferred_score < self._soft_threshold:
+        if inferred_score == 0.0 or inferred_score < self._soft_threshold:
             self._clear_pending()
             self._anchor = snapshot
             self._remember(snapshot.maps, self._context_id)
@@ -163,13 +163,19 @@ class ContextTracker:
             self._pending_candidate = snapshot.maps
             self._pending_path = path
             self._pending_confirmations = 0
-            self._pending_scores = []
+            self._pending_score_total = 0.0
         self._pending_confirmations += 1
-        self._pending_scores.append(inferred_score)
+        self._pending_score_total = fsum((self._pending_score_total, inferred_score))
         confirmed = self._pending_confirmations >= self._hard_confirmations and (
             path == "strong"
-            or fsum(self._pending_scores)
+            or self._pending_score_total
             >= fsum((_MODERATE_REQUIRED_SCORE,) * self._hard_confirmations)
+            or isclose(
+                self._pending_score_total,
+                fsum((_MODERATE_REQUIRED_SCORE,) * self._hard_confirmations),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
         )
         if not confirmed:
             return self._decision(
@@ -215,7 +221,7 @@ class ContextTracker:
         self._pending_candidate = None
         self._pending_path = None
         self._pending_confirmations = 0
-        self._pending_scores = []
+        self._pending_score_total = 0.0
 
     @staticmethod
     def _decision(

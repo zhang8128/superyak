@@ -17,7 +17,13 @@ import uuid
 
 import pytest
 
-from categories import Boundary, CategoryQuotaExceeded, CellDraft, EvolvingCategoryStore
+from categories import (
+    Boundary,
+    CategoryQuotaExceeded,
+    CellDraft,
+    EvolvingCategoryStore,
+    MAX_CATEGORY_IDENTIFIER_BYTES,
+)
 from category_evolution import (
     EvolutionEngine,
     EvolutionPolicy,
@@ -113,12 +119,12 @@ def test_root_epoch_keeps_immutable_history_when_snapshot_is_high_water_skipped(
     """Catches high-water snapshot maintenance rolling back a valid root epoch."""
     size = {"value": 0}
     store = EvolvingCategoryStore(
-        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=100,
+        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=10_000_000,
         size_provider=lambda _path: size["value"],
     )
     engine = EvolutionEngine(store)
     store.create_cell(CellDraft("cell", 0, "cell"))
-    size["value"] = 90
+    size["value"] = 9_000_000
 
     assert engine.create_root_epoch("root", ("cell",)) == "root"
     assert engine.active_cell_ids("root") == ("cell",)
@@ -126,18 +132,56 @@ def test_root_epoch_keeps_immutable_history_when_snapshot_is_high_water_skipped(
     store.close()
 
 
+def test_root_epoch_keeps_immutable_history_when_snapshot_exceeds_derived_byte_cap(
+    evolution_store, monkeypatch
+):
+    """An oversized replaceable snapshot cannot roll back a valid root epoch."""
+    monkeypatch.setattr(
+        "category_evolution._MAX_DERIVED_SNAPSHOT_BYTES", 16, raising=False
+    )
+    evolution_store.create_cell(CellDraft("cell-a", 0, "a"))
+    evolution_store.create_cell(CellDraft("cell-b", 0, "b"))
+    engine = EvolutionEngine(evolution_store)
+
+    assert engine.create_root_epoch("root", ("cell-a", "cell-b")) == "root"
+    assert engine.active_cell_ids("root") == ("cell-a", "cell-b")
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs WHERE id = 'root'"
+    ).fetchone()[0] == 1
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_snapshots WHERE epoch_id = 'root'"
+    ).fetchone()[0] == 0
+
+
+def test_root_epoch_rejects_oversized_repeated_identifier_before_wal_writes(
+    evolution_store,
+):
+    """An epoch ID cannot be amplified through every root-membership index row."""
+    evolution_store.create_cell(CellDraft("cell", 0, "cell"))
+    engine = EvolutionEngine(evolution_store)
+
+    with pytest.raises(ValueError, match="epoch identifier byte limit"):
+        engine.create_root_epoch(
+            "e" * (MAX_CATEGORY_IDENTIFIER_BYTES + 1), ("cell",)
+        )
+
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs"
+    ).fetchone()[0] == 0
+
+
 def test_snapshot_repair_at_hard_pressure_returns_immutable_active_state(tmp_path):
     """Catches a full archive turning an optional snapshot repair into a read failure."""
     size = {"value": 0}
     store = EvolvingCategoryStore(
-        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=100,
+        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=10_000_000,
         size_provider=lambda _path: size["value"],
     )
     engine = EvolutionEngine(store)
     store.create_cell(CellDraft("cell", 0, "cell"))
     engine.create_root_epoch("root", ("cell",))
     store.connection.execute("DELETE FROM cat_snapshots WHERE epoch_id = 'root'")
-    size["value"] = 100
+    size["value"] = 10_000_000
 
     assert engine.active_cell_ids("root") == ("cell",)
     assert store.connection.execute("SELECT COUNT(*) FROM cat_snapshots").fetchone()[0] == 0
@@ -148,14 +192,14 @@ def test_commit_keeps_immutable_epoch_when_snapshot_is_high_water_skipped(tmp_pa
     """Catches a high-water snapshot skip rolling back a committed rewrite epoch."""
     size = {"value": 0}
     store = EvolvingCategoryStore(
-        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=100,
+        sqlite3.connect(tmp_path / "quota.db"), quota_bytes=10_000_000,
         size_provider=lambda _path: size["value"],
     )
     engine = EvolutionEngine(store)
     store.create_cell(CellDraft("old", 0, "old"))
     engine.create_root_epoch("root", ("old",))
     engine.propose(_proposal("retire", "retire", inputs=("old",)))
-    size["value"] = 90
+    size["value"] = 9_000_000
 
     assert engine.commit("retire", ("root",), epoch_id="next") == "next"
     assert engine.active_cell_ids("next") == ()
@@ -172,7 +216,7 @@ def test_legacy_replay_aborts_when_required_snapshot_is_derived_skipped(tmp_path
     _make_legacy_history(legacy)
 
     @contextmanager
-    def skipped_snapshot(_self):
+    def skipped_snapshot(_self, **_kwargs):
         yield None
 
     monkeypatch.setattr(EvolvingCategoryStore, "derived_transaction", skipped_snapshot)
@@ -223,6 +267,196 @@ def _root(engine, store, *cell_ids):
     for cell_id in cell_ids:
         store.create_cell(CellDraft(cell_id, 0, cell_id), created_event_id=event_id)
     return engine.create_root_epoch("root", cell_ids, event_id=event_id)
+
+
+def _insert_noop_epoch(store, epoch_id, rewrite_id, parents):
+    proposed_event = f"proposed:{rewrite_id}"
+    committed_event = f"committed:{rewrite_id}"
+    store.connection.execute(
+        "INSERT INTO cat_events VALUES (?, 'rewrite_proposed', ?, 'now')",
+        (proposed_event, json.dumps({"rewrite_id": rewrite_id})),
+    )
+    store.connection.execute(
+        "INSERT INTO cat_rewrites VALUES (?, NULL, ?, '{}', 'now')",
+        (rewrite_id, proposed_event),
+    )
+    store.connection.execute(
+        "INSERT INTO cat_events VALUES (?, 'rewrite_committed', ?, 'now')",
+        (
+            committed_event,
+            json.dumps(
+                {
+                    "rewrite_id": rewrite_id,
+                    "epoch_id": epoch_id,
+                    "parent_epoch_ids": list(parents),
+                    "snapshot_hash": canonical_snapshot_hash(("seed",)),
+                }
+            ),
+        ),
+    )
+    store.connection.execute(
+        "INSERT INTO cat_epochs VALUES (?, ?, ?, 'now')",
+        (epoch_id, rewrite_id, committed_event),
+    )
+    store.connection.executemany(
+        "INSERT INTO cat_epoch_parents VALUES (?, ?, ?)",
+        ((epoch_id, position, parent) for position, parent in enumerate(parents)),
+    )
+
+
+def test_active_reconstruction_handles_history_beyond_python_recursion(evolution_store):
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "seed")
+    parent = "root"
+    with evolution_store.transaction(immediate=True):
+        for index in range(1_100):
+            epoch_id = f"deep-{index:04d}"
+            _insert_noop_epoch(evolution_store, epoch_id, f"rewrite-{index:04d}", (parent,))
+            parent = epoch_id
+
+    assert engine.active_cell_ids(parent) == ("seed",)
+
+
+def test_active_reconstruction_uses_file_backed_temp_state(evolution_store):
+    """Large iterative DAG state cannot silently move into process RSS."""
+    assert evolution_store.connection.execute("PRAGMA temp_store").fetchone()[0] == 1
+
+
+def test_shared_dag_reconstruction_memoizes_ancestors(evolution_store):
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "seed")
+    parents = ("root",)
+    with evolution_store.transaction(immediate=True):
+        for level in range(18):
+            left = f"dag-{level:02d}-a"
+            right = f"dag-{level:02d}-b"
+            _insert_noop_epoch(
+                evolution_store, left, f"dag-rewrite-{level:02d}-a", parents
+            )
+            _insert_noop_epoch(
+                evolution_store, right, f"dag-rewrite-{level:02d}-b", parents
+            )
+            parents = (left, right)
+
+    progress_calls = 0
+
+    def bounded_progress():
+        nonlocal progress_calls
+        progress_calls += 1
+        return int(progress_calls > 20_000)
+
+    evolution_store.connection.set_progress_handler(bounded_progress, 100)
+    try:
+        assert engine.active_cell_ids(parents[0]) == ("seed",)
+    finally:
+        evolution_store.connection.set_progress_handler(None, 0)
+    assert progress_calls <= 20_000
+
+
+def test_linear_history_reuses_membership_state_instead_of_copying_every_epoch(
+    evolution_store,
+):
+    """Unchanged large membership is carried through a chain in near-linear work."""
+    member_count = 200
+    engine = EvolutionEngine(evolution_store)
+    with evolution_store.transaction(immediate=True) as connection:
+        connection.executemany(
+            "INSERT INTO cat_cells "
+            "(id, dimension, content, payload_json, content_hash, created_at) "
+            "VALUES (?, 0, ?, '{}', 'hash', 'now')",
+            ((f"member-{index:03d}", "member") for index in range(member_count)),
+        )
+    members = tuple(f"member-{index:03d}" for index in range(member_count))
+    engine.create_root_epoch("linear-root", members)
+    parent = "linear-root"
+    with evolution_store.transaction(immediate=True):
+        for index in range(member_count):
+            epoch_id = f"linear-{index:03d}"
+            _insert_noop_epoch(
+                evolution_store,
+                epoch_id,
+                f"linear-rewrite-{index:03d}",
+                (parent,),
+            )
+            parent = epoch_id
+
+    progress_calls = 0
+
+    def bounded_progress():
+        nonlocal progress_calls
+        progress_calls += 1
+        return int(progress_calls > 6_000)
+
+    evolution_store.connection.set_progress_handler(bounded_progress, 100)
+    try:
+        assert engine.active_cell_ids(parent) == members
+    finally:
+        evolution_store.connection.set_progress_handler(None, 0)
+    assert progress_calls <= 6_000
+
+
+def test_latest_disposition_is_indexed_under_large_event_history(evolution_store):
+    engine = EvolutionEngine(evolution_store)
+    with evolution_store.transaction(immediate=True):
+        evolution_store.connection.executemany(
+            "INSERT INTO cat_events VALUES (?, 'noise', '{}', 'now')",
+            ((f"noise-{index:05d}",) for index in range(20_000)),
+        )
+        evolution_store.connection.execute(
+            "INSERT INTO cat_events VALUES "
+            "('target-event', 'rewrite_proposed', '{\"rewrite_id\":\"target\"}', 'now')"
+        )
+    progress_calls = 0
+
+    def bounded_progress():
+        nonlocal progress_calls
+        progress_calls += 1
+        return int(progress_calls > 20)
+
+    evolution_store.connection.set_progress_handler(bounded_progress, 100)
+    try:
+        assert engine.latest_disposition("target") == "proposed"
+    finally:
+        evolution_store.connection.set_progress_handler(None, 0)
+    assert progress_calls <= 20
+
+
+def test_pending_rewrite_projection_tracks_dispositions_and_transaction_rollback(
+    evolution_store,
+):
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store)
+    engine.propose(
+        _proposal(
+            "pending-projection",
+            "create",
+            outputs=(CellDraft("pending-output", 0, "output"),),
+        )
+    )
+    assert evolution_store.connection.execute(
+        "SELECT rewrite_id FROM cat_pending_rewrites"
+    ).fetchone()[0] == "pending-projection"
+
+    evolution_store.append_event(
+        "rewrite_rejected", {"rewrite_id": "pending-projection", "reason": "test"}
+    )
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_pending_rewrites"
+    ).fetchone()[0] == 0
+
+    with pytest.raises(RuntimeError, match="rollback projection"):
+        with evolution_store.transaction():
+            evolution_store.append_event(
+                "rewrite_proposed", {"rewrite_id": "rolled-back"}
+            )
+            assert evolution_store.connection.execute(
+                "SELECT COUNT(*) FROM cat_pending_rewrites "
+                "WHERE rewrite_id = 'rolled-back'"
+            ).fetchone()[0] == 1
+            raise RuntimeError("rollback projection")
+    assert evolution_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_pending_rewrites WHERE rewrite_id = 'rolled-back'"
+    ).fetchone()[0] == 0
 
 
 def test_rewrite_proposal_archives_outputs_without_changing_active_cells(evolution_store):
@@ -661,6 +895,32 @@ def test_multi_parent_commit_preserves_parent_order_and_unions_active_state(tmp_
         store.close()
 
 
+def test_shared_parent_slots_stay_immutable_until_every_branch_consumes_them(
+    evolution_store,
+):
+    engine = EvolutionEngine(evolution_store)
+    _root(engine, evolution_store, "a", "b")
+    engine.propose(_proposal("left-retire", "retire", inputs=("a",)))
+    engine.propose(_proposal("right-retire", "retire", inputs=("b",)))
+    left = engine.commit("left-retire", ("root",), epoch_id="left")
+    right = engine.commit("right-retire", ("root",), epoch_id="right")
+    assert left == "left" and right == "right"
+    engine.propose(
+        _proposal(
+            "join-branches",
+            "create",
+            outputs=(CellDraft("c", 0, "c"),),
+        )
+    )
+
+    joined = engine.commit(
+        "join-branches", ("left", "right"), epoch_id="joined-branches"
+    )
+
+    assert joined == "joined-branches"
+    assert engine.active_cell_ids(joined) == ("a", "b", "c")
+
+
 def test_corrupt_cyclic_epoch_history_rejects_commit_without_epoch(tmp_path):
     """Catches validation traversing a corrupt parent cycle as if it were a DAG."""
     database = tmp_path / "durable-cycle.db"
@@ -777,6 +1037,43 @@ def test_explicit_correction_proposal_commits_despite_ordinary_ineligibility(
     assert engine.active_cell_ids("corrected-epoch") == ("corrected",)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("rewrite_budget", True, TypeError),
+        ("rewrite_budget", 1.0, TypeError),
+        ("rewrite_budget", -1, ValueError),
+        ("rewrite_budget", 33, ValueError),
+        ("max_members", False, TypeError),
+        ("max_members", 1.5, TypeError),
+        ("max_members", -1, ValueError),
+        ("max_members", 33, ValueError),
+        ("max_active_branches", True, TypeError),
+        ("max_active_branches", 1.0, TypeError),
+        ("max_active_branches", 0, ValueError),
+        ("max_active_branches", 5, ValueError),
+    ],
+)
+def test_evolution_policy_rejects_non_integer_or_over_maximum_limits(
+    field, value, error
+):
+    """Callers cannot loosen immutable engine maxima or exploit numeric aliases."""
+    with pytest.raises(error):
+        EvolutionPolicy(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        EvolutionPolicy(rewrite_budget=0, max_members=0, max_active_branches=1),
+        EvolutionPolicy(rewrite_budget=32, max_members=32, max_active_branches=4),
+    ],
+)
+def test_evolution_policy_accepts_exact_hard_boundaries(evolution_store, policy):
+    """The exact lower and upper structural limits remain usable."""
+    assert EvolutionEngine(evolution_store, policy).policy == policy
+
+
 def test_equal_gain_consolidation_orders_by_creation_time_then_id(
     tmp_path, monkeypatch
 ):
@@ -811,6 +1108,97 @@ def test_equal_gain_consolidation_orders_by_creation_time_then_id(
         store.close()
 
 
+def test_consolidation_budget_counts_successful_commits_not_attempts(evolution_store):
+    """An ineligible first attempt cannot discard a later eligible proposal."""
+    engine = EvolutionEngine(evolution_store, EvolutionPolicy(rewrite_budget=1))
+    _root(engine, evolution_store)
+    engine.propose(
+        _proposal(
+            "ineligible-first",
+            "create",
+            outputs=(CellDraft("rejected-output", 0, "rejected"),),
+            evidence=_evidence(persistence=0.0, gain=2.0, cost=0.0),
+        )
+    )
+    engine.propose(
+        _proposal(
+            "eligible-second",
+            "create",
+            outputs=(CellDraft("committed-output", 0, "committed"),),
+            evidence=_evidence(persistence=0.5, gain=1.0, cost=0.0),
+        )
+    )
+
+    committed = engine.consolidate(
+        ("eligible-second", "ineligible-first"), "root"
+    )
+
+    assert tuple(rewrite_id for rewrite_id, _epoch_id in committed) == (
+        "eligible-second",
+    )
+    assert engine.latest_disposition("ineligible-first") == "rejected"
+    assert engine.latest_disposition("eligible-second") == "committed"
+
+
+def test_consolidation_leaves_unattempted_overflow_proposed(evolution_store):
+    """Budget deferral is not a terminal supersession decision."""
+    engine = EvolutionEngine(evolution_store, EvolutionPolicy(rewrite_budget=1))
+    _root(engine, evolution_store)
+    for proposal_id, gain in (("first", 0.9), ("deferred", 0.8)):
+        engine.propose(
+            _proposal(
+                proposal_id,
+                "create",
+                outputs=(CellDraft(f"out-{proposal_id}", 0, proposal_id),),
+                evidence=_evidence(gain=gain, cost=0.1),
+            )
+        )
+
+    committed = engine.consolidate(("deferred", "first"), "root")
+
+    assert tuple(rewrite_id for rewrite_id, _epoch_id in committed) == ("first",)
+    assert engine.latest_disposition("deferred") == "proposed"
+
+
+def test_max_rewrite_pass_emits_compact_commit_events(evolution_store):
+    engine = EvolutionEngine(
+        evolution_store,
+        EvolutionPolicy(rewrite_budget=32, max_members=32, max_active_branches=4),
+    )
+    roots = tuple(f"root-{index:03d}" for index in range(256))
+    seed_event = evolution_store.append_event("seed", {})
+    for cell_id in roots:
+        evolution_store.create_cell(
+            CellDraft(cell_id, 0, cell_id), created_event_id=seed_event
+        )
+    engine.create_root_epoch("root", roots, event_id=seed_event)
+    rewrite_ids = []
+    for index in range(32):
+        rewrite_id = f"create-{index:02d}"
+        rewrite_ids.append(rewrite_id)
+        engine.propose(
+            _proposal(
+                rewrite_id,
+                "create",
+                outputs=(CellDraft(f"created-{index:02d}", 0, "created"),),
+            )
+        )
+
+    committed = engine.consolidate(rewrite_ids, "root")
+
+    assert len(committed) == 32
+    payloads = [
+        json.loads(row[0])
+        for row in evolution_store.connection.execute(
+            "SELECT payload_json FROM cat_events "
+            "WHERE kind = 'rewrite_committed' ORDER BY rowid"
+        )
+    ]
+    assert all("active_cell_ids" not in payload for payload in payloads)
+    assert max(len(json.dumps(payload)) for payload in payloads) < 1024
+    assert len(engine.active_cell_ids(committed[-1][1])) == len(roots) + 32
+
+
 def test_consolidation_order_and_budget_are_deterministic(tmp_path):
     """Catches LLM/input order bypassing deterministic policy or the 32 rewrite budget."""
     store = EvolvingCategoryStore(sqlite3.connect(tmp_path / "consolidate.db"))
@@ -834,8 +1222,8 @@ def test_consolidation_order_and_budget_are_deterministic(tmp_path):
             "p-33",
             *(f"p-{i:02d}" for i in range(2, 33)),
         }
-        assert engine.latest_disposition("p-00") == "superseded"
-        assert engine.latest_disposition("p-01") == "superseded"
+        assert engine.latest_disposition("p-00") == "proposed"
+        assert engine.latest_disposition("p-01") == "proposed"
     finally:
         store.close()
 
@@ -901,6 +1289,42 @@ def _model_pre_unique_index_output(path: Path) -> None:
     connection.execute("DROP INDEX idx_cat_epochs_rewrite_unique")
     connection.commit()
     connection.close()
+
+
+def _model_pre_membership_projection_output(path: Path) -> None:
+    """Transform a completed replay into the exact 5f20e72 core schema."""
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        DROP TRIGGER cat_events_pending_rewrite_proposed;
+        DROP TRIGGER cat_events_pending_rewrite_terminal;
+        DROP INDEX idx_cat_events_rewrite_disposition;
+        DROP TRIGGER cat_epoch_members_no_update;
+        DROP TRIGGER cat_epoch_members_no_delete;
+        DROP INDEX idx_cat_epoch_members_cell;
+        DROP TABLE cat_epoch_members;
+        DROP TABLE cat_pending_rewrites;
+        """
+    )
+    connection.commit()
+    connection.close()
+
+
+def test_legacy_replay_accepts_exact_pre_membership_output_read_only(tmp_path):
+    """A completed output from the reviewed base remains an idempotent replay."""
+    legacy = tmp_path / "legacy.db"
+    output = tmp_path / "pre-membership.db"
+    _make_legacy_history(legacy)
+    expected = _importer().import_legacy_category(legacy, output)
+    _model_pre_membership_projection_output(output)
+    predecessor_bytes = output.read_bytes()
+    predecessor_mtime = output.stat().st_mtime_ns
+
+    actual = _importer().import_legacy_category(legacy, output)
+
+    assert actual == expected
+    assert output.read_bytes() == predecessor_bytes
+    assert output.stat().st_mtime_ns == predecessor_mtime
 
 
 def test_legacy_replay_accepts_exact_pre_unique_index_output_read_only(tmp_path):

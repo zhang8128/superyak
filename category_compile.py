@@ -7,7 +7,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 import heapq
-from itertools import chain
+from hashlib import sha256
 import json
 import math
 import os
@@ -21,7 +21,11 @@ import time
 from typing import Any
 import uuid
 
-from categories import WeightVector
+from categories import (
+    WeightVector,
+    _staged_epoch_membership,
+    is_supported_category_vector_ddl,
+)
 
 
 _MMR_LAMBDA = 0.75
@@ -29,6 +33,9 @@ _TIME_CHECK_BATCH = 32
 _MAX_WALL_TIME_MS = 500
 _MAX_ACTIVE_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _MAX_ACTIVE_MEMBERS = 1_000_000
+_MAX_SEED_IDS = 50_000
+_MAX_SEED_ID_BYTES = 4096
+_ACTIVE_FILTER_BATCH = 256
 _MAX_CONTENT_BYTES = 1024 * 1024
 _MAX_EMBEDDING_BYTES = 64 * 1024
 _MAX_EMBEDDING_DIMENSIONS = 4096
@@ -239,7 +246,7 @@ class CategoryCompiler:
         self,
         epoch_id: str,
         context_id: str | None = None,
-        seed_cell_ids: Iterable[str] = (),
+        seed_cell_ids: tuple[str, ...] = (),
         base_tokens: int | None = None,
     ) -> CompiledCategory:
         base = self.budget.base_tokens if base_tokens is None else base_tokens
@@ -247,22 +254,20 @@ class CategoryCompiler:
             raise TypeError("base tokens must be an integer")
         if not 0 <= base <= self.budget.hard_ceiling:
             raise ValueError("base tokens must be within the hard ceiling")
+        if type(seed_cell_ids) is not tuple:
+            raise TypeError("seed cell IDs must be an exact tuple")
+        if len(seed_cell_ids) > _MAX_SEED_IDS:
+            raise ValueError("seed cell ID limit exceeded")
         rotation_at_start = base >= self.budget.rotation_watermark
         started = time.monotonic_ns()
         deadline = started + self.budget.wall_time_ms * 1_000_000
-        seed_iterator = iter(seed_cell_ids)
-        if self._expired(deadline):
-            return self._empty_result(epoch_id, context_id, True, rotation_at_start)
-        try:
-            first_seed = next(seed_iterator)
-        except StopIteration:
+        if not seed_cell_ids:
             return self._empty_result(epoch_id, context_id, False, rotation_at_start)
         if self._expired(deadline):
             return self._empty_result(epoch_id, context_id, True, rotation_at_start)
         if base >= self.budget.hard_ceiling:
             return self._empty_result(epoch_id, context_id, True, rotation_at_start)
 
-        seed_stream = chain((first_seed,), seed_iterator)
         active_table = f"category_compile_active_{uuid.uuid4().hex}"
         try:
             compile_connection = self._acquire_compile_connection(deadline)
@@ -276,7 +281,7 @@ class CategoryCompiler:
             compile_connection.execute("BEGIN")
             self._stage_active_membership(epoch_id, active_table, deadline)
             bounded_seeds, seed_truncated = self._bounded_seed_ids(
-                seed_stream, deadline, active_table
+                seed_cell_ids, deadline, active_table
             )
             if not bounded_seeds:
                 self._assert_database_identity()
@@ -367,14 +372,21 @@ class CategoryCompiler:
                 "SELECT sql FROM sqlite_master "
                 "WHERE type = 'table' AND name = 'cat_vectors'"
             ).fetchone()
-            if vector_schema is not None and "using vec0" in str(vector_schema[0]).lower():
-                import sqlite_vec
-
-                connection.enable_load_extension(True)
+            if vector_schema is not None and is_supported_category_vector_ddl(
+                vector_schema[0]
+            ):
                 try:
-                    sqlite_vec.load(connection)
-                finally:
-                    connection.enable_load_extension(False)
+                    import sqlite_vec
+
+                    connection.enable_load_extension(True)
+                    try:
+                        sqlite_vec.load(connection)
+                    finally:
+                        connection.enable_load_extension(False)
+                except (ImportError, OSError, sqlite3.Error):
+                    # Vectors are replaceable acceleration.  The exact tables
+                    # remain readable even when this process cannot load vec0.
+                    pass
             return connection
         except Exception:
             if connection is not None:
@@ -520,10 +532,9 @@ class CategoryCompiler:
         truncated = seed_truncated
         stopped = False
 
+        active_seed_ids = self._active_ids(active_table, seed_cell_ids, deadline)
         active_seeds = tuple(
-            cell_id
-            for cell_id in seed_cell_ids
-            if self._is_active(active_table, cell_id)
+            cell_id for cell_id in seed_cell_ids if cell_id in active_seed_ids
         )
         active_seed_set = set(active_seeds)
         inactive_seeds = tuple(
@@ -641,44 +652,348 @@ class CategoryCompiler:
     def _stage_active_membership(
         self, epoch_id: str, active_table: str, deadline: int
     ) -> None:
-        size_row = self.connection.execute(
-            "SELECT length(CAST(active_cell_ids_json AS BLOB)) "
-            "FROM cat_snapshots WHERE epoch_id = ? "
-            "ORDER BY rowid DESC LIMIT 1",
-            (epoch_id,),
-        ).fetchone()
-        if size_row is not None and int(size_row[0]) > _MAX_ACTIVE_SNAPSHOT_BYTES:
-            raise _ResourceLimitExceeded
         self.connection.execute(
             f'CREATE TEMP TABLE "{active_table}" '
             "(id TEXT PRIMARY KEY) WITHOUT ROWID"
         )
-        if size_row is None:
+        if self._load_valid_snapshot(epoch_id, active_table, deadline):
             return
-        if self._expired(deadline):
-            raise _DeadlineExceeded
-        self.connection.execute(
-            f"""
-            INSERT OR IGNORE INTO temp."{active_table}" (id)
-            SELECT id FROM (
-                SELECT DISTINCT CAST(active.value AS TEXT) AS id
-                FROM cat_snapshots AS snapshot,
-                     json_each(snapshot.active_cell_ids_json) AS active
-                WHERE snapshot.rowid = (
-                    SELECT MAX(rowid) FROM cat_snapshots WHERE epoch_id = ?
-                )
-                LIMIT ?
+        self._reconstruct_active_membership(epoch_id, active_table, deadline)
+
+    @staticmethod
+    def _snapshot_digest(
+        identifiers: Iterable[str], deadline: int | None = None
+    ) -> str:
+        digest = sha256()
+        digest.update(b"[")
+        for index, identifier in enumerate(identifiers):
+            if (
+                deadline is not None
+                and index % _TIME_CHECK_BATCH == 0
+                and time.monotonic_ns() >= deadline
+            ):
+                raise _DeadlineExceeded
+            if index:
+                digest.update(b",")
+            digest.update(
+                json.dumps(identifier, separators=(",", ":")).encode("utf-8")
             )
-            """,
-            (epoch_id, _MAX_ACTIVE_MEMBERS + 1),
-        )
-        count = self.connection.execute(
-            f'SELECT COUNT(*) FROM temp."{active_table}"'
-        ).fetchone()[0]
-        if int(count) > _MAX_ACTIVE_MEMBERS:
-            raise _ResourceLimitExceeded
+        digest.update(b"]")
+        return digest.hexdigest()
+
+    def _immutable_epoch_digest(self, epoch_id: str, deadline: int) -> str | None:
+        row = self.connection.execute(
+            "SELECT epoch.rewrite_id AS rewrite_id, "
+            "epoch.created_event_id AS created_event_id, "
+            "event.kind AS kind, event.payload_json AS payload_json "
+            "FROM cat_epochs AS epoch "
+            "LEFT JOIN cat_events AS event ON event.id = epoch.created_event_id "
+            "WHERE epoch.id = ?",
+            (epoch_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        payload = None
+        if row["kind"] is not None:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                payload = None
+        if row["rewrite_id"] is None:
+            member_count = int(
+                self.connection.execute(
+                    "SELECT COUNT(*) FROM cat_epoch_members WHERE epoch_id = ?",
+                    (epoch_id,),
+                ).fetchone()[0]
+            )
+            if member_count > _MAX_ACTIVE_MEMBERS:
+                return None
+            has_membership_marker = (
+                row["kind"] == "epoch_created"
+                and isinstance(payload, dict)
+                and type(payload.get("member_count")) is int
+                and isinstance(payload.get("membership_hash"), str)
+            )
+            if member_count or has_membership_marker:
+                digest = self._snapshot_digest(
+                    (
+                        str(item[0])
+                        for item in self.connection.execute(
+                            "SELECT cell_id FROM cat_epoch_members "
+                            "WHERE epoch_id = ? ORDER BY position",
+                            (epoch_id,),
+                        )
+                    ),
+                    deadline,
+                )
+                if has_membership_marker and (
+                    payload.get("epoch_id") != epoch_id
+                    or payload.get("member_count") != member_count
+                    or payload.get("membership_hash") != digest
+                ):
+                    return None
+                return digest
+        if row["rewrite_id"] is None and row["kind"] != "epoch_created":
+            count = int(
+                self.connection.execute(
+                    "SELECT COUNT(*) FROM cat_cells WHERE created_event_id IS ?",
+                    (row["created_event_id"],),
+                ).fetchone()[0]
+            )
+            if count > _MAX_ACTIVE_MEMBERS:
+                return None
+            return self._snapshot_digest(
+                (
+                    str(item[0])
+                    for item in self.connection.execute(
+                        "SELECT id FROM cat_cells "
+                        "WHERE created_event_id IS ? ORDER BY id",
+                        (row["created_event_id"],),
+                    )
+                ),
+                deadline,
+            )
+        if row["kind"] is None:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if row["rewrite_id"] is not None:
+            expected = payload.get("snapshot_hash")
+            if (
+                row["kind"] != "rewrite_committed"
+                or payload.get("epoch_id") != epoch_id
+                or payload.get("rewrite_id") != row["rewrite_id"]
+                or not isinstance(expected, str)
+                or len(expected) != 64
+            ):
+                return None
+            return expected
+        identifiers = payload.get("active_cell_ids")
+        if (
+            row["kind"] != "epoch_created"
+            or payload.get("epoch_id") != epoch_id
+            or not isinstance(identifiers, list)
+            or len(identifiers) > _MAX_ACTIVE_MEMBERS
+            or any(not isinstance(identifier, str) for identifier in identifiers)
+            or identifiers != sorted(set(identifiers))
+        ):
+            return None
+        return self._snapshot_digest(identifiers, deadline)
+
+    def _load_valid_snapshot(
+        self, epoch_id: str, active_table: str, deadline: int
+    ) -> bool:
+        metadata = self.connection.execute(
+            "SELECT rowid, length(CAST(active_cell_ids_json AS BLOB)) "
+            "FROM cat_snapshots WHERE epoch_id = ? ORDER BY rowid DESC LIMIT 1",
+            (epoch_id,),
+        ).fetchone()
+        if metadata is None:
+            return False
+        if int(metadata[1]) > _MAX_ACTIVE_SNAPSHOT_BYTES:
+            return False
+        row = self.connection.execute(
+            "SELECT active_cell_ids_json, content_hash "
+            "FROM cat_snapshots WHERE rowid = ?",
+            (metadata[0],),
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            snapshot_type = self.connection.execute(
+                "SELECT json_type(?)", (row[0],)
+            ).fetchone()[0]
+        except sqlite3.OperationalError as exc:
+            if "malformed json" not in str(exc).lower():
+                raise
+            return False
+        if snapshot_type != "array":
+            return False
+        savepoint = f"snapshot_validation_{uuid.uuid4().hex}"
+        self.connection.execute(f'SAVEPOINT "{savepoint}"')
+        prior: str | None = None
+        digest = sha256()
+        digest.update(b"[")
+        count = 0
+        try:
+            cursor = self.connection.execute(
+                "SELECT type, value FROM json_each(?)", (row[0],)
+            )
+            for index, item in enumerate(cursor):
+                if index % _TIME_CHECK_BATCH == 0 and self._expired(deadline):
+                    raise _DeadlineExceeded
+                if index >= _MAX_ACTIVE_MEMBERS or item[0] != "text":
+                    self.connection.execute(f'ROLLBACK TO "{savepoint}"')
+                    self.connection.execute(f'RELEASE "{savepoint}"')
+                    return False
+                identifier = str(item[1])
+                if prior is not None and identifier <= prior:
+                    self.connection.execute(f'ROLLBACK TO "{savepoint}"')
+                    self.connection.execute(f'RELEASE "{savepoint}"')
+                    return False
+                prior = identifier
+                if count:
+                    digest.update(b",")
+                digest.update(
+                    json.dumps(identifier, separators=(",", ":")).encode("utf-8")
+                )
+                self.connection.execute(
+                    f'INSERT INTO temp."{active_table}" (id) VALUES (?)',
+                    (identifier,),
+                )
+                count += 1
+        except sqlite3.OperationalError as exc:
+            self.connection.execute(f'ROLLBACK TO "{savepoint}"')
+            self.connection.execute(f'RELEASE "{savepoint}"')
+            if "malformed json" not in str(exc).lower():
+                raise
+            return False
+        except Exception:
+            self.connection.execute(f'ROLLBACK TO "{savepoint}"')
+            self.connection.execute(f'RELEASE "{savepoint}"')
+            raise
+        digest.update(b"]")
+        expected = self._immutable_epoch_digest(epoch_id, deadline)
+        actual = digest.hexdigest()
+        if row[1] != actual or expected != actual:
+            self.connection.execute(f'ROLLBACK TO "{savepoint}"')
+            self.connection.execute(f'RELEASE "{savepoint}"')
+            return False
         if self._expired(deadline):
+            self.connection.execute(f'ROLLBACK TO "{savepoint}"')
+            self.connection.execute(f'RELEASE "{savepoint}"')
             raise _DeadlineExceeded
+        self.connection.execute(f'RELEASE "{savepoint}"')
+        return True
+
+    def _reconstruct_active_membership(
+        self, epoch_id: str, active_table: str, deadline: int
+    ) -> None:
+        """Reconstruct exact state with bounded file-backed last-consumer slots."""
+
+        def check_budget() -> None:
+            if self._expired(deadline):
+                raise _DeadlineExceeded
+
+        with _staged_epoch_membership(
+            self.connection,
+            epoch_id,
+            table_prefix="category_compile",
+            max_epochs=_MAX_ACTIVE_MEMBERS,
+            max_members=_MAX_ACTIVE_MEMBERS,
+            check_budget=check_budget,
+            resource_error=_ResourceLimitExceeded,
+            load_root=lambda members, slot, root, event: self._load_root_membership_slot(
+                members, slot, root, event, deadline
+            ),
+        ) as (members_table, slot_id, _member_count):
+            self.connection.execute(
+                f'INSERT INTO temp."{active_table}" (id) '
+                f'SELECT cell_id FROM temp."{members_table}" WHERE slot_id = ?',
+                (slot_id,),
+            )
+            check_budget()
+
+    def _load_root_membership_slot(
+        self,
+        members_table: str,
+        slot_id: int,
+        epoch_id: str,
+        event_id: str | None,
+        deadline: int,
+    ) -> int:
+        member_count = int(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM cat_epoch_members WHERE epoch_id = ?",
+                (epoch_id,),
+            ).fetchone()[0]
+        )
+        if member_count > _MAX_ACTIVE_MEMBERS:
+            raise _ResourceLimitExceeded
+        event = self.connection.execute(
+            "SELECT kind, payload_json FROM cat_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        root_payload = None
+        if event is not None and event[0] == "epoch_created":
+            try:
+                root_payload = json.loads(event[1])
+            except (TypeError, json.JSONDecodeError):
+                root_payload = None
+        membership_marker = (
+            isinstance(root_payload, dict)
+            and type(root_payload.get("member_count")) is int
+            and isinstance(root_payload.get("membership_hash"), str)
+        )
+        if member_count or membership_marker:
+            if membership_marker:
+                member_digest = self._snapshot_digest(
+                    (
+                        str(item[0])
+                        for item in self.connection.execute(
+                            "SELECT cell_id FROM cat_epoch_members "
+                            "WHERE epoch_id = ? ORDER BY position",
+                            (epoch_id,),
+                        )
+                    ),
+                    deadline,
+                )
+                if (
+                    root_payload.get("epoch_id") != epoch_id
+                    or root_payload.get("member_count") != member_count
+                    or root_payload.get("membership_hash") != member_digest
+                ):
+                    raise ValueError("root epoch membership digest is invalid")
+            self.connection.execute(
+                f'INSERT INTO temp."{members_table}" (slot_id, cell_id) '
+                "SELECT ?, cell_id FROM cat_epoch_members "
+                "WHERE epoch_id = ? ORDER BY position",
+                (slot_id, epoch_id),
+            )
+            return member_count
+        if event is None or event[0] != "epoch_created":
+            count = int(
+                self.connection.execute(
+                    "SELECT COUNT(*) FROM cat_cells WHERE created_event_id IS ?",
+                    (event_id,),
+                ).fetchone()[0]
+            )
+            if count > _MAX_ACTIVE_MEMBERS:
+                raise _ResourceLimitExceeded
+            self.connection.execute(
+                f'INSERT INTO temp."{members_table}" (slot_id, cell_id) '
+                "SELECT ?, id FROM cat_cells WHERE created_event_id IS ?",
+                (slot_id, event_id),
+            )
+            return count
+        metadata = self.connection.execute(
+            "SELECT json_extract(?, '$.epoch_id'), "
+            "json_type(?, '$.active_cell_ids')",
+            (event[1], event[1]),
+        ).fetchone()
+        if metadata[0] != epoch_id or metadata[1] != "array":
+            raise ValueError("root epoch history is invalid")
+        prior: str | None = None
+        count = 0
+        for index, item in enumerate(
+            self.connection.execute(
+                "SELECT type, value FROM json_each(?, '$.active_cell_ids')",
+                (event[1],),
+            )
+        ):
+            if index % _TIME_CHECK_BATCH == 0 and self._expired(deadline):
+                raise _DeadlineExceeded
+            if index >= _MAX_ACTIVE_MEMBERS or item[0] != "text":
+                raise _ResourceLimitExceeded
+            identifier = str(item[1])
+            if prior is not None and identifier <= prior:
+                raise ValueError("root epoch membership is not canonical")
+            prior = identifier
+            self.connection.execute(
+                f'INSERT INTO temp."{members_table}" VALUES (?, ?)',
+                (slot_id, identifier),
+            )
+            count += 1
+        return count
 
     def _translate_seeds(
         self,
@@ -689,6 +1004,7 @@ class CategoryCompiler:
     ) -> tuple[tuple[str, ...], bool, bool]:
         truncated = False
         pending = deque(seed_cell_ids)
+        initially_inactive = set(seed_cell_ids)
         discovered = set(seed_cell_ids)
         active: set[str] = set()
         steps = 0
@@ -696,7 +1012,9 @@ class CategoryCompiler:
             if steps % _TIME_CHECK_BATCH == 0 and self._expired(deadline):
                 return tuple(sorted(active)), True, True
             cell_id = pending.popleft()
-            if self._is_active(active_table, cell_id):
+            if cell_id not in initially_inactive and self._is_active(
+                active_table, cell_id
+            ):
                 active.add(cell_id)
             else:
                 descendants, descendants_limited = self._lineage_descendants(
@@ -715,34 +1033,38 @@ class CategoryCompiler:
         return tuple(sorted(active)), truncated, False
 
     def _bounded_seed_ids(
-        self, seed_cell_ids: Iterable[str], deadline: int, active_table: str
+        self, seed_cell_ids: tuple[str, ...], deadline: int, active_table: str
     ) -> tuple[tuple[str, ...], bool]:
         """Keep active-first viable seeds without letting invalid IDs use the cap."""
         limit = self.budget.max_candidates
-        selected: dict[str, bool] = {}
-        worst_first: list[tuple[int, _ReverseId, str]] = []
+        viable_ids: list[str] = []
+        seen: set[str] = set()
         overflow = False
-        iterator = iter(seed_cell_ids)
-        index = 0
-        while True:
+        for index, cell_id in enumerate(seed_cell_ids):
             if index % _TIME_CHECK_BATCH == 0 and self._expired(deadline):
                 raise _DeadlineExceeded
-            try:
-                cell_id = next(iterator)
-            except StopIteration:
-                break
-            if self._expired(deadline):
-                raise _DeadlineExceeded
-            index += 1
-            if not isinstance(cell_id, str):
-                raise TypeError("seed cell IDs must be strings")
-            if cell_id in selected:
+            if type(cell_id) is not str:
+                raise TypeError("seed cell IDs must be exact strings")
+            if (
+                len(cell_id) > _MAX_SEED_ID_BYTES
+                or len(cell_id.encode("utf-8")) > _MAX_SEED_ID_BYTES
+            ):
+                raise ValueError("seed cell ID byte limit exceeded")
+            if cell_id in seen:
                 continue
+            seen.add(cell_id)
             viable, resource_limited = self._cell_viability(cell_id, deadline)
             overflow |= resource_limited
-            if not viable:
-                continue
-            active = self._is_active(active_table, cell_id)
+            if viable:
+                viable_ids.append(cell_id)
+
+        active_ids = self._active_ids(active_table, viable_ids, deadline)
+        selected: dict[str, bool] = {}
+        worst_first: list[tuple[int, _ReverseId, str]] = []
+        for index, cell_id in enumerate(viable_ids):
+            if index % _TIME_CHECK_BATCH == 0 and self._expired(deadline):
+                raise _DeadlineExceeded
+            active = cell_id in active_ids
             if len(selected) < limit:
                 selected[cell_id] = active
                 heapq.heappush(
@@ -763,6 +1085,27 @@ class CategoryCompiler:
                     del selected[removed[2]]
                     selected[cell_id] = active
         return tuple(sorted(selected)), overflow
+
+    def _active_ids(
+        self, active_table: str, cell_ids: Sequence[str], deadline: int
+    ) -> set[str]:
+        """Filter membership in bounded SQL batches instead of point probes."""
+        active: set[str] = set()
+        for offset in range(0, len(cell_ids), _ACTIVE_FILTER_BATCH):
+            if self._expired(deadline):
+                raise _DeadlineExceeded
+            batch = tuple(cell_ids[offset : offset + _ACTIVE_FILTER_BATCH])
+            if not batch:
+                continue
+            placeholders = ",".join("?" for _item in batch)
+            cursor = self.connection.execute(
+                f'SELECT id FROM temp."{active_table}" WHERE id IN ({placeholders})',
+                batch,
+            )
+            active.update(str(row[0]) for row in cursor)
+        if self._expired(deadline):
+            raise _DeadlineExceeded
+        return active
 
     def _cell_viability(self, cell_id: str, deadline: int) -> tuple[bool, bool]:
         """Return candidate/lineage viability and whether a resource cap rejected it.
@@ -1142,11 +1485,16 @@ class CategoryCompiler:
         ).fetchone()
         if table is None:
             return None, False
-        size_row = self.connection.execute(
-            "SELECT length(CAST(embedding AS BLOB)) "
-            "FROM cat_vectors WHERE cell_id = ?",
-            (cell_id,),
-        ).fetchone()
+        try:
+            size_row = self.connection.execute(
+                "SELECT length(CAST(embedding AS BLOB)) "
+                "FROM cat_vectors WHERE cell_id = ?",
+                (cell_id,),
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such module: vec0" not in str(exc).lower():
+                raise
+            return None, False
         if size_row is None or size_row[0] is None:
             return None, False
         if int(size_row[0]) > _MAX_EMBEDDING_BYTES:

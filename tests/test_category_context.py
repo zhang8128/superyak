@@ -1,8 +1,29 @@
 from datetime import datetime, timedelta, timezone
+import sys
 
 import pytest
 
 from category_context import ContextObservation, ContextTracker
+
+
+def _retained_size(value, seen=None):
+    """Approximate the recursively retained Python state of a tracker."""
+    seen = set() if seen is None else seen
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    size = sys.getsizeof(value)
+    if isinstance(value, dict):
+        return size + sum(
+            _retained_size(key, seen) + _retained_size(item, seen)
+            for key, item in value.items()
+        )
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return size + sum(_retained_size(item, seen) for item in value)
+    if hasattr(value, "__dict__"):
+        return size + _retained_size(vars(value), seen)
+    return size
 
 
 @pytest.mark.parametrize(
@@ -101,6 +122,36 @@ def test_context_thresholds_require_finite_ordered_real_values(soft, hard, error
     """Catches unsafe or contradictory boundary threshold configuration."""
     with pytest.raises(error):
         ContextTracker(soft_threshold=soft, hard_threshold=hard)
+
+
+def test_zero_soft_threshold_identical_stream_and_pending_evidence_stay_bounded():
+    """Zero divergence stays same and long pending evidence retains constant state."""
+    identical = ContextObservation(goal={"stable": 1.0})
+    zero_tracker = ContextTracker(soft_threshold=0.0)
+    first = zero_tracker.observe(identical)
+    for _ in range(5_000):
+        decision = zero_tracker.observe(identical)
+        assert decision.kind == "same"
+        assert decision.context_id == first.context_id
+    cloned = zero_tracker.clone()
+    assert cloned.observe(identical).kind == "same"
+
+    pending_tracker = ContextTracker(hard_confirmations=100_000)
+    pending_tracker.observe(
+        ContextObservation(entities={"anchor": 1.0}, sources={"anchor": 1.0})
+    )
+    moderate = ContextObservation(
+        entities={"candidate": 1.0}, sources={"candidate": 1.0}
+    )
+    for expected in range(1, 5_001):
+        decision = pending_tracker.observe(moderate)
+        assert decision.kind == "soft"
+        assert decision.confirmations == expected
+
+    assert _retained_size(pending_tracker) < 20_000
+    pending_clone = pending_tracker.clone()
+    continued = pending_clone.observe(moderate)
+    assert (continued.kind, continued.confirmations) == ("soft", 5_001)
 
 
 def test_source_only_change_does_not_cross_the_soft_threshold():

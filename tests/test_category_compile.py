@@ -45,6 +45,17 @@ def _observe(store, cell_id, *, context_id=None, relevance=0.0, evidence=0.0,
     )
 
 
+def _insert_raw_cell(store, cell_id, content, *, dimension=0):
+    """Simulate pre-bound or externally seeded immutable archive content."""
+    with store.transaction(immediate=True) as connection:
+        connection.execute(
+            "INSERT INTO cat_cells "
+            "(id, dimension, content, payload_json, content_hash, created_at) "
+            "VALUES (?, ?, ?, '{}', 'raw', 'now')",
+            (cell_id, dimension, content),
+        )
+
+
 def _observe_dedicated_connections(monkeypatch):
     """Capture SQL and cleanup state from compiler-owned connections."""
     real_connect = sqlite3.connect
@@ -698,7 +709,7 @@ def test_token_packing_never_crosses_hard_ceiling_and_rotation_is_exact(store):
     assert at_hard.truncated
 
     at_hard_empty = CategoryCompiler(store).compile(
-        "missing-epoch", None, (cell_id for cell_id in ()), 65_536
+        "missing-epoch", None, (), 65_536
     )
     assert at_hard_empty.cells == ()
     assert at_hard_empty.token_count == 0
@@ -733,6 +744,195 @@ def test_context_weights_and_output_order_are_stable_and_hashable(store):
     assert result.cells[0].contributions["affect_salience"] == 0.08
     assert result.cells[0].affect == -0.8
     assert hash(result.cells[0]) == hash(result.cells[0])
+
+
+def _commit_retype(store, *, epoch_id="newest"):
+    store.create_cell(CellDraft("old", 0, "old"))
+    engine = EvolutionEngine(store)
+    engine.create_root_epoch("root", ("old",))
+    engine.propose(
+        RewriteProposal(
+            "retype",
+            "retype",
+            "locus",
+            None,
+            ("old",),
+            (CellDraft("new", 0, "new"),),
+            (),
+            RewriteEvidence((), 0.8, 0.8, 0.1),
+        )
+    )
+    assert engine.commit("retype", ("root",), epoch_id=epoch_id) == epoch_id
+    return engine
+
+
+def test_compiler_reconstructs_newest_epoch_when_snapshot_is_high_water_skipped(
+    tmp_path,
+):
+    usage = {"bytes": 0}
+    category_store = EvolvingCategoryStore(
+        sqlite3.connect(tmp_path / "high-water.db"),
+        quota_bytes=10_000_000,
+        size_provider=lambda _path: usage["bytes"],
+    )
+    try:
+        usage["bytes"] = 0
+        category_store.create_cell(CellDraft("old", 0, "old"))
+        engine = EvolutionEngine(category_store)
+        engine.create_root_epoch("root", ("old",))
+        engine.propose(
+            RewriteProposal(
+                "retype",
+                "retype",
+                "locus",
+                None,
+                ("old",),
+                (CellDraft("new", 0, "new"),),
+                (),
+                RewriteEvidence((), 0.8, 0.8, 0.1),
+            )
+        )
+        usage["bytes"] = 9_000_000
+        assert engine.commit("retype", ("root",), epoch_id="newest") == "newest"
+        assert category_store.connection.execute(
+            "SELECT COUNT(*) FROM cat_snapshots WHERE epoch_id = 'newest'"
+        ).fetchone()[0] == 0
+
+        compiled = CategoryCompiler(category_store).compile(
+            "newest", None, ("old", "new"), 0
+        )
+
+        assert tuple(cell.id for cell in compiled.cells) == ("new",)
+    finally:
+        category_store.close()
+
+
+def test_compiler_rejects_parseable_corrupt_snapshot(store):
+    _commit_retype(store)
+    store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json = '[\"old\"]' "
+        "WHERE epoch_id = 'newest'"
+    )
+    store.connection.commit()
+
+    compiled = CategoryCompiler(store).compile(
+        "newest", None, ("old", "new"), 0
+    )
+
+    assert tuple(cell.id for cell in compiled.cells) == ("new",)
+
+
+def test_compiler_reconstructs_malformed_snapshot_without_retaining_partial_state(store):
+    _root(store, CellDraft("seed", 0, "seed"))
+    store.connection.execute(
+        "UPDATE cat_snapshots SET active_cell_ids_json = 'not valid JSON' "
+        "WHERE epoch_id = 'root'"
+    )
+    store.connection.commit()
+
+    compiler = CategoryCompiler(store)
+    try:
+        first = compiler.compile("root", None, ("seed",), 0)
+        second = compiler.compile("root", None, ("seed",), 0)
+    finally:
+        compiler.close()
+
+    assert tuple(cell.id for cell in first.cells) == ("seed",)
+    assert tuple(cell.id for cell in second.cells) == ("seed",)
+
+
+def test_compiler_reconstructs_missing_snapshot_from_immutable_history(store):
+    _root(store, CellDraft("seed", 0, "seed"))
+    store.connection.execute("DELETE FROM cat_snapshots WHERE epoch_id = 'root'")
+    store.connection.commit()
+
+    compiled = CategoryCompiler(store).compile("root", None, ("seed",), 0)
+
+    assert tuple(cell.id for cell in compiled.cells) == ("seed",)
+
+
+def test_compiler_reuses_membership_state_across_long_unchanged_history(
+    store, monkeypatch
+):
+    """Bounded compilation cannot copy the full active set at every ancestor."""
+    member_count = 200
+    with store.transaction(immediate=True) as connection:
+        connection.executemany(
+            "INSERT INTO cat_cells "
+            "(id, dimension, content, payload_json, content_hash, created_at) "
+            "VALUES (?, 0, ?, '{}', 'hash', 'now')",
+            ((f"member-{index:03d}", "member") for index in range(member_count)),
+        )
+    members = tuple(f"member-{index:03d}" for index in range(member_count))
+    EvolutionEngine(store).create_root_epoch("bounded-root", members)
+    parent = "bounded-root"
+    with store.transaction(immediate=True) as connection:
+        for index in range(member_count):
+            rewrite_id = f"bounded-rewrite-{index:03d}"
+            epoch_id = f"bounded-epoch-{index:03d}"
+            proposed_event = f"bounded-proposed-{index:03d}"
+            committed_event = f"bounded-committed-{index:03d}"
+            connection.execute(
+                "INSERT INTO cat_events VALUES (?, 'rewrite_proposed', ?, 'now')",
+                (proposed_event, json.dumps({"rewrite_id": rewrite_id})),
+            )
+            connection.execute(
+                "INSERT INTO cat_rewrites VALUES (?, NULL, ?, '{}', 'now')",
+                (rewrite_id, proposed_event),
+            )
+            connection.execute(
+                "INSERT INTO cat_events VALUES (?, 'rewrite_committed', ?, 'now')",
+                (
+                    committed_event,
+                    json.dumps(
+                        {
+                            "rewrite_id": rewrite_id,
+                            "epoch_id": epoch_id,
+                            "parent_epoch_ids": [parent],
+                            "snapshot_hash": "0" * 64,
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                "INSERT INTO cat_epochs VALUES (?, ?, ?, 'now')",
+                (epoch_id, rewrite_id, committed_event),
+            )
+            connection.execute(
+                "INSERT INTO cat_epoch_parents VALUES (?, 0, ?)",
+                (epoch_id, parent),
+            )
+            parent = epoch_id
+
+    real_connect = sqlite3.connect
+    progress_calls = 0
+
+    class BoundedConnection(sqlite3.Connection):
+        def set_progress_handler(self, callback, opcode_count):
+            if callback is None:
+                return super().set_progress_handler(None, opcode_count)
+
+            def bounded_callback():
+                nonlocal progress_calls
+                progress_calls += 1
+                return int(progress_calls > 700) or callback()
+
+            return super().set_progress_handler(bounded_callback, opcode_count)
+
+    def bounded_connect(*args, **kwargs):
+        kwargs["factory"] = BoundedConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr("category_compile.sqlite3.connect", bounded_connect)
+    compiler = CategoryCompiler(store)
+    try:
+        result = compiler.compile(parent, None, ("member-000",), 0)
+    finally:
+        compiler.close()
+
+    assert tuple(cell.id for cell in result.cells) == ("member-000",)
+    assert not result.truncated
+    assert progress_calls <= 700
 
 
 def test_sql_deadline_interrupt_cleans_progress_handler_and_temp_state(store, monkeypatch):
@@ -939,12 +1139,12 @@ def test_snapshot_size_check_and_staging_share_one_pinned_read_snapshot(
     assert not result.truncated
 
     future = compiler.compile("root", None, ("seed",), 0)
-    assert future.cells == ()
-    assert future.truncated
+    assert tuple(cell.id for cell in future.cells) == ("seed",)
+    assert not future.truncated
     compiler.close()
 
 
-def test_reentrant_seed_iteration_keeps_each_compile_connection_isolated(
+def test_reentrant_staging_keeps_each_compile_connection_isolated(
     store, monkeypatch
 ):
     _root(store, CellDraft("seed", 0, "seed"))
@@ -952,11 +1152,18 @@ def test_reentrant_seed_iteration_keeps_each_compile_connection_isolated(
     compiler = CategoryCompiler(store)
     nested_results = []
 
-    def reentrant_seeds():
-        nested_results.append(compiler.compile("root", None, ("seed",), 0))
-        yield "seed"
+    original_stage = compiler._stage_active_membership
+    entered = False
 
-    outer = compiler.compile("root", None, reentrant_seeds(), 0)
+    def reentrant_stage(*args, **kwargs):
+        nonlocal entered
+        if not entered:
+            entered = True
+            nested_results.append(compiler.compile("root", None, ("seed",), 0))
+        return original_stage(*args, **kwargs)
+
+    monkeypatch.setattr(compiler, "_stage_active_membership", reentrant_stage)
+    outer = compiler.compile("root", None, ("seed",), 0)
 
     assert tuple(cell.id for cell in outer.cells) == ("seed",)
     assert tuple(cell.id for cell in nested_results[0].cells) == ("seed",)
@@ -1013,7 +1220,7 @@ def test_database_file_replacement_during_read_connection_open_is_rejected(
     assert list(Path(database_path).parent.glob(".category-compile-*")) == []
 
 
-def test_database_aba_swap_during_open_cannot_redirect_compile(
+def test_database_aba_swap_seed_iterable_is_rejected_without_invocation(
     store, tmp_path
 ):
     _root(store, CellDraft("seed", 0, "ORIGINAL"))
@@ -1040,10 +1247,10 @@ def test_database_aba_swap_during_open_cannot_redirect_compile(
             os.replace(original_away, database_path)
         yield "seed"
 
-    result = compiler.compile("root", None, swap_during_seed_iteration(), 0)
+    with pytest.raises(TypeError, match="tuple"):
+        compiler.compile("root", None, swap_during_seed_iteration(), 0)
 
-    assert swapped
-    assert tuple(cell.content for cell in result.cells) == ("ORIGINAL",)
+    assert not swapped
     compiler.close()
 
 
@@ -1175,14 +1382,11 @@ def test_symlinked_wal_database_supports_two_concurrent_compile_threads(tmp_path
         results = []
         errors = []
 
-        def concurrent_seeds():
-            barrier.wait(timeout=5)
-            yield "seed"
-
         def run_compile():
             try:
+                barrier.wait(timeout=5)
                 results.append(
-                    compiler.compile("root", None, concurrent_seeds(), 0)
+                    compiler.compile("root", None, ("seed",), 0)
                 )
             except BaseException as exc:
                 errors.append(exc)
@@ -1214,19 +1418,18 @@ def test_connection_pool_acquisition_obeys_compile_deadline(store):
     entered_lock = threading.Lock()
     worker_results = []
 
-    def holding_seeds():
+    def hold_connection():
         nonlocal entered
-        yield "seed"
+        connection = compiler._acquire_compile_connection(10**30)
         with entered_lock:
             entered += 1
             if entered == 4:
                 all_leases_held.set()
-        assert release_leases.wait(5)
-
-    def hold_connection():
-        worker_results.append(
-            compiler.compile("root", None, holding_seeds(), 0)
-        )
+        try:
+            assert release_leases.wait(5)
+            worker_results.append(connection)
+        finally:
+            compiler._release_compile_connection(connection)
 
     workers = [threading.Thread(target=hold_connection) for _ in range(4)]
     for worker in workers:
@@ -1274,7 +1477,7 @@ def test_empty_tuple_skips_oversized_snapshot_pool_lease_and_staging(
     assert calls == []
 
 
-def test_empty_generator_skips_malformed_snapshot_pool_lease_and_staging(
+def test_empty_tuple_skips_malformed_snapshot_pool_lease_and_staging(
     store, monkeypatch
 ):
     _root(store, CellDraft("seed", 0, "seed"))
@@ -1286,9 +1489,7 @@ def test_empty_generator_skips_malformed_snapshot_pool_lease_and_staging(
     store.connection.commit()
     calls = _observe_compile_boundary_calls(compiler, monkeypatch)
     try:
-        result = compiler.compile(
-            "root", None, (cell_id for cell_id in ()), 0
-        )
+        result = compiler.compile("root", None, (), 0)
     finally:
         compiler.close()
 
@@ -1300,13 +1501,13 @@ def test_empty_generator_skips_malformed_snapshot_pool_lease_and_staging(
     assert calls == []
 
 
-def test_empty_generator_ignores_closed_connection_pool(store, monkeypatch):
+def test_empty_tuple_ignores_closed_connection_pool(store, monkeypatch):
     _root(store, CellDraft("seed", 0, "seed"))
     compiler = CategoryCompiler(store)
     compiler.close()
     calls = _observe_compile_boundary_calls(compiler, monkeypatch)
 
-    result = compiler.compile("root", None, (cell_id for cell_id in ()), 0)
+    result = compiler.compile("root", None, (), 0)
 
     assert result.cells == ()
     assert not result.truncated
@@ -1333,7 +1534,7 @@ def test_empty_tuple_does_not_wait_for_saturated_connection_pool(store, monkeypa
     assert calls == []
 
 
-def test_seed_peek_precedes_pool_lease_without_eagerly_consuming_tail(
+def test_exact_seed_tuple_enters_pool_without_caller_iteration(
     store, monkeypatch
 ):
     _root(
@@ -1345,23 +1546,17 @@ def test_seed_peek_precedes_pool_lease_without_eagerly_consuming_tail(
     events = []
     original_acquire = compiler._acquire_compile_connection
 
-    def seeds():
-        events.append("first")
-        yield "first"
-        events.append("tail")
-        yield "second"
-
     def observe_acquire(deadline):
         events.append("lease")
         return original_acquire(deadline)
 
     monkeypatch.setattr(compiler, "_acquire_compile_connection", observe_acquire)
     try:
-        result = compiler.compile("root", None, seeds(), 0)
+        result = compiler.compile("root", None, ("first", "second"), 0)
     finally:
         compiler.close()
 
-    assert events == ["first", "lease", "tail"]
+    assert events == ["lease"]
     assert tuple(cell.id for cell in result.cells) == ("first", "second")
 
 
@@ -1561,12 +1756,15 @@ def test_multi_parent_ancestry_translates_both_inputs_once(store):
 
 
 def test_invalid_raw_seeds_do_not_consume_candidate_cap_before_useful_seed(store):
-    _root(
-        store,
+    for draft in (
         CellDraft("b-opaque", 3, "opaque"),
         CellDraft("c-malformed", 2, "path without boundaries"),
-        CellDraft("d-oversized", 0, "x" * (2 * 1024 * 1024)),
         CellDraft("z-useful", 0, "useful"),
+    ):
+        store.create_cell(draft)
+    _insert_raw_cell(store, "d-oversized", "x" * (2 * 1024 * 1024))
+    EvolutionEngine(store).create_root_epoch(
+        "root", ("b-opaque", "c-malformed", "d-oversized", "z-useful")
     )
     compiler = CategoryCompiler(store, CompileBudget(max_candidates=1))
 
@@ -1617,7 +1815,8 @@ def test_opaque_rewrite_output_does_not_consume_cap_before_active_descendant(sto
 
 
 def test_oversized_content_is_not_retained_as_a_candidate(store):
-    _root(store, CellDraft("huge", 0, "x" * (2 * 1024 * 1024)))
+    _insert_raw_cell(store, "huge", "x" * (2 * 1024 * 1024))
+    EvolutionEngine(store).create_root_epoch("root", ("huge",))
 
     result = CategoryCompiler(store).compile("root", None, ("huge",), 0)
 
@@ -1627,11 +1826,9 @@ def test_oversized_content_is_not_retained_as_a_candidate(store):
 
 
 def test_oversized_content_does_not_stop_valid_sibling(store):
-    _root(
-        store,
-        CellDraft("a-huge", 0, "x" * (2 * 1024 * 1024)),
-        CellDraft("b-valid", 0, "valid sibling"),
-    )
+    _insert_raw_cell(store, "a-huge", "x" * (2 * 1024 * 1024))
+    store.create_cell(CellDraft("b-valid", 0, "valid sibling"))
+    EvolutionEngine(store).create_root_epoch("root", ("a-huge", "b-valid"))
 
     result = CategoryCompiler(store).compile(
         "root", None, ("a-huge", "b-valid"), 0
@@ -1784,9 +1981,10 @@ def test_cosine_is_stable_for_huge_finite_components(store):
     assert tuple(cell.id for cell in result.cells[:2]) == ("a", "c")
 
 
-def test_active_snapshot_byte_and_cardinality_bounds_truncate_safely(store, monkeypatch):
+def test_oversized_derived_snapshot_reconstructs_immutable_membership(
+    store, monkeypatch
+):
     _root(store, CellDraft("seed", 0, "seed"))
-    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
     compiler = CategoryCompiler(store)
     monkeypatch.setattr("category_compile._MAX_ACTIVE_SNAPSHOT_BYTES", 32, raising=False)
     store.connection.execute(
@@ -1795,19 +1993,26 @@ def test_active_snapshot_byte_and_cardinality_bounds_truncate_safely(store, monk
     )
     store.connection.commit()
 
-    too_many_bytes = compiler.compile("root", None, ("seed",), 0)
-    assert too_many_bytes.cells == ()
-    assert too_many_bytes.truncated
+    result = compiler.compile("root", None, ("seed",), 0)
 
-    monkeypatch.setattr("category_compile._MAX_ACTIVE_SNAPSHOT_BYTES", 1024, raising=False)
+    assert tuple(cell.id for cell in result.cells) == ("seed",)
+    assert not result.truncated
+    compiler.close()
+
+
+def test_active_membership_cardinality_bound_truncates_safely(store, monkeypatch):
+    _root(store, CellDraft("seed", 0, "seed"))
+    _traced_sql, close_states = _observe_dedicated_connections(monkeypatch)
+    compiler = CategoryCompiler(store)
+
     monkeypatch.setattr("category_compile._MAX_ACTIVE_MEMBERS", 2, raising=False)
-    store.connection.execute(
-        "UPDATE cat_snapshots SET active_cell_ids_json = ? WHERE epoch_id = 'root'",
-        (json.dumps(["seed", "missing-a", "missing-b"]),),
+    store.create_cell(CellDraft("member-a", 0, "a"))
+    store.create_cell(CellDraft("member-b", 0, "b"))
+    EvolutionEngine(store).create_root_epoch(
+        "large-root", ("seed", "member-a", "member-b")
     )
-    store.connection.commit()
 
-    too_many_members = compiler.compile("root", None, ("seed",), 0)
+    too_many_members = compiler.compile("large-root", None, ("seed",), 0)
     assert too_many_members.cells == ()
     assert too_many_members.truncated
     compiler.close()
@@ -1882,13 +2087,85 @@ def test_wall_time_is_checked_while_consuming_seed_iterable(store, monkeypatch):
         lambda: 2_000_000 if seeds.expired else 0,
     )
 
-    result = CategoryCompiler(store, CompileBudget(wall_time_ms=1)).compile(
-        "root", None, seeds, 0
-    )
+    with pytest.raises(TypeError, match="tuple"):
+        CategoryCompiler(store, CompileBudget(wall_time_ms=1)).compile(
+            "root", None, seeds, 0
+        )
 
-    assert result.cells == ()
-    assert result.candidate_count == 0
-    assert result.truncated
+    assert not seeds.expired
+
+
+def test_blocking_seed_iterable_is_rejected_without_invocation(store):
+    _root(store, CellDraft("seed", 0, "seed"))
+
+    class BlockingSeeds:
+        entered = False
+
+        def __iter__(self):
+            self.entered = True
+            time.sleep(0.1)
+            yield "seed"
+
+    seeds = BlockingSeeds()
+    started = time.monotonic()
+    with pytest.raises(TypeError, match="tuple"):
+        CategoryCompiler(store, CompileBudget(wall_time_ms=5)).compile(
+            "root", None, seeds, 0
+        )
+
+    assert not seeds.entered
+    assert time.monotonic() - started < 0.05
+
+
+def test_seed_string_subclass_is_rejected_without_hashing_caller_code(store):
+    """Exact tuple validation also requires inert built-in string elements."""
+    _root(store, CellDraft("seed", 0, "seed"))
+
+    class SlowString(str):
+        hashed = False
+
+        def __hash__(self):
+            self.hashed = True
+            time.sleep(0.08)
+            return super().__hash__()
+
+    seed = SlowString("seed")
+    compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=5))
+    started = time.monotonic()
+    try:
+        with pytest.raises(TypeError, match="strings"):
+            compiler.compile("root", seed_cell_ids=(seed,))
+    finally:
+        compiler.close()
+
+    assert seed.hashed is False
+    assert time.monotonic() - started < 0.05
+
+
+def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatch):
+    drafts = tuple(CellDraft(f"seed-{index:03d}", 0, "seed") for index in range(64))
+    _root(store, *drafts)
+    compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=100))
+    point_probes = 0
+
+    def slow_point_probe(*_args):
+        nonlocal point_probes
+        point_probes += 1
+        time.sleep(0.01)
+        return True
+
+    monkeypatch.setattr(compiler, "_is_active", slow_point_probe)
+    started = time.monotonic()
+    try:
+        result = compiler.compile(
+            "root", None, tuple(draft.id for draft in drafts), 0
+        )
+    finally:
+        compiler.close()
+
+    assert point_probes == 0
+    assert result.cells
+    assert time.monotonic() - started < 0.2
 
 
 def test_wall_time_is_checked_during_word_tokenization(store, monkeypatch):

@@ -89,3 +89,41 @@ def test_watcher_indexing_participates_in_server_lifecycle_barrier(
     assert finished.wait(timeout=5)
     worker.join(timeout=5)
     assert index_entered.is_set()
+
+
+@pytest.mark.parametrize("failed_worker", ["watcher", "consumer"])
+def test_partial_worker_death_is_terminal_and_retains_original_pair(
+    tmp_path, monkeypatch, failed_worker
+):
+    """A partial pair failure cannot orphan survivors by publishing replacements."""
+    config = WatcherConfig(enabled=True)
+    watcher = FileWatcher(tmp_path, config, storage=None, embedding_provider=None)
+    failed = threading.Event()
+    release = threading.Event()
+
+    def exits():
+        failed.set()
+
+    def survives():
+        release.wait(2)
+
+    monkeypatch.setattr(
+        watcher, "_watch_loop", exits if failed_worker == "watcher" else survives
+    )
+    monkeypatch.setattr(
+        watcher, "_consume_loop", exits if failed_worker == "consumer" else survives
+    )
+
+    watcher.start()
+    original = (watcher._watcher_thread, watcher._consumer_thread)
+    try:
+        assert failed.wait(1)
+        assert watcher._stop_event.wait(1)
+        watcher.start()
+        assert (watcher._watcher_thread, watcher._consumer_thread) == original
+        assert watcher._stop_event.is_set()
+    finally:
+        release.set()
+        watcher.stop(timeout=2)
+
+    assert all(thread is not None and not thread.is_alive() for thread in original)

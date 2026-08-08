@@ -29,6 +29,24 @@ from typing import Callable, Iterable, Iterator, Literal, Mapping
 
 logger = logging.getLogger("engram.categories")
 
+MAX_CATEGORY_EVENT_PAYLOAD_BYTES = 1024 * 1024
+MAX_CATEGORY_CONTEXT_BYTES = 256 * 1024
+MAX_CATEGORY_CELL_CONTENT_BYTES = 1024 * 1024
+MAX_CATEGORY_CELL_PAYLOAD_BYTES = 256 * 1024
+MAX_CATEGORY_IDENTIFIER_BYTES = 4096
+MAX_CATEGORY_POLICY_VERSION_BYTES = 1024
+_SQLITE_WRITE_RESERVATION_BYTES = 24 * 1024
+_SQLITE_SIDECAR_GROWTH_BYTES = 64 * 1024
+_CATEGORY_VECTOR_SCHEMA_LOGICAL_ROWS = 12
+_REWRITE_DISPOSITION_EVENT_KINDS = frozenset(
+    {
+        "rewrite_proposed",
+        "rewrite_committed",
+        "rewrite_rejected",
+        "rewrite_superseded",
+    }
+)
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -278,6 +296,19 @@ class _DerivedArchiveWriteSkipped(RuntimeError):
     """Internal signal used to turn a derived high-water write into an explicit skip."""
 
 
+class _DerivedWriteConnection:
+    """Connection proxy whose commit status is resolved when the context exits."""
+
+    __slots__ = ("_connection", "committed")
+
+    def __init__(self, connection: sqlite3.Connection):
+        self._connection = connection
+        self.committed = False
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+
 _EVOLVING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS cat_schema_version (
     version INTEGER PRIMARY KEY,
@@ -341,6 +372,10 @@ CREATE TABLE IF NOT EXISTS cat_rewrites (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS cat_pending_rewrites (
+    rewrite_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS cat_rewrite_members (
     rewrite_id TEXT NOT NULL REFERENCES cat_rewrites(id),
     role TEXT NOT NULL CHECK (role IN ('input','output','witness','evidence')),
@@ -365,6 +400,14 @@ CREATE TABLE IF NOT EXISTS cat_epoch_parents (
     PRIMARY KEY (epoch_id, position)
 );
 
+CREATE TABLE IF NOT EXISTS cat_epoch_members (
+    epoch_id TEXT NOT NULL REFERENCES cat_epochs(id),
+    position INTEGER NOT NULL CHECK (position >= 0),
+    cell_id TEXT NOT NULL REFERENCES cat_cells(id),
+    PRIMARY KEY (epoch_id, position),
+    UNIQUE (epoch_id, cell_id)
+);
+
 CREATE TABLE IF NOT EXISTS cat_snapshots (
     id TEXT PRIMARY KEY,
     epoch_id TEXT REFERENCES cat_epochs(id),
@@ -374,12 +417,39 @@ CREATE TABLE IF NOT EXISTS cat_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cat_boundaries_boundary ON cat_boundaries(boundary_id);
+CREATE INDEX IF NOT EXISTS idx_cat_events_rewrite_disposition
+    ON cat_events(json_extract(payload_json, '$.rewrite_id'))
+    WHERE kind IN ('rewrite_proposed','rewrite_committed',
+                   'rewrite_rejected','rewrite_superseded');
 CREATE INDEX IF NOT EXISTS idx_cat_weight_latest
     ON cat_weight_observations(cell_id, context_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_rewrite_members_cell ON cat_rewrite_members(cell_id);
 CREATE INDEX IF NOT EXISTS idx_cat_epoch_parents_parent ON cat_epoch_parents(parent_id);
+CREATE INDEX IF NOT EXISTS idx_cat_epoch_members_cell ON cat_epoch_members(cell_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cat_epochs_rewrite_unique
     ON cat_epochs(rewrite_id) WHERE rewrite_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS cat_events_pending_rewrite_proposed
+AFTER INSERT ON cat_events
+WHEN NEW.kind = 'rewrite_proposed'
+ AND CASE WHEN json_valid(NEW.payload_json)
+          THEN json_type(NEW.payload_json, '$.rewrite_id')
+          ELSE NULL END = 'text'
+BEGIN
+    INSERT OR IGNORE INTO cat_pending_rewrites (rewrite_id)
+    VALUES (json_extract(NEW.payload_json, '$.rewrite_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS cat_events_pending_rewrite_terminal
+AFTER INSERT ON cat_events
+WHEN NEW.kind IN ('rewrite_committed','rewrite_rejected','rewrite_superseded')
+ AND CASE WHEN json_valid(NEW.payload_json)
+          THEN json_type(NEW.payload_json, '$.rewrite_id')
+          ELSE NULL END = 'text'
+BEGIN
+    DELETE FROM cat_pending_rewrites
+    WHERE rewrite_id = json_extract(NEW.payload_json, '$.rewrite_id');
+END;
 """
 
 _IMMUTABLE_TABLES = (
@@ -393,6 +463,7 @@ _IMMUTABLE_TABLES = (
     "cat_rewrite_members",
     "cat_epochs",
     "cat_epoch_parents",
+    "cat_epoch_members",
 )
 
 _CATEGORY_VECTOR_DDL = (
@@ -510,20 +581,67 @@ def _vector_schema_definitions(
     return tuple(sorted(definitions, key=lambda definition: definition[:3]))
 
 
-@lru_cache(maxsize=1)
-def _expected_vector_schema_definitions() -> tuple[tuple[str, str, str, str | None], ...]:
-    """Build the supported layout from the sqlite-vec version installed by the project."""
-    import sqlite_vec
+_SUPPORTED_VECTOR_SCHEMA_DEFINITIONS = (
+    ("index", "sqlite_autoindex_cat_vectors_info_1", "cat_vectors_info", None),
+    ("index", "sqlite_autoindex_cat_vectors_rowids_1", "cat_vectors_rowids", None),
+    (
+        "index",
+        "sqlite_autoindex_cat_vectors_vector_chunks00_1",
+        "cat_vectors_vector_chunks00",
+        None,
+    ),
+    (
+        "table",
+        "cat_vectors",
+        "cat_vectors",
+        "create virtual table cat_vectors using vec0(cell_id text primary key, "
+        "embedding float[768])",
+    ),
+    (
+        "table",
+        "cat_vectors_chunks",
+        "cat_vectors_chunks",
+        'create table "cat_vectors_chunks"(chunk_id integer primary key '
+        "autoincrement,size integer not null,validity blob not null,rowids blob not null)",
+    ),
+    (
+        "table",
+        "cat_vectors_info",
+        "cat_vectors_info",
+        'create table "cat_vectors_info" (key text primary key, value any)',
+    ),
+    (
+        "table",
+        "cat_vectors_rowids",
+        "cat_vectors_rowids",
+        'create table "cat_vectors_rowids"(rowid integer primary key '
+        "autoincrement,id text unique not null,chunk_id integer,chunk_offset integer)",
+    ),
+    (
+        "table",
+        "cat_vectors_vector_chunks00",
+        "cat_vectors_vector_chunks00",
+        'create table "cat_vectors_vector_chunks00"(rowid primary key,vectors blob not null)',
+    ),
+    (
+        "table",
+        "sqlite_sequence",
+        "sqlite_sequence",
+        "create table sqlite_sequence(name,seq)",
+    ),
+)
 
-    connection = sqlite3.connect(":memory:")
-    try:
-        connection.enable_load_extension(True)
-        sqlite_vec.load(connection)
-        connection.enable_load_extension(False)
-        connection.execute(_CATEGORY_VECTOR_DDL)
-        return _vector_schema_definitions(connection)
-    finally:
-        connection.close()
+
+def _expected_vector_schema_definitions() -> tuple[tuple[str, str, str, str | None], ...]:
+    """Return the pinned sqlite-vec layout without loading an optional extension."""
+    return _SUPPORTED_VECTOR_SCHEMA_DEFINITIONS
+
+
+def is_supported_category_vector_ddl(sql: object) -> bool:
+    """Recognize the pinned optional vector table from sqlite_master text alone."""
+    return isinstance(sql, str) and _normalized_schema_sql(sql) == _normalized_schema_sql(
+        _CATEGORY_VECTOR_DDL
+    )
 
 
 def _category_vector_schema_state(
@@ -543,6 +661,281 @@ def _content_hash(content: str) -> str:
     return sha256(content.encode("utf-8")).hexdigest()
 
 
+@contextmanager
+def _staged_epoch_membership(
+    connection: sqlite3.Connection,
+    epoch_id: str,
+    *,
+    table_prefix: str,
+    max_epochs: int,
+    max_members: int,
+    check_budget: Callable[[], None],
+    resource_error: Callable[[], BaseException],
+    load_root: Callable[[str, int, str, str | None], int],
+) -> Iterator[tuple[str, int, int]]:
+    """Yield one exact target state using last-consumer slot reuse.
+
+    Discovery is iterative and file-backed. Materialization mutates a parent's
+    slot only for its final consumer, so a linear history carries one state
+    forward instead of copying every member for every epoch.
+    """
+    suffix = uuid.uuid4().hex
+    nodes = f"{table_prefix}_nodes_{suffix}"
+    edges = f"{table_prefix}_edges_{suffix}"
+    edges_parent = f"{table_prefix}_edges_parent_{suffix}"
+    schedule = f"{table_prefix}_schedule_{suffix}"
+    work = f"{table_prefix}_work_{suffix}"
+    members = f"{table_prefix}_members_{suffix}"
+    connection.execute(
+        f'CREATE TEMP TABLE "{nodes}" ('
+        "epoch_id TEXT PRIMARY KEY, rewrite_id TEXT, created_event_id TEXT, "
+        "color INTEGER NOT NULL, remaining_consumers INTEGER NOT NULL DEFAULT 0, "
+        "slot_id INTEGER UNIQUE, member_count INTEGER NOT NULL DEFAULT 0"
+        ") WITHOUT ROWID"
+    )
+    connection.execute(
+        f'CREATE TEMP TABLE "{edges}" ('
+        "child_id TEXT NOT NULL, position INTEGER NOT NULL, parent_id TEXT NOT NULL, "
+        "PRIMARY KEY(child_id, position), UNIQUE(child_id, parent_id)"
+        ") WITHOUT ROWID"
+    )
+    connection.execute(
+        f'CREATE INDEX "{edges_parent}" ON "{edges}" (parent_id)'
+    )
+    connection.execute(
+        f'CREATE TEMP TABLE "{schedule}" ('
+        "ordinal INTEGER PRIMARY KEY, epoch_id TEXT NOT NULL UNIQUE)"
+    )
+    connection.execute(
+        f'CREATE TEMP TABLE "{work}" ('
+        "sequence INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "epoch_id TEXT NOT NULL, exiting INTEGER NOT NULL)"
+    )
+    connection.execute(
+        f'CREATE TEMP TABLE "{members}" ('
+        "slot_id INTEGER NOT NULL, cell_id TEXT NOT NULL, "
+        "PRIMARY KEY(slot_id, cell_id)) WITHOUT ROWID"
+    )
+    try:
+        connection.execute(
+            f'INSERT INTO temp."{work}" (epoch_id, exiting) VALUES (?, 0)',
+            (epoch_id,),
+        )
+        discovered = 0
+        ordinal = 0
+        while True:
+            check_budget()
+            item = connection.execute(
+                f'SELECT sequence, epoch_id, exiting FROM temp."{work}" '
+                "ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            if item is None:
+                break
+            connection.execute(
+                f'DELETE FROM temp."{work}" WHERE sequence = ?', (item[0],)
+            )
+            current = str(item[1])
+            node = connection.execute(
+                f'SELECT color FROM temp."{nodes}" WHERE epoch_id = ?',
+                (current,),
+            ).fetchone()
+            if int(item[2]):
+                if node is None or int(node[0]) != 1:
+                    continue
+                connection.execute(
+                    f'UPDATE temp."{nodes}" SET color = 2 WHERE epoch_id = ?',
+                    (current,),
+                )
+                connection.execute(
+                    f'INSERT INTO temp."{schedule}" VALUES (?, ?)',
+                    (ordinal, current),
+                )
+                ordinal += 1
+                continue
+            if node is not None:
+                if int(node[0]) == 1:
+                    raise ValueError("epoch parents must stay acyclic")
+                continue
+            if discovered >= max_epochs:
+                raise resource_error()
+            epoch = connection.execute(
+                "SELECT rewrite_id, created_event_id FROM cat_epochs WHERE id = ?",
+                (current,),
+            ).fetchone()
+            if epoch is None:
+                raise ValueError("epoch does not exist")
+            connection.execute(
+                f'INSERT INTO temp."{nodes}" '
+                "(epoch_id, rewrite_id, created_event_id, color) VALUES (?, ?, ?, 1)",
+                (current, epoch[0], epoch[1]),
+            )
+            discovered += 1
+            connection.execute(
+                f'INSERT INTO temp."{work}" (epoch_id, exiting) VALUES (?, 1)',
+                (current,),
+            )
+            parents = tuple(
+                (int(row[0]), str(row[1]))
+                for row in connection.execute(
+                    "SELECT position, parent_id FROM cat_epoch_parents "
+                    "WHERE epoch_id = ? ORDER BY position DESC",
+                    (current,),
+                )
+            )
+            if len(parents) > 4:
+                raise resource_error()
+            for position, parent in parents:
+                connection.execute(
+                    f'INSERT INTO temp."{edges}" VALUES (?, ?, ?)',
+                    (current, position, parent),
+                )
+                connection.execute(
+                    f'INSERT INTO temp."{work}" (epoch_id, exiting) VALUES (?, 0)',
+                    (parent,),
+                )
+        connection.execute(
+            f'UPDATE temp."{nodes}" SET remaining_consumers = ('
+            f'SELECT COUNT(*) FROM temp."{edges}" AS edge '
+            f'WHERE edge.parent_id = epoch_id)'
+        )
+
+        next_slot = 0
+        scheduled = connection.execute(
+            f'SELECT epoch_id FROM temp."{schedule}" ORDER BY ordinal'
+        )
+        for scheduled_row in scheduled:
+            check_budget()
+            current = str(scheduled_row[0])
+            node = connection.execute(
+                f'SELECT rewrite_id, created_event_id FROM temp."{nodes}" '
+                "WHERE epoch_id = ?",
+                (current,),
+            ).fetchone()
+            parent_rows = tuple(
+                connection.execute(
+                    f'SELECT edge.parent_id, parent.slot_id, '
+                    f'parent.remaining_consumers, parent.member_count '
+                    f'FROM temp."{edges}" AS edge '
+                    f'JOIN temp."{nodes}" AS parent '
+                    f'ON parent.epoch_id = edge.parent_id '
+                    f'WHERE edge.child_id = ? ORDER BY edge.position',
+                    (current,),
+                )
+            )
+            rewrite_id = node[0]
+            reusable = next(
+                (row for row in parent_rows if int(row[2]) == 1), None
+            )
+            if rewrite_id is None:
+                if parent_rows:
+                    raise ValueError("root epoch cannot have parents")
+                slot_id = next_slot
+                next_slot += 1
+                member_count = load_root(
+                    members,
+                    slot_id,
+                    current,
+                    str(node[1]) if node[1] is not None else None,
+                )
+                if member_count > max_members:
+                    raise resource_error()
+            else:
+                if not parent_rows:
+                    raise ValueError("rewrite epoch requires a parent")
+                if reusable is not None:
+                    slot_id = int(reusable[1])
+                    member_count = int(reusable[3])
+                else:
+                    slot_id = next_slot
+                    next_slot += 1
+                    member_count = 0
+                for parent in parent_rows:
+                    if parent is reusable:
+                        continue
+                    room = max_members - member_count
+                    connection.execute(
+                        f'INSERT OR IGNORE INTO temp."{members}" (slot_id, cell_id) '
+                        f'SELECT ?, source.cell_id FROM temp."{members}" AS source '
+                        "WHERE source.slot_id = ? ORDER BY source.cell_id LIMIT ?",
+                        (slot_id, int(parent[1]), room + 1),
+                    )
+                    added = int(connection.execute("SELECT changes()").fetchone()[0])
+                    member_count += added
+                    if member_count > max_members:
+                        raise resource_error()
+                    check_budget()
+                connection.execute(
+                    f'DELETE FROM temp."{members}" WHERE slot_id = ? AND cell_id IN ('
+                    "SELECT cell_id FROM cat_rewrite_members "
+                    "WHERE rewrite_id = ? AND role = 'input')",
+                    (slot_id, str(rewrite_id)),
+                )
+                member_count -= int(
+                    connection.execute("SELECT changes()").fetchone()[0]
+                )
+                connection.execute(
+                    f'INSERT OR IGNORE INTO temp."{members}" (slot_id, cell_id) '
+                    "SELECT ?, cell_id FROM cat_rewrite_members "
+                    "WHERE rewrite_id = ? AND role = 'output'",
+                    (slot_id, str(rewrite_id)),
+                )
+                member_count += int(
+                    connection.execute("SELECT changes()").fetchone()[0]
+                )
+                if member_count > max_members:
+                    raise resource_error()
+
+            if reusable is not None:
+                connection.execute(
+                    f'UPDATE temp."{nodes}" SET slot_id = NULL, member_count = 0 '
+                    "WHERE epoch_id = ?",
+                    (str(reusable[0]),),
+                )
+            connection.execute(
+                f'UPDATE temp."{nodes}" SET slot_id = ?, member_count = ? '
+                "WHERE epoch_id = ?",
+                (slot_id, member_count, current),
+            )
+            for parent in parent_rows:
+                parent_id = str(parent[0])
+                connection.execute(
+                    f'UPDATE temp."{nodes}" '
+                    "SET remaining_consumers = remaining_consumers - 1 "
+                    "WHERE epoch_id = ?",
+                    (parent_id,),
+                )
+                remaining = int(
+                    connection.execute(
+                        f'SELECT remaining_consumers FROM temp."{nodes}" '
+                        "WHERE epoch_id = ?",
+                        (parent_id,),
+                    ).fetchone()[0]
+                )
+                if remaining == 0 and parent is not reusable:
+                    parent_slot = int(parent[1])
+                    connection.execute(
+                        f'DELETE FROM temp."{members}" WHERE slot_id = ?',
+                        (parent_slot,),
+                    )
+                    connection.execute(
+                        f'UPDATE temp."{nodes}" '
+                        "SET slot_id = NULL, member_count = 0 WHERE epoch_id = ?",
+                        (parent_id,),
+                    )
+            check_budget()
+
+        target = connection.execute(
+            f'SELECT slot_id, member_count FROM temp."{nodes}" WHERE epoch_id = ?',
+            (epoch_id,),
+        ).fetchone()
+        if target is None or target[0] is None:
+            raise ValueError("epoch reconstruction did not produce target state")
+        yield members, int(target[0]), int(target[1])
+    finally:
+        for table in (members, work, schedule, edges, nodes):
+            connection.execute(f'DROP TABLE IF EXISTS temp."{table}"')
+
+
 class EvolvingCategoryStore:
     """An isolated, append-only store for evolving category structures."""
 
@@ -553,6 +946,9 @@ class EvolvingCategoryStore:
         quota_bytes: int = 3_000_000_000_000,
         high_watermark_ratio: float = 0.90,
         size_provider: Callable[[Path], int | None] | None = None,
+        protected_database_identities: Iterable[
+            tuple[str | Path, tuple[int, int] | None]
+        ] = (),
     ):
         if connection.in_transaction:
             raise ValueError(
@@ -561,14 +957,25 @@ class EvolvingCategoryStore:
         self._connection = connection
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
+        self._connection.execute("PRAGMA temp_store = FILE")
         if self._connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise RuntimeError("EvolvingCategoryStore requires foreign keys to be enabled")
         if size_provider is not None and not callable(size_provider):
             raise TypeError("size_provider must be callable")
         self._quota_bytes = quota_bytes
         self._high_watermark = self._validate_watermark(high_watermark_ratio)
+        self._protected_database_identities = tuple(
+            (
+                Path(path).expanduser().resolve(strict=False),
+                identity,
+            )
+            for path, identity in protected_database_identities
+        )
         self._database_path, self._database_identity = self._main_database_identity()
+        self.assert_database_isolated()
         self._size_provider = size_provider if size_provider is not None else self._default_size_provider
+        self._transaction_reserved_bytes = 0
+        self._reservation_tracking = False
         self._ensure_schema()
 
     @property
@@ -621,29 +1028,106 @@ class EvolvingCategoryStore:
             return False
         return actual == expected and versions == (1,)
 
+    def _pending_rewrite_projection_stats(self) -> tuple[int, int]:
+        projection = self._connection.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    kind,
+                    json_extract(payload_json, '$.rewrite_id') AS rewrite_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY json_extract(payload_json, '$.rewrite_id')
+                        ORDER BY rowid DESC
+                    ) AS disposition_rank
+                FROM cat_events
+                WHERE kind IN (
+                    'rewrite_proposed', 'rewrite_committed',
+                    'rewrite_rejected', 'rewrite_superseded'
+                )
+                  AND CASE WHEN json_valid(payload_json)
+                           THEN json_type(payload_json, '$.rewrite_id')
+                           ELSE NULL END = 'text'
+            )
+            SELECT COUNT(*),
+                   COALESCE(SUM(length(CAST(ranked.rewrite_id AS BLOB))), 0)
+            FROM ranked
+            JOIN cat_rewrites AS rewrite ON rewrite.id = ranked.rewrite_id
+            WHERE ranked.disposition_rank = 1
+              AND ranked.kind = 'rewrite_proposed'
+            """
+        ).fetchone()
+        return int(projection[0]), int(projection[1])
+
+    def _rebuild_pending_rewrite_projection(self) -> None:
+        """Rebuild the mutable startup index during a transactional schema upgrade."""
+        self._connection.execute("DELETE FROM cat_pending_rewrites")
+        self._connection.execute(
+            """
+            INSERT INTO cat_pending_rewrites (rewrite_id)
+            WITH ranked AS (
+                SELECT
+                    kind,
+                    json_extract(payload_json, '$.rewrite_id') AS rewrite_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY json_extract(payload_json, '$.rewrite_id')
+                        ORDER BY rowid DESC
+                    ) AS disposition_rank
+                FROM cat_events
+                WHERE kind IN (
+                    'rewrite_proposed', 'rewrite_committed',
+                    'rewrite_rejected', 'rewrite_superseded'
+                )
+                  AND CASE WHEN json_valid(payload_json)
+                           THEN json_type(payload_json, '$.rewrite_id')
+                           ELSE NULL END = 'text'
+            )
+            SELECT ranked.rewrite_id
+            FROM ranked
+            JOIN cat_rewrites AS rewrite ON rewrite.id = ranked.rewrite_id
+            WHERE ranked.disposition_rank = 1
+              AND ranked.kind = 'rewrite_proposed'
+            """
+        )
+
     def _ensure_schema(self) -> None:
+        self.assert_database_isolated()
         if self._has_current_core_schema():
             self._provision_optional_vectors()
             return
+        expected_names = {
+            name for _kind, name, _sql in _expected_core_schema_definitions()
+        }
+        actual_names = {
+            str(row[0])
+            for row in self._connection.execute(
+                "SELECT name FROM sqlite_master WHERE sql IS NOT NULL"
+            )
+        }
+        missing_schema_rows = len(expected_names - actual_names)
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            self._transaction_reserved_bytes = self._outstanding_wal_bytes()
+            self.assert_database_isolated()
             self._enforce_quota("immutable")
             if _category_vector_schema_state(self._connection) == "incoherent":
                 raise RuntimeError("incoherent optional vector schema")
+            self._admit_reservation(
+                self._write_reservation(
+                    row_count=max(1, missing_schema_rows)
+                ),
+                "immutable",
+            )
             self._execute_complete_statements(_EVOLVING_SCHEMA)
             _install_immutability_triggers(self._connection)
-            self._connection.execute("SAVEPOINT cat_optional_vec")
-            try:
-                self._connection.execute(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS cat_vectors "
-                    "USING vec0(cell_id TEXT PRIMARY KEY, embedding float[768])"
+            projected_rows, projected_bytes = self._pending_rewrite_projection_stats()
+            if projected_rows:
+                self._admit_reservation(
+                    self._write_reservation_bytes(
+                        projected_bytes, row_count=projected_rows
+                    ),
+                    "immutable",
                 )
-            except sqlite3.OperationalError as exc:
-                self._connection.execute("ROLLBACK TO SAVEPOINT cat_optional_vec")
-                if "no such module: vec0" not in str(exc).lower():
-                    raise
-            finally:
-                self._connection.execute("RELEASE SAVEPOINT cat_optional_vec")
+            self._rebuild_pending_rewrite_projection()
             self._connection.execute(
                 "INSERT OR IGNORE INTO cat_schema_version (version, applied_at) VALUES (1, ?)",
                 (_now_iso(),),
@@ -653,13 +1137,18 @@ class EvolvingCategoryStore:
             # A fresh database can grow while DDL is staged; reject it before
             # publication when the provider can observe that growth.
             self._enforce_quota("immutable")
+            self.assert_database_isolated()
             self._connection.commit()
         except Exception:
             self._connection.rollback()
             raise
+        finally:
+            self._transaction_reserved_bytes = 0
+        self._provision_optional_vectors()
 
     def _provision_optional_vectors(self) -> None:
         """Best-effort derived provisioning; never upgrades a pressured reopen."""
+        self.assert_database_isolated()
         vector_state = _category_vector_schema_state(self._connection)
         if vector_state == "current":
             return
@@ -667,8 +1156,13 @@ class EvolvingCategoryStore:
             raise RuntimeError("incoherent optional vector schema")
         if self.pressure().state != "normal":
             return
+        reservation = self._write_reservation(
+            row_count=_CATEGORY_VECTOR_SCHEMA_LOGICAL_ROWS
+        )
         try:
-            with self.derived_transaction() as connection:
+            with self.derived_transaction(
+                reserved_bytes=reservation
+            ) as connection:
                 if connection is None:
                     return
                 vector_state = _category_vector_schema_state(connection)
@@ -695,14 +1189,29 @@ class EvolvingCategoryStore:
         row = self._connection.execute("PRAGMA database_list").fetchone()
         if row is None or not row[2] or row[2] == ":memory:":
             return None, None
-        path = Path(str(row[2]))
+        path = Path(str(row[2])).expanduser().resolve(strict=False)
         try:
-            metadata = os.stat(path, follow_symlinks=False)
+            metadata = os.stat(path)
         except OSError:
             return path, None
         if not stat.S_ISREG(metadata.st_mode):
             return path, None
         return path, (metadata.st_dev, metadata.st_ino)
+
+    def assert_database_isolated(self) -> None:
+        """Reject canonical-path and existing-file aliases to protected stores."""
+        database_path, database_identity = self._main_database_identity()
+        if database_path is None:
+            return
+        for protected_path, protected_identity in self._protected_database_identities:
+            if database_path == protected_path or (
+                database_identity is not None
+                and protected_identity is not None
+                and database_identity == protected_identity
+            ):
+                raise ValueError("category v2 path aliases a protected database")
+        self._database_path = database_path
+        self._database_identity = database_identity
 
     @staticmethod
     def _regular_file_size(
@@ -763,7 +1272,7 @@ class EvolvingCategoryStore:
         if main_size is None:
             return None
         total = main_size
-        for suffix in ("-wal", "-shm"):
+        for suffix in ("-wal", "-shm", "-journal"):
             sidecar_size = self._regular_file_size(
                 Path(f"{self._database_path}{suffix}")
             )
@@ -771,6 +1280,13 @@ class EvolvingCategoryStore:
                 return None
             total += sidecar_size
         return total
+
+    def _outstanding_wal_bytes(self) -> int:
+        """Return WAL allocation that a commit may also copy into the main file."""
+        if self._database_path is None:
+            return 0
+        wal_size = self._regular_file_size(Path(f"{self._database_path}-wal"))
+        return int(wal_size) if wal_size is not None else 0
 
     def pressure(self) -> ArchivePressure:
         """Return capacity pressure without changing archive state.
@@ -809,17 +1325,129 @@ class EvolvingCategoryStore:
         if quota_class == "derived" and pressure.state == "derived_blocked":
             raise _DerivedArchiveWriteSkipped()
 
+    def _admit_reservation(
+        self,
+        reserved_bytes: int,
+        quota_class: Literal["immutable", "derived"],
+    ) -> None:
+        if type(reserved_bytes) is not int:
+            raise TypeError("reserved_bytes must be an integer")
+        if reserved_bytes < 0:
+            raise ValueError("reserved_bytes must be non-negative")
+        pressure = self.pressure()
+        if pressure.state == "writes_blocked":
+            raise CategoryQuotaExceeded("category archive quota reached")
+        projected = pressure.used_bytes + self._transaction_reserved_bytes + reserved_bytes
+        if projected >= pressure.quota_bytes:
+            raise CategoryQuotaExceeded("category archive quota reservation exceeded")
+        if quota_class == "derived":
+            if pressure.state == "derived_blocked":
+                raise _DerivedArchiveWriteSkipped()
+            assert self._high_watermark is not None
+            if (
+                projected * self._high_watermark.denominator
+                >= pressure.quota_bytes * self._high_watermark.numerator
+            ):
+                raise _DerivedArchiveWriteSkipped()
+        self._transaction_reserved_bytes += reserved_bytes
+
+    def _write_reservation_bytes(self, value_bytes: int, *, row_count: int) -> int:
+        if type(value_bytes) is not int or value_bytes < 0:
+            raise ValueError("value_bytes must be a non-negative integer")
+        if type(row_count) is not int or row_count < 0:
+            raise ValueError("row_count must be a non-negative integer")
+        page_size = int(self._connection.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(self._connection.execute("PRAGMA page_count").fetchone()[0])
+        # A logical row can update the table plus three indexes/projections.
+        # With only binary fanout, a database of ``page_count`` pages has at
+        # most this many b-tree levels.  Rewriting and splitting each level is
+        # bounded by two frames plus one root frame.
+        btree_height = max(1, (page_count + 1).bit_length() - 1)
+        structural_pages = max(16, 4 * (2 * btree_height + 1))
+        sqlite_row_overhead = max(
+            _SQLITE_WRITE_RESERVATION_BYTES,
+            structural_pages * (page_size + 24),
+        )
+        # Values may be represented in the table and as keys in as many as
+        # three indexes/projections.  Count all four copies rather than only
+        # the caller's serialized representation.
+        return (
+            4 * value_bytes
+            + row_count * sqlite_row_overhead
+            + _SQLITE_SIDECAR_GROWTH_BYTES
+        )
+
+    def _write_reservation(self, *values: str | bytes, row_count: int = 1) -> int:
+        value_bytes = sum(
+            len(value if isinstance(value, bytes) else value.encode("utf-8"))
+            for value in values
+        )
+        return self._write_reservation_bytes(value_bytes, row_count=row_count)
+
+    def reserve_write(
+        self,
+        *values: str | bytes,
+        row_count: int = 1,
+        quota_class: Literal["immutable", "derived"] = "immutable",
+    ) -> None:
+        """Accumulate conservative growth inside the current write transaction."""
+        if not self._connection.in_transaction or not self._reservation_tracking:
+            raise RuntimeError("write reservation requires a store transaction")
+        self._admit_reservation(
+            self._write_reservation(*values, row_count=row_count), quota_class
+        )
+
+    def reserve_write_bytes(
+        self,
+        value_bytes: int,
+        *,
+        row_count: int = 1,
+        quota_class: Literal["immutable", "derived"] = "immutable",
+    ) -> None:
+        """Reserve already-counted persisted bytes without allocating a buffer."""
+        if not self._connection.in_transaction or not self._reservation_tracking:
+            raise RuntimeError("write reservation requires a store transaction")
+        self._admit_reservation(
+            self._write_reservation_bytes(value_bytes, row_count=row_count),
+            quota_class,
+        )
+
+    @staticmethod
+    def _bounded_text(value: object, maximum: int, label: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(f"{label} must be a string")
+        if len(value.encode("utf-8")) > maximum:
+            raise ValueError(f"{label} byte limit exceeded")
+        return value
+
+    @classmethod
+    def _bounded_json(cls, value: object, maximum: int, label: str) -> str:
+        try:
+            serialized = _canonical_json(value)
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+            raise ValueError(f"{label} must be canonical JSON") from exc
+        return cls._bounded_text(serialized, maximum, label)
+
     @contextmanager
     def transaction(
         self,
         *,
         immediate: bool = False,
         quota_class: Literal["immutable", "derived"] = "immutable",
+        reserved_bytes: int = 0,
     ) -> Iterator[sqlite3.Connection]:
         """Run quota-protected writes without committing caller-owned work."""
         if quota_class not in ("immutable", "derived"):
             raise ValueError("quota_class must be 'immutable' or 'derived'")
+        if type(reserved_bytes) is not int:
+            raise TypeError("reserved_bytes must be an integer")
+        if reserved_bytes < 0:
+            raise ValueError("reserved_bytes must be non-negative")
         if self._connection.in_transaction:
+            if not self._reservation_tracking:
+                self._reservation_tracking = True
+                self._transaction_reserved_bytes = self._outstanding_wal_bytes()
+            prior_reservation = self._transaction_reserved_bytes
             savepoint = f"cat_write_{uuid.uuid4().hex}"
             self._connection.execute(f"SAVEPOINT {savepoint}")
             try:
@@ -827,8 +1455,11 @@ class EvolvingCategoryStore:
                 # before the size read, without changing caller-owned rows.
                 self._connection.execute("DELETE FROM cat_snapshots WHERE 0")
                 self._enforce_quota(quota_class)
+                self._admit_reservation(reserved_bytes, quota_class)
                 yield self._connection
+                self._enforce_quota(quota_class)
             except Exception:
+                self._transaction_reserved_bytes = prior_reservation
                 self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                 self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
                 raise
@@ -845,10 +1476,15 @@ class EvolvingCategoryStore:
 
         # Checking beneath SQLite's writer reservation prevents concurrent
         # writers from both admitting the same stale filesystem measurement.
+        self._reservation_tracking = True
+        self._transaction_reserved_bytes = 0
         self._connection.execute("BEGIN IMMEDIATE")
         try:
+            self._transaction_reserved_bytes = self._outstanding_wal_bytes()
             self._enforce_quota(quota_class)
+            self._admit_reservation(reserved_bytes, quota_class)
             yield self._connection
+            self._enforce_quota(quota_class)
         except Exception:
             self._connection.rollback()
             raise
@@ -858,38 +1494,80 @@ class EvolvingCategoryStore:
             except Exception:
                 self._connection.rollback()
                 raise
+        finally:
+            self._transaction_reserved_bytes = 0
+            self._reservation_tracking = False
 
     @contextmanager
-    def derived_transaction(self) -> Iterator[sqlite3.Connection | None]:
-        """Yield a connection, or ``None`` when replaceable work is skipped."""
+    def derived_transaction(
+        self, *, reserved_bytes: int = 0
+    ) -> Iterator[_DerivedWriteConnection | None]:
+        """Yield a tracked connection, or ``None`` for an admission-time skip."""
+        write: _DerivedWriteConnection | None = None
         try:
-            with self.transaction(immediate=True, quota_class="derived") as connection:
-                yield connection
+            with self.transaction(
+                immediate=True,
+                quota_class="derived",
+                reserved_bytes=reserved_bytes,
+            ) as connection:
+                write = _DerivedWriteConnection(connection)
+                yield write
         except _DerivedArchiveWriteSkipped:
-            yield None
+            if write is None:
+                yield None
+            return
+        assert write is not None
+        write.committed = True
 
     def append_event(
         self, kind: str, payload: Mapping[str, object], *, event_id: str | None = None
     ) -> str:
         identifier = event_id or str(uuid.uuid4())
-        with self.transaction() as connection:
+        identifier = self._bounded_text(
+            identifier, MAX_CATEGORY_IDENTIFIER_BYTES, "event identifier"
+        )
+        kind = self._bounded_text(kind, 1024, "event kind")
+        payload_json = self._bounded_json(
+            payload, MAX_CATEGORY_EVENT_PAYLOAD_BYTES, "event payload"
+        )
+        if kind in _REWRITE_DISPOSITION_EVENT_KINDS:
+            rewrite_id = payload.get("rewrite_id")
+            if isinstance(rewrite_id, str):
+                self._bounded_text(
+                    rewrite_id,
+                    MAX_CATEGORY_IDENTIFIER_BYTES,
+                    "rewrite identifier",
+                )
+        reservation = self._write_reservation(
+            identifier,
+            kind,
+            payload_json,
+            row_count=2 if kind in _REWRITE_DISPOSITION_EVENT_KINDS else 1,
+        )
+        with self.transaction(reserved_bytes=reservation) as connection:
             connection.execute(
                 "INSERT INTO cat_events (id, kind, payload_json, created_at) VALUES (?, ?, ?, ?)",
-                (identifier, kind, _canonical_json(payload), _now_iso()),
+                (identifier, kind, payload_json, _now_iso()),
             )
         return identifier
 
     def create_context(
         self, features: Mapping[str, object], *, context_id: str | None = None
     ) -> str:
-        features_json = _canonical_json(features)
-        with self.transaction() as connection:
+        features_json = self._bounded_json(
+            features, MAX_CATEGORY_CONTEXT_BYTES, "context features"
+        )
+        identifier = context_id or str(uuid.uuid4())
+        identifier = self._bounded_text(
+            identifier, MAX_CATEGORY_IDENTIFIER_BYTES, "context identifier"
+        )
+        reservation = self._write_reservation(identifier, features_json)
+        with self.transaction(reserved_bytes=reservation) as connection:
             existing = connection.execute(
                 "SELECT id FROM cat_contexts WHERE features_json = ?", (features_json,)
             ).fetchone()
             if existing:
                 return str(existing["id"])
-            identifier = context_id or str(uuid.uuid4())
             connection.execute(
                 """
                 INSERT INTO cat_contexts (id, features_json, content_hash, created_at)
@@ -901,7 +1579,31 @@ class EvolvingCategoryStore:
 
     def create_cell(self, draft: CellDraft, *, created_event_id: str | None = None) -> str:
         self._validate_cell(draft)
-        with self.transaction() as connection:
+        identifier = self._bounded_text(
+            draft.id, MAX_CATEGORY_IDENTIFIER_BYTES, "cell identifier"
+        )
+        content = self._bounded_text(
+            draft.content, MAX_CATEGORY_CELL_CONTENT_BYTES, "cell content"
+        )
+        payload_json = self._bounded_json(
+            draft.payload, MAX_CATEGORY_CELL_PAYLOAD_BYTES, "cell payload"
+        )
+        value_bytes = (
+            len(identifier.encode("utf-8")) * (1 + len(draft.boundaries))
+            + len(content.encode("utf-8"))
+            + len(payload_json.encode("utf-8"))
+            + sum(
+                len(boundary.cell_id.encode("utf-8"))
+                for boundary in draft.boundaries
+            )
+            + len((draft.context_id or "").encode("utf-8"))
+            + len((created_event_id or "").encode("utf-8"))
+        )
+        reservation = self._write_reservation_bytes(
+            value_bytes,
+            row_count=1 + len(draft.boundaries),
+        )
+        with self.transaction(reserved_bytes=reservation) as connection:
             connection.execute(
                 """
                 INSERT INTO cat_cells
@@ -910,12 +1612,12 @@ class EvolvingCategoryStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    draft.id,
+                    identifier,
                     draft.dimension,
-                    draft.content,
+                    content,
                     draft.context_id,
-                    _canonical_json(draft.payload),
-                    _content_hash(draft.content),
+                    payload_json,
+                    _content_hash(content),
                     created_event_id,
                     _now_iso(),
                 ),
@@ -1052,7 +1754,15 @@ class EvolvingCategoryStore:
         policy_version: str = "v1",
     ) -> str:
         identifier = str(uuid.uuid4())
-        with self.transaction() as connection:
+        policy_version = self._bounded_text(
+            policy_version,
+            MAX_CATEGORY_POLICY_VERSION_BYTES,
+            "weight policy version",
+        )
+        reservation = self._write_reservation(
+            identifier, cell_id, context_id or "", policy_version
+        )
+        with self.transaction(reserved_bytes=reservation) as connection:
             connection.execute(
                 """
                 INSERT INTO cat_weight_observations

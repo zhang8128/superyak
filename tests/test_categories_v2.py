@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -19,6 +20,8 @@ from categories import (
     EvolvingCategoryStore,
     WeightVector,
 )
+from category_compile import CategoryCompiler
+from category_evolution import EvolutionEngine
 
 
 @pytest.fixture
@@ -31,6 +34,11 @@ def v2_store(tmp_path):
 
 def make_v2_store(database, **kwargs):
     return EvolvingCategoryStore(sqlite3.connect(database), **kwargs)
+
+
+def seed_v2_schema(database):
+    seeded = make_v2_store(database)
+    seeded.close()
 
 
 def create_supported_cat_vectors(database):
@@ -47,6 +55,12 @@ def create_supported_cat_vectors(database):
     connection.close()
 
 
+def database_identity(database):
+    canonical = database.resolve(strict=True)
+    metadata = canonical.stat()
+    return canonical, (metadata.st_dev, metadata.st_ino)
+
+
 def assert_vector_layout_rejected_at_hard_quota(database):
     before_bytes = database.read_bytes()
     before_mtime = database.stat().st_mtime_ns
@@ -61,9 +75,48 @@ def assert_vector_layout_rejected_at_hard_quota(database):
     assert database.stat().st_mtime_ns == before_mtime
 
 
+@pytest.mark.parametrize("alias_kind", ["direct", "symlink", "hardlink"])
+def test_protected_database_alias_is_rejected_before_schema_initialization(
+    tmp_path, alias_kind
+):
+    """Canonical paths and existing file identities protect legacy databases."""
+    protected = tmp_path / "categories.db"
+    connection = sqlite3.connect(protected)
+    connection.execute("CREATE TABLE legacy_marker(value TEXT)")
+    connection.commit()
+    connection.close()
+    candidate = protected
+    if alias_kind == "symlink":
+        candidate = tmp_path / "candidate-link.db"
+        candidate.symlink_to(protected.name)
+    elif alias_kind == "hardlink":
+        candidate = tmp_path / "candidate-hardlink.db"
+        os.link(protected, candidate)
+
+    candidate_connection = sqlite3.connect(candidate)
+    try:
+        with pytest.raises(ValueError, match="protected database"):
+            EvolvingCategoryStore(
+                candidate_connection,
+                protected_database_identities=(database_identity(protected),),
+            )
+    finally:
+        candidate_connection.close()
+
+    check = sqlite3.connect(protected)
+    try:
+        assert check.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'cat_*'"
+        ).fetchone()[0] == 0
+        assert check.execute("SELECT COUNT(*) FROM legacy_marker").fetchone()[0] == 0
+    finally:
+        check.close()
+
+
 def test_archive_pressure_stages(tmp_path):
     """Catches a quota boundary that classifies either 90% threshold incorrectly."""
     size = {"value": 0}
+    seed_v2_schema(tmp_path / "quota.db")
     store = make_v2_store(
         tmp_path / "quota.db",
         quota_bytes=1_000,
@@ -83,12 +136,14 @@ def test_archive_pressure_stages(tmp_path):
 def test_hard_quota_blocks_cell_write_without_hiding_existing_reads(tmp_path):
     """Catches a hard-limit write path that commits a cell or blocks reads."""
     size = {"value": 0}
+    seed_v2_schema(tmp_path / "quota.db")
     store = make_v2_store(
-        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: size["value"]
+        tmp_path / "quota.db", quota_bytes=1_000_000,
+        size_provider=lambda _path: size["value"],
     )
     store.create_cell(CellDraft("existing", 0, "existing"))
 
-    size["value"] = 100
+    size["value"] = 1_000_000
     with pytest.raises(CategoryQuotaExceeded):
         store.create_cell(CellDraft("new", 0, "new"))
 
@@ -97,11 +152,357 @@ def test_hard_quota_blocks_cell_write_without_hiding_existing_reads(tmp_path):
     store.close()
 
 
+def test_hard_quota_rejects_write_that_would_cross_with_sqlite_sidecars(tmp_path):
+    database = tmp_path / "reserved-quota.db"
+    store = make_v2_store(database)
+    store.connection.execute("PRAGMA journal_mode = WAL")
+    store.create_cell(CellDraft("existing", 0, "existing"))
+    baseline = store._default_size_provider(database)
+    assert baseline is not None
+    store._quota_bytes = baseline + 8 * 1024
+
+    with pytest.raises(CategoryQuotaExceeded):
+        store.append_event("bounded", {"content": "x" * (16 * 1024)})
+
+    assert store.get_cell("existing")["content"] == "existing"
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_events WHERE kind = 'bounded'"
+    ).fetchone()[0] == 0
+    pressure = store.pressure()
+    assert pressure.used_bytes <= pressure.quota_bytes
+    store.close()
+
+
+def test_wal_reservation_upper_bounds_commit_visible_sidecar_growth(tmp_path):
+    """A commit cannot publish into the hard-blocked state after admission."""
+    database = tmp_path / "wal-reservation.db"
+    store = make_v2_store(database, quota_bytes=10**9)
+    store.connection.execute("PRAGMA journal_mode = WAL")
+    store.connection.execute("PRAGMA wal_autocheckpoint = 0")
+    store.connection.commit()
+    store.connection.execute("BEGIN IMMEDIATE")
+    store.connection.rollback()
+    payload = {"blob": "x" * 700_000}
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    reservation = store._write_reservation("event", "probe", payload_json)
+    used_before = store._default_size_provider(database)
+    assert used_before is not None
+    store._quota_bytes = used_before + reservation + 1
+
+    store.append_event("probe", payload, event_id="event")
+
+    pressure = store.pressure()
+    assert pressure.used_bytes < pressure.quota_bytes
+    assert pressure.state != "writes_blocked"
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_events WHERE id = 'event'"
+    ).fetchone()[0] == 1
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "page_size", [512, 1_024, 2_048, 8_192, 16_384, 32_768, 65_536]
+)
+def test_wal_reservation_scales_with_valid_database_page_size(tmp_path, page_size):
+    """Commit-frame admission is safe for every supported large SQLite page size."""
+    database = tmp_path / f"wal-pages-{page_size}.db"
+    connection = sqlite3.connect(database)
+    connection.execute(f"PRAGMA page_size = {page_size}")
+    assert connection.execute("PRAGMA page_size").fetchone()[0] == page_size
+    store = EvolvingCategoryStore(connection, quota_bytes=10**9)
+    store.connection.execute("PRAGMA journal_mode = WAL")
+    store.connection.execute("PRAGMA wal_autocheckpoint = 0")
+    store.connection.commit()
+    store.connection.execute("BEGIN IMMEDIATE")
+    store.connection.rollback()
+    payload = {"blob": "x" * 24_576}
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    reservation = store._write_reservation("event", "probe", payload_json)
+    used_before = store._default_size_provider(database)
+    assert used_before is not None
+    store._quota_bytes = used_before + reservation + 1
+
+    store.append_event("probe", payload, event_id="event")
+
+    pressure = store.pressure()
+    assert pressure.used_bytes < pressure.quota_bytes
+    assert pressure.state != "writes_blocked"
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_events WHERE id = 'event'"
+    ).fetchone()[0] == 1
+    store.close()
+
+
+@pytest.mark.parametrize("page_size", [4_096, 16_384, 65_536])
+def test_wal_reservation_covers_table_and_unique_index_splits(tmp_path, page_size):
+    """One logical context row reserves every b-tree changed by its commit."""
+    database = tmp_path / f"wal-context-{page_size}.db"
+    connection = sqlite3.connect(database)
+    connection.execute(f"PRAGMA page_size = {page_size}")
+    store = EvolvingCategoryStore(connection, quota_bytes=10**9)
+    store.connection.execute("PRAGMA journal_mode = WAL")
+    store.connection.execute("PRAGMA wal_autocheckpoint = 0")
+    store.connection.commit()
+    store.connection.execute("BEGIN IMMEDIATE")
+    store.connection.rollback()
+    split_index = {4_096: 74, 16_384: 64, 65_536: 18}[page_size]
+    for index in range(split_index):
+        store.create_context(
+            {"blob": f"{index:04d}" + "x" * 3_500},
+            context_id=f"context-{index}",
+        )
+    features = {"blob": f"{split_index:04d}" + "x" * 3_500}
+    features_json = json.dumps(features, sort_keys=True, separators=(",", ":"))
+    identifier = f"context-{split_index}"
+    reservation = store._write_reservation(identifier, features_json)
+    used_before = store._default_size_provider(database)
+    assert used_before is not None
+    outstanding_wal = Path(f"{database}-wal").stat().st_size
+    store._quota_bytes = used_before + outstanding_wal + reservation + 1
+
+    store.create_context(features, context_id=identifier)
+
+    pressure = store.pressure()
+    assert pressure.used_bytes < pressure.quota_bytes
+    assert pressure.state != "writes_blocked"
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_contexts WHERE id = ?", (identifier,)
+    ).fetchone()[0] == 1
+    store.close()
+
+
+@pytest.mark.parametrize("page_size", [4_096, 16_384])
+def test_wal_reservation_covers_variable_bytes_duplicated_in_unique_index(
+    tmp_path, page_size
+):
+    """Payload bytes reserve both their table and UNIQUE-index representations."""
+    database = tmp_path / f"wal-context-bytes-{page_size}.db"
+    connection = sqlite3.connect(database)
+    connection.execute(f"PRAGMA page_size = {page_size}")
+    store = EvolvingCategoryStore(connection, quota_bytes=10**9)
+    store.connection.execute("PRAGMA journal_mode = WAL")
+    store.connection.execute("PRAGMA wal_autocheckpoint = 0")
+    store.connection.commit()
+    store.connection.execute("BEGIN IMMEDIATE")
+    store.connection.rollback()
+    features = {"blob": "x" * 200_000}
+    features_json = json.dumps(features, sort_keys=True, separators=(",", ":"))
+    reservation = store._write_reservation("context", features_json)
+    used_before = store._default_size_provider(database)
+    assert used_before is not None
+    store._quota_bytes = used_before + reservation + 1
+
+    store.create_context(features, context_id="context")
+
+    pressure = store.pressure()
+    assert pressure.used_bytes < pressure.quota_bytes
+    assert pressure.state != "writes_blocked"
+    store.close()
+
+
+def test_wal_autocheckpoint_duplication_is_reserved_before_commit(tmp_path):
+    """Outstanding WAL frames cannot be duplicated into main past hard quota."""
+    database = tmp_path / "wal-autocheckpoint.db"
+    store = make_v2_store(database, quota_bytes=10**9)
+    assert store.connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    store.connection.execute("PRAGMA wal_autocheckpoint = 0")
+    payload_json = json.dumps({"blob": "x" * 3_500}, separators=(",", ":"))
+    store.connection.executemany(
+        "INSERT INTO cat_events VALUES (?, 'prefill', ?, 'now')",
+        ((f"prefill-{index:04d}", payload_json) for index in range(1_100)),
+    )
+    store.connection.commit()
+    wal = Path(f"{database}-wal")
+    page_size = store.connection.execute("PRAGMA page_size").fetchone()[0]
+    assert (wal.stat().st_size - 32) // (page_size + 24) > 1_000
+    store.connection.execute("PRAGMA wal_autocheckpoint = 1000")
+    reservation = store._write_reservation("tiny", "probe", "{}")
+    used_before = store._default_size_provider(database)
+    assert used_before is not None
+    store._quota_bytes = used_before + reservation + 1
+
+    with pytest.raises(CategoryQuotaExceeded):
+        store.append_event("probe", {}, event_id="tiny")
+
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_events WHERE id = 'tiny'"
+    ).fetchone()[0] == 0
+    pressure = store.pressure()
+    assert pressure.used_bytes < pressure.quota_bytes
+    assert pressure.state != "writes_blocked"
+    store.close()
+
+
+def test_disposition_rewrite_identifier_is_bounded_before_projection(v2_store):
+    """A bounded event cannot expand an unbounded identifier into two indexes."""
+    rewrite_id = "r" * (categories_module.MAX_CATEGORY_IDENTIFIER_BYTES + 1)
+
+    with pytest.raises(ValueError, match="rewrite identifier byte limit"):
+        v2_store.append_event("rewrite_proposed", {"rewrite_id": rewrite_id})
+
+    assert v2_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_events WHERE kind = 'rewrite_proposed'"
+    ).fetchone()[0] == 0
+    assert v2_store.connection.execute(
+        "SELECT COUNT(*) FROM cat_pending_rewrites"
+    ).fetchone()[0] == 0
+
+
+def test_schema_upgrade_backfills_only_still_pending_historical_rewrites(tmp_path):
+    """The derived pending projection is complete on the first predecessor reopen."""
+    database = tmp_path / "pre-pending-projection.db"
+    store = make_v2_store(database)
+    store.connection.execute("DROP TRIGGER cat_events_pending_rewrite_proposed")
+    store.connection.execute("DROP TRIGGER cat_events_pending_rewrite_terminal")
+    store.connection.execute("DROP TABLE cat_pending_rewrites")
+    store.connection.commit()
+    with store.transaction() as connection:
+        for rewrite_id in ("still-pending", "already-terminal"):
+            event_id = store.append_event(
+                "rewrite_proposed", {"rewrite_id": rewrite_id}
+            )
+            connection.execute(
+                "INSERT INTO cat_rewrites VALUES (?, NULL, ?, '{}', 'now')",
+                (rewrite_id, event_id),
+            )
+        store.append_event(
+            "rewrite_rejected", {"rewrite_id": "already-terminal"}
+        )
+    store.close()
+
+    upgraded = make_v2_store(database)
+    try:
+        assert tuple(
+            str(row[0])
+            for row in upgraded.connection.execute(
+                "SELECT rewrite_id FROM cat_pending_rewrites ORDER BY rewrite_id"
+            )
+        ) == ("still-pending",)
+    finally:
+        upgraded.close()
+
+
+def test_wal_schema_upgrade_reserves_commit_visible_growth(tmp_path):
+    """Adding the pending projection cannot publish beyond the hard quota."""
+    database = tmp_path / "quota-predecessor.db"
+    store = make_v2_store(database)
+    store.connection.execute("DROP TRIGGER cat_events_pending_rewrite_proposed")
+    store.connection.execute("DROP TRIGGER cat_events_pending_rewrite_terminal")
+    store.connection.execute("DROP TABLE cat_pending_rewrites")
+    store.connection.commit()
+    assert store.connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    store.connection.commit()
+    store.close()
+
+    connection = sqlite3.connect(database)
+    connection.execute("BEGIN IMMEDIATE")
+    connection.rollback()
+    baseline = sum(
+        candidate.stat().st_size
+        for candidate in (
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+            Path(f"{database}-journal"),
+        )
+        if candidate.exists()
+    )
+    try:
+        with pytest.raises(CategoryQuotaExceeded):
+            EvolvingCategoryStore(connection, quota_bytes=baseline + 1_024)
+    finally:
+        connection.close()
+
+    check = sqlite3.connect(database)
+    try:
+        assert check.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='table' AND name='cat_pending_rewrites'"
+        ).fetchone()[0] == 0
+    finally:
+        check.close()
+
+
+def test_wal_schema_upgrade_reserves_projected_identifier_bytes(tmp_path):
+    """Backfill admission includes large predecessor IDs copied into projection."""
+    database = tmp_path / "large-id-predecessor.db"
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA page_size = 512")
+    store = EvolvingCategoryStore(connection)
+    store.connection.execute("DROP TRIGGER cat_events_pending_rewrite_proposed")
+    store.connection.execute("DROP TRIGGER cat_events_pending_rewrite_terminal")
+    store.connection.execute("DROP TABLE cat_pending_rewrites")
+    rewrite_id = "r" * 500_000
+    payload_json = json.dumps(
+        {"rewrite_id": rewrite_id}, sort_keys=True, separators=(",", ":")
+    )
+    store.connection.execute(
+        "INSERT INTO cat_events VALUES ('proposal', 'rewrite_proposed', ?, 'now')",
+        (payload_json,),
+    )
+    store.connection.execute(
+        "INSERT INTO cat_rewrites VALUES (?, NULL, 'proposal', '{}', 'now')",
+        (rewrite_id,),
+    )
+    store.connection.commit()
+    assert store.connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    store.close()
+
+    connection = sqlite3.connect(database)
+    connection.execute("BEGIN IMMEDIATE")
+    connection.rollback()
+    baseline = sum(
+        candidate.stat().st_size
+        for candidate in (
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+            Path(f"{database}-journal"),
+        )
+        if candidate.exists()
+    )
+    try:
+        with pytest.raises(CategoryQuotaExceeded):
+            EvolvingCategoryStore(connection, quota_bytes=baseline + 500_000)
+    finally:
+        connection.close()
+
+    check = sqlite3.connect(database)
+    try:
+        assert check.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='table' AND name='cat_pending_rewrites'"
+        ).fetchone()[0] == 0
+    finally:
+        check.close()
+
+
+@pytest.mark.parametrize(
+    ("operation", "table"),
+    [
+        (lambda store: store.append_event("large", {"x": "x" * (1024 * 1024 + 1)}), "cat_events"),
+        (lambda store: store.create_context({"x": "x" * (256 * 1024 + 1)}), "cat_contexts"),
+        (lambda store: store.create_cell(CellDraft("large-content", 0, "x" * (1024 * 1024 + 1))), "cat_cells"),
+        (lambda store: store.create_cell(CellDraft("large-payload", 0, "ok", payload={"x": "x" * (256 * 1024 + 1)})), "cat_cells"),
+    ],
+)
+def test_variable_payloads_are_bounded_before_sql(v2_store, operation, table):
+    before = v2_store.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+    with pytest.raises(ValueError, match="byte limit"):
+        operation(v2_store)
+
+    assert v2_store.connection.execute(
+        f"SELECT COUNT(*) FROM {table}"
+    ).fetchone()[0] == before
+
+
 def test_derived_transaction_explicitly_skips_at_high_water_mark(tmp_path):
     """Catches derived maintenance that presents a high-water skip as a write."""
-    size = {"value": 90}
+    size = {"value": 90_000}
+    seed_v2_schema(tmp_path / "quota.db")
     store = make_v2_store(
-        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: size["value"]
+        tmp_path / "quota.db", quota_bytes=100_000, size_provider=lambda _path: size["value"]
     )
 
     with store.derived_transaction() as connection:
@@ -111,18 +512,47 @@ def test_derived_transaction_explicitly_skips_at_high_water_mark(tmp_path):
     store.close()
 
 
+def test_derived_transaction_reports_late_high_water_rollback_as_skipped(tmp_path):
+    """A post-body pressure transition is a clean skip, never a second yield."""
+    size = {"value": 0}
+    seed_v2_schema(tmp_path / "late-derived.db")
+    store = make_v2_store(
+        tmp_path / "late-derived.db",
+        quota_bytes=1_000,
+        high_watermark_ratio=0.9,
+        size_provider=lambda _path: size["value"],
+    )
+    write = None
+
+    with store.derived_transaction() as connection:
+        assert connection is not None
+        write = connection
+        size["value"] = 900
+        connection.execute(
+            "INSERT INTO cat_snapshots VALUES ('late', NULL, '[]', 'hash', 'now')"
+        )
+
+    assert write is not None and write.committed is False
+    assert store.connection.execute(
+        "SELECT COUNT(*) FROM cat_snapshots WHERE id = 'late'"
+    ).fetchone()[0] == 0
+    assert not store.connection.in_transaction
+    store.close()
+
+
 def test_failed_quota_check_preserves_caller_transaction(tmp_path):
     """Catches quota denial committing or rolling back caller-owned work."""
     size = {"value": 0}
+    seed_v2_schema(tmp_path / "quota.db")
     store = make_v2_store(
-        tmp_path / "quota.db", quota_bytes=100, size_provider=lambda _path: size["value"]
+        tmp_path / "quota.db", quota_bytes=100_000, size_provider=lambda _path: size["value"]
     )
     connection = store.connection
     connection.execute("BEGIN")
     connection.execute(
         "INSERT INTO cat_events (id, kind, payload_json, created_at) VALUES ('caller', 'work', '{}', 'now')"
     )
-    size["value"] = 100
+    size["value"] = 100_000
 
     with pytest.raises(CategoryQuotaExceeded):
         store.create_cell(CellDraft("blocked", 0, "blocked"))
@@ -137,6 +567,7 @@ def test_failed_quota_check_preserves_caller_transaction(tmp_path):
 def test_default_size_provider_counts_only_current_database_and_sidecars(tmp_path):
     """Catches size accounting that misses WAL/SHM data or follows a replaced database."""
     database = tmp_path / "quota.db"
+    seed_v2_schema(database)
     store = make_v2_store(database, quota_bytes=1_000_000)
     wal = database.with_name(f"{database.name}-wal")
     shm = database.with_name(f"{database.name}-shm")
@@ -157,6 +588,7 @@ def test_invalid_size_provider_fails_closed_without_disabling_pressure_reads(tmp
 def test_default_size_provider_fails_closed_when_original_database_is_unlinked(tmp_path):
     """Catches an unlinked live archive being measured as zero bytes."""
     database = tmp_path / "quota.db"
+    seed_v2_schema(database)
     store = make_v2_store(database, quota_bytes=1_000_000)
 
     database.unlink()
@@ -169,6 +601,7 @@ def test_default_size_provider_fails_closed_when_original_database_is_unlinked(t
 def test_default_size_provider_rejects_retargeted_main_database_path(tmp_path, mutation):
     """Catches path retargeting that measures a different file as this archive."""
     database = tmp_path / "quota.db"
+    seed_v2_schema(database)
     store = make_v2_store(database, quota_bytes=1_000_000)
     original = tmp_path / "original.db"
     database.rename(original)
@@ -190,6 +623,7 @@ def test_default_size_provider_rejects_retargeted_main_database_path(tmp_path, m
 def test_default_size_provider_accepts_a_hardlink_to_the_original_database(tmp_path):
     """Catches identity checks that reject the same live database under a hard link."""
     database = tmp_path / "quota.db"
+    seed_v2_schema(database)
     store = make_v2_store(database, quota_bytes=1_000_000)
     original = tmp_path / "original.db"
     database.rename(original)
@@ -202,6 +636,7 @@ def test_default_size_provider_accepts_a_hardlink_to_the_original_database(tmp_p
 def test_default_size_provider_detects_replacement_between_path_resolution_and_open(tmp_path, monkeypatch):
     """Catches a pathname race that switches databases after identity capture."""
     database = tmp_path / "quota.db"
+    seed_v2_schema(database)
     store = make_v2_store(database, quota_bytes=1_000_000)
     replacement = tmp_path / "replacement.db"
     replacement.write_bytes(b"replacement")
@@ -224,6 +659,7 @@ def test_default_size_provider_detects_replacement_between_path_resolution_and_o
 def test_default_size_provider_rejects_fifo_without_blocking(tmp_path, suffix):
     """Catches quota measurement hanging while opening an attacker-controlled FIFO."""
     database = tmp_path / "quota.db"
+    seed_v2_schema(database)
     store = make_v2_store(database, quota_bytes=1_000_000)
     candidate = Path(f"{database}{suffix}")
     if suffix:
@@ -241,6 +677,7 @@ def test_default_size_provider_rejects_fifo_without_blocking(tmp_path, suffix):
 def test_default_size_provider_fallback_rejects_symlink(tmp_path, monkeypatch):
     """Catches platforms without O_NOFOLLOW following a sidecar symlink."""
     database = tmp_path / "quota.db"
+    seed_v2_schema(database)
     store = make_v2_store(database, quota_bytes=1_000_000)
     target = tmp_path / "target"
     target.write_bytes(b"target")
@@ -276,7 +713,10 @@ def test_falsey_size_provider_is_used_instead_of_replaced_by_default(tmp_path):
         def __call__(self, _path):
             return 9
 
-    store = make_v2_store(tmp_path / "quota.db", quota_bytes=10, size_provider=FalseyProvider())
+    seed_v2_schema(tmp_path / "quota.db")
+    store = make_v2_store(
+        tmp_path / "quota.db", quota_bytes=10, size_provider=FalseyProvider()
+    )
     assert store.pressure().state == "derived_blocked"
     store.close()
 
@@ -294,6 +734,33 @@ def test_hard_quota_rejects_fresh_store_before_creating_schema(tmp_path):
         ).fetchone()[0] == 0
     finally:
         connection.close()
+
+
+def test_default_size_provider_rejects_fresh_schema_that_cannot_fit(tmp_path):
+    """Fresh schema DDL cannot publish physical files beyond the hard quota."""
+    database = tmp_path / "physical-quota.db"
+    connection = sqlite3.connect(database)
+    try:
+        with pytest.raises(CategoryQuotaExceeded):
+            EvolvingCategoryStore(connection, quota_bytes=1_024)
+        assert not connection.in_transaction
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'cat_*'"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+    physical_bytes = sum(
+        path.stat().st_size
+        for path in (
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+            Path(f"{database}-journal"),
+        )
+        if path.exists()
+    )
+    assert physical_bytes < 1_024
 
 
 def test_current_schema_reopens_at_hard_quota_without_a_schema_write(tmp_path):
@@ -346,7 +813,9 @@ def test_current_core_schema_provisions_missing_vectors_only_when_normal(tmp_pat
     connection.enable_load_extension(True)
     sqlite_vec.load(connection)
     connection.enable_load_extension(False)
-    reopened = EvolvingCategoryStore(connection, quota_bytes=1_000_000, size_provider=lambda _path: 0)
+    reopened = EvolvingCategoryStore(
+        connection, quota_bytes=100_000_000, size_provider=lambda _path: 0
+    )
     assert reopened.connection.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE name = 'cat_vectors'"
     ).fetchone()[0] == 1
@@ -406,6 +875,46 @@ def test_optional_vector_admission_race_is_a_read_only_skip(
     ).fetchone()[0] == 0
     reopened.close()
     assert database.stat().st_mtime_ns == before
+
+
+def test_optional_vector_schema_reserves_commit_visible_wal_growth(tmp_path):
+    """Derived vec0 provisioning skips before DDL when schema growth lacks room."""
+    sqlite_vec = pytest.importorskip("sqlite_vec")
+    database = tmp_path / "vector-quota.db"
+    seeded = make_v2_store(database)
+    seeded.close()
+    connection = sqlite3.connect(database)
+    connection.enable_load_extension(True)
+    sqlite_vec.load(connection)
+    connection.enable_load_extension(False)
+    assert connection.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    connection.commit()
+    connection.execute("BEGIN IMMEDIATE")
+    connection.rollback()
+    baseline = sum(
+        candidate.stat().st_size
+        for candidate in (
+            database,
+            Path(f"{database}-wal"),
+            Path(f"{database}-shm"),
+            Path(f"{database}-journal"),
+        )
+        if candidate.exists()
+    )
+
+    reopened = EvolvingCategoryStore(
+        connection,
+        quota_bytes=baseline + 1_024,
+        high_watermark_ratio=0.999999,
+    )
+    try:
+        assert reopened.connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE name = 'cat_vectors' OR name LIKE 'cat_vectors_%'"
+        ).fetchone()[0] == 0
+        assert reopened.pressure().state == "normal"
+    finally:
+        reopened.close()
 
 
 def test_lone_bogus_vector_shadow_requires_migration_at_hard_quota(tmp_path):
@@ -535,6 +1044,37 @@ def test_genuine_vec0_layout_is_current_and_reopens_without_a_write(tmp_path):
     assert database.stat().st_mtime_ns == before
 
 
+def test_supported_vec0_reopen_without_extension_keeps_exact_traversal(
+    tmp_path, monkeypatch
+):
+    """Optional vector unavailability cannot disable exact category reads."""
+    database = tmp_path / "vector-reopen.db"
+    seeded = make_v2_store(database)
+    seeded.create_cell(CellDraft("seed", 0, "exact seed"))
+    EvolutionEngine(seeded).create_root_epoch("root", ("seed",))
+    seeded.close()
+    create_supported_cat_vectors(database)
+
+    import sqlite_vec
+
+    attempts = []
+
+    def unavailable(_connection):
+        attempts.append(True)
+        raise sqlite3.OperationalError("extension unavailable")
+
+    monkeypatch.setattr(sqlite_vec, "load", unavailable)
+    reopened = make_v2_store(database)
+    compiler = CategoryCompiler(reopened)
+    try:
+        compiled = compiler.compile("root", None, ("seed",), 0)
+        assert [cell.id for cell in compiled.cells] == ["seed"]
+        assert attempts
+    finally:
+        compiler.close()
+        reopened.close()
+
+
 def test_incoherent_vec0_layout_fails_closed_at_normal_pressure_before_schema_ddl(tmp_path):
     """Catches normal migration layering IF NOT EXISTS over damaged vector state."""
     database = tmp_path / "quota.db"
@@ -605,9 +1145,11 @@ def test_schema_uses_prefixed_tables_and_enforces_foreign_keys(v2_store):
         "cat_boundaries",
         "cat_weight_observations",
         "cat_rewrites",
+        "cat_pending_rewrites",
         "cat_rewrite_members",
         "cat_epochs",
         "cat_epoch_parents",
+        "cat_epoch_members",
         "cat_snapshots",
     } <= names
     assert v2_store.connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -735,6 +1277,10 @@ def immutable_rows(v2_store):
         "INSERT INTO cat_epoch_parents (epoch_id, position, parent_id) "
         "VALUES ('child', 0, 'parent')"
     )
+    connection.execute(
+        "INSERT INTO cat_epoch_members (epoch_id, position, cell_id) "
+        "VALUES ('parent', 0, 'cell')"
+    )
     return {
         "cat_schema_version": ("version = 1", ()),
         "cat_events": ("id = ?", (event_id,)),
@@ -746,6 +1292,7 @@ def immutable_rows(v2_store):
         "cat_rewrite_members": ("rewrite_id = 'rewrite' AND role = 'input' AND position = 0", ()),
         "cat_epochs": ("id = 'child'", ()),
         "cat_epoch_parents": ("epoch_id = 'child' AND position = 0", ()),
+        "cat_epoch_members": ("epoch_id = 'parent' AND position = 0", ()),
     }
 
 
@@ -760,6 +1307,7 @@ def immutable_rows(v2_store):
     "cat_rewrite_members",
     "cat_epochs",
     "cat_epoch_parents",
+    "cat_epoch_members",
 ])
 def test_every_immutable_table_rejects_update_and_delete(v2_store, immutable_rows, table):
     where, parameters = immutable_rows[table]

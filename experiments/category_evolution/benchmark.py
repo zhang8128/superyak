@@ -384,11 +384,30 @@ def _write_epoch_snapshot(connection: sqlite3.Connection, epoch_id: str, cells: 
     snapshot_content_hash = _streamed_snapshot_hash(connection)
     connection.execute(
         "INSERT INTO cat_events (id, kind, payload_json, created_at) VALUES (?, ?, ?, ?)",
-        (event_id, "benchmark_epoch", "{}", created_at),
+        (
+            event_id,
+            "benchmark_epoch",
+            json.dumps(
+                {
+                    "epoch_id": epoch_id,
+                    "member_count": cells,
+                    "membership_hash": snapshot_content_hash,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            created_at,
+        ),
     )
     connection.execute(
         "INSERT INTO cat_epochs (id, created_event_id, created_at) VALUES (?, ?, ?)",
         (epoch_id, event_id, created_at),
+    )
+    connection.execute(
+        "INSERT INTO cat_epoch_members (epoch_id, position, cell_id) "
+        "SELECT ?, ROW_NUMBER() OVER (ORDER BY id) - 1, id "
+        "FROM cat_cells ORDER BY id",
+        (epoch_id,),
     )
     connection.execute(
         """INSERT INTO cat_snapshots (id, epoch_id, active_cell_ids_json, content_hash, created_at)

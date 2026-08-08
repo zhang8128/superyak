@@ -68,7 +68,7 @@ def test_fixture_cohorts_are_deterministic_and_vocabulary_isolated():
     """A cohort hash changes for its distinct words but not process/order variation."""
     development = fixture_cohort("development", seed=20260807)
     holdout = fixture_cohort("holdout", seed=20260807)
-    assert fixture_hash(development) == "dab094fab673bec72b30bd89af20590baddf9c5c2408dec240a5f961f634c241"
+    assert fixture_hash(development) == "485dc6f5c6a2b7f7c504c45a30f5327ae0f93af1128776920a60236c06854799"
     assert fixture_hash(development) == fixture_hash(fixture_cohort("development", seed=20260807))
     assert fixture_hash(development) != fixture_hash(holdout)
     assert {case.domain for case in development.cases} == {
@@ -94,7 +94,7 @@ def test_fixture_hash_is_identical_in_a_separate_python_process():
         capture_output=True,
         text=True,
     )
-    assert completed.stdout.strip() == "dab094fab673bec72b30bd89af20590baddf9c5c2408dec240a5f961f634c241"
+    assert completed.stdout.strip() == "485dc6f5c6a2b7f7c504c45a30f5327ae0f93af1128776920a60236c06854799"
 
 
 def test_abrupt_and_gradual_fixture_transitions_exercise_different_tracker_paths():
@@ -416,6 +416,7 @@ def test_full_state_digest_changes_for_content_boundary_context_and_loss(tmp_pat
     ("cat_rewrite_members", "external_id"),
     ("cat_epochs", "created_event_id"),
     ("cat_epoch_parents", "parent_id"),
+    ("cat_epoch_members", "cell_id"),
     ("cat_snapshots", "content_hash"),
 ])
 def test_full_state_digest_independently_covers_each_remaining_replay_table(tmp_path, table, column):
@@ -447,8 +448,8 @@ def test_compiler_rank_perturbation_changes_shadow_metric():
     assert mean_reciprocal_rank([(["other", "relevant"], {"relevant"})]) == 0.5
 
 
-def test_changed_blind_query_changes_real_baseline_and_compiler_output():
-    """A non-gold input perturbation reaches real search and the downstream compiler."""
+def test_query_changes_baseline_while_prequery_history_changes_compiler_output():
+    """Baseline consumes query text; compiler consumes its independent history evidence."""
     corpus, _adjudication = evaluation_runner._build_blinded_inputs(fixture_cohort("development"))
     original = evaluation_runner._run_blinded_ranking(corpus)
     perturbed = copy.deepcopy(corpus)
@@ -456,7 +457,19 @@ def test_changed_blind_query_changes_real_baseline_and_compiler_output():
     perturbed["fixture_hash"] = evaluation_runner._blind_manifest_hash(perturbed)
     changed = evaluation_runner._run_blinded_ranking(perturbed)
     assert changed["rankings"][0]["baseline"] != original["rankings"][0]["baseline"]
-    assert changed["rankings"][0]["shadow"] != original["rankings"][0]["shadow"]
+    assert changed["rankings"][0]["shadow"] == original["rankings"][0]["shadow"]
+
+    history_changed = copy.deepcopy(corpus)
+    history = history_changed["cases"][0]["history_observations"]
+    history[0]["weights"], history[1]["weights"] = (
+        history[1]["weights"], history[0]["weights"]
+    )
+    history_changed["fixture_hash"] = evaluation_runner._blind_manifest_hash(
+        history_changed
+    )
+    reranked = evaluation_runner._run_blinded_ranking(history_changed)
+    assert reranked["rankings"][0]["baseline"] == original["rankings"][0]["baseline"]
+    assert reranked["rankings"][0]["shadow"] != original["rankings"][0]["shadow"]
 
 
 def test_zero_direct_and_transfer_evidence_is_not_evaluable():
@@ -806,6 +819,59 @@ def test_blind_candidates_and_graph_are_permutation_symmetric_across_gold_roles(
     assert selected_is_lexical_first == {False, True}
 
 
+@pytest.mark.parametrize("cohort_name", ["development", "holdout"])
+def test_fixed_prequery_history_makes_twins_learnable_and_permutation_stable(
+    cohort_name,
+):
+    """Persisted context evidence, not opaque-ID order, distinguishes each twin."""
+    corpus, adjudication = evaluation_runner._build_blinded_inputs(
+        fixture_cohort(cohort_name)
+    )
+    cases = {case["case_id"]: case for case in corpus["cases"]}
+    output = evaluation_runner._run_blinded_ranking(corpus)
+    output_by_case = {case["case_id"]: case for case in output["rankings"]}
+
+    for gold in adjudication["ranking_cases"]:
+        case = cases[gold["case_id"]]
+        observations = case["history_observations"]
+        assert len(observations) == 2
+        assert set(case["seed_candidate_ids"]) == {
+            row["candidate_id"] for row in observations
+        }
+        preferred = max(
+            observations,
+            key=lambda row: (
+                row["weights"]["relevance"], row["weights"]["evidence"]
+            ),
+        )["candidate_id"]
+        assert preferred == gold["relevant_ids"][0]
+        twin = next(
+            row["candidate_id"] for row in observations
+            if row["candidate_id"] != preferred
+        )
+        shadow_ids = [
+            row["candidate_id"] for row in output_by_case[gold["case_id"]]["shadow"]
+        ]
+        assert shadow_ids.index(preferred) < shadow_ids.index(twin)
+
+    permuted = copy.deepcopy(corpus)
+    permuted["candidates"].reverse()
+    permuted["cases"].reverse()
+    for case in permuted["cases"]:
+        case["candidate_ids"].reverse()
+        case["seed_candidate_ids"].reverse()
+        case["history_observations"].reverse()
+    permuted["fixture_hash"] = evaluation_runner._blind_manifest_hash(permuted)
+    permuted_output = evaluation_runner._run_blinded_ranking(permuted)
+    permuted_by_case = {
+        case["case_id"]: case for case in permuted_output["rankings"]
+    }
+    for case_id, original in output_by_case.items():
+        assert [row["candidate_id"] for row in permuted_by_case[case_id]["shadow"]] == [
+            row["candidate_id"] for row in original["shadow"]
+        ]
+
+
 def test_gold_only_fixture_mutation_preserves_blind_input_vectors_and_worker_output():
     """Rebuilding after a truth swap cannot change child-visible identity or ranking."""
     cohort = fixture_cohort("development")
@@ -924,6 +990,83 @@ def test_blind_worker_uses_separate_query_embeddings_and_survives_poisoned_gold_
     evaluation_runner._validate_ranking_output(output, corpus)
     assert all(case["baseline"] != case["direct"] for case in output["rankings"])
     assert not list(tmp_path.glob("category-blind-ranking-*"))
+
+
+def test_boundary_predictions_run_in_blinded_child_and_ignore_gold_swaps(tmp_path):
+    """Boundary inference executes in a fresh process with observations but no gold."""
+    cohort = fixture_cohort("development")
+    corpus, adjudication = evaluation_runner._build_blinded_inputs(cohort)
+    swapped_cases = tuple(
+        replace(
+            case,
+            expected_boundary=not case.expected_boundary,
+            expected_decisions=tuple(not value for value in case.expected_decisions),
+        )
+        for case in cohort.cases
+    )
+    swapped = replace(cohort, cases=swapped_cases)
+    swapped_corpus, swapped_adjudication = evaluation_runner._build_blinded_inputs(swapped)
+    assert swapped_corpus == corpus
+    assert swapped_adjudication != adjudication
+
+    configuration = {
+        "soft_threshold": 0.35,
+        "hard_threshold": 0.65,
+        "hard_confirmations": 2,
+    }
+    worker_input = evaluation_runner._boundary_worker_input(corpus, configuration)
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    (poison / "sitecustomize.py").write_text(
+        "import importlib.abc, sys\n"
+        "class BlockFixtures(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'experiments.category_evolution.fixtures':\n"
+        "            raise RuntimeError('gold fixture import poisoned')\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, BlockFixtures())\n"
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(filter(None, (
+        str(poison), str(Path(evaluation_runner.sqlite_vec.__file__).parent.parent),
+        environment.get("PYTHONPATH"),
+    )))
+    completed = subprocess.run(
+        [sys.executable, "-m", "experiments.category_evolution.runner", "--_boundary-worker"],
+        input=json.dumps(worker_input), capture_output=True, text=True, env=environment,
+    )
+    assert completed.returncode == 0, completed.stderr
+    output = evaluation_runner._validate_boundary_output(
+        json.loads(completed.stdout), worker_input
+    )
+    swapped_output = evaluation_runner._run_blinded_boundaries(
+        swapped_corpus, configuration
+    )
+    assert swapped_output == output
+    assert evaluation_runner._score_boundary_predictions(
+        output["predictions"], adjudication
+    ) != evaluation_runner._score_boundary_predictions(
+        swapped_output["predictions"], swapped_adjudication
+    )
+
+
+def test_boundary_worker_rejects_gold_fields_inside_observations():
+    """The child contract cannot carry labels even when inference ignores them."""
+    corpus, _adjudication = evaluation_runner._build_blinded_inputs(
+        fixture_cohort("development")
+    )
+    worker_input = evaluation_runner._boundary_worker_input(
+        corpus,
+        {
+            "soft_threshold": 0.35,
+            "hard_threshold": 0.65,
+            "hard_confirmations": 2,
+        },
+    )
+    worker_input["cases"][0]["observations"][0]["expected_boundary"] = True
+
+    with pytest.raises(ValueError, match="unknown fields"):
+        evaluation_runner._validate_boundary_input(worker_input)
 
 
 def test_shadow_rankings_use_declared_baseline_universe_and_keep_full_compiler_evidence():

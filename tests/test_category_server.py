@@ -85,10 +85,31 @@ def _fork_category_server_child(server, parent_observer, mode: str) -> tuple[dic
         try:
             os.close(read_fd)
             commits_before_request = None
+            try:
+                if mode == "explicit-startup":
+                    startup = getattr(server, "_initialize_pre_serving", None)
+                    if startup is not None:
+                        startup()
+                else:
+                    server.recall(
+                        "fork child category recovery",
+                        max_results=1,
+                        uninvited=0,
+                    )
+            except RuntimeError as exc:
+                os.write(
+                    write_fd,
+                    json.dumps(
+                        {
+                            "error": "exec" if "exec" in str(exc).lower() else "other",
+                            "quarantined": len(server._fork_quarantined_resources),
+                        },
+                        sort_keys=True,
+                    ).encode(),
+                )
+                os._exit(0)
+
             if mode == "explicit-startup":
-                startup = getattr(server, "_initialize_pre_serving", None)
-                if startup is not None:
-                    startup()
                 startup_observer = server._category_observer
                 commits_before_request = (
                     startup_observer.store.connection.execute(
@@ -100,9 +121,7 @@ def _fork_category_server_child(server, parent_observer, mode: str) -> tuple[dic
                 )
 
             recalled = server.recall(
-                "fork child category recovery",
-                max_results=1,
-                uninvited=0,
+                "fork child category recovery", max_results=1, uninvited=0
             )
             observer = server._category_observer
             storage = server._storage
@@ -189,6 +208,7 @@ def category_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_server_generation_cleanup", None, raising=False)
     monkeypatch.setattr(server, "_initialization_cleanup_required", False, raising=False)
     monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid(), raising=False)
+    monkeypatch.setattr(server, "_fork_exec_required", False, raising=False)
     monkeypatch.setattr(server, "_knowledge_graph", None)
     monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(server, "_form_resonances", lambda *_args, **_kwargs: None)
@@ -239,6 +259,7 @@ def category_init_env(tmp_path, monkeypatch):
         "_server_generation_cleanup": None,
         "_initialization_cleanup_required": False,
         "_server_lock_pid": server.os.getpid(),
+        "_fork_exec_required": False,
     }.items():
         monkeypatch.setattr(server, name, value, raising=False)
 
@@ -339,6 +360,116 @@ def test_observer_database_error_is_non_fatal_and_content_safe_in_logs(
     assert "DatabaseError" in category_logs
     assert "private-query-marker" not in category_logs
     assert "private-memory-marker" not in category_logs
+
+
+def test_failed_observation_skips_delivery(category_server_env, monkeypatch):
+    """A delivery event cannot exist when its recall observation did not commit."""
+    server, config = category_server_env
+    _fixed_server_clock(monkeypatch, server)
+    server.remember("baseline survives category failure")
+    config.category_evolution.enabled = True
+    observer = RecordingObserver(observe_error=sqlite3.OperationalError("busy"))
+    monkeypatch.setattr(server, "_category_observer", observer)
+
+    result = server.recall("baseline", uninvited=0)
+
+    assert result["results"]
+    assert not hasattr(observer, "delivered")
+
+
+def test_shadow_writer_contention_is_fail_fast(tmp_path):
+    """An external SQLite writer cannot consume the recall latency budget."""
+    database = tmp_path / "categories_v2.db"
+    observer = category_evolution.CategoryObserver(database)
+    blocker = sqlite3.connect(database, timeout=0, check_same_thread=False)
+    blocker.execute("BEGIN IMMEDIATE")
+    finished = threading.Event()
+    errors = []
+
+    def observe():
+        try:
+            observer.observe_recall(
+                "contended",
+                (),
+                source="/workspace",
+                observed_at=datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc),
+                recall_id="contended-recall",
+            )
+        except sqlite3.OperationalError as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=observe)
+    try:
+        worker.start()
+        assert finished.wait(0.20), "shadow write exceeded its fail-fast latency bound"
+        assert errors and "locked" in str(errors[0]).lower()
+    finally:
+        blocker.rollback()
+        worker.join(2)
+        blocker.close()
+        observer.close()
+
+
+def test_server_rechecks_protected_identity_after_symlink_retarget(
+    tmp_path, monkeypatch
+):
+    """A path race after preflight cannot initialize schema in a protected DB."""
+    import server
+    from config import load_config
+
+    graph = tmp_path / "graph.db"
+    legacy = tmp_path / "categories.db"
+    safe = tmp_path / "safe-v2.db"
+    for database, marker in ((graph, "graph_marker"), (legacy, "legacy_marker")):
+        connection = sqlite3.connect(database)
+        connection.execute(f"CREATE TABLE {marker}(value TEXT)")
+        connection.commit()
+        connection.close()
+    sqlite3.connect(safe).close()
+    candidate = tmp_path / "candidate.db"
+    candidate.symlink_to(safe.name)
+
+    graph_connection = sqlite3.connect(graph)
+    legacy_connection = sqlite3.connect(legacy)
+    protected = (
+        server._sqlite_main_identity(graph_connection),
+        server._sqlite_main_identity(legacy_connection),
+    )
+    graph_connection.close()
+    legacy_connection.close()
+    config = load_config(tmp_path).category_evolution
+    config.enabled = True
+    config.db_path = str(candidate)
+    real_connect = sqlite3.connect
+    retargeted = False
+
+    def retarget_then_connect(path, *args, **kwargs):
+        nonlocal retargeted
+        if not retargeted:
+            candidate.unlink()
+            candidate.symlink_to(legacy.name)
+            retargeted = True
+        return real_connect(path, *args, **kwargs)
+
+    monkeypatch.setattr(category_evolution.sqlite3, "connect", retarget_then_connect)
+    with pytest.raises(ValueError, match="protected database"):
+        server._new_category_observer(
+            config,
+            graph,
+            allow_startup_consolidation=False,
+            protected_database_identities=protected,
+        )
+
+    check = real_connect(legacy)
+    try:
+        assert check.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name GLOB 'cat_*'"
+        ).fetchone()[0] == 0
+        assert check.execute("SELECT COUNT(*) FROM legacy_marker").fetchone()[0] == 0
+    finally:
+        check.close()
 
 
 def test_live_influence_blends_existing_results_without_injection_or_commentary(
@@ -572,11 +703,48 @@ def test_startup_consolidation_failure_is_nonfatal_logged_and_type_only(
         observer.close()
 
 
+def test_startup_candidate_selection_does_not_scan_terminal_disposition_history(
+    tmp_path,
+):
+    """The 50k candidate cap also bounds work before the limit is applied."""
+    observer = category_evolution.CategoryObserver(
+        tmp_path / "categories_v2.db", allow_startup_consolidation=False
+    )
+    observer.store.create_cell(CellDraft("seed", 0, "seed"))
+    observer.engine.create_root_epoch("root", ("seed",))
+    with observer.store.transaction(immediate=True) as connection:
+        connection.executemany(
+            "INSERT INTO cat_events VALUES (?, 'rewrite_committed', ?, 'now')",
+            (
+                (
+                    f"terminal-{index:05d}",
+                    json.dumps({"rewrite_id": f"terminal-rewrite-{index:05d}"}),
+                )
+                for index in range(20_000)
+            ),
+        )
+
+    progress_calls = 0
+
+    def bounded_progress():
+        nonlocal progress_calls
+        progress_calls += 1
+        return int(progress_calls > 20)
+
+    observer.store.connection.set_progress_handler(bounded_progress, 100)
+    try:
+        observer._consolidate_startup()
+    finally:
+        observer.store.connection.set_progress_handler(None, 0)
+        observer.close()
+    assert progress_calls <= 20
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
-def test_real_fork_child_first_recall_never_runs_startup_consolidation(
+def test_real_fork_child_first_recall_requires_process_replacement(
     category_init_env,
 ):
-    """Lazy child recovery cannot commit structure from its first request."""
+    """A request cannot lazily recover an inherited initialized server."""
     server, config, db_path = category_init_env
     config.category_evolution.enabled = True
     config.category_evolution.auto_commit = True
@@ -595,16 +763,8 @@ def test_real_fork_child_first_recall_never_runs_startup_consolidation(
     )
 
     assert exit_code == 0
-    assert payload == {
-        "cleanup_closed": True,
-        "commits_before_request": None,
-        "configured_auto_commit": True,
-        "disposition": "proposed",
-        "epochs": baseline_epochs,
-        "initialized": True,
-        "recall_shape": ["recall_id", "results"],
-        "rewrite_commits": 0,
-    }
+    assert payload["error"] == "exec"
+    assert payload["quarantined"] > 0
     assert server._category_observer is parent_observer
     assert server._storage is parent_storage
     assert parent_storage.conn.execute("SELECT 1").fetchone()[0] == 1
@@ -615,10 +775,10 @@ def test_real_fork_child_first_recall_never_runs_startup_consolidation(
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
-def test_real_fork_child_explicit_pre_serving_startup_may_consolidate(
+def test_real_fork_child_explicit_pre_serving_also_requires_process_replacement(
     category_init_env,
 ):
-    """Only an explicit child startup phase may commit before requests."""
+    """Even explicit startup cannot create a second child native generation."""
     server, config, db_path = category_init_env
     config.category_evolution.enabled = True
     config.category_evolution.auto_commit = True
@@ -637,23 +797,15 @@ def test_real_fork_child_explicit_pre_serving_startup_may_consolidate(
     )
 
     assert exit_code == 0
-    assert payload == {
-        "cleanup_closed": True,
-        "commits_before_request": 1,
-        "configured_auto_commit": True,
-        "disposition": "committed",
-        "epochs": baseline_epochs + 1,
-        "initialized": True,
-        "recall_shape": ["recall_id", "results"],
-        "rewrite_commits": 1,
-    }
+    assert payload["error"] == "exec"
+    assert payload["quarantined"] > 0
     assert server._category_observer is parent_observer
     assert server._storage is parent_storage
     assert parent_storage.conn.execute("SELECT 1").fetchone()[0] == 1
-    assert parent_observer.engine.latest_disposition("proposal") == "committed"
+    assert parent_observer.engine.latest_disposition("proposal") == "proposed"
     assert parent_observer.store.connection.execute(
         "SELECT COUNT(*) FROM cat_epochs"
-    ).fetchone()[0] == baseline_epochs + 1
+    ).fetchone()[0] == baseline_epochs
 
 
 def test_observer_report_retains_failure_type_without_failure_text(tmp_path, monkeypatch):
@@ -803,6 +955,60 @@ def test_orphan_outcome_retry_remains_idempotent_after_recall_arrives(tmp_path):
         assert len(outcomes) == 1
         assert json.loads(outcomes[0][0])["orphaned"] is True
     finally:
+        observer.close()
+
+
+@pytest.mark.parametrize("operation", ["delivery", "outcome"])
+@pytest.mark.parametrize("stale", [False, True])
+def test_correlation_lookup_is_bounded_by_primary_key(
+    tmp_path, operation, stale
+):
+    """Absent and wrong-kind recall IDs do not scan the immutable event archive."""
+    observer = category_evolution.CategoryObserver(tmp_path / "categories_v2.db")
+    connection = observer.store.connection
+    recall_id = f"bounded-{operation}-{stale}"
+    try:
+        with observer.store.transaction() as writer:
+            writer.executemany(
+                "INSERT INTO cat_events (id, kind, payload_json, created_at) "
+                "VALUES (?, 'unrelated', '{}', '2026-08-07')",
+                ((f"history-{index}",) for index in range(20_000)),
+            )
+            if stale:
+                writer.execute(
+                    "INSERT INTO cat_events (id, kind, payload_json, created_at) "
+                    "VALUES (?, 'unrelated', '{}', '2026-08-07')",
+                    (
+                        observer._stable_id(
+                            "recall", {"recall_id": recall_id}
+                        ),
+                    ),
+                )
+
+        progress = {"calls": 0}
+
+        def bounded_progress():
+            progress["calls"] += 1
+            return int(progress["calls"] > 25)
+
+        connection.set_progress_handler(bounded_progress, 100)
+        if operation == "delivery":
+            observer.observe_delivery(recall_id, ())
+            event_kind = "recall_delivered"
+        else:
+            observer.observe_outcome(recall_id, False, None)
+            event_kind = "recall_outcome"
+        connection.set_progress_handler(None, 0)
+
+        payload = json.loads(connection.execute(
+            "SELECT payload_json FROM cat_events WHERE kind = ? ORDER BY rowid DESC LIMIT 1",
+            (event_kind,),
+        ).fetchone()[0])
+        assert payload["correlated"] is False
+        assert payload["recall_event_id"] is None
+        assert progress["calls"] <= 25
+    finally:
+        connection.set_progress_handler(None, 0)
         observer.close()
 
 
@@ -1012,7 +1218,7 @@ def test_pid_recovery_never_consolidates_seeded_proposals(
         elif operation == "outcome":
             observer.observe_outcome("recall", True, None)
         elif operation == "compile":
-            observer.compile_for_recall(["memory"])
+            observer.compile_for_recall(("memory",))
         elif operation == "report":
             observer.report()
         else:
@@ -1519,6 +1725,7 @@ def test_init_guard_is_replaced_after_pid_change(monkeypatch):
     pid = {"value": 100}
     monkeypatch.setattr(server.os, "getpid", lambda: pid["value"])
     monkeypatch.setattr(server, "_server_lock_pid", 100)
+    monkeypatch.setattr(server, "_fork_exec_required", False)
     inherited_lock = threading.RLock()
     server._init_lock = inherited_lock
     held = threading.Event()
@@ -1534,7 +1741,15 @@ def test_init_guard_is_replaced_after_pid_change(monkeypatch):
     assert held.wait(timeout=5)
     pid["value"] = 101
     monkeypatch.setattr(server, "_init_unlocked", lambda **_kwargs: None)
-    worker = threading.Thread(target=server._init)
+    errors = []
+
+    def initialize():
+        try:
+            server._init()
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=initialize)
     worker.start()
     worker.join(timeout=0.25)
     completed_before_release = not worker.is_alive()
@@ -1543,6 +1758,8 @@ def test_init_guard_is_replaced_after_pid_change(monkeypatch):
     worker.join(timeout=5)
 
     assert completed_before_release is True
+    if errors:
+        assert "exec" in str(errors[0]).lower()
 
 
 def test_server_atfork_child_eagerly_replaces_locks_and_requires_reinit(monkeypatch):
@@ -1557,6 +1774,7 @@ def test_server_atfork_child_eagerly_replaces_locks_and_requires_reinit(monkeypa
     server._category_recall_lock = old_order_lock
     monkeypatch.setattr(server, "_server_lock_pid", 100)
     monkeypatch.setattr(server, "_initialized", True)
+    monkeypatch.setattr(server, "_fork_exec_required", False)
     pid["value"] = 101
 
     server._after_server_fork_child()
@@ -1567,18 +1785,17 @@ def test_server_atfork_child_eagerly_replaces_locks_and_requires_reinit(monkeypa
     assert server._initialized is False
 
 
-def test_two_child_first_init_calls_share_one_eagerly_installed_lock(monkeypatch):
-    """Only one first caller performs process-local server initialization."""
+def test_two_initialized_child_init_calls_are_both_rejected(monkeypatch):
+    """Concurrent child callers cannot create any replacement generation."""
     import server
 
     pid = {"value": 100}
     monkeypatch.setattr(server.os, "getpid", lambda: pid["value"])
     monkeypatch.setattr(server, "_server_lock_pid", 100)
     monkeypatch.setattr(server, "_initialized", True)
+    monkeypatch.setattr(server, "_fork_exec_required", False)
     pid["value"] = 101
     server._after_server_fork_child()
-    entered = threading.Event()
-    allow_init = threading.Event()
     calls = 0
 
     def initialize_once(**_kwargs):
@@ -1586,21 +1803,26 @@ def test_two_child_first_init_calls_share_one_eagerly_installed_lock(monkeypatch
         if server._initialized:
             return
         calls += 1
-        entered.set()
-        allow_init.wait(timeout=5)
         server._initialized = True
 
     monkeypatch.setattr(server, "_init_unlocked", initialize_once)
-    first = threading.Thread(target=server._init)
-    second = threading.Thread(target=server._init)
+    errors = []
+
+    def initialize():
+        try:
+            server._init()
+        except RuntimeError as exc:
+            errors.append("exec" if "exec" in str(exc).lower() else "other")
+
+    first = threading.Thread(target=initialize)
+    second = threading.Thread(target=initialize)
     first.start()
-    assert entered.wait(timeout=5)
     second.start()
-    allow_init.set()
     first.join(timeout=5)
     second.join(timeout=5)
 
-    assert calls == 1
+    assert calls == 0
+    assert errors == ["exec", "exec"]
 
 
 def test_adjust_results_preserves_invalid_or_missing_scores_and_breaks_ties_deterministically():

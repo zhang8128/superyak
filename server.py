@@ -190,6 +190,7 @@ _initialization_cleanup_required = False
 _failed_initialization_cleanup_lock = threading.Lock()
 _server_operation_context = threading.local()
 _fork_quarantined_resources = []
+_fork_exec_required = False
 _SERVER_FORK_SNAPSHOT = ()
 _SERVER_AT_FORK_REGISTERED = False
 
@@ -276,10 +277,11 @@ def _reset_server_child_state(
     global _initialization_cleanup_required
     global _failed_initialization_cleanup_lock
     global _server_operation_context
-    global _fork_quarantined_resources
+    global _fork_quarantined_resources, _fork_exec_required
     global _init_lock, _category_recall_lock, _server_pid_guard
     global _server_lifecycle_lock, _server_lock_pid, _category_last_observed_at
 
+    requires_exec = _fork_exec_required or _initialized or bool(resources)
     callback_candidates = tuple(_server_atexit_callbacks) + (
         _server_generation_cleanup,
         _category_atexit_callback,
@@ -305,6 +307,10 @@ def _reset_server_child_state(
         if all(resource is not existing for existing in quarantined)
     )
     _fork_quarantined_resources = quarantined
+    # Native owners inherited from an initialized server cannot be safely
+    # replaced in-process.  The child may only replace its process image; a
+    # descendant fork preserves the same bounded quarantine and boundary.
+    _fork_exec_required = requires_exec
     _server_atexit_callbacks = []
     _server_generation_cleanup = None
     _initialization_cleanup_required = False
@@ -500,6 +506,7 @@ def _observe_category_recall(
     result_ids = [str(result.get("id", "")) for result in results if result.get("id") is not None]
     _prepare_category_recall_lock()
     global _category_last_observed_at
+    observation_committed = False
     with _category_recall_lock:
         observed_at = datetime.now(timezone.utc)
         if (
@@ -516,13 +523,16 @@ def _observe_category_recall(
                 observed_at=observed_at,
                 recall_id=recall_id,
             )
+            observation_committed = True
         except Exception as exc:
             _remember_category_error(exc)
             logger.warning("Category observer recall failed (%s)", type(exc).__name__)
 
     compiled = None
     try:
-        compiled = _category_observer.compile_for_recall(result_ids, base_tokens=0)
+        compiled = _category_observer.compile_for_recall(
+            tuple(result_ids), base_tokens=0
+        )
     except Exception as exc:
         _remember_category_error(exc)
         logger.warning("Category observer compile failed (%s)", type(exc).__name__)
@@ -540,18 +550,19 @@ def _observe_category_recall(
         except Exception as exc:
             _remember_category_error(exc)
             logger.warning("Category observer influence failed (%s)", type(exc).__name__)
-    try:
-        _category_observer.observe_delivery(
-            recall_id,
-            [
-                str(result.get("id", ""))
-                for result in delivered
-                if result.get("id") is not None
-            ],
-        )
-    except Exception as exc:
-        _remember_category_error(exc)
-        logger.warning("Category observer delivery failed (%s)", type(exc).__name__)
+    if observation_committed:
+        try:
+            _category_observer.observe_delivery(
+                recall_id,
+                [
+                    str(result.get("id", ""))
+                    for result in delivered
+                    if result.get("id") is not None
+                ],
+            )
+        except Exception as exc:
+            _remember_category_error(exc)
+            logger.warning("Category observer delivery failed (%s)", type(exc).__name__)
     return delivered
 
 
@@ -564,6 +575,13 @@ def _prepare_server_process_locks() -> None:
             _reset_server_child_state(_server_owned_resources(), current_pid)
 
 
+def _require_exec_after_initialized_fork() -> None:
+    if _fork_exec_required:
+        raise RuntimeError(
+            "initialized fork child must exec a fresh server process before use"
+        )
+
+
 def _prepare_category_recall_lock() -> None:
     _prepare_server_process_locks()
 
@@ -571,6 +589,7 @@ def _prepare_category_recall_lock() -> None:
 def _init(*, allow_startup_consolidation: bool = False):
     global _initialization_cleanup_required
     _prepare_server_process_locks()
+    _require_exec_after_initialized_fork()
     while True:
         # Exact cleanup runs without holding the lifecycle barrier: watcher
         # terminal join may need its worker to finish under that barrier.
@@ -895,11 +914,56 @@ def _category_flags(category_config) -> dict:
     }
 
 
+def _sqlite_main_identity(
+    connection: sqlite3.Connection,
+) -> tuple[Path, tuple[int, int] | None]:
+    row = next(
+        (
+            row
+            for row in connection.execute("PRAGMA database_list")
+            if str(row[1]) == "main"
+        ),
+        None,
+    )
+    if row is None or not row[2]:
+        raise ValueError("protected SQLite database must be file-backed")
+    path = Path(str(row[2])).expanduser().resolve(strict=False)
+    try:
+        metadata = path.stat()
+    except OSError:
+        identity = None
+    else:
+        identity = (metadata.st_dev, metadata.st_ino)
+    return path, identity
+
+
+def _assert_category_database_preflight(
+    candidate: Path,
+    protected_database_identities,
+) -> Path:
+    canonical = candidate.expanduser().resolve(strict=False)
+    try:
+        metadata = canonical.stat()
+    except OSError:
+        identity = None
+    else:
+        identity = (metadata.st_dev, metadata.st_ino)
+    for protected_path, protected_identity in protected_database_identities:
+        if canonical == Path(protected_path).expanduser().resolve(strict=False) or (
+            identity is not None
+            and protected_identity is not None
+            and identity == protected_identity
+        ):
+            raise ValueError("category v2 path aliases a protected database")
+    return candidate
+
+
 def _new_category_observer(
     category_config,
     graph_db_path: Path,
     *,
     allow_startup_consolidation: bool,
+    protected_database_identities=(),
 ):
     from category_evolution import CategoryObserver
 
@@ -908,7 +972,10 @@ def _new_category_observer(
         if category_config.db_path
         else graph_db_path.parent / "categories_v2.db"
     )
-    return CategoryObserver(
+    _assert_category_database_preflight(
+        category_db_path, protected_database_identities
+    )
+    observer = CategoryObserver(
         category_db_path,
         shadow=category_config.shadow,
         influence_recall=category_config.influence_recall,
@@ -926,7 +993,14 @@ def _new_category_observer(
         soft_boundary_threshold=category_config.soft_boundary_threshold,
         hard_boundary_threshold=category_config.hard_boundary_threshold,
         hard_boundary_confirmations=category_config.hard_boundary_confirmations,
+        protected_database_identities=protected_database_identities,
     )
+    try:
+        observer.assert_database_isolated()
+    except Exception:
+        observer.close()
+        raise
+    return observer
 
 
 def _activate_category_observer(
@@ -934,6 +1008,7 @@ def _activate_category_observer(
     graph_db_path: Path,
     *,
     allow_startup_consolidation: bool,
+    protected_database_identities=(),
 ) -> None:
     global _category_observer, _category_status
     _category_observer = None
@@ -942,11 +1017,18 @@ def _activate_category_observer(
         return
     flags = _category_flags(category_config)
     try:
-        _category_observer = _new_category_observer(
+        candidate = _new_category_observer(
             category_config,
             graph_db_path,
             allow_startup_consolidation=allow_startup_consolidation,
+            protected_database_identities=protected_database_identities,
         )
+        try:
+            candidate.assert_database_isolated()
+        except Exception:
+            candidate.close()
+            raise
+        _category_observer = candidate
     except Exception as exc:
         error_type = type(exc).__name__
         _category_status = {
@@ -1016,6 +1098,10 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False):
         category_config,
         db_path,
         allow_startup_consolidation=allow_startup_consolidation,
+        protected_database_identities=(
+            _sqlite_main_identity(_storage.conn),
+            _sqlite_main_identity(cat_conn),
+        ),
     )
     if _category_observer is not None:
         _category_atexit_callback = _register_server_cleanup(

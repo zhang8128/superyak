@@ -288,16 +288,21 @@ The shadow database uses prefixed tables so schema intent remains explicit:
 - `cat_contexts`
 - `cat_weight_observations`
 - `cat_rewrites`
+- `cat_pending_rewrites`
 - `cat_rewrite_members`
 - `cat_epochs`
 - `cat_epoch_parents`
+- `cat_epoch_members`
 - `cat_snapshots`
 - `cat_vectors`
 
 Foreign keys are enabled. Committing a rewrite, creating its epoch, attaching
 members, and recording epoch membership occurs in one transaction. Cell rows
 remain immutable; active membership is derived from the selected epoch and its
-rewrite history.
+rewrite history. `cat_epoch_members` stores bounded root membership needed for
+reconstruction, while `cat_pending_rewrites` is a transactionally maintained,
+rebuildable projection used to find proposals that still need a terminal
+disposition without scanning the full event history.
 
 The legacy importer creates proxy 0-cells for external memory IDs, imports
 level-1 cells as 1-cells, and imports level-2 transfers as 2-cells. Import is

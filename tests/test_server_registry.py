@@ -571,6 +571,7 @@ def engram_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_server_generation_cleanup", None)
     monkeypatch.setattr(server, "_initialization_cleanup_required", False)
     monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid())
+    monkeypatch.setattr(server, "_fork_exec_required", False)
 
     yield server
 
@@ -819,11 +820,82 @@ def test_true_lifo_cleanup_joins_real_watcher_before_closing_storage(
     assert watcher.is_alive() is False
     assert watcher.processed_count() == 1
     assert storage_close_calls == [storage]
-    assert "ProgrammingError" not in caplog.text
 
-    for callback in reversed(tuple(registered)):
-        callback()
-    assert storage_close_calls == [storage]
+
+def test_partial_worker_death_blocks_storage_close_until_survivor_joins(
+    engram_server_env, monkeypatch, caplog
+):
+    """Full generation shutdown retains and joins a partially dead pair."""
+    from config import load_config
+    from storage import Storage
+    from watcher import FileWatcher
+
+    config = load_config(engram_server_env.PROJECT_ROOT)
+    config.graph.enabled = False
+    config.watcher.enabled = True
+    monkeypatch.setattr(engram_server_env, "load_config", lambda _root: config)
+    registered = []
+    monkeypatch.setattr(atexit, "register", registered.append)
+    real_storage_close = Storage.close
+    real_watcher_stop = FileWatcher.stop
+    storage_close_started = threading.Event()
+    watcher_stop_started = threading.Event()
+
+    def observe_storage_close(storage):
+        storage_close_started.set()
+        return real_storage_close(storage)
+
+    def observe_watcher_stop(watcher, *args, **kwargs):
+        watcher_stop_started.set()
+        return real_watcher_stop(watcher, *args, **kwargs)
+
+    monkeypatch.setattr(Storage, "close", observe_storage_close)
+    monkeypatch.setattr(FileWatcher, "stop", observe_watcher_stop)
+    engram_server_env._init()
+    watcher = engram_server_env._watcher
+    source = engram_server_env.PROJECT_ROOT / "partial_death.py"
+    source.write_text("def held_by_survivor():\n    return 1\n")
+    producer_exit = threading.Event()
+    index_entered = threading.Event()
+    allow_index = threading.Event()
+    real_embed = engram_server_env._embeddings.embed
+
+    monkeypatch.setattr(watcher, "_watch_loop", lambda: producer_exit.wait(5))
+
+    def block_index(texts, **kwargs):
+        if any("partial_death.py" in text for text in texts):
+            index_entered.set()
+            assert allow_index.wait(timeout=5)
+        return real_embed(texts, **kwargs)
+
+    monkeypatch.setattr(engram_server_env._embeddings, "embed", block_index)
+    watcher._queue.put(source)
+    watcher.start()
+    original_threads = tuple(watcher._threads)
+    assert index_entered.wait(timeout=5)
+    producer_exit.set()
+    watcher._watcher_thread.join(timeout=5)
+    assert not watcher._watcher_thread.is_alive()
+    assert watcher._consumer_thread.is_alive()
+    watcher.start()
+    assert tuple(watcher._threads) == original_threads
+
+    shutdown_observations = []
+
+    def release_survivor():
+        assert watcher_stop_started.wait(timeout=5)
+        shutdown_observations.append(not storage_close_started.wait(timeout=0.1))
+        allow_index.set()
+
+    releaser = threading.Thread(target=release_survivor)
+    releaser.start()
+    registered[-1]()
+    releaser.join(timeout=5)
+
+    assert shutdown_observations == [True]
+    assert storage_close_started.is_set()
+    assert all(not thread.is_alive() for thread in original_threads)
+    assert "ProgrammingError" not in caplog.text
 
 
 def test_failed_watcher_join_retains_exact_generation_for_cleanup_retry(
@@ -1113,6 +1185,7 @@ def test_real_fork_waits_for_blocked_core_initialization_and_resets_child_state(
 
     releaser = threading.Thread(target=release_when_fork_waits)
     releaser.start()
+
     read_fd, write_fd = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -1148,7 +1221,7 @@ def test_real_fork_waits_for_blocked_core_initialization_and_resets_child_state(
 def test_real_fork_quiesces_active_core_sqlite_and_serializes_child_reinit(
     tmp_path, monkeypatch
 ):
-    """A child never uses an inherited active handle and initializes core once."""
+    """A child never uses or replaces an inherited active native generation."""
     import sqlite3
 
     lifecycle = _ObservedRLock()
@@ -1220,6 +1293,13 @@ def test_real_fork_quiesces_active_core_sqlite_and_serializes_child_reinit(
 
     releaser = threading.Thread(target=release_when_fork_waits)
     releaser.start()
+
+    def capture_runtime_error(operation, errors):
+        try:
+            operation()
+        except RuntimeError as exc:
+            errors.append("exec" if "exec" in str(exc).lower() else "other")
+
     read_fd, write_fd = os.pipe()
     pid = os.fork()
     if pid == 0:
@@ -1235,8 +1315,13 @@ def test_real_fork_quiesces_active_core_sqlite_and_serializes_child_reinit(
                 and old_project_notepad in quarantined
                 and old_global_notepad in quarantined
             )
-            first = threading.Thread(target=server._init)
-            second = threading.Thread(target=server._init)
+            errors = []
+            first = threading.Thread(
+                target=lambda: capture_runtime_error(server._init, errors)
+            )
+            second = threading.Thread(
+                target=lambda: capture_runtime_error(server._init, errors)
+            )
             first.start()
             second.start()
             first.join(timeout=2)
@@ -1245,7 +1330,8 @@ def test_real_fork_quiesces_active_core_sqlite_and_serializes_child_reinit(
                 inherited_is_quarantined
                 and not first.is_alive()
                 and not second.is_alive()
-                and len(child_init_calls) == 1
+                and len(child_init_calls) == 0
+                and errors == ["exec", "exec"]
                 and server._recall_scores == {}
                 and server._recall_resonances == {}
                 and server._wander_visits == {}
@@ -1337,6 +1423,7 @@ def test_fork_snapshot_retains_detached_generation_coordinator(monkeypatch):
     monkeypatch.setattr(atexit, "unregister", unregistered.append)
     monkeypatch.setattr(server, "_server_atexit_callbacks", [])
     monkeypatch.setattr(server, "_server_generation_cleanup", coordinator)
+    monkeypatch.setattr(server, "_fork_exec_required", False)
     monkeypatch.setattr(server, "_category_atexit_callback", None)
     for name in (
         "_storage",
@@ -1364,6 +1451,99 @@ def test_fork_snapshot_retains_detached_generation_coordinator(monkeypatch):
 
     assert unregistered == [coordinator]
     assert coordinator in server._fork_quarantined_resources
+
+
+def test_initialized_fork_child_requires_exec_before_init_or_serving(monkeypatch):
+    """An inherited native generation is a process-replacement boundary."""
+    resource = object()
+    calls = []
+    monkeypatch.setattr(server, "_fork_exec_required", False, raising=False)
+    monkeypatch.setattr(server, "_fork_quarantined_resources", [])
+    monkeypatch.setattr(server, "_init_unlocked", lambda **_kwargs: calls.append("init"))
+
+    server._reset_server_child_state((resource,), os.getpid())
+
+    for operation in (server._init, server._initialize_pre_serving):
+        with pytest.raises(RuntimeError, match="exec"):
+            operation()
+    assert calls == []
+    assert server._fork_quarantined_resources == [resource]
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+def test_repeated_fork_quarantine_is_bounded_with_ordinary_child_exit(tmp_path):
+    """Descendant forks cannot accumulate resource generations before exec."""
+    probe = textwrap.dedent(
+        """
+        import json
+        import os
+        from pathlib import Path
+        import sqlite3
+        import sys
+
+        import server
+
+        database = Path(sys.argv[1])
+        connection = sqlite3.connect(database)
+        connection.execute("CREATE TABLE probe(value INTEGER)")
+        connection.commit()
+        server._storage = connection
+        server._initialized = True
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(read_fd)
+            first_size = len(server._fork_quarantined_resources)
+            nested = os.fork()
+            if nested == 0:
+                blocked = []
+                for operation in (
+                    server._init,
+                    server._initialize_pre_serving,
+                    lambda: server.recall("must exec", max_results=1),
+                ):
+                    try:
+                        operation()
+                    except RuntimeError as exc:
+                        blocked.append("exec" in str(exc).lower())
+                    else:
+                        blocked.append(False)
+                os.write(
+                    write_fd,
+                    json.dumps(
+                        {
+                            "blocked": blocked,
+                            "first_size": first_size,
+                            "nested_size": len(server._fork_quarantined_resources),
+                        },
+                        sort_keys=True,
+                    ).encode(),
+                )
+                sys.exit(0)
+            _, nested_status = os.waitpid(nested, 0)
+            sys.exit(os.waitstatus_to_exitcode(nested_status))
+        os.close(write_fd)
+        payload = os.read(read_fd, 4096)
+        _, status = os.waitpid(pid, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+        result = json.loads(payload)
+        assert result["blocked"] == [True, True, True]
+        assert result["first_size"] > 0
+        assert result["nested_size"] == result["first_size"]
+        assert connection.execute("SELECT 1").fetchone() == (1,)
+        connection.close()
+        """
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", probe, str(tmp_path / "fork-boundary.db")],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_child_quarantine_unregisters_callback_only_category_observer():

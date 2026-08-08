@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
+from datetime import datetime
 import hashlib
 import json
 import math
@@ -22,7 +23,7 @@ import sqlite_vec
 
 from categories import CategoryStore, EvolvingCategoryStore, WeightVector
 from category_compile import CategoryCompiler, CompileBudget
-from category_context import ContextTracker
+from category_context import ContextObservation, ContextTracker
 from category_evolution import import_legacy_category, legacy_proxy_id
 
 from .benchmark import run_benchmark
@@ -42,6 +43,8 @@ DEFAULT_SEED = 20260807
 BLIND_CORPUS_SCHEMA = "engram.category-evolution.blind-corpus"
 ADJUDICATION_SCHEMA = "engram.category-evolution.adjudication"
 RANKING_OUTPUT_SCHEMA = "engram.category-evolution.ranking-output"
+BOUNDARY_INPUT_SCHEMA = "engram.category-evolution.boundary-input"
+BOUNDARY_OUTPUT_SCHEMA = "engram.category-evolution.boundary-output"
 SCHEMA_VERSION = 1
 ENCODER_DIMENSIONS = 64
 ENCODER_SEED = "category-eval-v1:"
@@ -55,6 +58,7 @@ ENCODER_SPEC = {
     "l2_normalized": True,
 }
 _RANKING_WORKER_FLAG = "--_ranking-worker"
+_BOUNDARY_WORKER_FLAG = "--_boundary-worker"
 _COMPILER_CAPS = {
     "max_depth": 4,
     "max_neighbors": 64,
@@ -73,6 +77,17 @@ GATE_THRESHOLDS = {
     "incremental_peak_rss_bytes": 1 << 30,
 }
 _TUNING_FLAGS = ("soft_threshold", "hard_threshold", "hard_confirmations")
+_PREQUERY_OBSERVED_AT = "2026-08-06T00:00:00+00:00"
+_HISTORY_WEIGHT_PROFILES = (
+    {
+        "relevance": 0.90, "evidence": 0.80, "recency": 0.70,
+        "affect": 0.0, "adoption": 0.50, "novelty": 0.20, "cost": 0.10,
+    },
+    {
+        "relevance": 0.20, "evidence": 0.60, "recency": 0.40,
+        "affect": 0.0, "adoption": 0.20, "novelty": 0.20, "cost": 0.10,
+    },
+)
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -108,8 +123,8 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, object]:
     blind_corpus, adjudication = _build_blinded_inputs(cohort)
     ranking_output = _run_blinded_ranking(blind_corpus)
     ranking = _score_ranking_output(ranking_output, adjudication, blind_corpus)
-    boundary_predictions = _predict_boundary_decisions(cohort, _configuration(args))
-    boundary = _score_boundary_predictions(boundary_predictions, adjudication)
+    boundary_output = _run_blinded_boundaries(blind_corpus, _configuration(args))
+    boundary = _score_boundary_predictions(boundary_output["predictions"], adjudication)
     legacy = _find_legacy(args.legacy)
     resource_benchmark = _run_requested_benchmark(args)
     compiler_probes = list(ranking["compile_probes"])
@@ -226,7 +241,8 @@ def _blind_manifest_hash(corpus: Mapping[str, object]) -> str:
     """Bind a BlindCorpus identity to every child-visible manifest field."""
     return _canonical_hash({
         key: corpus[key] for key in (
-            "schema", "schema_version", "encoder", "cases", "candidates",
+            "schema", "schema_version", "encoder", "cases", "boundary_cases",
+            "candidates",
         )
     })
 
@@ -238,7 +254,11 @@ def _build_blinded_inputs(cohort: FixtureCohort) -> tuple[dict[str, object], dic
     cases: list[dict[str, object]] = []
     private_cases: list[dict[str, object]] = []
     for case in cohort.rankings:
-        if case.relevant_variant not in (0, 1) or type(case.negative_transfer_truth) is not bool:
+        if (
+            case.relevant_variant not in (0, 1)
+            or case.history_preferred_variant not in (0, 1)
+            or type(case.negative_transfer_truth) is not bool
+        ):
             raise ValueError("ranking fixture truth is invalid")
         case_id = _opaque_id("case", case.query, case.direct_query)
         context_label = _opaque_id("gold-context", case.domain)
@@ -256,11 +276,26 @@ def _build_blinded_inputs(cohort: FixtureCohort) -> tuple[dict[str, object], dic
                 "target_id": None,
             }
             candidate_contexts[candidate_id] = context_label
+        history_observations = []
+        for variant, candidate_id in enumerate(neutral_ids):
+            profile = _HISTORY_WEIGHT_PROFILES[
+                0 if variant == case.history_preferred_variant else 1
+            ]
+            history_observations.append({
+                "candidate_id": candidate_id,
+                "observed_at": _PREQUERY_OBSERVED_AT,
+                "weights": dict(profile),
+            })
         cases.append({
             "case_id": case_id,
             "query_text": case.query,
             "direct_query_text": case.direct_query,
             "candidate_ids": [],
+            "seed_candidate_ids": list(neutral_ids),
+            "context_features": {
+                _opaque_id("context-feature", case_id): 1.0,
+            },
+            "history_observations": history_observations,
         })
         private_cases.append({
             "case_id": case_id,
@@ -312,11 +347,29 @@ def _build_blinded_inputs(cohort: FixtureCohort) -> tuple[dict[str, object], dic
             },
         })
 
+    blind_boundary_cases: list[dict[str, object]] = []
+    boundary_adjudication: list[dict[str, object]] = []
+    for index, case in enumerate(cohort.cases):
+        observations = [_blind_observation(observation) for observation in case.observations]
+        case_id = _opaque_id(
+            "boundary-case", index, _canonical_hash(observations)
+        )
+        blind_boundary_cases.append({
+            "case_id": case_id,
+            "observations": observations,
+        })
+        boundary_adjudication.append({
+            "case_id": case_id,
+            "kind": case.kind,
+            "expected_decisions": list(case.expected_decisions),
+        })
+
     blind_corpus: dict[str, object] = {
         "schema": BLIND_CORPUS_SCHEMA,
         "schema_version": SCHEMA_VERSION,
         "encoder": dict(ENCODER_SPEC),
         "cases": cases,
+        "boundary_cases": blind_boundary_cases,
         "candidates": sorted(
             candidates.values(),
             key=lambda item: (int(item["dimension"]), str(item["candidate_id"])),
@@ -324,14 +377,6 @@ def _build_blinded_inputs(cohort: FixtureCohort) -> tuple[dict[str, object], dic
     }
     blind_fixture_hash = _blind_manifest_hash(blind_corpus)
     blind_corpus["fixture_hash"] = blind_fixture_hash
-    boundary_adjudication = [
-        {
-            "case_id": _opaque_id("boundary-case", blind_fixture_hash, index),
-            "kind": case.kind,
-            "expected_decisions": list(case.expected_decisions),
-        }
-        for index, case in enumerate(cohort.cases)
-    ]
     adjudication: dict[str, object] = {
         "schema": ADJUDICATION_SCHEMA,
         "schema_version": SCHEMA_VERSION,
@@ -342,6 +387,20 @@ def _build_blinded_inputs(cohort: FixtureCohort) -> tuple[dict[str, object], dic
     _validate_blind_corpus(blind_corpus)
     _validate_adjudication(adjudication, blind_corpus)
     return blind_corpus, adjudication
+
+
+def _blind_observation(observation: ContextObservation) -> dict[str, object]:
+    """Serialize only generic, predictor-visible boundary evidence."""
+    return {
+        "goal": dict(observation.goal),
+        "entities": dict(observation.entities),
+        "participants": dict(observation.participants),
+        "tools": dict(observation.tools),
+        "sources": dict(observation.sources),
+        "attention": dict(observation.attention),
+        "observed_at": observation.observed_at.isoformat(),
+        "explicit_boundary": observation.explicit_boundary,
+    }
 
 
 def _require_exact_keys(value: object, expected: set[str], label: str) -> dict[str, object]:
@@ -372,7 +431,8 @@ def _validate_encoder(value: object, label: str) -> None:
 
 def _validate_blind_corpus(corpus: object) -> dict[str, object]:
     corpus = _require_exact_keys(corpus, {
-        "schema", "schema_version", "fixture_hash", "encoder", "cases", "candidates",
+        "schema", "schema_version", "fixture_hash", "encoder", "cases",
+        "boundary_cases", "candidates",
     }, "BlindCorpus")
     if (
         corpus["schema"] != BLIND_CORPUS_SCHEMA
@@ -421,6 +481,7 @@ def _validate_blind_corpus(corpus: object) -> dict[str, object]:
     for raw_case in cases:
         case = _require_exact_keys(raw_case, {
             "case_id", "query_text", "direct_query_text", "candidate_ids",
+            "seed_candidate_ids", "context_features", "history_observations",
         }, "BlindCorpus case")
         case_id = case["case_id"]
         if not isinstance(case_id, str) or not case_id or case_id in case_ids:
@@ -438,6 +499,120 @@ def _validate_blind_corpus(corpus: object) -> dict[str, object]:
             or set(candidate_ids) != level_zero_ids
         ):
             raise ValueError("BlindCorpus case candidate IDs must name the complete level-zero corpus")
+        seeds = case["seed_candidate_ids"]
+        context_features = case["context_features"]
+        history = case["history_observations"]
+        if (
+            not isinstance(seeds, list)
+            or len(seeds) != 2
+            or any(not isinstance(identifier, str) for identifier in seeds)
+            or len(set(seeds)) != len(seeds)
+            or not set(seeds) <= level_zero_ids
+        ):
+            raise ValueError("BlindCorpus history seeds must name two distinct candidates")
+        if (
+            not isinstance(context_features, dict)
+            or not context_features
+            or any(
+                not isinstance(key, str)
+                or not key
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) < 0
+                for key, value in context_features.items()
+            )
+        ):
+            raise ValueError("BlindCorpus context features are invalid")
+        if not isinstance(history, list) or len(history) != len(seeds):
+            raise ValueError("BlindCorpus pre-query history is incomplete")
+        history_ids: set[str] = set()
+        for raw_observation in history:
+            observation = _require_exact_keys(
+                raw_observation,
+                {"candidate_id", "observed_at", "weights"},
+                "BlindCorpus history observation",
+            )
+            candidate_id = observation["candidate_id"]
+            if (
+                not isinstance(candidate_id, str)
+                or candidate_id not in seeds
+                or candidate_id in history_ids
+            ):
+                raise ValueError("BlindCorpus history candidate IDs are invalid")
+            history_ids.add(candidate_id)
+            observed_at = observation["observed_at"]
+            if not isinstance(observed_at, str):
+                raise ValueError("BlindCorpus history timestamp must be text")
+            try:
+                timestamp = datetime.fromisoformat(observed_at)
+            except ValueError as exc:
+                raise ValueError("BlindCorpus history timestamp is invalid") from exc
+            cutoff = datetime.fromisoformat(_PREQUERY_OBSERVED_AT)
+            if (
+                timestamp.tzinfo is None
+                or timestamp.utcoffset() is None
+                or timestamp > cutoff
+            ):
+                raise ValueError("BlindCorpus history must predate evaluation queries")
+            weights = _require_exact_keys(
+                observation["weights"],
+                {
+                    "relevance", "evidence", "recency", "affect",
+                    "adoption", "novelty", "cost",
+                },
+                "BlindCorpus history weights",
+            )
+            try:
+                WeightVector(**weights)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("BlindCorpus history weights are invalid") from exc
+        if history_ids != set(seeds):
+            raise ValueError("BlindCorpus history does not cover its seeds")
+    boundary_cases = corpus["boundary_cases"]
+    if not isinstance(boundary_cases, list) or not boundary_cases:
+        raise ValueError("BlindCorpus boundary cases must be a non-empty array")
+    boundary_ids: set[str] = set()
+    observation_fields = {
+        "goal", "entities", "participants", "tools", "sources", "attention",
+        "observed_at", "explicit_boundary",
+    }
+    for raw_case in boundary_cases:
+        case = _require_exact_keys(
+            raw_case, {"case_id", "observations"}, "BlindCorpus boundary case"
+        )
+        case_id = case["case_id"]
+        if not isinstance(case_id, str) or not case_id or case_id in boundary_ids:
+            raise ValueError("BlindCorpus boundary case IDs must be unique")
+        boundary_ids.add(case_id)
+        observations = case["observations"]
+        if not isinstance(observations, list) or not observations:
+            raise ValueError("BlindCorpus boundary observations must be non-empty")
+        for raw_observation in observations:
+            observation = _require_exact_keys(
+                raw_observation, observation_fields, "BlindCorpus boundary observation"
+            )
+            for field in ("goal", "entities", "participants", "tools", "sources", "attention"):
+                values = observation[field]
+                if not isinstance(values, dict) or any(
+                    not isinstance(key, str)
+                    or isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or float(value) < 0
+                    for key, value in values.items()
+                ):
+                    raise ValueError("BlindCorpus boundary feature maps are invalid")
+            if type(observation["explicit_boundary"]) is not bool:
+                raise ValueError("BlindCorpus explicit boundary flag must be bool")
+            if not isinstance(observation["observed_at"], str):
+                raise ValueError("BlindCorpus boundary timestamp must be text")
+            try:
+                observed_at = datetime.fromisoformat(observation["observed_at"])
+            except ValueError as exc:
+                raise ValueError("BlindCorpus boundary timestamp is invalid") from exc
+            if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+                raise ValueError("BlindCorpus boundary timestamp must be timezone-aware")
     if corpus["fixture_hash"] != _blind_manifest_hash(corpus):
         raise ValueError("BlindCorpus fixture hash does not match its visible manifest")
     return corpus
@@ -501,6 +676,9 @@ def _validate_adjudication(adjudication: object, corpus: object) -> dict[str, ob
     boundary_cases = adjudication["boundary_cases"]
     if not isinstance(boundary_cases, list):
         raise ValueError("Adjudication boundary cases must be an array")
+    corpus_boundary_ids = {
+        str(case["case_id"]) for case in corpus["boundary_cases"]
+    }
     boundary_ids: set[str] = set()
     for raw_case in boundary_cases:
         case = _require_exact_keys(raw_case, {"case_id", "kind", "expected_decisions"},
@@ -514,6 +692,13 @@ def _validate_adjudication(adjudication: object, corpus: object) -> dict[str, ob
         decisions = case["expected_decisions"]
         if not isinstance(decisions, list) or not decisions or any(type(item) is not bool for item in decisions):
             raise ValueError("Adjudication expected boundary decisions are invalid")
+        corpus_case = next(
+            item for item in corpus["boundary_cases"] if item["case_id"] == case_id
+        ) if case_id in corpus_boundary_ids else None
+        if corpus_case is None or len(decisions) != len(corpus_case["observations"]):
+            raise ValueError("Adjudication boundary cases do not match BlindCorpus")
+    if boundary_ids != corpus_boundary_ids:
+        raise ValueError("Adjudication boundary cases do not cover BlindCorpus")
     return adjudication
 
 
@@ -534,6 +719,200 @@ def _run_blinded_ranking(corpus: object) -> dict[str, object]:
     except json.JSONDecodeError as exc:
         raise RuntimeError("blind ranking worker emitted malformed JSON") from exc
     return _validate_ranking_output(output, validated)
+
+
+def _boundary_worker_input(
+    corpus: object, configuration: Mapping[str, object]
+) -> dict[str, object]:
+    """Build the complete, gold-free stdin contract for boundary inference."""
+    validated = _validate_blind_corpus(corpus)
+    selected = {
+        name: configuration[name]
+        for name in ("soft_threshold", "hard_threshold", "hard_confirmations")
+    }
+    _validate_boundary_configuration(selected)
+    return {
+        "schema": BOUNDARY_INPUT_SCHEMA,
+        "schema_version": SCHEMA_VERSION,
+        "fixture_hash": validated["fixture_hash"],
+        "configuration": selected,
+        "cases": validated["boundary_cases"],
+    }
+
+
+def _validate_boundary_configuration(configuration: object) -> dict[str, object]:
+    configuration = _require_exact_keys(
+        configuration,
+        {"soft_threshold", "hard_threshold", "hard_confirmations"},
+        "BoundaryInput configuration",
+    )
+    ContextTracker(
+        soft_threshold=configuration["soft_threshold"],
+        hard_threshold=configuration["hard_threshold"],
+        hard_confirmations=configuration["hard_confirmations"],
+    )
+    return configuration
+
+
+def _validate_boundary_input(worker_input: object) -> dict[str, object]:
+    worker_input = _require_exact_keys(
+        worker_input,
+        {"schema", "schema_version", "fixture_hash", "configuration", "cases"},
+        "BoundaryInput",
+    )
+    if (
+        worker_input["schema"] != BOUNDARY_INPUT_SCHEMA
+        or type(worker_input["schema_version"]) is not int
+        or worker_input["schema_version"] != SCHEMA_VERSION
+        or not _valid_hash(worker_input["fixture_hash"])
+    ):
+        raise ValueError("BoundaryInput schema/version is unsupported")
+    _validate_boundary_configuration(worker_input["configuration"])
+    cases = worker_input["cases"]
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("BoundaryInput cases must be a non-empty array")
+    case_ids: set[str] = set()
+    for raw_case in cases:
+        case = _require_exact_keys(
+            raw_case, {"case_id", "observations"}, "BoundaryInput case"
+        )
+        case_id = case["case_id"]
+        if not isinstance(case_id, str) or not case_id or case_id in case_ids:
+            raise ValueError("BoundaryInput case IDs must be unique")
+        case_ids.add(case_id)
+        if not isinstance(case["observations"], list) or not case["observations"]:
+            raise ValueError("BoundaryInput observations must be non-empty")
+        for raw_observation in case["observations"]:
+            observation = _require_exact_keys(
+                raw_observation,
+                {
+                    "goal", "entities", "participants", "tools", "sources",
+                    "attention", "observed_at", "explicit_boundary",
+                },
+                "BoundaryInput observation",
+            )
+            try:
+                ContextObservation(
+                    goal=observation["goal"],
+                    entities=observation["entities"],
+                    participants=observation["participants"],
+                    tools=observation["tools"],
+                    sources=observation["sources"],
+                    attention=observation["attention"],
+                    observed_at=datetime.fromisoformat(observation["observed_at"]),
+                    explicit_boundary=observation["explicit_boundary"],
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("BoundaryInput observation is invalid") from exc
+    return worker_input
+
+
+def _run_blinded_boundaries(
+    corpus: object, configuration: Mapping[str, object]
+) -> dict[str, object]:
+    """Predict boundaries in a fresh interpreter that never imports fixture gold."""
+    worker_input = _boundary_worker_input(corpus, configuration)
+    completed = subprocess.run(
+        [sys.executable, "-m", "experiments.category_evolution.runner", _BOUNDARY_WORKER_FLAG],
+        input=_canonical_json(worker_input),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode:
+        raise RuntimeError(completed.stderr.strip() or "blind boundary worker failed")
+    try:
+        output = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("blind boundary worker emitted malformed JSON") from exc
+    return _validate_boundary_output(output, worker_input)
+
+
+def _boundary_worker_main() -> int:
+    try:
+        worker_input = _validate_boundary_input(json.loads(sys.stdin.read()))
+        output = _execute_blind_boundaries(worker_input)
+    except (json.JSONDecodeError, RuntimeError, TypeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(_canonical_json(output))
+    return 0
+
+
+def _execute_blind_boundaries(worker_input: dict[str, object]) -> dict[str, object]:
+    configuration = worker_input["configuration"]
+    predictions: list[dict[str, object]] = []
+    for case in worker_input["cases"]:
+        tracker = ContextTracker(
+            soft_threshold=configuration["soft_threshold"],
+            hard_threshold=configuration["hard_threshold"],
+            hard_confirmations=configuration["hard_confirmations"],
+        )
+        decisions: list[bool] = []
+        for raw in case["observations"]:
+            observation = ContextObservation(
+                goal=raw["goal"],
+                entities=raw["entities"],
+                participants=raw["participants"],
+                tools=raw["tools"],
+                sources=raw["sources"],
+                attention=raw["attention"],
+                observed_at=datetime.fromisoformat(raw["observed_at"]),
+                explicit_boundary=raw["explicit_boundary"],
+            )
+            decisions.append(tracker.observe(observation).kind == "hard")
+        predictions.append({"case_id": case["case_id"], "decisions": decisions})
+    return {
+        "schema": BOUNDARY_OUTPUT_SCHEMA,
+        "schema_version": SCHEMA_VERSION,
+        "fixture_hash": worker_input["fixture_hash"],
+        "input_hash": _canonical_hash(worker_input),
+        "predictions": predictions,
+    }
+
+
+def _validate_boundary_output(output: object, worker_input: object) -> dict[str, object]:
+    worker_input = _validate_boundary_input(worker_input)
+    output = _require_exact_keys(
+        output,
+        {"schema", "schema_version", "fixture_hash", "input_hash", "predictions"},
+        "BoundaryOutput",
+    )
+    if (
+        output["schema"] != BOUNDARY_OUTPUT_SCHEMA
+        or type(output["schema_version"]) is not int
+        or output["schema_version"] != SCHEMA_VERSION
+        or output["fixture_hash"] != worker_input["fixture_hash"]
+        or output["input_hash"] != _canonical_hash(worker_input)
+    ):
+        raise ValueError("BoundaryOutput identity does not match BoundaryInput")
+    expected = {
+        str(case["case_id"]): len(case["observations"])
+        for case in worker_input["cases"]
+    }
+    predictions = output["predictions"]
+    if not isinstance(predictions, list) or len(predictions) != len(expected):
+        raise ValueError("BoundaryOutput predictions are incomplete")
+    seen: set[str] = set()
+    for raw_prediction in predictions:
+        prediction = _require_exact_keys(
+            raw_prediction, {"case_id", "decisions"}, "BoundaryOutput prediction"
+        )
+        case_id = prediction["case_id"]
+        decisions = prediction["decisions"]
+        if (
+            not isinstance(case_id, str)
+            or case_id not in expected
+            or case_id in seen
+            or not isinstance(decisions, list)
+            or len(decisions) != expected[case_id]
+            or any(type(decision) is not bool for decision in decisions)
+        ):
+            raise ValueError("BoundaryOutput predictions do not match BoundaryInput")
+        seen.add(case_id)
+    if seen != set(expected):
+        raise ValueError("BoundaryOutput predictions do not cover BoundaryInput")
+    return output
 
 
 def _ranking_worker_main() -> int:
@@ -640,24 +1019,38 @@ def _compile_blind_rankings(
             if not baseline["baseline"] or not baseline["direct"]:
                 raise RuntimeError("CategoryStore.search returned incomplete blind rankings")
             context_id = store.create_context(
-                {"evaluation": "blind-ranking", "case_id": case_id},
+                case["context_features"],
                 context_id=_opaque_id("worker-context", case_id),
             )
-            count = len(baseline["baseline"])
-            for rank, row in enumerate(baseline["baseline"], start=1):
-                relevance = (count - rank + 1) / count
-                store.observe_weight(
-                    legacy_proxy_id(str(row["candidate_id"])), context_id,
-                    WeightVector(relevance, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            for observation in case["history_observations"]:
+                candidate_id = str(observation["candidate_id"])
+                evidence_event_id = store.append_event(
+                    "evaluation_history_observation",
+                    {
+                        "case_id": case_id,
+                        "candidate_id": candidate_id,
+                        "context_features": case["context_features"],
+                        "observed_at": observation["observed_at"],
+                    },
                 )
+                store.observe_weight(
+                    legacy_proxy_id(candidate_id),
+                    context_id,
+                    WeightVector(**observation["weights"]),
+                    evidence_event_id=evidence_event_id,
+                )
+            seed_ids = tuple(
+                legacy_proxy_id(str(candidate_id))
+                for candidate_id in case["seed_candidate_ids"]
+            )
             compiler_cells, query_probe = _timed_blind_compile(
                 compiler, epoch_id, context_id,
-                legacy_proxy_id(str(baseline["baseline"][0]["candidate_id"])),
+                seed_ids,
                 "query", proxy_to_opaque, adjacency,
             )
             compiler_direct_cells, direct_probe = _timed_blind_compile(
                 compiler, epoch_id, context_id,
-                legacy_proxy_id(str(baseline["direct"][0]["candidate_id"])),
+                seed_ids,
                 "direct", proxy_to_opaque, adjacency,
             )
             eligible = set(str(identifier) for identifier in case["candidate_ids"])
@@ -726,13 +1119,13 @@ def _timed_blind_compile(
     compiler: CategoryCompiler,
     epoch_id: str,
     context_id: str,
-    seed_id: str,
+    seed_ids: Sequence[str],
     purpose: str,
     proxy_to_opaque: Mapping[str, str],
     adjacency: Mapping[str, set[str]],
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     started = time.monotonic_ns()
-    compiled = compiler.compile(epoch_id, context_id=context_id, seed_cell_ids=(seed_id,))
+    compiled = compiler.compile(epoch_id, context_id=context_id, seed_cell_ids=seed_ids)
     elapsed_ms = (time.monotonic_ns() - started) / 1_000_000
     rows: list[dict[str, object]] = []
     for cell in compiled.cells:
@@ -1043,19 +1436,7 @@ def _predict_boundary_decisions(
     configuration: Mapping[str, object],
 ) -> list[dict[str, object]]:
     blind_corpus, _adjudication = _build_blinded_inputs(cohort)
-    blind_fixture_hash = str(blind_corpus["fixture_hash"])
-    results = []
-    for index, case in enumerate(cohort.cases):
-        tracker = ContextTracker(
-            soft_threshold=float(configuration["soft_threshold"]),
-            hard_threshold=float(configuration["hard_threshold"]),
-            hard_confirmations=int(configuration["hard_confirmations"]),
-        )
-        results.append({
-            "case_id": _opaque_id("boundary-case", blind_fixture_hash, index),
-            "decisions": [tracker.observe(observation).kind == "hard" for observation in case.observations],
-        })
-    return results
+    return _run_blinded_boundaries(blind_corpus, configuration)["predictions"]
 
 
 def _score_boundary_predictions(
@@ -1130,10 +1511,28 @@ def _full_state_digest(database: Path, import_report: dict[str, object]) -> str:
         ) if not str(row[0]).startswith("cat_vectors")]
         state: dict[str, object] = {"import_report": import_report, "tables": {}}
         for table in tables:
-            columns = [str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')
+            table_info = list(connection.execute(f'PRAGMA table_info("{table}")'))
+            columns = [str(row[1]) for row in table_info
                        if str(row[1]) not in {"created_at", "applied_at"}]
+            primary_key = [
+                str(row[1])
+                for row in sorted(table_info, key=lambda item: int(item[5]))
+                if int(row[5]) > 0
+            ]
+            definition = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            without_rowid = bool(
+                definition is not None
+                and isinstance(definition[0], str)
+                and "WITHOUT ROWID" in definition[0].upper()
+            )
+            order_by = primary_key if without_rowid else ["rowid"]
             rows = connection.execute(
-                f'SELECT {",".join(chr(34)+column+chr(34) for column in columns)} FROM "{table}" ORDER BY rowid'
+                f'SELECT {",".join(chr(34)+column+chr(34) for column in columns)} '
+                f'FROM "{table}" ORDER BY '
+                + ",".join(chr(34) + column + chr(34) for column in order_by)
             ).fetchall()
             state["tables"][table] = {"columns": columns, "rows": [list(row) for row in rows]}
         return hashlib.sha256(_canonical_json(state).encode()).hexdigest()
@@ -1336,6 +1735,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("error: private ranking worker accepts stdin JSON only", file=sys.stderr)
             return 2
         return _ranking_worker_main()
+    if arguments and arguments[0] == _BOUNDARY_WORKER_FLAG:
+        if arguments != [_BOUNDARY_WORKER_FLAG]:
+            print("error: private boundary worker accepts stdin JSON only", file=sys.stderr)
+            return 2
+        return _boundary_worker_main()
     try:
         args = build_parser().parse_args(arguments)
         report = run_evaluation(args)
