@@ -19,7 +19,7 @@ from experiments.category_evolution.metrics import (
     relative_mrr_improvement,
 )
 from experiments.category_evolution.runner import main as runner_main
-from experiments.category_evolution.runner import _false_cross_context_transfers, _full_state_digest
+from experiments.category_evolution.runner import _acceptance, _false_cross_context_transfers, _full_state_digest
 from category_evolution import legacy_proxy_id
 from category_context import ContextTracker
 
@@ -135,6 +135,10 @@ def test_runner_replays_real_legacy_database_three_times_without_mutating_it(tmp
     assert report["replay_hashes"][0] == report["replay_hashes"][1] == report["replay_hashes"][2]
     assert report["replay_identical"] is True
     assert report["ranking"]["source"] == "category_compiler_fixture_db"
+    assert {name: report["compiler_limits"][name] for name in (
+        "max_depth", "max_neighbors", "max_candidates", "wall_time_ms", "hard_ceiling",
+    )} == {"max_depth": 4, "max_neighbors": 64, "max_candidates": 50_000,
+          "wall_time_ms": 500, "hard_ceiling": 65_536}
     assert report["ranking"]["direct_seed_source"] == "baseline_direct_top"
     assert report["ranking"]["cross_context_pairs"] == 4
     assert report["ranking"]["cross_context_candidates_evaluated"] >= 4
@@ -240,6 +244,43 @@ def test_full_state_digest_changes_for_content_boundary_context_and_loss(tmp_pat
     connection.commit(); connection.close()
     assert _full_state_digest(database, {"unexplained_loss": 0}) != original
     assert _full_state_digest(database, {"unexplained_loss": 1}) != original
+    connection = sqlite3.connect(database)
+    connection.execute("UPDATE cat_boundaries SET boundary_id='changed'")
+    connection.execute("UPDATE cat_contexts SET features_json='{\"changed\":true}'")
+    connection.commit(); connection.close()
+    assert _full_state_digest(database, {"unexplained_loss": 0}) != original
+
+
+def test_label_swap_changes_metrics_not_completed_ranking():
+    """Truth is applied after ranking; changing it cannot change compiler candidates/scores."""
+    completed_ranking = ["candidate-a", "candidate-b"]
+    before = list(completed_ranking)
+    assert mean_reciprocal_rank([(completed_ranking, {"candidate-a"})]) == 1.0
+    assert mean_reciprocal_rank([(completed_ranking, {"candidate-b"})]) == 0.5
+    assert completed_ranking == before
+
+
+def test_compiler_rank_perturbation_changes_shadow_metric():
+    """A changed compiler ordering must change the resulting shadow metric."""
+    assert mean_reciprocal_rank([(["relevant", "other"], {"relevant"})]) == 1.0
+    assert mean_reciprocal_rank([(["other", "relevant"], {"relevant"})]) == 0.5
+
+
+def test_zero_direct_and_transfer_evidence_is_not_evaluable():
+    """Missing evidence must fail acceptance rather than score as perfect zero regression."""
+    report = {
+        "boundary_metrics": {"overall": {"f1": 1.0}},
+        "ranking": {"relative_mrr_improvement": None, "direct_recall_baseline_hits": 0,
+                    "direct_recall_regression": 0.0, "direct_recall_evaluated": False,
+                    "false_transfer_rate": None, "false_transfer_evaluated": False},
+        "import_report": None, "import_reports": None, "replay_hashes": [], "replay_identical": False,
+        "compiler_probe": None, "compiler_probes": [], "compiler_limits": {}, "resource_benchmark": None,
+    }
+    acceptance = _acceptance(report)
+    assert acceptance["gates"]["direct_recall_regression"]["observed"] is None
+    assert acceptance["gates"]["direct_recall_regression"]["passed"] is False
+    assert acceptance["gates"]["false_transfer_rate"]["passed"] is False
+    assert acceptance["overall_pass"] is False
 
 
 def test_false_transfer_excludes_empty_and_same_context_distractors():
