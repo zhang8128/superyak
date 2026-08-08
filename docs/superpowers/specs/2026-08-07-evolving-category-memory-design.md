@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 
-**Status:** Approved direction; awaiting written-spec review
+**Status:** Approved implementation direction; shadow acceptance pending
 
 **Scope:** First falsifiable implementation in `engram`
 
@@ -66,6 +66,10 @@ Implement an **event-sourced, context-weighted weak 2-category in shadow mode**.
   archive as an in-memory graph.
 - Keep arbitrary computation in separately budgeted operators. Category cells
   may describe executable rules, but they do not grant execution authority.
+- Treat a clean process boundary as the only supported runtime upgrade path.
+  In-process `importlib.reload(server)` is unsupported: the supervisor stops the
+  old process, exact-owned resources close in dependency order, and a fresh
+  process constructs the next generation from disk.
 
 The infinity-category is an extension direction, not a claim about the first
 runtime.
@@ -313,7 +317,7 @@ Follow the repository's flat-module organization:
 | `category_compile.py` | Indexed traversal, valuation, diversity, budget packing |
 | `config.py` | Shadow-mode, quotas, thresholds, and structural budgets |
 | `reflection.py` | `reflect(focus="category_evolution")` diagnostics |
-| `server.py` | Non-fatal initialization and shadow observation wiring |
+| `server.py` | Non-fatal initialization, shadow observation wiring, and exact process-lifetime cleanup |
 | `tests/test_categories_v2.py` | Cell, boundary, transaction, and replay invariants |
 | `tests/test_category_context.py` | Domain-neutral boundary fixtures |
 | `tests/test_category_evolution.py` | Proposal, rewrite, fork, and consolidation behavior |
@@ -384,6 +388,15 @@ live structural mutation.
   filesystem fills.
 - Every compile has wall-time, cell-count, traversal, and token limits.
 - Epoch selection provides logical rollback without deleting later history.
+- Code upgrades use coordinated process replacement, never live module reload.
+  Shutdown stops and joins the watcher while storage remains open, drains
+  admitted work, closes dependent native resources, then closes storage. A
+  replacement process starts only after the old process exits; immutable disk
+  state and process-local reset provide the handoff.
+- No runtime code adopts classes, callbacks, SQLite connections, compiler
+  leases, or native handles created by an older module generation. Failed
+  shutdown remains an old-process failure for the supervisor to surface; it
+  cannot publish a mixed-generation server inside the process.
 
 ## Test Strategy
 

@@ -692,9 +692,18 @@ git commit -m "feat: bound evolving category archive writes"
 
 **Files:**
 - Modify: `server.py:150-168,273-386,1368-1495,2126-2133`
+- Modify: `watcher.py`
+- Modify: `storage.py`
+- Modify: `knowledge.py`
+- Modify: `category_compile.py`
 - Modify: `reflection.py:52-64,675-740`
 - Modify: `tests/test_server.py:47-89`
 - Modify: `tests/test_reflection.py:86-94`
+- Modify: `tests/test_server_registry.py`
+- Modify: `tests/test_watcher.py`
+- Modify: `tests/test_storage.py`
+- Modify: `tests/test_knowledge.py`
+- Modify: `tests/test_category_compile.py`
 - Create: `tests/test_category_server.py`
 
 **Interfaces:**
@@ -724,11 +733,32 @@ Build sparse context features from normalized query terms, cwd source, and times
 
 Add `_category_observer = None`. Initialize only when `enabled`; empty `db_path` resolves beside active `graph.db` as `categories_v2.db`. Catch init/observe/compile failures, log, and continue. Preserve legacy `_category_store` and visible transfers unchanged. Shadow compiles only diagnostics. Startup consolidation runs only when `enabled and auto_commit`; recall never runs it.
 
-- [ ] **Step 6: Add reflection provider**
+- [ ] **Step 6: Enforce the process-restart lifecycle boundary**
+
+Support one resource generation per process. Remove in-process server reload
+migration, generation-ABI adoption, mixed-generation compatibility adapters,
+and tests that treat `importlib.reload(server)` as a supported runtime update.
+The server owns one exact cleanup coordinator: it stops and joins the watcher
+while storage is open, drains admitted operations, closes independent native
+dependencies while retaining retryable failures, and closes storage last.
+Fork hooks may quiesce an unchanged process, but they must not implement code
+upgrade or module-generation migration. Code deployment is performed by the
+external supervisor: terminate the old process, wait for exit, then launch a
+fresh interpreter.
+
+Add a behavioral subprocess test that starts an enabled observer against a
+temporary project, records an event, shuts down cleanly, starts a second Python
+process against the same disk state, and verifies the event remains readable,
+process-local tracker state is fresh, no callback/native handle is inherited,
+and visible recall remains unchanged in shadow mode. Add a blocked-watcher
+shutdown test proving watcher join precedes storage close. Do not use source-text
+assertions or `importlib.reload(server)` as the lifecycle mechanism.
+
+- [ ] **Step 7: Add reflection provider**
 
 Extend `Reflector.__init__` with keyword-only `category_reporter: Callable[[], dict] | None = None`. Return `{"available": False}` when absent and `{"available": False, "error": type(exc).__name__}` on failure. Add only explicit focus dispatch.
 
-- [ ] **Step 7: Verify and commit**
+- [ ] **Step 8: Verify and commit**
 
 Run: `.venv/bin/python -m pytest tests/test_category_server.py tests/test_reflection.py tests/test_server.py -q`
 
