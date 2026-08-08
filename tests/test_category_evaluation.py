@@ -20,7 +20,9 @@ from experiments.category_evolution.metrics import (
 )
 from experiments.category_evolution.runner import main as runner_main
 from experiments.category_evolution.runner import _acceptance, _false_cross_context_transfers, _full_state_digest
+from experiments.category_evolution.runner import _build_current_fixture_archive, _compile_shadow_rankings
 from category_evolution import legacy_proxy_id
+from category_evolution import import_legacy_category
 from category_context import ContextTracker
 
 
@@ -264,6 +266,33 @@ def test_compiler_rank_perturbation_changes_shadow_metric():
     """A changed compiler ordering must change the resulting shadow metric."""
     assert mean_reciprocal_rank([(["relevant", "other"], {"relevant"})]) == 1.0
     assert mean_reciprocal_rank([(["other", "relevant"], {"relevant"})]) == 0.5
+
+
+def test_post_ranking_truth_swap_does_not_change_compiler_candidates(tmp_path):
+    """The real compiler path is label-blind; only post-hoc scoring changes."""
+    legacy = tmp_path / "current.db"
+    shadow = tmp_path / "shadow.db"
+    baseline, truths = _build_current_fixture_archive(legacy, fixture_cohort("development"))
+    imported = import_legacy_category(legacy, shadow)
+    first, _direct, _probes, _cross = _compile_shadow_rankings(shadow, imported.root_epoch_id, truths, baseline)
+    first_ids = [ranking for ranking, _relevant in first]
+    original_mrr = mean_reciprocal_rank(first)
+    truths[0]["relevant_id"] = truths[0]["noise_id"]
+    second, _direct, _probes, _cross = _compile_shadow_rankings(shadow, imported.root_epoch_id, truths, baseline)
+    assert [ranking for ranking, _relevant in second] == first_ids
+    assert mean_reciprocal_rank(second) != original_mrr
+
+
+def test_changed_baseline_seed_changes_real_compiler_ranking(tmp_path):
+    """A real input perturbation reaches compiler candidates and downstream metrics."""
+    legacy = tmp_path / "current.db"
+    shadow = tmp_path / "shadow.db"
+    baseline, truths = _build_current_fixture_archive(legacy, fixture_cohort("development"))
+    imported = import_legacy_category(legacy, shadow)
+    original, _direct, _probes, _cross = _compile_shadow_rankings(shadow, imported.root_epoch_id, truths, baseline)
+    perturbed = [{"query": list(reversed(row["query"])), "direct": list(reversed(row["direct"]))} for row in baseline]
+    changed, _direct, _probes, _cross = _compile_shadow_rankings(shadow, imported.root_epoch_id, truths, perturbed)
+    assert [rank for rank, _truth in changed] != [rank for rank, _truth in original]
 
 
 def test_zero_direct_and_transfer_evidence_is_not_evaluable():
