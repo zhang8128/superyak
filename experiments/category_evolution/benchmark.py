@@ -132,6 +132,14 @@ def _write_epoch_snapshot(connection: sqlite3.Connection, epoch_id: str, cells: 
     """Materialize membership inside SQLite; Python never holds cell IDs or JSON."""
     event_id = "benchmark-epoch-event"
     created_at = datetime.now(timezone.utc).isoformat()
+    # A bounded 64-ary stress frontier exercises real traversal: at depth 3 it
+    # reaches tens of thousands of cells, while generation remains streaming.
+    frontier = min(cells, 50_000)
+    connection.executemany(
+        "INSERT INTO cat_boundaries (cell_id, side, position, boundary_id) VALUES (?, 'source', ?, ?)",
+        ((f"cell-{((number - 1) // 64):07d}", (number - 1) % 64, f"cell-{number:07d}")
+         for number in range(1, frontier)),
+    )
     connection.execute(
         "INSERT INTO cat_events (id, kind, payload_json, created_at) VALUES (?, ?, ?, ?)",
         (event_id, "benchmark_epoch", "{}", created_at),
