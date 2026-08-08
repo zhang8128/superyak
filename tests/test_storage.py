@@ -205,6 +205,67 @@ def test_storage_uses_resource_migrations_when_directory_is_not_explicit(
         store.close()
 
 
+def test_close_retains_failed_cold_connection_and_closes_main_once(
+    tmp_path, caplog,
+):
+    """A failed exact cold handle is retryable after the main DB is closed."""
+    store = Storage(str(tmp_path / "graph.db"))
+
+    class ColdConnection:
+        def __init__(self):
+            self.attempts = 0
+
+        def close(self):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise sqlite3.OperationalError("private cold close detail")
+
+    cold = ColdConnection()
+    store._cold_conn = cold
+
+    with pytest.raises(sqlite3.OperationalError, match="private cold close detail"):
+        store.close()
+
+    assert store._cold_conn is cold
+    assert cold.attempts == 1
+    assert "private cold close detail" not in caplog.text
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        store.conn.execute("SELECT 1")
+
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="engram.storage"):
+        store.close()
+        store.close()
+
+    assert cold.attempts == 2
+    assert store._cold_conn is None
+    assert not any("WAL checkpoint failed" in record.message for record in caplog.records)
+
+
+def test_close_checkpoint_warning_is_type_only(tmp_path, caplog):
+    store = Storage(str(tmp_path / "graph.db"))
+    real_connection = store.conn
+
+    class CheckpointFailure:
+        def execute(self, sql):
+            assert sql == "PRAGMA wal_checkpoint(TRUNCATE)"
+            raise sqlite3.OperationalError("private checkpoint detail")
+
+        def close(self):
+            real_connection.close()
+
+    store.conn = CheckpointFailure()
+
+    with caplog.at_level("WARNING", logger="engram.storage"):
+        store.close()
+
+    assert "private checkpoint detail" not in caplog.text
+    assert any(
+        record.message == "WAL checkpoint failed on close (OperationalError)"
+        for record in caplog.records
+    )
+
+
 def test_failed_migration_rolls_back_schema_and_version(tmp_path):
     migrations = tmp_path / "migrations"
     migrations.mkdir()

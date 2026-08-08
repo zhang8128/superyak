@@ -401,7 +401,7 @@ class CategoryCompiler:
             if self._closed or self._closing:
                 raise RuntimeError("category compiler is closed")
             while not self._available_connections:
-                if self._closed:
+                if self._closed or self._closing:
                     raise RuntimeError("category compiler is closed")
                 remaining_ns = deadline - time.monotonic_ns()
                 if remaining_ns <= 0:

@@ -299,9 +299,18 @@ class KnowledgeGraph:
 
     def close(self):
         """Clean up Graphiti resources."""
+        first_error = None
         if self._graphiti is not None:
             try:
                 self._run_async(self._graphiti.close())
-            except Exception:
-                logger.debug("Knowledge graph close failed", exc_info=True)
-        self._shutdown_executor()
+            except Exception as exc:
+                first_error = exc
+            else:
+                self._graphiti = None
+        try:
+            self._shutdown_executor()
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+        if first_error is not None:
+            raise first_error

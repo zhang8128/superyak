@@ -16,6 +16,22 @@ def test_watcher_start_stop(tmp_path):
     assert not watcher.is_alive()
 
 
+def test_watcher_cannot_restart_after_shutdown_begins(tmp_path):
+    """Cleanup stop is terminal so lifecycle drain cannot spawn new workers."""
+    config = WatcherConfig(enabled=True, debounce_ms=100)
+    watcher = FileWatcher(tmp_path, config, storage=None, embedding_provider=None)
+
+    watcher.start()
+    watcher.stop(timeout=2.0)
+    watcher.start()
+
+    try:
+        assert watcher.is_alive() is False
+    finally:
+        if watcher.is_alive():
+            watcher.stop(timeout=2.0)
+
+
 def test_watcher_not_started_when_disabled(tmp_path):
     config = WatcherConfig(enabled=False)
     watcher = FileWatcher(tmp_path, config, storage=None, embedding_provider=None)

@@ -173,6 +173,60 @@ class TestKnowledgeGraphInit:
         assert driver_closes == []
         assert kg._executor is None
 
+    def test_close_attempts_independent_owners_and_retries_only_failures(
+        self, graph_config
+    ):
+        """Graph and executor failures retain only their exact failed handles."""
+        from knowledge import KnowledgeGraph
+
+        class GraphHandle:
+            def __init__(self):
+                self.attempts = 0
+
+            def close(self):
+                self.attempts += 1
+                return self
+
+        class ExecutorHandle:
+            def __init__(self):
+                self.attempts = 0
+
+            def shutdown(self, *, wait):
+                assert wait is False
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise RuntimeError("private executor close detail")
+
+        graph = GraphHandle()
+        executor = ExecutorHandle()
+        kg = KnowledgeGraph.__new__(KnowledgeGraph)
+        kg._config = graph_config
+        kg._graphiti = graph
+        kg._executor = executor
+
+        def fail_graph_once(handle):
+            assert handle is graph
+            if graph.attempts == 1:
+                raise RuntimeError("private graph close detail")
+
+        kg._run_async = fail_graph_once
+
+        with pytest.raises(RuntimeError, match="private graph close detail"):
+            kg.close()
+
+        assert graph.attempts == 1
+        assert executor.attempts == 1
+        assert kg._graphiti is graph
+        assert kg._executor is executor
+
+        kg.close()
+        kg.close()
+
+        assert graph.attempts == 2
+        assert executor.attempts == 2
+        assert kg._graphiti is None
+        assert kg._executor is None
+
 
 class FakeGraphEmbeddingProvider:
     def __init__(self):

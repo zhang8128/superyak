@@ -242,6 +242,368 @@ def test_claude_session_id_wins_over_inherited_run_key(engram_server_env, monkey
     assert engram_server_env._session_id == "claude-session"
 
 
+def test_real_watcher_indexes_with_server_storage_from_worker_thread(
+    engram_server_env,
+):
+    """The lifecycle-serialized watcher can use the server's real SQLite store."""
+    source = engram_server_env.PROJECT_ROOT / "worker_owned.py"
+    source.write_text("def indexed_from_worker():\n    return 1\n")
+    engram_server_env._init()
+    finished = threading.Event()
+    errors = []
+
+    def index_from_worker():
+        try:
+            engram_server_env._watcher._index_file(source)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=index_from_worker)
+    worker.start()
+    assert finished.wait(timeout=5)
+    worker.join(timeout=5)
+
+    assert errors == []
+    assert engram_server_env._storage.get_entity(
+        "symbol:worker_owned.py::indexed_from_worker"
+    ) is not None
+
+
+def test_true_lifo_cleanup_joins_real_watcher_before_closing_storage(
+    engram_server_env, monkeypatch, caplog
+):
+    """The one generation callback drains real indexing before Storage.close."""
+    from config import load_config
+    from storage import Storage
+    from watcher import FileWatcher
+
+    config = load_config(engram_server_env.PROJECT_ROOT)
+    config.graph.enabled = False
+    config.watcher.enabled = True
+    monkeypatch.setattr(engram_server_env, "load_config", lambda _root: config)
+
+    registered = []
+    monkeypatch.setattr(atexit, "register", registered.append)
+    real_storage_close = Storage.close
+    real_watcher_stop = FileWatcher.stop
+    shutdown_stage = threading.Event()
+    storage_close_started = threading.Event()
+    watcher_stop_started = threading.Event()
+    storage_close_calls = []
+
+    def observed_storage_close(storage):
+        storage_close_calls.append(storage)
+        storage_close_started.set()
+        shutdown_stage.set()
+        return real_storage_close(storage)
+
+    def observed_watcher_stop(watcher, *args, **kwargs):
+        watcher_stop_started.set()
+        shutdown_stage.set()
+        return real_watcher_stop(watcher, *args, **kwargs)
+
+    monkeypatch.setattr(Storage, "close", observed_storage_close)
+    monkeypatch.setattr(FileWatcher, "stop", observed_watcher_stop)
+    engram_server_env._init()
+    storage = engram_server_env._storage
+    watcher = engram_server_env._watcher
+    source = engram_server_env.PROJECT_ROOT / "cleanup_owned.py"
+    source.write_text("def replacement_symbol():\n    return 2\n")
+    index_entered = threading.Event()
+    allow_index = threading.Event()
+    real_embed = engram_server_env._embeddings.embed
+
+    def block_index_embedding(texts, **kwargs):
+        if any("cleanup_owned.py" in text for text in texts):
+            index_entered.set()
+            assert allow_index.wait(timeout=5)
+        return real_embed(texts, **kwargs)
+
+    monkeypatch.setattr(engram_server_env._embeddings, "embed", block_index_embedding)
+    watcher.start()
+    watcher._queue.put(source)
+    assert index_entered.wait(timeout=5)
+
+    shutdown_observations = []
+
+    def release_after_shutdown_blocks():
+        assert shutdown_stage.wait(timeout=5)
+        shutdown_observations.append(
+            (watcher_stop_started.is_set(), storage_close_started.is_set())
+        )
+        allow_index.set()
+
+    releaser = threading.Thread(target=release_after_shutdown_blocks)
+    releaser.start()
+    for callback in reversed(tuple(registered)):
+        callback()
+    releaser.join(timeout=5)
+
+    assert shutdown_observations == [(True, False)]
+    assert len(engram_server_env._server_atexit_callbacks) == 1
+    assert watcher.is_alive() is False
+    assert watcher.processed_count() == 1
+    assert storage_close_calls == [storage]
+    assert "ProgrammingError" not in caplog.text
+
+    for callback in reversed(tuple(registered)):
+        callback()
+    assert storage_close_calls == [storage]
+
+
+def test_failed_watcher_join_retains_exact_generation_for_cleanup_retry(
+    engram_server_env, monkeypatch
+):
+    """A bounded join failure cannot close storage or target replacements."""
+    from config import load_config
+    from storage import Storage
+    from watcher import FileWatcher
+
+    config = load_config(engram_server_env.PROJECT_ROOT)
+    config.graph.enabled = False
+    config.watcher.enabled = True
+    monkeypatch.setattr(engram_server_env, "load_config", lambda _root: config)
+    registered = []
+    monkeypatch.setattr(atexit, "register", registered.append)
+    real_storage_close = Storage.close
+    real_watcher_stop = FileWatcher.stop
+    stop_attempted = threading.Event()
+    storage_close_calls = []
+
+    def observed_storage_close(storage):
+        storage_close_calls.append(storage)
+        return real_storage_close(storage)
+
+    def bounded_watcher_stop(watcher, *_args, **_kwargs):
+        stop_attempted.set()
+        return real_watcher_stop(watcher, timeout=0)
+
+    monkeypatch.setattr(Storage, "close", observed_storage_close)
+    monkeypatch.setattr(FileWatcher, "stop", bounded_watcher_stop)
+    engram_server_env._init()
+    storage = engram_server_env._storage
+    watcher = engram_server_env._watcher
+    source = engram_server_env.PROJECT_ROOT / "retry_cleanup.py"
+    source.write_text("def blocked_for_retry():\n    return 3\n")
+    index_entered = threading.Event()
+    allow_index = threading.Event()
+    real_embed = engram_server_env._embeddings.embed
+
+    def block_index_embedding(texts, **kwargs):
+        if any("retry_cleanup.py" in text for text in texts):
+            index_entered.set()
+            assert allow_index.wait(timeout=5)
+        return real_embed(texts, **kwargs)
+
+    monkeypatch.setattr(engram_server_env._embeddings, "embed", block_index_embedding)
+    watcher.start()
+    watcher._queue.put(source)
+    assert index_entered.wait(timeout=5)
+    callback = registered[-1]
+    cleanup_finished = threading.Event()
+    cleanup = threading.Thread(
+        target=lambda: (callback(), cleanup_finished.set())
+    )
+    cleanup.start()
+    try:
+        assert stop_attempted.wait(timeout=5)
+        assert cleanup_finished.wait(timeout=0.25)
+        assert storage_close_calls == []
+    finally:
+        allow_index.set()
+        cleanup_finished.wait(timeout=5)
+        cleanup.join(timeout=5)
+
+    watcher._consumer_thread.join(timeout=5)
+    watcher._watcher_thread.join(timeout=5)
+    replacement_calls = []
+
+    class Replacement:
+        def close(self):
+            replacement_calls.append("close")
+
+        def stop(self):
+            replacement_calls.append("stop")
+
+    replacement_storage = Replacement()
+    replacement_watcher = Replacement()
+    engram_server_env._storage = replacement_storage
+    engram_server_env._watcher = replacement_watcher
+    try:
+        callback()
+        callback()
+        assert storage_close_calls == [storage]
+        assert replacement_calls == []
+    finally:
+        engram_server_env._storage = storage
+        engram_server_env._watcher = watcher
+
+
+def test_failed_storage_close_retries_after_dependencies_without_double_close(
+    engram_server_env, monkeypatch
+):
+    """Storage remains the last exact step and retries without rerunning owners."""
+    from config import load_config
+    from storage import Storage
+    from watcher import FileWatcher
+
+    config = load_config(engram_server_env.PROJECT_ROOT)
+    config.graph.enabled = False
+    config.watcher.enabled = False
+    monkeypatch.setattr(engram_server_env, "load_config", lambda _root: config)
+    registered = []
+    monkeypatch.setattr(atexit, "register", registered.append)
+    real_storage_close = Storage.close
+    real_watcher_stop = FileWatcher.stop
+    storage_attempts = []
+    watcher_attempts = []
+
+    def fail_storage_once(storage):
+        storage_attempts.append(storage)
+        if len(storage_attempts) == 1:
+            raise sqlite3.OperationalError("private storage close detail")
+        return real_storage_close(storage)
+
+    def observe_watcher_stop(watcher, *args, **kwargs):
+        watcher_attempts.append(watcher)
+        return real_watcher_stop(watcher, *args, **kwargs)
+
+    monkeypatch.setattr(Storage, "close", fail_storage_once)
+    monkeypatch.setattr(FileWatcher, "stop", observe_watcher_stop)
+    engram_server_env._init()
+    storage = engram_server_env._storage
+    watcher = engram_server_env._watcher
+    callback = registered[-1]
+
+    callback()
+
+    assert storage.conn.execute("SELECT 1").fetchone()[0] == 1
+    assert storage_attempts == [storage]
+    assert watcher_attempts == [watcher]
+    assert storage in callback._server_resources
+
+    callback()
+    callback()
+
+    assert storage_attempts == [storage, storage]
+    assert watcher_attempts == [watcher]
+    with pytest.raises(sqlite3.ProgrammingError):
+        storage.conn.execute("SELECT 1")
+
+
+def test_queued_server_operation_drains_before_generation_storage_closes(
+    tmp_path, monkeypatch
+):
+    """Work admitted before shutdown finishes against still-open Storage."""
+    from storage import Storage
+
+    class OrderedRLock:
+        def __init__(self):
+            self._condition = threading.Condition()
+            self._owner = None
+            self._depth = 0
+            self._queue = []
+
+        def acquire(self):
+            ident = threading.get_ident()
+            with self._condition:
+                if self._owner == ident:
+                    self._depth += 1
+                    return True
+                token = object()
+                self._queue.append(token)
+                self._condition.notify_all()
+                self._condition.wait_for(
+                    lambda: self._owner is None and self._queue[0] is token
+                )
+                self._queue.pop(0)
+                self._owner = ident
+                self._depth = 1
+                return True
+
+        def release(self):
+            with self._condition:
+                self._depth -= 1
+                if self._depth == 0:
+                    self._owner = None
+                    self._condition.notify_all()
+
+        def wait_for_queue(self, count):
+            with self._condition:
+                return self._condition.wait_for(
+                    lambda: len(self._queue) >= count, timeout=5
+                )
+
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            self.release()
+
+    lifecycle = OrderedRLock()
+    storage = Storage(str(tmp_path / "queued-cleanup.db"), check_same_thread=False)
+    coordinator = server._ServerGenerationCleanup(lifecycle)
+    cleanup_started = threading.Event()
+
+    class Watcher:
+        def stop(self):
+            cleanup_started.set()
+
+    watcher = Watcher()
+    coordinator.add(watcher, watcher.stop, "watcher")
+    coordinator.add(storage, storage.close, "storage")
+    monkeypatch.setattr(server, "_server_lifecycle_lock", lifecycle)
+    monkeypatch.setattr(server, "_server_atexit_callbacks", [coordinator])
+    monkeypatch.setattr(server, "_server_generation_cleanup", coordinator)
+    monkeypatch.setattr(server, "_server_lock_pid", os.getpid())
+    monkeypatch.setattr(
+        server,
+        "_init_unlocked",
+        lambda: storage.conn.execute("SELECT 1").fetchone()[0],
+    )
+    operation = server._server_operation(server._init)
+    cleanup_finished = threading.Event()
+    operation_finished = threading.Event()
+    operation_errors = []
+    operation_results = []
+
+    def clean_generation():
+        coordinator()
+        cleanup_finished.set()
+
+    def run_queued_operation():
+        try:
+            operation_results.append(operation())
+        except Exception as exc:
+            operation_errors.append(exc)
+        finally:
+            operation_finished.set()
+
+    lifecycle.acquire()
+    queued = threading.Thread(target=run_queued_operation)
+    queued.start()
+    assert lifecycle.wait_for_queue(1)
+    cleanup = threading.Thread(target=clean_generation)
+    cleanup.start()
+    assert cleanup_started.wait(timeout=5)
+    assert not cleanup_finished.is_set()
+    lifecycle.release()
+    assert operation_finished.wait(timeout=5)
+    assert cleanup_finished.wait(timeout=5)
+    cleanup.join(timeout=5)
+    queued.join(timeout=5)
+
+    assert operation_errors == []
+    assert operation_results == [1]
+    with pytest.raises(RuntimeError, match="generation is shutting down"):
+        operation()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        storage.conn.execute("SELECT 1")
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
 def test_real_fork_waits_for_blocked_core_initialization_and_resets_child_state(
     monkeypatch,
@@ -497,11 +859,24 @@ def test_core_atexit_callbacks_close_exact_instances_not_replacement_globals(
 def test_server_reload_preserves_core_generation_lock_and_cleanup_ownership(
     monkeypatch,
 ):
-    """Reload cannot orphan live core resources or register a parallel lock."""
-    resource = object()
-    project_notepad = object()
-    global_notepad = object()
-    callback = lambda: None
+    """Reload adopts exact owners into one callback without replacing its lock."""
+    class Resource:
+        def close(self):
+            pass
+
+    resource = Resource()
+    project_notepad = Resource()
+    global_notepad = Resource()
+    callback = server._make_server_cleanup(
+        resource, resource.close, "storage"
+    )
+    registered = [callback]
+
+    def unregister(item):
+        registered[:] = [callback for callback in registered if callback is not item]
+
+    monkeypatch.setattr(atexit, "register", registered.append)
+    monkeypatch.setattr(atexit, "unregister", unregister)
     lifecycle = threading.RLock()
     monkeypatch.setattr(server, "_storage", resource)
     monkeypatch.setattr(server, "_initialized", True)
@@ -515,9 +890,55 @@ def test_server_reload_preserves_core_generation_lock_and_cleanup_ownership(
     assert reloaded._storage is resource
     assert reloaded._initialized is True
     assert reloaded._server_lifecycle_lock is lifecycle
-    assert reloaded._server_atexit_callbacks == [callback]
+    assert len(reloaded._server_atexit_callbacks) == 1
+    coordinator = reloaded._server_atexit_callbacks[0]
+    assert coordinator is registered[-1]
+    assert getattr(coordinator, "_server_cleanup_coordinator", False) is True
+    assert set(coordinator._server_resources) >= {
+        resource,
+        project_notepad,
+        global_notepad,
+    }
     assert reloaded._notepad_project is project_notepad
     assert reloaded._notepad_global is global_notepad
+
+
+def test_reload_keeps_existing_generation_coordinator_registered(monkeypatch):
+    """A second reload cannot unregister the already-adopted exact callback."""
+    class Observer:
+        def close(self):
+            pass
+
+    observer = Observer()
+    lifecycle = threading.RLock()
+    coordinator = server._ServerGenerationCleanup(lifecycle)
+    coordinator.add(observer, observer.close, "category observer")
+    registered = [coordinator]
+    unregistered = []
+    monkeypatch.setattr(atexit, "register", registered.append)
+    monkeypatch.setattr(atexit, "unregister", unregistered.append)
+    monkeypatch.setattr(server, "_server_lifecycle_lock", lifecycle)
+    monkeypatch.setattr(server, "_server_atexit_callbacks", [coordinator])
+    monkeypatch.setattr(server, "_server_generation_cleanup", coordinator)
+    monkeypatch.setattr(server, "_category_observer", observer)
+    monkeypatch.setattr(server, "_category_pending_close", None)
+    monkeypatch.setattr(server, "_category_atexit_callback", coordinator)
+    monkeypatch.setattr(server, "_storage", None)
+    monkeypatch.setattr(server, "_watcher", None)
+    monkeypatch.setattr(server, "_knowledge_graph", None)
+    monkeypatch.setattr(server, "_category_store", None)
+    monkeypatch.setattr(server, "_clipboard", None)
+    monkeypatch.setattr(server, "_instinct_graph", None)
+    monkeypatch.setattr(server, "_notepad_project", None)
+    monkeypatch.setattr(server, "_notepad_global", None)
+
+    reloaded = importlib.reload(server)
+
+    assert reloaded._server_lifecycle_lock is lifecycle
+    assert reloaded._server_atexit_callbacks == [coordinator]
+    assert reloaded._category_atexit_callback is coordinator
+    assert registered == [coordinator]
+    assert unregistered == []
 
 
 def test_fork_snapshot_retains_resources_owned_only_by_exact_cleanup_callback(
@@ -595,11 +1016,10 @@ def test_lazy_notepads_register_exact_idempotent_cleanup(
     second = server._get_notepads()
 
     assert first == second == (project, global_pad)
-    assert [callback._server_resource for callback in registered] == [
-        project,
-        global_pad,
-    ]
+    assert len(registered) == 1
+    assert set(registered[0]._server_resources) == {project, global_pad}
     for callback in registered:
+        callback()
         callback()
     with pytest.raises(sqlite3.ProgrammingError):
         project.conn.execute("SELECT 1")
@@ -700,11 +1120,13 @@ def test_reload_migration_masks_legacy_dynamic_atexit_callbacks_after_fork(
 
     reloaded = importlib.reload(server)
 
-    adopted = {
-        getattr(callback, "_server_resource", None)
+    coordinators = [
+        callback
         for callback in registered
-        if getattr(callback, "_server_resource", None) is not None
-    }
+        if getattr(callback, "_server_cleanup_coordinator", False)
+    ]
+    assert len(coordinators) == 1
+    adopted = set(coordinators[0]._server_resources)
     assert adopted == {
         old_watcher,
         old_storage,
@@ -728,4 +1150,17 @@ def test_reload_migration_masks_legacy_dynamic_atexit_callbacks_after_fork(
         callback()
 
     assert old_storage in reloaded._fork_quarantined_resources
+    assert all(
+        resource.close_count == 0
+        for resource in (
+            old_storage,
+            old_watcher,
+            old_knowledge,
+            old_category_connection,
+            old_clipboard,
+            old_instinct_graph,
+            old_project_notepad,
+            old_global_notepad,
+        )
+    )
     assert child_storage.close_count == 1

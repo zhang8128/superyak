@@ -1396,7 +1396,7 @@ def test_category_atexit_cleanup_logs_only_failure_type(category_init_env, monke
 
 
 def test_module_reload_retains_observer_until_next_init_can_close_it(monkeypatch):
-    """Actual module reload must not discard the only live observer reference."""
+    """Reload adopts the exact observer into the generation coordinator."""
     import server
 
     class OldObserver:
@@ -1404,13 +1404,16 @@ def test_module_reload_retains_observer_until_next_init_can_close_it(monkeypatch
             pass
 
     old = OldObserver()
-    callback = old.close
+    callback = server._make_category_cleanup(old)
     server._category_observer = old
     server._category_atexit_callback = callback
     reloaded = importlib.reload(server)
     try:
         assert reloaded._category_observer is old
-        assert reloaded._category_atexit_callback == callback
+        coordinator = reloaded._category_atexit_callback
+        assert getattr(coordinator, "_server_cleanup_coordinator", False) is True
+        assert coordinator._category_observer is old
+        assert old in coordinator._server_resources
     finally:
         reloaded._category_observer = None
         reloaded._category_atexit_callback = None

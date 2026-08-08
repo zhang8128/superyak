@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from queue import SimpleQueue, Empty
-from threading import Thread, Event
+from threading import Thread, Event, Lock, current_thread
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -25,6 +25,8 @@ class FileWatcher:
         self._storage = storage
         self._embedding_provider = embedding_provider
         self._operation_lock = operation_lock
+        self._state_lock = Lock()
+        self._stopped = False
         self._queue: SimpleQueue[Path] = SimpleQueue()
         self._stop_event = Event()
         self._watcher_thread: Thread | None = None
@@ -34,22 +36,34 @@ class FileWatcher:
         self._exclude_dirs = set(getattr(config, 'exclude', None) or _DEFAULT_EXCLUDE)
 
     def start(self) -> None:
-        if not self._config.enabled:
-            logger.info("watcher disabled by config")
-            return
-        self._stop_event.clear()
-        self._watcher_thread = Thread(target=self._watch_loop, daemon=True, name="engram-watcher")
-        self._consumer_thread = Thread(target=self._consume_loop, daemon=True, name="engram-consumer")
-        self._watcher_thread.start()
-        self._consumer_thread.start()
+        with self._state_lock:
+            if not self._config.enabled:
+                logger.info("watcher disabled by config")
+                return
+            if self._stopped:
+                logger.info("file watcher shutdown already started")
+                return
+            if self.is_alive():
+                return
+            self._stop_event.clear()
+            self._watcher_thread = Thread(target=self._watch_loop, daemon=True, name="engram-watcher")
+            self._consumer_thread = Thread(target=self._consume_loop, daemon=True, name="engram-consumer")
+            self._watcher_thread.start()
+            self._consumer_thread.start()
         logger.info("file watcher started for %s (extensions: %s)", self._root, self._extensions)
 
     def stop(self, timeout: float = 5.0) -> None:
-        self._stop_event.set()
-        if self._watcher_thread and self._watcher_thread.is_alive():
-            self._watcher_thread.join(timeout=timeout)
-        if self._consumer_thread and self._consumer_thread.is_alive():
-            self._consumer_thread.join(timeout=timeout)
+        with self._state_lock:
+            self._stopped = True
+            self._stop_event.set()
+            threads = (self._watcher_thread, self._consumer_thread)
+        for thread in threads:
+            if thread is not None and thread.is_alive():
+                if thread is current_thread():
+                    raise RuntimeError("file watcher cannot join its current thread")
+                thread.join(timeout=timeout)
+        if any(thread is not None and thread.is_alive() for thread in threads):
+            raise RuntimeError("file watcher threads did not stop")
         logger.info("file watcher stopped (processed %d files)", self._processed)
 
     def is_alive(self) -> bool:

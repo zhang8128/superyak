@@ -119,7 +119,7 @@ def test_compiler_close_retries_failed_pool_member_without_losing_other_handles(
 
 
 def test_waiter_cannot_lease_handle_retained_after_partial_close(store, monkeypatch):
-    """A pre-existing pool waiter rechecks closing state after every wake."""
+    """A pre-existing waiter rejects shutdown before borrowed leases return."""
     real_connect = sqlite3.connect
 
     class RetryConnection(sqlite3.Connection):
@@ -138,19 +138,43 @@ def test_waiter_cannot_lease_handle_retained_after_partial_close(store, monkeypa
     monkeypatch.setattr("category_compile.sqlite3.connect", connect_retry)
     compiler = CategoryCompiler(store)
     leased = [compiler._acquire_compile_connection(10**30) for _ in range(4)]
-    failed = leased.pop()
+    failed = leased[0]
     failed.fail_once = True
-    waiter_started = threading.Event()
+
+    class ObservedCondition(threading.Condition):
+        def __init__(self):
+            super().__init__()
+            self.waiter_ident = None
+            self.wait_count = 0
+            self.first_wait = threading.Event()
+            self.second_wait = threading.Event()
+            self.close_notification = threading.Event()
+
+        def wait(self, timeout=None):
+            if threading.get_ident() == self.waiter_ident:
+                self.wait_count += 1
+                if self.wait_count == 1:
+                    self.first_wait.set()
+                elif self.wait_count == 2:
+                    self.second_wait.set()
+            return super().wait(timeout)
+
+        def notify_all(self):
+            if compiler._closing:
+                self.close_notification.set()
+            return super().notify_all()
+
+    compiler._pool_condition = ObservedCondition()
     waiter_finished = threading.Event()
     acquired = []
     errors = []
 
     def wait_for_connection():
-        waiter_started.set()
+        compiler._pool_condition.waiter_ident = threading.get_ident()
         try:
             acquired.append(
                 compiler._acquire_compile_connection(
-                    time.monotonic_ns() + 5_000_000_000
+                    time.monotonic_ns() + 500_000_000
                 )
             )
         except Exception as exc:
@@ -160,21 +184,13 @@ def test_waiter_cannot_lease_handle_retained_after_partial_close(store, monkeypa
 
     waiter = threading.Thread(target=wait_for_connection)
     waiter.start()
-    assert waiter_started.wait(timeout=5)
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        with compiler._pool_condition:
-            if compiler._pool_condition._waiters:
-                break
-        time.sleep(0.001)
-    else:
-        pytest.fail(
-            f"compiler waiter did not block on the empty pool; "
-            f"finished={waiter_finished.is_set()} errors={errors!r}"
-        )
+    assert compiler._pool_condition.first_wait.wait(timeout=5)
+
+    # A spurious wakeup must continue waiting while the compiler remains open.
     with compiler._pool_condition:
-        del compiler._leased_connections[failed]
-        compiler._available_connections.append(failed)
+        compiler._pool_condition.notify_all()
+    assert compiler._pool_condition.second_wait.wait(timeout=5)
+    assert waiter_finished.is_set() is False
 
     close_errors = []
     close_finished = threading.Event()
@@ -190,21 +206,35 @@ def test_waiter_cannot_lease_handle_retained_after_partial_close(store, monkeypa
     closing = threading.Thread(target=close_pool)
     closing.start()
 
-    assert waiter_finished.wait(timeout=5)
-    waiter.join(timeout=5)
-    for connection in leased:
-        compiler._release_compile_connection(connection)
-    assert close_finished.wait(timeout=5)
-    closing.join(timeout=5)
     try:
+        assert compiler._pool_condition.close_notification.wait(timeout=5)
+        assert waiter_finished.wait(timeout=0.25)
+        assert close_finished.is_set() is False
         assert acquired == []
         assert len(errors) == 1
         assert isinstance(errors[0], RuntimeError)
+
+        for connection in leased:
+            compiler._release_compile_connection(connection)
+        assert close_finished.wait(timeout=5)
+        closing.join(timeout=5)
         assert len(close_errors) == 1
         assert isinstance(close_errors[0], sqlite3.OperationalError)
         assert compiler._available_connections == [failed]
-    finally:
+
         compiler.close()
+        assert compiler._available_connections == []
+        assert compiler._closed is True
+    finally:
+        with compiler._pool_condition:
+            still_leased = tuple(compiler._leased_connections)
+        for connection in still_leased:
+            compiler._release_compile_connection(connection)
+        close_finished.wait(timeout=5)
+        closing.join(timeout=5)
+        waiter.join(timeout=5)
+        if not compiler._closed:
+            compiler.close()
 
 
 def test_close_retains_borrowed_handle_that_fails_release_during_pool_shutdown(

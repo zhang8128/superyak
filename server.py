@@ -189,6 +189,7 @@ _category_last_observed_at = globals().get("_category_last_observed_at")
 _server_pid_guard = globals().get("_server_pid_guard", threading.RLock())
 _server_lock_pid = globals().get("_server_lock_pid", os.getpid())
 _server_atexit_callbacks = globals().get("_server_atexit_callbacks", [])
+_server_generation_cleanup = globals().get("_server_generation_cleanup")
 _fork_quarantined_resources = globals().get("_fork_quarantined_resources", [])
 _SERVER_FORK_SNAPSHOT = globals().get("_SERVER_FORK_SNAPSHOT", ())
 _SERVER_AT_FORK_REGISTERED = globals().get("_SERVER_AT_FORK_REGISTERED", False)
@@ -245,8 +246,12 @@ def _server_owned_resources() -> tuple[object, ...]:
         _notepad_project,
         _notepad_global,
     ) + tuple(
-        getattr(callback, "_server_resource", None)
+        resource
         for callback in _server_atexit_callbacks
+        for resource in (
+            tuple(getattr(callback, "_server_resources", ()))
+            or (getattr(callback, "_server_resource", None),)
+        )
     ) + (
         getattr(_category_atexit_callback, "_category_observer", None),
     )
@@ -298,7 +303,8 @@ def _reset_server_child_state(
     global _clipboard, _category_store, _category_observer
     global _notepad_project, _notepad_global
     global _category_pending_close, _category_status, _category_atexit_callback
-    global _server_atexit_callbacks, _fork_quarantined_resources
+    global _server_atexit_callbacks, _server_generation_cleanup
+    global _fork_quarantined_resources
     global _init_lock, _category_recall_lock, _server_pid_guard
     global _server_lifecycle_lock, _server_lock_pid, _category_last_observed_at
 
@@ -321,6 +327,7 @@ def _reset_server_child_state(
     )
     _fork_quarantined_resources = quarantined
     _server_atexit_callbacks = []
+    _server_generation_cleanup = None
 
     _storage = None
     _embeddings = None
@@ -587,9 +594,14 @@ def _prepare_category_recall_lock() -> None:
 
 def _init():
     _prepare_server_process_locks()
-    with _server_lifecycle_lock:
-        with _init_lock:
-            return _init_unlocked()
+    coordinator = _admit_server_operation()
+    try:
+        with _server_lifecycle_lock:
+            with _init_lock:
+                return _init_unlocked()
+    finally:
+        if coordinator is not None:
+            coordinator.finish_operation()
 
 
 def _server_operation(function):
@@ -597,8 +609,13 @@ def _server_operation(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
         _prepare_server_process_locks()
-        with _server_lifecycle_lock:
-            return function(*args, **kwargs)
+        coordinator = _admit_server_operation()
+        try:
+            with _server_lifecycle_lock:
+                return function(*args, **kwargs)
+        finally:
+            if coordinator is not None:
+                coordinator.finish_operation()
 
     return wrapped
 
@@ -632,27 +649,236 @@ def _make_server_cleanup(resource, cleanup, label: str):
 
     callback._server_resource = resource
     callback._server_cleanup_label = label
+    callback._server_cleanup = cleanup
     return callback
+
+
+class _ServerGenerationCleanup:
+    """Retryable dependency-ordered cleanup for one exact core generation."""
+
+    _server_cleanup_coordinator = True
+
+    def __init__(self, lifecycle_lock):
+        self._lifecycle_lock = lifecycle_lock
+        self._cleanup_lock = threading.Lock()
+        self._state_condition = threading.Condition()
+        self._steps = []
+        self._completed = set()
+        self._category_observer = None
+        self._closing = False
+        self._operations = 0
+        self._operation_owners = {}
+
+    @property
+    def _server_resources(self):
+        return tuple(step[1] for step in self._steps)
+
+    @property
+    def closing(self) -> bool:
+        with self._state_condition:
+            return self._closing
+
+    def admit_operation(self) -> bool:
+        with self._state_condition:
+            owner = threading.get_ident()
+            owner_depth = self._operation_owners.get(owner, 0)
+            if self._closing and owner_depth == 0:
+                return False
+            self._operations += 1
+            self._operation_owners[owner] = owner_depth + 1
+            return True
+
+    def finish_operation(self) -> None:
+        with self._state_condition:
+            owner = threading.get_ident()
+            remaining = self._operation_owners[owner] - 1
+            if remaining:
+                self._operation_owners[owner] = remaining
+            else:
+                del self._operation_owners[owner]
+            self._operations -= 1
+            if self._operations == 0:
+                self._state_condition.notify_all()
+
+    def add(self, resource, cleanup, label: str) -> None:
+        key = (id(resource), label)
+        if any(step[0] == key for step in self._steps):
+            return
+        if label == "watcher":
+            phase = 0
+        elif label == "storage":
+            phase = 2
+        else:
+            phase = 1
+        self._steps.append((key, resource, cleanup, label, phase))
+        if label == "category observer":
+            self._category_observer = resource
+
+    def mark_completed(self, resource, label: str) -> None:
+        self._completed.add((id(resource), label))
+
+    def _run_step(self, step) -> bool:
+        key, _resource, cleanup, label, _phase = step
+        if key in self._completed:
+            return True
+        try:
+            cleanup()
+        except Exception as exc:
+            logger.warning("%s cleanup failed (%s)", label, type(exc).__name__)
+            return False
+        self._completed.add(key)
+        return True
+
+    def __call__(self) -> None:
+        with self._cleanup_lock:
+            with self._state_condition:
+                self._closing = True
+            watcher_ok = True
+            for step in self._steps:
+                if step[4] == 0 and not self._run_step(step):
+                    watcher_ok = False
+            if not watcher_ok:
+                return
+
+            with self._state_condition:
+                if self._operation_owners.get(threading.get_ident(), 0):
+                    logger.warning(
+                        "server generation cleanup deferred from active operation"
+                    )
+                    return
+                self._state_condition.wait_for(lambda: self._operations == 0)
+
+            # Watcher joins and admitted operations drain before dependent
+            # resources are closed under the same lifecycle barrier.
+            with self._lifecycle_lock:
+                dependencies_ok = True
+                for step in self._steps:
+                    if step[4] == 1 and not self._run_step(step):
+                        dependencies_ok = False
+                if not dependencies_ok:
+                    return
+                for step in self._steps:
+                    if step[4] == 2:
+                        self._run_step(step)
+
+
+def _active_server_cleanup_coordinator():
+    for callback in _server_atexit_callbacks:
+        if getattr(callback, "_server_cleanup_coordinator", False):
+            return callback
+    return None
+
+
+def _server_generation_is_closing() -> bool:
+    coordinator = _active_server_cleanup_coordinator()
+    return bool(
+        coordinator is not None
+        and getattr(coordinator, "_lifecycle_lock", None)
+        is _server_lifecycle_lock
+        and getattr(coordinator, "closing", False)
+    )
+
+
+def _admit_server_operation():
+    coordinator = _active_server_cleanup_coordinator()
+    if (
+        coordinator is None
+        or getattr(coordinator, "_lifecycle_lock", None)
+        is not _server_lifecycle_lock
+    ):
+        return None
+    if not coordinator.admit_operation():
+        raise RuntimeError("server generation is shutting down")
+    return coordinator
+
+
+def _ensure_server_cleanup_coordinator():
+    global _server_generation_cleanup
+    coordinator = _active_server_cleanup_coordinator()
+    if coordinator is not None:
+        _server_generation_cleanup = coordinator
+        return coordinator
+    coordinator = _ServerGenerationCleanup(_server_lifecycle_lock)
+    _server_generation_cleanup = coordinator
+    _server_atexit_callbacks.append(coordinator)
+    atexit.register(coordinator)
+    return coordinator
 
 
 def _register_server_cleanup(resource, cleanup, label: str):
-    global _server_atexit_callbacks
-    for callback in _server_atexit_callbacks:
-        if (
-            getattr(callback, "_server_resource", None) is resource
-            and getattr(callback, "_server_cleanup_label", None) == label
-        ):
-            return callback
-    callback = _make_server_cleanup(resource, cleanup, label)
-    _server_atexit_callbacks.append(callback)
-    atexit.register(callback)
-    return callback
+    coordinator = _ensure_server_cleanup_coordinator()
+    coordinator.add(resource, cleanup, label)
+    return coordinator
+
+
+def _cleanup_for_legacy_resource(resource, label: str):
+    if label == "watcher":
+        return resource.stop
+    return resource.close
 
 
 def _adopt_legacy_cleanup_ownership() -> None:
-    """Bind reload-preserved base resources to exact cleanup callbacks."""
-    if not _LEGACY_DYNAMIC_ATEXIT_REQUIRED:
+    """Adopt reload-preserved callbacks/resources into one coordinator."""
+    global _category_atexit_callback
+    legacy_callbacks = [
+        callback
+        for callback in _server_atexit_callbacks
+        if not getattr(callback, "_server_cleanup_coordinator", False)
+    ]
+    category_callback = _category_atexit_callback
+    category_resource = getattr(category_callback, "_category_observer", None)
+    has_resources = any(
+        resource is not None
+        for resource in (
+            _watcher,
+            _storage,
+            _knowledge_graph,
+            _category_store,
+            _clipboard,
+            _instinct_graph,
+            _notepad_project,
+            _notepad_global,
+            _category_observer,
+            _category_pending_close,
+            category_resource,
+        )
+    )
+    if not legacy_callbacks and not has_resources:
         return
+
+    for callback in legacy_callbacks:
+        try:
+            atexit.unregister(callback)
+        except Exception:
+            pass
+        try:
+            _server_atexit_callbacks.remove(callback)
+        except ValueError:
+            pass
+        resource = getattr(callback, "_server_resource", None)
+        label = getattr(callback, "_server_cleanup_label", None)
+        if resource is not None and label is not None:
+            _register_server_cleanup(
+                resource,
+                getattr(callback, "_server_cleanup", None)
+                or _cleanup_for_legacy_resource(resource, label),
+                label,
+            )
+
+    if category_resource is not None:
+        if (
+            category_callback not in legacy_callbacks
+            and not getattr(
+                category_callback, "_server_cleanup_coordinator", False
+            )
+        ):
+            try:
+                atexit.unregister(category_callback)
+            except Exception:
+                pass
+        _category_atexit_callback = _register_server_cleanup(
+            category_resource, category_resource.close, "category observer"
+        )
     if _watcher is not None:
         _register_server_cleanup(_watcher, _watcher.stop, "watcher")
     if _storage is not None:
@@ -679,6 +905,11 @@ def _adopt_legacy_cleanup_ownership() -> None:
     if _notepad_global is not None:
         _register_server_cleanup(
             _notepad_global, _notepad_global.close, "global notepad"
+        )
+    observer = _category_pending_close or _category_observer
+    if observer is not None:
+        _category_atexit_callback = _register_server_cleanup(
+            observer, observer.close, "category observer"
         )
 
 
@@ -765,14 +996,16 @@ def _publish_category_observer() -> None:
             else ((lambda status=_category_status: dict(status)) if _category_status else None)
         )
     if _category_observer is not None:
-        _category_atexit_callback = _make_category_cleanup(_category_observer)
-        atexit.register(_category_atexit_callback)
+        _category_atexit_callback = _register_server_cleanup(
+            _category_observer,
+            _category_observer.close,
+            "category observer",
+        )
 
 
 def _init_unlocked():
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_pending_close, _category_status, _category_atexit_callback
     already_initialized = _initialized
-    _adopt_legacy_cleanup_ownership()
     if already_initialized and _category_pending_close is None:
         return
     old_observer = _category_pending_close or _category_observer
@@ -808,10 +1041,13 @@ def _init_unlocked():
         _category_status = None
         _category_atexit_callback = None
         if old_callback is not None:
-            try:
-                atexit.unregister(old_callback)
-            except Exception:
-                pass
+            if getattr(old_callback, "_server_cleanup_coordinator", False):
+                old_callback.mark_completed(old_observer, "category observer")
+            else:
+                try:
+                    atexit.unregister(old_callback)
+                except Exception:
+                    pass
     if already_initialized:
         category_config = getattr(_config, "category_evolution", None)
         graph_db_path = Path(_storage.db_path)
@@ -833,7 +1069,8 @@ def _init_unlocked():
             logger.info("Using instance DB: %s", _config.instance)
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _storage = Storage(str(db_path))
+    # Every server and watcher access is serialized by the lifecycle barrier.
+    _storage = Storage(str(db_path), check_same_thread=False)
     _embeddings = NomicEmbedProvider()
 
     harness = os.environ.get("ENGRAM_HARNESS", "claude-code")
@@ -942,8 +1179,11 @@ def _init_unlocked():
         _category_store._conn, _category_store._conn.close, "category store"
     )
     if _category_observer is not None:
-        _category_atexit_callback = _make_category_cleanup(_category_observer)
-        atexit.register(_category_atexit_callback)
+        _category_atexit_callback = _register_server_cleanup(
+            _category_observer,
+            _category_observer.close,
+            "category observer",
+        )
 
     # Federation: genome sync + inbox processing
     if _config and _config.instance:
