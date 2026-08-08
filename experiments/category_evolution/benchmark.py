@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Iterator, Sequence
 
 from categories import EvolvingCategoryStore
@@ -80,7 +81,9 @@ def _worker(cells: int, database: Path) -> dict[str, object]:
         epoch_id = "benchmark-root"
         _write_epoch_snapshot(connection, epoch_id, cells)
         compiler = CategoryCompiler(store, CompileBudget())
+        started = time.monotonic_ns()
         compiled = compiler.compile(epoch_id, seed_cell_ids=("cell-0000000",))
+        elapsed_ms = (time.monotonic_ns() - started) / 1_000_000
         peak = _rss_bytes()
         return {
             "schema_version": 1,
@@ -96,6 +99,8 @@ def _worker(cells: int, database: Path) -> dict[str, object]:
                 "candidate_count": compiled.candidate_count,
                 "cell_count": len(compiled.cells),
                 "truncated": compiled.truncated,
+                "token_count": compiled.token_count,
+                "elapsed_wall_time_ms": elapsed_ms,
             },
         }
     finally:
@@ -132,12 +137,12 @@ def _write_epoch_snapshot(connection: sqlite3.Connection, epoch_id: str, cells: 
     """Materialize membership inside SQLite; Python never holds cell IDs or JSON."""
     event_id = "benchmark-epoch-event"
     created_at = datetime.now(timezone.utc).isoformat()
-    # A bounded 64-ary stress frontier exercises real traversal: at depth 3 it
-    # reaches tens of thousands of cells, while generation remains streaming.
+    # A bounded 4-ary frontier stays meaningful in the 1K shape run (341
+    # reachable cells at depth 4) without turning its MMR pass into a timeout.
     frontier = min(cells, 50_000)
     connection.executemany(
         "INSERT INTO cat_boundaries (cell_id, side, position, boundary_id) VALUES (?, 'source', ?, ?)",
-        ((f"cell-{((number - 1) // 64):07d}", (number - 1) % 64, f"cell-{number:07d}")
+        ((f"cell-{((number - 1) // 4):07d}", (number - 1) % 4, f"cell-{number:07d}")
          for number in range(1, frontier)),
     )
     connection.execute(
