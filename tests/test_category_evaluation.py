@@ -137,6 +137,7 @@ def test_runner_replays_real_legacy_database_three_times_without_mutating_it(tmp
     assert report["replay_hashes"][0] == report["replay_hashes"][1] == report["replay_hashes"][2]
     assert report["replay_identical"] is True
     assert report["ranking"]["source"] == "category_compiler_fixture_db"
+    assert report["ranking"]["baseline_source"] == "CategoryStore.search"
     assert {name: report["compiler_limits"][name] for name in (
         "max_depth", "max_neighbors", "max_candidates", "wall_time_ms", "hard_ceiling",
     )} == {"max_depth": 4, "max_neighbors": 64, "max_candidates": 50_000,

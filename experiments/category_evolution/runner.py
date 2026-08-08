@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from typing import Sequence
+import sqlite_vec
 
 from categories import CategoryStore, CellDraft, EvolvingCategoryStore, WeightVector
 from category_compile import CategoryCompiler, CompileBudget
@@ -207,6 +208,7 @@ def _evaluate_rankings(cohort: FixtureCohort, work_dir: Path) -> dict[str, objec
         false_transfers = _false_cross_context_transfers(shadow_rankings, truths)
         return {
             "source": "category_compiler_fixture_db",
+            "baseline_source": "CategoryStore.search",
             "baseline_mrr": baseline_mrr,
             "shadow_mrr": shadow_mrr,
             "relative_mrr_improvement": relative_mrr_improvement(baseline_mrr, shadow_mrr),
@@ -230,12 +232,15 @@ def _evaluate_rankings(cohort: FixtureCohort, work_dir: Path) -> dict[str, objec
 
 def _build_current_fixture_archive(legacy: Path, cohort: FixtureCohort) -> tuple[list[dict[str, list[str]]], list[dict[str, str]]]:
     connection = sqlite3.connect(legacy)
-    current = CategoryStore(connection)
+    _load_vec(connection)
+    current = CategoryStore(connection, dimension=2)
     truths: list[dict[str, str]] = []
     try:
-        for case in cohort.rankings:
-            relevant_id = current.add_cell(f"{case.query} {case.direct_query} reference", context={"evaluation": case.domain})
-            noise_id = current.add_cell(f"{case.query} {case.query} distractor", context={"evaluation": case.domain})
+        for index, case in enumerate(cohort.rankings):
+            # Embeddings are fixed by insertion position/query family, never by
+            # the post-hoc relevance truth used to score returned ranks.
+            relevant_id = current.add_cell(f"{case.query} {case.direct_query} reference", context={"evaluation": case.domain}, embedding=[1.0, index / 10])
+            noise_id = current.add_cell(f"{case.query} {case.query} distractor", context={"evaluation": case.domain}, embedding=[0.0, 1.0])
             current.compose(noise_id, relevant_id, "fixture association", context={"evaluation": case.domain})
             truths.append({"domain": case.domain, "relevant_id": relevant_id, "noise_id": noise_id,
                            "query": case.query, "direct_query": case.direct_query})
@@ -244,10 +249,10 @@ def _build_current_fixture_archive(legacy: Path, cohort: FixtureCohort) -> tuple
             foreign = truths[(index + 1) % len(truths)]
             truth["foreign_relevant_id"] = foreign["relevant_id"]
             current.compose(truth["noise_id"], foreign["relevant_id"], "cross-context association", context={"evaluation": truth["domain"]})
-        cells = current.cells_at_level(0)
         return [
-            {"query": _lexical_rank(case["query"], cells), "direct": _lexical_rank(case["direct_query"], cells)}
-            for case in truths
+            {"query": [row["id"] for row in current.search([1.0, index / 10], level=0, limit=16)],
+             "direct": [row["id"] for row in current.search([1.0, index / 10], level=0, limit=16)]}
+            for index, _case in enumerate(truths)
         ], truths
     finally:
         connection.close()
@@ -333,6 +338,14 @@ def _lexical_rank(query: str, cells: Sequence[dict]) -> list[str]:
         score = sum(content_terms.count(term) for term in terms)
         scored.append((score, index, str(cell["id"])))
     return [identifier for score, _index, identifier in sorted(scored, key=lambda row: (-row[0], row[1])) if score]
+
+
+def _load_vec(connection: sqlite3.Connection) -> None:
+    connection.enable_load_extension(True)
+    try:
+        sqlite_vec.load(connection)
+    finally:
+        connection.enable_load_extension(False)
 
 
 def _replay_three_times(legacy: Path, work_dir: Path) -> tuple[list[str], list[dict[str, object]], dict[str, object]]:
