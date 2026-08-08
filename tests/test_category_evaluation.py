@@ -19,6 +19,8 @@ from experiments.category_evolution.metrics import (
     relative_mrr_improvement,
 )
 from experiments.category_evolution.runner import main as runner_main
+from experiments.category_evolution.runner import _false_cross_context_transfers, _full_state_digest
+from category_evolution import legacy_proxy_id
 from category_context import ContextTracker
 
 
@@ -215,3 +217,51 @@ def test_small_resource_benchmark_streams_and_marks_acceptance_gate_unevaluated(
         "reason": "requires explicit --cells 1000000",
     }
     assert report["acceptance_run"] is False
+    assert report["compiler"]["candidate_count"] > 1
+    assert "elapsed_wall_time_ms" in report["compiler"]
+
+
+def test_full_state_digest_changes_for_content_boundary_context_and_loss(tmp_path):
+    """Same active IDs cannot hide immutable replay-state changes."""
+    database = tmp_path / "v2.db"
+    connection = sqlite3.connect(database)
+    connection.executescript("""
+        CREATE TABLE cat_cells (id TEXT, content TEXT, created_at TEXT);
+        CREATE TABLE cat_boundaries (cell_id TEXT, boundary_id TEXT, created_at TEXT);
+        CREATE TABLE cat_contexts (id TEXT, features_json TEXT, created_at TEXT);
+        INSERT INTO cat_cells VALUES ('same', 'one', 'now');
+        INSERT INTO cat_boundaries VALUES ('same', 'other', 'now');
+        INSERT INTO cat_contexts VALUES ('ctx', '{}', 'now');
+    """)
+    connection.commit(); connection.close()
+    original = _full_state_digest(database, {"unexplained_loss": 0})
+    connection = sqlite3.connect(database)
+    connection.execute("UPDATE cat_cells SET content='two'")
+    connection.commit(); connection.close()
+    assert _full_state_digest(database, {"unexplained_loss": 0}) != original
+    assert _full_state_digest(database, {"unexplained_loss": 1}) != original
+
+
+def test_false_transfer_excludes_empty_and_same_context_distractors():
+    """Only an observed foreign candidate ahead of local relevance is a transfer error."""
+    foreign = legacy_proxy_id("foreign")
+    local = legacy_proxy_id("local")
+    truths = [{"foreign_relevant_id": "foreign"}, {"foreign_relevant_id": "foreign"}]
+    assert _false_cross_context_transfers([([], {local}), (["same", local], {local})], truths) == []
+    assert _false_cross_context_transfers([([foreign, local], {local})], truths[:1]) == [True]
+
+
+def test_missing_legacy_keeps_compiler_schema_and_acceptance_false(tmp_path, capsys):
+    """Environmental replay absence is a stable report shape, never a passing gate."""
+    assert runner_main(["--legacy", str(tmp_path / "none.db"), "--work-dir", str(tmp_path / "out"), "--cohort", "development"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["compiler_probe"] is None
+    assert report["compiler_probes"] == []
+    assert report["acceptance"]["overall_pass"] is False
+
+
+def test_private_worker_cli_rejects_direct_invocation(tmp_path):
+    """The public benchmark CLI cannot accept a worker database path."""
+    result = subprocess.run([sys.executable, "-m", "experiments.category_evolution.benchmark", "--_worker", "--cells", "1", "--work-dir", str(tmp_path)], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert not list(tmp_path.glob("*.db"))

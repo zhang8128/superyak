@@ -298,7 +298,7 @@ def _false_cross_context_transfers(
     false transfer is specifically a foreign candidate before local relevance.
     """
     outcomes: list[bool] = []
-    for ranking, relevant, truth in zip(rankings, (entry[1] for entry in rankings), truths, strict=True):
+    for (ranking, relevant), truth in zip(rankings, truths, strict=True):
         foreign = legacy_proxy_id(truth["foreign_relevant_id"])
         if foreign not in ranking:
             continue
