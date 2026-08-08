@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -26,6 +27,7 @@ from .metrics import (
     mean_reciprocal_rank,
     relative_mrr_improvement,
 )
+from .benchmark import run_benchmark
 
 
 DEFAULT_SEED = 20260807
@@ -59,8 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="development-only ContextTracker hard boundary threshold")
     parser.add_argument("--hard-confirmations", type=int, default=None,
                         help="development-only ContextTracker confirmation count")
-    parser.add_argument("--resource-report", type=Path,
-                        help="JSON emitted by a real benchmark --cells 1000000 invocation")
+    parser.add_argument("--resource-report", type=Path, help="informational only; never accepted for gates")
+    parser.add_argument("--benchmark-cells", type=int, help="run the benchmark now; only 1000000 is acceptance evidence")
     return parser
 
 
@@ -84,8 +86,10 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, object]:
         "import_report": None,
         "replay_hashes": [],
         "replay_identical": False,
+        "compiler_probe": None,
+        "compiler_probes": [],
         "environmental_limitation": None,
-        "resource_benchmark": _resource_benchmark(args.resource_report),
+        "resource_benchmark": _run_requested_benchmark(args),
         "ranking_provenance": "controlled disposable fixture archive; not the supplied legacy archive",
         "replay_provenance": "supplied/discovered legacy archive is replayed independently",
     }
@@ -98,7 +102,9 @@ def run_evaluation(args: argparse.Namespace) -> dict[str, object]:
 
     replay_hashes, import_reports, compiler_probe = _replay_three_times(legacy, args.work_dir)
     report["import_report"] = import_reports[0]
+    report["import_reports"] = import_reports
     report["replay_hashes"] = replay_hashes
+    report["replay_digests"] = replay_hashes
     report["replay_identical"] = len(replay_hashes) == 3 and len(set(replay_hashes)) == 1
     report["compiler_probe"] = compiler_probe
     report["compiler_probes"] = [compiler_probe, *ranking["compile_probes"]]
@@ -115,6 +121,16 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("legacy path must name a database file")
     if args.work_dir.exists() and not args.work_dir.is_dir():
         raise ValueError("work-dir must be a directory")
+    if args.resource_report is not None:
+        raise ValueError("resource-report is informational only; run --benchmark-cells 1000000 instead")
+    if args.benchmark_cells is not None and args.benchmark_cells != 1_000_000:
+        raise ValueError("benchmark-cells must be exactly 1000000")
+
+
+def _run_requested_benchmark(args: argparse.Namespace) -> dict[str, object] | None:
+    if args.benchmark_cells is None:
+        return None
+    return run_benchmark(cells=args.benchmark_cells, work_dir=args.work_dir)
 
 
 def _find_legacy(explicit: Path | None) -> Path | None:
@@ -186,10 +202,7 @@ def _evaluate_rankings(cohort: FixtureCohort, work_dir: Path) -> dict[str, objec
         shadow_mrr = mean_reciprocal_rank(shadow_rankings)
         baseline_hits = sum(bool(ranking and ranking[0] in relevant) for ranking, relevant in baseline_direct_rankings)
         shadow_hits = sum(bool(ranking and ranking[0] in relevant) for ranking, relevant in shadow_direct_rankings)
-        false_transfers = [
-            not ranking or ranking[0] not in relevant
-            for ranking, relevant in shadow_rankings
-        ]
+        false_transfers = _false_cross_context_transfers(shadow_rankings, truths)
         return {
             "source": "category_compiler_fixture_db",
             "baseline_mrr": baseline_mrr,
@@ -198,7 +211,8 @@ def _evaluate_rankings(cohort: FixtureCohort, work_dir: Path) -> dict[str, objec
             "direct_recall_baseline_hits": baseline_hits,
             "direct_recall_shadow_hits": shadow_hits,
             "direct_recall_regression": direct_recall_regression(baseline_hits, shadow_hits),
-            "false_transfer_rate": false_transfer_rate(false_transfers),
+            "false_transfer_rate": None if not false_transfers else false_transfer_rate(false_transfers),
+            "false_transfer_evaluated": bool(false_transfers),
             "fixture_import": asdict(imported),
             "direct_seed_source": "baseline_direct_top",
             "cross_context_pairs": len(truths),
@@ -248,29 +262,49 @@ def _compile_shadow_rankings(
         probes: list[dict[str, object]] = []
         cross_context_candidates = 0
         for truth, baseline in zip(truths, baseline_rows, strict=True):
-            relevant_id = legacy_proxy_id(truth["relevant_id"])
-            noise_id = legacy_proxy_id(truth["noise_id"])
-            foreign_relevant_id = legacy_proxy_id(truth["foreign_relevant_id"])
             context_id = store.create_context({"evaluation": "ranking", "domain": truth["domain"]})
-            store.observe_weight(relevant_id, context_id, WeightVector(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-            store.observe_weight(noise_id, context_id, WeightVector(0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            # Fixed label-blind transform of observed baseline rank.  Truth IDs
+            # are not consulted until the completed compiler ranking is scored.
+            for rank, raw_id in enumerate(baseline["query"], start=1):
+                store.observe_weight(legacy_proxy_id(raw_id), context_id,
+                                     WeightVector(1.0 / rank, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
             query_compiled, query_probe = _timed_compile(
                 compiler, epoch_id, context_id, legacy_proxy_id(baseline["query"][0]), "query",
             )
-            ranked = [cell.id for cell in query_compiled.cells if cell.id in (noise_id, relevant_id, foreign_relevant_id)]
+            ranked = [cell.id for cell in query_compiled.cells]
+            foreign_relevant_id = legacy_proxy_id(truth["foreign_relevant_id"])
             cross_context_candidates += int(foreign_relevant_id in ranked)
-            rankings.append((ranked, {relevant_id}))
+            rankings.append((ranked, {legacy_proxy_id(truth["relevant_id"])}))
             probes.append(query_probe)
             direct_compiled, direct_probe = _timed_compile(
                 compiler, epoch_id, context_id, legacy_proxy_id(baseline["direct"][0]), "direct",
             )
-            direct_ranked = [cell.id for cell in direct_compiled.cells if cell.id in (noise_id, relevant_id, foreign_relevant_id)]
-            direct_rankings.append((direct_ranked, {relevant_id}))
+            direct_ranked = [cell.id for cell in direct_compiled.cells]
+            direct_rankings.append((direct_ranked, {legacy_proxy_id(truth["relevant_id"])}))
             probes.append(direct_probe)
         return rankings, direct_rankings, probes, cross_context_candidates
     finally:
         compiler.close()
         store.close()
+
+
+def _false_cross_context_transfers(
+    rankings: Sequence[tuple[list[str], set[str]]], truths: Sequence[dict[str, str]],
+) -> list[bool]:
+    """One evaluable opportunity per fixture with a known foreign candidate.
+
+    Empty results and same-context distractors are not false transfers.  A
+    false transfer is specifically a foreign candidate before local relevance.
+    """
+    outcomes: list[bool] = []
+    for ranking, relevant, truth in zip(rankings, (entry[1] for entry in rankings), truths, strict=True):
+        foreign = legacy_proxy_id(truth["foreign_relevant_id"])
+        if foreign not in ranking:
+            continue
+        local_position = min((index for index, item in enumerate(ranking) if item in relevant), default=None)
+        foreign_position = ranking.index(foreign)
+        outcomes.append(local_position is None or foreign_position < local_position)
+    return outcomes
 
 
 def _timed_compile(
@@ -309,12 +343,46 @@ def _replay_three_times(legacy: Path, work_dir: Path) -> tuple[list[str], list[d
         if output.exists():
             raise ValueError(f"refusing to overwrite existing disposable output: {output}")
         imported = import_legacy_category(legacy, output)
-        import_reports.append(asdict(imported))
-        replay_hashes.append(imported.snapshot_hash)
+        import_report = asdict(imported)
+        import_reports.append(import_report)
+        replay_hashes.append(_full_state_digest(output, import_report))
         if probe is None:
             probe = _compile_probe(output, imported.root_epoch_id)
     assert probe is not None
     return replay_hashes, import_reports, probe
+
+
+def _full_state_digest(database: Path, import_report: dict[str, object]) -> str:
+    """Digest immutable replay state, not merely the active snapshot identities.
+
+    Ordered row content covers cells, boundaries, contexts, events, weights,
+    rewrites, epochs and snapshots.  Timestamp-only runtime fields are excluded
+    because independent deterministic replays legitimately stamp different UTC
+    creation times.
+    """
+    connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        tables = [str(row[0]) for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'cat_%' ORDER BY name"
+        ) if not str(row[0]).startswith("cat_vectors")]
+        state: dict[str, object] = {"import_report": import_report, "tables": {}}
+        for table in tables:
+            columns = [str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')
+                       if str(row[1]) not in {"created_at", "applied_at"}]
+            rows = connection.execute(
+                f'SELECT {",".join(chr(34)+column+chr(34) for column in columns)} FROM "{table}" ORDER BY rowid'
+            ).fetchall()
+            state["tables"][table] = {"columns": columns, "rows": [list(row) for row in rows]}
+        payload = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=_json_value)
+        return hashlib.sha256(payload.encode()).hexdigest()
+    finally:
+        connection.close()
+
+
+def _json_value(value: object) -> object:
+    if isinstance(value, bytes):
+        return {"blob": value.hex()}
+    raise TypeError(type(value).__name__)
 
 
 def _compile_probe(database: Path, epoch_id: str) -> dict[str, object]:
@@ -352,8 +420,10 @@ def _acceptance(report: dict[str, object]) -> dict[str, object]:
     import_report = report["import_report"]
     compiler_probe = report.get("compiler_probe")
     compiler_probes = report.get("compiler_probes", [])
+    limits = report.get("compiler_limits")
     resource_benchmark = report["resource_benchmark"]
-    replay_loss = None if import_report is None else int(import_report["unexplained_loss"])
+    import_reports = report.get("import_reports")
+    replay_losses = None if not isinstance(import_reports, list) else [int(item["unexplained_loss"]) for item in import_reports]
     compiler_conformant = (
         isinstance(compiler_probes, list)
         and bool(compiler_probes)
@@ -364,6 +434,11 @@ def _acceptance(report: dict[str, object]) -> dict[str, object]:
             and float(probe["elapsed_wall_time_ms"]) <= 500
             for probe in compiler_probes
         )
+        and isinstance(limits, dict)
+        and all(limits.get(name) == value for name, value in {
+            "max_depth": 4, "max_neighbors": 64, "max_candidates": 50_000,
+            "wall_time_ms": 500, "hard_ceiling": 65_536,
+        }.items())
     )
     resource_evaluated = isinstance(resource_benchmark, dict) and bool(resource_benchmark.get("acceptance_gate", {}).get("evaluated"))
     resource_observed = None if not isinstance(resource_benchmark, dict) else resource_benchmark.get("incremental_peak_rss_bytes")
@@ -376,17 +451,18 @@ def _acceptance(report: dict[str, object]) -> dict[str, object]:
         ),
         "direct_recall_regression": _gate(
             GATE_THRESHOLDS["direct_recall_regression"], ranking["direct_recall_regression"],
-            float(ranking["direct_recall_regression"]) <= 0.05,
+            ranking["direct_recall_baseline_hits"] > 0 and float(ranking["direct_recall_regression"]) <= 0.05,
         ),
         "false_transfer_rate": _gate(
             GATE_THRESHOLDS["false_transfer_rate"], ranking["false_transfer_rate"],
-            float(ranking["false_transfer_rate"]) <= 0.10,
+            ranking.get("false_transfer_evaluated") is True and float(ranking["false_transfer_rate"]) <= 0.10,
         ),
         "identical_replay_hashes": _gate(
             GATE_THRESHOLDS["identical_replay_hashes"], len(report["replay_hashes"]), bool(report["replay_identical"]),
         ),
         "unexplained_replay_loss": _gate(
-            GATE_THRESHOLDS["unexplained_replay_loss"], replay_loss, replay_loss == 0,
+            GATE_THRESHOLDS["unexplained_replay_loss"], replay_losses,
+            replay_losses is not None and len(replay_losses) == 3 and all(loss == 0 for loss in replay_losses),
         ),
         "compiler_conformance": _gate(
             {"max_candidates": 50_000, "hard_ceiling_tokens": 65_536,

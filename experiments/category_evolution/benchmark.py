@@ -40,8 +40,10 @@ def run_benchmark(*, cells: int, work_dir: Path) -> dict[str, object]:
     try:
         completed = subprocess.run(
             [
-                sys.executable, "-m", "experiments.category_evolution.benchmark",
-                "--_worker", "--cells", str(cells), "--database", str(database),
+                sys.executable, "-c",
+                ("import json; from pathlib import Path; "
+                 "from experiments.category_evolution.benchmark import _worker; "
+                 f"print(json.dumps(_worker({cells}, Path({str(database)!r})), sort_keys=True, separators=(',', ':')))"),
             ],
             check=False,
             capture_output=True,
@@ -164,18 +166,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cells", type=int, required=True)
     parser.add_argument("--work-dir", type=Path)
-    parser.add_argument("--database", type=Path)
-    parser.add_argument("--_worker", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args._worker:
-            if args.database is None:
-                raise ValueError("worker requires --database")
-            report = _worker(args.cells, args.database)
-        else:
-            if args.work_dir is None:
-                raise ValueError("--work-dir is required")
-            report = run_benchmark(cells=args.cells, work_dir=args.work_dir)
+        if args.work_dir is None:
+            raise ValueError("--work-dir is required")
+        report = run_benchmark(cells=args.cells, work_dir=args.work_dir)
     except (OSError, ValueError, sqlite3.Error, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
