@@ -37,6 +37,7 @@ class BoundaryCase:
     kind: Literal["explicit", "abrupt", "gradual"]
     expected_boundary: bool
     observations: tuple[ContextObservation, ...]
+    expected_decisions: tuple[bool, ...]
 
 
 @dataclass(frozen=True)
@@ -109,18 +110,19 @@ def _domain_cases(domain: str, words: tuple[str, str, str, str]) -> list[Boundar
     branch = _observation(f"{target}_branch", f"{source}_branch", f"{tool}_branch", minute=2)
     explicit = ContextObservation(**{**asdict(gradual_changed), "explicit_boundary": True})
     return [
-        BoundaryCase(domain, "explicit-change", "explicit", True, (initial, explicit)),
+        BoundaryCase(domain, "explicit-change", "explicit", True, (initial, explicit), (False, True)),
         BoundaryCase(domain, "confirmed-abrupt-change", "abrupt", True,
-                     (initial, abrupt_changed, abrupt_changed)),
+                     (initial, abrupt_changed, abrupt_changed), (False, False, True)),
         BoundaryCase(domain, "confirmed-gradual-change", "gradual", True,
-                     (initial, gradual_changed, gradual_changed)),
-        BoundaryCase(domain, "stable-control", "gradual", False, (initial, same)),
+                     (initial, gradual_changed, gradual_changed), (False, False, True)),
+        BoundaryCase(domain, "stable-control", "gradual", False, (initial, same), (False, False)),
         BoundaryCase(domain, "return-to-prior", "abrupt", True,
-                     (initial, abrupt_changed, abrupt_changed, restored, restored)),
-        BoundaryCase(domain, "overlap-control", "gradual", False, (initial, overlap)),
-        BoundaryCase(domain, "source-only-control", "gradual", False, (initial, source_only)),
+                     (initial, abrupt_changed, abrupt_changed, restored, restored), (False, False, True, False, True)),
+        BoundaryCase(domain, "overlap-control", "gradual", False, (initial, overlap), (False, False)),
+        BoundaryCase(domain, "source-only-control", "gradual", False, (initial, source_only), (False, False)),
         BoundaryCase(domain, "fork-reconciliation", "abrupt", True,
-                     (initial, abrupt_changed, abrupt_changed, branch, branch, restored, restored)),
+                     (initial, abrupt_changed, abrupt_changed, branch, branch, restored, restored),
+                     (False, False, True, False, True, False, True)),
     ]
 
 
@@ -139,6 +141,7 @@ def _case_payload(case: BoundaryCase) -> Mapping[str, object]:
         "structure": case.structure,
         "kind": case.kind,
         "expected_boundary": case.expected_boundary,
+        "expected_decisions": list(case.expected_decisions),
         "observations": [
             {
                 "goal": dict(observation.goal), "entities": dict(observation.entities),

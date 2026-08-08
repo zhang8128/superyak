@@ -171,11 +171,11 @@ def _evaluate_boundaries(cohort: FixtureCohort, configuration: dict[str, object]
             hard_threshold=float(configuration["hard_threshold"]),
             hard_confirmations=int(configuration["hard_confirmations"]),
         )
-        decision = None
-        for observation in case.observations:
+        if len(case.observations) != len(case.expected_decisions):
+            raise ValueError("fixture observation/decision lengths differ")
+        for observation, expected in zip(case.observations, case.expected_decisions, strict=True):
             decision = tracker.observe(observation)
-        assert decision is not None
-        rows.append((case.kind, case.expected_boundary, decision.kind == "hard"))
+            rows.append((case.kind, expected, decision.kind == "hard"))
     return boundary_metrics(rows)
 
 

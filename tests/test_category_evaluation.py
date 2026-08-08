@@ -61,7 +61,7 @@ def test_fixture_cohorts_are_deterministic_and_vocabulary_isolated():
     """A cohort hash changes for its distinct words but not process/order variation."""
     development = fixture_cohort("development", seed=20260807)
     holdout = fixture_cohort("holdout", seed=20260807)
-    assert fixture_hash(development) == "25082a3cec57fe52e6ec6b277285a212936770eb149c077ecab2fbd7d1a21e27"
+    assert fixture_hash(development) == "0a890989eca2b3f5d0e9029591ca317ca6a0de0799160cfd445dae3f2a834ce6"
     assert fixture_hash(development) == fixture_hash(fixture_cohort("development", seed=20260807))
     assert fixture_hash(development) != fixture_hash(holdout)
     assert {case.domain for case in development.cases} == {
@@ -87,7 +87,7 @@ def test_fixture_hash_is_identical_in_a_separate_python_process():
         capture_output=True,
         text=True,
     )
-    assert completed.stdout.strip() == "25082a3cec57fe52e6ec6b277285a212936770eb149c077ecab2fbd7d1a21e27"
+    assert completed.stdout.strip() == "0a890989eca2b3f5d0e9029591ca317ca6a0de0799160cfd445dae3f2a834ce6"
 
 
 def test_abrupt_and_gradual_fixture_transitions_exercise_different_tracker_paths():
