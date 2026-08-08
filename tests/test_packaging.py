@@ -163,3 +163,44 @@ print("installed-wheel-startup-ok")
     )
 
     assert result.stdout.strip() == "installed-wheel-startup-ok"
+
+
+def test_installed_wheel_imports_evolving_category_runtime(tmp_path):
+    """Consumers can import the v2 category runtime from the installed wheel."""
+    wheel = _build_wheel(tmp_path)
+    venv = tmp_path / "venv"
+    subprocess.run(
+        ["uv", "venv", str(venv), "--python", str(Path(os.sys.executable))],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    python = venv / "bin" / "python"
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    outside_checkout = tmp_path / "outside-checkout"
+    outside_checkout.mkdir()
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env["PYTHONNOUSERSITE"] = "1"
+    result = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import category_context, category_compile, category_evolution; "
+            "print('installed-wheel-category-runtime-imports-ok')",
+        ],
+        cwd=outside_checkout,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "installed-wheel-category-runtime-imports-ok"

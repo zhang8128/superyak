@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger("engram.reflection")
@@ -55,13 +56,25 @@ class Reflector:
                  signals_db_path: str | None = None,
                  *,
                  cohesion_config=None,
-                 persistence_config=None):
+                 persistence_config=None,
+                 category_reporter: Callable[[], dict] | None = None):
         self._storage = storage
         self._staleness_days = staleness_days
         self._genome_db_path = genome_db_path
         self._signals_db_path = signals_db_path
         self._cohesion_config = cohesion_config
         self._persistence_config = persistence_config
+        self._category_reporter = category_reporter
+
+    def analyze_category_evolution(self) -> dict:
+        """Return optional category diagnostics without exposing reporter errors."""
+        if self._category_reporter is None:
+            return {"available": False}
+        try:
+            return self._category_reporter()
+        except Exception as exc:
+            logger.warning("Category evolution report failed (%s)", type(exc).__name__)
+            return {"available": False, "error": type(exc).__name__}
 
     def analyze_usage(self) -> dict:
         """Most/least accessed episodes and semantics."""
@@ -726,6 +739,9 @@ class Reflector:
         elif focus == "persistence":
             # Not in the no-focus default: filtrations per hub — heavier than other foci.
             return {"persistence": self.analyze_persistence()}
+        elif focus == "category_evolution":
+            # Explicit only: archive/compiler diagnostics stay out of default reflection.
+            return {"category_evolution": self.analyze_category_evolution()}
         else:
             return {
                 "usage": self.analyze_usage(),

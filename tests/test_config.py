@@ -137,3 +137,40 @@ def test_federation_config_with_instance(tmp_path):
     assert cfg.instance == "agi"
     assert cfg.session_context == "building"
     assert cfg.signals.retention_days == 60
+
+
+def test_category_evolution_config_defaults():
+    cfg = EngramConfig().category_evolution
+    assert (cfg.enabled, cfg.shadow, cfg.influence_recall, cfg.auto_commit) == (
+        False, True, False, False,
+    )
+    assert cfg.archive_quota_bytes == 3_000_000_000_000
+    assert cfg.archive_high_watermark_ratio == 0.90
+    assert cfg.interpreted_max_dimension == 2
+    assert cfg.max_traversal_depth == 4
+    assert cfg.max_neighbors == 64
+    assert cfg.max_candidates == 50_000
+    assert cfg.compile_wall_time_ms == 500
+    assert cfg.consolidation_event_interval == 250
+    assert cfg.consolidation_rewrite_budget == 32
+    assert cfg.max_rewrite_members == 32
+    assert cfg.max_active_branches == 4
+    assert cfg.soft_boundary_threshold == 0.35
+    assert cfg.hard_boundary_threshold == 0.65
+    assert cfg.hard_boundary_confirmations == 2
+
+
+def test_category_evolution_config_loads_independent_gates(tmp_path):
+    config_dir = tmp_path / ".engram"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        "[category_evolution]\n"
+        "enabled = true\nshadow = true\n"
+        "influence_recall = false\nauto_commit = false\n"
+        "max_candidates = 1234\n"
+    )
+    cfg = load_config(tmp_path).category_evolution
+    assert cfg.enabled is True
+    assert cfg.influence_recall is False
+    assert cfg.auto_commit is False
+    assert cfg.max_candidates == 1234

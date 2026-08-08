@@ -93,6 +93,44 @@ def test_reflect_dispatches_focus(tmp_db):
     assert "instincts" in result_all
 
 
+def test_category_evolution_focus_returns_report_but_no_focus_stays_unchanged(tmp_db):
+    """Catches category diagnostics leaking into the default reflection response."""
+    report = {
+        "available": True,
+        "flags": {
+            "enabled": True,
+            "shadow": True,
+            "influence_recall": False,
+            "auto_commit": False,
+        },
+        "counts_by_dimension": {"0": 3, "1": 2},
+        "proposal_dispositions": {"proposed": 1, "committed": 0, "rejected": 2, "superseded": 0},
+        "current_epoch": "epoch-7",
+        "recent_boundaries": [{"kind": "soft", "score": 0.4, "context_id": "context-2"}],
+        "compiler_truncations": 4,
+        "quota_pressure": {"state": "normal", "used_bytes": 12, "quota_bytes": 100},
+        "last_error": None,
+    }
+    reflector = Reflector(tmp_db, category_reporter=lambda: report)
+
+    assert reflector.reflect(focus="category_evolution") == {"category_evolution": report}
+    assert "category_evolution" not in reflector.reflect()
+
+
+def test_category_evolution_focus_absent_and_failure_shapes_are_content_safe(tmp_db):
+    """Catches absent/error reporters changing shape or exposing exception text."""
+    assert Reflector(tmp_db).reflect(focus="category_evolution") == {
+        "category_evolution": {"available": False}
+    }
+
+    def fail():
+        raise RuntimeError("private report details")
+
+    assert Reflector(tmp_db, category_reporter=fail).reflect(focus="category_evolution") == {
+        "category_evolution": {"available": False, "error": "RuntimeError"}
+    }
+
+
 def test_unobserved_instinct_recommendation(tmp_db):
     """Never-fired instincts are 'unobserved' — they may influence through channels the system doesn't track."""
     tmp_db.add_instinct(id="i-unobserved", trigger="t", action="a", source_semantic_ids=[])

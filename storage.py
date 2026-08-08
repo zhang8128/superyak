@@ -52,9 +52,19 @@ def _sanitize_fts_query(query: str) -> str:
 class Storage:
     """SQLite-backed storage for entities, relationships, episodes, and vectors."""
 
-    def __init__(self, db_path: str, migrations_dir: str | None = None):
+    def __init__(
+        self,
+        db_path: str,
+        migrations_dir: str | None = None,
+        *,
+        check_same_thread: bool = True,
+    ):
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
+        self._check_same_thread = check_same_thread
+        self.conn = sqlite3.connect(
+            db_path, check_same_thread=self._check_same_thread
+        )
+        self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
 
@@ -205,7 +215,10 @@ class Storage:
 
         # Must reconnect for sqlite_master changes to take effect
         self.conn.close()
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(
+            self.db_path, check_same_thread=self._check_same_thread
+        )
+        self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self.conn.enable_load_extension(True)
         import sqlite_vec
@@ -275,17 +288,33 @@ class Storage:
 
     def close(self) -> None:
         """Checkpoint WAL and close. Prevents vec0 corruption on unclean restart."""
+        first_error = None
         if hasattr(self, "_cold_conn") and self._cold_conn is not None:
             try:
                 self._cold_conn.close()
-            except Exception:
-                logger.warning("Cold storage close failed", exc_info=True)
-            self._cold_conn = None
-        try:
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except Exception:
-            logger.warning("WAL checkpoint failed on close", exc_info=True)
-        self.conn.close()
+            except Exception as exc:
+                logger.warning(
+                    "Cold storage close failed (%s)", type(exc).__name__
+                )
+                first_error = exc
+            else:
+                self._cold_conn = None
+        if not self._conn_closed:
+            try:
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception as exc:
+                logger.warning(
+                    "WAL checkpoint failed on close (%s)", type(exc).__name__
+                )
+            try:
+                self.conn.close()
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+            else:
+                self._conn_closed = True
+        if first_error is not None:
+            raise first_error
 
     # --- Entities ---
 
@@ -655,7 +684,9 @@ class Storage:
         if not hasattr(self, "_cold_conn") or self._cold_conn is None:
             from pathlib import Path
             cold_path = Path(self.db_path).with_name("cold.db")
-            self._cold_conn = sqlite3.connect(str(cold_path))
+            self._cold_conn = sqlite3.connect(
+                str(cold_path), check_same_thread=self._check_same_thread
+            )
             self._cold_conn.row_factory = sqlite3.Row
             self._cold_conn.execute("""
                 CREATE TABLE IF NOT EXISTS episodes (
