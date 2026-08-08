@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import select
 import threading
+import time
 
 import pytest
 
@@ -70,6 +71,189 @@ def _observe_dedicated_connections(monkeypatch):
 
     monkeypatch.setattr("category_compile.sqlite3.connect", connect_observed)
     return traced_sql, close_states
+
+
+def test_compiler_close_retries_failed_pool_member_without_losing_other_handles(
+    store, monkeypatch
+):
+    """A partial pool close retains only failed ownership and blocks new leases."""
+    real_connect = sqlite3.connect
+    members = []
+
+    class RetryConnection(sqlite3.Connection):
+        def close(self):
+            self.close_attempts += 1
+            if self.fail_once:
+                self.fail_once = False
+                raise sqlite3.OperationalError("private close detail")
+            return super().close()
+
+    def connect_retry(*args, **kwargs):
+        kwargs["factory"] = RetryConnection
+        connection = real_connect(*args, **kwargs)
+        connection.close_attempts = 0
+        connection.fail_once = False
+        members.append(connection)
+        return connection
+
+    monkeypatch.setattr("category_compile.sqlite3.connect", connect_retry)
+    compiler = CategoryCompiler(store)
+    failed = compiler._available_connections[1]
+    failed.fail_once = True
+
+    with pytest.raises(sqlite3.OperationalError):
+        compiler.close()
+
+    assert [member.close_attempts for member in members] == [1, 1, 1, 1]
+    assert compiler._available_connections == [failed]
+    assert compiler._closed is False
+    with pytest.raises(RuntimeError, match="closed"):
+        compiler._acquire_compile_connection(10**30)
+
+    compiler.close()
+
+    assert failed.close_attempts == 2
+    assert [member.close_attempts for member in members if member is not failed] == [1, 1, 1]
+    assert compiler._available_connections == []
+    assert compiler._closed is True
+
+
+def test_waiter_cannot_lease_handle_retained_after_partial_close(store, monkeypatch):
+    """A pre-existing pool waiter rechecks closing state after every wake."""
+    real_connect = sqlite3.connect
+
+    class RetryConnection(sqlite3.Connection):
+        def close(self):
+            if self.fail_once:
+                self.fail_once = False
+                raise sqlite3.OperationalError("private close detail")
+            return super().close()
+
+    def connect_retry(*args, **kwargs):
+        kwargs["factory"] = RetryConnection
+        connection = real_connect(*args, **kwargs)
+        connection.fail_once = False
+        return connection
+
+    monkeypatch.setattr("category_compile.sqlite3.connect", connect_retry)
+    compiler = CategoryCompiler(store)
+    leased = [compiler._acquire_compile_connection(10**30) for _ in range(4)]
+    failed = leased.pop()
+    failed.fail_once = True
+    waiter_started = threading.Event()
+    waiter_finished = threading.Event()
+    acquired = []
+    errors = []
+
+    def wait_for_connection():
+        waiter_started.set()
+        try:
+            acquired.append(
+                compiler._acquire_compile_connection(
+                    time.monotonic_ns() + 5_000_000_000
+                )
+            )
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            waiter_finished.set()
+
+    waiter = threading.Thread(target=wait_for_connection)
+    waiter.start()
+    assert waiter_started.wait(timeout=5)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with compiler._pool_condition:
+            if compiler._pool_condition._waiters:
+                break
+        time.sleep(0.001)
+    else:
+        pytest.fail(
+            f"compiler waiter did not block on the empty pool; "
+            f"finished={waiter_finished.is_set()} errors={errors!r}"
+        )
+    with compiler._pool_condition:
+        compiler._available_connections.append(failed)
+
+    with pytest.raises(sqlite3.OperationalError):
+        compiler.close()
+
+    assert waiter_finished.wait(timeout=5)
+    waiter.join(timeout=5)
+    try:
+        assert acquired == []
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+        assert compiler._available_connections == [failed]
+    finally:
+        compiler.close()
+        for connection in leased:
+            connection.close()
+
+
+def test_close_retains_borrowed_handle_that_fails_release_during_pool_shutdown(
+    store, monkeypatch
+):
+    """Close finalization includes failures retained by concurrent lease release."""
+    real_connect = sqlite3.connect
+    close_blocked = threading.Event()
+    allow_close = threading.Event()
+    members = []
+
+    class InterleavedConnection(sqlite3.Connection):
+        def close(self):
+            self.close_attempts += 1
+            if self.block_once:
+                self.block_once = False
+                close_blocked.set()
+                allow_close.wait(timeout=5)
+            if self.fail_once:
+                self.fail_once = False
+                raise sqlite3.OperationalError("private borrowed close detail")
+            return super().close()
+
+    def connect_interleaved(*args, **kwargs):
+        kwargs["factory"] = InterleavedConnection
+        connection = real_connect(*args, **kwargs)
+        connection.close_attempts = 0
+        connection.block_once = False
+        connection.fail_once = False
+        members.append(connection)
+        return connection
+
+    monkeypatch.setattr("category_compile.sqlite3.connect", connect_interleaved)
+    compiler = CategoryCompiler(store)
+    borrowed = compiler._acquire_compile_connection(10**30)
+    compiler._available_connections[0].block_once = True
+    borrowed.fail_once = True
+    close_errors = []
+
+    def close_pool():
+        try:
+            compiler.close()
+        except Exception as exc:
+            close_errors.append(exc)
+
+    closing = threading.Thread(target=close_pool)
+    closing.start()
+    assert close_blocked.wait(timeout=5)
+
+    with pytest.raises(sqlite3.OperationalError):
+        compiler._release_compile_connection(borrowed)
+    allow_close.set()
+    closing.join(timeout=5)
+
+    assert not closing.is_alive()
+    assert close_errors == []
+    assert compiler._available_connections == [borrowed]
+    assert compiler._closed is False
+    assert compiler._closing is True
+
+    compiler.close()
+
+    assert borrowed.close_attempts == 2
+    assert compiler._available_connections == []
+    assert compiler._closed is True
 
 
 def _observe_compile_boundary_calls(compiler, monkeypatch):

@@ -64,8 +64,10 @@ def _after_category_fork_child() -> None:
     # The forking thread acquired every observer lock, so no SQLite operation
     # was active at the split. Replace synchronization objects before child
     # recovery closes and reopens the quiesced inherited handles.
+    current_pid = os.getpid()
     for observer in _FORK_ACQUIRED:
         observer._lock = threading.RLock()
+        observer._lock_pid = current_pid
     _FORK_ACQUIRED = []
     _FORK_REGISTRY_LOCK = threading.RLock()
 
@@ -777,6 +779,7 @@ class CategoryObserver:
         self._compiler_truncations = 0
         self._closed = False
         self._lock = threading.RLock()
+        self._lock_pid = os.getpid()
         self._database_path = Path(database_path)
         self._store_options = {
             "quota_bytes": archive_quota_bytes,
@@ -798,29 +801,30 @@ class CategoryObserver:
             "soft_threshold": soft_boundary_threshold,
             "hard_threshold": hard_boundary_threshold,
         }
-        self._creator_pid = os.getpid()
+        self._resource_pid = self._lock_pid
         self._tracker_resets = 0
         self.store: EvolvingCategoryStore | None = None
         self.compiler: CategoryCompiler | None = None
         self.engine: EvolutionEngine | None = None
-        try:
-            self._open_resources()
-            if self.auto_commit:
-                try:
-                    self._consolidate_startup()
-                except Exception as exc:
-                    self._record_error(exc)
-                    logger.warning(
-                        "Category startup consolidation failed (%s)",
-                        type(exc).__name__,
-                    )
-            _FORK_OBSERVERS.add(self)
-        except Exception:
-            if self.compiler is not None:
-                self.compiler.close()
-            if self.store is not None:
-                self.store.close()
-            raise
+        with _FORK_REGISTRY_LOCK:
+            try:
+                self._open_resources()
+                if self.auto_commit:
+                    try:
+                        self._consolidate_startup()
+                    except Exception as exc:
+                        self._record_error(exc)
+                        logger.warning(
+                            "Category startup consolidation failed (%s)",
+                            type(exc).__name__,
+                        )
+                _FORK_OBSERVERS.add(self)
+            except Exception:
+                if self.compiler is not None:
+                    self.compiler.close()
+                if self.store is not None:
+                    self.store.close()
+                raise
 
     def _open_resources(self) -> None:
         connection: sqlite3.Connection | None = sqlite3.connect(
@@ -844,7 +848,7 @@ class CategoryObserver:
 
     def _ensure_process(self) -> None:
         current_pid = os.getpid()
-        if current_pid == self._creator_pid or self._closed:
+        if current_pid == self._resource_pid or self._closed:
             return
         old_compiler, old_store = self.compiler, self.store
         self.compiler = None
@@ -866,24 +870,20 @@ class CategoryObserver:
         except Exception as exc:
             self._record_error(exc)
         self._open_resources()
-        self._creator_pid = current_pid
+        self._resource_pid = current_pid
         self._tracker_resets += 1
-        if self.auto_commit:
-            try:
-                self._consolidate_startup()
-            except Exception as exc:
-                self._record_error(exc)
-                logger.warning(
-                    "Category startup consolidation failed (%s)",
-                    type(exc).__name__,
-                )
 
     def _prepare_public_lock(self) -> None:
-        # A lock held by another thread at fork stays permanently held in the
-        # child. PID comparison is safe before locking because only a forked
-        # process can take this branch during normal operation.
-        if os.getpid() != self._creator_pid:
-            self._lock = threading.RLock()
+        current_pid = os.getpid()
+        if current_pid == self._lock_pid:
+            return
+        # Actual fork children install their lock eagerly in the at-fork hook.
+        # This registry-serialized fallback supports spawn/reload tests without
+        # allowing concurrent first callers to create independent locks.
+        with _FORK_REGISTRY_LOCK:
+            if current_pid != self._lock_pid:
+                self._lock = threading.RLock()
+                self._lock_pid = current_pid
 
     @staticmethod
     def proxy_id(memory_id: str) -> str:
@@ -1002,7 +1002,7 @@ class CategoryObserver:
                     "recall_id": recall_id,
                     "memory_id": memory_id,
                     "proxy_id": self.proxy_id(memory_id),
-                    "rank": rank,
+                    "baseline_rank": rank,
                 }
                 proxy_event_id = self._stable_id("proxy-event", proxy_event_payload)
                 self.store.append_event(
@@ -1021,6 +1021,60 @@ class CategoryObserver:
                         created_event_id=proxy_event_id,
                     )
         self._tracker = next_tracker
+
+    def observe_delivery(self, recall_id: str, result_ids: Iterable[str]) -> None:
+        """Append the result order actually delivered for one observed recall."""
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                self._observe_delivery(recall_id, result_ids)
+            except Exception as exc:
+                self._record_error(exc)
+                raise
+
+    def _observe_delivery(self, recall_id: str, result_ids: Iterable[str]) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        ids = tuple(str(result_id) for result_id in result_ids)
+        delivery_id = self._stable_id("delivery", {"recall_id": str(recall_id)})
+        with self.store.transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (delivery_id,)
+            ).fetchone():
+                return
+            recall_event = connection.execute(
+                "SELECT id FROM cat_events WHERE kind='recall_observed' "
+                "AND json_extract(payload_json, '$.recall_id') = ? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (str(recall_id),),
+            ).fetchone()
+            recall_event_id = (
+                str(recall_event[0]) if recall_event is not None else None
+            )
+            delivery_payload = {
+                "recall_id": str(recall_id),
+                "recall_event_id": recall_event_id,
+                "result_ids": ids,
+                "correlated": recall_event_id is not None,
+            }
+            self.store.append_event(
+                "recall_delivered", delivery_payload, event_id=delivery_id
+            )
+            for rank, memory_id in enumerate(ids):
+                payload = {
+                    "delivery_event_id": delivery_id,
+                    "recall_event_id": recall_event_id,
+                    "recall_id": str(recall_id),
+                    "memory_id": memory_id,
+                    "proxy_id": self.proxy_id(memory_id),
+                    "delivered_rank": rank,
+                }
+                self.store.append_event(
+                    "proxy_delivered",
+                    payload,
+                    event_id=self._stable_id("proxy-delivered", payload),
+                )
 
     def observe_outcome(self, recall_id: str, used: bool, note: str | None) -> None:
         self._prepare_public_lock()
@@ -1253,27 +1307,27 @@ class CategoryObserver:
 
     def close(self) -> None:
         self._prepare_public_lock()
-        with self._lock:
-            if self._closed:
-                return
-            self._ensure_process()
-            if self.compiler is not None:
-                try:
-                    self.compiler.close()
-                except Exception as exc:
-                    self._record_error(exc)
-                    raise
-                self.compiler = None
-            if self.store is not None:
-                try:
-                    self.store.close()
-                except Exception as exc:
-                    self._record_error(exc)
-                    raise
-                self.store = None
-            self.engine = None
-            self._closed = True
-            _FORK_OBSERVERS.discard(self)
+        with _FORK_REGISTRY_LOCK:
+            with self._lock:
+                if self._closed:
+                    return
+                if self.compiler is not None:
+                    try:
+                        self.compiler.close()
+                    except Exception as exc:
+                        self._record_error(exc)
+                        raise
+                    self.compiler = None
+                if self.store is not None:
+                    try:
+                        self.store.close()
+                    except Exception as exc:
+                        self._record_error(exc)
+                        raise
+                    self.store = None
+                self.engine = None
+                self._closed = True
+                _FORK_OBSERVERS.discard(self)
 
 
 @dataclass(frozen=True)

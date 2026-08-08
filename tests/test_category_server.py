@@ -45,6 +45,26 @@ def _seed_eligible_proposal(database: Path) -> None:
     store.close()
 
 
+def _seed_eligible_proposal_in_observer(observer) -> None:
+    evidence_event = observer.store.append_event("evidence", {"source": "test"})
+    root_event = observer.store.append_event("root", {"active_cell_ids": []})
+    observer.engine.create_root_epoch("root", (), event_id=root_event)
+    observer.engine.propose(
+        category_evolution.RewriteProposal(
+            id="proposal",
+            kind="create",
+            locus_id="root",
+            context_id=None,
+            input_ids=(),
+            outputs=(CellDraft("new-cell", 0, "new cell"),),
+            witness_ids=(),
+            evidence=category_evolution.RewriteEvidence(
+                (evidence_event,), 0.8, 0.8, 0.1
+            ),
+        )
+    )
+
+
 class FakeEmbeddingProvider:
     def dimension(self) -> int:
         return 768
@@ -80,6 +100,9 @@ def category_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_session_id", str(uuid.uuid4()))
     monkeypatch.setattr(server, "_category_store", None)
     monkeypatch.setattr(server, "_category_observer", None, raising=False)
+    monkeypatch.setattr(server, "_category_pending_close", None, raising=False)
+    monkeypatch.setattr(server, "_category_last_observed_at", None, raising=False)
+    monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid(), raising=False)
     monkeypatch.setattr(server, "_knowledge_graph", None)
     monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(server, "_form_resonances", lambda *_args, **_kwargs: None)
@@ -120,8 +143,11 @@ def category_init_env(tmp_path, monkeypatch):
         "_knowledge_graph": None,
         "_category_store": None,
         "_category_observer": None,
+        "_category_pending_close": None,
         "_category_status": None,
         "_category_atexit_callback": None,
+        "_category_last_observed_at": None,
+        "_server_lock_pid": server.os.getpid(),
     }.items():
         monkeypatch.setattr(server, name, value, raising=False)
 
@@ -129,6 +155,11 @@ def category_init_env(tmp_path, monkeypatch):
 
     if server._category_observer is not None:
         server._category_observer.close()
+    if server._category_pending_close is not None:
+        try:
+            server._category_pending_close.close()
+        except Exception:
+            pass
     if server._category_store is not None:
         server._category_store._conn.close()
     if server._storage is not None:
@@ -149,6 +180,9 @@ class RecordingObserver:
 
     def compile_for_recall(self, seed_ids, base_tokens=0):
         return self.compiled
+
+    def observe_delivery(self, recall_id, result_ids):
+        self.delivered = (recall_id, tuple(result_ids))
 
     def adjust_results(self, results, compiled, influence=0.10):
         self.adjusted += 1
@@ -256,6 +290,112 @@ def test_live_influence_blends_existing_results_without_injection_or_commentary(
     assert all(set(item) == set(next(base for base in baseline if base["id"] == item["id"])) for item in influenced)
     assert all("commentary" not in item for item in influenced)
     assert observer.adjusted == 1
+
+
+def test_live_influence_persists_delivered_order_separately_from_baseline(
+    category_server_env, monkeypatch
+):
+    """Durable delivered ranks exactly join to the reordered response."""
+    server, config = category_server_env
+    observer = category_evolution.CategoryObserver(
+        server.PROJECT_ROOT / "categories_v2.db",
+        shadow=False,
+        influence_recall=True,
+    )
+    baseline = [
+        {"id": "memory-b", "score": 0.90, "payload": "b"},
+        {"id": "memory-a", "score": 0.80, "payload": "a"},
+    ]
+    compiled = CompiledCategory(
+        "epoch",
+        None,
+        (
+            CompiledCell(observer.proxy_id("memory-b"), "b", 0, 0.0, {}, 0, 1),
+            CompiledCell(observer.proxy_id("memory-a"), "a", 0, 1.0, {}, 0, 1),
+        ),
+        2,
+        2,
+        False,
+        False,
+    )
+    monkeypatch.setattr(observer, "compile_for_recall", lambda *_args, **_kwargs: compiled)
+    server._category_observer = observer
+    config.category_evolution.enabled = True
+    config.category_evolution.shadow = False
+    config.category_evolution.influence_recall = True
+
+    delivered = server._observe_category_recall("query", baseline, "recall-ranked")
+
+    try:
+        assert [item["id"] for item in delivered] == ["memory-a", "memory-b"]
+        connection = observer.store.connection
+        stored_delivered = [
+            (str(row[0]), int(row[1]))
+            for row in connection.execute(
+                "SELECT json_extract(delivery.payload_json, '$.memory_id'), "
+                "json_extract(delivery.payload_json, '$.delivered_rank') "
+                "FROM cat_events AS delivery "
+                "JOIN cat_events AS recall "
+                "ON json_extract(delivery.payload_json, '$.recall_event_id') = recall.id "
+                "WHERE delivery.kind='proxy_delivered' "
+                "AND json_extract(recall.payload_json, '$.recall_id') = ? "
+                "ORDER BY json_extract(delivery.payload_json, '$.delivered_rank')",
+                ("recall-ranked",),
+            )
+        ]
+        assert stored_delivered == [(item["id"], rank) for rank, item in enumerate(delivered)]
+        baseline_payloads = [
+            json.loads(row[0])
+            for row in connection.execute(
+                "SELECT payload_json FROM cat_events "
+                "WHERE kind='proxy_observed' ORDER BY rowid"
+            )
+        ]
+        assert [payload["memory_id"] for payload in baseline_payloads] == [
+            "memory-b",
+            "memory-a",
+        ]
+        assert all("baseline_rank" in payload for payload in baseline_payloads)
+        assert all("delivered_rank" not in payload for payload in baseline_payloads)
+    finally:
+        observer.close()
+        server._category_observer = None
+
+
+def test_delivery_positions_preserve_duplicate_response_ids(tmp_path):
+    """Delivered history records every response position, including duplicates."""
+    observer = category_evolution.CategoryObserver(tmp_path / "categories_v2.db")
+    try:
+        observer.observe_recall(
+            "query",
+            ["duplicate", "other"],
+            source="/workspace",
+            observed_at=datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc),
+            recall_id="duplicate-recall",
+        )
+        observer.observe_delivery(
+            "duplicate-recall", ["duplicate", "other", "duplicate"]
+        )
+
+        delivery = json.loads(
+            observer.store.connection.execute(
+                "SELECT payload_json FROM cat_events WHERE kind='recall_delivered'"
+            ).fetchone()[0]
+        )
+        positions = [
+            (payload["memory_id"], payload["delivered_rank"])
+            for payload in (
+                json.loads(row[0])
+                for row in observer.store.connection.execute(
+                    "SELECT payload_json FROM cat_events "
+                    "WHERE kind='proxy_delivered' ORDER BY rowid"
+                )
+            )
+        ]
+        assert delivery["result_ids"] == ["duplicate", "other", "duplicate"]
+        assert positions == [("duplicate", 0), ("other", 1), ("duplicate", 2)]
+    finally:
+        observer.close()
 
 
 def test_observation_and_outcome_retries_are_idempotent_without_committing_epochs(tmp_path):
@@ -396,7 +536,7 @@ def test_recall_rank_and_outcome_correlation_are_persisted_idempotently(tmp_path
                 "SELECT payload_json FROM cat_events WHERE kind='proxy_observed' ORDER BY rowid"
             )
         ]
-        assert [(item["memory_id"], item["rank"]) for item in proxy_payloads] == [
+        assert [(item["memory_id"], item["baseline_rank"]) for item in proxy_payloads] == [
             ("memory-b", 0),
             ("memory-a", 1),
         ]
@@ -673,6 +813,73 @@ def test_pid_change_reopens_resources_and_reports_process_local_tracker_reset(
         observer.close()
 
 
+@pytest.mark.parametrize("operation", ["recall", "outcome", "compile", "report", "close"])
+def test_pid_recovery_never_consolidates_seeded_proposals(
+    tmp_path, monkeypatch, operation
+):
+    """Generic first use in a child is recovery, never startup maintenance."""
+    pid = {"value": 100}
+    monkeypatch.setattr(category_evolution.os, "getpid", lambda: pid["value"])
+    database = tmp_path / "categories_v2.db"
+    observer = category_evolution.CategoryObserver(database, auto_commit=False)
+    _seed_eligible_proposal_in_observer(observer)
+    observer.auto_commit = True
+    pid["value"] = 101
+
+    try:
+        if operation == "recall":
+            observer.observe_recall(
+                "query",
+                ["memory"],
+                source="/workspace",
+                observed_at=datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc),
+                recall_id="recall",
+            )
+        elif operation == "outcome":
+            observer.observe_outcome("recall", True, None)
+        elif operation == "compile":
+            observer.compile_for_recall(["memory"])
+        elif operation == "report":
+            observer.report()
+        else:
+            observer.close()
+
+        connection = sqlite3.connect(database)
+        try:
+            committed = connection.execute(
+                "SELECT COUNT(*) FROM cat_events WHERE kind='rewrite_committed'"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        assert committed == 0
+    finally:
+        if not observer._closed:
+            observer.auto_commit = False
+            observer.close()
+
+
+def test_close_after_pid_change_does_not_reopen_resources(tmp_path, monkeypatch):
+    """Shutdown closes inherited resources directly without child initialization."""
+    pid = {"value": 100}
+    monkeypatch.setattr(category_evolution.os, "getpid", lambda: pid["value"])
+    observer = category_evolution.CategoryObserver(tmp_path / "categories_v2.db")
+    opened = 0
+    original_open = observer._open_resources
+
+    def count_open():
+        nonlocal opened
+        opened += 1
+        return original_open()
+
+    monkeypatch.setattr(observer, "_open_resources", count_open)
+    pid["value"] = 101
+
+    observer.close()
+
+    assert opened == 0
+    assert observer._closed is True
+
+
 def test_pid_change_does_not_wait_on_inherited_compiler_condition(
     tmp_path, monkeypatch
 ):
@@ -707,6 +914,79 @@ def test_pid_change_does_not_wait_on_inherited_compiler_condition(
     worker.join(timeout=5)
     try:
         assert recovered_without_release is True
+    finally:
+        observer.close()
+
+
+def test_two_threads_share_one_lock_and_one_resource_reopen_after_pid_change(
+    tmp_path, monkeypatch
+):
+    """Concurrent child first-use cannot install separate locks or reopen twice."""
+    pid = {"value": 100}
+    monkeypatch.setattr(category_evolution.os, "getpid", lambda: pid["value"])
+    observer = category_evolution.CategoryObserver(tmp_path / "categories_v2.db")
+    original_open = observer._open_resources
+    first_open_entered = threading.Event()
+    allow_first_open = threading.Event()
+    second_open_entered = threading.Event()
+    open_count = 0
+    count_lock = threading.Lock()
+
+    def controlled_open():
+        nonlocal open_count
+        with count_lock:
+            open_count += 1
+            invocation = open_count
+        if invocation == 1:
+            first_open_entered.set()
+            allow_first_open.wait(timeout=5)
+        else:
+            second_open_entered.set()
+        return original_open()
+
+    monkeypatch.setattr(observer, "_open_resources", controlled_open)
+    pid["value"] = 101
+    reports = []
+    errors = []
+
+    def report():
+        try:
+            reports.append(observer.report())
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=report)
+    second = threading.Thread(target=report)
+    first.start()
+    assert first_open_entered.wait(timeout=5)
+    second.start()
+    second_open_entered.wait(timeout=0.25)
+    allow_first_open.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+    try:
+        assert errors == []
+        assert len(reports) == 2
+        assert open_count == 1
+    finally:
+        observer.close()
+
+
+def test_atfork_child_installs_lock_pid_before_resource_recovery(tmp_path, monkeypatch):
+    """Child lock state is current immediately while resource state stays stale."""
+    pid = {"value": 100}
+    monkeypatch.setattr(category_evolution.os, "getpid", lambda: pid["value"])
+    observer = category_evolution.CategoryObserver(tmp_path / "categories_v2.db")
+    old_lock = observer._lock
+    pid["value"] = 101
+    category_evolution._FORK_ACQUIRED = [observer]
+
+    category_evolution._after_category_fork_child()
+
+    try:
+        assert observer._lock is not old_lock
+        assert observer._lock_pid == 101
+        assert observer._resource_pid == 100
     finally:
         observer.close()
 
@@ -759,6 +1039,59 @@ def test_prefork_barrier_waits_for_observer_sqlite_work_to_finish(
         assert not fork_thread.is_alive()
     finally:
         observer.close()
+
+
+def test_observer_construction_is_registered_before_prefork_snapshot(
+    tmp_path, monkeypatch
+):
+    """Fork preparation cannot pass a half-constructed unregistered observer."""
+    original_open = category_evolution.CategoryObserver._open_resources
+    construction_entered = threading.Event()
+    allow_construction = threading.Event()
+    fork_quiesced = threading.Event()
+    allow_parent_release = threading.Event()
+    created = []
+    errors = []
+
+    def blocked_open(self):
+        construction_entered.set()
+        allow_construction.wait(timeout=5)
+        return original_open(self)
+
+    monkeypatch.setattr(category_evolution.CategoryObserver, "_open_resources", blocked_open)
+
+    def construct():
+        try:
+            created.append(
+                category_evolution.CategoryObserver(tmp_path / "categories_v2.db")
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    def fork_hooks():
+        category_evolution._before_category_fork()
+        fork_quiesced.set()
+        allow_parent_release.wait(timeout=5)
+        category_evolution._after_category_fork_parent()
+
+    constructor = threading.Thread(target=construct)
+    constructor.start()
+    assert construction_entered.wait(timeout=5)
+    fork_thread = threading.Thread(target=fork_hooks)
+    fork_thread.start()
+    passed_half_constructed = fork_quiesced.wait(timeout=0.1)
+    allow_construction.set()
+    constructor.join(timeout=5)
+    assert fork_quiesced.wait(timeout=5)
+    allow_parent_release.set()
+    fork_thread.join(timeout=5)
+    try:
+        assert passed_half_constructed is False
+        assert errors == []
+        assert len(created) == 1
+    finally:
+        if created:
+            created[0].close()
 
 
 def test_category_module_reload_preserves_fork_registry_without_reregistering(
@@ -913,6 +1246,120 @@ def test_real_reinit_retains_cleanup_callback_when_replaced_observer_close_fails
     assert unregistered == []
 
 
+def test_replacement_waits_for_exact_old_observer_close_retry(
+    category_init_env, monkeypatch
+):
+    """A failed old close exposes unavailable state and opens no replacement pool."""
+    from types import SimpleNamespace
+
+    server, config, _db_path = category_init_env
+    config.category_evolution.enabled = True
+
+    class OldObserver:
+        def __init__(self):
+            self.attempts = 0
+            self.closed = False
+
+        def close(self):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("private old close detail")
+            self.closed = True
+
+    class NewObserver:
+        def __init__(self, *_args, **_kwargs):
+            construction_saw_old_closed.append(old.closed)
+            self.closed = False
+
+        def report(self):
+            return {"available": True}
+
+        def close(self):
+            self.closed = True
+
+    old = OldObserver()
+    construction_saw_old_closed = []
+    old_cleanup = server._make_category_cleanup(old)
+    server._category_observer = old
+    server._category_atexit_callback = old_cleanup
+    server._reflector = SimpleNamespace(_category_reporter=old.report if hasattr(old, "report") else None)
+    monkeypatch.setattr(category_evolution, "CategoryObserver", NewObserver)
+    unregistered = []
+    monkeypatch.setattr("atexit.unregister", lambda callback: unregistered.append(callback))
+
+    server._init()
+
+    assert construction_saw_old_closed == []
+    assert server._category_observer is None
+    assert server._category_pending_close is old
+    assert server._category_status == {
+        "available": False,
+        "flags": {
+            "enabled": True,
+            "shadow": True,
+            "influence_recall": False,
+            "auto_commit": False,
+        },
+        "error": "RuntimeError",
+        "last_error": "RuntimeError",
+    }
+    assert server._reflector._category_reporter() == server._category_status
+    assert unregistered == []
+
+    server._init()
+
+    assert old.attempts == 2
+    assert old.closed is True
+    assert construction_saw_old_closed == [True]
+    assert isinstance(server._category_observer, NewObserver)
+    assert server._category_pending_close is None
+    assert unregistered == [old_cleanup]
+
+
+def test_pending_category_close_does_not_block_core_server_after_reload(
+    category_init_env, monkeypatch
+):
+    """Core tools remain usable while category replacement close keeps failing."""
+    server, config, _db_path = category_init_env
+    config.category_evolution.enabled = True
+
+    class OldObserver:
+        def close(self):
+            raise RuntimeError("private old close detail")
+
+    old = OldObserver()
+    server._category_observer = old
+    server._category_atexit_callback = server._make_category_cleanup(old)
+    constructions = []
+
+    def construct(*_args, **_kwargs):
+        constructions.append(True)
+        raise AssertionError("replacement must not open")
+
+    monkeypatch.setattr(category_evolution, "CategoryObserver", construct)
+
+    server._init()
+    remembered = server.remember("core remains usable")
+
+    assert server._initialized is True
+    assert server._storage is not None
+    assert server._storage.get_episode(remembered["episode_id"]) is not None
+    assert server._category_pending_close is old
+    assert server._category_observer is None
+    assert constructions == []
+    assert server._reflector.reflect("category_evolution")["category_evolution"] == {
+        "available": False,
+        "flags": {
+            "enabled": True,
+            "shadow": True,
+            "influence_recall": False,
+            "auto_commit": False,
+        },
+        "error": "RuntimeError",
+        "last_error": "RuntimeError",
+    }
+
+
 def test_category_atexit_cleanup_logs_only_failure_type(category_init_env, monkeypatch, caplog):
     """Shutdown cleanup must not let a private close exception reach atexit."""
     import atexit
@@ -957,6 +1404,59 @@ def test_module_reload_retains_observer_until_next_init_can_close_it(monkeypatch
         assert reloaded._category_atexit_callback == callback
     finally:
         reloaded._category_observer = None
+        reloaded._category_atexit_callback = None
+
+
+def test_real_reload_status_remains_usable_when_old_category_close_fails(
+    tmp_path, monkeypatch
+):
+    """Reloaded core initialization completes despite category-only close failure."""
+    import server
+    from config import load_config
+
+    config = load_config(tmp_path)
+    config.graph.enabled = False
+    config.watcher.enabled = False
+    config.category_evolution.enabled = True
+
+    class OldObserver:
+        def close(self):
+            raise RuntimeError("private reload close detail")
+
+    old = OldObserver()
+    server._category_observer = old
+    server._category_pending_close = None
+    server._category_atexit_callback = server._make_category_cleanup(old)
+    reloaded = importlib.reload(server)
+    monkeypatch.setattr(reloaded, "ENGRAM_HOME", tmp_path)
+    monkeypatch.setattr(reloaded, "DB_PATH", tmp_path / ".engram" / "graph.db")
+    monkeypatch.setattr(reloaded, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(reloaded, "load_config", lambda _root: config)
+    monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
+
+    result = reloaded.status()
+
+    try:
+        assert isinstance(result, dict)
+        assert reloaded._initialized is True
+        assert reloaded._storage is not None
+        assert reloaded._category_observer is None
+        assert reloaded._category_pending_close is old
+        category_report = reloaded._reflector.reflect("category_evolution")
+        assert category_report["category_evolution"]["available"] is False
+        assert category_report["category_evolution"]["error"] == "RuntimeError"
+        assert "private reload close detail" not in str(category_report)
+    finally:
+        if reloaded._category_store is not None:
+            reloaded._category_store._conn.close()
+        if reloaded._storage is not None:
+            reloaded._storage.close()
+        reloaded._watcher = None
+        reloaded._knowledge_graph = None
+        reloaded._category_store = None
+        reloaded._storage = None
+        reloaded._category_observer = None
+        reloaded._category_pending_close = None
         reloaded._category_atexit_callback = None
 
 
@@ -1016,6 +1516,45 @@ def test_concurrent_server_recalls_timestamp_inside_serialized_observation(
         server._category_observer = None
 
 
+def test_server_clamps_regressing_wall_clock_for_observation_order(
+    category_server_env, monkeypatch
+):
+    """A backwards wall clock still emits nondecreasing observer timestamps."""
+    server, config = category_server_env
+    observer = category_evolution.CategoryObserver(
+        server.PROJECT_ROOT / "categories_v2.db"
+    )
+    server._category_observer = observer
+    config.category_evolution.enabled = True
+    config.category_evolution.shadow = True
+    later = datetime(2030, 1, 1, 12, 0, 1, tzinfo=timezone.utc)
+    earlier = later - timedelta(seconds=1)
+    clock = iter((later, earlier))
+
+    class RegressingDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(clock)
+
+    monkeypatch.setattr(server, "datetime", RegressingDateTime)
+
+    server._observe_category_recall("first", [{"id": "one"}], "recall-one")
+    server._observe_category_recall("second", [{"id": "two"}], "recall-two")
+
+    try:
+        observed = [
+            json.loads(row[0])["observed_at"]
+            for row in observer.store.connection.execute(
+                "SELECT payload_json FROM cat_events "
+                "WHERE kind='recall_observed' ORDER BY rowid"
+            )
+        ]
+        assert observed == [later.isoformat(), later.isoformat()]
+    finally:
+        observer.close()
+        server._category_observer = None
+
+
 def test_init_guard_serializes_concurrent_initialization(monkeypatch):
     """Catches two startup calls entering resource initialization concurrently."""
     import server
@@ -1054,7 +1593,7 @@ def test_init_guard_is_replaced_after_pid_change(monkeypatch):
 
     pid = {"value": 100}
     monkeypatch.setattr(server.os, "getpid", lambda: pid["value"])
-    server._init_lock_pid = 100
+    monkeypatch.setattr(server, "_server_lock_pid", 100)
     inherited_lock = threading.RLock()
     server._init_lock = inherited_lock
     held = threading.Event()
@@ -1079,6 +1618,64 @@ def test_init_guard_is_replaced_after_pid_change(monkeypatch):
     worker.join(timeout=5)
 
     assert completed_before_release is True
+
+
+def test_server_atfork_child_eagerly_replaces_locks_and_requires_reinit(monkeypatch):
+    """Child state is unlocked and never inherits a true initialized flag."""
+    import server
+
+    pid = {"value": 100}
+    monkeypatch.setattr(server.os, "getpid", lambda: pid["value"])
+    old_init_lock = threading.RLock()
+    old_order_lock = threading.RLock()
+    server._init_lock = old_init_lock
+    server._category_recall_lock = old_order_lock
+    monkeypatch.setattr(server, "_server_lock_pid", 100)
+    monkeypatch.setattr(server, "_initialized", True)
+    pid["value"] = 101
+
+    server._after_server_fork_child()
+
+    assert server._init_lock is not old_init_lock
+    assert server._category_recall_lock is not old_order_lock
+    assert server._server_lock_pid == 101
+    assert server._initialized is False
+
+
+def test_two_child_first_init_calls_share_one_eagerly_installed_lock(monkeypatch):
+    """Only one first caller performs process-local server initialization."""
+    import server
+
+    pid = {"value": 100}
+    monkeypatch.setattr(server.os, "getpid", lambda: pid["value"])
+    monkeypatch.setattr(server, "_server_lock_pid", 100)
+    monkeypatch.setattr(server, "_initialized", True)
+    pid["value"] = 101
+    server._after_server_fork_child()
+    entered = threading.Event()
+    allow_init = threading.Event()
+    calls = 0
+
+    def initialize_once():
+        nonlocal calls
+        if server._initialized:
+            return
+        calls += 1
+        entered.set()
+        allow_init.wait(timeout=5)
+        server._initialized = True
+
+    monkeypatch.setattr(server, "_init_unlocked", initialize_once)
+    first = threading.Thread(target=server._init)
+    second = threading.Thread(target=server._init)
+    first.start()
+    assert entered.wait(timeout=5)
+    second.start()
+    allow_init.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert calls == 1
 
 
 def test_adjust_results_preserves_invalid_or_missing_scores_and_breaks_ties_deterministically():

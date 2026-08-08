@@ -213,6 +213,8 @@ class CategoryCompiler:
         self._pool_condition = threading.Condition()
         self._available_connections: list[sqlite3.Connection] = []
         self._closed = False
+        self._closing = False
+        self._close_in_progress = False
         try:
             for _index in range(_CONNECTION_POOL_SIZE):
                 self._available_connections.append(self._create_compile_connection())
@@ -394,6 +396,8 @@ class CategoryCompiler:
     def _acquire_compile_connection(self, deadline: int) -> sqlite3.Connection:
         self._assert_database_identity()
         with self._pool_condition:
+            if self._closed or self._closing:
+                raise RuntimeError("category compiler is closed")
             while not self._available_connections:
                 if self._closed:
                     raise RuntimeError("category compiler is closed")
@@ -401,6 +405,8 @@ class CategoryCompiler:
                 if remaining_ns <= 0:
                     raise _DeadlineExceeded
                 self._pool_condition.wait(remaining_ns / 1_000_000_000)
+            if self._closed or self._closing:
+                raise RuntimeError("category compiler is closed")
             if time.monotonic_ns() >= deadline:
                 raise _DeadlineExceeded
             connection = self._available_connections.pop()
@@ -415,22 +421,53 @@ class CategoryCompiler:
 
     def _release_compile_connection(self, connection: sqlite3.Connection) -> None:
         with self._pool_condition:
-            if self._closed:
-                connection.close()
-            else:
+            should_close = self._closed or self._closing
+            if not should_close:
                 self._available_connections.append(connection)
                 self._pool_condition.notify()
+                return
+        try:
+            connection.close()
+        except Exception:
+            with self._pool_condition:
+                self._available_connections.append(connection)
+                self._closed = False
+                self._closing = True
+                self._pool_condition.notify_all()
+            raise
 
     def close(self) -> None:
         with self._pool_condition:
+            while self._close_in_progress:
+                self._pool_condition.wait()
             if self._closed:
                 return
-            self._closed = True
+            self._closing = True
+            self._close_in_progress = True
             connections = self._available_connections
             self._available_connections = []
             self._pool_condition.notify_all()
+        failed = []
+        first_error: Exception | None = None
         for connection in connections:
-            connection.close()
+            try:
+                connection.close()
+            except Exception as exc:
+                failed.append(connection)
+                if first_error is None:
+                    first_error = exc
+        with self._pool_condition:
+            self._available_connections.extend(failed)
+            self._close_in_progress = False
+            if not self._available_connections:
+                self._closed = True
+                self._closing = False
+            else:
+                self._closed = False
+                self._closing = True
+            self._pool_condition.notify_all()
+        if first_error is not None:
+            raise first_error
 
     def __del__(self) -> None:
         try:

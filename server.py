@@ -171,12 +171,32 @@ _category_store = None
 # Preserve the live observer across importlib.reload so the next initializer can
 # close it before replacement. On first import these names are absent.
 _category_observer = globals().get("_category_observer")
+_category_pending_close = globals().get("_category_pending_close")
 _category_status = globals().get("_category_status")
 _category_atexit_callback = globals().get("_category_atexit_callback")
 _init_lock = threading.RLock()
-_init_lock_pid = os.getpid()
 _category_recall_lock = threading.RLock()
-_category_recall_lock_pid = os.getpid()
+_category_last_observed_at = None
+_server_pid_guard = threading.RLock()
+_server_lock_pid = os.getpid()
+_SERVER_AT_FORK_REGISTERED = globals().get("_SERVER_AT_FORK_REGISTERED", False)
+
+
+def _after_server_fork_child() -> None:
+    """Install process-local server locks before any child thread can run."""
+    global _init_lock, _category_recall_lock, _server_pid_guard
+    global _server_lock_pid, _initialized, _category_last_observed_at
+    _init_lock = threading.RLock()
+    _category_recall_lock = threading.RLock()
+    _server_pid_guard = threading.RLock()
+    _server_lock_pid = os.getpid()
+    _initialized = False
+    _category_last_observed_at = None
+
+
+if hasattr(os, "register_at_fork") and not _SERVER_AT_FORK_REGISTERED:
+    os.register_at_fork(after_in_child=_after_server_fork_child)
+    _SERVER_AT_FORK_REGISTERED = True
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -304,13 +324,21 @@ def _observe_category_recall(
         return results
     result_ids = [str(result.get("id", "")) for result in results if result.get("id") is not None]
     _prepare_category_recall_lock()
+    global _category_last_observed_at
     with _category_recall_lock:
+        observed_at = datetime.now(timezone.utc)
+        if (
+            _category_last_observed_at is not None
+            and observed_at < _category_last_observed_at
+        ):
+            observed_at = _category_last_observed_at
+        _category_last_observed_at = observed_at
         try:
             _category_observer.observe_recall(
                 query,
                 result_ids,
                 source=os.getcwd(),
-                observed_at=datetime.now(timezone.utc),
+                observed_at=observed_at,
                 recall_id=recall_id,
             )
         except Exception as exc:
@@ -324,35 +352,55 @@ def _observe_category_recall(
         _remember_category_error(exc)
         logger.warning("Category observer compile failed (%s)", type(exc).__name__)
 
+    delivered = results
     if (
         compiled is not None
         and category_config.shadow is False
         and category_config.influence_recall is True
     ):
         try:
-            return _category_observer.adjust_results(
+            delivered = _category_observer.adjust_results(
                 [dict(result) for result in results], compiled, influence=0.10
             )
         except Exception as exc:
             _remember_category_error(exc)
             logger.warning("Category observer influence failed (%s)", type(exc).__name__)
-    return results
+    try:
+        _category_observer.observe_delivery(
+            recall_id,
+            [
+                str(result.get("id", ""))
+                for result in delivered
+                if result.get("id") is not None
+            ],
+        )
+    except Exception as exc:
+        _remember_category_error(exc)
+        logger.warning("Category observer delivery failed (%s)", type(exc).__name__)
+    return delivered
+
+
+def _prepare_server_process_locks() -> None:
+    global _init_lock, _category_recall_lock, _server_lock_pid, _initialized
+    global _category_last_observed_at
+    current_pid = os.getpid()
+    if current_pid == _server_lock_pid:
+        return
+    with _server_pid_guard:
+        if current_pid != _server_lock_pid:
+            _init_lock = threading.RLock()
+            _category_recall_lock = threading.RLock()
+            _server_lock_pid = current_pid
+            _initialized = False
+            _category_last_observed_at = None
 
 
 def _prepare_category_recall_lock() -> None:
-    global _category_recall_lock, _category_recall_lock_pid
-    current_pid = os.getpid()
-    if current_pid != _category_recall_lock_pid:
-        _category_recall_lock = threading.RLock()
-        _category_recall_lock_pid = current_pid
+    _prepare_server_process_locks()
 
 
 def _init():
-    global _init_lock, _init_lock_pid
-    current_pid = os.getpid()
-    if current_pid != _init_lock_pid:
-        _init_lock = threading.RLock()
-        _init_lock_pid = current_pid
+    _prepare_server_process_locks()
     with _init_lock:
         return _init_unlocked()
 
@@ -369,29 +417,126 @@ def _make_category_cleanup(observer):
     return cleanup
 
 
-def _init_unlocked():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_status, _category_atexit_callback
-    if _initialized:
-        return
-    old_observer = _category_observer
-    old_callback = _category_atexit_callback
+def _category_flags(category_config) -> dict:
+    return {
+        "enabled": getattr(category_config, "enabled", False) is True,
+        "shadow": getattr(category_config, "shadow", True) is not False,
+        "influence_recall": (
+            getattr(category_config, "influence_recall", False) is True
+        ),
+        "auto_commit": getattr(category_config, "auto_commit", False) is True,
+    }
+
+
+def _new_category_observer(category_config, graph_db_path: Path):
+    from category_evolution import CategoryObserver
+
+    category_db_path = (
+        Path(category_config.db_path)
+        if category_config.db_path
+        else graph_db_path.parent / "categories_v2.db"
+    )
+    return CategoryObserver(
+        category_db_path,
+        shadow=category_config.shadow,
+        influence_recall=category_config.influence_recall,
+        auto_commit=category_config.auto_commit,
+        archive_quota_bytes=category_config.archive_quota_bytes,
+        archive_high_watermark_ratio=category_config.archive_high_watermark_ratio,
+        max_traversal_depth=category_config.max_traversal_depth,
+        max_neighbors=category_config.max_neighbors,
+        max_candidates=category_config.max_candidates,
+        compile_wall_time_ms=category_config.compile_wall_time_ms,
+        consolidation_rewrite_budget=category_config.consolidation_rewrite_budget,
+        max_rewrite_members=category_config.max_rewrite_members,
+        max_active_branches=category_config.max_active_branches,
+        soft_boundary_threshold=category_config.soft_boundary_threshold,
+        hard_boundary_threshold=category_config.hard_boundary_threshold,
+        hard_boundary_confirmations=category_config.hard_boundary_confirmations,
+    )
+
+
+def _activate_category_observer(category_config, graph_db_path: Path) -> None:
+    global _category_observer, _category_status
     _category_observer = None
     _category_status = None
-    _category_atexit_callback = None
-    old_observer_closed = old_observer is None
+    if category_config is None or category_config.enabled is not True:
+        return
+    flags = _category_flags(category_config)
+    try:
+        _category_observer = _new_category_observer(category_config, graph_db_path)
+    except Exception as exc:
+        error_type = type(exc).__name__
+        _category_status = {
+            "available": False,
+            "flags": flags,
+            "error": error_type,
+            "last_error": error_type,
+        }
+        logger.warning("Category observer init failed (%s)", error_type)
+
+
+def _publish_category_observer() -> None:
+    global _category_atexit_callback
+    if _reflector is not None:
+        _reflector._category_reporter = (
+            _category_observer.report
+            if _category_observer is not None
+            else ((lambda status=_category_status: dict(status)) if _category_status else None)
+        )
+    if _category_observer is not None:
+        _category_atexit_callback = _make_category_cleanup(_category_observer)
+        atexit.register(_category_atexit_callback)
+
+
+def _init_unlocked():
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_pending_close, _category_status, _category_atexit_callback
+    already_initialized = _initialized
+    if already_initialized and _category_pending_close is None:
+        return
+    old_observer = _category_pending_close or _category_observer
+    old_callback = _category_atexit_callback
+    _category_observer = None
+    replacement_blocked = False
     if old_observer is not None:
         try:
             old_observer.close()
-            old_observer_closed = True
         except Exception as exc:
+            _category_pending_close = old_observer
+            category_config = getattr(
+                _config or load_config(PROJECT_ROOT), "category_evolution", None
+            )
+            flags = _category_flags(category_config)
+            error_type = type(exc).__name__
+            _category_status = {
+                "available": False,
+                "flags": flags,
+                "error": error_type,
+                "last_error": error_type,
+            }
+            if _reflector is not None:
+                _reflector._category_reporter = (
+                    lambda status=_category_status: dict(status)
+                )
             logger.warning("Category observer replacement close failed (%s)", type(exc).__name__)
-    # Keep a failed observer's exact cleanup callback registered so interpreter
-    # shutdown can retry a partial close. Successful replacements unregister it.
-    if old_callback is not None and old_observer_closed:
-        try:
-            atexit.unregister(old_callback)
-        except Exception:
-            pass
+            replacement_blocked = True
+            if already_initialized:
+                return
+    if not replacement_blocked:
+        _category_pending_close = None
+        _category_status = None
+        _category_atexit_callback = None
+        if old_callback is not None:
+            try:
+                atexit.unregister(old_callback)
+            except Exception:
+                pass
+    if already_initialized:
+        category_config = getattr(_config, "category_evolution", None)
+        graph_db_path = Path(_storage.db_path)
+        _activate_category_observer(category_config, graph_db_path)
+        _publish_category_observer()
+        return
     from embeddings import NomicEmbedProvider
     from storage import Storage
 
@@ -439,49 +584,8 @@ def _init_unlocked():
     _category_store = CategoryStore(cat_conn, dimension=768)
 
     category_config = getattr(_config, "category_evolution", None)
-    if category_config is not None and category_config.enabled is True:
-        category_flags = {
-            "enabled": True,
-            "shadow": category_config.shadow is not False,
-            "influence_recall": category_config.influence_recall is True,
-            "auto_commit": category_config.auto_commit is True,
-        }
-        try:
-            from category_evolution import CategoryObserver
-
-            category_db_path = (
-                Path(category_config.db_path)
-                if category_config.db_path
-                else db_path.parent / "categories_v2.db"
-            )
-            _category_observer = CategoryObserver(
-                category_db_path,
-                shadow=category_config.shadow,
-                influence_recall=category_config.influence_recall,
-                auto_commit=category_config.auto_commit,
-                archive_quota_bytes=category_config.archive_quota_bytes,
-                archive_high_watermark_ratio=category_config.archive_high_watermark_ratio,
-                max_traversal_depth=category_config.max_traversal_depth,
-                max_neighbors=category_config.max_neighbors,
-                max_candidates=category_config.max_candidates,
-                compile_wall_time_ms=category_config.compile_wall_time_ms,
-                consolidation_rewrite_budget=category_config.consolidation_rewrite_budget,
-                max_rewrite_members=category_config.max_rewrite_members,
-                max_active_branches=category_config.max_active_branches,
-                soft_boundary_threshold=category_config.soft_boundary_threshold,
-                hard_boundary_threshold=category_config.hard_boundary_threshold,
-                hard_boundary_confirmations=category_config.hard_boundary_confirmations,
-            )
-        except Exception as exc:
-            _category_observer = None
-            error_type = type(exc).__name__
-            _category_status = {
-                "available": False,
-                "flags": category_flags,
-                "error": error_type,
-                "last_error": error_type,
-            }
-            logger.warning("Category observer init failed (%s)", type(exc).__name__)
+    if not replacement_blocked:
+        _activate_category_observer(category_config, db_path)
 
     from compress import Compressor
     from dedup import Deduplicator, DedupConfig
