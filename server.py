@@ -568,7 +568,7 @@ def _prepare_category_recall_lock() -> None:
     _prepare_server_process_locks()
 
 
-def _init():
+def _init(*, allow_startup_consolidation: bool = False):
     global _initialization_cleanup_required
     _prepare_server_process_locks()
     while True:
@@ -588,7 +588,11 @@ def _init():
                 try:
                     with _init_lock:
                         try:
-                            return _init_unlocked()
+                            return _init_unlocked(
+                                allow_startup_consolidation=(
+                                    allow_startup_consolidation is True
+                                )
+                            )
                         except Exception:
                             _initialization_cleanup_required = True
                             initialization_failed = True
@@ -891,7 +895,12 @@ def _category_flags(category_config) -> dict:
     }
 
 
-def _new_category_observer(category_config, graph_db_path: Path):
+def _new_category_observer(
+    category_config,
+    graph_db_path: Path,
+    *,
+    allow_startup_consolidation: bool,
+):
     from category_evolution import CategoryObserver
 
     category_db_path = (
@@ -904,6 +913,7 @@ def _new_category_observer(category_config, graph_db_path: Path):
         shadow=category_config.shadow,
         influence_recall=category_config.influence_recall,
         auto_commit=category_config.auto_commit,
+        allow_startup_consolidation=allow_startup_consolidation,
         archive_quota_bytes=category_config.archive_quota_bytes,
         archive_high_watermark_ratio=category_config.archive_high_watermark_ratio,
         max_traversal_depth=category_config.max_traversal_depth,
@@ -919,7 +929,12 @@ def _new_category_observer(category_config, graph_db_path: Path):
     )
 
 
-def _activate_category_observer(category_config, graph_db_path: Path) -> None:
+def _activate_category_observer(
+    category_config,
+    graph_db_path: Path,
+    *,
+    allow_startup_consolidation: bool,
+) -> None:
     global _category_observer, _category_status
     _category_observer = None
     _category_status = None
@@ -927,7 +942,11 @@ def _activate_category_observer(category_config, graph_db_path: Path) -> None:
         return
     flags = _category_flags(category_config)
     try:
-        _category_observer = _new_category_observer(category_config, graph_db_path)
+        _category_observer = _new_category_observer(
+            category_config,
+            graph_db_path,
+            allow_startup_consolidation=allow_startup_consolidation,
+        )
     except Exception as exc:
         error_type = type(exc).__name__
         _category_status = {
@@ -939,7 +958,7 @@ def _activate_category_observer(category_config, graph_db_path: Path) -> None:
         logger.warning("Category observer init failed (%s)", error_type)
 
 
-def _init_unlocked():
+def _init_unlocked(*, allow_startup_consolidation: bool = False):
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_status, _category_atexit_callback
     if _initialized:
         return
@@ -993,7 +1012,11 @@ def _init_unlocked():
     _category_store = CategoryStore(cat_conn, dimension=768)
 
     category_config = getattr(_config, "category_evolution", None)
-    _activate_category_observer(category_config, db_path)
+    _activate_category_observer(
+        category_config,
+        db_path,
+        allow_startup_consolidation=allow_startup_consolidation,
+    )
     if _category_observer is not None:
         _category_atexit_callback = _register_server_cleanup(
             _category_observer,
@@ -3445,5 +3468,11 @@ def clipboard_view(situation: str = "") -> dict:
     return {"clipboard": view, "stats": stats}
 
 
+def _initialize_pre_serving() -> None:
+    """Initialize one process with explicit startup-maintenance authority."""
+    _init(allow_startup_consolidation=True)
+
+
 if __name__ == "__main__":
+    _initialize_pre_serving()
     mcp.run()

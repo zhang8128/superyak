@@ -324,7 +324,7 @@ _INITIALIZATION_FAILURE_RACE_PROBE = textwrap.dedent(
         with calls_lock:
             cleanup_calls += 1
 
-    def controlled_init():
+    def controlled_init(**_kwargs):
         global calls
         with calls_lock:
             calls += 1
@@ -1035,7 +1035,7 @@ def test_queued_server_operation_drains_before_generation_storage_closes(
     monkeypatch.setattr(
         server,
         "_init_unlocked",
-        lambda: storage.conn.execute("SELECT 1").fetchone()[0],
+        lambda **_kwargs: storage.conn.execute("SELECT 1").fetchone()[0],
     )
     operation = server._server_operation(server._init)
     cleanup_finished = threading.Event()
@@ -1097,7 +1097,7 @@ def test_real_fork_waits_for_blocked_core_initialization_and_resets_child_state(
     monkeypatch.setattr(server, "_last_instinct_id", "instinct")
     monkeypatch.setattr(server, "_session_episode_count", 7)
 
-    def blocked_init():
+    def blocked_init(**_kwargs):
         init_entered.set()
         assert allow_init.wait(timeout=5)
         server._initialized = True
@@ -1194,7 +1194,7 @@ def test_real_fork_quiesces_active_core_sqlite_and_serializes_child_reinit(
     monkeypatch.setattr(server, "_wander_visits", {"memory": 2})
     child_init_calls = []
 
-    def initialize_child_once():
+    def initialize_child_once(**_kwargs):
         if server._initialized:
             return
         child_init_calls.append(os.getpid())
@@ -1442,7 +1442,7 @@ def test_nested_same_thread_init_defers_cleanup_until_outer_operation_finishes(
     monkeypatch.setattr(
         server,
         "_init_unlocked",
-        lambda: storage.conn.execute("SELECT 1").fetchone()[0],
+        lambda **_kwargs: storage.conn.execute("SELECT 1").fetchone()[0],
     )
     observations = []
 

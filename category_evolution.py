@@ -753,6 +753,7 @@ class CategoryObserver:
         shadow: bool = True,
         influence_recall: bool = False,
         auto_commit: bool = False,
+        allow_startup_consolidation: bool = True,
         archive_quota_bytes: int = 3_000_000_000_000,
         archive_high_watermark_ratio: float = 0.90,
         max_traversal_depth: int = 4,
@@ -805,7 +806,7 @@ class CategoryObserver:
         with _FORK_REGISTRY_LOCK:
             try:
                 self._open_resources()
-                if self.auto_commit:
+                if self.auto_commit and allow_startup_consolidation is True:
                     try:
                         self._consolidate_startup()
                     except Exception as exc:

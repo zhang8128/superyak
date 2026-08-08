@@ -6,7 +6,9 @@ import atexit
 from datetime import datetime, timedelta, timezone
 import json
 import math
+import os
 from pathlib import Path
+import select
 import sqlite3
 import threading
 import uuid
@@ -63,6 +65,88 @@ def _seed_eligible_proposal_in_observer(observer) -> None:
             ),
         )
     )
+
+
+def _read_fork_payload(pid: int, read_fd: int) -> tuple[dict, int]:
+    readable, _, _ = select.select([read_fd], [], [], 10)
+    if not readable:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        pytest.fail("fork child did not report within 10 seconds")
+    payload = os.read(read_fd, 8192)
+    _, status = os.waitpid(pid, 0)
+    return json.loads(payload), os.waitstatus_to_exitcode(status)
+
+
+def _fork_category_server_child(server, parent_observer, mode: str) -> tuple[dict, int]:
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.close(read_fd)
+            commits_before_request = None
+            if mode == "explicit-startup":
+                startup = getattr(server, "_initialize_pre_serving", None)
+                if startup is not None:
+                    startup()
+                startup_observer = server._category_observer
+                commits_before_request = (
+                    startup_observer.store.connection.execute(
+                        "SELECT COUNT(*) FROM cat_events "
+                        "WHERE kind='rewrite_committed'"
+                    ).fetchone()[0]
+                    if startup_observer is not None
+                    else 0
+                )
+
+            recalled = server.recall(
+                "fork child category recovery",
+                max_results=1,
+                uninvited=0,
+            )
+            observer = server._category_observer
+            storage = server._storage
+            cleanup = server._server_generation_cleanup
+            assert observer is not None
+            assert storage is not None
+            assert cleanup is not None
+            assert observer is not parent_observer
+            connection = observer.store.connection
+            payload = {
+                "commits_before_request": commits_before_request,
+                "initialized": server._initialized,
+                "configured_auto_commit": observer.report()["flags"][
+                    "auto_commit"
+                ],
+                "recall_shape": sorted(recalled),
+                "rewrite_commits": connection.execute(
+                    "SELECT COUNT(*) FROM cat_events "
+                    "WHERE kind='rewrite_committed'"
+                ).fetchone()[0],
+                "epochs": connection.execute(
+                    "SELECT COUNT(*) FROM cat_epochs"
+                ).fetchone()[0],
+                "disposition": observer.engine.latest_disposition("proposal"),
+            }
+            storage_connection = storage.conn
+            cleanup()
+            try:
+                storage_connection.execute("SELECT 1")
+            except sqlite3.ProgrammingError:
+                storage_closed = True
+            else:
+                storage_closed = False
+            payload["cleanup_closed"] = storage_closed and observer._closed
+            os.write(write_fd, json.dumps(payload, sort_keys=True).encode())
+            os._exit(0)
+        except BaseException:
+            os._exit(3)
+
+    os.close(write_fd)
+    try:
+        return _read_fork_payload(pid, read_fd)
+    finally:
+        os.close(read_fd)
 
 
 class FakeEmbeddingProvider:
@@ -486,6 +570,90 @@ def test_startup_consolidation_failure_is_nonfatal_logged_and_type_only(
         assert "private consolidation details" not in caplog.text
     finally:
         observer.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+def test_real_fork_child_first_recall_never_runs_startup_consolidation(
+    category_init_env,
+):
+    """Lazy child recovery cannot commit structure from its first request."""
+    server, config, db_path = category_init_env
+    config.category_evolution.enabled = True
+    config.category_evolution.auto_commit = True
+    config.category_evolution.shadow = True
+    server._init()
+    parent_observer = server._category_observer
+    parent_storage = server._storage
+    category_database = db_path.parent / "categories_v2.db"
+    _seed_eligible_proposal(category_database)
+    baseline_epochs = parent_observer.store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs"
+    ).fetchone()[0]
+
+    payload, exit_code = _fork_category_server_child(
+        server, parent_observer, "lazy-request"
+    )
+
+    assert exit_code == 0
+    assert payload == {
+        "cleanup_closed": True,
+        "commits_before_request": None,
+        "configured_auto_commit": True,
+        "disposition": "proposed",
+        "epochs": baseline_epochs,
+        "initialized": True,
+        "recall_shape": ["recall_id", "results"],
+        "rewrite_commits": 0,
+    }
+    assert server._category_observer is parent_observer
+    assert server._storage is parent_storage
+    assert parent_storage.conn.execute("SELECT 1").fetchone()[0] == 1
+    assert parent_observer.engine.latest_disposition("proposal") == "proposed"
+    assert parent_observer.store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs"
+    ).fetchone()[0] == baseline_epochs
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+def test_real_fork_child_explicit_pre_serving_startup_may_consolidate(
+    category_init_env,
+):
+    """Only an explicit child startup phase may commit before requests."""
+    server, config, db_path = category_init_env
+    config.category_evolution.enabled = True
+    config.category_evolution.auto_commit = True
+    config.category_evolution.shadow = True
+    server._init()
+    parent_observer = server._category_observer
+    parent_storage = server._storage
+    category_database = db_path.parent / "categories_v2.db"
+    _seed_eligible_proposal(category_database)
+    baseline_epochs = parent_observer.store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs"
+    ).fetchone()[0]
+
+    payload, exit_code = _fork_category_server_child(
+        server, parent_observer, "explicit-startup"
+    )
+
+    assert exit_code == 0
+    assert payload == {
+        "cleanup_closed": True,
+        "commits_before_request": 1,
+        "configured_auto_commit": True,
+        "disposition": "committed",
+        "epochs": baseline_epochs + 1,
+        "initialized": True,
+        "recall_shape": ["recall_id", "results"],
+        "rewrite_commits": 1,
+    }
+    assert server._category_observer is parent_observer
+    assert server._storage is parent_storage
+    assert parent_storage.conn.execute("SELECT 1").fetchone()[0] == 1
+    assert parent_observer.engine.latest_disposition("proposal") == "committed"
+    assert parent_observer.store.connection.execute(
+        "SELECT COUNT(*) FROM cat_epochs"
+    ).fetchone()[0] == baseline_epochs + 1
 
 
 def test_observer_report_retains_failure_type_without_failure_text(tmp_path, monkeypatch):
@@ -1315,7 +1483,7 @@ def test_init_guard_serializes_concurrent_initialization(monkeypatch):
     order = []
     order_lock = threading.Lock()
 
-    def guarded_body():
+    def guarded_body(**_kwargs):
         with order_lock:
             index = sum(item.startswith("enter") for item in order) + 1
             order.append(f"enter-{index}")
@@ -1365,7 +1533,7 @@ def test_init_guard_is_replaced_after_pid_change(monkeypatch):
     holder.start()
     assert held.wait(timeout=5)
     pid["value"] = 101
-    monkeypatch.setattr(server, "_init_unlocked", lambda: None)
+    monkeypatch.setattr(server, "_init_unlocked", lambda **_kwargs: None)
     worker = threading.Thread(target=server._init)
     worker.start()
     worker.join(timeout=0.25)
@@ -1413,7 +1581,7 @@ def test_two_child_first_init_calls_share_one_eagerly_installed_lock(monkeypatch
     allow_init = threading.Event()
     calls = 0
 
-    def initialize_once():
+    def initialize_once(**_kwargs):
         nonlocal calls
         if server._initialized:
             return
