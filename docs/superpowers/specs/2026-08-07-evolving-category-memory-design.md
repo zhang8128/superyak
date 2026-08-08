@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 
-**Status:** Approved implementation direction; shadow acceptance pending
+**Status:** Implemented in shadow mode; acceptance pending
 
 **Scope:** First falsifiable implementation in `engram`
 
@@ -271,12 +271,11 @@ Persist:
 Snapshots, embeddings, and secondary indexes are derived and may be rebuilt.
 Raw events, cells, committed rewrites, and provenance are immutable.
 
-The archive receives a configurable hard quota. The recommended default for the
-available 4 TB volume is the lower of 3 TB or 75% of the assigned filesystem.
-At the high-water mark, the system stops producing derived snapshots and vector
-duplicates first. If the hard quota is reached, category writes fail closed and
-the existing engram recall path continues without category evolution. The
-system never fills the volume or silently deletes immutable history.
+The archive has a 3 TB hard quota and a 90% high-water mark. At the high-water
+mark, the system stops producing derived snapshots and vector duplicates first.
+If the hard quota is reached, category writes fail closed and the existing
+engram recall path continues without category evolution. The system never fills
+the volume or silently deletes immutable history.
 
 ## Storage Schema
 
@@ -375,6 +374,33 @@ Rollout stages:
 Each stage requires explicit configuration. Shipping the code does not enable
 live structural mutation.
 
+### Operational commands and current evidence
+
+Use disposable v2 output paths. Replay leaves `categories.db` untouched and
+writes only the separate `categories_v2.db`:
+
+```bash
+.venv/bin/python -m category_evolution replay \
+  --legacy /path/to/categories.db --output /path/to/categories_v2.db --json
+
+.venv/bin/python -m experiments.category_evolution.runner \
+  --legacy /path/to/categories.db --work-dir /tmp/category-eval-development \
+  --cohort development
+.venv/bin/python -m experiments.category_evolution.runner \
+  --legacy /path/to/categories.db --work-dir /tmp/category-eval-holdout \
+  --cohort holdout
+
+.venv/bin/python -m experiments.category_evolution.runner \
+  --work-dir /tmp/category-benchmark --cohort development --benchmark-cells 1000000
+```
+
+The development evaluation is evidence, not acceptance: boundary F1 is 1.0;
+baseline/shadow MRR is .75/.75; relative improvement 0 fails; direct regression
+0 passes; false transfer 0/12 passes; replay and compiler gates pass; and the
+resource gate is unevaluated because no 1M-cell benchmark has run. Overall
+acceptance is false. Observer, recall influence, and auto-commit remain disabled;
+holdout evaluation and any live enablement are separate explicit decisions.
+
 ## Error Handling and Recovery
 
 - Invalid dimensional boundaries reject the proposal; they never partially
@@ -451,7 +477,8 @@ Fixtures cover:
 - a useful distant association can occupy a diversity slot;
 - historical cells translate through rewrite lineage;
 - output is deterministic under stable inputs and tie-breaking;
-- 36k target, 40k rotation watermark, and 64k ceiling are enforced exactly.
+- 36,000-token target, 40,000-token rotation watermark, and 65,536-token
+  ceiling are enforced exactly.
 
 ### Acceptance experiments
 

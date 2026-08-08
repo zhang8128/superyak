@@ -31,6 +31,9 @@ llm = ["anthropic"]
 py-modules = [
     "ask",
     "categories",
+    "category_compile",
+    "category_context",
+    "category_evolution",
     "cli",
     "clipboard",
     "clusters",

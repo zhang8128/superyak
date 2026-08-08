@@ -189,6 +189,72 @@ payloads down to the same metadata-only representation.
 .venv/bin/python -m pytest tests/ -q   # full test suite
 ```
 
+## Evolving-category v2 (shadow runtime)
+
+The evolving-category runtime is an experiment in **shadow mode**. It is generic:
+it has no book-, repository-, conversation-, or other domain-specific production
+branch. Cells have ordered boundaries, immutable rewrite events, and immutable
+epochs; dimensions 0–2 are interpreted while higher dimensions are archived as
+opaque records and excluded from online traversal. `categories.db` remains the
+legacy store. v2 writes only to the separate sibling `categories_v2.db` (or an
+explicitly configured `db_path`) and never migrates or mutates the legacy file.
+
+The feature-enabling rollout gates are independent and disabled by default;
+`shadow = true` is the enabled safety guard:
+
+```toml
+[category_evolution]
+enabled = false
+shadow = true
+influence_recall = false
+auto_commit = false
+```
+
+Setting only `enabled = true` creates the v2 observer and records shadow data;
+it does not alter recall output or auto-commit an epoch. `influence_recall` and
+`auto_commit` require separate explicit configuration and must remain false while
+acceptance is pending. Inspect optional diagnostics with
+`reflect(focus="category_evolution")`; absence or failure of the observer is
+non-fatal and normal recall continues unchanged.
+
+Compiler limits are a 36,000-token normal target, 40,000-token rotation
+watermark, and 65,536-token hard ceiling, with depth 4, at most 64 neighbors,
+50,000 candidates, and 500 ms wall time. The existing 112 GB process governor
+remains authoritative. The archive quota is 3 TB with a 90% high-water mark;
+under pressure derived writes stop first, then v2 category writes fail closed,
+while normal recall remains available. Structural limits are four active branches,
+32 members per rewrite, and 32 rewrites per pass.
+
+Use a coordinated process replacement for upgrades. In-process
+`importlib.reload(server)` is unsupported: stop the old process, let it close its
+owned resources, then start a fresh process from disk.
+
+Operational commands use disposable v2 output paths:
+
+```bash
+# Replay a legacy archive without changing categories.db.
+.venv/bin/python -m category_evolution replay \
+  --legacy /path/to/categories.db --output /path/to/categories_v2.db --json
+
+# Run blinded development or holdout evaluation (keep their work directories separate).
+.venv/bin/python -m experiments.category_evolution.runner \
+  --legacy /path/to/categories.db --work-dir /tmp/category-eval-development \
+  --cohort development
+.venv/bin/python -m experiments.category_evolution.runner \
+  --legacy /path/to/categories.db --work-dir /tmp/category-eval-holdout \
+  --cohort holdout
+
+# Resource acceptance evidence requires exactly one million cells.
+.venv/bin/python -m experiments.category_evolution.runner \
+  --work-dir /tmp/category-benchmark --cohort development --benchmark-cells 1000000
+```
+
+The current development result is not acceptance: boundary F1 is 1.0;
+baseline/shadow MRR is .75/.75; relative improvement 0 fails; direct regression
+0 passes; false transfer 0/12 passes; replay and compiler pass; the resource gate
+is unevaluated because no 1M run has occurred. Overall acceptance is false, so do
+not enable observer, recall influence, or auto-commit based on this result.
+
 ## Part of a System
 
 | Repo | Role |
