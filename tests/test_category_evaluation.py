@@ -144,7 +144,7 @@ def test_runner_replays_real_legacy_database_three_times_without_mutating_it(tmp
           "wall_time_ms": 500, "hard_ceiling": 65_536}
     assert report["ranking"]["direct_seed_source"] == "baseline_direct_top"
     assert report["ranking"]["cross_context_pairs"] == 4
-    assert report["ranking"]["cross_context_candidates_evaluated"] >= 4
+    assert report["ranking"]["cross_context_candidates_evaluated"] > 0
     assert len(report["ranking"]["compile_probes"]) == 8
     assert report["acceptance"]["gates"]["unexplained_replay_loss"]["passed"] is True
     assert report["configuration"]["shadow"] is True

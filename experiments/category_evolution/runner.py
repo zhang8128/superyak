@@ -236,11 +236,13 @@ def _build_current_fixture_archive(legacy: Path, cohort: FixtureCohort) -> tuple
     current = CategoryStore(connection, dimension=2)
     truths: list[dict[str, str]] = []
     try:
-        for index, case in enumerate(cohort.rankings):
+        for case in cohort.rankings:
             # Embeddings are fixed by insertion position/query family, never by
             # the post-hoc relevance truth used to score returned ranks.
-            relevant_id = current.add_cell(f"{case.query} {case.direct_query} reference", context={"evaluation": case.domain}, embedding=[1.0, index / 10])
-            noise_id = current.add_cell(f"{case.query} {case.query} distractor", context={"evaluation": case.domain}, embedding=[0.0, 1.0])
+            relevant_content = f"{case.query} {case.direct_query} reference"
+            noise_content = f"{case.query} {case.query} distractor"
+            relevant_id = current.add_cell(relevant_content, context={"evaluation": case.domain}, embedding=_fixture_vector(relevant_content))
+            noise_id = current.add_cell(noise_content, context={"evaluation": case.domain}, embedding=_fixture_vector(noise_content))
             current.compose(noise_id, relevant_id, "fixture association", context={"evaluation": case.domain})
             truths.append({"domain": case.domain, "relevant_id": relevant_id, "noise_id": noise_id,
                            "query": case.query, "direct_query": case.direct_query})
@@ -250,9 +252,9 @@ def _build_current_fixture_archive(legacy: Path, cohort: FixtureCohort) -> tuple
             truth["foreign_relevant_id"] = foreign["relevant_id"]
             current.compose(truth["noise_id"], foreign["relevant_id"], "cross-context association", context={"evaluation": truth["domain"]})
         return [
-            {"query": [row["id"] for row in current.search([1.0, index / 10], level=0, limit=16)],
-             "direct": [row["id"] for row in current.search([1.0, index / 10], level=0, limit=16)]}
-            for index, _case in enumerate(truths)
+            {"query": [row["id"] for row in current.search(_fixture_vector(case["query"]), level=0, limit=16)],
+             "direct": [row["id"] for row in current.search(_fixture_vector(case["direct_query"]), level=0, limit=16)]}
+            for case in truths
         ], truths
     finally:
         connection.close()
@@ -346,6 +348,11 @@ def _load_vec(connection: sqlite3.Connection) -> None:
         sqlite_vec.load(connection)
     finally:
         connection.enable_load_extension(False)
+
+
+def _fixture_vector(text: str) -> list[float]:
+    digest = hashlib.sha256(text.encode()).digest()
+    return [int.from_bytes(digest[offset:offset + 4], "big") / 2**32 for offset in (0, 4)]
 
 
 def _replay_three_times(legacy: Path, work_dir: Path) -> tuple[list[str], list[dict[str, object]], dict[str, object]]:
