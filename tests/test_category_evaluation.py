@@ -298,6 +298,8 @@ def test_missing_legacy_keeps_compiler_schema_and_acceptance_false(tmp_path, cap
     report = json.loads(capsys.readouterr().out)
     assert report["compiler_probe"] is None
     assert report["compiler_probes"] == []
+    assert report["import_reports"] == []
+    assert report["replay_digests"] == []
     assert report["acceptance"]["overall_pass"] is False
 
 
