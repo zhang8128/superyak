@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import atexit
 from datetime import datetime, timedelta, timezone
-import importlib
 import json
 import math
 from pathlib import Path
@@ -101,15 +100,10 @@ def category_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_session_id", str(uuid.uuid4()))
     monkeypatch.setattr(server, "_category_store", None)
     monkeypatch.setattr(server, "_category_observer", None, raising=False)
-    monkeypatch.setattr(server, "_category_pending_close", None, raising=False)
     monkeypatch.setattr(server, "_category_last_observed_at", None, raising=False)
     monkeypatch.setattr(server, "_server_atexit_callbacks", [], raising=False)
     monkeypatch.setattr(server, "_server_generation_cleanup", None, raising=False)
-    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
-    monkeypatch.setattr(server, "_server_lifecycle_status", None, raising=False)
-    monkeypatch.setattr(server, "_server_reload_reinitialize", False, raising=False)
-    monkeypatch.setattr(server, "_server_reload_session_id", None, raising=False)
-    monkeypatch.setattr(server, "_server_reload_in_progress", False, raising=False)
+    monkeypatch.setattr(server, "_initialization_cleanup_required", False, raising=False)
     monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid(), raising=False)
     monkeypatch.setattr(server, "_knowledge_graph", None)
     monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
@@ -155,16 +149,11 @@ def category_init_env(tmp_path, monkeypatch):
         "_knowledge_graph": None,
         "_category_store": None,
         "_category_observer": None,
-        "_category_pending_close": None,
         "_category_status": None,
         "_category_atexit_callback": None,
         "_category_last_observed_at": None,
         "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
+        "_initialization_cleanup_required": False,
         "_server_lock_pid": server.os.getpid(),
     }.items():
         monkeypatch.setattr(server, name, value, raising=False)
@@ -177,11 +166,6 @@ def category_init_env(tmp_path, monkeypatch):
 
     if server._category_observer is not None:
         server._category_observer.close()
-    if server._category_pending_close is not None:
-        try:
-            server._category_pending_close.close()
-        except Exception:
-            pass
     if server._category_store is not None:
         server._category_store._conn.close()
     if server._storage is not None:
@@ -1116,28 +1100,6 @@ def test_observer_construction_is_registered_before_prefork_snapshot(
             created[0].close()
 
 
-def test_category_module_reload_preserves_fork_registry_without_reregistering(
-    tmp_path, monkeypatch
-):
-    """Hot reload cannot lose live observers or stack duplicate fork hooks."""
-    observer = category_evolution.CategoryObserver(tmp_path / "categories_v2.db")
-    registry = category_evolution._FORK_OBSERVERS
-    registrations = []
-    monkeypatch.setattr(
-        category_evolution.os,
-        "register_at_fork",
-        lambda **callbacks: registrations.append(callbacks),
-    )
-    reloaded = importlib.reload(category_evolution)
-    try:
-        assert reloaded._FORK_OBSERVERS is registry
-        assert observer in reloaded._FORK_OBSERVERS
-        assert reloaded._CATEGORY_AT_FORK_REGISTERED is True
-        assert registrations == []
-    finally:
-        observer.close()
-
-
 def test_real_init_disabled_does_not_create_or_report_category_observer(category_init_env):
     """Catches disabled defaults opening v2 resources or changing absent reflection."""
     server, config, db_path = category_init_env
@@ -1176,7 +1138,7 @@ def test_real_init_enabled_uses_graph_sibling_path_thresholds_and_exact_cleanup(
     cleanup = next(
         callback
         for callback in registered
-        if getattr(callback, "_category_observer", None) is observer
+        if observer in getattr(callback, "_server_resources", ())
     )
     assert cleanup is server._category_atexit_callback
 
@@ -1223,165 +1185,6 @@ def test_real_init_category_constructor_failure_is_reflected_type_only(
     assert server.recall("observer init failure", uninvited=0)["results"]
 
 
-def test_real_reinit_closes_replaced_observer(category_init_env, monkeypatch):
-    """Catches reload replacing an observer without closing its compiler/store."""
-    server, config, _db_path = category_init_env
-    config.category_evolution.enabled = False
-
-    class OldObserver:
-        def __init__(self):
-            self.closed = 0
-
-        def close(self):
-            self.closed += 1
-
-    old = OldObserver()
-    server._category_observer = old
-    server._category_atexit_callback = old.close
-    unregistered = []
-    monkeypatch.setattr("atexit.unregister", lambda callback: unregistered.append(callback))
-    server._init()
-
-    assert old.closed == 1
-    assert unregistered == [old.close]
-
-
-def test_real_reinit_retains_cleanup_callback_when_replaced_observer_close_fails(
-    category_init_env, monkeypatch
-):
-    """A partial close remains retryable through the original exit callback."""
-    server, config, _db_path = category_init_env
-    config.category_evolution.enabled = False
-
-    class OldObserver:
-        def close(self):
-            raise RuntimeError("private close detail")
-
-    old = OldObserver()
-    server._category_observer = old
-    server._category_atexit_callback = old.close
-    unregistered = []
-    monkeypatch.setattr("atexit.unregister", lambda callback: unregistered.append(callback))
-
-    server._init()
-
-    assert unregistered == []
-
-
-def test_replacement_waits_for_exact_old_observer_close_retry(
-    category_init_env, monkeypatch
-):
-    """A failed old close exposes unavailable state and opens no replacement pool."""
-    from types import SimpleNamespace
-
-    server, config, _db_path = category_init_env
-    config.category_evolution.enabled = True
-
-    class OldObserver:
-        def __init__(self):
-            self.attempts = 0
-            self.closed = False
-
-        def close(self):
-            self.attempts += 1
-            if self.attempts == 1:
-                raise RuntimeError("private old close detail")
-            self.closed = True
-
-    class NewObserver:
-        def __init__(self, *_args, **_kwargs):
-            construction_saw_old_closed.append(old.closed)
-            self.closed = False
-
-        def report(self):
-            return {"available": True}
-
-        def close(self):
-            self.closed = True
-
-    old = OldObserver()
-    construction_saw_old_closed = []
-    old_cleanup = server._make_category_cleanup(old)
-    server._category_observer = old
-    server._category_atexit_callback = old_cleanup
-    server._reflector = SimpleNamespace(_category_reporter=old.report if hasattr(old, "report") else None)
-    monkeypatch.setattr(category_evolution, "CategoryObserver", NewObserver)
-    unregistered = []
-    monkeypatch.setattr("atexit.unregister", lambda callback: unregistered.append(callback))
-
-    server._init()
-
-    assert construction_saw_old_closed == []
-    assert server._category_observer is None
-    assert server._category_pending_close is old
-    assert server._category_status == {
-        "available": False,
-        "flags": {
-            "enabled": True,
-            "shadow": True,
-            "influence_recall": False,
-            "auto_commit": False,
-        },
-        "error": "RuntimeError",
-        "last_error": "RuntimeError",
-    }
-    assert server._reflector._category_reporter() == server._category_status
-    assert unregistered == []
-
-    server._init()
-
-    assert old.attempts == 2
-    assert old.closed is True
-    assert construction_saw_old_closed == [True]
-    assert isinstance(server._category_observer, NewObserver)
-    assert server._category_pending_close is None
-    assert unregistered == [old_cleanup]
-
-
-def test_pending_category_close_does_not_block_core_server_after_reload(
-    category_init_env, monkeypatch
-):
-    """Core tools remain usable while category replacement close keeps failing."""
-    server, config, _db_path = category_init_env
-    config.category_evolution.enabled = True
-
-    class OldObserver:
-        def close(self):
-            raise RuntimeError("private old close detail")
-
-    old = OldObserver()
-    server._category_observer = old
-    server._category_atexit_callback = server._make_category_cleanup(old)
-    constructions = []
-
-    def construct(*_args, **_kwargs):
-        constructions.append(True)
-        raise AssertionError("replacement must not open")
-
-    monkeypatch.setattr(category_evolution, "CategoryObserver", construct)
-
-    server._init()
-    remembered = server.remember("core remains usable")
-
-    assert server._initialized is True
-    assert server._storage is not None
-    assert server._storage.get_episode(remembered["episode_id"]) is not None
-    assert server._category_pending_close is old
-    assert server._category_observer is None
-    assert constructions == []
-    assert server._reflector.reflect("category_evolution")["category_evolution"] == {
-        "available": False,
-        "flags": {
-            "enabled": True,
-            "shadow": True,
-            "influence_recall": False,
-            "auto_commit": False,
-        },
-        "error": "RuntimeError",
-        "last_error": "RuntimeError",
-    }
-
-
 def test_category_atexit_cleanup_logs_only_failure_type(category_init_env, monkeypatch, caplog):
     """Shutdown cleanup must not let a private close exception reach atexit."""
     import atexit
@@ -1406,148 +1209,6 @@ def test_category_atexit_cleanup_logs_only_failure_type(category_init_env, monke
         assert "private shutdown detail" not in caplog.text
     finally:
         monkeypatch.setattr(observer.compiler, "close", original_close)
-
-
-def test_module_reload_retires_unmarked_observer_before_return(monkeypatch):
-    """A missing generation ABI retires, rather than adopts, the observer."""
-    import server
-
-    class OldObserver:
-        def __init__(self):
-            self.close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-
-    old = OldObserver()
-    callback = server._make_category_cleanup(old)
-    registered = [callback]
-
-    def unregister(item):
-        registered[:] = [entry for entry in registered if entry is not item]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    for name, value in {
-        "_initialized": False,
-        "_storage": None,
-        "_watcher": None,
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": old,
-        "_category_pending_close": None,
-        "_category_atexit_callback": callback,
-        "_clipboard": None,
-        "_instinct_graph": None,
-        "_notepad_project": None,
-        "_notepad_global": None,
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-
-    reloaded = importlib.reload(server)
-
-    assert old.close_calls == 1
-    assert reloaded._category_observer is None
-    assert reloaded._category_atexit_callback is None
-    assert reloaded._server_pending_retirement is None
-    assert reloaded._initialized is False
-    assert registered == []
-
-
-def test_real_reload_status_remains_usable_when_old_category_close_fails(
-    tmp_path, monkeypatch
-):
-    """Reload stays unavailable until the exact failed observer retry succeeds."""
-    import server
-    from config import load_config
-
-    config = load_config(tmp_path)
-    config.graph.enabled = False
-    config.watcher.enabled = False
-    config.category_evolution.enabled = True
-
-    class OldObserver:
-        def __init__(self):
-            self.close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-            if self.close_calls == 1:
-                raise RuntimeError("private reload close detail")
-
-    old = OldObserver()
-    for name, value in {
-        "_initialized": True,
-        "_storage": None,
-        "_watcher": None,
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": old,
-        "_category_pending_close": None,
-        "_category_atexit_callback": server._make_category_cleanup(old),
-        "_clipboard": None,
-        "_instinct_graph": None,
-        "_notepad_project": None,
-        "_notepad_global": None,
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-    reloaded = importlib.reload(server)
-    monkeypatch.setattr(reloaded, "ENGRAM_HOME", tmp_path)
-    monkeypatch.setattr(reloaded, "DB_PATH", tmp_path / ".engram" / "graph.db")
-    monkeypatch.setattr(reloaded, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(reloaded, "load_config", lambda _root: config)
-    monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
-
-    try:
-        assert old.close_calls == 1
-        assert reloaded._initialized is False
-        assert reloaded._server_pending_retirement is not None
-        assert reloaded._server_lifecycle_status == {
-            "available": False,
-            "error": "RuntimeError",
-            "last_error": "RuntimeError",
-        }
-        assert "private reload close detail" not in str(
-            reloaded._server_lifecycle_status
-        )
-
-        result = reloaded.status()
-
-        assert isinstance(result, dict)
-        assert old.close_calls == 2
-        assert reloaded._initialized is True
-        assert reloaded._storage is not None
-        assert reloaded._server_pending_retirement is None
-        assert reloaded._server_lifecycle_status is None
-    finally:
-        for callback in tuple(reloaded._server_atexit_callbacks):
-            atexit.unregister(callback)
-            callback()
-        reloaded._server_atexit_callbacks.clear()
-        reloaded._watcher = None
-        reloaded._knowledge_graph = None
-        reloaded._category_store = None
-        reloaded._storage = None
-        reloaded._category_observer = None
-        reloaded._category_pending_close = None
-        reloaded._category_atexit_callback = None
-        reloaded._server_generation_cleanup = None
-        reloaded._server_pending_retirement = None
-        reloaded._server_lifecycle_status = None
 
 
 def test_concurrent_server_recalls_timestamp_inside_serialized_observation(
@@ -1665,9 +1326,9 @@ def test_init_guard_serializes_concurrent_initialization(monkeypatch):
             order.append(f"exit-{index}")
 
     monkeypatch.setattr(server, "_init_unlocked", guarded_body)
-    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
     monkeypatch.setattr(server, "_server_atexit_callbacks", [], raising=False)
     monkeypatch.setattr(server, "_server_generation_cleanup", None, raising=False)
+    monkeypatch.setattr(server, "_initialization_cleanup_required", False, raising=False)
     monkeypatch.setattr(server, "_server_lifecycle_lock", threading.RLock())
     monkeypatch.setattr(server, "_init_lock", threading.RLock())
     monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid())

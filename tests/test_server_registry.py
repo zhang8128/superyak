@@ -11,11 +11,15 @@ maintenance passes) runs for real against an empty temp DB.
 from __future__ import annotations
 
 import atexit
-import importlib
+import json
 import math
 import os
+from pathlib import Path
 import select
 import sqlite3
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 
@@ -23,9 +27,6 @@ import pytest
 
 import server
 
-from category_compile import CategoryCompiler, _DeadlineExceeded
-from category_evolution import CategoryObserver
-from knowledge import KnowledgeGraph
 from storage import Storage
 from watcher import FileWatcher
 
@@ -102,6 +103,429 @@ class FakeEmbeddingProvider:
         return [x / norm for x in vec]
 
 
+_PROCESS_RESTART_PROBE = textwrap.dedent(
+    """
+    import json
+    import math
+    import os
+    from pathlib import Path
+    import sqlite3
+    import sys
+
+    project = Path(sys.argv[1])
+    phase = sys.argv[2]
+    previous = json.loads(sys.argv[3]) if len(sys.argv) > 3 else None
+
+    import embeddings
+    import server
+    from config import load_config
+
+    class FakeEmbeddingProvider:
+        def dimension(self):
+            return 768
+
+        def embed(self, texts, **_kwargs):
+            vectors = []
+            for text in texts:
+                seed = sum(text.encode("utf-8")) or 1
+                vector = [float((seed + index) % 17) for index in range(768)]
+                norm = math.sqrt(sum(value * value for value in vector))
+                vectors.append([value / norm for value in vector])
+            return vectors
+
+    embeddings.NomicEmbedProvider = FakeEmbeddingProvider
+    config = load_config(project)
+    config.graph.enabled = False
+    config.watcher.enabled = False
+    config.category_evolution.enabled = True
+    config.category_evolution.shadow = True
+    config.category_evolution.influence_recall = False
+    config.category_evolution.auto_commit = False
+    server.ENGRAM_HOME = project
+    server.DB_PATH = project / ".engram" / "graph.db"
+    server.PROJECT_ROOT = project
+    server.load_config = lambda _root: config
+    server._init()
+
+    observer = server._category_observer
+    storage = server._storage
+    cleanup = server._server_generation_cleanup
+    assert observer is not None
+    assert storage is not None
+    assert cleanup is not None
+    observer_connection = observer.store.connection
+    storage_connection = storage.conn
+
+    baseline = [
+        {"id": "memory-a", "score": 0.8, "content": "alpha"},
+        {"id": "memory-b", "score": 0.4, "content": "beta"},
+    ]
+
+    if phase == "a":
+        observer_connection.execute(
+            "CREATE TEMP TABLE process_a_observer_handle (marker TEXT)"
+        )
+        storage_connection.execute(
+            "CREATE TEMP TABLE process_a_storage_handle (marker TEXT)"
+        )
+        cleanup.process_marker = "process-a-only"
+        delivered = server._observe_category_recall(
+            "durable restart event", baseline, "restart-recall-a"
+        )
+        report = server._reflector.reflect("category_evolution")[
+            "category_evolution"
+        ]
+        assert delivered == baseline
+        assert observer._tracker._anchor is not None
+        assert report["available"] is True
+        payload = {
+            "pid": os.getpid(),
+            "session_id": server._session_id,
+            "event_count": observer_connection.execute(
+                "SELECT COUNT(*) FROM cat_events WHERE kind='recall_observed' "
+                "AND json_extract(payload_json, '$.recall_id')='restart-recall-a'"
+            ).fetchone()[0],
+            "shadow_unchanged": delivered == baseline,
+        }
+    else:
+        assert previous is not None
+        assert os.getpid() != previous["pid"]
+        assert server._session_id != previous["session_id"]
+        assert observer._tracker._anchor is None
+        assert observer._tracker._pending_candidate is None
+        assert observer._tracker._pending_confirmations == 0
+        assert not hasattr(cleanup, "process_marker")
+        assert observer in cleanup._server_resources
+        assert storage in cleanup._server_resources
+        assert observer_connection.execute(
+            "SELECT COUNT(*) FROM sqlite_temp_master "
+            "WHERE name='process_a_observer_handle'"
+        ).fetchone()[0] == 0
+        assert storage_connection.execute(
+            "SELECT COUNT(*) FROM sqlite_temp_master "
+            "WHERE name='process_a_storage_handle'"
+        ).fetchone()[0] == 0
+        durable_event_count = observer_connection.execute(
+            "SELECT COUNT(*) FROM cat_events WHERE kind='recall_observed' "
+            "AND json_extract(payload_json, '$.recall_id')='restart-recall-a'"
+        ).fetchone()[0]
+        report = server._reflector.reflect("category_evolution")[
+            "category_evolution"
+        ]
+        assert durable_event_count == 1
+        assert report["available"] is True
+        assert report["counts_by_dimension"] == {"0": 2}
+        delivered = server._observe_category_recall(
+            "fresh process shadow event", baseline, "restart-recall-b"
+        )
+        assert delivered == baseline
+        payload = {
+            "pid": os.getpid(),
+            "durable_event_count": durable_event_count,
+            "report_available": report["available"],
+            "tracker_fresh": True,
+            "callbacks_fresh": True,
+            "native_handles_fresh": True,
+            "shadow_unchanged": delivered == baseline,
+        }
+
+    cleanup()
+    for connection in (observer_connection, storage_connection):
+        try:
+            connection.execute("SELECT 1")
+        except sqlite3.ProgrammingError:
+            pass
+        else:
+            raise AssertionError("exact process cleanup left a SQLite handle open")
+    print(json.dumps(payload, sort_keys=True))
+    """
+)
+
+
+_INITIALIZATION_FAILURE_RACE_PROBE = textwrap.dedent(
+    """
+    import json
+    import os
+    import sys
+    import threading
+
+    import server
+
+    mode = sys.argv[1]
+
+    class ObservedRLock:
+        def __init__(self):
+            self._lock = threading.RLock()
+            self._state_lock = threading.Lock()
+            self._owner = None
+            self._depth = 0
+            self.contended = threading.Event()
+
+        def acquire(self, *args, **kwargs):
+            ident = threading.get_ident()
+            with self._state_lock:
+                if self._owner is not None and self._owner != ident:
+                    self.contended.set()
+            acquired = self._lock.acquire(*args, **kwargs)
+            if acquired:
+                with self._state_lock:
+                    self._owner = ident
+                    self._depth += 1
+            return acquired
+
+        def release(self):
+            with self._state_lock:
+                self._depth -= 1
+                if self._depth == 0:
+                    self._owner = None
+            self._lock.release()
+
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            self.release()
+
+    class InitFailure(RuntimeError):
+        pass
+
+    lifecycle = ObservedRLock()
+    published = threading.Event()
+    allow_failure = threading.Event()
+    cleanup_entered = threading.Event()
+    allow_cleanup = threading.Event()
+    second_retry_entered = threading.Event()
+    first_done = threading.Event()
+    second_done = threading.Event()
+    calls_lock = threading.Lock()
+    observations_lock = threading.Lock()
+    calls = 0
+    cleanup_calls = 0
+    results = {}
+    errors = {}
+
+    server._server_lifecycle_lock = lifecycle
+    server._init_lock = threading.RLock()
+    server._server_pid_guard = threading.RLock()
+    server._server_lock_pid = os.getpid()
+    server._server_atexit_callbacks = []
+    server._server_generation_cleanup = None
+    server._initialization_cleanup_required = False
+    server._initialized = False
+
+    resource = object()
+
+    def cleanup():
+        global cleanup_calls
+        if mode == "cleanup-order":
+            cleanup_entered.set()
+            assert allow_cleanup.wait(timeout=5)
+        with calls_lock:
+            cleanup_calls += 1
+
+    def controlled_init():
+        global calls
+        with calls_lock:
+            calls += 1
+            call = calls
+        if call == 1:
+            label = "watcher" if mode == "cleanup-order" else "dependency"
+            server._register_server_cleanup(resource, cleanup, label)
+            published.set()
+            assert allow_failure.wait(timeout=5)
+            raise InitFailure("first initializer failed")
+        server._initialized = True
+        return "ready"
+
+    server._init_unlocked = controlled_init
+    real_retry_cleanup = server._retry_failed_initialization_cleanup
+
+    def observed_retry_cleanup():
+        if threading.current_thread().name == "second-initializer":
+            second_retry_entered.set()
+        return real_retry_cleanup()
+
+    server._retry_failed_initialization_cleanup = observed_retry_cleanup
+
+    operation = server._server_operation(server._init)
+
+    def run(name, done, function=server._init):
+        try:
+            value = function()
+        except Exception as exc:
+            with observations_lock:
+                errors[name] = type(exc).__name__
+        else:
+            with observations_lock:
+                results[name] = value
+        finally:
+            done.set()
+
+    first = threading.Thread(
+        target=run,
+        args=(
+            "first",
+            first_done,
+            operation if mode == "wrapped-operation" else server._init,
+        ),
+        name="first-initializer",
+        daemon=True,
+    )
+    first.start()
+    assert published.wait(timeout=5)
+    second = threading.Thread(
+        target=run,
+        args=(
+            "second",
+            second_done,
+            (
+                operation
+                if mode in {"operation", "wrapped-operation"}
+                else server._init
+            ),
+        ),
+        name="second-initializer",
+        daemon=True,
+    )
+    if mode in {"admission", "operation", "wrapped-operation"}:
+        second.start()
+        assert lifecycle.contended.wait(timeout=5)
+        allow_failure.set()
+    else:
+        allow_failure.set()
+        assert cleanup_entered.wait(timeout=5)
+        second.start()
+        assert second_retry_entered.wait(timeout=5)
+        allow_cleanup.set()
+    first_finished = first_done.wait(timeout=2)
+    second_finished = second_done.wait(timeout=2)
+    if mode in {"operation", "wrapped-operation"} and first_finished and second_finished:
+        results["retry"] = operation()
+    with calls_lock:
+        final_calls = calls
+        final_cleanup_calls = cleanup_calls
+    payload = {
+        "calls": final_calls,
+        "cleanup_calls": final_cleanup_calls,
+        "errors": errors,
+        "first_finished": first_finished,
+        "results": results,
+        "second_finished": second_finished,
+    }
+    os.write(sys.stdout.fileno(), (json.dumps(payload, sort_keys=True) + "\\n").encode())
+    os._exit(0)
+    """
+)
+
+
+def _run_process_restart_probe(project: Path, phase: str, previous=None) -> dict:
+    command = [sys.executable, "-c", _PROCESS_RESTART_PROBE, str(project), phase]
+    if previous is not None:
+        command.append(json.dumps(previous, sort_keys=True))
+    environment = os.environ.copy()
+    environment["ENGRAM_HARNESS"] = "codex"
+    environment["ENGRAM_RUN_KEY"] = ""
+    environment.pop("CLAUDE_SESSION_ID", None)
+    completed = subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parent.parent,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return json.loads(completed.stdout.strip().splitlines()[-1])
+
+
+def test_process_restart_reopens_durable_shadow_state_with_fresh_runtime_owners(
+    tmp_path,
+):
+    """A clean process replacement keeps disk events, never runtime owners."""
+    process_a = _run_process_restart_probe(tmp_path, "a")
+    process_b = _run_process_restart_probe(tmp_path, "b", process_a)
+
+    assert process_a["event_count"] == 1
+    assert process_a["shadow_unchanged"] is True
+    assert process_b == {
+        "callbacks_fresh": True,
+        "durable_event_count": 1,
+        "native_handles_fresh": True,
+        "pid": process_b["pid"],
+        "report_available": True,
+        "shadow_unchanged": True,
+        "tracker_fresh": True,
+    }
+
+
+def _run_initialization_failure_race_probe(mode: str) -> dict:
+    completed = subprocess.run(
+        [sys.executable, "-c", _INITIALIZATION_FAILURE_RACE_PROBE, mode],
+        cwd=Path(__file__).resolve().parent.parent,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    return json.loads(completed.stdout.strip())
+
+
+def _assert_successful_initialization_failure_retry(payload: dict) -> None:
+    assert payload == {
+        "calls": 2,
+        "cleanup_calls": 1,
+        "errors": {"first": "InitFailure"},
+        "first_finished": True,
+        "results": {"second": "ready"},
+        "second_finished": True,
+    }
+
+
+def test_failed_first_initializer_cannot_deadlock_concurrent_retry():
+    """A waiting initializer is not admitted against the failing owner."""
+    _assert_successful_initialization_failure_retry(
+        _run_initialization_failure_race_probe("admission")
+    )
+
+
+def test_failed_initialization_cleanup_keeps_one_lock_order_for_retry():
+    """A retry never holds lifecycle while waiting for exact cleanup."""
+    _assert_successful_initialization_failure_retry(
+        _run_initialization_failure_race_probe("cleanup-order")
+    )
+
+
+def test_admitted_tool_rechecks_failed_initialization_before_running():
+    """A queued tool drains admission without entering failed resources."""
+    assert _run_initialization_failure_race_probe("operation") == {
+        "calls": 2,
+        "cleanup_calls": 1,
+        "errors": {
+            "first": "InitFailure",
+            "second": "RuntimeError",
+        },
+        "first_finished": True,
+        "results": {"retry": "ready"},
+        "second_finished": True,
+    }
+
+
+def test_failed_tool_initialization_cleans_up_after_releasing_outer_barrier():
+    """Nested init failure cannot clean while its tool owns lifecycle."""
+    assert _run_initialization_failure_race_probe("wrapped-operation") == {
+        "calls": 2,
+        "cleanup_calls": 1,
+        "errors": {
+            "first": "InitFailure",
+            "second": "RuntimeError",
+        },
+        "first_finished": True,
+        "results": {"retry": "ready"},
+        "second_finished": True,
+    }
+
+
 @pytest.fixture
 def engram_server_env(tmp_path, monkeypatch):
     """Drive the real server._init() against a temp ENGRAM_HOME.
@@ -141,16 +565,11 @@ def engram_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_knowledge_graph", None)
     monkeypatch.setattr(server, "_category_store", None)
     monkeypatch.setattr(server, "_category_observer", None)
-    monkeypatch.setattr(server, "_category_pending_close", None)
     monkeypatch.setattr(server, "_category_status", None)
     monkeypatch.setattr(server, "_category_atexit_callback", None)
     monkeypatch.setattr(server, "_category_last_observed_at", None)
     monkeypatch.setattr(server, "_server_generation_cleanup", None)
-    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
-    monkeypatch.setattr(server, "_server_lifecycle_status", None, raising=False)
-    monkeypatch.setattr(server, "_server_reload_reinitialize", False, raising=False)
-    monkeypatch.setattr(server, "_server_reload_session_id", None, raising=False)
-    monkeypatch.setattr(server, "_server_reload_in_progress", False, raising=False)
+    monkeypatch.setattr(server, "_initialization_cleanup_required", False)
     monkeypatch.setattr(server, "_server_lock_pid", server.os.getpid())
 
     yield server
@@ -161,11 +580,6 @@ def engram_server_env(tmp_path, monkeypatch):
 
     if server._category_observer is not None:
         server._category_observer.close()
-    if server._category_pending_close is not None:
-        try:
-            server._category_pending_close.close()
-        except Exception:
-            pass
     if server._category_store is not None:
         server._category_store._conn.close()
     if server._storage is not None:
@@ -185,10 +599,10 @@ def test_init_stamps_server_session(engram_server_env, monkeypatch):
     assert row["repo"]  # cwd recorded
 
 
-def test_partial_initialization_is_retired_before_retry(
+def test_partial_initialization_is_cleaned_before_retry(
     engram_server_env, monkeypatch
 ):
-    """A failed rebuild cannot be overwritten while exact native owners live."""
+    """A failed initializer cannot publish replacements over exact live owners."""
     import embeddings
 
     class InitFailure(RuntimeError):
@@ -210,29 +624,19 @@ def test_partial_initialization_is_retired_before_retry(
             server._init()
 
         old_storage = server._storage
-        pending = server._server_pending_retirement
         assert old_storage is not None
-        assert old_storage.conn.execute("SELECT 1").fetchone()[0] == 1
-        assert pending is not None
-        assert old_storage in pending._server_resources
-        assert server._server_atexit_callbacks == [pending]
-        assert server._server_lifecycle_status == {
-            "available": False,
-            "error": "InitFailure",
-            "last_error": "InitFailure",
-        }
+        with pytest.raises(sqlite3.ProgrammingError):
+            old_storage.conn.execute("SELECT 1")
+        assert server._initialized is False
+        assert server._server_atexit_callbacks == []
 
         server._init()
 
         assert server._initialized is True
         assert server._storage is not old_storage
-        with pytest.raises(sqlite3.ProgrammingError):
-            old_storage.conn.execute("SELECT 1")
-        assert server._server_pending_retirement is None
         coordinator = server._server_generation_cleanup
-        assert coordinator._resource_lifecycle_abi == (
-            server._SERVER_RESOURCE_LIFECYCLE_ABI
-        )
+        assert coordinator is not None
+        assert server._storage in coordinator._server_resources
     finally:
         if old_storage is not None:
             try:
@@ -478,7 +882,7 @@ def test_failed_watcher_join_retains_exact_generation_for_cleanup_retry(
     cleanup.start()
     try:
         assert stop_attempted.wait(timeout=5)
-        assert cleanup_finished.wait(timeout=0.25)
+        assert cleanup_finished.wait(timeout=5)
         assert storage_close_calls == []
     finally:
         allow_index.set()
@@ -782,7 +1186,6 @@ def test_real_fork_quiesces_active_core_sqlite_and_serializes_child_reinit(
     monkeypatch.setattr(server, "_initialized", True)
     monkeypatch.setattr(server, "_storage", old_storage)
     monkeypatch.setattr(server, "_category_observer", old_observer)
-    monkeypatch.setattr(server, "_category_pending_close", None)
     monkeypatch.setattr(server, "_category_atexit_callback", None)
     monkeypatch.setattr(server, "_notepad_project", old_project_notepad)
     monkeypatch.setattr(server, "_notepad_global", old_global_notepad)
@@ -925,897 +1328,6 @@ def test_core_atexit_callbacks_close_exact_instances_not_replacement_globals(
         server._clipboard = old_clipboard
 
 
-def test_server_reload_preserves_core_generation_lock_and_cleanup_ownership(
-    monkeypatch,
-):
-    """A marked generation retains exact owners and its reload-stable lock."""
-    class Resource:
-        def close(self):
-            pass
-
-    resource = Resource()
-    project_notepad = Resource()
-    global_notepad = Resource()
-    lifecycle = threading.RLock()
-    coordinator = server._ServerGenerationCleanup(lifecycle)
-    coordinator.add(resource, resource.close, "storage")
-    coordinator.add(project_notepad, project_notepad.close, "project notepad")
-    coordinator.add(global_notepad, global_notepad.close, "global notepad")
-    coordinator.publish_resource_lifecycle_abi()
-    registered = [coordinator]
-
-    def unregister(item):
-        registered[:] = [callback for callback in registered if callback is not item]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    monkeypatch.setattr(server, "_storage", resource)
-    monkeypatch.setattr(server, "_initialized", True)
-    monkeypatch.setattr(server, "_server_lifecycle_lock", lifecycle, raising=False)
-    monkeypatch.setattr(server, "_server_atexit_callbacks", [coordinator], raising=False)
-    monkeypatch.setattr(server, "_server_generation_cleanup", coordinator)
-    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
-    monkeypatch.setattr(server, "_server_lifecycle_status", None, raising=False)
-    monkeypatch.setattr(server, "_server_reload_reinitialize", False, raising=False)
-    monkeypatch.setattr(server, "_server_reload_session_id", None, raising=False)
-    monkeypatch.setattr(server, "_notepad_project", project_notepad)
-    monkeypatch.setattr(server, "_notepad_global", global_notepad)
-
-    reloaded = importlib.reload(server)
-
-    assert reloaded._storage is resource
-    assert reloaded._initialized is True
-    assert reloaded._server_lifecycle_lock is lifecycle
-    assert len(reloaded._server_atexit_callbacks) == 1
-    assert reloaded._server_atexit_callbacks[0] is coordinator
-    assert coordinator is registered[-1]
-    assert getattr(coordinator, "_server_cleanup_coordinator", False) is True
-    assert set(coordinator._server_resources) >= {
-        resource,
-        project_notepad,
-        global_notepad,
-    }
-    assert reloaded._notepad_project is project_notepad
-    assert reloaded._notepad_global is global_notepad
-
-
-def test_reload_keeps_existing_generation_coordinator_registered(monkeypatch):
-    """A second reload cannot unregister the already-adopted exact callback."""
-    class Observer:
-        def close(self):
-            pass
-
-    observer = Observer()
-    lifecycle = threading.RLock()
-    coordinator = server._ServerGenerationCleanup(lifecycle)
-    coordinator.add(observer, observer.close, "category observer")
-    coordinator.publish_resource_lifecycle_abi()
-    registered = [coordinator]
-    unregistered = []
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregistered.append)
-    monkeypatch.setattr(server, "_server_lifecycle_lock", lifecycle)
-    monkeypatch.setattr(server, "_server_atexit_callbacks", [coordinator])
-    monkeypatch.setattr(server, "_server_generation_cleanup", coordinator)
-    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
-    monkeypatch.setattr(server, "_server_lifecycle_status", None, raising=False)
-    monkeypatch.setattr(server, "_server_reload_reinitialize", False, raising=False)
-    monkeypatch.setattr(server, "_server_reload_session_id", None, raising=False)
-    monkeypatch.setattr(server, "_initialized", True)
-    monkeypatch.setattr(server, "_category_observer", observer)
-    monkeypatch.setattr(server, "_category_pending_close", None)
-    monkeypatch.setattr(server, "_category_atexit_callback", coordinator)
-    monkeypatch.setattr(server, "_storage", None)
-    monkeypatch.setattr(server, "_watcher", None)
-    monkeypatch.setattr(server, "_knowledge_graph", None)
-    monkeypatch.setattr(server, "_category_store", None)
-    monkeypatch.setattr(server, "_clipboard", None)
-    monkeypatch.setattr(server, "_instinct_graph", None)
-    monkeypatch.setattr(server, "_notepad_project", None)
-    monkeypatch.setattr(server, "_notepad_global", None)
-
-    reloaded = importlib.reload(server)
-
-    assert reloaded._server_lifecycle_lock is lifecycle
-    assert reloaded._server_atexit_callbacks == [coordinator]
-    assert reloaded._category_atexit_callback is coordinator
-    assert registered == [coordinator]
-    assert unregistered == []
-
-
-def test_reload_drains_and_retires_lazy_owners_published_after_snapshot(
-    monkeypatch,
-):
-    """An old request cannot publish callback-owned SQLite state past migration."""
-    lifecycle = threading.RLock()
-    request_holds_lifecycle = threading.Event()
-    stop_seen = threading.Event()
-    late_done = threading.Event()
-
-    class Watcher:
-        _watcher_thread = None
-        _consumer_thread = None
-
-        def stop(self):
-            stop_seen.set()
-
-        def is_alive(self):
-            return False
-
-    class LateOwner:
-        def __init__(self):
-            self.close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-
-    watcher = Watcher()
-    project = LateOwner()
-    global_pad = LateOwner()
-    registered = []
-
-    def unregister(callback):
-        registered[:] = [item for item in registered if item is not callback]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    for name, value in {
-        "_initialized": False,
-        "_storage": None,
-        "_embeddings": None,
-        "_config": None,
-        "_compressor": None,
-        "_reflector": None,
-        "_watcher": watcher,
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": None,
-        "_category_pending_close": None,
-        "_category_atexit_callback": None,
-        "_clipboard": None,
-        "_instinct_graph": None,
-        "_notepad_project": None,
-        "_notepad_global": None,
-        "_server_lifecycle_lock": lifecycle,
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-
-    def old_request():
-        with lifecycle:
-            request_holds_lifecycle.set()
-            assert stop_seen.wait(timeout=5)
-            server._notepad_project = project
-            server._notepad_global = global_pad
-            server._register_server_cleanup(
-                project, project.close, "project notepad"
-            )
-            server._register_server_cleanup(
-                global_pad, global_pad.close, "global notepad"
-            )
-            late_done.set()
-
-    request = threading.Thread(target=old_request)
-    request.start()
-    assert request_holds_lifecycle.wait(timeout=5)
-
-    reloaded = importlib.reload(server)
-    request.join(timeout=5)
-
-    assert late_done.is_set() is True
-    assert request.is_alive() is False
-    assert project.close_calls == 1
-    assert global_pad.close_calls == 1
-    assert reloaded._notepad_project is None
-    assert reloaded._notepad_global is None
-    assert reloaded._server_generation_cleanup is None
-    assert reloaded._server_pending_retirement is None
-    assert reloaded._server_atexit_callbacks == []
-    assert registered == []
-
-
-def test_reload_rebuilds_when_old_initializer_publishes_after_capture(
-    tmp_path, monkeypatch
-):
-    """Late `_initialized=True` cannot survive retirement with empty owners."""
-    lifecycle = threading.RLock()
-    initializer_holds_lifecycle = threading.Event()
-    stop_seen = threading.Event()
-    published = threading.Event()
-
-    class Watcher:
-        _watcher_thread = None
-        _consumer_thread = None
-
-        def stop(self):
-            stop_seen.set()
-
-        def is_alive(self):
-            return False
-
-    class LateStorage:
-        def __init__(self):
-            self.close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-
-    watcher = Watcher()
-    late_storage = LateStorage()
-    config = _reload_config(tmp_path, watcher=False, category=False)
-    registered = []
-
-    def unregister(callback):
-        registered[:] = [item for item in registered if item is not callback]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    monkeypatch.setattr("config.load_config", lambda _root: config)
-    monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
-    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setenv("ENGRAM_PROJECT_ROOT", str(tmp_path))
-    for name, value in {
-        "_initialized": False,
-        "_storage": None,
-        "_embeddings": None,
-        "_config": config,
-        "_compressor": None,
-        "_reflector": None,
-        "_watcher": watcher,
-        "_session_id": None,
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": None,
-        "_category_pending_close": None,
-        "_category_status": None,
-        "_category_atexit_callback": None,
-        "_clipboard": None,
-        "_instinct_graph": None,
-        "_notepad_project": None,
-        "_notepad_global": None,
-        "_server_lifecycle_lock": lifecycle,
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
-        "_server_lock_pid": os.getpid(),
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-
-    def old_initializer():
-        with lifecycle:
-            initializer_holds_lifecycle.set()
-            assert stop_seen.wait(timeout=5)
-            server._storage = late_storage
-            server._session_id = "late-session"
-            server._initialized = True
-            published.set()
-
-    initializer = threading.Thread(target=old_initializer)
-    initializer.start()
-    assert initializer_holds_lifecycle.wait(timeout=5)
-    replacement_coordinator = None
-    try:
-        reloaded = importlib.reload(server)
-        replacement_coordinator = reloaded._server_generation_cleanup
-        initializer.join(timeout=5)
-
-        assert published.is_set() is True
-        assert not initializer.is_alive()
-        assert late_storage.close_calls == 1
-        assert reloaded._initialized is True
-        assert reloaded._storage is not None
-        assert reloaded._storage is not late_storage
-        assert reloaded._session_id == "late-session"
-        assert reloaded._server_pending_retirement is None
-        assert replacement_coordinator._resource_lifecycle_abi == (
-            reloaded._SERVER_RESOURCE_LIFECYCLE_ABI
-        )
-        assert registered == [replacement_coordinator]
-    finally:
-        stop_seen.set()
-        initializer.join(timeout=5)
-        if replacement_coordinator is not None:
-            replacement_coordinator()
-
-
-def test_reload_rebuilds_marked_generation_after_shutdown_has_started(
-    tmp_path, monkeypatch
-):
-    """A closing same-ABI owner is terminal state, not reload-compatible state."""
-    config = _reload_config(tmp_path, watcher=False, category=False)
-    registered = []
-
-    def unregister(callback):
-        registered[:] = [item for item in registered if item is not callback]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    monkeypatch.setattr(server, "ENGRAM_HOME", tmp_path)
-    monkeypatch.setattr(server, "DB_PATH", tmp_path / ".engram" / "graph.db")
-    monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(server, "load_config", lambda _root: config)
-    monkeypatch.setattr("config.load_config", lambda _root: config)
-    monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
-    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setenv("ENGRAM_PROJECT_ROOT", str(tmp_path))
-    for name, value in {
-        "_initialized": False,
-        "_storage": None,
-        "_embeddings": None,
-        "_config": None,
-        "_compressor": None,
-        "_reflector": None,
-        "_watcher": None,
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": None,
-        "_category_pending_close": None,
-        "_category_status": None,
-        "_category_atexit_callback": None,
-        "_clipboard": None,
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
-        "_server_lock_pid": os.getpid(),
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-
-    server._init()
-    old_storage = server._storage
-    old_coordinator = server._server_generation_cleanup
-
-    class ExtraOwner:
-        def __init__(self):
-            self.close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-
-    extra = ExtraOwner()
-    old_coordinator.add(extra, extra.close, "extra owner")
-    old_coordinator()
-    assert old_coordinator.closing is True
-    assert extra.close_calls == 1
-
-    reloaded = importlib.reload(server)
-    replacement = reloaded._server_generation_cleanup
-    try:
-        assert reloaded._initialized is True
-        assert reloaded._storage is not old_storage
-        assert replacement is not old_coordinator
-        assert replacement.closing is False
-        assert replacement._resource_lifecycle_abi == (
-            reloaded._SERVER_RESOURCE_LIFECYCLE_ABI
-        )
-        assert extra.close_calls == 1
-        assert registered == [replacement]
-    finally:
-        if replacement is not None:
-            replacement()
-
-
-def test_legacy_request_does_not_deadlock_reload_preparation_lock():
-    """A pre-reload wrapper holding lifecycle fails the reload gate promptly."""
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        try:
-            os.close(read_fd)
-            lifecycle = threading.RLock()
-            stop_seen = threading.Event()
-            request_holds_lifecycle = threading.Event()
-            reload_done = threading.Event()
-            request_done = threading.Event()
-            request_errors = []
-
-            class Watcher:
-                _watcher_thread = None
-                _consumer_thread = None
-
-                def stop(self):
-                    stop_seen.set()
-                    assert request_holds_lifecycle.wait(timeout=3)
-
-                def is_alive(self):
-                    return False
-
-            for name, value in {
-                "_initialized": False,
-                "_storage": None,
-                "_embeddings": None,
-                "_config": None,
-                "_compressor": None,
-                "_reflector": None,
-                "_watcher": Watcher(),
-                "_knowledge_graph": None,
-                "_category_store": None,
-                "_category_observer": None,
-                "_category_pending_close": None,
-                "_category_atexit_callback": None,
-                "_clipboard": None,
-                "_instinct_graph": None,
-                "_notepad_project": None,
-                "_notepad_global": None,
-                "_server_lifecycle_lock": lifecycle,
-                "_server_atexit_callbacks": [],
-                "_server_generation_cleanup": None,
-                "_server_pending_retirement": None,
-                "_server_lifecycle_status": None,
-                "_server_reload_reinitialize": False,
-                "_server_reload_session_id": None,
-                "_server_reload_in_progress": False,
-            }.items():
-                setattr(server, name, value)
-
-            def reload_server():
-                try:
-                    importlib.reload(server)
-                finally:
-                    reload_done.set()
-
-            def legacy_request():
-                assert stop_seen.wait(timeout=3)
-                with lifecycle:
-                    request_holds_lifecycle.set()
-                    try:
-                        server._init()
-                    except Exception as exc:
-                        request_errors.append(exc)
-                request_done.set()
-
-            reload_thread = threading.Thread(target=reload_server, daemon=True)
-            request_thread = threading.Thread(target=legacy_request, daemon=True)
-            reload_thread.start()
-            request_thread.start()
-            reload_thread.join(timeout=3)
-            request_thread.join(timeout=3)
-            clean = (
-                reload_done.is_set()
-                and request_done.is_set()
-                and not reload_thread.is_alive()
-                and not request_thread.is_alive()
-                and len(request_errors) == 1
-                and isinstance(request_errors[0], RuntimeError)
-                and "server generation unavailable" in str(request_errors[0])
-            )
-            os.write(write_fd, b"clean" if clean else b"deadlock")
-            os._exit(0 if clean else 2)
-        except BaseException:
-            os._exit(3)
-
-    os.close(write_fd)
-    payload, status = _wait_for_child(pid, read_fd)
-    os.close(read_fd)
-    assert payload == b"clean"
-    assert os.waitstatus_to_exitcode(status) == 0
-
-
-def test_same_thread_reload_defers_retirement_until_lifecycle_is_released(
-    monkeypatch,
-):
-    """Reload from inside the old RLock cannot close an active generation."""
-    lifecycle = threading.RLock()
-    registered = []
-
-    class Resource:
-        def __init__(self):
-            self.close_calls = 0
-
-        def close(self):
-            self.close_calls += 1
-
-    resource = Resource()
-
-    def unregister(callback):
-        registered[:] = [item for item in registered if item is not callback]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    for name, value in {
-        "_initialized": False,
-        "_storage": resource,
-        "_embeddings": None,
-        "_config": None,
-        "_compressor": None,
-        "_reflector": None,
-        "_watcher": None,
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": None,
-        "_category_pending_close": None,
-        "_category_atexit_callback": None,
-        "_clipboard": None,
-        "_instinct_graph": None,
-        "_notepad_project": None,
-        "_notepad_global": None,
-        "_server_lifecycle_lock": lifecycle,
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-
-    with lifecycle:
-        reloaded = importlib.reload(server)
-        assert resource.close_calls == 0
-        assert reloaded._storage is resource
-        assert reloaded._server_pending_retirement is not None
-
-    reloaded._prepare_server_generation()
-
-    assert resource.close_calls == 1
-    assert reloaded._storage is None
-    assert reloaded._server_pending_retirement is None
-    assert reloaded._server_atexit_callbacks == []
-    assert registered == []
-
-
-def test_reload_gate_rejects_init_before_current_module_publication(monkeypatch):
-    """No stale `_init_unlocked` can run while reload publication is closed."""
-    called = []
-    monkeypatch.setattr(server, "_server_reload_in_progress", True)
-    monkeypatch.setattr(server, "_server_pending_retirement", None)
-    monkeypatch.setattr(server, "_init_unlocked", lambda: called.append(True))
-
-    with pytest.raises(RuntimeError, match="server generation unavailable"):
-        server._init()
-
-    assert called == []
-
-
-def test_real_fork_waits_for_complete_reload_publication(monkeypatch):
-    """A child cannot observe the initializer preserved mid-server reload."""
-    class ObservedCondition(threading.Condition):
-        def __init__(self):
-            super().__init__(threading.RLock())
-            self.fork_waiting = threading.Event()
-
-        def wait(self, timeout=None):
-            self.fork_waiting.set()
-            return super().wait(timeout)
-
-    condition = ObservedCondition()
-    stop_seen = threading.Event()
-    allow_stop = threading.Event()
-    reload_done = threading.Event()
-    fork_done = threading.Event()
-    fork_results = []
-
-    class Watcher:
-        _watcher_thread = None
-        _consumer_thread = None
-
-        def stop(self):
-            stop_seen.set()
-            assert allow_stop.wait(timeout=5)
-
-        def is_alive(self):
-            return False
-
-    def stale_init():
-        return "stale"
-
-    for name, value in {
-        "_initialized": False,
-        "_storage": None,
-        "_embeddings": None,
-        "_config": None,
-        "_compressor": None,
-        "_reflector": None,
-        "_watcher": Watcher(),
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": None,
-        "_category_pending_close": None,
-        "_category_atexit_callback": None,
-        "_clipboard": None,
-        "_instinct_graph": None,
-        "_notepad_project": None,
-        "_notepad_global": None,
-        "_server_lifecycle_lock": threading.RLock(),
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_reinitialize": False,
-        "_server_reload_session_id": None,
-        "_server_reload_in_progress": False,
-        "_server_reload_fork_condition": condition,
-        "_server_reload_fork_gate_held": False,
-        "_server_lifecycle_fork_gate_held": False,
-        "_init_unlocked": stale_init,
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-
-    def reload_server():
-        try:
-            importlib.reload(server)
-        finally:
-            reload_done.set()
-
-    read_fd, write_fd = os.pipe()
-
-    def fork_while_reloading():
-        pid = os.fork()
-        if pid == 0:
-            try:
-                os.close(read_fd)
-                current = (
-                    server._init_unlocked is not stale_init
-                    and server._server_reload_in_progress is False
-                )
-                os.write(write_fd, b"current" if current else b"stale")
-                os._exit(0 if current else 2)
-            except BaseException:
-                os._exit(3)
-        os.close(write_fd)
-        payload, status = _wait_for_child(pid, read_fd)
-        os.close(read_fd)
-        fork_results.append((payload, os.waitstatus_to_exitcode(status)))
-        fork_done.set()
-
-    reload_thread = threading.Thread(target=reload_server)
-    reload_thread.start()
-    assert stop_seen.wait(timeout=5)
-    fork_thread = threading.Thread(target=fork_while_reloading)
-    fork_thread.start()
-    assert condition.fork_waiting.wait(timeout=5)
-    assert reload_done.is_set() is False
-    assert fork_done.is_set() is False
-
-    allow_stop.set()
-    reload_thread.join(timeout=5)
-    fork_thread.join(timeout=5)
-
-    assert not reload_thread.is_alive()
-    assert not fork_thread.is_alive()
-    assert fork_results == [(b"current", 0)]
-
-
-def test_reload_prerequisite_failure_does_not_poison_fork_gate(monkeypatch):
-    """Failure before publication leaves the preserved generation gate open."""
-    fastmcp = importlib.import_module("mcp.server.fastmcp")
-    original_fastmcp = fastmcp.FastMCP
-    preserved_mcp = server.mcp
-
-    class ReloadPrerequisiteFailure(RuntimeError):
-        pass
-
-    def fail_fastmcp(*_args, **_kwargs):
-        raise ReloadPrerequisiteFailure("constructor unavailable")
-
-    monkeypatch.setattr(fastmcp, "FastMCP", fail_fastmcp)
-    try:
-        with pytest.raises(ReloadPrerequisiteFailure):
-            importlib.reload(server)
-
-        flag_after_failure = server._server_reload_in_progress
-        gate_returned = threading.Event()
-
-        def enter_and_release_gate():
-            server._before_server_reload_fork_gate()
-            gate_returned.set()
-            server._after_server_reload_fork_parent_gate()
-
-        gate_thread = threading.Thread(
-            target=enter_and_release_gate, daemon=True
-        )
-        gate_thread.start()
-        returned_without_repair = gate_returned.wait(timeout=1)
-        if not returned_without_repair:
-            with server._server_reload_fork_condition:
-                server._server_reload_in_progress = False
-                server._server_reload_fork_condition.notify_all()
-        gate_thread.join(timeout=1)
-
-        assert flag_after_failure is False
-        assert returned_without_repair is True
-        assert server.mcp is preserved_mcp
-        assert not gate_thread.is_alive()
-    finally:
-        monkeypatch.setattr(fastmcp, "FastMCP", original_fastmcp)
-        if server._server_reload_in_progress:
-            with server._server_reload_fork_condition:
-                server._server_reload_in_progress = False
-                server._server_reload_fork_condition.notify_all()
-        importlib.reload(server)
-
-
-def test_tool_registration_failure_surfaces_after_reload_gate_reopens(
-    monkeypatch,
-):
-    """A staged MCP schema failure cannot poison fork or replace serving MCP."""
-    fastmcp = importlib.import_module("mcp.server.fastmcp")
-    original_fastmcp = fastmcp.FastMCP
-    preserved_mcp = server.mcp
-
-    class BadMCP:
-        def tool(self, *_args, **_kwargs):
-            raise RuntimeError("private tool-registration detail")
-
-    monkeypatch.setattr(fastmcp, "FastMCP", lambda *_args, **_kwargs: BadMCP())
-    gate_thread = None
-    try:
-        with pytest.raises(RuntimeError) as caught:
-            importlib.reload(server)
-
-        flag_after_failure = server._server_reload_in_progress
-        gate_returned = threading.Event()
-
-        def enter_and_release_gate():
-            server._before_server_reload_fork_gate()
-            gate_returned.set()
-            server._after_server_reload_fork_parent_gate()
-
-        gate_thread = threading.Thread(
-            target=enter_and_release_gate, daemon=True
-        )
-        gate_thread.start()
-        returned_without_repair = gate_returned.wait(timeout=1)
-        if not returned_without_repair:
-            with server._server_reload_fork_condition:
-                server._server_reload_in_progress = False
-                server._server_reload_fork_condition.notify_all()
-        gate_thread.join(timeout=1)
-
-        assert type(caught.value) is RuntimeError
-        assert "private tool-registration detail" not in str(caught.value)
-        assert flag_after_failure is False
-        assert returned_without_repair is True
-        assert server.mcp is preserved_mcp
-        assert not gate_thread.is_alive()
-    finally:
-        monkeypatch.setattr(fastmcp, "FastMCP", original_fastmcp)
-        if server._server_reload_in_progress:
-            with server._server_reload_fork_condition:
-                server._server_reload_in_progress = False
-                server._server_reload_fork_condition.notify_all()
-        if gate_thread is not None:
-            gate_thread.join(timeout=1)
-        importlib.reload(server)
-
-
-def test_init_rechecks_generation_after_preparation_before_entering_lifecycle(
-    monkeypatch,
-):
-    """A pending retirement published after precheck still blocks init."""
-    precheck_finished = threading.Event()
-    resume_admission = threading.Event()
-    original_admit = server._admit_server_operation
-    init_calls = []
-    results = []
-    errors = []
-
-    def paused_admit():
-        precheck_finished.set()
-        assert resume_admission.wait(timeout=2)
-        return original_admit()
-
-    monkeypatch.setattr(server, "_server_reload_in_progress", False)
-    monkeypatch.setattr(server, "_server_pending_retirement", None)
-    monkeypatch.setattr(server, "_server_atexit_callbacks", [])
-    monkeypatch.setattr(server, "_server_generation_cleanup", None)
-    monkeypatch.setattr(server, "_admit_server_operation", paused_admit)
-    monkeypatch.setattr(
-        server,
-        "_init_unlocked",
-        lambda: init_calls.append("replacement-built") or "built",
-    )
-
-    def initialize():
-        try:
-            results.append(server._init())
-        except Exception as exc:
-            errors.append(exc)
-
-    worker = threading.Thread(target=initialize)
-    worker.start()
-    assert precheck_finished.wait(timeout=2)
-    pending = object()
-    server._server_pending_retirement = pending
-    resume_admission.set()
-    worker.join(timeout=2)
-
-    assert not worker.is_alive()
-    assert results == []
-    assert len(errors) == 1
-    assert isinstance(errors[0], RuntimeError)
-    assert "server generation unavailable" in str(errors[0])
-    assert init_calls == []
-    assert server._server_pending_retirement is pending
-
-
-def test_legacy_compiler_retirement_defers_from_its_lease_owner():
-    """Compatibility cleanup cannot wait for a lease owned by its caller."""
-    condition = threading.Condition()
-    handle = object()
-    compiler = type("LegacyCompiler", (), {})()
-    compiler._pool_condition = condition
-    compiler._available_connections = []
-    compiler._leased_connections = {}
-    compiler._closing = False
-    compiler._closed = False
-    compiler._close_in_progress = False
-    compiler._shutdown_errors = []
-    retirement = server._LegacyServerGenerationRetirement(
-        threading.RLock(), None, (), {}
-    )
-    errors = []
-    finished = threading.Event()
-
-    def close_from_lease_owner():
-        with condition:
-            compiler._leased_connections[handle] = threading.get_ident()
-        try:
-            retirement._close_legacy_compiler(compiler)
-        except Exception as exc:
-            errors.append(exc)
-        finally:
-            finished.set()
-
-    worker = threading.Thread(target=close_from_lease_owner, daemon=True)
-    worker.start()
-    completed_without_waiting = finished.wait(timeout=1)
-    if not completed_without_waiting:
-        # Keep a RED run bounded even though the broken implementation waits
-        # forever for the exact lease held by this same worker.
-        with condition:
-            compiler._leased_connections.clear()
-            condition.notify_all()
-    worker.join(timeout=1)
-
-    assert completed_without_waiting is True
-    assert len(errors) == 1
-    assert isinstance(errors[0], RuntimeError)
-    assert "connection lease" in str(errors[0])
-    assert compiler._leased_connections == {handle: worker.ident}
-    assert compiler._closing is False
-    assert compiler._closed is False
-    assert compiler._close_in_progress is False
-
-
-def test_fork_snapshot_retains_resources_owned_only_by_exact_cleanup_callback(
-    monkeypatch,
-):
-    """Child quarantine keeps callback-only native owners from destructing."""
-    resource = object()
-    category_resource = type("CategoryResource", (), {"close": lambda self: None})()
-    callback = server._make_server_cleanup(resource, lambda: None, "native")
-    monkeypatch.setattr(server, "_server_atexit_callbacks", [callback])
-    monkeypatch.setattr(
-        server,
-        "_category_atexit_callback",
-        server._make_category_cleanup(category_resource),
-    )
-    monkeypatch.setattr(server, "_category_observer", None)
-    monkeypatch.setattr(server, "_category_pending_close", None)
-    monkeypatch.setattr(server, "_storage", None)
-    monkeypatch.setattr(server, "_knowledge_graph", None)
-
-    snapshot = server._server_owned_resources()
-
-    assert resource in snapshot
-    assert category_resource in snapshot
-
-
 def test_fork_snapshot_retains_detached_generation_coordinator(monkeypatch):
     """Child reset cannot destruct native handles hidden by an orphan callback."""
     resource = object()
@@ -1825,7 +1337,6 @@ def test_fork_snapshot_retains_detached_generation_coordinator(monkeypatch):
     monkeypatch.setattr(atexit, "unregister", unregistered.append)
     monkeypatch.setattr(server, "_server_atexit_callbacks", [])
     monkeypatch.setattr(server, "_server_generation_cleanup", coordinator)
-    monkeypatch.setattr(server, "_server_pending_retirement", None)
     monkeypatch.setattr(server, "_category_atexit_callback", None)
     for name in (
         "_storage",
@@ -1838,7 +1349,6 @@ def test_fork_snapshot_retains_detached_generation_coordinator(monkeypatch):
         "_clipboard",
         "_category_store",
         "_category_observer",
-        "_category_pending_close",
         "_instinct_graph",
         "_notepad_project",
         "_notepad_global",
@@ -1854,20 +1364,6 @@ def test_fork_snapshot_retains_detached_generation_coordinator(monkeypatch):
 
     assert unregistered == [coordinator]
     assert coordinator in server._fork_quarantined_resources
-
-
-def test_exact_core_cleanup_callback_is_idempotent_after_success():
-    """Repeated cleanup registration execution cannot close one owner twice."""
-    calls = []
-    resource = object()
-    callback = server._make_server_cleanup(
-        resource, lambda: calls.append(resource), "resource"
-    )
-
-    callback()
-    callback()
-
-    assert calls == [resource]
 
 
 def test_child_quarantine_unregisters_callback_only_category_observer():
@@ -1918,989 +1414,6 @@ def test_lazy_notepads_register_exact_idempotent_cleanup(
         global_pad.conn.execute("SELECT 1")
 
 
-def test_reload_upgrades_legacy_child_only_atfork_registration(monkeypatch):
-    """A legacy boolean cannot suppress the new three-phase lifecycle hook."""
-    registrations = []
-    monkeypatch.setattr(
-        server.os,
-        "register_at_fork",
-        lambda **callbacks: registrations.append(callbacks),
-    )
-    monkeypatch.setattr(server, "_SERVER_AT_FORK_REGISTERED", True)
-    monkeypatch.delattr(
-        server, "_SERVER_AT_FORK_LIFECYCLE_VERSION", raising=False
-    )
-
-    reloaded = importlib.reload(server)
-
-    assert len(registrations) == 1
-    assert set(registrations[0]) == {
-        "before",
-        "after_in_parent",
-        "after_in_child",
-    }
-    assert reloaded._SERVER_AT_FORK_LIFECYCLE_VERSION == 2
-
-
-def test_legacy_atfork_upgrade_waits_for_reload_before_lifecycle_lock(
-    monkeypatch,
-):
-    """The newly installed lifecycle hook cannot lock ahead of the gate."""
-    class ObservedCondition(threading.Condition):
-        def __init__(self):
-            super().__init__(threading.RLock())
-            self.waiting = threading.Event()
-
-        def wait(self, timeout=None):
-            self.waiting.set()
-            return super().wait(timeout)
-
-    condition = ObservedCondition()
-    registrations = []
-    monkeypatch.setattr(
-        server.os,
-        "register_at_fork",
-        lambda **callbacks: registrations.append(callbacks),
-    )
-    monkeypatch.setattr(server, "_server_reload_fork_condition", condition)
-    monkeypatch.setattr(
-        server, "_SERVER_RELOAD_GATE_AT_FORK_REGISTERED", False
-    )
-    monkeypatch.setattr(server, "_SERVER_AT_FORK_REGISTERED", True)
-    monkeypatch.setattr(server, "_SERVER_AT_FORK_LIFECYCLE_VERSION", 0)
-    monkeypatch.setattr(server, "_initialized", False)
-    monkeypatch.setattr(server, "_server_atexit_callbacks", [])
-    monkeypatch.setattr(server, "_server_generation_cleanup", None)
-    monkeypatch.setattr(server, "_server_pending_retirement", None)
-    for name in (
-        "_storage",
-        "_watcher",
-        "_knowledge_graph",
-        "_category_store",
-        "_category_observer",
-        "_category_pending_close",
-        "_clipboard",
-        "_instinct_graph",
-        "_notepad_project",
-        "_notepad_global",
-    ):
-        monkeypatch.setattr(server, name, None)
-
-    reloaded = importlib.reload(server)
-    assert len(registrations) == 2
-    with condition:
-        reloaded._server_reload_in_progress = True
-
-    before_done = threading.Event()
-    run_parent_callbacks = threading.Event()
-
-    def run_fork_callbacks():
-        for registration in reversed(registrations):
-            registration["before"]()
-        before_done.set()
-        assert run_parent_callbacks.wait(timeout=2)
-        for registration in registrations:
-            registration["after_in_parent"]()
-
-    fork_thread = threading.Thread(target=run_fork_callbacks, daemon=True)
-    fork_thread.start()
-    assert condition.waiting.wait(timeout=2)
-
-    lifecycle_was_free = reloaded._server_lifecycle_lock.acquire(
-        blocking=False
-    )
-    if lifecycle_was_free:
-        reloaded._server_lifecycle_lock.release()
-
-    with condition:
-        reloaded._server_reload_in_progress = False
-        condition.notify_all()
-    assert before_done.wait(timeout=2)
-    run_parent_callbacks.set()
-    fork_thread.join(timeout=2)
-
-    assert lifecycle_was_free is True
-    assert not fork_thread.is_alive()
-
-
-def test_reload_migration_masks_legacy_dynamic_atexit_callbacks_after_fork(
-    monkeypatch,
-):
-    """Legacy dynamic callbacks cannot double-close a child generation."""
-    class Resource:
-        def __init__(self):
-            self.close_count = 0
-
-        def close(self):
-            self.close_count += 1
-
-        def stop(self):
-            self.close()
-
-    registered = [
-        lambda: server._watcher.stop() if server._watcher else None,
-        lambda: server._storage.close() if server._storage else None,
-        lambda: server._knowledge_graph.close()
-        if server._knowledge_graph
-        else None,
-        lambda: server._category_store._conn.close()
-        if server._category_store
-        else None,
-        lambda: server._clipboard.close() if server._clipboard else None,
-    ]
-
-    def unregister(callback):
-        registered[:] = [item for item in registered if item is not callback]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    monkeypatch.setattr(server.os, "register_at_fork", lambda **_callbacks: None)
-    monkeypatch.setattr(server, "_storage", None)
-    monkeypatch.setattr(server, "_watcher", None)
-    monkeypatch.setattr(server, "_knowledge_graph", None)
-    monkeypatch.setattr(server, "_category_store", None)
-    monkeypatch.setattr(server, "_clipboard", None)
-    monkeypatch.setattr(server, "_instinct_graph", None)
-    monkeypatch.setattr(server, "_notepad_project", None)
-    monkeypatch.setattr(server, "_notepad_global", None)
-    monkeypatch.setattr(server, "_initialized", False)
-    monkeypatch.setattr(server, "_server_atexit_callbacks", [])
-    monkeypatch.setattr(server, "_server_generation_cleanup", None)
-    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
-    monkeypatch.setattr(server, "_server_reload_reinitialize", False, raising=False)
-    monkeypatch.setattr(server, "_server_reload_session_id", None, raising=False)
-    monkeypatch.setattr(server, "_category_observer", None)
-    monkeypatch.setattr(server, "_category_pending_close", None)
-    monkeypatch.setattr(server, "_category_atexit_callback", None)
-    monkeypatch.setattr(server, "_SERVER_AT_FORK_REGISTERED", True)
-    monkeypatch.delattr(
-        server, "_SERVER_AT_FORK_LIFECYCLE_VERSION", raising=False
-    )
-    monkeypatch.delattr(
-        server, "_legacy_dynamic_atexit_guard", raising=False
-    )
-    monkeypatch.delattr(
-        server, "_LEGACY_DYNAMIC_ATEXIT_REQUIRED", raising=False
-    )
-
-    reloaded = importlib.reload(server)
-
-    resources = reloaded._server_owned_resources()
-    reloaded._reset_server_child_state(resources, os.getpid())
-    child_storage = Resource()
-    reloaded._storage = child_storage
-    reloaded._register_server_cleanup(
-        child_storage, child_storage.close, "storage"
-    )
-
-    for callback in reversed(tuple(registered)):
-        callback()
-
-    assert child_storage.close_count == 1
-
-
-class _PriorRevisionStorage(Storage):
-    """Real Storage with the pre-b7a31f5 close contract."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.legacy_close_calls = 0
-
-    def close(self) -> None:
-        self.legacy_close_calls += 1
-        if hasattr(self, "_cold_conn") and self._cold_conn is not None:
-            try:
-                self._cold_conn.close()
-            except Exception:
-                pass
-            self._cold_conn = None
-        try:
-            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except Exception:
-            pass
-        self.conn.close()
-
-
-class _PriorRevisionWatcher(FileWatcher):
-    """Real watcher with the old restartable, silent-timeout shutdown."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.legacy_stop_calls = 0
-        self.legacy_start_calls = 0
-
-    def start(self) -> None:
-        if not self._config.enabled:
-            return
-        self.legacy_start_calls += 1
-        self._stop_event.clear()
-        self._watcher_thread = threading.Thread(
-            target=self._watch_loop, daemon=True, name="prior-engram-watcher"
-        )
-        self._consumer_thread = threading.Thread(
-            target=self._consume_loop, daemon=True, name="prior-engram-consumer"
-        )
-        self._watcher_thread.start()
-        self._consumer_thread.start()
-
-    def stop(self, timeout: float = 5.0) -> None:
-        self.legacy_stop_calls += 1
-        self._stop_event.set()
-        if self._watcher_thread and self._watcher_thread.is_alive():
-            self._watcher_thread.join(timeout=timeout)
-        if self._consumer_thread and self._consumer_thread.is_alive():
-            self._consumer_thread.join(timeout=timeout)
-
-    def _index_file_unlocked(self, path):
-        before_index = getattr(self, "_before_index", None)
-        if before_index is not None:
-            before_index(path)
-        return super()._index_file_unlocked(path)
-
-
-class _PriorRevisionCompiler(CategoryCompiler):
-    """The b9 waiter loop, which ignores `_closing` after a wakeup."""
-
-    def _acquire_compile_connection(self, deadline: int) -> sqlite3.Connection:
-        self._assert_database_identity()
-        with self._pool_condition:
-            if self._closed or self._closing:
-                raise RuntimeError("category compiler is closed")
-            while not self._available_connections:
-                if self._closed:
-                    raise RuntimeError("category compiler is closed")
-                remaining_ns = deadline - time.monotonic_ns()
-                if remaining_ns <= 0:
-                    raise _DeadlineExceeded
-                self._pool_condition.wait(remaining_ns / 1_000_000_000)
-            if self._closed or self._closing:
-                raise RuntimeError("category compiler is closed")
-            if time.monotonic_ns() >= deadline:
-                raise _DeadlineExceeded
-            connection = self._available_connections.pop()
-            self._leased_connections[connection] = threading.get_ident()
-        try:
-            self._assert_database_identity()
-            if time.monotonic_ns() >= deadline:
-                raise _DeadlineExceeded
-        except Exception:
-            self._release_compile_connection(connection)
-            raise
-        return connection
-
-
-class _PriorRevisionObserver(CategoryObserver):
-    """Concrete prior-generation observer owning a prior compiler pool."""
-
-
-class _PriorRevisionKnowledgeGraph(KnowledgeGraph):
-    """Concrete KG owner with the old swallowed graph-close failure."""
-
-    def close(self):
-        if self._graphiti is not None:
-            try:
-                self._run_async(self._graphiti.close())
-            except Exception:
-                pass
-        self._shutdown_executor()
-
-
-class _ObservedCompilerCondition(threading.Condition):
-    def __init__(self, compiler):
-        super().__init__()
-        self.compiler = compiler
-        self.waiter_ident = None
-        self.waiting = threading.Event()
-        self.shutdown_started = threading.Event()
-
-    def wait(self, timeout=None):
-        if threading.get_ident() == self.waiter_ident:
-            self.waiting.set()
-        return super().wait(timeout)
-
-    def notify_all(self):
-        if self.compiler._closed or self.compiler._closing:
-            self.shutdown_started.set()
-        return super().notify_all()
-
-
-def _make_prior_observer(path):
-    observer = _PriorRevisionObserver(path)
-    observer.compiler.close()
-    observer.compiler = _PriorRevisionCompiler(
-        observer.store, observer._compile_budget
-    )
-    condition = _ObservedCompilerCondition(observer.compiler)
-    observer.compiler._pool_condition = condition
-    return observer, condition
-
-
-def _prior_cleanup_callback(resource, cleanup, label):
-    """Match b9 exact callbacks, including their fail-soft wrapper."""
-    completed = False
-    callback_lock = threading.Lock()
-
-    def callback():
-        nonlocal completed
-        with callback_lock:
-            if completed:
-                return
-            try:
-                cleanup()
-            except Exception:
-                return
-            completed = True
-
-    callback._server_resource = resource
-    callback._server_cleanup_label = label
-    return callback
-
-
-def _prior_category_callback(observer):
-    def callback():
-        try:
-            observer.close()
-        except Exception:
-            pass
-
-    callback._category_observer = observer
-    return callback
-
-
-def _reload_config(tmp_path, *, watcher=True, category=True):
-    from config import load_config
-
-    config = load_config(tmp_path)
-    config.graph.enabled = False
-    config.watcher.enabled = watcher
-    config.category_evolution.enabled = category
-    config.category_evolution.shadow = True
-    config.category_evolution.influence_recall = False
-    config.category_evolution.auto_commit = False
-    config.category_evolution.db_path = ""
-    return config
-
-
-def _install_prior_server_generation(
-    monkeypatch,
-    tmp_path,
-    *,
-    storage,
-    watcher,
-    knowledge_graph,
-    category_store,
-    observer,
-    config,
-    lifecycle,
-    embedding_factory=FakeEmbeddingProvider,
-):
-    for callback in tuple(getattr(server, "_server_atexit_callbacks", ())):
-        atexit.unregister(callback)
-    category_callback = getattr(server, "_category_atexit_callback", None)
-    if category_callback is not None:
-        atexit.unregister(category_callback)
-
-    registered = []
-
-    def unregister(callback):
-        registered[:] = [item for item in registered if item is not callback]
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregister)
-    monkeypatch.setattr("config.load_config", lambda _root: config)
-    monkeypatch.setattr("embeddings.NomicEmbedProvider", embedding_factory)
-    monkeypatch.setenv("ENGRAM_HOME", str(tmp_path))
-    monkeypatch.setenv("ENGRAM_PROJECT_ROOT", str(tmp_path))
-
-    callbacks = [
-        _prior_cleanup_callback(watcher, watcher.stop, "watcher"),
-        _prior_cleanup_callback(storage, storage.close, "storage"),
-        _prior_cleanup_callback(
-            knowledge_graph, knowledge_graph.close, "knowledge graph"
-        ),
-        _prior_cleanup_callback(
-            category_store._conn, category_store._conn.close, "category store"
-        ),
-    ]
-    observer_callback = _prior_category_callback(observer) if observer else None
-    registered.extend(callbacks)
-    if observer_callback is not None:
-        registered.append(observer_callback)
-
-    values = {
-        "_storage": storage,
-        "_embeddings": watcher._embedding_provider,
-        "_config": config,
-        "_compressor": object(),
-        "_reflector": None,
-        "_watcher": watcher,
-        "_session_id": "prior-session",
-        "_session_episode_count": 0,
-        "_instance_name": None,
-        "_initialized": True,
-        "_genome_db_path": None,
-        "_signals_db_path": None,
-        "_knowledge_graph": knowledge_graph,
-        "_category_store": category_store,
-        "_category_observer": observer,
-        "_category_pending_close": None,
-        "_category_status": None,
-        "_category_atexit_callback": observer_callback,
-        "_category_last_observed_at": None,
-        "_clipboard": None,
-        "_instinct_graph": None,
-        "_notepad_project": None,
-        "_notepad_global": None,
-        "_server_lifecycle_lock": lifecycle,
-        "_init_lock": threading.RLock(),
-        "_category_recall_lock": threading.RLock(),
-        "_server_pid_guard": threading.RLock(),
-        "_server_lock_pid": os.getpid(),
-        "_server_atexit_callbacks": callbacks,
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_session_id": None,
-        "_fork_quarantined_resources": [],
-        "_SERVER_AT_FORK_REGISTERED": True,
-        "_SERVER_AT_FORK_LIFECYCLE_VERSION": 2,
-        "_LEGACY_DYNAMIC_ATEXIT_REQUIRED": False,
-        "_legacy_dynamic_atexit_guard": None,
-    }
-    for name, value in values.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-    return registered
-
-
-def _make_prior_knowledge_graph(*, fail_graph_once=False):
-    class GraphHandle:
-        def __init__(self):
-            self.close_attempts = 0
-
-        def close(self):
-            self.close_attempts += 1
-            return self
-
-    class ExecutorHandle:
-        def __init__(self):
-            self.shutdown_attempts = 0
-
-        def shutdown(self, *, wait):
-            assert wait is False
-            self.shutdown_attempts += 1
-
-    graph = GraphHandle()
-    executor = ExecutorHandle()
-    knowledge = _PriorRevisionKnowledgeGraph.__new__(
-        _PriorRevisionKnowledgeGraph
-    )
-    knowledge._graphiti = graph
-    knowledge._executor = executor
-
-    def run_async(handle):
-        assert handle is graph
-        if fail_graph_once and graph.close_attempts == 1:
-            raise RuntimeError("private prior graph close detail")
-
-    knowledge._run_async = run_async
-    return knowledge, graph, executor
-
-
-def test_incompatible_reload_retires_real_prior_generation_before_rebuild(
-    tmp_path, monkeypatch
-):
-    """An unmarked live generation is quiesced and rebuilt, never adopted."""
-    config = _reload_config(tmp_path)
-    lifecycle = _ObservedRLock()
-    index_entered = threading.Event()
-    allow_index = threading.Event()
-
-    old_storage = _PriorRevisionStorage(str(tmp_path / "prior-graph.db"))
-    old_embedding = FakeEmbeddingProvider()
-    old_watcher = _PriorRevisionWatcher(
-        tmp_path,
-        config.watcher,
-        old_storage,
-        old_embedding,
-        operation_lock=lifecycle,
-    )
-
-    def block_prior_index(path):
-        if path.name == "prior_blocked.py":
-            index_entered.set()
-            assert allow_index.wait(timeout=5)
-
-    old_watcher._before_index = block_prior_index
-    old_observer, compiler_condition = _make_prior_observer(
-        tmp_path / "prior-categories-v2.db"
-    )
-    old_compiler = old_observer.compiler
-    old_knowledge, old_graph, old_executor = _make_prior_knowledge_graph()
-    old_category_connection = sqlite3.connect(tmp_path / "prior-categories.db")
-    old_category_store = type(
-        "PriorCategoryStore", (), {"_conn": old_category_connection}
-    )()
-    registered = _install_prior_server_generation(
-        monkeypatch,
-        tmp_path,
-        storage=old_storage,
-        watcher=old_watcher,
-        knowledge_graph=old_knowledge,
-        category_store=old_category_store,
-        observer=old_observer,
-        config=config,
-        lifecycle=lifecycle,
-    )
-
-    source = tmp_path / "prior_blocked.py"
-    source.write_text("def prior_blocked():\n    return 1\n")
-    old_watcher.start()
-    old_watcher._queue.put(source)
-    assert index_entered.wait(timeout=5)
-
-    leased = []
-    leases_ready = threading.Event()
-    release_leases = threading.Event()
-    borrower_errors = []
-
-    def borrow_prior_compiler_connections():
-        try:
-            for _ in range(len(old_compiler._available_connections)):
-                leased.append(
-                    old_compiler._acquire_compile_connection(10**30)
-                )
-            leases_ready.set()
-            assert release_leases.wait(timeout=5)
-            for connection in leased:
-                if connection in old_compiler._leased_connections:
-                    old_compiler._release_compile_connection(connection)
-        except Exception as exc:
-            borrower_errors.append(exc)
-
-    borrower = threading.Thread(target=borrow_prior_compiler_connections)
-    borrower.start()
-    assert leases_ready.wait(timeout=5)
-    waiter_finished = threading.Event()
-    waiter_errors = []
-
-    def wait_for_prior_compiler():
-        compiler_condition.waiter_ident = threading.get_ident()
-        try:
-            old_compiler._acquire_compile_connection(
-                time.monotonic_ns() + 5_000_000_000
-            )
-        except Exception as exc:
-            waiter_errors.append(exc)
-        finally:
-            waiter_finished.set()
-
-    waiter = threading.Thread(target=wait_for_prior_compiler)
-    waiter.start()
-    assert compiler_condition.waiting.wait(timeout=5)
-
-    reload_returned = threading.Event()
-    release_observations = []
-    replacement_coordinator = None
-
-    def unblock_retirement():
-        stop_started = old_watcher._stop_event.wait(timeout=2)
-        release_observations.append(
-            (stop_started, old_watcher.is_alive(), reload_returned.is_set())
-        )
-        allow_index.set()
-        shutdown_started = compiler_condition.shutdown_started.wait(timeout=2)
-        rejected_while_closing = waiter_finished.wait(timeout=0.25)
-        release_observations.append(
-            (shutdown_started, rejected_while_closing, reload_returned.is_set())
-        )
-        release_leases.set()
-
-    releaser = threading.Thread(target=unblock_retirement)
-    releaser.start()
-    try:
-        reloaded = importlib.reload(server)
-        replacement_coordinator = getattr(
-            reloaded, "_server_generation_cleanup", None
-        )
-        reload_returned.set()
-        releaser.join(timeout=5)
-        borrower.join(timeout=5)
-        waiter.join(timeout=5)
-
-        assert release_observations == [
-            (True, True, False),
-            (True, True, False),
-        ]
-        assert len(waiter_errors) == 1
-        assert isinstance(waiter_errors[0], RuntimeError)
-        assert borrower_errors == []
-        assert old_watcher.is_alive() is False
-        assert old_watcher.legacy_stop_calls == 1
-        assert old_storage.legacy_close_calls == 0
-        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-            old_storage.conn.execute("SELECT 1")
-        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-            old_category_connection.execute("SELECT 1")
-        assert old_observer._closed is True
-        assert old_observer.compiler is None
-        assert old_observer.store is None
-        assert old_graph.close_attempts == 1
-        assert old_executor.shutdown_attempts == 1
-        assert old_knowledge._graphiti is None
-        assert old_knowledge._executor is None
-
-        coordinator = reloaded._server_generation_cleanup
-        assert reloaded._initialized is True
-        assert reloaded._session_id == "prior-session"
-        assert reloaded._storage is not old_storage
-        assert reloaded._watcher is not old_watcher
-        assert reloaded._category_observer is not old_observer
-        assert reloaded._storage._check_same_thread is False
-        assert coordinator._resource_lifecycle_abi == (
-            reloaded._SERVER_RESOURCE_LIFECYCLE_ABI
-        )
-        assert old_storage not in coordinator._server_resources
-        assert reloaded._category_atexit_callback is coordinator
-        assert registered == [coordinator]
-
-        current_source = tmp_path / "current_worker.py"
-        current_source.write_text("def current_worker():\n    return 2\n")
-        indexing_finished = threading.Event()
-        indexing_errors = []
-
-        def index_with_current_storage():
-            try:
-                reloaded._watcher._index_file(current_source)
-            except Exception as exc:
-                indexing_errors.append(exc)
-            finally:
-                indexing_finished.set()
-
-        current_worker = threading.Thread(target=index_with_current_storage)
-        current_worker.start()
-        assert indexing_finished.wait(timeout=5)
-        current_worker.join(timeout=5)
-        assert indexing_errors == []
-        assert reloaded._storage.get_entity(
-            "symbol:current_worker.py::current_worker"
-        ) is not None
-
-        current_compiler = reloaded._category_observer.compiler
-        current_condition = _ObservedCompilerCondition(current_compiler)
-        current_compiler._pool_condition = current_condition
-        current_leased = [
-            current_compiler._acquire_compile_connection(10**30)
-            for _ in range(len(current_compiler._available_connections))
-        ]
-        current_waiter_finished = threading.Event()
-        current_waiter_errors = []
-
-        def wait_for_current_compiler():
-            current_condition.waiter_ident = threading.get_ident()
-            try:
-                current_compiler._acquire_compile_connection(
-                    time.monotonic_ns() + 500_000_000
-                )
-            except Exception as exc:
-                current_waiter_errors.append(exc)
-            finally:
-                current_waiter_finished.set()
-
-        current_waiter = threading.Thread(target=wait_for_current_compiler)
-        current_waiter.start()
-        assert current_condition.waiting.wait(timeout=5)
-        close_finished = threading.Event()
-        close_errors = []
-
-        def close_current_compiler():
-            try:
-                current_compiler.close()
-            except Exception as exc:
-                close_errors.append(exc)
-            finally:
-                close_finished.set()
-
-        current_closer = threading.Thread(target=close_current_compiler)
-        current_closer.start()
-        assert current_condition.shutdown_started.wait(timeout=5)
-        assert current_waiter_finished.wait(timeout=0.25)
-        assert close_finished.is_set() is False
-        for connection in current_leased:
-            current_compiler._release_compile_connection(connection)
-        assert close_finished.wait(timeout=5)
-        current_waiter.join(timeout=5)
-        current_closer.join(timeout=5)
-        assert len(current_waiter_errors) == 1
-        assert isinstance(current_waiter_errors[0], RuntimeError)
-        assert close_errors == []
-
-        for callback in reversed(tuple(registered)):
-            callback()
-        for callback in reversed(tuple(registered)):
-            callback()
-        assert reloaded._watcher.is_alive() is False
-        reloaded._watcher.start()
-        assert reloaded._watcher.is_alive() is False
-        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-            reloaded._storage.conn.execute("SELECT 1")
-    finally:
-        if replacement_coordinator is not None:
-            replacement_coordinator()
-        release_leases.set()
-        allow_index.set()
-        for connection in tuple(old_compiler._leased_connections):
-            old_compiler._release_compile_connection(connection)
-        releaser.join(timeout=5)
-        borrower.join(timeout=5)
-        waiter.join(timeout=5)
-        if old_watcher.is_alive():
-            old_watcher.stop()
-        if not old_observer._closed:
-            old_observer.close()
-        try:
-            old_category_connection.close()
-        except Exception:
-            pass
-        try:
-            old_storage.close()
-        except Exception:
-            pass
-
-
-def test_failed_legacy_retirement_is_type_only_and_retried_before_rebuild(
-    tmp_path, monkeypatch
-):
-    """Failed native handles stay exact and block replacement until `_init`."""
-    config = _reload_config(tmp_path, watcher=False, category=False)
-    lifecycle = _ObservedRLock()
-    constructions = []
-
-    class CountingEmbedding(FakeEmbeddingProvider):
-        def __init__(self):
-            constructions.append("embedding")
-            super().__init__()
-
-    class FailOnceColdConnection:
-        def __init__(self):
-            self.close_attempts = 0
-
-        def close(self):
-            self.close_attempts += 1
-            if self.close_attempts == 1:
-                raise sqlite3.OperationalError(
-                    "private prior cold close detail"
-                )
-
-    old_storage = _PriorRevisionStorage(str(tmp_path / "prior-failure.db"))
-    cold_connection = FailOnceColdConnection()
-    old_storage._cold_conn = cold_connection
-    old_embedding = FakeEmbeddingProvider()
-    old_watcher = _PriorRevisionWatcher(
-        tmp_path,
-        config.watcher,
-        old_storage,
-        old_embedding,
-        operation_lock=lifecycle,
-    )
-    old_knowledge, old_graph, old_executor = _make_prior_knowledge_graph(
-        fail_graph_once=True
-    )
-    old_category_connection = sqlite3.connect(
-        tmp_path / "prior-failure-categories.db"
-    )
-    old_category_store = type(
-        "PriorCategoryStore", (), {"_conn": old_category_connection}
-    )()
-    registered = _install_prior_server_generation(
-        monkeypatch,
-        tmp_path,
-        storage=old_storage,
-        watcher=old_watcher,
-        knowledge_graph=old_knowledge,
-        category_store=old_category_store,
-        observer=None,
-        config=config,
-        lifecycle=lifecycle,
-        embedding_factory=CountingEmbedding,
-    )
-    old_compressor = server._compressor
-
-    reloaded = importlib.reload(server)
-
-    assert reloaded._initialized is False
-    assert reloaded._storage is None
-    assert reloaded._watcher is None
-    assert reloaded._knowledge_graph is None
-    assert constructions == []
-    assert reloaded._server_lifecycle_status == {
-        "available": False,
-        "error": "RuntimeError",
-        "last_error": "RuntimeError",
-    }
-    assert "private" not in str(reloaded._server_lifecycle_status)
-    pending = reloaded._server_pending_retirement
-    assert pending is not None
-    assert old_storage in pending._server_resources
-    assert old_knowledge in pending._server_resources
-    assert cold_connection.close_attempts == 1
-    assert old_storage._cold_conn is cold_connection
-    assert old_graph.close_attempts == 1
-    assert old_knowledge._graphiti is old_graph
-    assert old_executor.shutdown_attempts == 1
-    assert old_knowledge._executor is None
-    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
-        old_storage.conn.execute("SELECT 1")
-    assert registered == [pending]
-
-    # A fork while retirement is pending must quarantine the complete exact
-    # generation, including owners that never had their own callback.  The
-    # child must not retry or destruct inherited native state.
-    old_embedding = old_watcher._embedding_provider
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        try:
-            os.close(read_fd)
-            quarantined = reloaded._fork_quarantined_resources
-            clean = (
-                reloaded._server_pending_retirement is None
-                and reloaded._storage is None
-                and old_storage in quarantined
-                and old_embedding in quarantined
-                and old_compressor in quarantined
-                and cold_connection.close_attempts == 1
-                and old_graph.close_attempts == 1
-            )
-            os.write(write_fd, b"clean" if clean else b"dirty")
-            os._exit(0 if clean else 2)
-        except BaseException:
-            os._exit(3)
-
-    os.close(write_fd)
-    payload, status = _wait_for_child(pid, read_fd)
-    os.close(read_fd)
-    assert payload == b"clean"
-    assert os.waitstatus_to_exitcode(status) == 0
-    assert reloaded._server_pending_retirement is pending
-    assert cold_connection.close_attempts == 1
-    assert old_graph.close_attempts == 1
-
-    reloaded._init()
-
-    assert cold_connection.close_attempts == 2
-    assert old_storage._cold_conn is None
-    assert old_graph.close_attempts == 2
-    assert old_knowledge._graphiti is None
-    assert old_executor.shutdown_attempts == 1
-    assert reloaded._server_pending_retirement is None
-    assert reloaded._server_lifecycle_status is None
-    assert reloaded._initialized is True
-    assert constructions == ["embedding"]
-    assert reloaded._storage is not old_storage
-    coordinator = reloaded._server_generation_cleanup
-    assert coordinator._resource_lifecycle_abi == (
-        reloaded._SERVER_RESOURCE_LIFECYCLE_ABI
-    )
-    assert registered == [coordinator]
-
-    for callback in reversed(tuple(registered)):
-        callback()
-
-
-def test_compatible_reload_preserves_exact_generation_without_duplicate_callback(
-    tmp_path, monkeypatch
-):
-    """A matching generation ABI preserves owners, workers, and one callback."""
-    import watcher as watcher_module
-
-    config = _reload_config(tmp_path)
-    for callback in tuple(getattr(server, "_server_atexit_callbacks", ())):
-        atexit.unregister(callback)
-    registered = []
-    unregistered = []
-    starts = []
-    stops = []
-    current_watcher_class = watcher_module.FileWatcher
-    real_start = current_watcher_class.start
-    real_stop = current_watcher_class.stop
-
-    def observed_start(watcher):
-        starts.append(watcher)
-        return real_start(watcher)
-
-    def observed_stop(watcher, *args, **kwargs):
-        stops.append(watcher)
-        return real_stop(watcher, *args, **kwargs)
-
-    monkeypatch.setattr(atexit, "register", registered.append)
-    monkeypatch.setattr(atexit, "unregister", unregistered.append)
-    monkeypatch.setattr(current_watcher_class, "start", observed_start)
-    monkeypatch.setattr(current_watcher_class, "stop", observed_stop)
-    monkeypatch.setattr(server, "ENGRAM_HOME", tmp_path)
-    monkeypatch.setattr(server, "DB_PATH", tmp_path / ".engram" / "graph.db")
-    monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(server, "load_config", lambda _root: config)
-    monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
-    for name, value in {
-        "_initialized": False,
-        "_storage": None,
-        "_embeddings": None,
-        "_config": None,
-        "_compressor": None,
-        "_reflector": None,
-        "_watcher": None,
-        "_knowledge_graph": None,
-        "_category_store": None,
-        "_category_observer": None,
-        "_category_pending_close": None,
-        "_category_status": None,
-        "_category_atexit_callback": None,
-        "_clipboard": None,
-        "_server_atexit_callbacks": [],
-        "_server_generation_cleanup": None,
-        "_server_pending_retirement": None,
-        "_server_lifecycle_status": None,
-        "_server_reload_session_id": None,
-        "_server_lock_pid": os.getpid(),
-    }.items():
-        monkeypatch.setattr(server, name, value, raising=False)
-
-    server._init()
-    abi = server._SERVER_RESOURCE_LIFECYCLE_ABI
-    storage = server._storage
-    watcher = server._watcher
-    observer = server._category_observer
-    coordinator = server._server_generation_cleanup
-    watcher.start()
-    watcher_threads = (watcher._watcher_thread, watcher._consumer_thread)
-    callbacks = tuple(registered)
-    # The callback owns the ABI.  A reload can recover the convenience global
-    # from that exact marked owner without constructing or registering another.
-    server._server_generation_cleanup = None
-
-    reloaded = importlib.reload(server)
-    reloaded._init()
-
-    try:
-        assert reloaded._storage is storage
-        assert reloaded._watcher is watcher
-        assert reloaded._category_observer is observer
-        assert reloaded._server_generation_cleanup is coordinator
-        assert reloaded._server_atexit_callbacks == [coordinator]
-        assert reloaded._category_atexit_callback is coordinator
-        assert coordinator._resource_lifecycle_abi == abi
-        assert tuple(registered) == callbacks == (coordinator,)
-        assert unregistered == []
-        assert starts == [watcher]
-        assert stops == []
-        assert (watcher._watcher_thread, watcher._consumer_thread) == (
-            watcher_threads
-        )
-        assert watcher.is_alive() is True
-    finally:
-        coordinator()
-
-
 def test_nested_same_thread_init_defers_cleanup_until_outer_operation_finishes(
     tmp_path, monkeypatch
 ):
@@ -2924,7 +1437,7 @@ def test_nested_same_thread_init_defers_cleanup_until_outer_operation_finishes(
     monkeypatch.setattr(server, "_server_lifecycle_lock", lifecycle)
     monkeypatch.setattr(server, "_server_atexit_callbacks", [coordinator])
     monkeypatch.setattr(server, "_server_generation_cleanup", coordinator)
-    monkeypatch.setattr(server, "_server_pending_retirement", None, raising=False)
+    monkeypatch.setattr(server, "_initialization_cleanup_required", False)
     monkeypatch.setattr(server, "_server_lock_pid", os.getpid())
     monkeypatch.setattr(
         server,

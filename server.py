@@ -2,86 +2,15 @@
 from __future__ import annotations
 
 import atexit
-import importlib
 import json
 import logging
 import os
 import sqlite3
-import sys
 import threading
 import uuid
 from functools import wraps
 from datetime import datetime, timezone
 from pathlib import Path
-
-# A reload reuses this module dictionary.  Install a fork publication gate as
-# early as possible when upgrading a process that already owns server at-fork
-# hooks; on a fresh import it is registered immediately after those hooks.
-_server_reload_fork_condition = globals().get(
-    "_server_reload_fork_condition",
-    threading.Condition(threading.RLock()),
-)
-_server_reload_fork_gate_held = globals().get(
-    "_server_reload_fork_gate_held", False
-)
-_server_lifecycle_fork_gate_held = globals().get(
-    "_server_lifecycle_fork_gate_held", False
-)
-_SERVER_RELOAD_GATE_AT_FORK_REGISTERED = globals().get(
-    "_SERVER_RELOAD_GATE_AT_FORK_REGISTERED", False
-)
-_server_reload_in_progress = globals().get(
-    "_server_reload_in_progress", False
-)
-
-
-def _before_server_reload_fork_gate() -> None:
-    global _server_reload_fork_gate_held
-    if _server_lifecycle_fork_gate_held:
-        _server_reload_fork_gate_held = False
-        return
-    _server_reload_fork_condition.acquire()
-    _server_reload_fork_condition.wait_for(
-        lambda: not _server_reload_in_progress
-    )
-    _server_reload_fork_gate_held = True
-
-
-def _after_server_reload_fork_parent_gate() -> None:
-    global _server_reload_fork_gate_held
-    if not _server_reload_fork_gate_held:
-        return
-    _server_reload_fork_gate_held = False
-    _server_reload_fork_condition.release()
-
-
-def _after_server_reload_fork_child_gate() -> None:
-    global _server_reload_fork_condition, _server_reload_fork_gate_held
-    global _server_reload_in_progress
-    if _server_reload_fork_gate_held:
-        inherited_condition = _server_reload_fork_condition
-        inherited_condition.release()
-        _server_reload_fork_condition = threading.Condition(threading.RLock())
-    _server_reload_fork_gate_held = False
-    _server_reload_in_progress = False
-
-
-def _register_server_reload_fork_gate() -> None:
-    global _SERVER_RELOAD_GATE_AT_FORK_REGISTERED
-    if (
-        hasattr(os, "register_at_fork")
-        and not _SERVER_RELOAD_GATE_AT_FORK_REGISTERED
-    ):
-        os.register_at_fork(
-            before=_before_server_reload_fork_gate,
-            after_in_parent=_after_server_reload_fork_parent_gate,
-            after_in_child=_after_server_reload_fork_child_gate,
-        )
-        _SERVER_RELOAD_GATE_AT_FORK_REGISTERED = True
-
-
-if globals().get("_SERVER_AT_FORK_REGISTERED", False):
-    _register_server_reload_fork_gate()
 
 from mcp.server.fastmcp import FastMCP
 
@@ -98,14 +27,7 @@ from transitions import TransitionGraph
 
 logger = logging.getLogger("engram.server")
 
-# Complete fallible prerequisite construction before closing the preserved
-# generation's publication gate.  A constructor/import failure therefore
-# leaves the exact old module usable instead of poisoning every future fork.
-_reload_previous_mcp = globals().get("mcp")
-_reload_mcp = FastMCP("engram")
-_server_reload_registration_errors = []
-with _server_reload_fork_condition:
-    _server_reload_in_progress = True
+mcp = FastMCP("engram")
 
 def _mutation_logged(fn):
     """Record mutating tool calls without ever gating their behavior."""
@@ -231,98 +153,51 @@ DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 # PROJECT_ROOT is the working directory (for code indexing), ENGRAM_HOME is where memories live
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
 
-_storage = globals().get("_storage")
-_embeddings = globals().get("_embeddings")
-_config = globals().get("_config")
-_compressor = globals().get("_compressor")
-_reflector = globals().get("_reflector")
-_watcher = globals().get("_watcher")
-_session_id = globals().get("_session_id")
-_session_episode_count = globals().get("_session_episode_count", 0)
-_instance_name = globals().get("_instance_name")
-_initialized = globals().get("_initialized", False)
-_genome_db_path = globals().get("_genome_db_path")
-_signals_db_path = globals().get("_signals_db_path")
-_recall_scores: dict[str, dict[str, float]] = globals().get("_recall_scores", {})
-_recall_resonances: dict[str, list[dict]] = globals().get(
-    "_recall_resonances", {}
-)
-_instinct_graph = globals().get("_instinct_graph")
-_last_instinct_id = globals().get("_last_instinct_id")
-_knowledge_graph = globals().get("_knowledge_graph")
-_wander_visits: dict[str, int] = globals().get("_wander_visits", {})
-_clipboard = globals().get("_clipboard")
-_category_store = globals().get("_category_store")
-_notepad_project = globals().get("_notepad_project")
-_notepad_global = globals().get("_notepad_global")
-# Preserve the live observer across importlib.reload so the next initializer can
-# close it before replacement. On first import these names are absent.
-_category_observer = globals().get("_category_observer")
-_category_pending_close = globals().get("_category_pending_close")
-_category_status = globals().get("_category_status")
-_category_atexit_callback = globals().get("_category_atexit_callback")
-_server_lifecycle_lock = globals().get(
-    "_server_lifecycle_lock", threading.RLock()
-)
-_init_lock = globals().get("_init_lock", threading.RLock())
-_category_recall_lock = globals().get(
-    "_category_recall_lock", threading.RLock()
-)
-_category_last_observed_at = globals().get("_category_last_observed_at")
-_server_pid_guard = globals().get("_server_pid_guard", threading.RLock())
-_server_lock_pid = globals().get("_server_lock_pid", os.getpid())
-_server_atexit_callbacks = globals().get("_server_atexit_callbacks", [])
-_server_generation_cleanup = globals().get("_server_generation_cleanup")
-_server_pending_retirement = globals().get("_server_pending_retirement")
-_server_lifecycle_status = globals().get("_server_lifecycle_status")
-_server_reload_reinitialize = globals().get(
-    "_server_reload_reinitialize", False
-)
-_server_reload_session_id = globals().get("_server_reload_session_id")
-_fork_quarantined_resources = globals().get("_fork_quarantined_resources", [])
-_SERVER_RESOURCE_LIFECYCLE_ABI = 1
-_SERVER_FORK_SNAPSHOT = globals().get("_SERVER_FORK_SNAPSHOT", ())
-_SERVER_AT_FORK_REGISTERED = globals().get("_SERVER_AT_FORK_REGISTERED", False)
-_SERVER_AT_FORK_LIFECYCLE_VERSION = globals().get(
-    "_SERVER_AT_FORK_LIFECYCLE_VERSION", 0
-)
-_LEGACY_DYNAMIC_ATEXIT_REQUIRED = globals().get(
-    "_LEGACY_DYNAMIC_ATEXIT_REQUIRED",
-    _SERVER_AT_FORK_REGISTERED and _SERVER_AT_FORK_LIFECYCLE_VERSION < 2,
-)
-_legacy_dynamic_atexit_guard = globals().get(
-    "_legacy_dynamic_atexit_guard"
-)
-
-
-def _make_legacy_dynamic_atexit_guard():
-    """Mask base-version global callbacks after exact cleanup has run."""
-    def guard() -> None:
-        global _watcher, _storage, _knowledge_graph, _category_store, _clipboard
-        _watcher = None
-        _storage = None
-        _knowledge_graph = None
-        _category_store = None
-        _clipboard = None
-
-    return guard
-
-
-if _LEGACY_DYNAMIC_ATEXIT_REQUIRED and _legacy_dynamic_atexit_guard is None:
-    # Base 7f7566f registered anonymous callbacks that resolve these globals at
-    # shutdown. They cannot be unregistered after a hot reload because their
-    # identities were not retained. Register this guard after them and before
-    # all exact-instance callbacks: LIFO exit then runs exact cleanup, clears
-    # the dynamic targets, and finally makes the inherited callbacks no-ops.
-    _legacy_dynamic_atexit_guard = _make_legacy_dynamic_atexit_guard()
-    atexit.register(_legacy_dynamic_atexit_guard)
+_storage = None
+_embeddings = None
+_config = None
+_compressor = None
+_reflector = None
+_watcher = None
+_session_id = None
+_session_episode_count = 0
+_instance_name = None
+_initialized = False
+_genome_db_path = None
+_signals_db_path = None
+_recall_scores: dict[str, dict[str, float]] = {}
+_recall_resonances: dict[str, list[dict]] = {}
+_instinct_graph = None
+_last_instinct_id = None
+_knowledge_graph = None
+_wander_visits: dict[str, int] = {}
+_clipboard = None
+_category_store = None
+_notepad_project = None
+_notepad_global = None
+_category_observer = None
+_category_status = None
+_category_atexit_callback = None
+_server_lifecycle_lock = threading.RLock()
+_init_lock = threading.RLock()
+_category_recall_lock = threading.RLock()
+_category_last_observed_at = None
+_server_pid_guard = threading.RLock()
+_server_lock_pid = os.getpid()
+_server_atexit_callbacks = []
+_server_generation_cleanup = None
+_initialization_cleanup_required = False
+_failed_initialization_cleanup_lock = threading.Lock()
+_server_operation_context = threading.local()
+_fork_quarantined_resources = []
+_SERVER_FORK_SNAPSHOT = ()
+_SERVER_AT_FORK_REGISTERED = False
 
 
 def _server_owned_resources() -> tuple[object, ...]:
     """Snapshot exact resource instances owned by the current core generation."""
     ownership_callbacks = tuple(_server_atexit_callbacks) + (
         _server_generation_cleanup,
-        _server_pending_retirement,
         _category_atexit_callback,
     )
     resources = (
@@ -336,7 +211,6 @@ def _server_owned_resources() -> tuple[object, ...]:
         _clipboard,
         _category_store,
         _category_observer,
-        _category_pending_close,
         _instinct_graph,
         _notepad_project,
         _notepad_global,
@@ -348,12 +222,7 @@ def _server_owned_resources() -> tuple[object, ...]:
         resource
         for callback in ownership_callbacks
         if callback is not None
-        for resource in (
-            tuple(getattr(callback, "_server_resources", ()))
-            or (getattr(callback, "_server_resource", None),)
-        )
-    ) + (
-        getattr(_category_atexit_callback, "_category_observer", None),
+        for resource in tuple(getattr(callback, "_server_resources", ()))
     )
     unique = []
     seen = set()
@@ -366,24 +235,15 @@ def _server_owned_resources() -> tuple[object, ...]:
 
 def _before_server_fork() -> None:
     """Enter the outer lifecycle barrier before category fork quiescence."""
-    global _SERVER_FORK_SNAPSHOT, _server_lifecycle_fork_gate_held
-    if not _server_reload_fork_gate_held:
-        _server_reload_fork_condition.acquire()
-        _server_reload_fork_condition.wait_for(
-            lambda: not _server_reload_in_progress
-        )
-        _server_lifecycle_fork_gate_held = True
+    global _SERVER_FORK_SNAPSHOT
     _server_lifecycle_lock.acquire()
     _SERVER_FORK_SNAPSHOT = _server_owned_resources()
 
 
 def _after_server_fork_parent() -> None:
-    global _SERVER_FORK_SNAPSHOT, _server_lifecycle_fork_gate_held
+    global _SERVER_FORK_SNAPSHOT
     _SERVER_FORK_SNAPSHOT = ()
     _server_lifecycle_lock.release()
-    if _server_lifecycle_fork_gate_held:
-        _server_lifecycle_fork_gate_held = False
-        _server_reload_fork_condition.release()
 
 
 def _discard_inherited_category_observers(resources: tuple[object, ...]) -> None:
@@ -411,18 +271,17 @@ def _reset_server_child_state(
     global _instinct_graph, _last_instinct_id, _knowledge_graph, _wander_visits
     global _clipboard, _category_store, _category_observer
     global _notepad_project, _notepad_global
-    global _category_pending_close, _category_status, _category_atexit_callback
+    global _category_status, _category_atexit_callback
     global _server_atexit_callbacks, _server_generation_cleanup
-    global _server_pending_retirement, _server_lifecycle_status
-    global _server_reload_reinitialize, _server_reload_session_id
-    global _server_reload_in_progress
+    global _initialization_cleanup_required
+    global _failed_initialization_cleanup_lock
+    global _server_operation_context
     global _fork_quarantined_resources
     global _init_lock, _category_recall_lock, _server_pid_guard
     global _server_lifecycle_lock, _server_lock_pid, _category_last_observed_at
 
     callback_candidates = tuple(_server_atexit_callbacks) + (
         _server_generation_cleanup,
-        _server_pending_retirement,
         _category_atexit_callback,
     )
     callbacks = []
@@ -448,11 +307,9 @@ def _reset_server_child_state(
     _fork_quarantined_resources = quarantined
     _server_atexit_callbacks = []
     _server_generation_cleanup = None
-    _server_pending_retirement = None
-    _server_lifecycle_status = None
-    _server_reload_reinitialize = False
-    _server_reload_session_id = None
-    _server_reload_in_progress = False
+    _initialization_cleanup_required = False
+    _failed_initialization_cleanup_lock = threading.Lock()
+    _server_operation_context = threading.local()
 
     _storage = None
     _embeddings = None
@@ -475,7 +332,6 @@ def _reset_server_child_state(
     _clipboard = None
     _category_store = None
     _category_observer = None
-    _category_pending_close = None
     _category_status = None
     _category_atexit_callback = None
     _category_last_observed_at = None
@@ -491,22 +347,15 @@ def _reset_server_child_state(
 
 def _after_server_fork_child() -> None:
     """Quarantine the inherited generation before any child thread can run."""
-    global _SERVER_FORK_SNAPSHOT, _server_reload_fork_condition
-    global _server_lifecycle_fork_gate_held
-    inherited_condition = _server_reload_fork_condition
-    inherited_lifecycle_gate = _server_lifecycle_fork_gate_held
+    global _SERVER_FORK_SNAPSHOT
     resources = tuple(_SERVER_FORK_SNAPSHOT)
     _SERVER_FORK_SNAPSHOT = ()
     _reset_server_child_state(resources, os.getpid())
-    if inherited_lifecycle_gate:
-        inherited_condition.release()
-        _server_reload_fork_condition = threading.Condition(threading.RLock())
-        _server_lifecycle_fork_gate_held = False
 
 
 if (
     hasattr(os, "register_at_fork")
-    and _SERVER_AT_FORK_LIFECYCLE_VERSION < 2
+    and not _SERVER_AT_FORK_REGISTERED
 ):
     # Importing registers the standalone category hook first. Python executes
     # before hooks in reverse registration order, giving the fixed order:
@@ -524,9 +373,6 @@ if (
         after_in_child=_after_server_fork_child,
     )
     _SERVER_AT_FORK_REGISTERED = True
-    _SERVER_AT_FORK_LIFECYCLE_VERSION = 2
-
-_register_server_reload_fork_gate()
 
 
 def _get_instinct_graph():
@@ -709,62 +555,53 @@ def _observe_category_recall(
     return delivered
 
 
-def _prepare_server_process_locks_for_reload() -> None:
-    current_pid = os.getpid()
-    if current_pid != _server_lock_pid:
-        with _server_pid_guard:
-            if current_pid != _server_lock_pid:
-                _reset_server_child_state(
-                    _server_owned_resources(), current_pid
-                )
-
-
 def _prepare_server_process_locks() -> None:
-    _prepare_server_process_locks_for_reload()
-    if _server_reload_in_progress:
-        raise RuntimeError(
-            "server generation unavailable (RuntimeError)"
-        ) from None
-    prepare_generation = globals().get("_prepare_server_generation")
-    if (
-        prepare_generation is not None
-        and _server_pending_retirement is not None
-    ):
-        prepare_generation()
+    current_pid = os.getpid()
+    if current_pid == _server_lock_pid:
+        return
+    with _server_pid_guard:
+        if current_pid != _server_lock_pid:
+            _reset_server_child_state(_server_owned_resources(), current_pid)
 
 
 def _prepare_category_recall_lock() -> None:
     _prepare_server_process_locks()
 
 
-def _require_server_generation_ready() -> None:
-    """Close the precheck/admission race before generation-owned work runs."""
-    if _server_reload_in_progress or _server_pending_retirement is not None:
-        raise RuntimeError(
-            "server generation unavailable (RuntimeError)"
-        ) from None
-
-
-def _init(*, _allow_reload: bool = False):
-    if _allow_reload:
-        _prepare_server_process_locks_for_reload()
-        _prepare_server_generation(allow_during_reload=True)
-    else:
-        _prepare_server_process_locks()
-    coordinator = _admit_server_operation()
-    try:
-        with _server_lifecycle_lock:
-            if not _allow_reload:
-                _require_server_generation_ready()
-            with _init_lock:
+def _init():
+    global _initialization_cleanup_required
+    _prepare_server_process_locks()
+    while True:
+        # Exact cleanup runs without holding the lifecycle barrier: watcher
+        # terminal join may need its worker to finish under that barrier.
+        _retry_failed_initialization_cleanup()
+        coordinator = None
+        initialization_failed = False
+        try:
+            with _server_lifecycle_lock:
+                # A failed initializer can publish the gate while this caller
+                # waits for the barrier. Retry outside instead of admitting
+                # work against the closing coordinator.
+                if _initialization_cleanup_required:
+                    continue
+                coordinator = _admit_server_operation()
                 try:
-                    return _init_unlocked()
-                except Exception as exc:
-                    _capture_failed_server_initialization(exc)
-                    raise
-    finally:
-        if coordinator is not None:
-            coordinator.finish_operation()
+                    with _init_lock:
+                        try:
+                            return _init_unlocked()
+                        except Exception:
+                            _initialization_cleanup_required = True
+                            initialization_failed = True
+                            raise
+                finally:
+                    if coordinator is not None:
+                        coordinator.finish_operation()
+        except Exception:
+            if initialization_failed and not getattr(
+                _server_operation_context, "depth", 0
+            ):
+                _cleanup_failed_initialization()
+            raise
 
 
 def _server_operation(function):
@@ -772,62 +609,46 @@ def _server_operation(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
         _prepare_server_process_locks()
+        operation_depth = getattr(_server_operation_context, "depth", 0)
+        outermost_operation = operation_depth == 0
+        if _initialization_cleanup_required:
+            if not outermost_operation:
+                raise RuntimeError(
+                    "server initialization unavailable (RuntimeError)"
+                )
+            _retry_failed_initialization_cleanup()
         coordinator = _admit_server_operation()
         try:
             with _server_lifecycle_lock:
-                _require_server_generation_ready()
-                return function(*args, **kwargs)
+                # Initialization can fail after this operation is admitted
+                # but before it enters the barrier. Drain that admission
+                # without invoking code against partially closed resources.
+                if _initialization_cleanup_required:
+                    raise RuntimeError(
+                        "server initialization unavailable (RuntimeError)"
+                    )
+                _server_operation_context.depth = operation_depth + 1
+                try:
+                    return function(*args, **kwargs)
+                finally:
+                    _server_operation_context.depth = operation_depth
         finally:
             if coordinator is not None:
                 coordinator.finish_operation()
+            if outermost_operation and _initialization_cleanup_required:
+                _cleanup_failed_initialization()
 
     return wrapped
 
 
 def _server_tool(*tool_args, **tool_kwargs):
     """Register an MCP tool whose full execution participates in fork safety."""
-    try:
-        register = _reload_mcp.tool(*tool_args, **tool_kwargs)
-    except Exception as exc:
-        _server_reload_registration_errors.append(type(exc).__name__)
-
-        def decorate_unregistered(function):
-            return _server_operation(function)
-
-        return decorate_unregistered
+    register = mcp.tool(*tool_args, **tool_kwargs)
 
     def decorate(function):
-        wrapped = _server_operation(function)
-        try:
-            return register(wrapped)
-        except Exception as exc:
-            _server_reload_registration_errors.append(type(exc).__name__)
-            return wrapped
+        return register(_server_operation(function))
 
     return decorate
-
-
-def _make_server_cleanup(resource, cleanup, label: str):
-    """Bind cleanup to one exact resource without leaking exception details."""
-    cleanup_lock = threading.Lock()
-    completed = False
-
-    def callback() -> None:
-        nonlocal completed
-        with cleanup_lock:
-            if completed:
-                return
-            try:
-                cleanup()
-            except Exception as exc:
-                logger.warning("%s cleanup failed (%s)", label, type(exc).__name__)
-            else:
-                completed = True
-
-    callback._server_resource = resource
-    callback._server_cleanup_label = label
-    callback._server_cleanup = cleanup
-    return callback
 
 
 class _ServerGenerationCleanup:
@@ -837,12 +658,10 @@ class _ServerGenerationCleanup:
 
     def __init__(self, lifecycle_lock):
         self._lifecycle_lock = lifecycle_lock
-        self._resource_lifecycle_abi = None
         self._cleanup_lock = threading.Lock()
         self._state_condition = threading.Condition()
         self._steps = []
         self._completed = set()
-        self._category_observer = None
         self._closing = False
         self._operations = 0
         self._operation_owners = {}
@@ -852,9 +671,8 @@ class _ServerGenerationCleanup:
         return tuple(step[1] for step in self._steps)
 
     @property
-    def closing(self) -> bool:
-        with self._state_condition:
-            return self._closing
+    def cleanup_complete(self) -> bool:
+        return all(step[0] in self._completed for step in self._steps)
 
     def admit_operation(self) -> bool:
         with self._state_condition:
@@ -889,15 +707,6 @@ class _ServerGenerationCleanup:
         else:
             phase = 1
         self._steps.append((key, resource, cleanup, label, phase))
-        if label == "category observer":
-            self._category_observer = resource
-
-    def mark_completed(self, resource, label: str) -> None:
-        self._completed.add((id(resource), label))
-
-    def publish_resource_lifecycle_abi(self) -> None:
-        """Mark this exact, fully initialized generation as reload-compatible."""
-        self._resource_lifecycle_abi = _SERVER_RESOURCE_LIFECYCLE_ABI
 
     def _run_step(self, step) -> bool:
         key, _resource, cleanup, label, _phase = step
@@ -951,16 +760,6 @@ def _active_server_cleanup_coordinator():
     return None
 
 
-def _server_generation_is_closing() -> bool:
-    coordinator = _active_server_cleanup_coordinator()
-    return bool(
-        coordinator is not None
-        and getattr(coordinator, "_lifecycle_lock", None)
-        is _server_lifecycle_lock
-        and getattr(coordinator, "closing", False)
-    )
-
-
 def _admit_server_operation():
     coordinator = _active_server_cleanup_coordinator()
     if (
@@ -993,872 +792,92 @@ def _register_server_cleanup(resource, cleanup, label: str):
     return coordinator
 
 
-def _lifecycle_owned_by_current_thread() -> bool:
-    owned = getattr(_server_lifecycle_lock, "_is_owned", None)
-    if owned is not None:
-        try:
-            return bool(owned())
-        except Exception:
-            pass
-    return (
-        getattr(_server_lifecycle_lock, "_owner", None)
-        == threading.get_ident()
-    )
-
-
-class _LegacyServerGenerationRetirement:
-    """Retry-safe disposal state for one incompatible exact generation."""
-
-    _server_legacy_retirement = True
-
-    def __init__(
-        self,
-        lifecycle_lock,
-        coordinator,
-        resources,
-        owned_globals,
-    ):
-        self._lifecycle_lock = lifecycle_lock
-        self._old_coordinator = coordinator
-        self._server_resources = tuple(resources)
-        self._owned_globals = dict(owned_globals)
-        self._cleanup_lock = threading.Lock()
-        self._preparation_lock = threading.Lock()
-        self._steps = []
-        self._completed = set()
-        self._native_completed = set()
-        self._coordinators = []
-        self._retired = False
-        self._safe_to_detach = False
-        self._dependencies_refreshed = False
-        self._late_initialized = False
-        self.adopt_coordinator(coordinator)
-
-    def add(self, resource, label: str, kind: str, cleanup=None) -> None:
-        if resource is None:
-            return
-        key = (id(resource), label)
-        if any(step[0] == key for step in self._steps):
-            return
-        if kind == "watcher":
-            phase = 0
-        elif kind == "storage":
-            phase = 2
-        else:
-            phase = 1
-        self._steps.append((key, resource, label, kind, cleanup, phase))
-
-    def adopt_coordinator(self, coordinator) -> None:
-        if coordinator is None or any(
-            existing is coordinator for existing in self._coordinators
-        ):
-            return
-        self._coordinators.append(coordinator)
-
-    @staticmethod
-    def _close_coordinator_admission(coordinator) -> None:
-        condition = getattr(coordinator, "_state_condition", None)
-        if condition is None:
-            return
-        with condition:
-            coordinator._closing = True
-            condition.notify_all()
-
-    def _begin_admission_shutdown(self) -> None:
-        for coordinator in tuple(self._coordinators):
-            self._close_coordinator_admission(coordinator)
-
-    def _wait_for_admitted_operations(self) -> None:
-        for coordinator in tuple(self._coordinators):
-            condition = getattr(coordinator, "_state_condition", None)
-            if condition is None:
-                continue
-            with condition:
-                owners = getattr(coordinator, "_operation_owners", {})
-                if owners.get(threading.get_ident(), 0):
-                    raise RuntimeError(
-                        "legacy retirement deferred from active operation"
-                    )
-                condition.wait_for(
-                    lambda: getattr(coordinator, "_operations", 0) == 0
-                )
-
-    def _has_admitted_operations(self) -> bool:
-        for coordinator in tuple(self._coordinators):
-            condition = getattr(coordinator, "_state_condition", None)
-            if condition is None:
-                continue
-            with condition:
-                if getattr(coordinator, "_operations", 0):
-                    return True
-        return False
-
-    @staticmethod
-    def _threads_still_alive(resource) -> bool:
-        threads = (
-            getattr(resource, "_watcher_thread", None),
-            getattr(resource, "_consumer_thread", None),
-        )
-        concrete = tuple(thread for thread in threads if thread is not None)
-        if concrete:
-            return any(thread.is_alive() for thread in concrete)
-        is_alive = getattr(resource, "is_alive", None)
-        return bool(is_alive is not None and is_alive())
-
-    def _stop_watcher(self, resource) -> None:
-        # The old start method ignores the current `_stopped` contract.  Mask it
-        # on this exact retiring instance so no stale reference can restart it.
-        try:
-            resource._stopped = True
-            resource.start = lambda: None
-        except Exception:
-            pass
-        resource.stop()
-        if self._threads_still_alive(resource):
-            raise RuntimeError("legacy watcher threads did not stop")
-
-    def _close_native(self, owner, handle, name: str) -> None:
-        key = (id(owner), name, id(handle))
-        if key in self._native_completed:
-            return
-        handle.close()
-        self._native_completed.add(key)
-
-    def _close_storage(self, storage) -> None:
-        if not hasattr(storage, "conn"):
-            storage.close()
-            return
-        errors = []
-        cold = getattr(storage, "_cold_conn", None)
-        if cold is not None:
-            try:
-                self._close_native(storage, cold, "cold")
-            except Exception as exc:
-                errors.append(exc)
-            else:
-                if getattr(storage, "_cold_conn", None) is cold:
-                    storage._cold_conn = None
-
-        connection = storage.conn
-        main_key = (id(storage), "main", id(connection))
-        if main_key not in self._native_completed:
-            try:
-                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            except Exception as exc:
-                logger.warning(
-                    "legacy storage checkpoint failed (%s)",
-                    type(exc).__name__,
-                )
-            try:
-                connection.close()
-            except Exception as exc:
-                errors.append(exc)
-            else:
-                self._native_completed.add(main_key)
-                try:
-                    storage._conn_closed = True
-                except Exception:
-                    pass
-        if errors:
-            raise errors[0]
-
-    def _close_knowledge_graph(self, knowledge_graph) -> None:
-        if not (
-            hasattr(knowledge_graph, "_graphiti")
-            or hasattr(knowledge_graph, "_executor")
-        ):
-            knowledge_graph.close()
-            return
-        errors = []
-        graph = getattr(knowledge_graph, "_graphiti", None)
-        if graph is not None:
-            try:
-                result = graph.close()
-                knowledge_graph._run_async(result)
-            except Exception as exc:
-                errors.append(exc)
-            else:
-                if getattr(knowledge_graph, "_graphiti", None) is graph:
-                    knowledge_graph._graphiti = None
-        executor = getattr(knowledge_graph, "_executor", None)
-        if executor is not None:
-            try:
-                executor.shutdown(wait=False)
-            except Exception as exc:
-                errors.append(exc)
-            else:
-                if getattr(knowledge_graph, "_executor", None) is executor:
-                    knowledge_graph._executor = None
-        if errors:
-            raise errors[0]
-
-    @staticmethod
-    def _compiler_has_legacy_pool(compiler) -> bool:
-        return all(
-            hasattr(compiler, name)
-            for name in (
-                "_pool_condition",
-                "_available_connections",
-                "_leased_connections",
-            )
-        )
-
-    def _close_legacy_compiler(self, compiler) -> None:
-        if not self._compiler_has_legacy_pool(compiler):
-            compiler.close()
-            return
-        condition = compiler._pool_condition
-        failed = []
-        errors = []
-        with condition:
-            if threading.get_ident() in compiler._leased_connections.values():
-                raise RuntimeError(
-                    "category compiler cannot close from a connection lease"
-                )
-            compiler._closing = True
-            # An already-running b9 waiter checks `_closed`, not `_closing`,
-            # after its wakeup.  Keep this terminal bit asserted while draining.
-            compiler._closed = True
-            compiler._close_in_progress = True
-            compiler._shutdown_errors = []
-            available = list(compiler._available_connections)
-            compiler._available_connections = []
-            condition.notify_all()
-
-        for connection in available:
-            try:
-                connection.close()
-            except Exception as exc:
-                failed.append(connection)
-                errors.append(exc)
-
-        with condition:
-            while compiler._leased_connections:
-                compiler._closed = True
-                compiler._closing = True
-                condition.notify_all()
-                condition.wait()
-            release_failed = list(compiler._available_connections)
-            compiler._available_connections = []
-            failed.extend(
-                connection
-                for connection in release_failed
-                if connection not in failed
-            )
-            errors.extend(getattr(compiler, "_shutdown_errors", ()))
-            compiler._shutdown_errors = []
-            compiler._available_connections.extend(failed)
-            compiler._close_in_progress = False
-            compiler._closed = True
-            compiler._closing = bool(failed)
-            condition.notify_all()
-        if errors:
-            raise errors[0]
-
-    def _close_category_observer(self, observer) -> None:
-        if not (hasattr(observer, "compiler") and hasattr(observer, "store")):
-            observer.close()
-            return
-        try:
-            import category_evolution as category_module
-        except Exception:
-            category_module = None
-        registry_lock = getattr(
-            category_module, "_FORK_REGISTRY_LOCK", threading.RLock()
-        )
-        observer_lock = getattr(observer, "_lock", threading.RLock())
-        errors = []
-        with registry_lock:
-            with observer_lock:
-                compiler = observer.compiler
-                if compiler is not None:
-                    try:
-                        self._close_legacy_compiler(compiler)
-                    except Exception as exc:
-                        errors.append(exc)
-                    else:
-                        if observer.compiler is compiler:
-                            observer.compiler = None
-                store = observer.store
-                if store is not None:
-                    connection = getattr(store, "_connection", None)
-                    try:
-                        if connection is None:
-                            store.close()
-                        else:
-                            self._close_native(store, connection, "store")
-                    except Exception as exc:
-                        errors.append(exc)
-                    else:
-                        if observer.store is store:
-                            observer.store = None
-                if not errors and observer.compiler is None and observer.store is None:
-                    observer.engine = None
-                    observer._closed = True
-                    registry = getattr(category_module, "_FORK_OBSERVERS", None)
-                    if registry is not None:
-                        registry.discard(observer)
-        if errors:
-            raise errors[0]
-
-    def _run_step(self, step):
-        key, resource, label, kind, cleanup, _phase = step
-        if key in self._completed:
-            return None
-        try:
-            if kind == "watcher":
-                self._stop_watcher(resource)
-            elif kind == "storage":
-                self._close_storage(resource)
-            elif kind == "knowledge graph":
-                self._close_knowledge_graph(resource)
-            elif kind == "category observer":
-                self._close_category_observer(resource)
-            elif cleanup is not None:
-                cleanup()
-            else:
-                resource.close()
-        except Exception as exc:
-            logger.warning(
-                "%s legacy retirement failed (%s)", label, type(exc).__name__
-            )
-            return exc
-        self._completed.add(key)
-        return None
-
-    def retire(self) -> None:
-        global _initialized, _server_reload_reinitialize
-        with self._cleanup_lock:
-            if self._retired:
-                return
-            if _lifecycle_owned_by_current_thread():
-                raise RuntimeError(
-                    "legacy retirement deferred from active lifecycle operation"
-                )
-            self._begin_admission_shutdown()
-            watcher_steps = [step for step in self._steps if step[5] == 0]
-            watcher_errors = [
-                error
-                for step in watcher_steps
-                for error in (self._run_step(step),)
-                if error is not None
-            ]
-            self._wait_for_admitted_operations()
-            if watcher_errors:
-                raise watcher_errors[0]
-
-            # An old request may already hold a bound `start` method when the
-            # exact instance is terminalized.  Acquiring the lifecycle barrier
-            # drains that request; verify under the barrier, then release and
-            # stop again if the stale frame managed to restart a worker.
-            while True:
-                watchers_to_stop = []
-                needs_drain = False
-                errors = []
-                with self._lifecycle_lock:
-                    _absorb_late_legacy_server_owners(self)
-                    if self._late_initialized:
-                        _initialized = False
-                        _server_reload_reinitialize = True
-                    watcher_steps = [
-                        step for step in self._steps if step[5] == 0
-                    ]
-                    watchers_to_stop = [
-                        step
-                        for step in watcher_steps
-                        if (
-                            step[0] not in self._completed
-                            or self._threads_still_alive(step[1])
-                        )
-                    ]
-                    needs_drain = self._has_admitted_operations()
-                    if not watchers_to_stop and not needs_drain:
-                        self._safe_to_detach = True
-                        for phase in (1, 2):
-                            for step in self._steps:
-                                if step[5] != phase:
-                                    continue
-                                error = self._run_step(step)
-                                if error is not None:
-                                    errors.append(error)
-                if not watchers_to_stop and not needs_drain:
-                    break
-                self._wait_for_admitted_operations()
-                for step in watchers_to_stop:
-                    self._completed.discard(step[0])
-                    error = self._run_step(step)
-                    if error is not None:
-                        errors.append(error)
-                if errors:
-                    raise errors[0]
-            if errors:
-                raise errors[0]
-            self._retired = True
-
-    def __call__(self) -> None:
-        try:
-            self.retire()
-        except Exception as exc:
-            logger.warning(
-                "server legacy generation retirement failed (%s)",
-                type(exc).__name__,
-            )
-
-
-def _legacy_cleanup_kind(label: str) -> str:
-    if label == "watcher":
-        return "watcher"
-    if label == "storage":
-        return "storage"
-    if label == "knowledge graph":
-        return "knowledge graph"
-    if label == "category observer":
-        return "category observer"
-    return "generic"
-
-
-def _legacy_server_owned_globals() -> dict[str, object | None]:
-    return {
-        "_storage": _storage,
-        "_embeddings": _embeddings,
-        "_config": _config,
-        "_compressor": _compressor,
-        "_reflector": _reflector,
-        "_watcher": _watcher,
-        "_knowledge_graph": _knowledge_graph,
-        "_category_store": _category_store,
-        "_category_observer": _category_observer,
-        "_category_pending_close": _category_pending_close,
-        "_clipboard": _clipboard,
-        "_instinct_graph": _instinct_graph,
-        "_notepad_project": _notepad_project,
-        "_notepad_global": _notepad_global,
-    }
-
-
-def _add_legacy_server_owners(retirement, callbacks) -> None:
-    retirement.add(_watcher, "watcher", "watcher")
-    observer = (
-        _category_pending_close
-        or _category_observer
-        or getattr(_category_atexit_callback, "_category_observer", None)
-        or next(
-            (
-                getattr(callback, "_category_observer", None)
-                for callback in callbacks
-                if getattr(callback, "_category_observer", None) is not None
-            ),
-            None,
-        )
-    )
-    retirement.add(observer, "category observer", "category observer")
-    retirement.add(
-        _knowledge_graph, "knowledge graph", "knowledge graph"
-    )
-    if _category_store is not None:
-        retirement.add(
-            getattr(_category_store, "_conn", None),
-            "category store",
-            "generic",
-        )
-    retirement.add(_clipboard, "clipboard", "generic")
-    retirement.add(_instinct_graph, "instinct graph", "generic")
-    retirement.add(_notepad_project, "project notepad", "generic")
-    retirement.add(_notepad_global, "global notepad", "generic")
-    retirement.add(_storage, "storage", "storage")
-
-    for callback in callbacks:
-        if callback is retirement:
-            continue
-        if getattr(callback, "_server_cleanup_coordinator", False):
-            retirement.adopt_coordinator(callback)
-            retirement._close_coordinator_admission(callback)
-            if (
-                getattr(callback, "_resource_lifecycle_abi", None)
-                == _SERVER_RESOURCE_LIFECYCLE_ABI
-            ):
-                retirement._completed.update(
-                    getattr(callback, "_completed", ())
-                )
-        for step in tuple(getattr(callback, "_steps", ())):
-            if len(step) < 4:
-                continue
-            resource = step[1]
-            label = step[3]
-            cleanup = step[2]
-            retirement.add(
-                resource,
-                label,
-                _legacy_cleanup_kind(label),
-                cleanup,
-            )
-        resource = getattr(callback, "_server_resource", None)
-        label = getattr(callback, "_server_cleanup_label", None)
-        if resource is not None and label is not None:
-            retirement.add(
-                resource,
-                label,
-                _legacy_cleanup_kind(label),
-                getattr(callback, "_server_cleanup", None),
-            )
-
-
-def _absorb_late_legacy_server_owners(retirement) -> None:
-    """Capture owners an already-running old request published after snapshot."""
-    global _server_atexit_callbacks, _server_generation_cleanup
-    global _category_atexit_callback, _server_reload_session_id
-
-    if _initialized:
-        retirement._late_initialized = True
-        if _server_reload_session_id is None and _session_id is not None:
-            _server_reload_session_id = _session_id
-
-    resources = list(retirement._server_resources)
-    seen = {id(resource) for resource in resources}
-    for resource in _server_owned_resources():
-        if id(resource) not in seen:
-            resources.append(resource)
-            seen.add(id(resource))
-    retirement._server_resources = tuple(resources)
-
-    for name, resource in _legacy_server_owned_globals().items():
-        if resource is not None:
-            retirement._owned_globals[name] = resource
-
-    callbacks = list(_server_atexit_callbacks)
-    coordinator = (
-        _active_server_cleanup_coordinator()
-        or _server_generation_cleanup
-    )
-    if coordinator is not None and all(
-        callback is not coordinator for callback in callbacks
-    ):
-        callbacks.append(coordinator)
-    if (
-        _category_atexit_callback is not None
-        and all(
-            callback is not _category_atexit_callback
-            for callback in callbacks
-        )
-    ):
-        callbacks.append(_category_atexit_callback)
-    _add_legacy_server_owners(retirement, tuple(callbacks))
-
-    for callback in callbacks:
-        if callback is retirement:
-            continue
-        try:
-            atexit.unregister(callback)
-        except Exception:
-            pass
-    _server_atexit_callbacks = [retirement]
-    _server_generation_cleanup = None
-    _category_atexit_callback = None
-
-
-def _capture_legacy_server_generation():
-    coordinator = (
-        _active_server_cleanup_coordinator()
-        or _server_generation_cleanup
-    )
-    resources = _server_owned_resources()
-    owned_globals = _legacy_server_owned_globals()
-    retirement = _LegacyServerGenerationRetirement(
-        _server_lifecycle_lock, coordinator, resources, owned_globals
-    )
-    callbacks = list(_server_atexit_callbacks)
-    if coordinator is not None and all(
-        callback is not coordinator for callback in callbacks
-    ):
-        callbacks.append(coordinator)
-    if (
-        _category_atexit_callback is not None
-        and all(
-            callback is not _category_atexit_callback
-            for callback in callbacks
-        )
-    ):
-        callbacks.append(_category_atexit_callback)
-    _add_legacy_server_owners(retirement, tuple(callbacks))
-    return retirement
-
-
-def _detach_legacy_server_globals(retirement) -> None:
+def _reset_failed_initialization_state() -> None:
+    """Clear globals only after every exact partially initialized owner closed."""
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher
-    global _knowledge_graph, _category_store, _category_observer
-    global _category_pending_close, _category_status, _category_atexit_callback
-    global _clipboard, _instinct_graph, _notepad_project, _notepad_global
-    global _server_generation_cleanup
+    global _session_id, _session_episode_count, _instance_name, _initialized
+    global _genome_db_path, _signals_db_path, _recall_scores, _recall_resonances
+    global _instinct_graph, _last_instinct_id, _knowledge_graph, _wander_visits
+    global _clipboard, _category_store, _category_observer
+    global _category_status, _category_atexit_callback
+    global _notepad_project, _notepad_global
+    global _server_generation_cleanup, _initialization_cleanup_required
 
-    for name, resource in retirement._owned_globals.items():
-        if globals().get(name) is resource:
-            globals()[name] = None
+    _storage = None
+    _embeddings = None
+    _config = None
+    _compressor = None
+    _reflector = None
+    _watcher = None
+    _session_id = None
+    _session_episode_count = 0
+    _instance_name = None
+    _initialized = False
+    _genome_db_path = None
+    _signals_db_path = None
+    _recall_scores = {}
+    _recall_resonances = {}
+    _instinct_graph = None
+    _last_instinct_id = None
+    _knowledge_graph = None
+    _wander_visits = {}
+    _clipboard = None
+    _category_store = None
+    _category_observer = None
     _category_status = None
     _category_atexit_callback = None
+    _notepad_project = None
+    _notepad_global = None
     _server_generation_cleanup = None
+    _initialization_cleanup_required = False
 
 
-def _reload_server_lifecycle_dependencies() -> None:
-    """Refresh construction-time lifecycle semantics after old owners retire."""
-    global vec0_distance_to_similarity, _pack_embedding
-    for module_name in (
-        "storage",
-        "watcher",
-        "knowledge",
-        "category_compile",
-        "category_evolution",
-    ):
-        module = sys.modules.get(module_name)
-        if module is not None:
-            importlib.reload(module)
-    from storage import (
-        vec0_distance_to_similarity as current_distance_to_similarity,
-        _pack_embedding as current_pack_embedding,
-    )
-
-    vec0_distance_to_similarity = current_distance_to_similarity
-    _pack_embedding = current_pack_embedding
-
-
-def _record_server_lifecycle_failure(exc) -> None:
-    global _server_lifecycle_status
-    error_type = type(exc).__name__
-    _server_lifecycle_status = {
-        "available": False,
-        "error": error_type,
-        "last_error": error_type,
-    }
-    logger.warning("Server generation migration failed (%s)", error_type)
-
-
-def _capture_failed_server_initialization(exc) -> None:
-    """Quarantine exact partially constructed owners before any init retry."""
-    global _initialized, _server_pending_retirement
-    global _server_generation_cleanup, _server_atexit_callbacks
-    global _category_atexit_callback, _server_reload_session_id
-
-    if _initialized or _server_pending_retirement is not None:
-        _record_server_lifecycle_failure(exc)
+def _unregister_completed_initialization_cleanup(coordinator) -> None:
+    if not coordinator.cleanup_complete:
         return
-    resources = _server_owned_resources()
-    if not resources and not _server_atexit_callbacks:
-        _record_server_lifecycle_failure(exc)
-        return
-
-    if _server_reload_session_id is None and _session_id is not None:
-        _server_reload_session_id = _session_id
-    retirement = _capture_legacy_server_generation()
-    # These owners were built by this module revision; only their incomplete
-    # instance graph must be retired.  Dependency code is already ABI-current.
-    retirement._dependencies_refreshed = True
-    callbacks = list(_server_atexit_callbacks)
-    if _category_atexit_callback is not None:
-        callbacks.append(_category_atexit_callback)
-    for callback in callbacks:
-        try:
-            atexit.unregister(callback)
-        except Exception:
-            pass
-    _server_pending_retirement = retirement
-    _server_generation_cleanup = None
-    _server_atexit_callbacks = [retirement]
-    _category_atexit_callback = None
-    _initialized = False
-    atexit.register(retirement)
-    _record_server_lifecycle_failure(exc)
-
-
-def _finalize_server_retirement(pending) -> None:
-    global _server_pending_retirement, _server_lifecycle_status
-    global _server_atexit_callbacks
-
-    _detach_legacy_server_globals(pending)
     try:
-        atexit.unregister(pending)
+        atexit.unregister(coordinator)
     except Exception:
         pass
-    if _server_pending_retirement is pending:
-        _server_pending_retirement = None
-    _server_atexit_callbacks = [
+    _server_atexit_callbacks[:] = [
         callback
         for callback in _server_atexit_callbacks
-        if callback is not pending
+        if callback is not coordinator
     ]
-    _server_lifecycle_status = None
 
 
-def _prepare_server_generation(
-    *,
-    raise_on_failure: bool = True,
-    allow_during_reload: bool = False,
-) -> bool:
-    """Finish exact legacy retirement before admitting current-generation work."""
-    if _server_reload_in_progress and not allow_during_reload:
-        if raise_on_failure:
-            raise RuntimeError(
-                "server generation unavailable (RuntimeError)"
-            ) from None
-        return False
-
-    pending = _server_pending_retirement
-    if pending is None:
-        return True
-    if _lifecycle_owned_by_current_thread():
-        exc = RuntimeError(
-            "legacy retirement deferred from active lifecycle operation"
+def _cleanup_failed_initialization() -> None:
+    """Close every exact owner created by a failed current-process initializer."""
+    with _failed_initialization_cleanup_lock:
+        if not _initialization_cleanup_required:
+            return
+        coordinator = (
+            _active_server_cleanup_coordinator()
+            or _server_generation_cleanup
         )
-        _record_server_lifecycle_failure(exc)
-        if raise_on_failure:
-            raise RuntimeError(
-                "server generation unavailable (RuntimeError)"
-            ) from None
-        return False
-    preparation_lock = getattr(
-        pending, "_preparation_lock", pending._cleanup_lock
-    )
-    acquired = preparation_lock.acquire(blocking=False)
-    if not acquired:
-        if _lifecycle_owned_by_current_thread():
-            if raise_on_failure:
+        if coordinator is None:
+            return
+        coordinator()
+        _unregister_completed_initialization_cleanup(coordinator)
+
+
+def _retry_failed_initialization_cleanup() -> None:
+    """Finish exact cleanup before allowing a fresh initialization attempt."""
+    with _failed_initialization_cleanup_lock:
+        if not _initialization_cleanup_required:
+            return
+        coordinator = (
+            _active_server_cleanup_coordinator()
+            or _server_generation_cleanup
+        )
+        if coordinator is not None:
+            coordinator()
+            if not coordinator.cleanup_complete:
                 raise RuntimeError(
-                    "server generation unavailable (RuntimeError)"
+                    "server initialization unavailable (RuntimeError)"
                 ) from None
-            return False
-        preparation_lock.acquire()
-        acquired = True
-    try:
-        if _server_pending_retirement is not pending:
-            return True
-        try:
-            pending.retire()
-            if not pending._dependencies_refreshed:
-                with pending._lifecycle_lock:
-                    _reload_server_lifecycle_dependencies()
-                pending._dependencies_refreshed = True
-        except Exception as exc:
-            if pending._safe_to_detach:
-                _detach_legacy_server_globals(pending)
-            _record_server_lifecycle_failure(exc)
-            if raise_on_failure:
-                raise RuntimeError(
-                    f"server generation unavailable ({type(exc).__name__})"
-                ) from None
-            return False
-
-        _detach_legacy_server_globals(pending)
-        if not _server_reload_in_progress:
-            _finalize_server_retirement(pending)
-        return True
-    finally:
-        if acquired:
-            preparation_lock.release()
-
-
-def _prepare_server_reload_migration() -> None:
-    """Retire incompatible reload-preserved owners without invoking stale init."""
-    global _initialized, _server_pending_retirement
-    global _server_reload_reinitialize, _server_atexit_callbacks
-    global _server_reload_session_id
-    global _category_atexit_callback, _server_lifecycle_status
-    global _server_generation_cleanup
-
-    if _server_pending_retirement is not None:
-        _prepare_server_generation(
-            raise_on_failure=False, allow_during_reload=True
-        )
-        return
-
-    coordinator = (
-        _active_server_cleanup_coordinator()
-        or _server_generation_cleanup
-    )
-    compatible = bool(
-        _initialized
-        and coordinator is not None
-        and any(
-            callback is coordinator
-            for callback in _server_atexit_callbacks
-        )
-        and getattr(coordinator, "_resource_lifecycle_abi", None)
-        == _SERVER_RESOURCE_LIFECYCLE_ABI
-        and getattr(coordinator, "_lifecycle_lock", None)
-        is _server_lifecycle_lock
-        and not getattr(coordinator, "closing", False)
-        and (
-            (
-                _category_observer is None
-                and _category_pending_close is None
-            )
-            or _category_atexit_callback is coordinator
-        )
-    )
-    if compatible:
-        _server_generation_cleanup = coordinator
-        return
-
-    has_generation = bool(
-        _initialized
-        or coordinator is not None
-        or _server_atexit_callbacks
-        or any(
-            resource is not None
-            for resource in (
-                _storage,
-                _watcher,
-                _knowledge_graph,
-                _category_store,
-                _category_observer,
-                _category_pending_close,
-                _clipboard,
-                _instinct_graph,
-                _notepad_project,
-                _notepad_global,
-            )
-        )
-    )
-    if not has_generation:
-        return
-
-    was_initialized = _initialized
-    if was_initialized and _server_reload_session_id is None:
-        _server_reload_session_id = _session_id
-    retirement = _capture_legacy_server_generation()
-    callbacks = list(_server_atexit_callbacks)
-    if _category_atexit_callback is not None:
-        callbacks.append(_category_atexit_callback)
-    for callback in callbacks:
-        try:
-            atexit.unregister(callback)
-        except Exception:
-            pass
-    _server_pending_retirement = retirement
-    _server_generation_cleanup = None
-    _server_atexit_callbacks = [retirement]
-    _category_atexit_callback = None
-    _initialized = False
-    _server_reload_reinitialize = (
-        _server_reload_reinitialize or was_initialized
-    )
-    _server_lifecycle_status = None
-    atexit.register(retirement)
-    _prepare_server_generation(
-        raise_on_failure=False, allow_during_reload=True
-    )
-
-
-_prepare_server_reload_migration()
-
-
-def _make_category_cleanup(observer):
-    """Bind one observer to fail-soft, content-safe process cleanup."""
-    def cleanup() -> None:
-        try:
-            observer.close()
-        except Exception as exc:
-            logger.warning("Category observer close failed (%s)", type(exc).__name__)
-
-    cleanup._category_observer = observer
-    return cleanup
+            _unregister_completed_initialization_cleanup(coordinator)
+        _reset_failed_initialization_state()
 
 
 def _category_flags(category_config) -> dict:
@@ -1920,72 +939,9 @@ def _activate_category_observer(category_config, graph_db_path: Path) -> None:
         logger.warning("Category observer init failed (%s)", error_type)
 
 
-def _publish_category_observer() -> None:
-    global _category_atexit_callback
-    if _reflector is not None:
-        _reflector._category_reporter = (
-            _category_observer.report
-            if _category_observer is not None
-            else ((lambda status=_category_status: dict(status)) if _category_status else None)
-        )
-    if _category_observer is not None:
-        _category_atexit_callback = _register_server_cleanup(
-            _category_observer,
-            _category_observer.close,
-            "category observer",
-        )
-
-
 def _init_unlocked():
-    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_pending_close, _category_status, _category_atexit_callback, _server_reload_reinitialize, _server_reload_session_id
-    already_initialized = _initialized
-    if already_initialized and _category_pending_close is None:
-        return
-    old_observer = _category_pending_close or _category_observer
-    old_callback = _category_atexit_callback
-    _category_observer = None
-    replacement_blocked = False
-    if old_observer is not None:
-        try:
-            old_observer.close()
-        except Exception as exc:
-            _category_pending_close = old_observer
-            category_config = getattr(
-                _config or load_config(PROJECT_ROOT), "category_evolution", None
-            )
-            flags = _category_flags(category_config)
-            error_type = type(exc).__name__
-            _category_status = {
-                "available": False,
-                "flags": flags,
-                "error": error_type,
-                "last_error": error_type,
-            }
-            if _reflector is not None:
-                _reflector._category_reporter = (
-                    lambda status=_category_status: dict(status)
-                )
-            logger.warning("Category observer replacement close failed (%s)", type(exc).__name__)
-            replacement_blocked = True
-            if already_initialized:
-                return
-    if not replacement_blocked:
-        _category_pending_close = None
-        _category_status = None
-        _category_atexit_callback = None
-        if old_callback is not None:
-            if getattr(old_callback, "_server_cleanup_coordinator", False):
-                old_callback.mark_completed(old_observer, "category observer")
-            else:
-                try:
-                    atexit.unregister(old_callback)
-                except Exception:
-                    pass
-    if already_initialized:
-        category_config = getattr(_config, "category_evolution", None)
-        graph_db_path = Path(_storage.db_path)
-        _activate_category_observer(category_config, graph_db_path)
-        _publish_category_observer()
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_status, _category_atexit_callback
+    if _initialized:
         return
     from embeddings import NomicEmbedProvider
     from storage import Storage
@@ -2004,6 +960,7 @@ def _init_unlocked():
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # Every server and watcher access is serialized by the lifecycle barrier.
     _storage = Storage(str(db_path), check_same_thread=False)
+    _register_server_cleanup(_storage, _storage.close, "storage")
     _embeddings = NomicEmbedProvider()
 
     harness = os.environ.get("ENGRAM_HARNESS", "claude-code")
@@ -2013,15 +970,7 @@ def _init_unlocked():
         bound_session_id = _storage.resolve_session_binding(
             os.environ.get("ENGRAM_RUN_KEY", "")
         )
-    # A hot reload is still the same encounter.  Environment/binding identity
-    # remains authoritative, but otherwise retain the prior generation's
-    # process-local session instead of splitting attribution at the ABI cutover.
-    _session_id = (
-        claude_session_id
-        or bound_session_id
-        or _server_reload_session_id
-        or str(uuid.uuid4())
-    )
+    _session_id = claude_session_id or bound_session_id or str(uuid.uuid4())
 
     # Silent provenance: server-side best-effort stamp. The hook-side stamp
     # (same session_id under Claude Code) is authoritative and fills model.
@@ -2034,6 +983,7 @@ def _init_unlocked():
 
     from categories import CategoryStore
     cat_conn = sqlite3.connect(str(db_path.parent / "categories.db"))
+    _register_server_cleanup(cat_conn, cat_conn.close, "category store")
     try:
         import sqlite_vec
         cat_conn.enable_load_extension(True)
@@ -2043,8 +993,13 @@ def _init_unlocked():
     _category_store = CategoryStore(cat_conn, dimension=768)
 
     category_config = getattr(_config, "category_evolution", None)
-    if not replacement_blocked:
-        _activate_category_observer(category_config, db_path)
+    _activate_category_observer(category_config, db_path)
+    if _category_observer is not None:
+        _category_atexit_callback = _register_server_cleanup(
+            _category_observer,
+            _category_observer.close,
+            "category observer",
+        )
 
     from compress import Compressor
     from dedup import Deduplicator, DedupConfig
@@ -2070,6 +1025,9 @@ def _init_unlocked():
                 graph_config.db_path = str(db_path.parent / "knowledge.kuzu")
             _knowledge_graph = KnowledgeGraph(
                 graph_config, embedding_provider=_embeddings
+            )
+            _register_server_cleanup(
+                _knowledge_graph, _knowledge_graph.close, "knowledge graph"
             )
         except Exception as e:
             logger.warning("Knowledge graph init failed (non-fatal): %s", e)
@@ -2111,20 +1069,6 @@ def _init_unlocked():
         operation_lock=_server_lifecycle_lock,
     )
     _register_server_cleanup(_watcher, _watcher.stop, "watcher")
-    _register_server_cleanup(_storage, _storage.close, "storage")
-    if _knowledge_graph is not None:
-        _register_server_cleanup(
-            _knowledge_graph, _knowledge_graph.close, "knowledge graph"
-        )
-    _register_server_cleanup(
-        _category_store._conn, _category_store._conn.close, "category store"
-    )
-    if _category_observer is not None:
-        _category_atexit_callback = _register_server_cleanup(
-            _category_observer,
-            _category_observer.close,
-            "category observer",
-        )
 
     # Federation: genome sync + inbox processing
     if _config and _config.instance:
@@ -2322,9 +1266,6 @@ def _init_unlocked():
         _clipboard = None
 
     _initialized = True
-    _ensure_server_cleanup_coordinator().publish_resource_lifecycle_abi()
-    _server_reload_reinitialize = False
-    _server_reload_session_id = None
 
 
 def _apply_recall_bias(query_embedding: list[float],
@@ -4502,36 +3443,6 @@ def clipboard_view(situation: str = "") -> dict:
     view = _clipboard.compose(situation=situation)
     stats = _clipboard.stats
     return {"clipboard": view, "stats": stats}
-
-
-# The reload-time migration hook runs before this file's new initializer has
-# been defined, so it can only retire the incompatible generation.  Keep the
-# reload gate closed through exact pending finalization and current rebuild.
-# A failed legacy retirement remains pending for a later explicit `_init()`.
-try:
-    if (
-        _server_pending_retirement is not None
-        and _server_pending_retirement._retired
-        and _server_pending_retirement._dependencies_refreshed
-    ):
-        _finalize_server_retirement(_server_pending_retirement)
-    if _server_reload_reinitialize and _server_pending_retirement is None:
-        try:
-            _init(_allow_reload=True)
-        except Exception as exc:
-            _record_server_lifecycle_failure(exc)
-finally:
-    with _server_reload_fork_condition:
-        _server_reload_in_progress = False
-        _server_reload_fork_condition.notify_all()
-
-if _server_reload_registration_errors:
-    registration_error_type = _server_reload_registration_errors[0]
-    _reload_mcp = _reload_previous_mcp
-    raise RuntimeError(
-        f"server tool registration failed ({registration_error_type})"
-    ) from None
-mcp = _reload_mcp
 
 
 if __name__ == "__main__":

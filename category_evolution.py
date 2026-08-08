@@ -23,14 +23,10 @@ import weakref
 logger = logging.getLogger(__name__)
 
 
-_FORK_OBSERVERS: weakref.WeakSet = globals().get(
-    "_FORK_OBSERVERS", weakref.WeakSet()
-)
-_FORK_REGISTRY_LOCK = globals().get("_FORK_REGISTRY_LOCK", threading.RLock())
-_FORK_ACQUIRED: list[object] = globals().get("_FORK_ACQUIRED", [])
-_CATEGORY_AT_FORK_REGISTERED = globals().get(
-    "_CATEGORY_AT_FORK_REGISTERED", False
-)
+_FORK_OBSERVERS: weakref.WeakSet = weakref.WeakSet()
+_FORK_REGISTRY_LOCK = threading.RLock()
+_FORK_ACQUIRED: list[object] = []
+_CATEGORY_AT_FORK_REGISTERED = False
 
 
 def _before_category_fork() -> None:
@@ -878,7 +874,7 @@ class CategoryObserver:
         if current_pid == self._lock_pid:
             return
         # Actual fork children install their lock eagerly in the at-fork hook.
-        # This registry-serialized fallback supports spawn/reload tests without
+        # This registry-serialized fallback supports child-recovery tests without
         # allowing concurrent first callers to create independent locks.
         with _FORK_REGISTRY_LOCK:
             if current_pid != self._lock_pid:
