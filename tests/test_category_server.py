@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 from datetime import datetime, timedelta, timezone
 import importlib
 import json
@@ -119,9 +120,13 @@ def category_init_env(tmp_path, monkeypatch):
     import server
     from config import load_config
 
+    real_atexit_unregister = atexit.unregister
     config = load_config(tmp_path)
     config.graph.enabled = False
     config.watcher.enabled = False
+    for callback in tuple(getattr(server, "_server_atexit_callbacks", ())):
+        atexit.unregister(callback)
+    server._server_atexit_callbacks.clear()
     db_path = tmp_path / ".engram" / "graph.db"
     monkeypatch.setattr(server, "ENGRAM_HOME", tmp_path)
     monkeypatch.setattr(server, "DB_PATH", db_path)
@@ -152,6 +157,10 @@ def category_init_env(tmp_path, monkeypatch):
         monkeypatch.setattr(server, name, value, raising=False)
 
     yield server, config, db_path
+
+    for callback in tuple(server._server_atexit_callbacks):
+        real_atexit_unregister(callback)
+    server._server_atexit_callbacks.clear()
 
     if server._category_observer is not None:
         server._category_observer.close()
@@ -1447,10 +1456,10 @@ def test_real_reload_status_remains_usable_when_old_category_close_fails(
         assert category_report["category_evolution"]["error"] == "RuntimeError"
         assert "private reload close detail" not in str(category_report)
     finally:
-        if reloaded._category_store is not None:
-            reloaded._category_store._conn.close()
-        if reloaded._storage is not None:
-            reloaded._storage.close()
+        for callback in tuple(reloaded._server_atexit_callbacks):
+            atexit.unregister(callback)
+            callback()
+        reloaded._server_atexit_callbacks.clear()
         reloaded._watcher = None
         reloaded._knowledge_graph = None
         reloaded._category_store = None

@@ -18,11 +18,13 @@ _DEFAULT_EXCLUDE = {"node_modules", ".venv", "__pycache__", "dist", "build"}
 
 class FileWatcher:
     def __init__(self, project_root: Path, config: "WatcherConfig",
-                 storage: "Storage | None", embedding_provider: object | None):
+                 storage: "Storage | None", embedding_provider: object | None,
+                 operation_lock: object | None = None):
         self._root = project_root
         self._config = config
         self._storage = storage
         self._embedding_provider = embedding_provider
+        self._operation_lock = operation_lock
         self._queue: SimpleQueue[Path] = SimpleQueue()
         self._stop_event = Event()
         self._watcher_thread: Thread | None = None
@@ -96,6 +98,13 @@ class FileWatcher:
                 logger.error("failed to index %s", path, exc_info=True)
 
     def _index_file(self, path: Path) -> None:
+        if self._operation_lock is not None:
+            with self._operation_lock:
+                self._index_file_unlocked(path)
+            return
+        self._index_file_unlocked(path)
+
+    def _index_file_unlocked(self, path: Path) -> None:
         if self._storage is None or self._embedding_provider is None:
             return
         from indexer import index_file

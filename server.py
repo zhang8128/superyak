@@ -148,55 +148,244 @@ DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 # PROJECT_ROOT is the working directory (for code indexing), ENGRAM_HOME is where memories live
 PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
 
-_storage = None
-_embeddings = None
-_config = None
-_compressor = None
-_reflector = None
-_watcher = None
-_session_id = None
-_session_episode_count = 0
-_instance_name = None
-_initialized = False
-_genome_db_path = None
-_signals_db_path = None
-_recall_scores: dict[str, dict[str, float]] = {}  # recall_id -> {result_id: score}
-_recall_resonances: dict[str, list[dict]] = {}  # recall_id -> [{resonance_id, memory_id}]
-_instinct_graph = None
-_last_instinct_id = None
-_knowledge_graph = None
-_wander_visits: dict[str, int] = {}  # memory_id -> visit count this session
-_clipboard = None
-_category_store = None
+_storage = globals().get("_storage")
+_embeddings = globals().get("_embeddings")
+_config = globals().get("_config")
+_compressor = globals().get("_compressor")
+_reflector = globals().get("_reflector")
+_watcher = globals().get("_watcher")
+_session_id = globals().get("_session_id")
+_session_episode_count = globals().get("_session_episode_count", 0)
+_instance_name = globals().get("_instance_name")
+_initialized = globals().get("_initialized", False)
+_genome_db_path = globals().get("_genome_db_path")
+_signals_db_path = globals().get("_signals_db_path")
+_recall_scores: dict[str, dict[str, float]] = globals().get("_recall_scores", {})
+_recall_resonances: dict[str, list[dict]] = globals().get(
+    "_recall_resonances", {}
+)
+_instinct_graph = globals().get("_instinct_graph")
+_last_instinct_id = globals().get("_last_instinct_id")
+_knowledge_graph = globals().get("_knowledge_graph")
+_wander_visits: dict[str, int] = globals().get("_wander_visits", {})
+_clipboard = globals().get("_clipboard")
+_category_store = globals().get("_category_store")
+_notepad_project = globals().get("_notepad_project")
+_notepad_global = globals().get("_notepad_global")
 # Preserve the live observer across importlib.reload so the next initializer can
 # close it before replacement. On first import these names are absent.
 _category_observer = globals().get("_category_observer")
 _category_pending_close = globals().get("_category_pending_close")
 _category_status = globals().get("_category_status")
 _category_atexit_callback = globals().get("_category_atexit_callback")
-_init_lock = threading.RLock()
-_category_recall_lock = threading.RLock()
-_category_last_observed_at = None
-_server_pid_guard = threading.RLock()
-_server_lock_pid = os.getpid()
+_server_lifecycle_lock = globals().get(
+    "_server_lifecycle_lock", threading.RLock()
+)
+_init_lock = globals().get("_init_lock", threading.RLock())
+_category_recall_lock = globals().get(
+    "_category_recall_lock", threading.RLock()
+)
+_category_last_observed_at = globals().get("_category_last_observed_at")
+_server_pid_guard = globals().get("_server_pid_guard", threading.RLock())
+_server_lock_pid = globals().get("_server_lock_pid", os.getpid())
+_server_atexit_callbacks = globals().get("_server_atexit_callbacks", [])
+_fork_quarantined_resources = globals().get("_fork_quarantined_resources", [])
+_SERVER_FORK_SNAPSHOT = globals().get("_SERVER_FORK_SNAPSHOT", ())
 _SERVER_AT_FORK_REGISTERED = globals().get("_SERVER_AT_FORK_REGISTERED", False)
+_SERVER_AT_FORK_LIFECYCLE_VERSION = globals().get(
+    "_SERVER_AT_FORK_LIFECYCLE_VERSION", 0
+)
+_LEGACY_DYNAMIC_ATEXIT_REQUIRED = globals().get(
+    "_LEGACY_DYNAMIC_ATEXIT_REQUIRED",
+    _SERVER_AT_FORK_REGISTERED and _SERVER_AT_FORK_LIFECYCLE_VERSION < 2,
+)
+_legacy_dynamic_atexit_guard = globals().get(
+    "_legacy_dynamic_atexit_guard"
+)
 
 
-def _after_server_fork_child() -> None:
-    """Install process-local server locks before any child thread can run."""
+def _make_legacy_dynamic_atexit_guard():
+    """Mask base-version global callbacks after exact cleanup has run."""
+    def guard() -> None:
+        global _watcher, _storage, _knowledge_graph, _category_store, _clipboard
+        _watcher = None
+        _storage = None
+        _knowledge_graph = None
+        _category_store = None
+        _clipboard = None
+
+    return guard
+
+
+if _LEGACY_DYNAMIC_ATEXIT_REQUIRED and _legacy_dynamic_atexit_guard is None:
+    # Base 7f7566f registered anonymous callbacks that resolve these globals at
+    # shutdown. They cannot be unregistered after a hot reload because their
+    # identities were not retained. Register this guard after them and before
+    # all exact-instance callbacks: LIFO exit then runs exact cleanup, clears
+    # the dynamic targets, and finally makes the inherited callbacks no-ops.
+    _legacy_dynamic_atexit_guard = _make_legacy_dynamic_atexit_guard()
+    atexit.register(_legacy_dynamic_atexit_guard)
+
+
+def _server_owned_resources() -> tuple[object, ...]:
+    """Snapshot exact resource instances owned by the current core generation."""
+    resources = (
+        _storage,
+        _embeddings,
+        _config,
+        _compressor,
+        _reflector,
+        _watcher,
+        _knowledge_graph,
+        _clipboard,
+        _category_store,
+        _category_observer,
+        _category_pending_close,
+        _instinct_graph,
+        _notepad_project,
+        _notepad_global,
+    ) + tuple(
+        getattr(callback, "_server_resource", None)
+        for callback in _server_atexit_callbacks
+    ) + (
+        getattr(_category_atexit_callback, "_category_observer", None),
+    )
+    unique = []
+    seen = set()
+    for resource in resources:
+        if resource is not None and id(resource) not in seen:
+            unique.append(resource)
+            seen.add(id(resource))
+    return tuple(unique)
+
+
+def _before_server_fork() -> None:
+    """Enter the outer lifecycle barrier before category fork quiescence."""
+    global _SERVER_FORK_SNAPSHOT
+    _server_lifecycle_lock.acquire()
+    _SERVER_FORK_SNAPSHOT = _server_owned_resources()
+
+
+def _after_server_fork_parent() -> None:
+    global _SERVER_FORK_SNAPSHOT
+    _SERVER_FORK_SNAPSHOT = ()
+    _server_lifecycle_lock.release()
+
+
+def _discard_inherited_category_observers(resources: tuple[object, ...]) -> None:
+    """Remove every quarantined observer from the child-only weak registry."""
+    try:
+        import category_evolution as _category_evolution
+
+        with _category_evolution._FORK_REGISTRY_LOCK:
+            for resource in resources:
+                try:
+                    _category_evolution._FORK_OBSERVERS.discard(resource)
+                except TypeError:
+                    pass
+    except Exception:
+        pass
+
+
+def _reset_server_child_state(
+    resources: tuple[object, ...], current_pid: int
+) -> None:
+    """Quarantine inherited owners and install an empty child generation."""
+    global _storage, _embeddings, _config, _compressor, _reflector, _watcher
+    global _session_id, _session_episode_count, _instance_name, _initialized
+    global _genome_db_path, _signals_db_path, _recall_scores, _recall_resonances
+    global _instinct_graph, _last_instinct_id, _knowledge_graph, _wander_visits
+    global _clipboard, _category_store, _category_observer
+    global _notepad_project, _notepad_global
+    global _category_pending_close, _category_status, _category_atexit_callback
+    global _server_atexit_callbacks, _fork_quarantined_resources
     global _init_lock, _category_recall_lock, _server_pid_guard
-    global _server_lock_pid, _initialized, _category_last_observed_at
+    global _server_lifecycle_lock, _server_lock_pid, _category_last_observed_at
+
+    callbacks = tuple(_server_atexit_callbacks)
+    if _category_atexit_callback is not None:
+        callbacks += (_category_atexit_callback,)
+    for callback in callbacks:
+        try:
+            atexit.unregister(callback)
+        except Exception:
+            pass
+
+    _discard_inherited_category_observers(resources)
+
+    quarantined = list(_fork_quarantined_resources)
+    quarantined.extend(
+        resource
+        for resource in resources
+        if all(resource is not existing for existing in quarantined)
+    )
+    _fork_quarantined_resources = quarantined
+    _server_atexit_callbacks = []
+
+    _storage = None
+    _embeddings = None
+    _config = None
+    _compressor = None
+    _reflector = None
+    _watcher = None
+    _session_id = None
+    _session_episode_count = 0
+    _instance_name = None
+    _initialized = False
+    _genome_db_path = None
+    _signals_db_path = None
+    _recall_scores = {}
+    _recall_resonances = {}
+    _instinct_graph = None
+    _last_instinct_id = None
+    _knowledge_graph = None
+    _wander_visits = {}
+    _clipboard = None
+    _category_store = None
+    _category_observer = None
+    _category_pending_close = None
+    _category_status = None
+    _category_atexit_callback = None
+    _category_last_observed_at = None
+    _notepad_project = None
+    _notepad_global = None
+
+    _server_lifecycle_lock = threading.RLock()
     _init_lock = threading.RLock()
     _category_recall_lock = threading.RLock()
     _server_pid_guard = threading.RLock()
-    _server_lock_pid = os.getpid()
-    _initialized = False
-    _category_last_observed_at = None
+    _server_lock_pid = current_pid
 
 
-if hasattr(os, "register_at_fork") and not _SERVER_AT_FORK_REGISTERED:
-    os.register_at_fork(after_in_child=_after_server_fork_child)
+def _after_server_fork_child() -> None:
+    """Quarantine the inherited generation before any child thread can run."""
+    global _SERVER_FORK_SNAPSHOT
+    resources = tuple(_SERVER_FORK_SNAPSHOT)
+    _SERVER_FORK_SNAPSHOT = ()
+    _reset_server_child_state(resources, os.getpid())
+
+
+if (
+    hasattr(os, "register_at_fork")
+    and _SERVER_AT_FORK_LIFECYCLE_VERSION < 2
+):
+    # Importing registers the standalone category hook first. Python executes
+    # before hooks in reverse registration order, giving the fixed order:
+    # server lifecycle -> category registry -> observer.
+    try:
+        import category_evolution as _category_evolution
+    except ModuleNotFoundError:
+        # Category evolution is optional and fails closed when its runtime
+        # modules are absent (for example, an older packaged installation).
+        pass
+
+    os.register_at_fork(
+        before=_before_server_fork,
+        after_in_parent=_after_server_fork_parent,
+        after_in_child=_after_server_fork_child,
+    )
     _SERVER_AT_FORK_REGISTERED = True
+    _SERVER_AT_FORK_LIFECYCLE_VERSION = 2
 
 
 from resonance import form_resonances as _form_resonances, surface_resonances as _surface_resonances
@@ -208,6 +397,9 @@ def _get_instinct_graph():
     if _instinct_graph is None:
         db_path = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent)) / ".engram" / "instinct_transitions.db"
         _instinct_graph = TransitionGraph(db_path=db_path)
+        _register_server_cleanup(
+            _instinct_graph, _instinct_graph.close, "instinct graph"
+        )
     return _instinct_graph
 
 
@@ -381,18 +573,12 @@ def _observe_category_recall(
 
 
 def _prepare_server_process_locks() -> None:
-    global _init_lock, _category_recall_lock, _server_lock_pid, _initialized
-    global _category_last_observed_at
     current_pid = os.getpid()
     if current_pid == _server_lock_pid:
         return
     with _server_pid_guard:
         if current_pid != _server_lock_pid:
-            _init_lock = threading.RLock()
-            _category_recall_lock = threading.RLock()
-            _server_lock_pid = current_pid
-            _initialized = False
-            _category_last_observed_at = None
+            _reset_server_child_state(_server_owned_resources(), current_pid)
 
 
 def _prepare_category_recall_lock() -> None:
@@ -401,8 +587,102 @@ def _prepare_category_recall_lock() -> None:
 
 def _init():
     _prepare_server_process_locks()
-    with _init_lock:
-        return _init_unlocked()
+    with _server_lifecycle_lock:
+        with _init_lock:
+            return _init_unlocked()
+
+
+def _server_operation(function):
+    """Hold the process lifecycle barrier for one complete public operation."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        _prepare_server_process_locks()
+        with _server_lifecycle_lock:
+            return function(*args, **kwargs)
+
+    return wrapped
+
+
+def _server_tool(*tool_args, **tool_kwargs):
+    """Register an MCP tool whose full execution participates in fork safety."""
+    register = mcp.tool(*tool_args, **tool_kwargs)
+
+    def decorate(function):
+        return register(_server_operation(function))
+
+    return decorate
+
+
+def _make_server_cleanup(resource, cleanup, label: str):
+    """Bind cleanup to one exact resource without leaking exception details."""
+    cleanup_lock = threading.Lock()
+    completed = False
+
+    def callback() -> None:
+        nonlocal completed
+        with cleanup_lock:
+            if completed:
+                return
+            try:
+                cleanup()
+            except Exception as exc:
+                logger.warning("%s cleanup failed (%s)", label, type(exc).__name__)
+            else:
+                completed = True
+
+    callback._server_resource = resource
+    callback._server_cleanup_label = label
+    return callback
+
+
+def _register_server_cleanup(resource, cleanup, label: str):
+    global _server_atexit_callbacks
+    for callback in _server_atexit_callbacks:
+        if (
+            getattr(callback, "_server_resource", None) is resource
+            and getattr(callback, "_server_cleanup_label", None) == label
+        ):
+            return callback
+    callback = _make_server_cleanup(resource, cleanup, label)
+    _server_atexit_callbacks.append(callback)
+    atexit.register(callback)
+    return callback
+
+
+def _adopt_legacy_cleanup_ownership() -> None:
+    """Bind reload-preserved base resources to exact cleanup callbacks."""
+    if not _LEGACY_DYNAMIC_ATEXIT_REQUIRED:
+        return
+    if _watcher is not None:
+        _register_server_cleanup(_watcher, _watcher.stop, "watcher")
+    if _storage is not None:
+        _register_server_cleanup(_storage, _storage.close, "storage")
+    if _knowledge_graph is not None:
+        _register_server_cleanup(
+            _knowledge_graph, _knowledge_graph.close, "knowledge graph"
+        )
+    if _category_store is not None:
+        connection = _category_store._conn
+        _register_server_cleanup(
+            connection, connection.close, "category store"
+        )
+    if _clipboard is not None:
+        _register_server_cleanup(_clipboard, _clipboard.close, "clipboard")
+    if _instinct_graph is not None:
+        _register_server_cleanup(
+            _instinct_graph, _instinct_graph.close, "instinct graph"
+        )
+    if _notepad_project is not None:
+        _register_server_cleanup(
+            _notepad_project, _notepad_project.close, "project notepad"
+        )
+    if _notepad_global is not None:
+        _register_server_cleanup(
+            _notepad_global, _notepad_global.close, "global notepad"
+        )
+
+
+_adopt_legacy_cleanup_ownership()
 
 
 def _make_category_cleanup(observer):
@@ -492,6 +772,7 @@ def _publish_category_observer() -> None:
 def _init_unlocked():
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_pending_close, _category_status, _category_atexit_callback
     already_initialized = _initialized
+    _adopt_legacy_cleanup_ownership()
     if already_initialized and _category_pending_close is None:
         return
     old_observer = _category_pending_close or _category_observer
@@ -644,11 +925,22 @@ def _init_unlocked():
 
     # Watcher is created but NOT started — lazy-started on first code search
     from watcher import FileWatcher
-    _watcher = FileWatcher(PROJECT_ROOT, _config.watcher, _storage, _embeddings)
-    atexit.register(lambda: _watcher.stop() if _watcher else None)
-    atexit.register(lambda: _storage.close() if _storage else None)
-    atexit.register(lambda: _knowledge_graph.close() if _knowledge_graph else None)
-    atexit.register(lambda: _category_store._conn.close() if _category_store else None)
+    _watcher = FileWatcher(
+        PROJECT_ROOT,
+        _config.watcher,
+        _storage,
+        _embeddings,
+        operation_lock=_server_lifecycle_lock,
+    )
+    _register_server_cleanup(_watcher, _watcher.stop, "watcher")
+    _register_server_cleanup(_storage, _storage.close, "storage")
+    if _knowledge_graph is not None:
+        _register_server_cleanup(
+            _knowledge_graph, _knowledge_graph.close, "knowledge graph"
+        )
+    _register_server_cleanup(
+        _category_store._conn, _category_store._conn.close, "category store"
+    )
     if _category_observer is not None:
         _category_atexit_callback = _make_category_cleanup(_category_observer)
         atexit.register(_category_atexit_callback)
@@ -843,7 +1135,7 @@ def _init_unlocked():
             engram_storage=_storage,
             embeddings=_embeddings,
         )
-        atexit.register(lambda: _clipboard.close() if _clipboard else None)
+        _register_server_cleanup(_clipboard, _clipboard.close, "clipboard")
     except Exception:
         logger.warning("Clipboard init failed (non-fatal)", exc_info=True)
         _clipboard = None
@@ -985,7 +1277,7 @@ def _ensure_indexed():
 # Core Memory Tools (Task 8)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def remember(
     content: str,
@@ -1133,7 +1425,7 @@ def _get_reading_gap_domains() -> list[str]:
         return []
 
 
-@mcp.tool()
+@_server_tool()
 def recall(
     query: str,
     layer: str | None = None,
@@ -1673,7 +1965,7 @@ def recall(
     return response
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def log_outcome(recall_id: str, used: bool, note: str | None = None) -> dict:
     """Log whether recall results were useful. Helps reflection learn what works."""
@@ -1778,7 +2070,7 @@ def _record_application(storage, cat_store, embeddings, recall_id: str, note: st
     return created
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def instinct_feedback(instinct_id: str, followed: bool, context: str | None = None) -> dict:
     """Report whether you followed or overrode an instinct. Adjusts instinct strength.
@@ -1853,7 +2145,7 @@ def instinct_feedback(instinct_id: str, followed: bool, context: str | None = No
     return result
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def challenge_instinct(instinct_id: str, evidence: str) -> dict:
     """Challenge an instinct with contradictory evidence.
@@ -1906,7 +2198,7 @@ def challenge_instinct(instinct_id: str, evidence: str) -> dict:
     }
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def retire_instinct(instinct_id: str, reason: str) -> dict:
     """Remove an instinct entirely. For duplicates, obsolete patterns,
@@ -1965,7 +2257,7 @@ def _safe_count(table: str) -> int | None:
         return None
 
 
-@mcp.tool()
+@_server_tool()
 def status() -> dict:
     """Return layer counts, watcher state, and session_id."""
     _init()
@@ -2037,7 +2329,7 @@ def status() -> dict:
 # Compression Tools (Task 9)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_server_tool()
 def compress(scope: str | None = None) -> dict:
     """Phase 1: Cluster uncompressed episodes for summarization.
     Returns clusters and compress_id for commit step."""
@@ -2063,7 +2355,7 @@ def compress(scope: str | None = None) -> dict:
     return {"clusters": clusters_out, "compress_id": compress_id}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
     """Phase 2: Commit AI-provided summaries for clusters.
@@ -2081,7 +2373,7 @@ def compress_commit(compress_id: str, summaries: list[dict]) -> dict:
 # Core Memory Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def mark_core(episode_id: str, tier: int = 1) -> dict:
     """Mark an episode as a core memory — exempt from decay, preserved indefinitely.
@@ -2131,7 +2423,7 @@ def mark_core(episode_id: str, tier: int = 1) -> dict:
     return {"marked": episode_id, "core": True, "tier": tier}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def unmark_core(episode_id: str) -> dict:
     """Demote a core memory back to a normal episode — re-enables natural decay.
@@ -2148,7 +2440,7 @@ def unmark_core(episode_id: str) -> dict:
     return {"unmarked": episode_id, "core": False}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def unmark_core_batch(episode_ids: list[str]) -> dict:
     """Demote multiple core memories at once.
@@ -2162,7 +2454,7 @@ def unmark_core_batch(episode_ids: list[str]) -> dict:
     return {"unmarked_count": count, "episode_ids": episode_ids}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def add_anchor(type: str, content: str, expected: str, baseline_score: float | None = None) -> dict:
     """Create an anchor for coherence checking.
@@ -2188,7 +2480,7 @@ def add_anchor(type: str, content: str, expected: str, baseline_score: float | N
     return {"anchor_id": aid, "type": type, "status": "active"}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def propose_retirement(anchor_id: str, reason: str = "") -> dict:
     """Propose retiring an anchor. Takes effect after 2 sessions uncontested.
@@ -2215,7 +2507,7 @@ def propose_retirement(anchor_id: str, reason: str = "") -> dict:
     }
 
 
-@mcp.tool()
+@_server_tool()
 def core_memories() -> dict:
     """List all core memories — the formative episodes that don't decay."""
     _init()
@@ -2224,7 +2516,7 @@ def core_memories() -> dict:
     return {"count": len(episodes), "episodes": episodes}
 
 
-@mcp.tool()
+@_server_tool()
 def recall_cold(query: str, max_results: int = 10) -> dict:
     """Search cold storage — episodes that decayed past threshold but weren't destroyed.
 
@@ -2240,7 +2532,7 @@ def recall_cold(query: str, max_results: int = 10) -> dict:
     return {"results": results, "count": len(results)}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def revive(episode_id: str) -> dict:
     """Revive a cold episode — pull it back from cold storage into active recall.
@@ -2275,7 +2567,7 @@ def revive(episode_id: str) -> dict:
 # Assessment Tools — off-device function measurement
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def assessment_schedule(reason: str | None = None) -> dict:
     """Schedule the next session as an off-device assessment.
@@ -2318,7 +2610,7 @@ def assessment_schedule(reason: str | None = None) -> dict:
     }
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def assessment_report(
     function_score: int,
@@ -2406,7 +2698,7 @@ def assessment_report(
 # Reflection Tools (Task 10)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def reflect(focus: str | None = None) -> dict:
     """Self-observation over memory, including explicit category_evolution focus."""
@@ -2416,7 +2708,7 @@ def reflect(focus: str | None = None) -> dict:
     return _reflector.reflect(focus)
 
 
-@mcp.tool()
+@_server_tool()
 def introspect() -> dict:
     """High-level self-portrait: semantic kinds, instincts, health metrics, recent activity."""
     _init()
@@ -2429,7 +2721,7 @@ def introspect() -> dict:
 # Code Tools (Task 11)
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_server_tool()
 def search_code(query: str, k: int = 10) -> dict:
     """Semantic search over code symbols. Incrementally re-indexes stale files first."""
     _init()
@@ -2481,7 +2773,7 @@ def search_code(query: str, k: int = 10) -> dict:
     return {"results": results}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def reindex(full: bool = False) -> dict:
     """Manually trigger code reindex. full=True rebuilds everything."""
@@ -2500,7 +2792,7 @@ def reindex(full: bool = False) -> dict:
 # --- Task Contexts ---
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def task_focus(name: str, content: str | None = None) -> dict:
     """Start or resume a task context. This is your working memory — the current scope,
@@ -2531,7 +2823,7 @@ def task_focus(name: str, content: str | None = None) -> dict:
     return {"task_context": ctx, "action": "resumed" if existing else "created"}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def task_update(content: str) -> dict:
     """Update the active task context with new content.
@@ -2550,7 +2842,7 @@ def task_update(content: str) -> dict:
     return {"task_context": ctx}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def task_done() -> dict:
     """Archive the active task context. Call when the task is complete or abandoned.
@@ -2569,7 +2861,7 @@ def task_done() -> dict:
 # Dream Residue Tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def dream_capture(reaction: str) -> dict:
     """Capture a raw emotional reaction for later distillation into dream residue.
@@ -2606,7 +2898,7 @@ def dream_capture(reaction: str) -> dict:
     }
 
 
-@mcp.tool()
+@_server_tool()
 def dream_surface(n: int = 3) -> dict:
     """Surface dream residues — opaque emotional artifacts from prior sessions.
 
@@ -2629,7 +2921,7 @@ def dream_surface(n: int = 3) -> dict:
     }
 
 
-@mcp.tool()
+@_server_tool()
 def dream_verify(recall_id: str) -> dict:
     """Reveal the hidden scores from a dream-influenced recall.
 
@@ -2655,7 +2947,7 @@ def dream_verify(recall_id: str) -> dict:
     }
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def dream_react(residue_id: str, reaction: str) -> dict:
     """React to a dream residue. Your reaction feeds the next cycle.
@@ -2697,10 +2989,6 @@ def dream_react(residue_id: str, reaction: str) -> dict:
 # Notepad Tools — working reference, not memory
 # ---------------------------------------------------------------------------
 
-_notepad_project = None
-_notepad_global = None
-
-
 def _get_notepads():
     """Lazy-init notepad instances (project + global)."""
     global _notepad_project, _notepad_global
@@ -2710,10 +2998,16 @@ def _get_notepads():
         global_db = Path.home() / ".engram" / "notepad.db"
         _notepad_project = Notepad(project_db)
         _notepad_global = Notepad(global_db)
+    _register_server_cleanup(
+        _notepad_project, _notepad_project.close, "project notepad"
+    )
+    _register_server_cleanup(
+        _notepad_global, _notepad_global.close, "global notepad"
+    )
     return _notepad_project, _notepad_global
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def jot(key: str, value: str, tags: list[str] | None = None,
         scope: str = "project", status: str = "open",
@@ -2738,7 +3032,7 @@ def jot(key: str, value: str, tags: list[str] | None = None,
     return result
 
 
-@mcp.tool()
+@_server_tool()
 def look(query: str, scope: str | None = None) -> dict:
     """Look up a working note — fuzzy search across keys, values, tags.
 
@@ -2779,7 +3073,7 @@ def look(query: str, scope: str | None = None) -> dict:
     return {"results": project_results, "count": len(project_results)}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def erase(key: str, scope: str = "project") -> dict:
     """Remove a working note.
@@ -2796,7 +3090,7 @@ def erase(key: str, scope: str = "project") -> dict:
     return {"erased": key, "removed": removed}
 
 
-@mcp.tool()
+@_server_tool()
 def wander(start_id: str, max_steps: int = 1) -> dict:
     """Traverse the memory graph starting from a known memory node.
 
@@ -2890,7 +3184,7 @@ def wander(start_id: str, max_steps: int = 1) -> dict:
     }
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def graph_view(center: str | None = None, depth: int = 1) -> dict:
     """View the unified memory graph topology.
@@ -2931,7 +3225,7 @@ def graph_view(center: str | None = None, depth: int = 1) -> dict:
 
 # ── Clipboard tools ─────────────────────────────────────────────
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def clipboard_pin(text: str, priority: int = 0) -> dict:
     """Pin something to your clipboard — it stays visible until you unpin it.
@@ -2951,7 +3245,7 @@ def clipboard_pin(text: str, priority: int = 0) -> dict:
     return {"pinned": text, "id": pin_id}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def clipboard_unpin(pin_id: str) -> dict:
     """Remove a pin from the clipboard.
@@ -2966,7 +3260,7 @@ def clipboard_unpin(pin_id: str) -> dict:
     return {"removed": removed, "id": pin_id}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def clipboard_remind(text: str, trigger: str = "every_n_steps", value: float = 10, repeat: bool = True) -> dict:
     """Set a reminder that fires automatically.
@@ -2990,7 +3284,7 @@ def clipboard_remind(text: str, trigger: str = "every_n_steps", value: float = 1
     return {"reminder": text, "id": rem_id, "trigger": trigger, "value": value}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def clipboard_dismiss(reminder_id: str) -> dict:
     """Dismiss a reminder.
@@ -3005,7 +3299,7 @@ def clipboard_dismiss(reminder_id: str) -> dict:
     return {"removed": removed, "id": reminder_id}
 
 
-@mcp.tool()
+@_server_tool()
 @_mutation_logged
 def clipboard_view(situation: str = "") -> dict:
     """Glance at your clipboard — see what's pinned, what reminders fired, what's relevant.

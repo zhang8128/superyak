@@ -212,6 +212,8 @@ class CategoryCompiler:
         self.database_identity = (database_stat.st_dev, database_stat.st_ino)
         self._pool_condition = threading.Condition()
         self._available_connections: list[sqlite3.Connection] = []
+        self._leased_connections: dict[sqlite3.Connection, int] = {}
+        self._shutdown_errors: list[Exception] = []
         self._closed = False
         self._closing = False
         self._close_in_progress = False
@@ -410,6 +412,7 @@ class CategoryCompiler:
             if time.monotonic_ns() >= deadline:
                 raise _DeadlineExceeded
             connection = self._available_connections.pop()
+            self._leased_connections[connection] = threading.get_ident()
         try:
             self._assert_database_identity()
             if time.monotonic_ns() >= deadline:
@@ -421,29 +424,46 @@ class CategoryCompiler:
 
     def _release_compile_connection(self, connection: sqlite3.Connection) -> None:
         with self._pool_condition:
+            if connection not in self._leased_connections:
+                raise RuntimeError("category compiler connection is not leased")
             should_close = self._closed or self._closing
             if not should_close:
+                del self._leased_connections[connection]
                 self._available_connections.append(connection)
                 self._pool_condition.notify()
                 return
         try:
             connection.close()
-        except Exception:
+        except Exception as exc:
             with self._pool_condition:
+                del self._leased_connections[connection]
                 self._available_connections.append(connection)
+                self._shutdown_errors.append(exc)
                 self._closed = False
                 self._closing = True
                 self._pool_condition.notify_all()
-            raise
+        else:
+            with self._pool_condition:
+                del self._leased_connections[connection]
+                self._pool_condition.notify_all()
 
     def close(self) -> None:
         with self._pool_condition:
             while self._close_in_progress:
+                if threading.get_ident() in self._leased_connections.values():
+                    raise RuntimeError(
+                        "category compiler cannot close from a connection lease"
+                    )
                 self._pool_condition.wait()
             if self._closed:
                 return
+            if threading.get_ident() in self._leased_connections.values():
+                raise RuntimeError(
+                    "category compiler cannot close from a connection lease"
+                )
             self._closing = True
             self._close_in_progress = True
+            self._shutdown_errors = []
             connections = self._available_connections
             self._available_connections = []
             self._pool_condition.notify_all()
@@ -458,6 +478,14 @@ class CategoryCompiler:
                     first_error = exc
         with self._pool_condition:
             self._available_connections.extend(failed)
+            if first_error is not None:
+                self._shutdown_errors.append(first_error)
+            while self._leased_connections:
+                self._pool_condition.wait()
+            first_error = (
+                self._shutdown_errors[0] if self._shutdown_errors else None
+            )
+            self._shutdown_errors = []
             self._close_in_progress = False
             if not self._available_connections:
                 self._closed = True

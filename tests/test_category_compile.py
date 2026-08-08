@@ -173,50 +173,69 @@ def test_waiter_cannot_lease_handle_retained_after_partial_close(store, monkeypa
             f"finished={waiter_finished.is_set()} errors={errors!r}"
         )
     with compiler._pool_condition:
+        del compiler._leased_connections[failed]
         compiler._available_connections.append(failed)
 
-    with pytest.raises(sqlite3.OperationalError):
-        compiler.close()
+    close_errors = []
+    close_finished = threading.Event()
+
+    def close_pool():
+        try:
+            compiler.close()
+        except Exception as exc:
+            close_errors.append(exc)
+        finally:
+            close_finished.set()
+
+    closing = threading.Thread(target=close_pool)
+    closing.start()
 
     assert waiter_finished.wait(timeout=5)
     waiter.join(timeout=5)
+    for connection in leased:
+        compiler._release_compile_connection(connection)
+    assert close_finished.wait(timeout=5)
+    closing.join(timeout=5)
     try:
         assert acquired == []
         assert len(errors) == 1
         assert isinstance(errors[0], RuntimeError)
+        assert len(close_errors) == 1
+        assert isinstance(close_errors[0], sqlite3.OperationalError)
         assert compiler._available_connections == [failed]
     finally:
         compiler.close()
-        for connection in leased:
-            connection.close()
 
 
 def test_close_retains_borrowed_handle_that_fails_release_during_pool_shutdown(
     store, monkeypatch
 ):
-    """Close finalization includes failures retained by concurrent lease release."""
+    """Shutdown waits for a borrowed member and owns its late close failure."""
     real_connect = sqlite3.connect
-    close_blocked = threading.Event()
-    allow_close = threading.Event()
+    available_closed = threading.Event()
     members = []
+    close_count_lock = threading.Lock()
+    available_close_count = 0
 
     class InterleavedConnection(sqlite3.Connection):
         def close(self):
+            nonlocal available_close_count
             self.close_attempts += 1
-            if self.block_once:
-                self.block_once = False
-                close_blocked.set()
-                allow_close.wait(timeout=5)
             if self.fail_once:
                 self.fail_once = False
                 raise sqlite3.OperationalError("private borrowed close detail")
-            return super().close()
+            result = super().close()
+            if self is not borrowed:
+                with close_count_lock:
+                    available_close_count += 1
+                    if available_close_count == 3:
+                        available_closed.set()
+            return result
 
     def connect_interleaved(*args, **kwargs):
         kwargs["factory"] = InterleavedConnection
         connection = real_connect(*args, **kwargs)
         connection.close_attempts = 0
-        connection.block_once = False
         connection.fail_once = False
         members.append(connection)
         return connection
@@ -224,27 +243,30 @@ def test_close_retains_borrowed_handle_that_fails_release_during_pool_shutdown(
     monkeypatch.setattr("category_compile.sqlite3.connect", connect_interleaved)
     compiler = CategoryCompiler(store)
     borrowed = compiler._acquire_compile_connection(10**30)
-    compiler._available_connections[0].block_once = True
     borrowed.fail_once = True
     close_errors = []
+    close_finished = threading.Event()
 
     def close_pool():
         try:
             compiler.close()
         except Exception as exc:
             close_errors.append(exc)
+        finally:
+            close_finished.set()
 
     closing = threading.Thread(target=close_pool)
     closing.start()
-    assert close_blocked.wait(timeout=5)
+    assert available_closed.wait(timeout=5)
+    assert close_finished.wait(timeout=0.1) is False
 
-    with pytest.raises(sqlite3.OperationalError):
-        compiler._release_compile_connection(borrowed)
-    allow_close.set()
+    compiler._release_compile_connection(borrowed)
+    assert close_finished.wait(timeout=5)
     closing.join(timeout=5)
 
     assert not closing.is_alive()
-    assert close_errors == []
+    assert len(close_errors) == 1
+    assert isinstance(close_errors[0], sqlite3.OperationalError)
     assert compiler._available_connections == [borrowed]
     assert compiler._closed is False
     assert compiler._closing is True
@@ -254,6 +276,83 @@ def test_close_retains_borrowed_handle_that_fails_release_during_pool_shutdown(
     assert borrowed.close_attempts == 2
     assert compiler._available_connections == []
     assert compiler._closed is True
+
+
+def test_close_waits_for_all_concurrent_borrowed_successes(store):
+    """Shutdown cannot complete until every successful late release is closed."""
+    compiler = CategoryCompiler(store)
+    borrowed = [compiler._acquire_compile_connection(10**30) for _ in range(2)]
+    close_errors = []
+    close_finished = threading.Event()
+
+    def close_pool():
+        try:
+            compiler.close()
+        except Exception as exc:
+            close_errors.append(exc)
+        finally:
+            close_finished.set()
+
+    closing = threading.Thread(target=close_pool)
+    closing.start()
+    deadline = time.monotonic() + 5
+    with compiler._pool_condition:
+        while not compiler._close_in_progress:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0
+            compiler._pool_condition.wait(timeout=remaining)
+    assert close_finished.wait(timeout=0.1) is False
+
+    compiler._release_compile_connection(borrowed[0])
+    assert close_finished.wait(timeout=0.1) is False
+    compiler._release_compile_connection(borrowed[1])
+    assert close_finished.wait(timeout=5)
+    closing.join(timeout=5)
+
+    assert close_errors == []
+    assert compiler._leased_connections == {}
+    assert compiler._available_connections == []
+    assert compiler._closed is True
+
+
+def test_close_from_thread_owning_lease_fails_without_self_deadlock(store):
+    """A lease owner cannot wait for itself while leading pool shutdown."""
+    compiler = CategoryCompiler(store)
+    leased = threading.Event()
+    finished = threading.Event()
+    externally_released = threading.Event()
+    borrowed = []
+    errors = []
+
+    def borrow_then_close():
+        connection = compiler._acquire_compile_connection(10**30)
+        borrowed.append(connection)
+        leased.set()
+        try:
+            compiler.close()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            if not externally_released.is_set():
+                compiler._release_compile_connection(connection)
+            finished.set()
+
+    owner = threading.Thread(target=borrow_then_close)
+    owner.start()
+    assert leased.wait(timeout=5)
+    completed_without_help = finished.wait(timeout=0.1)
+    if not completed_without_help:
+        externally_released.set()
+        compiler._release_compile_connection(borrowed[0])
+        assert finished.wait(timeout=5)
+    owner.join(timeout=5)
+    try:
+        assert completed_without_help is True
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+        assert compiler._closing is False
+    finally:
+        compiler.close()
 
 
 def _observe_compile_boundary_calls(compiler, monkeypatch):
