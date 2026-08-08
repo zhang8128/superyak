@@ -129,10 +129,7 @@ def _cell_rows(start: int, end: int, created_at: str) -> Iterator[tuple[str, str
 
 
 def _write_epoch_snapshot(connection: sqlite3.Connection, epoch_id: str, cells: int) -> None:
-    """Persist one compact snapshot string without materializing a million cell objects."""
-    active_json = "[" + ",".join(
-        json.dumps(f"cell-{number:07d}", separators=(",", ":")) for number in range(cells)
-    ) + "]"
+    """Materialize membership inside SQLite; Python never holds cell IDs or JSON."""
     event_id = "benchmark-epoch-event"
     created_at = datetime.now(timezone.utc).isoformat()
     connection.execute(
@@ -145,9 +142,9 @@ def _write_epoch_snapshot(connection: sqlite3.Connection, epoch_id: str, cells: 
     )
     connection.execute(
         """INSERT INTO cat_snapshots (id, epoch_id, active_cell_ids_json, content_hash, created_at)
-           VALUES (?, ?, ?, ?, ?)""",
-        ("benchmark-snapshot", epoch_id, active_json,
-         hashlib.sha256(active_json.encode()).hexdigest(), created_at),
+           SELECT ?, ?, json_group_array(id), ?, ?
+           FROM (SELECT id FROM cat_cells ORDER BY id)""",
+        ("benchmark-snapshot", epoch_id, "benchmark-sql-materialized", created_at),
     )
     connection.commit()
 

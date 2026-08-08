@@ -211,6 +211,7 @@ def _evaluate_rankings(cohort: FixtureCohort, work_dir: Path) -> dict[str, objec
             "direct_recall_baseline_hits": baseline_hits,
             "direct_recall_shadow_hits": shadow_hits,
             "direct_recall_regression": direct_recall_regression(baseline_hits, shadow_hits),
+            "direct_recall_evaluated": baseline_hits > 0,
             "false_transfer_rate": None if not false_transfers else false_transfer_rate(false_transfers),
             "false_transfer_evaluated": bool(false_transfers),
             "fixture_import": asdict(imported),
@@ -450,8 +451,9 @@ def _acceptance(report: dict[str, object]) -> dict[str, object]:
             relative is not None and float(relative) >= 0.15,
         ),
         "direct_recall_regression": _gate(
-            GATE_THRESHOLDS["direct_recall_regression"], ranking["direct_recall_regression"],
-            ranking["direct_recall_baseline_hits"] > 0 and float(ranking["direct_recall_regression"]) <= 0.05,
+            GATE_THRESHOLDS["direct_recall_regression"],
+            ranking["direct_recall_regression"] if ranking.get("direct_recall_evaluated") else None,
+            ranking.get("direct_recall_evaluated") is True and float(ranking["direct_recall_regression"]) <= 0.05,
         ),
         "false_transfer_rate": _gate(
             GATE_THRESHOLDS["false_transfer_rate"], ranking["false_transfer_rate"],
