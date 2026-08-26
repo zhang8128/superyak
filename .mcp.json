@@ -4,6 +4,7 @@
       "command": "uv",
       "args": ["run", "--directory", "/Users/kairos/Projects/engram", "python", "server.py"],
       "env": {
+        "ENGRAM_DEFAULT_INSTANCE": "engram",
         "ENGRAM_HOME": "/Users/kairos/Projects/engram",
         "ENGRAM_HARNESS": "claude-code"
       }

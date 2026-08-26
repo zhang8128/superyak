@@ -22,6 +22,7 @@ def test_engram_launcher_preserves_caller_cwd_and_contract():
     assert "--directory" not in argv
     assert argv[-2:] == ["python", SERVER]
     assert engram["env"] == {
+        "ENGRAM_DEFAULT_INSTANCE": "engram",
         "ENGRAM_HOME": PROJECT,
         "ENGRAM_HARNESS": "codex",
     }

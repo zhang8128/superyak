@@ -28,16 +28,20 @@ PROJECT_ROOT = Path(os.environ.get("ENGRAM_PROJECT_ROOT", os.getcwd()))
 
 def _load_instance_config():
     """Load instance config from project root .engram/config.toml if present."""
+    default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE") or None
     config_path = PROJECT_ROOT / ".engram" / "config.toml"
     if not config_path.exists():
-        return None, None
+        return default_instance, None
     try:
         import tomllib
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
-        return config.get("instance"), config.get("session_context")
+        return (
+            config.get("instance") or default_instance,
+            config.get("session_context"),
+        )
     except Exception:
-        return None, None
+        return default_instance, None
 
 
 _ASSESSMENT_MARKER = (

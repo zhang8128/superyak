@@ -14,7 +14,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from config import load_config
+from config import load_config, resolve_instance_name
 from indexer import incremental_index
 from logging_config import setup_logging
 from operation_audit import sanitize_operation_details
@@ -1049,14 +1049,15 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False):
 
     setup_logging(os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
     _config = load_config(PROJECT_ROOT)
+    _instance_name = resolve_instance_name(_config)
 
     # Federation: use instance DB when configured, otherwise default
     db_path = DB_PATH
-    if _config and _config.instance:
-        instance_db = ENGRAM_HOME / ".engram" / "instances" / _config.instance / "graph.db"
+    if _instance_name:
+        instance_db = ENGRAM_HOME / ".engram" / "instances" / _instance_name / "graph.db"
         if instance_db.exists():
             db_path = instance_db
-            logger.info("Using instance DB: %s", _config.instance)
+            logger.info("Using instance DB: %s", _instance_name)
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # Every server and watcher access is serialized by the lifecycle barrier.
@@ -1180,8 +1181,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False):
     _register_server_cleanup(_watcher, _watcher.stop, "watcher")
 
     # Federation: genome sync + inbox processing
-    if _config and _config.instance:
-        _instance_name = _config.instance
+    if _instance_name:
         _genome_db_path = ENGRAM_HOME / ".engram" / "genome" / "graph.db"
         _signals_db_path = ENGRAM_HOME / ".engram" / "signals.db"
         try:

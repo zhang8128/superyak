@@ -587,6 +587,26 @@ def engram_server_env(tmp_path, monkeypatch):
         server._storage.close()
 
 
+def test_server_uses_default_instance_for_unbound_project(
+    engram_server_env, tmp_path, monkeypatch,
+):
+    project_root = tmp_path / "unbound-project"
+    project_root.mkdir()
+    instance_db = tmp_path / ".engram" / "instances" / "engram" / "graph.db"
+    instance_db.parent.mkdir(parents=True)
+    Storage(str(instance_db)).close()
+    monkeypatch.setattr(engram_server_env, "PROJECT_ROOT", project_root)
+    monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", "engram")
+
+    engram_server_env._init()
+
+    opened_db = Path(
+        engram_server_env._storage.conn.execute("PRAGMA database_list").fetchone()[2]
+    )
+    assert opened_db == instance_db
+    assert engram_server_env._instance_name == "engram"
+
+
 def test_init_stamps_server_session(engram_server_env, monkeypatch):
     monkeypatch.setenv("ENGRAM_HARNESS", "codex")
     server._init()
