@@ -218,6 +218,34 @@ class TestWake:
         msg = output["systemMessage"]
         assert "Engram (agi)" in msg
 
+    def test_wake_uses_default_instance_for_unbound_project(self, tmp_path):
+        from storage import Storage
+
+        instance_db = (
+            tmp_path / ".engram" / "instances" / "engram" / "graph.db"
+        )
+        instance_db.parent.mkdir(parents=True)
+        store = Storage(str(instance_db), migrations_dir=MIGRATIONS_DIR)
+        store.add_episode(
+            id="default-instance-episode",
+            session_id=None,
+            content="default instance routing sentinel",
+            embedding=[0.1] * 768,
+        )
+        store.close()
+        project_root = tmp_path / "unbound-project"
+        project_root.mkdir()
+
+        output = _run_wake(
+            str(tmp_path),
+            project_root=str(project_root),
+            extra_env={"ENGRAM_DEFAULT_INSTANCE": "engram"},
+        )
+
+        msg = output["systemMessage"]
+        assert "Engram (engram)" in msg
+        assert "1 episodes" in msg
+
     def test_wake_shows_inbox_count(self, tmp_path):
         """Unread messages in signals.db should appear in orientation."""
         from storage import Storage

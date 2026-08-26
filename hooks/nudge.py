@@ -41,16 +41,17 @@ ECHO_MAX_LEN = 150      # Truncate echo content
 
 
 def _load_instance_config():
+    default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE") or None
     config_path = PROJECT_ROOT / ".engram" / "config.toml"
     if not config_path.exists():
-        return None
+        return default_instance
     try:
         import tomllib
         with open(config_path, "rb") as f:
             config = tomllib.load(f)
-        return config.get("instance")
+        return config.get("instance") or default_instance
     except Exception:
-        return None
+        return default_instance
 
 
 def _pack_embedding(embedding: list[float]) -> bytes:

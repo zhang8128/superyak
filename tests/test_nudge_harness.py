@@ -78,6 +78,19 @@ def test_nudge_codex_skips_for_pair_child(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out == ""
 
 
+@pytest.mark.parametrize("hook_name", ["nudge", "sleep"])
+def test_hook_instance_config_uses_default_for_unbound_project(
+    hook_name, tmp_path, monkeypatch,
+):
+    project_root = tmp_path / "unbound-project"
+    project_root.mkdir()
+    hook = _load(hook_name)
+    monkeypatch.setattr(hook, "PROJECT_ROOT", project_root)
+    monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", "engram")
+
+    assert hook._load_instance_config() == "engram"
+
+
 def test_sleep_codex_uses_payload_session_id(tmp_path):
     # Arrange a minimal graph.db via Storage so sleep can dream from it,
     # then verify residues carry the codex session_id, not CLAUDE env.

@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/Projects/engram/hooks/nudge.py\"",
+            "command": "ENGRAM_DEFAULT_INSTANCE=engram python3 \"$HOME/Projects/engram/hooks/nudge.py\"",
             "timeout": 10
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/Projects/engram/hooks/wake.py\"",
+            "command": "ENGRAM_DEFAULT_INSTANCE=engram python3 \"$HOME/Projects/engram/hooks/wake.py\"",
             "timeout": 10
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/Projects/engram/hooks/sleep.py\"",
+            "command": "ENGRAM_DEFAULT_INSTANCE=engram python3 \"$HOME/Projects/engram/hooks/sleep.py\"",
             "timeout": 5
           }
         ]

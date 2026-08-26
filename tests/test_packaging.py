@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -10,6 +11,22 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_claude_plugin_defaults_unbound_projects_to_engram_instance():
+    mcp_config = json.loads((PROJECT_ROOT / ".mcp.json").read_text())
+    engram_env = mcp_config["mcpServers"]["engram"]["env"]
+    assert engram_env["ENGRAM_DEFAULT_INSTANCE"] == "engram"
+
+    hooks_config = json.loads((PROJECT_ROOT / "hooks" / "hooks.json").read_text())
+    commands = [
+        hook["command"]
+        for registrations in hooks_config["hooks"].values()
+        for registration in registrations
+        for hook in registration["hooks"]
+    ]
+    assert commands
+    assert all("ENGRAM_DEFAULT_INSTANCE=engram" in command for command in commands)
 
 
 def _build_wheel(tmp_path: Path) -> Path:

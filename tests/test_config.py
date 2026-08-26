@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import config
 from config import EngramConfig, SignalsConfig, load_config
 
 
@@ -137,6 +138,39 @@ def test_federation_config_with_instance(tmp_path):
     assert cfg.instance == "agi"
     assert cfg.session_context == "building"
     assert cfg.signals.retention_days == 60
+
+
+def test_resolve_db_path_uses_default_instance_for_unbound_project(
+    tmp_path, monkeypatch,
+):
+    engram_home = tmp_path / "engram-home"
+    project_root = tmp_path / "unbound-project"
+    instance_db = engram_home / ".engram" / "instances" / "engram" / "graph.db"
+    instance_db.parent.mkdir(parents=True)
+    instance_db.touch()
+    project_root.mkdir()
+    monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", "engram")
+
+    assert config.resolve_db_path(engram_home, project_root) == instance_db
+
+
+def test_resolve_db_path_prefers_explicit_project_instance_over_default(
+    tmp_path, monkeypatch,
+):
+    engram_home = tmp_path / "engram-home"
+    project_root = tmp_path / "bound-project"
+    explicit_db = engram_home / ".engram" / "instances" / "agi" / "graph.db"
+    default_db = engram_home / ".engram" / "instances" / "engram" / "graph.db"
+    explicit_db.parent.mkdir(parents=True)
+    default_db.parent.mkdir(parents=True)
+    explicit_db.touch()
+    default_db.touch()
+    config_dir = project_root / ".engram"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text('instance = "agi"\n')
+    monkeypatch.setenv("ENGRAM_DEFAULT_INSTANCE", "engram")
+
+    assert config.resolve_db_path(engram_home, project_root) == explicit_db
 
 
 def test_category_evolution_config_defaults():

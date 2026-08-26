@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -320,22 +321,40 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
     )
 
 
-def resolve_db_path(engram_home: Path) -> Path:
+def resolve_instance_name(
+    config: EngramConfig | None,
+    default_instance: str | None = None,
+) -> str | None:
+    """Choose a project binding, falling back to the configured default."""
+    if config and config.instance:
+        return config.instance
+    if default_instance is None:
+        default_instance = os.environ.get("ENGRAM_DEFAULT_INSTANCE")
+    if default_instance:
+        return default_instance.strip() or None
+    return None
+
+
+def resolve_db_path(
+    engram_home: Path,
+    project_root: Path | None = None,
+    default_instance: str | None = None,
+) -> Path:
     """Resolve the active graph.db, honoring instance routing.
 
-    Mirrors the federation logic in server.py: when an instance is configured
-    and its store exists, that is the live DB. Otherwise the top-level
-    ``.engram/graph.db`` (which, post-federation, is a frozen pre-federation
-    orphan — do not read it directly). Use this anywhere a standalone script
-    needs the same store the MCP server is actually using.
+    An explicit project binding wins. Otherwise ``ENGRAM_DEFAULT_INSTANCE``
+    supplies the binding for projects that have not opted into a distinct
+    identity. If the selected store does not exist, the legacy top-level
+    ``.engram/graph.db`` remains the compatibility fallback.
     """
     default = engram_home / ".engram" / "graph.db"
     try:
-        config = load_config(engram_home)
+        config = load_config(project_root or engram_home)
     except Exception:
-        return default
-    if config and config.instance:
-        instance_db = engram_home / ".engram" / "instances" / config.instance / "graph.db"
+        config = None
+    instance_name = resolve_instance_name(config, default_instance)
+    if instance_name:
+        instance_db = engram_home / ".engram" / "instances" / instance_name / "graph.db"
         if instance_db.exists():
             return instance_db
     return default
