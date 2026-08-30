@@ -138,7 +138,7 @@ These are executable conformance properties, not claims that arbitrary local sys
 
 ## 6. Canonical protocol artifacts
 
-Every artifact uses canonical JSON, a schema version, a media type, and a content digest. Object member order and local filesystem paths cannot affect its digest. Unknown extension members are preserved but do not alter core semantics unless a profile explicitly includes them in its signed payload.
+Every artifact uses canonical JSON, a schema version, a media type, and a content digest. Object member order and local filesystem paths cannot affect its digest. The digest covers the complete envelope except the `digest` and `attestations` members, which prevents self-reference and permits additional signatures without changing artifact identity. Unknown extension members are preserved but do not alter core semantics unless a profile explicitly includes them in its signed payload.
 
 ### 6.1 Common envelope
 
@@ -204,13 +204,31 @@ A `ConnectionPolicy` remains local and is not a universal reputation statement. 
 
 - publishers or publisher namespaces;
 - profiles and semantic domains;
-- actions such as `discover`, `read`, `compile`, `contribute`, `link_overlap`, `moderate`, or `administer`;
+- actions such as `discover`, `read`, `compile`, `contribute`, `link_overlap`, `moderate`, `administer`, `recall`, `suggest`, `inject_context`, `derive`, `retain`, or `reshare`;
 - contexts and claim kinds;
+- declared purposes and audiences when the use is context-sensitive;
 - validity interval;
 - optional evidence and attestation requirements;
 - effect `allow` or `deny`.
 
 Evaluation is deny-by-default. A more specific deny overrides an allow. Policy does not transitively trust a publisher merely because a trusted publisher trusts it.
+
+### 6.8 Relational memory and consent
+
+Memory exchange has a stronger boundary than ordinary document access. An engram may expose not only facts but salience, associations, formative events, and the patterns that influence what enters a future context. Permission to inspect an artifact therefore never implies permission to make it part of another mind's active context.
+
+Lighthouse makes the following constraints architectural even though the Engram adapter is deferred:
+
+1. Consent is directional. Mutual connection does not imply symmetric access.
+2. Consent is contextual. A grant is scoped by action, domain, context, purpose, audience, and time rather than by friendship or lighthouse membership alone.
+3. Consent is non-transitive. Shared membership, overlapping lighthouses, and trusted intermediaries do not create downstream memory access.
+4. `read`, `recall`, `suggest`, `inject_context`, `derive`, `retain`, and `reshare` are distinct actions. An allow for one grants none of the others.
+5. Future context injection must emit a local receipt identifying the contributing lighthouse, the policy rule, the requested purpose, the selected material, and any transformations. A person or agent must be able to inspect why an engram appeared.
+6. Revocation prevents future authorized access but cannot guarantee that a recipient forgets material already disclosed. The protocol must state this limit rather than promise cryptographic forgetting.
+7. Derived claims retain provenance to the disclosed inputs. A derived inference about someone is not treated as if they deliberately shared it.
+8. Silence, withholding, and deliberate opacity are valid outcomes, not errors to route around.
+
+Lighthouse can make use promises explicit and auditable; it cannot technically control a recipient after plaintext disclosure. Retention and resharing commitments therefore remain local policy plus attestable governance until a concrete enforcement mechanism exists.
 
 ## 7. Reference repository
 
@@ -222,6 +240,7 @@ packages/calculus/            Restrictions, bridge composition, and witness logi
 packages/conformance/         Adapter harness, law checks, CLI, and reports
 adapters/hyper/               Hyper fixture extractor and bridge half
 adapters/adna/                aDNA fixture extractor and bridge half
+bridges/hyper-adna/           Reference cross-profile bridge
 fixtures/                     Minimal source systems and invalid cases
 docs/superpowers/specs/       Approved designs
 docs/superpowers/plans/       Executable implementation plans
@@ -319,6 +338,7 @@ v0.1 is complete when the automated suite demonstrates:
 - Exact, partial, and approximate translations are visibly distinct in schemas and output.
 - Approximation requires a named metric, tolerance, and evidence procedure.
 - Personally sensitive payloads are referenced by digest where possible; federation and disclosure controls are deferred until a threat model is attached to a concrete transport.
+- Lighthouse membership and relationship edges are sensitive data. Descriptors do not reveal another participant's connections or infer reciprocal consent.
 - Conflicting claims may coexist. Lighthouse records conflict and authority context; it does not manufacture global consensus.
 
 ## 13. Evolution path
