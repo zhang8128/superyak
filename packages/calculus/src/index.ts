@@ -5,6 +5,14 @@ export {
   type ProjectionRequest,
 } from "./adapter.js";
 export {
+  composeBridges,
+  identityBridge,
+  translateWithWitness,
+  type BridgeEnvelopeMetadata,
+  type RuntimeBridge,
+  type TranslationResult,
+} from "./bridge.js";
+export {
   checkRestrictionComposition,
   checkRestrictionIdentity,
   isSubcontext,
