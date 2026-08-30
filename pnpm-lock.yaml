@@ -103,6 +103,34 @@ importers:
         specifier: 4.1.10
         version: 4.1.10(@types/node@24.0.0)(vite@8.2.2(@types/node@24.0.0)(esbuild@0.28.2)(tsx@4.23.12)(yaml@2.8.1))
 
+  packages/conformance:
+    dependencies:
+      '@lighthouse/adapter-adna':
+        specifier: workspace:*
+        version: link:../../adapters/adna
+      '@lighthouse/adapter-hyper':
+        specifier: workspace:*
+        version: link:../../adapters/hyper
+      '@lighthouse/bridge-hyper-adna':
+        specifier: workspace:*
+        version: link:../../bridges/hyper-adna
+      '@lighthouse/calculus':
+        specifier: workspace:*
+        version: link:../calculus
+      '@lighthouse/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: 24.0.0
+        version: 24.0.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.10
+        version: 4.1.10(@types/node@24.0.0)(vite@8.2.2(@types/node@24.0.0)(esbuild@0.28.2)(tsx@4.23.12)(yaml@2.8.1))
+
   packages/protocol:
     dependencies:
       zod:
