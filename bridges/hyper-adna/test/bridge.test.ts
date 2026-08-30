@@ -1,27 +1,16 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { ADNA_PORT_CLAIM_MEDIA_TYPE, ADNA_PROFILE, adnaAdapter } from "@lighthouse/adapter-adna";
 import {
-  ADNA_PORT_CLAIM_MEDIA_TYPE,
-  ADNA_PROFILE,
-  adnaAdapter,
-} from "@lighthouse/adapter-adna";
-import {
-  HYPER_DEPENDENCY_MEDIA_TYPE,
-  HYPER_PROFILE,
   createHyperDependencyClaim,
   createHyperLeaseClaim,
+  HYPER_DEPENDENCY_MEDIA_TYPE,
+  HYPER_PROFILE,
   hyperAdapter,
 } from "@lighthouse/adapter-hyper";
-import {
-  composeBridges,
-  identityBridge,
-  translateWithWitness,
-} from "@lighthouse/calculus";
+import { composeBridges, identityBridge, translateWithWitness } from "@lighthouse/calculus";
 import { describe, expect, it } from "vitest";
-import {
-  createHyperAdnaBridge,
-  type HyperAdnaMapping,
-} from "../src/index.js";
+import { createHyperAdnaBridge, type HyperAdnaMapping } from "../src/index.js";
 
 const root = path.resolve(import.meta.dirname, "../../..");
 const issuedAt = "2026-08-30T12:00:00Z";
@@ -121,9 +110,7 @@ describe("Hyper to aDNA bridge", () => {
 
     expect(result.witness.payload.targetEvaluation).toBe("violated");
     expect(result.witness.payload.outcome).toBe("invalid");
-    expect(result.witness.payload.diagnostics[0]?.code).toBe(
-      "SATISFACTION_NOT_PRESERVED",
-    );
+    expect(result.witness.payload.diagnostics[0]?.code).toBe("SATISFACTION_NOT_PRESERVED");
   });
 
   it("composes associatively with source and target identities", async () => {

@@ -1,9 +1,6 @@
 import { sealArtifact } from "@lighthouse/protocol";
 import { describe, expect, it } from "vitest";
-import {
-  evaluateConnectionPolicy,
-  type AuthorizationRequest,
-} from "../src/index.js";
+import { type AuthorizationRequest, evaluateConnectionPolicy } from "../src/index.js";
 
 const selectorDefaults = {
   profiles: ["urn:lighthouse:profile:hyper-modules"],

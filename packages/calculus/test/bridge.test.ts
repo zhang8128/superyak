@@ -1,17 +1,17 @@
 import {
-  sealArtifact,
   type BridgeDescriptor,
   type Claim,
   type ProfileRef,
   type Snapshot,
+  sealArtifact,
 } from "@lighthouse/protocol";
 import { describe, expect, it } from "vitest";
 import {
   composeBridges,
-  identityBridge,
-  translateWithWitness,
   type InstitutionAdapter,
+  identityBridge,
   type RuntimeBridge,
+  translateWithWitness,
 } from "../src/index.js";
 
 const sourceProfile = { id: "urn:profile:source", version: "1.0.0" };
@@ -150,11 +150,11 @@ const compositionMetadata = {
 
 describe("bridge laws", () => {
   it("preserves a supported claim through identity", async () => {
-    const identity = identityBridge(
-      sourceProfile,
-      ["application/vnd.example.source-truth+json"],
-      { id: "urn:bridge:source-identity", issuer: "urn:lighthouse:test", issuedAt },
-    );
+    const identity = identityBridge(sourceProfile, ["application/vnd.example.source-truth+json"], {
+      id: "urn:bridge:source-identity",
+      issuer: "urn:lighthouse:test",
+      issuedAt,
+    });
 
     const result = await translateWithWitness(
       identity,
@@ -217,9 +217,7 @@ describe("bridge laws", () => {
     );
 
     expect(result.witness.payload.outcome).toBe("invalid");
-    expect(result.witness.payload.diagnostics[0]?.code).toBe(
-      "SATISFACTION_NOT_PRESERVED",
-    );
+    expect(result.witness.payload.diagnostics[0]?.code).toBe("SATISFACTION_NOT_PRESERVED");
   });
 
   it("rejects composition across mismatched profiles", () => {

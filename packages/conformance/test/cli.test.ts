@@ -1,0 +1,76 @@
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { type CliIo, runCli } from "../src/cli.js";
+
+const fixtureRoot = path.resolve(import.meta.dirname, "../../../fixtures");
+
+function memoryIo() {
+  const output = { stdout: "", stderr: "" };
+  const io: CliIo = {
+    stdout(text) {
+      output.stdout += text;
+    },
+    stderr(text) {
+      output.stderr += text;
+    },
+  };
+  return { io, output };
+}
+
+describe("Lighthouse CLI", () => {
+  it("returns zero and machine-readable JSON for the valid proof", async () => {
+    const { io, output } = memoryIo();
+
+    expect(await runCli(["prove", "--fixtures", fixtureRoot], io)).toBe(0);
+    expect(JSON.parse(output.stdout)).toMatchObject({ passed: true, protocolVersion: "0.1" });
+    expect(output.stderr).toBe("");
+  });
+
+  it("returns non-zero for invalid schema and digest", async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "lighthouse-cli-invalid-"));
+    const invalidSchema = path.join(temporary, "invalid-schema.json");
+    const invalidDigest = path.join(temporary, "invalid-digest.json");
+    await writeFile(invalidSchema, "{}\n");
+    const policy = JSON.parse(
+      await readFile(path.join(fixtureRoot, "policy/workflow-policy.json"), "utf8"),
+    );
+    policy.digest.value = "0".repeat(64);
+    await writeFile(invalidDigest, `${JSON.stringify(policy)}\n`);
+
+    const schemaIo = memoryIo();
+    const digestIo = memoryIo();
+    expect(await runCli(["validate", invalidSchema], schemaIo.io)).toBe(1);
+    expect(JSON.parse(schemaIo.output.stderr).code).toBe("SCHEMA_INVALID");
+    expect(await runCli(["validate", invalidDigest], digestIo.io)).toBe(1);
+    expect(JSON.parse(digestIo.output.stderr).code).toBe("DIGEST_MISMATCH");
+  });
+
+  it("returns non-zero when the candidate bridge fails a law", async () => {
+    const { io, output } = memoryIo();
+
+    expect(await runCli(["prove", "--fixtures", fixtureRoot, "--invalid-bridge"], io)).toBe(1);
+    expect(JSON.parse(output.stdout).passed).toBe(false);
+  });
+
+  it("returns non-zero when local policy denies context injection", async () => {
+    const { io, output } = memoryIo();
+
+    expect(
+      await runCli(
+        [
+          "authorize",
+          path.join(fixtureRoot, "policy/workflow-policy.json"),
+          path.join(fixtureRoot, "policy/inject-request.json"),
+        ],
+        io,
+      ),
+    ).toBe(1);
+    expect(JSON.parse(output.stdout)).toEqual({
+      allowed: false,
+      code: "EXPLICIT_DENY",
+      ruleId: "deny-crew-context-injection",
+    });
+  });
+});

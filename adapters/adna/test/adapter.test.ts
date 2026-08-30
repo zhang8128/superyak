@@ -2,11 +2,7 @@ import { cp, mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  adnaAdapter,
-  createAdnaPortClaim,
-  type AdnaPortClaimInput,
-} from "../src/index.js";
+import { type AdnaPortClaimInput, adnaAdapter, createAdnaPortClaim } from "../src/index.js";
 
 const fixtureRoot = path.resolve(import.meta.dirname, "../../../fixtures/adna");
 const metadata = {

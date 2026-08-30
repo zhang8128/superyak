@@ -1,10 +1,10 @@
-import { digestJson, type Digest, verifyJsonDigest } from "./digest.js";
+import { type Digest, digestJson, verifyJsonDigest } from "./digest.js";
 import type { JsonValue } from "./json.js";
 import {
-  lighthouseArtifactSchema,
   type LighthouseArtifact,
-  unsignedArtifactSchema,
+  lighthouseArtifactSchema,
   type UnsignedLighthouseArtifact,
+  unsignedArtifactSchema,
 } from "./schemas.js";
 
 type DigestibleArtifact = LighthouseArtifact | UnsignedLighthouseArtifact;
@@ -18,7 +18,9 @@ export function artifactDigestContent(artifact: DigestibleArtifact): JsonValue {
   return withoutAttestations as JsonValue;
 }
 
-export function sealArtifact<T extends UnsignedLighthouseArtifact>(input: T): T & { digest: Digest } {
+export function sealArtifact<T extends UnsignedLighthouseArtifact>(
+  input: T,
+): T & { digest: Digest } {
   const parsed = unsignedArtifactSchema.parse(input) as T;
   return {
     ...parsed,

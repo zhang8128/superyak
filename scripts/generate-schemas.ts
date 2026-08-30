@@ -31,6 +31,7 @@ function addBridgeFidelityRules(schema: JsonValue): JsonValue {
         properties: { fidelity: { const: "approximate" } },
         required: ["fidelity"],
       },
+      // biome-ignore lint/suspicious/noThenProperty: `then` is a required JSON Schema keyword.
       then: { required: ["approximation"] },
     },
     {
@@ -38,6 +39,7 @@ function addBridgeFidelityRules(schema: JsonValue): JsonValue {
         properties: { fidelity: { enum: ["exact", "partial"] } },
         required: ["fidelity"],
       },
+      // biome-ignore lint/suspicious/noThenProperty: `then` is a required JSON Schema keyword.
       then: { not: { required: ["approximation"] } },
     },
   ];

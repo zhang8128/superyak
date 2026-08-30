@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";

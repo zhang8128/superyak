@@ -1,10 +1,10 @@
 import {
-  sealArtifact,
   type BridgeDescriptor,
   type Claim,
   type Fidelity,
   type ProfileRef,
   type Snapshot,
+  sealArtifact,
   type TranslationWitness,
 } from "@lighthouse/protocol";
 import type { InstitutionAdapter, OperationResult } from "./adapter.js";
@@ -166,19 +166,18 @@ export async function translateWithWitness(
   const targetEvaluation = await targetAdapter.evaluate(targetSnapshot, translated.value);
   const approximate = bridge.descriptor.payload.fidelity === "approximate";
   const preserved =
-    !approximate &&
-    sourceEvaluation !== "indeterminate" &&
-    sourceEvaluation === targetEvaluation;
+    !approximate && sourceEvaluation !== "indeterminate" && sourceEvaluation === targetEvaluation;
   const outcome = approximate ? "approximate" : preserved ? "preserved" : "invalid";
-  const diagnostics = preserved || approximate
-    ? []
-    : [
-        {
-          code: "SATISFACTION_NOT_PRESERVED",
-          message: `Source evaluated ${sourceEvaluation}; target evaluated ${targetEvaluation}`,
-          paths: ["payload.sentence"],
-        },
-      ];
+  const diagnostics =
+    preserved || approximate
+      ? []
+      : [
+          {
+            code: "SATISFACTION_NOT_PRESERVED",
+            message: `Source evaluated ${sourceEvaluation}; target evaluated ${targetEvaluation}`,
+            paths: ["payload.sentence"],
+          },
+        ];
   const approximation = bridge.descriptor.payload.approximation;
 
   return {

@@ -1,21 +1,21 @@
-export {
-  type InstitutionAdapter,
-  type Obstruction,
-  type OperationResult,
-  type ProjectionRequest,
+export type {
+  InstitutionAdapter,
+  Obstruction,
+  OperationResult,
+  ProjectionRequest,
 } from "./adapter.js";
 export {
+  type BridgeEnvelopeMetadata,
   composeBridges,
   identityBridge,
-  translateWithWitness,
-  type BridgeEnvelopeMetadata,
   type RuntimeBridge,
   type TranslationResult,
+  translateWithWitness,
 } from "./bridge.js";
 export {
-  evaluateConnectionPolicy,
   type AuthorizationDecision,
   type AuthorizationRequest,
+  evaluateConnectionPolicy,
 } from "./policy.js";
 export {
   checkRestrictionComposition,

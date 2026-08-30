@@ -1,19 +1,19 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
-  isSubcontext,
   type InstitutionAdapter,
+  isSubcontext,
   type OperationResult,
   type ProjectionRequest,
 } from "@lighthouse/calculus";
 import {
-  sealArtifact,
   type Claim,
   type ContextRef,
   type Evaluation,
   type JsonValue,
   type ProfileRef,
   type Snapshot,
+  sealArtifact,
 } from "@lighthouse/protocol";
 
 export const HYPER_PROFILE = {
@@ -160,7 +160,8 @@ async function projectHyper(request: ProjectionRequest): Promise<Snapshot> {
       contextPath: ["workflow", namespace],
     });
     for (const topic of Object.keys(brick.events.publishes).sort()) {
-      if (!schemas.has(topic)) throw new Error(`Brick ${brick.id} publishes missing schema ${topic}`);
+      if (!schemas.has(topic))
+        throw new Error(`Brick ${brick.id} publishes missing schema ${topic}`);
       edges.push({
         from: brick.id,
         to: `event-schema:${topic}`,
@@ -170,7 +171,8 @@ async function projectHyper(request: ProjectionRequest): Promise<Snapshot> {
       });
     }
     for (const topic of Object.keys(brick.events.subscribes).sort()) {
-      if (!schemas.has(topic)) throw new Error(`Brick ${brick.id} subscribes to missing schema ${topic}`);
+      if (!schemas.has(topic))
+        throw new Error(`Brick ${brick.id} subscribes to missing schema ${topic}`);
       edges.push({
         from: brick.id,
         to: `event-schema:${topic}`,
@@ -207,10 +209,7 @@ function contextContains(context: ContextRef, pathSegments: string[]): boolean {
   return context.path.every((segment, index) => pathSegments[index] === segment);
 }
 
-function restrictHyperSnapshot(
-  snapshot: Snapshot,
-  context: ContextRef,
-): OperationResult<Snapshot> {
+function restrictHyperSnapshot(snapshot: Snapshot, context: ContextRef): OperationResult<Snapshot> {
   if (!isSubcontext(snapshot.payload.context, context)) {
     return {
       ok: false,
@@ -285,12 +284,10 @@ function evaluateHyper(snapshot: Snapshot, claim: Claim): Evaluation {
       resource.kind === "event-schema" && resource.id === target,
   );
   const publishes = model.edges.some(
-    (edge) =>
-      edge.kind === "PUBLISHES" && edge.from === sentence.producerId && edge.to === target,
+    (edge) => edge.kind === "PUBLISHES" && edge.from === sentence.producerId && edge.to === target,
   );
   const subscribes = model.edges.some(
-    (edge) =>
-      edge.kind === "SUBSCRIBES" && edge.from === sentence.consumerId && edge.to === target,
+    (edge) => edge.kind === "SUBSCRIBES" && edge.from === sentence.consumerId && edge.to === target,
   );
   return publishes && subscribes && eventSchema?.mediaType === sentence.valueType
     ? "satisfied"

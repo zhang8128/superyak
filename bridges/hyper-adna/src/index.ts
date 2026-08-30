@@ -1,19 +1,11 @@
-import {
-  ADNA_PORT_CLAIM_MEDIA_TYPE,
-  ADNA_PROFILE,
-} from "@lighthouse/adapter-adna";
+import { ADNA_PORT_CLAIM_MEDIA_TYPE, ADNA_PROFILE } from "@lighthouse/adapter-adna";
 import {
   HYPER_DEPENDENCY_MEDIA_TYPE,
   HYPER_LEASE_MEDIA_TYPE,
   HYPER_PROFILE,
 } from "@lighthouse/adapter-hyper";
 import type { BridgeEnvelopeMetadata, RuntimeBridge } from "@lighthouse/calculus";
-import {
-  digestJson,
-  sealArtifact,
-  type Claim,
-  type JsonValue,
-} from "@lighthouse/protocol";
+import { type Claim, digestJson, type JsonValue, sealArtifact } from "@lighthouse/protocol";
 
 export interface HyperAdnaTopicMapping {
   outputPort: string;
@@ -29,9 +21,7 @@ export interface HyperAdnaMapping {
 }
 
 function asRecord(value: JsonValue): Record<string, JsonValue> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value
-    : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : undefined;
 }
 
 function unmapped(message: string, paths: string[]) {

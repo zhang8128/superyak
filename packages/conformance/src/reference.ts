@@ -1,39 +1,32 @@
 import { cp, mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ADNA_PORT_CLAIM_MEDIA_TYPE, ADNA_PROFILE, adnaAdapter } from "@lighthouse/adapter-adna";
 import {
-  ADNA_PORT_CLAIM_MEDIA_TYPE,
-  ADNA_PROFILE,
-  adnaAdapter,
-} from "@lighthouse/adapter-adna";
-import {
-  HYPER_DEPENDENCY_MEDIA_TYPE,
-  HYPER_PROFILE,
   createHyperDependencyClaim,
   createHyperLeaseClaim,
+  HYPER_DEPENDENCY_MEDIA_TYPE,
+  HYPER_PROFILE,
   hyperAdapter,
 } from "@lighthouse/adapter-hyper";
+import { createHyperAdnaBridge, type HyperAdnaMapping } from "@lighthouse/bridge-hyper-adna";
 import {
-  createHyperAdnaBridge,
-  type HyperAdnaMapping,
-} from "@lighthouse/bridge-hyper-adna";
-import {
+  type AuthorizationRequest,
   checkRestrictionComposition,
   checkRestrictionIdentity,
   composeBridges,
   evaluateConnectionPolicy,
+  type InstitutionAdapter,
   identityBridge,
   translateWithWitness,
-  type AuthorizationRequest,
-  type InstitutionAdapter,
 } from "@lighthouse/calculus";
 import {
-  parseArtifact,
-  sealArtifact,
-  verifyArtifactDigest,
   type ConnectionPolicy,
   type LighthouseArtifact,
+  parseArtifact,
   type Snapshot,
+  sealArtifact,
+  verifyArtifactDigest,
 } from "@lighthouse/protocol";
 import type { ConformanceCheck, ConformanceDiagnostic, ConformanceReport } from "./report.js";
 
@@ -122,22 +115,17 @@ export async function runReferenceConformance(
     "urn:lighthouse:adna-local",
     "lighthouse-adna",
   );
-  const validMapping = await readMapping(
-    path.join(options.fixtureRoot, "bridges/hyper-adna.json"),
-  );
+  const validMapping = await readMapping(path.join(options.fixtureRoot, "bridges/hyper-adna.json"));
   const invalidMapping = await readMapping(
     path.join(options.fixtureRoot, "bridges/hyper-adna-invalid.json"),
   );
-  const candidate = createHyperAdnaBridge(
-    options.invalidBridge ? invalidMapping : validMapping,
-    {
-      id: options.invalidBridge
-        ? "urn:bridge:hyper-adna-orders-invalid"
-        : "urn:bridge:hyper-adna-orders",
-      issuer: "urn:lighthouse:bridge-author",
-      issuedAt,
-    },
-  );
+  const candidate = createHyperAdnaBridge(options.invalidBridge ? invalidMapping : validMapping, {
+    id: options.invalidBridge
+      ? "urn:bridge:hyper-adna-orders-invalid"
+      : "urn:bridge:hyper-adna-orders",
+    issuer: "urn:lighthouse:bridge-author",
+    issuedAt,
+  });
   const invalidBridge = createHyperAdnaBridge(invalidMapping, {
     id: "urn:bridge:hyper-adna-orders-negative-control",
     issuer: "urn:lighthouse:bridge-author",
@@ -162,7 +150,9 @@ export async function runReferenceConformance(
   );
 
   const parsedPolicy = parseArtifact(
-    JSON.parse(await readFile(path.join(options.fixtureRoot, "policy/workflow-policy.json"), "utf8")),
+    JSON.parse(
+      await readFile(path.join(options.fixtureRoot, "policy/workflow-policy.json"), "utf8"),
+    ),
   );
   if (parsedPolicy.kind !== "ConnectionPolicy") {
     throw new Error("Reference policy fixture is not a ConnectionPolicy");

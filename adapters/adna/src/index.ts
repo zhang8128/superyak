@@ -1,19 +1,19 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-  isSubcontext,
   type InstitutionAdapter,
+  isSubcontext,
   type OperationResult,
   type ProjectionRequest,
 } from "@lighthouse/calculus";
 import {
-  sealArtifact,
   type Claim,
   type ContextRef,
   type Evaluation,
   type JsonValue,
   type ProfileRef,
   type Snapshot,
+  sealArtifact,
 } from "@lighthouse/protocol";
 import { parse as parseYaml } from "yaml";
 
@@ -22,8 +22,7 @@ export const ADNA_PROFILE = {
   version: "1.0.0",
 } satisfies ProfileRef;
 
-export const ADNA_PORT_CLAIM_MEDIA_TYPE =
-  "application/vnd.adna.port-compatibility-claim+json";
+export const ADNA_PORT_CLAIM_MEDIA_TYPE = "application/vnd.adna.port-compatibility-claim+json";
 
 export interface AdnaNode {
   id: string;
@@ -81,7 +80,11 @@ async function latticeFile(root: string): Promise<string> {
 
 function parseLattice(value: unknown): { name: string; model: AdnaModel } {
   const lattice = asRecord(value);
-  if (typeof lattice?.name !== "string" || !Array.isArray(lattice.nodes) || !Array.isArray(lattice.edges)) {
+  if (
+    typeof lattice?.name !== "string" ||
+    !Array.isArray(lattice.nodes) ||
+    !Array.isArray(lattice.edges)
+  ) {
     throw new Error("Invalid aDNA lattice: name, nodes, and edges are required");
   }
   const contextPath = ["workflow", lattice.name];

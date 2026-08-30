@@ -1,4 +1,4 @@
-import { canonicalize, type ContextRef, type JsonValue, type Snapshot } from "@lighthouse/protocol";
+import { type ContextRef, canonicalize, type JsonValue, type Snapshot } from "@lighthouse/protocol";
 import type { InstitutionAdapter, Obstruction } from "./adapter.js";
 
 export type LawCheck =
@@ -35,7 +35,8 @@ export async function checkRestrictionIdentity(
   if (!restricted.ok) {
     return failedLaw("RESTRICTION_IDENTITY_OBSTRUCTED", obstructionMessage(restricted.obstruction));
   }
-  return canonicalize(semanticProjection(restricted.value)) === canonicalize(semanticProjection(snapshot))
+  return canonicalize(semanticProjection(restricted.value)) ===
+    canonicalize(semanticProjection(snapshot))
     ? { passed: true }
     : failedLaw("RESTRICTION_IDENTITY_FAILED", "Identity restriction changed the semantic model");
 }
@@ -52,7 +53,10 @@ export async function checkRestrictionComposition(
   }
   const composed = await adapter.restrictSnapshot(first.value, inner);
   if (!composed.ok) {
-    return failedLaw("RESTRICTION_SECOND_STEP_OBSTRUCTED", obstructionMessage(composed.obstruction));
+    return failedLaw(
+      "RESTRICTION_SECOND_STEP_OBSTRUCTED",
+      obstructionMessage(composed.obstruction),
+    );
   }
   const direct = await adapter.restrictSnapshot(snapshot, inner);
   if (!direct.ok) {

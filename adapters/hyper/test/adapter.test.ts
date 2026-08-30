@@ -1,16 +1,9 @@
 import { cp, mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  checkRestrictionComposition,
-  checkRestrictionIdentity,
-} from "@lighthouse/calculus";
+import { checkRestrictionComposition, checkRestrictionIdentity } from "@lighthouse/calculus";
 import { describe, expect, it } from "vitest";
-import {
-  createHyperDependencyClaim,
-  createHyperLeaseClaim,
-  hyperAdapter,
-} from "../src/index.js";
+import { createHyperDependencyClaim, createHyperLeaseClaim, hyperAdapter } from "../src/index.js";
 
 const fixtureRoot = path.resolve(import.meta.dirname, "../../../fixtures/hyper/orders");
 const metadata = {

@@ -93,9 +93,9 @@ export function evaluateConnectionPolicy(
     return left.rule.id.localeCompare(right.rule.id);
   });
   const highestScore = activeMatches[0]?.score;
-  const winner = activeMatches.find(
-    ({ rule, score }) => score === highestScore && rule.effect === "deny",
-  ) ?? activeMatches[0];
+  const winner =
+    activeMatches.find(({ rule, score }) => score === highestScore && rule.effect === "deny") ??
+    activeMatches[0];
 
   if (winner?.rule.effect === "allow") {
     return { allowed: true, ruleId: winner.rule.id };

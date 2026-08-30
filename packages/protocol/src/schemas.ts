@@ -200,10 +200,10 @@ const commonFields = {
   extensions: z.record(namespacedExtensionKey, z.json()).optional(),
 };
 
-function envelopeSchema<const Kind extends z.infer<typeof artifactKindSchema>, Payload extends z.ZodType>(
-  kind: Kind,
-  payload: Payload,
-) {
+function envelopeSchema<
+  const Kind extends z.infer<typeof artifactKindSchema>,
+  Payload extends z.ZodType,
+>(kind: Kind, payload: Payload) {
   return z
     .object({
       ...commonFields,
@@ -234,10 +234,7 @@ export const lighthouseDescriptorSchema = envelopeSchema(
 export const snapshotSchema = envelopeSchema("Snapshot", snapshotPayloadSchema);
 export const claimSchema = envelopeSchema("Claim", claimPayloadSchema);
 export const bridgeDescriptorSchema = envelopeSchema("BridgeDescriptor", bridgePayloadSchema);
-export const translationWitnessSchema = envelopeSchema(
-  "TranslationWitness",
-  witnessPayloadSchema,
-);
+export const translationWitnessSchema = envelopeSchema("TranslationWitness", witnessPayloadSchema);
 export const connectionPolicySchema = envelopeSchema(
   "ConnectionPolicy",
   connectionPolicyPayloadSchema,

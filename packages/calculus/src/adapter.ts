@@ -1,10 +1,4 @@
-import type {
-  Claim,
-  ContextRef,
-  Evaluation,
-  ProfileRef,
-  Snapshot,
-} from "@lighthouse/protocol";
+import type { Claim, ContextRef, Evaluation, ProfileRef, Snapshot } from "@lighthouse/protocol";
 
 export interface Obstruction {
   code: string;
@@ -12,9 +6,7 @@ export interface Obstruction {
   paths: string[];
 }
 
-export type OperationResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; obstruction: Obstruction };
+export type OperationResult<T> = { ok: true; value: T } | { ok: false; obstruction: Obstruction };
 
 export interface ProjectionRequest {
   root: string;

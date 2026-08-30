@@ -10,7 +10,8 @@
   },
   "scripts": {
     "build": "pnpm --recursive --if-present build",
-    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm test",
+    "lighthouse": "tsx packages/conformance/src/cli.ts",
     "lint": "biome check .",
     "proof": "pnpm --filter @lighthouse/conformance proof",
     "schema:generate": "tsx scripts/generate-schemas.ts",

@@ -8,9 +8,7 @@ describe("canonical JSON", () => {
 
     expect(canonicalize(left)).toBe('{"a":{"x":null,"y":true},"z":[3,2,1]}');
     expect(digestJson(left)).toEqual(digestJson(right));
-    expect(digestJson({ z: [1, 2, 3], a: { x: null, y: true } })).not.toEqual(
-      digestJson(left),
-    );
+    expect(digestJson({ z: [1, 2, 3], a: { x: null, y: true } })).not.toEqual(digestJson(left));
   });
 
   it("rejects non-finite numbers", () => {

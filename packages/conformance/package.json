@@ -6,6 +6,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "src/index.ts",
+  "bin": {
+    "lighthouse": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -14,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "proof": "tsx src/cli.ts prove --fixtures ../../fixtures",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
@@ -26,6 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "24.0.0",
+    "tsx": "4.23.12",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }

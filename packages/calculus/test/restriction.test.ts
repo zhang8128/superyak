@@ -1,15 +1,10 @@
-import {
-  sealArtifact,
-  type Claim,
-  type ContextRef,
-  type Snapshot,
-} from "@lighthouse/protocol";
+import { type Claim, type ContextRef, type Snapshot, sealArtifact } from "@lighthouse/protocol";
 import { describe, expect, it } from "vitest";
 import {
   checkRestrictionComposition,
   checkRestrictionIdentity,
-  isSubcontext,
   type InstitutionAdapter,
+  isSubcontext,
   type OperationResult,
 } from "../src/index.js";
 
@@ -44,10 +39,7 @@ const snapshot = sealArtifact({
   },
 });
 
-function restrictSnapshot(
-  current: Snapshot,
-  context: ContextRef,
-): OperationResult<Snapshot> {
+function restrictSnapshot(current: Snapshot, context: ContextRef): OperationResult<Snapshot> {
   if (!isSubcontext(current.payload.context, context)) {
     return {
       ok: false,
