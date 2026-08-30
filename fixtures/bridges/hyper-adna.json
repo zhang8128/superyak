@@ -1,0 +1,16 @@
+{
+  "id": "urn:lighthouse:mapping:hyper-adna-orders",
+  "producerNodes": {
+    "orders:producer": "publish_order"
+  },
+  "consumerNodes": {
+    "orders:consumer": "consume_order"
+  },
+  "topics": {
+    "orders.created.v1": {
+      "outputPort": "order_created",
+      "inputPort": "order_created",
+      "valueType": "application/vnd.example.order+json"
+    }
+  }
+}

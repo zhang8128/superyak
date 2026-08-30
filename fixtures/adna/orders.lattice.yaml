@@ -1,0 +1,39 @@
+name: orders
+version: 1.0.0
+type: workflow
+nodes:
+  - id: publish_order
+    type: process
+    config:
+      outputs:
+        order_created: application/vnd.example.order+json
+  - id: consume_order
+    type: process
+    config:
+      inputs:
+        order_created: application/vnd.example.order+json
+  - id: lattice_interface
+    type: process
+    config:
+      interface_version: 1.0.0
+      entry_nodes:
+        - id: consume_order
+          accepts:
+            order_created: application/vnd.example.order+json
+      exit_nodes:
+        - id: publish_order
+          produces:
+            order_created: application/vnd.example.order+json
+      ports:
+        inputs:
+          - name: order_created
+            maps_to: consume_order
+        outputs:
+          - name: order_created
+            maps_from: publish_order
+edges:
+  - from: publish_order
+    to: consume_order
+    label: order created
+    data_mapping:
+      order_created: order_created
