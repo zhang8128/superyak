@@ -13,6 +13,11 @@ export {
   type TranslationResult,
 } from "./bridge.js";
 export {
+  evaluateConnectionPolicy,
+  type AuthorizationDecision,
+  type AuthorizationRequest,
+} from "./policy.js";
+export {
   checkRestrictionComposition,
   checkRestrictionIdentity,
   isSubcontext,

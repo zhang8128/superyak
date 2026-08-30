@@ -1,0 +1,13 @@
+{
+  "publisher": "urn:lighthouse:trusted-crew",
+  "profile": "urn:lighthouse:profile:hyper-modules",
+  "domain": "personal.memory",
+  "action": "inject_context",
+  "context": "workflow/orders",
+  "claimMediaType": "application/vnd.hyper.dependency-claim+json",
+  "purpose": "debugging",
+  "audience": "self",
+  "at": "2026-09-01T00:00:00Z",
+  "evidence": [],
+  "attestations": []
+}
