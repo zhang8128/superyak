@@ -17,8 +17,12 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
   "devDependencies": {
     "@types/node": "24.0.0",
+    "ajv": "8.17.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }
