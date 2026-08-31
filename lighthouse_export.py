@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+import sys
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TextIO
 
 
 TECHNICAL_CONTEXT = {"id": "memory/technical", "path": ["memory", "technical"]}
@@ -281,3 +284,74 @@ def export_lighthouse_shadow(
         if connection.in_transaction:
             connection.rollback()
         connection.close()
+
+
+def write_lighthouse_shadow(output: Path, document: dict[str, object]) -> None:
+    """Write one new canonical export without overwriting an existing path."""
+    created = False
+    try:
+        with Path(output).open("x", encoding="utf-8") as stream:
+            created = True
+            stream.write(
+                json.dumps(
+                    document,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+    except FileExistsError as error:
+        raise ExportError("OUTPUT_EXISTS") from error
+    except OSError as error:
+        if created:
+            Path(output).unlink(missing_ok=True)
+        raise ExportError("OUTPUT_WRITE_FAILED") from error
+    except Exception:
+        if created:
+            Path(output).unlink(missing_ok=True)
+        raise
+
+
+def _emit(stream: TextIO, value: dict[str, object]) -> None:
+    stream.write(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+
+
+class _PrivateArgumentParser(argparse.ArgumentParser):
+    """Convert parse failures to a stable code without echoing arguments."""
+
+    def error(self, message: str) -> None:
+        _ = message
+        raise ExportError("USAGE")
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    stdout: TextIO = sys.stdout,
+    stderr: TextIO = sys.stderr,
+) -> int:
+    """Run the privacy-safe offline exporter CLI."""
+    parser = _PrivateArgumentParser(prog="engram-lighthouse-export")
+    parser.add_argument("--db", required=True)
+    parser.add_argument("--instance", required=True)
+    parser.add_argument("--output", required=True)
+    try:
+        args = parser.parse_args(argv)
+        document, audit = export_lighthouse_shadow(Path(args.db), instance=args.instance)
+        write_lighthouse_shadow(Path(args.output), document)
+    except ExportError as error:
+        _emit(stderr, {"ok": False, "code": error.code})
+        return 1
+    except sqlite3.DatabaseError:
+        _emit(stderr, {"ok": False, "code": "DATABASE_READ_FAILED"})
+        return 1
+    _ = stdout
+    _emit(stderr, {"ok": True, "audit": asdict(audit)})
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

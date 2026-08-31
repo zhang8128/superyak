@@ -3,11 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from io import StringIO
 from pathlib import Path
 
 import pytest
 
-from lighthouse_export import ExportError, export_lighthouse_shadow
+from lighthouse_export import (
+    ExportError,
+    export_lighthouse_shadow,
+    main,
+    write_lighthouse_shadow,
+)
 
 
 def digest(value: str) -> str:
@@ -309,3 +315,118 @@ def test_projection_is_independent_of_database_insertion_order(tmp_path: Path) -
 
     assert first_document == second_document
     assert first_audit == second_audit
+
+
+def test_cli_writes_canonical_export_and_safe_audit(tmp_path: Path) -> None:
+    database = tmp_path / "graph.db"
+    connection = build_database(database)
+    memory_id = "00000000-0000-4000-8000-000000000001"
+    recall_id = "00000000-0000-4000-8000-000000000002"
+    add_memory(connection, "episodes", memory_id, "raw memory secret", "work")
+    add_recall(connection, recall_id, "raw query secret", [memory_id])
+    connection.commit()
+    connection.close()
+    output = tmp_path / "local.engram.json"
+    stdout, stderr = StringIO(), StringIO()
+
+    code = main(
+        [
+            "--db",
+            str(database),
+            "--instance",
+            "engram-test",
+            "--output",
+            str(output),
+        ],
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert code == 0
+    assert stdout.getvalue() == ""
+    written = output.read_text(encoding="utf-8")
+    assert written.endswith("\n") and not written.endswith("\n\n")
+    assert written == (
+        json.dumps(
+            json.loads(written),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    diagnostics = json.loads(stderr.getvalue())
+    assert diagnostics["ok"] is True
+    assert diagnostics["audit"]["eligible_traces"] == 1
+    assert "raw memory secret" not in written
+    assert "raw query secret" not in written
+    for secret in ("raw memory secret", "raw query secret", memory_id, recall_id):
+        assert secret not in stdout.getvalue() + stderr.getvalue()
+
+
+def test_cli_refuses_overwrite_without_changing_existing_file(tmp_path: Path) -> None:
+    database = tmp_path / "graph.db"
+    connection = build_database(database)
+    connection.commit()
+    connection.close()
+    output = tmp_path / "existing.engram.json"
+    output.write_text("keep-me", encoding="utf-8")
+    stderr = StringIO()
+
+    code = main(
+        ["--db", str(database), "--instance", "test", "--output", str(output)],
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert code == 1
+    assert output.read_text(encoding="utf-8") == "keep-me"
+    assert json.loads(stderr.getvalue()) == {"ok": False, "code": "OUTPUT_EXISTS"}
+
+
+def test_writer_removes_a_new_incomplete_file_when_serialization_fails(tmp_path: Path) -> None:
+    output = tmp_path / "incomplete.engram.json"
+
+    with pytest.raises(TypeError):
+        write_lighthouse_shadow(output, {"invalid": object()})
+
+    assert not output.exists()
+
+
+def test_cli_reports_corrupt_database_without_leaking_source_bytes(tmp_path: Path) -> None:
+    database = tmp_path / "corrupt.db"
+    database.write_text("raw database secret", encoding="utf-8")
+    stderr = StringIO()
+
+    code = main(
+        [
+            "--db",
+            str(database),
+            "--instance",
+            "test",
+            "--output",
+            str(tmp_path / "output.engram.json"),
+        ],
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert code == 1
+    assert json.loads(stderr.getvalue()) == {"ok": False, "code": "DATABASE_READ_FAILED"}
+    assert "raw database secret" not in stderr.getvalue()
+
+
+def test_cli_reports_usage_without_echoing_arguments() -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+
+    code = main(
+        ["--db", "private-database-path"],
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert code == 1
+    assert stdout.getvalue() == ""
+    assert json.loads(stderr.getvalue()) == {"ok": False, "code": "USAGE"}
+    assert "private-database-path" not in stderr.getvalue()
