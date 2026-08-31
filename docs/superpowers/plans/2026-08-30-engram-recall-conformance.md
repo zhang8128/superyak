@@ -547,9 +547,9 @@ Keep the original 15-check proof description unchanged. Link the normative profi
 
 - [ ] **Step 3: Run documentation and full workspace checks**
 
-Run: `pnpm lint && pnpm typecheck && pnpm test`
+Run: `pnpm check`
 
-Expected: documentation formatting, all package types, and every test PASS.
+Expected: all packages build first, then documentation formatting, all package types, and every test PASS.
 
 - [ ] **Step 4: Commit the profile documentation**
 
