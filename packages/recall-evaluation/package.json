@@ -6,6 +6,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "src/index.ts",
+  "bin": {
+    "recall-proof": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -14,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "proof": "tsx src/cli.ts proof --fixtures ../../fixtures/engram",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
   },

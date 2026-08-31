@@ -14,6 +14,7 @@
     "lighthouse": "tsx packages/conformance/src/cli.ts",
     "lint": "biome check .",
     "proof": "pnpm --filter @lighthouse/conformance proof",
+    "recall:proof": "pnpm --filter @lighthouse/recall-evaluation proof",
     "schema:generate": "tsx scripts/generate-schemas.ts",
     "test": "pnpm --recursive --if-present test",
     "typecheck": "pnpm --recursive --if-present typecheck"
