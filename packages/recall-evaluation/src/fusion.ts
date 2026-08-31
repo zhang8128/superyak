@@ -1,4 +1,4 @@
-import { canonicalize, type JsonValue } from "@lighthouse/protocol";
+import { canonicalize, compareCanonicalJson, type JsonValue } from "@lighthouse/protocol";
 import type { FusedCandidate, MemoryRef, RankedContribution } from "./types.js";
 
 export function memoryRefKey(ref: MemoryRef): string {
@@ -14,13 +14,13 @@ function validateContribution(contribution: RankedContribution): void {
   }
 }
 
-function contributionKey(contribution: RankedContribution): string {
-  return canonicalize({
+function contributionSortValue(contribution: RankedContribution): JsonValue {
+  return {
     ref: contribution.ref,
     rank: contribution.rank,
     sourceSnapshotDigest: contribution.sourceSnapshotDigest,
     sourceWeight: contribution.sourceWeight,
-  } as unknown as JsonValue);
+  } as unknown as JsonValue;
 }
 
 export function fuseRankings(inputs: RankedContribution[], k: number): FusedCandidate[] {
@@ -55,12 +55,13 @@ export function fuseRankings(inputs: RankedContribution[], k: number): FusedCand
     .map((candidate) => ({
       ...candidate,
       contributions: candidate.contributions.toSorted((left, right) =>
-        contributionKey(left).localeCompare(contributionKey(right)),
+        compareCanonicalJson(contributionSortValue(left), contributionSortValue(right)),
       ),
     }))
     .sort(
       (left, right) =>
-        right.score - left.score || memoryRefKey(left.ref).localeCompare(memoryRefKey(right.ref)),
+        right.score - left.score ||
+        compareCanonicalJson(left.ref as unknown as JsonValue, right.ref as unknown as JsonValue),
     )
     .slice(0, k);
 }

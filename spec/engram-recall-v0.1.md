@@ -42,12 +42,16 @@ The adapter MUST reject:
 - duplicate memory IDs;
 - dangling edge endpoints;
 - dangling recall candidates;
+- duplicate candidate memory IDs within one trace;
 - duplicate or non-contiguous positive candidate ranks;
 - duplicate traces for one `(turnId, contextPath)` pair;
 - memory or trace contexts outside the declared root;
 - invalid layers, origins, weights, digests, or format versions.
 
-Projection MUST sort set-like collections and candidate ranks. Filesystem
+Projection MUST sort set-like collections and candidate ranks. Sorts over text
+or structured identity MUST compare canonical JSON strings by Unicode
+code-unit order and MUST NOT use locale-sensitive collation. Parallel edges
+MUST use the complete canonical edge value as a total tie-break. Filesystem
 paths and directory enumeration order MUST NOT enter the snapshot. A directory
 projection MUST fail unless it contains exactly one `*.engram.json` file.
 
@@ -95,6 +99,9 @@ publisher-qualified memory reference, and zero or more forbidden references.
 The receiver MUST own these judgments. A remote publisher MUST NOT label its
 own material relevant or harmless for the receiver.
 
+An experiment MUST reject duplicate `(turnId, context.id)` turn keys rather
+than preserve caller order for ambiguous judgments.
+
 Memory identity is the ordered pair `(publisher, source-local memoryId)`.
 Equal local IDs from different publishers MUST remain distinct.
 
@@ -117,6 +124,12 @@ time          experiment timestamp
 Missing or expired rules deny access. The receiver's own source is marked
 `local:self` and is not treated as a remote grant. A remote trace MUST exactly
 match the evaluated turn ID and context in scoped modes.
+
+Each turn MUST record authorization separately from trace availability and
+admission. Per-source evidence distinguishes a matched, absent, or
+context-mismatched trace and an admitted, mode-excluded, policy-denied,
+zero-weight, or trace-unavailable outcome. An unknown turn is recorded as
+`absent`; absence MUST NOT be represented as an authorization failure.
 
 ## Rank fusion
 
@@ -186,11 +199,17 @@ Every evaluated turn emits a content-addressed local receipt containing:
 - selected opaque references, content digests, scores, and rank contributions;
 - source snapshot digests and local weights;
 - local markers and remote policy decisions;
+- per-source trace and admission outcomes;
 - transformation `weighted-rrf-v1`.
 
 Receipts MUST NOT contain raw query or memory content. A receipt does not grant
 content delivery, injection, retention, derivation, or resharing. Those actions
 remain independently authorized.
+
+Receipt content MUST pass a strict runtime schema before hashing. Unknown
+members and any value other than literal `injected: false` MUST be rejected.
+Verification MUST distinguish malformed receipt structure from a digest
+mismatch.
 
 The receipt is package-level evidence in this version, not a new core
 Lighthouse artifact kind.

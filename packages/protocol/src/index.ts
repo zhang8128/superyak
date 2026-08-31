@@ -6,7 +6,12 @@ export {
   verifyArtifactDigest,
 } from "./artifacts.js";
 export { type Digest, digestJson, verifyJsonDigest } from "./digest.js";
-export { canonicalize, type JsonPrimitive, type JsonValue } from "./json.js";
+export {
+  canonicalize,
+  compareCanonicalJson,
+  type JsonPrimitive,
+  type JsonValue,
+} from "./json.js";
 export {
   artifactKindSchema,
   attestationSchema,

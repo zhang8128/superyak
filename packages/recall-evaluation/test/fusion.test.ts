@@ -57,6 +57,19 @@ describe("weighted reciprocal-rank fusion", () => {
     expect(selected.map(({ ref }) => ref.memoryId)).toEqual(["memory-a", "memory-b"]);
   });
 
+  it("uses a locale-independent canonical tie-break for Unicode identities", () => {
+    const first = [
+      contribution("urn:local", "memory-ä", 1, 1),
+      contribution("urn:local", "memory-z", 1, 1),
+    ];
+
+    const selected = fuseRankings(first, 2);
+    const reversed = fuseRankings(first.toReversed(), 2);
+
+    expect(selected).toEqual(reversed);
+    expect(selected.map(({ ref }) => ref.memoryId)).toEqual(["memory-z", "memory-ä"]);
+  });
+
   it("truncates only after all candidates are fused", () => {
     const selected = fuseRankings(
       [

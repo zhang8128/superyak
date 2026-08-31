@@ -2,7 +2,14 @@ export { type RecallCliIo, runRecallCli } from "./cli.js";
 export { runRecallExperiment } from "./experiment.js";
 export { fuseRankings, memoryRefKey } from "./fusion.js";
 export { measureTurn } from "./metrics.js";
-export { sealRecallReceipt } from "./receipt.js";
+export {
+  parseRecallReceipt,
+  type RecallReceiptVerification,
+  recallSelectionReceiptContentSchema,
+  recallSelectionReceiptSchema,
+  sealRecallReceipt,
+  verifyRecallReceiptDigest,
+} from "./receipt.js";
 export {
   type RecallProofCheck,
   type RecallProofDiagnostic,
@@ -15,6 +22,7 @@ export type {
   MeasurementOptions,
   MemoryRef,
   RankedContribution,
+  RecallDenialCode,
   RecallExperimentInput,
   RecallExperimentMode,
   RecallExperimentReport,
@@ -24,6 +32,7 @@ export type {
   RecallSelectionReceipt,
   RecallSelectionReceiptContent,
   RecallSource,
+  RecallSourceAdmission,
   RecallSourceDecision,
   RecallTurnJudgment,
   RecallTurnReport,

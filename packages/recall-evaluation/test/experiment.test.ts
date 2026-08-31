@@ -182,6 +182,12 @@ describe("policy-scoped recall experiment", () => {
     expect(mode(report, "policy-scoped").metrics.unauthorizedSelectionCount).toBe(0);
     expect(mode(report, "indiscriminate-control").metrics.forbiddenExposureAtK).toBe(1);
     expect(mode(report, "indiscriminate-control").metrics.unauthorizedSelectionCount).toBe(1);
+    expect(mode(report, "local-only").turns[0]?.admissions).toContainEqual({
+      publisher: "urn:crew",
+      trace: "matched",
+      admission: "mode-excluded",
+      candidateCount: 1,
+    });
   });
 
   it("records deterministic recall-only receipts with the matched local rule", () => {
@@ -218,5 +224,99 @@ describe("policy-scoped recall experiment", () => {
       allowed: true,
       ruleId: "allow-intimate-neighbor-recall",
     });
+    expect(scoped.turns[0]?.admissions).toContainEqual({
+      publisher: "urn:intimate-neighbor",
+      trace: "context-mismatch",
+      admission: "trace-unavailable",
+      candidateCount: 0,
+    });
+  });
+
+  it("records an unknown turn as absent separately from authorization", () => {
+    const experiment = input();
+    const turn = experiment.turns[0];
+    if (turn === undefined) throw new Error("missing experiment turn");
+    turn.turnId = "turn-unknown";
+
+    const scopedTurn = mode(runRecallExperiment(experiment), "policy-scoped").turns[0];
+
+    expect(scopedTurn?.decisions).toContainEqual({
+      publisher: "urn:crew",
+      role: "remote",
+      allowed: true,
+      ruleId: "allow-crew-debug-recall",
+    });
+    expect(scopedTurn?.admissions).toContainEqual({
+      publisher: "urn:crew",
+      trace: "absent",
+      admission: "trace-unavailable",
+      candidateCount: 0,
+    });
+    expect(scopedTurn?.receipt.admissions).toEqual(scopedTurn?.admissions);
+  });
+
+  it("records a zero-weight matching source without selecting it", () => {
+    const experiment = input();
+    const crew = experiment.sources.find(({ snapshot }) => snapshot.issuer === "urn:crew");
+    if (crew === undefined) throw new Error("missing crew source");
+    crew.weight = 0;
+
+    const scopedTurn = mode(runRecallExperiment(experiment), "policy-scoped").turns[0];
+
+    expect(scopedTurn?.admissions).toContainEqual({
+      publisher: "urn:crew",
+      trace: "matched",
+      admission: "zero-weight",
+      candidateCount: 1,
+    });
+    expect(scopedTurn?.selected).not.toContainEqual(
+      expect.objectContaining({
+        ref: { publisher: "urn:crew", memoryId: "restart-after-server-change" },
+      }),
+    );
+  });
+
+  it("denies an unmatched remote source by default and records the exclusion", () => {
+    const experiment = input();
+    experiment.sources.push({
+      snapshot: snapshot(
+        "urn:unmatched",
+        "unmatched-debug-memory",
+        ["memory", "debugging", "mcp"],
+        "d",
+      ),
+      role: "remote",
+      weight: 4,
+    });
+
+    const scopedTurn = mode(runRecallExperiment(experiment), "policy-scoped").turns[0];
+
+    expect(scopedTurn?.decisions).toContainEqual({
+      publisher: "urn:unmatched",
+      role: "remote",
+      allowed: false,
+      code: "NO_MATCHING_ALLOW",
+    });
+    expect(scopedTurn?.admissions).toContainEqual({
+      publisher: "urn:unmatched",
+      trace: "matched",
+      admission: "policy-denied",
+      candidateCount: 1,
+    });
+    expect(scopedTurn?.selected).not.toContainEqual(
+      expect.objectContaining({ ref: { publisher: "urn:unmatched" } }),
+    );
+  });
+
+  it("rejects duplicate logical turn keys instead of preserving caller order", () => {
+    const experiment = input();
+    const turn = experiment.turns[0];
+    if (turn === undefined) throw new Error("missing experiment turn");
+    experiment.turns.push({
+      ...structuredClone(turn),
+      purpose: "different-judgment",
+    });
+
+    expect(() => runRecallExperiment(experiment)).toThrow("DUPLICATE_EXPERIMENT_TURN");
   });
 });

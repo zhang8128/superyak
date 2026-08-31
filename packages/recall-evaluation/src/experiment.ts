@@ -4,7 +4,7 @@ import {
   engramModel,
 } from "@lighthouse/adapter-engram";
 import { evaluateConnectionPolicy } from "@lighthouse/calculus";
-import { digestJson, type JsonValue } from "@lighthouse/protocol";
+import { compareCanonicalJson, digestJson, type JsonValue } from "@lighthouse/protocol";
 import { fuseRankings } from "./fusion.js";
 import { measureTurn } from "./metrics.js";
 import { sealRecallReceipt } from "./receipt.js";
@@ -18,6 +18,7 @@ import type {
   RecallModeReport,
   RecallSelectionReceiptContent,
   RecallSource,
+  RecallSourceAdmission,
   RecallSourceDecision,
   RecallTurnJudgment,
   RecallTurnReport,
@@ -50,8 +51,8 @@ function validateAndSortSources(input: RecallExperimentInput): RecallSource[] {
     })
     .sort(
       (left, right) =>
-        left.snapshot.issuer.localeCompare(right.snapshot.issuer) ||
-        left.snapshot.digest.value.localeCompare(right.snapshot.digest.value),
+        compareCanonicalJson(left.snapshot.issuer, right.snapshot.issuer) ||
+        compareCanonicalJson(left.snapshot.digest.value, right.snapshot.digest.value),
     );
 }
 
@@ -81,12 +82,20 @@ function decisionFor(
     evidence: [],
     attestations: [],
   });
+  if (decision.allowed) {
+    return {
+      publisher: source.snapshot.issuer,
+      role: "remote",
+      allowed: true,
+      ruleId: decision.ruleId,
+    };
+  }
   return {
     publisher: source.snapshot.issuer,
-    role: source.role,
-    allowed: decision.allowed,
-    ...(decision.allowed ? { ruleId: decision.ruleId } : { code: decision.code }),
-    ...(!decision.allowed && decision.ruleId !== undefined ? { ruleId: decision.ruleId } : {}),
+    role: "remote",
+    allowed: false,
+    code: decision.code,
+    ...(decision.ruleId === undefined ? {} : { ruleId: decision.ruleId }),
   };
 }
 
@@ -100,39 +109,81 @@ function includeSource(
   return mode === "policy-scoped" && decision.allowed;
 }
 
-function contributionsFor(
+interface SourceTraceResult {
+  trace: RecallSourceAdmission["trace"];
+  contributions: RankedContribution[];
+}
+
+function traceResultFor(
   mode: RecallExperimentMode,
   source: RecallSource,
   turn: RecallTurnJudgment,
-): RankedContribution[] {
+): SourceTraceResult {
   const model = engramModel(source.snapshot);
-  if (model === undefined) return [];
+  if (model === undefined) return { trace: "absent", contributions: [] };
   const memories = new Map(model.memories.map((memory) => [memory.id, memory]));
-  return model.recallTraces
-    .filter(
-      (trace) =>
-        trace.turnId === turn.turnId &&
-        (mode === "indiscriminate-control" || samePath(trace.contextPath, turn.context.path)),
-    )
-    .flatMap((trace) =>
-      trace.candidates.flatMap((candidate) => {
-        const memory = memories.get(candidate.memoryId);
-        if (memory === undefined) return [];
-        return [
-          {
-            ref: { publisher: source.snapshot.issuer, memoryId: memory.id },
-            contentDigest: memory.contentDigest,
-            sourceSnapshotDigest: source.snapshot.digest,
-            rank: candidate.rank,
-            sourceWeight: source.weight,
-          },
-        ];
-      }),
-    );
+  const turnTraces = model.recallTraces.filter((trace) => trace.turnId === turn.turnId);
+  if (turnTraces.length === 0) return { trace: "absent", contributions: [] };
+  const matchingTraces =
+    mode === "indiscriminate-control"
+      ? turnTraces
+      : turnTraces.filter((trace) => samePath(trace.contextPath, turn.context.path));
+  if (matchingTraces.length === 0) {
+    return { trace: "context-mismatch", contributions: [] };
+  }
+  const contributions = matchingTraces.flatMap((trace) =>
+    trace.candidates.flatMap((candidate) => {
+      const memory = memories.get(candidate.memoryId);
+      if (memory === undefined) return [];
+      return [
+        {
+          ref: { publisher: source.snapshot.issuer, memoryId: memory.id },
+          contentDigest: memory.contentDigest,
+          sourceSnapshotDigest: source.snapshot.digest,
+          rank: candidate.rank,
+          sourceWeight: source.weight,
+        },
+      ];
+    }),
+  );
+  return { trace: "matched", contributions };
+}
+
+function sourceAdmission(
+  mode: RecallExperimentMode,
+  source: RecallSource,
+  decision: RecallSourceDecision,
+  traceResult: SourceTraceResult,
+): RecallSourceAdmission {
+  let admission: RecallSourceAdmission["admission"];
+  if (!includeSource(mode, source, decision)) {
+    admission =
+      mode === "policy-scoped" && source.role === "remote" && !decision.allowed
+        ? "policy-denied"
+        : "mode-excluded";
+  } else if (source.weight === 0) {
+    admission = "zero-weight";
+  } else if (traceResult.trace !== "matched") {
+    admission = "trace-unavailable";
+  } else {
+    admission = "admitted";
+  }
+  return {
+    publisher: source.snapshot.issuer,
+    trace: traceResult.trace,
+    admission,
+    candidateCount: traceResult.contributions.length,
+  };
 }
 
 function sortedDecisions(decisions: RecallSourceDecision[]): RecallSourceDecision[] {
-  return decisions.toSorted((left, right) => left.publisher.localeCompare(right.publisher));
+  return decisions.toSorted((left, right) => compareCanonicalJson(left.publisher, right.publisher));
+}
+
+function sortedAdmissions(admissions: RecallSourceAdmission[]): RecallSourceAdmission[] {
+  return admissions.toSorted((left, right) =>
+    compareCanonicalJson(left.publisher, right.publisher),
+  );
 }
 
 function receiptContent(
@@ -141,6 +192,7 @@ function receiptContent(
   turn: RecallTurnJudgment,
   sources: RecallSource[],
   decisions: RecallSourceDecision[],
+  admissions: RecallSourceAdmission[],
   selected: ReturnType<typeof fuseRankings>,
 ): RecallSelectionReceiptContent {
   return {
@@ -162,6 +214,7 @@ function receiptContent(
       weight: source.weight,
     })),
     decisions: sortedDecisions(decisions),
+    admissions: sortedAdmissions(admissions),
   };
 }
 
@@ -173,12 +226,18 @@ function runTurn(
 ): RecallTurnReport {
   const decisions = sortedDecisions(sources.map((source) => decisionFor(input, source, turn)));
   const byPublisher = new Map(decisions.map((decision) => [decision.publisher, decision]));
-  const contributions = sources.flatMap((source) => {
+  const sourceResults = sources.map((source) => {
     const decision = byPublisher.get(source.snapshot.issuer);
-    return decision !== undefined && includeSource(mode, source, decision)
-      ? contributionsFor(mode, source, turn)
-      : [];
+    if (decision === undefined)
+      throw new Error(`MISSING_SOURCE_DECISION: ${source.snapshot.issuer}`);
+    const traceResult = traceResultFor(mode, source, turn);
+    const admission = sourceAdmission(mode, source, decision, traceResult);
+    return { admission, contributions: traceResult.contributions };
   });
+  const admissions = sortedAdmissions(sourceResults.map(({ admission }) => admission));
+  const contributions = sourceResults.flatMap(({ admission, contributions }) =>
+    admission.admission === "admitted" ? contributions : [],
+  );
   const selected = fuseRankings(contributions, input.k);
   const authorizedPublishers = Object.fromEntries(
     decisions.map((decision) => [decision.publisher, decision.allowed]),
@@ -193,7 +252,10 @@ function runTurn(
     selected,
     metrics,
     decisions,
-    receipt: sealRecallReceipt(receiptContent(input, mode, turn, sources, decisions, selected)),
+    admissions,
+    receipt: sealRecallReceipt(
+      receiptContent(input, mode, turn, sources, decisions, admissions, selected),
+    ),
   };
 }
 
@@ -232,10 +294,14 @@ function modeReport(
 export function runRecallExperiment(input: RecallExperimentInput): RecallExperimentReport {
   if (input.turns.length === 0) throw new Error("EMPTY_EXPERIMENT_TURNS");
   const sources = validateAndSortSources(input);
+  const turnKeys = new Set<string>();
+  for (const turn of input.turns) {
+    const key = JSON.stringify([turn.turnId, turn.context.id]);
+    if (turnKeys.has(key)) throw new Error(`DUPLICATE_EXPERIMENT_TURN: ${turn.turnId}`);
+    turnKeys.add(key);
+  }
   const turns = input.turns.toSorted((left, right) =>
-    `${left.turnId}\u0000${left.context.id}`.localeCompare(
-      `${right.turnId}\u0000${right.context.id}`,
-    ),
+    compareCanonicalJson([left.turnId, left.context.id], [right.turnId, right.context.id]),
   );
   const content: RecallExperimentReportContent = {
     kind: "RecallExperimentReport",

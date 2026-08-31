@@ -24,7 +24,8 @@
   "dependencies": {
     "@lighthouse/adapter-engram": "workspace:*",
     "@lighthouse/calculus": "workspace:*",
-    "@lighthouse/protocol": "workspace:*"
+    "@lighthouse/protocol": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.0.0",

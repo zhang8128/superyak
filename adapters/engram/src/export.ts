@@ -1,3 +1,4 @@
+import { compareCanonicalJson } from "@lighthouse/protocol";
 import { z } from "zod";
 
 const nonEmptyString = z.string().min(1);
@@ -107,6 +108,7 @@ function validateTraces(model: EngramExport, memoryIds: Set<string>): void {
     traceKeys.add(traceKey);
 
     const ranks = new Set<number>();
+    const candidateMemoryIds = new Set<string>();
     for (const candidate of trace.candidates) {
       if (!memoryIds.has(candidate.memoryId)) {
         fail("DANGLING_CANDIDATE", `${trace.turnId}:${candidate.memoryId}`);
@@ -114,7 +116,11 @@ function validateTraces(model: EngramExport, memoryIds: Set<string>): void {
       if (ranks.has(candidate.rank)) {
         fail("DUPLICATE_CANDIDATE_RANK", `${trace.turnId}:${candidate.rank}`);
       }
+      if (candidateMemoryIds.has(candidate.memoryId)) {
+        fail("DUPLICATE_CANDIDATE_MEMORY", `${trace.turnId}:${candidate.memoryId}`);
+      }
       ranks.add(candidate.rank);
+      candidateMemoryIds.add(candidate.memoryId);
     }
     const orderedRanks = [...ranks].sort((left, right) => left - right);
     if (orderedRanks.some((rank, index) => rank !== index + 1)) {
@@ -131,21 +137,15 @@ export function parseEngramExport(input: unknown): EngramModel {
 
   return {
     ...parsed,
-    memories: parsed.memories.toSorted((left, right) => left.id.localeCompare(right.id)),
-    edges: parsed.edges.toSorted((left, right) =>
-      `${left.source}\u0000${left.target}\u0000${left.type}`.localeCompare(
-        `${right.source}\u0000${right.target}\u0000${right.type}`,
-      ),
-    ),
+    memories: parsed.memories.toSorted((left, right) => compareCanonicalJson(left.id, right.id)),
+    edges: parsed.edges.toSorted((left, right) => compareCanonicalJson(left, right)),
     recallTraces: parsed.recallTraces
       .map((trace) => ({
         ...trace,
         candidates: trace.candidates.toSorted((left, right) => left.rank - right.rank),
       }))
       .toSorted((left, right) =>
-        `${left.turnId}\u0000${left.contextPath.join("/")}`.localeCompare(
-          `${right.turnId}\u0000${right.contextPath.join("/")}`,
-        ),
+        compareCanonicalJson([left.turnId, left.contextPath], [right.turnId, right.contextPath]),
       ),
   };
 }

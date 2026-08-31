@@ -128,6 +128,13 @@ describe("portable Engram export", () => {
     expect(() => parseEngramExport(document)).toThrow("DUPLICATE_CANDIDATE_RANK");
   });
 
+  it("rejects one memory occupying multiple candidate ranks", () => {
+    const document = changed((value) => {
+      value.recallTraces[0].candidates[0].memoryId = value.recallTraces[0].candidates[1].memoryId;
+    });
+    expect(() => parseEngramExport(document)).toThrow("DUPLICATE_CANDIDATE_MEMORY");
+  });
+
   it("rejects gaps in candidate ranks", () => {
     const document = changed((value) => {
       value.recallTraces[0].candidates[0].rank = 3;
@@ -157,5 +164,25 @@ describe("portable Engram export", () => {
       value.unexpected = true;
     });
     expect(() => parseEngramExport(document)).toThrow();
+  });
+
+  it("normalizes Unicode identities and parallel edges independently of input order", () => {
+    const first = changed((value) => {
+      value.memories[0].id = "memory-ä";
+      value.memories[1].id = "memory-z";
+      value.edges[0].source = "memory-z";
+      value.edges[0].target = "memory-ä";
+      value.edges.push({ ...value.edges[0], weight: 0.2, directed: false });
+      value.recallTraces[0].candidates[0].memoryId = "memory-z";
+      value.recallTraces[0].candidates[1].memoryId = "memory-ä";
+    });
+    const reversed = structuredClone(first);
+    reversed.memories.reverse();
+    reversed.edges.reverse();
+
+    const normalized = parseEngramExport(first);
+    expect(parseEngramExport(reversed)).toEqual(normalized);
+    expect(normalized.memories.map(({ id }) => id)).toEqual(["memory-z", "memory-ä"]);
+    expect(normalized.edges.map(({ weight }) => weight)).toEqual([0.2, 0.8]);
   });
 });

@@ -1,4 +1,4 @@
-import type { ConnectionPolicy } from "@lighthouse/protocol";
+import { type ConnectionPolicy, compareCanonicalJson } from "@lighthouse/protocol";
 
 export interface AuthorizationRequest {
   publisher: string;
@@ -90,7 +90,7 @@ export function evaluateConnectionPolicy(
   activeMatches.sort((left, right) => {
     if (left.score !== right.score) return right.score - left.score;
     if (left.rule.effect !== right.rule.effect) return left.rule.effect === "deny" ? -1 : 1;
-    return left.rule.id.localeCompare(right.rule.id);
+    return compareCanonicalJson(left.rule.id, right.rule.id);
   });
   const highestScore = activeMatches[0]?.score;
   const winner =

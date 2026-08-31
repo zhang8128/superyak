@@ -141,4 +141,28 @@ describe("connection policy", () => {
       evaluateConnectionPolicy(policy, { ...recallRequest, at: "2028-01-01T00:00:00Z" }),
     ).toEqual({ allowed: false, code: "OUTSIDE_VALIDITY" });
   });
+
+  it("resolves equally specific Unicode rule IDs without locale collation", () => {
+    const matchingRule = policy.payload.rules[0];
+    if (matchingRule === undefined) throw new Error("missing matching policy rule");
+    const unicodePolicy = sealArtifact({
+      kind: "ConnectionPolicy",
+      protocolVersion: "0.1",
+      id: "urn:policy:unicode-order",
+      issuedAt: "2026-08-30T12:00:00Z",
+      issuer: "urn:lighthouse:local",
+      payloadMediaType: "application/vnd.lighthouse.connection-policy+json",
+      payload: {
+        rules: [
+          { ...matchingRule, id: "allow-ä" },
+          { ...matchingRule, id: "allow-z" },
+        ],
+      },
+    });
+
+    expect(evaluateConnectionPolicy(unicodePolicy, workflowRead)).toEqual({
+      allowed: true,
+      ruleId: "allow-z",
+    });
+  });
 });

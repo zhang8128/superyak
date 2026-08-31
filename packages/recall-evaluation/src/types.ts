@@ -49,12 +49,34 @@ export interface MeasurementOptions {
 
 export type RecallExperimentMode = "local-only" | "policy-scoped" | "indiscriminate-control";
 
-export interface RecallSourceDecision {
+export type RecallDenialCode = "EXPLICIT_DENY" | "NO_MATCHING_ALLOW" | "OUTSIDE_VALIDITY";
+
+export type RecallSourceDecision =
+  | {
+      publisher: string;
+      role: "local";
+      allowed: true;
+      ruleId: "local:self";
+    }
+  | {
+      publisher: string;
+      role: "remote";
+      allowed: true;
+      ruleId: string;
+    }
+  | {
+      publisher: string;
+      role: "remote";
+      allowed: false;
+      code: RecallDenialCode;
+      ruleId?: string | undefined;
+    };
+
+export interface RecallSourceAdmission {
   publisher: string;
-  role: RecallSource["role"];
-  allowed: boolean;
-  ruleId?: string;
-  code?: string;
+  trace: "matched" | "absent" | "context-mismatch";
+  admission: "admitted" | "mode-excluded" | "policy-denied" | "zero-weight" | "trace-unavailable";
+  candidateCount: number;
 }
 
 export interface RecallSelectionReceiptContent {
@@ -76,6 +98,7 @@ export interface RecallSelectionReceiptContent {
     weight: number;
   }>;
   decisions: RecallSourceDecision[];
+  admissions: RecallSourceAdmission[];
 }
 
 export interface RecallSelectionReceipt extends RecallSelectionReceiptContent {
@@ -87,6 +110,7 @@ export interface RecallTurnReport {
   selected: FusedCandidate[];
   metrics: RecallMetrics;
   decisions: RecallSourceDecision[];
+  admissions: RecallSourceAdmission[];
   receipt: RecallSelectionReceipt;
 }
 

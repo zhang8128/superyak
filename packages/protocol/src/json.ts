@@ -22,3 +22,11 @@ export function canonicalize(value: JsonValue): string {
     .map((key) => `${JSON.stringify(key)}:${canonicalize(value[key] as JsonValue)}`)
     .join(",")}}`;
 }
+
+export function compareCanonicalJson(left: JsonValue, right: JsonValue): number {
+  const leftCanonical = canonicalize(left);
+  const rightCanonical = canonicalize(right);
+  if (leftCanonical < rightCanonical) return -1;
+  if (leftCanonical > rightCanonical) return 1;
+  return 0;
+}

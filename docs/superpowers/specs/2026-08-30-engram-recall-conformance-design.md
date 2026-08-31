@@ -104,10 +104,13 @@ the trace. Content delivery, encryption, and remote transport remain outside
 this increment.
 
 The adapter MUST reject duplicate memory IDs, dangling edges, dangling recall
-candidates, duplicate candidate ranks, non-contiguous ranks, non-finite or
+candidates, duplicate candidate memory IDs, duplicate candidate ranks,
+non-contiguous ranks, non-finite or
 out-of-range weights, and any memory or trace context outside the declared root.
-It sorts all set-like collections and excludes checkout paths from the sealed
-model so two copies produce the same digest.
+It sorts all set-like collections with locale-independent canonical comparison
+and excludes checkout paths from the sealed model so two copies produce the
+same digest. Parallel edges use their complete canonical value as a total
+tie-break.
 
 ### Restriction
 
@@ -192,8 +195,10 @@ score(memory) = sum_source weight(source) / (60 + rank(source, memory))
 
 Memory identity is publisher-qualified, so equal local IDs from different
 lighthouses cannot collide. Ties break lexicographically by qualified identity.
-The fixed constant and tie-break make replay deterministic. Rank-only fusion
-avoids pretending raw scores from unrelated retrieval engines are calibrated.
+The comparison is over canonical JSON in Unicode code-unit order, never locale
+collation. The fixed constant and tie-break make replay deterministic.
+Rank-only fusion avoids pretending raw scores from unrelated retrieval engines
+are calibrated.
 
 The fused result is a suggestion set. It does not call a model, mutate Engram,
 increment access counts, strengthen graph edges, or inject active context.
@@ -250,17 +255,23 @@ Each mode emits a content-addressed local receipt containing:
 - purpose and context;
 - the `weighted-rrf-v1` transformation and connection weights;
 - denied source decisions;
+- per-source trace status and admission outcome, separate from authorization;
 - an explicit `action: "recall"` and `injected: false`.
 
 The receipt is a package-level evidence record, not a new Lighthouse core
 artifact kind. Core promotion waits until a second profile demonstrates that
 the shape is genuinely shared.
 
+Receipt construction first clones and validates content against a strict
+runtime schema, then computes the digest. Verification distinguishes malformed
+structure from content tampering.
+
 ## Error Handling
 
 - Invalid exports fail projection with stable validation messages.
 - A trace with an unknown turn contributes nothing and is recorded as absent;
   absence is not authorization failure.
+- Duplicate `(turnId, context.id)` judgments fail before evaluation.
 - An unsupported profile or malformed rank claim evaluates to
   `indeterminate`, never `violated`.
 - Invalid weights fail the experiment before ranking.
