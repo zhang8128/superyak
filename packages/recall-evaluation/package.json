@@ -1,0 +1,31 @@
+{
+  "name": "@lighthouse/recall-evaluation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offline evaluation of policy-scoped recall across Lighthouse neighbors",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@lighthouse/adapter-engram": "workspace:*",
+    "@lighthouse/calculus": "workspace:*",
+    "@lighthouse/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.0",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}
