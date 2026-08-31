@@ -46,9 +46,16 @@ def _open_readonly(database: Path) -> sqlite3.Connection:
     if not database.is_file():
         raise ExportError("DATABASE_NOT_FOUND")
     connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
-    connection.execute("BEGIN")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+    except BaseException:
+        try:
+            connection.close()
+        except BaseException:
+            pass
+        raise
     return connection
 
 
@@ -85,16 +92,17 @@ def _project_memories(
         ("semantics", "semantic", "organic"),
     )
     for table, layer, origin in projections:
-        rows = connection.execute(
+        for row in connection.execute(
             f"SELECT id, content, content_hash FROM {table} WHERE lane = ?",
             ("work",),
-        ).fetchall()
-        for row in rows:
+        ):
             memory_id = row["id"]
             if not isinstance(memory_id, str) or not memory_id:
                 raise ExportError("INVALID_MEMORY_ID")
             if memory_id in seen_ids:
                 raise ExportError("DUPLICATE_MEMORY_ID")
+            content_digest = _content_digest(row["content"], row["content_hash"])
+            del row
             seen_ids.add(memory_id)
             memories.append(
                 {
@@ -102,7 +110,7 @@ def _project_memories(
                     "layer": layer,
                     "contentDigest": {
                         "algorithm": "sha256",
-                        "value": _content_digest(row["content"], row["content_hash"]),
+                        "value": content_digest,
                     },
                     "contextPath": list(TECHNICAL_CONTEXT["path"]),
                     "lane": "work",
@@ -115,7 +123,7 @@ def _project_memories(
     ]
 
 
-def _canonical_key(value: dict[str, object]) -> str:
+def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -125,10 +133,9 @@ def _project_edges(
 ) -> tuple[list[dict[str, object]], int]:
     edges: list[dict[str, object]] = []
     omitted = 0
-    rows = connection.execute(
+    for row in connection.execute(
         "SELECT episode_id, semantic_id FROM semantic_sources"
-    ).fetchall()
-    for row in rows:
+    ):
         source = row["episode_id"]
         target = row["semantic_id"]
         if source not in memory_ids or target not in memory_ids:
@@ -143,7 +150,7 @@ def _project_edges(
                 "directed": True,
             }
         )
-    return sorted(edges, key=_canonical_key), omitted
+    return sorted(edges, key=_canonical_json), omitted
 
 
 @dataclass(frozen=True)
@@ -162,6 +169,22 @@ def _parse_json(value: object) -> object:
     return json.loads(value)
 
 
+def _parse_trace_context(value: object) -> tuple[str, str]:
+    context = _parse_json(value)
+    if not isinstance(context, dict):
+        raise ValueError
+    turn_id = context.get("recall_id")
+    query = context.get("query")
+    if (
+        not isinstance(turn_id, str)
+        or not turn_id.strip()
+        or not isinstance(query, str)
+        or not query.strip()
+    ):
+        raise ValueError
+    return turn_id, hashlib.sha256(query.encode("utf-8")).hexdigest()
+
+
 def _project_traces(
     connection: sqlite3.Connection,
     memory_ids: set[str],
@@ -172,34 +195,28 @@ def _project_traces(
     malformed = 0
     duplicate_candidates = 0
     outside_work_set = 0
-    rows = connection.execute(
+    for row in connection.execute(
         "SELECT target_ids, context FROM memory_log WHERE event_type = ?",
         ("recall",),
-    ).fetchall()
-    for row in rows:
+    ):
+        raw_target_ids = row["target_ids"]
+        raw_context = row["context"]
+        del row
         try:
-            context = _parse_json(row["context"])
-            if not isinstance(context, dict):
-                raise ValueError
-            turn_id = context.get("recall_id")
-            query = context.get("query")
-            if (
-                not isinstance(turn_id, str)
-                or not turn_id.strip()
-                or not isinstance(query, str)
-                or not query.strip()
-            ):
-                raise ValueError
+            turn_id, query_digest = _parse_trace_context(raw_context)
         except (json.JSONDecodeError, ValueError, TypeError):
+            del raw_target_ids
             malformed += 1
             continue
+        finally:
+            del raw_context
 
         if turn_id in seen_turn_ids:
             raise ExportError("DUPLICATE_RECALL_TRACE")
         seen_turn_ids.add(turn_id)
 
         try:
-            target_ids = _parse_json(row["target_ids"])
+            target_ids = _parse_json(raw_target_ids)
             if not isinstance(target_ids, list) or any(
                 not isinstance(memory_id, str) or not memory_id for memory_id in target_ids
             ):
@@ -207,6 +224,8 @@ def _project_traces(
         except (json.JSONDecodeError, ValueError, TypeError):
             malformed += 1
             continue
+        finally:
+            del raw_target_ids
         if not target_ids:
             empty += 1
             continue
@@ -221,7 +240,7 @@ def _project_traces(
                 "turnId": turn_id,
                 "queryDigest": {
                     "algorithm": "sha256",
-                    "value": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+                    "value": query_digest,
                 },
                 "contextPath": list(TECHNICAL_CONTEXT["path"]),
                 "candidates": [
@@ -281,42 +300,39 @@ def export_lighthouse_shadow(
             excluded_outside_work_set=trace_projection.outside_work_set,
         )
     finally:
-        if connection.in_transaction:
-            connection.rollback()
-        connection.close()
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        finally:
+            connection.close()
 
 
 def write_lighthouse_shadow(output: Path, document: dict[str, object]) -> None:
     """Write one new canonical export without overwriting an existing path."""
+    serialized = _canonical_json(document) + "\n"
+    destination = Path(output)
     created = False
     try:
-        with Path(output).open("x", encoding="utf-8") as stream:
+        with destination.open("x", encoding="utf-8") as stream:
             created = True
-            stream.write(
-                json.dumps(
-                    document,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                + "\n"
-            )
+            stream.write(serialized)
     except FileExistsError as error:
         raise ExportError("OUTPUT_EXISTS") from error
-    except OSError as error:
+    except BaseException as error:
+        cleanup_failed = False
         if created:
-            Path(output).unlink(missing_ok=True)
-        raise ExportError("OUTPUT_WRITE_FAILED") from error
-    except Exception:
-        if created:
-            Path(output).unlink(missing_ok=True)
-        raise
+            try:
+                destination.unlink(missing_ok=True)
+            except BaseException:
+                cleanup_failed = True
+        if not isinstance(error, Exception):
+            raise
+        code = "OUTPUT_CLEANUP_FAILED" if cleanup_failed else "OUTPUT_WRITE_FAILED"
+        raise ExportError(code) from error
 
 
 def _emit(stream: TextIO, value: dict[str, object]) -> None:
-    stream.write(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-    )
+    stream.write(_canonical_json(value) + "\n")
 
 
 class _PrivateArgumentParser(argparse.ArgumentParser):
@@ -347,6 +363,9 @@ def main(
         return 1
     except sqlite3.DatabaseError:
         _emit(stderr, {"ok": False, "code": "DATABASE_READ_FAILED"})
+        return 1
+    except Exception:
+        _emit(stderr, {"ok": False, "code": "INTERNAL_ERROR"})
         return 1
     _ = stdout
     _emit(stderr, {"ok": True, "audit": asdict(audit)})

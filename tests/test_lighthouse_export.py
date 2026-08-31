@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import lighthouse_export
 from lighthouse_export import (
     ExportError,
     export_lighthouse_shadow,
@@ -135,12 +136,122 @@ def test_exports_only_opaque_work_memories_without_mutating_source(tmp_path: Pat
     assert database.read_bytes() == before
 
 
+def test_streams_sensitive_rows_instead_of_bulk_fetching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "graph.db"
+    writer = build_database(database)
+    add_memory(writer, "episodes", "work", "private memory text", "work")
+    add_recall(writer, "turn", "private query text", ["work"])
+    writer.commit()
+    writer.close()
+
+    real = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+    real.row_factory = sqlite3.Row
+    real.execute("PRAGMA query_only=ON")
+    real.execute("BEGIN")
+
+    class StreamingOnlyCursor:
+        def __init__(self, cursor: sqlite3.Cursor):
+            self.cursor = cursor
+
+        def __iter__(self):
+            return iter(self.cursor)
+
+        def fetchall(self) -> None:
+            raise AssertionError("sensitive rows must not be fetched in bulk")
+
+    class StreamingOnlyConnection:
+        def __getattr__(self, name: str):
+            return getattr(real, name)
+
+        def execute(self, sql: str, parameters: tuple[object, ...] = ()):
+            cursor = real.execute(sql, parameters)
+            if "content, content_hash" in sql or "target_ids, context" in sql:
+                return StreamingOnlyCursor(cursor)
+            return cursor
+
+    monkeypatch.setattr(
+        lighthouse_export,
+        "_open_readonly",
+        lambda _database: StreamingOnlyConnection(),
+    )
+
+    document, _ = export_lighthouse_shadow(database, instance="test")
+
+    assert len(document["memories"]) == 1
+    assert len(document["recallTraces"]) == 1
+
+
 def test_rejects_missing_schema(tmp_path: Path) -> None:
     database = tmp_path / "missing.db"
     sqlite3.connect(database).close()
 
     with pytest.raises(ExportError, match="MISSING_TABLE"):
         export_lighthouse_shadow(database, instance="test")
+
+
+def test_closes_connection_when_readonly_setup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "graph.db"
+    database.touch()
+
+    class SetupFailureConnection:
+        row_factory = None
+        closed = False
+
+        def execute(self, _sql: str) -> None:
+            raise RuntimeError("setup failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = SetupFailureConnection()
+    monkeypatch.setattr(
+        lighthouse_export.sqlite3,
+        "connect",
+        lambda *_args, **_kwargs: connection,
+    )
+
+    with pytest.raises(RuntimeError, match="setup failed"):
+        export_lighthouse_shadow(database, instance="test")
+
+    assert connection.closed is True
+
+
+def test_closes_connection_even_when_rollback_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "graph.db"
+    writer = build_database(database)
+    writer.commit()
+    writer.close()
+    real = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+    real.row_factory = sqlite3.Row
+    real.execute("PRAGMA query_only=ON")
+    real.execute("BEGIN")
+
+    class RollbackFailureConnection:
+        closed = False
+
+        def __getattr__(self, name: str):
+            return getattr(real, name)
+
+        def rollback(self) -> None:
+            raise RuntimeError("rollback failed")
+
+        def close(self) -> None:
+            self.closed = True
+            real.close()
+
+    connection = RollbackFailureConnection()
+    monkeypatch.setattr(lighthouse_export, "_open_readonly", lambda _database: connection)
+
+    with pytest.raises(RuntimeError, match="rollback failed"):
+        export_lighthouse_shadow(database, instance="test")
+
+    assert connection.closed is True
 
 
 def test_rejects_content_hash_mismatch(tmp_path: Path) -> None:
@@ -391,6 +502,128 @@ def test_writer_removes_a_new_incomplete_file_when_serialization_fails(tmp_path:
         write_lighthouse_shadow(output, {"invalid": object()})
 
     assert not output.exists()
+
+
+def test_writer_removes_incomplete_output_when_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "interrupted.engram.json"
+    original_open = Path.open
+
+    class InterruptingFile:
+        def __enter__(self):
+            self.stream = original_open(output, "x", encoding="utf-8")
+            return self
+
+        def write(self, value: str) -> None:
+            self.stream.write(value[:1])
+            self.stream.flush()
+            raise KeyboardInterrupt
+
+        def __exit__(self, *_args: object) -> None:
+            self.stream.close()
+
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: InterruptingFile())
+
+    with pytest.raises(KeyboardInterrupt):
+        write_lighthouse_shadow(output, {"valid": True})
+
+    assert not output.exists()
+
+
+def test_cli_removes_incomplete_output_after_encoding_failure(tmp_path: Path) -> None:
+    database = tmp_path / "graph.db"
+    connection = build_database(database)
+    connection.commit()
+    connection.close()
+    output = tmp_path / "incomplete.engram.json"
+    stderr = StringIO()
+
+    code = main(
+        [
+            "--db",
+            str(database),
+            "--instance",
+            "invalid-surrogate-\ud800",
+            "--output",
+            str(output),
+        ],
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert code == 1
+    assert not output.exists()
+    assert json.loads(stderr.getvalue()) == {"ok": False, "code": "OUTPUT_WRITE_FAILED"}
+
+
+def test_cli_normalizes_cleanup_failure_without_leaking_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "graph.db"
+    connection = build_database(database)
+    connection.commit()
+    connection.close()
+    output = tmp_path / "private-output-path.engram.json"
+    stderr = StringIO()
+
+    def fail_cleanup(_path: Path, *, missing_ok: bool = False) -> None:
+        _ = missing_ok
+        raise OSError("private cleanup path")
+
+    monkeypatch.setattr(Path, "unlink", fail_cleanup)
+
+    code = main(
+        [
+            "--db",
+            str(database),
+            "--instance",
+            "invalid-surrogate-\ud800",
+            "--output",
+            str(output),
+        ],
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert code == 1
+    assert json.loads(stderr.getvalue()) == {
+        "ok": False,
+        "code": "OUTPUT_CLEANUP_FAILED",
+    }
+    assert "private" not in stderr.getvalue()
+
+
+def test_cli_normalizes_unexpected_failures_without_leaking_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "graph.db"
+    connection = build_database(database)
+    connection.commit()
+    connection.close()
+    stderr = StringIO()
+
+    def fail_write(_output: Path, _document: dict[str, object]) -> None:
+        raise RuntimeError("private output path and source details")
+
+    monkeypatch.setattr(lighthouse_export, "write_lighthouse_shadow", fail_write)
+
+    code = main(
+        [
+            "--db",
+            str(database),
+            "--instance",
+            "test",
+            "--output",
+            "private-output-path",
+        ],
+        stdout=StringIO(),
+        stderr=stderr,
+    )
+
+    assert code == 1
+    assert json.loads(stderr.getvalue()) == {"ok": False, "code": "INTERNAL_ERROR"}
+    assert "private" not in stderr.getvalue()
 
 
 def test_cli_reports_corrupt_database_without_leaking_source_bytes(tmp_path: Path) -> None:
