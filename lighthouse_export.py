@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -111,6 +112,132 @@ def _project_memories(
     ]
 
 
+def _canonical_key(value: dict[str, object]) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _project_edges(
+    connection: sqlite3.Connection,
+    memory_ids: set[str],
+) -> tuple[list[dict[str, object]], int]:
+    edges: list[dict[str, object]] = []
+    omitted = 0
+    rows = connection.execute(
+        "SELECT episode_id, semantic_id FROM semantic_sources"
+    ).fetchall()
+    for row in rows:
+        source = row["episode_id"]
+        target = row["semantic_id"]
+        if source not in memory_ids or target not in memory_ids:
+            omitted += 1
+            continue
+        edges.append(
+            {
+                "source": source,
+                "target": target,
+                "type": "provenance",
+                "weight": 1.0,
+                "directed": True,
+            }
+        )
+    return sorted(edges, key=_canonical_key), omitted
+
+
+@dataclass(frozen=True)
+class _TraceProjection:
+    traces: list[dict[str, object]]
+    eligible: int
+    empty: int
+    malformed: int
+    duplicate_candidates: int
+    outside_work_set: int
+
+
+def _parse_json(value: object) -> object:
+    if not isinstance(value, str):
+        raise ValueError
+    return json.loads(value)
+
+
+def _project_traces(
+    connection: sqlite3.Connection,
+    memory_ids: set[str],
+) -> _TraceProjection:
+    traces: list[dict[str, object]] = []
+    seen_turn_ids: set[str] = set()
+    empty = 0
+    malformed = 0
+    duplicate_candidates = 0
+    outside_work_set = 0
+    rows = connection.execute(
+        "SELECT target_ids, context FROM memory_log WHERE event_type = ?",
+        ("recall",),
+    ).fetchall()
+    for row in rows:
+        try:
+            context = _parse_json(row["context"])
+            if not isinstance(context, dict):
+                raise ValueError
+            turn_id = context.get("recall_id")
+            query = context.get("query")
+            if (
+                not isinstance(turn_id, str)
+                or not turn_id.strip()
+                or not isinstance(query, str)
+                or not query.strip()
+            ):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError, TypeError):
+            malformed += 1
+            continue
+
+        if turn_id in seen_turn_ids:
+            raise ExportError("DUPLICATE_RECALL_TRACE")
+        seen_turn_ids.add(turn_id)
+
+        try:
+            target_ids = _parse_json(row["target_ids"])
+            if not isinstance(target_ids, list) or any(
+                not isinstance(memory_id, str) or not memory_id for memory_id in target_ids
+            ):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError, TypeError):
+            malformed += 1
+            continue
+        if not target_ids:
+            empty += 1
+            continue
+        if len(set(target_ids)) != len(target_ids):
+            duplicate_candidates += 1
+            continue
+        if any(memory_id not in memory_ids for memory_id in target_ids):
+            outside_work_set += 1
+            continue
+        traces.append(
+            {
+                "turnId": turn_id,
+                "queryDigest": {
+                    "algorithm": "sha256",
+                    "value": hashlib.sha256(query.encode("utf-8")).hexdigest(),
+                },
+                "contextPath": list(TECHNICAL_CONTEXT["path"]),
+                "candidates": [
+                    {"memoryId": memory_id, "rank": rank}
+                    for rank, memory_id in enumerate(target_ids, start=1)
+                ],
+            }
+        )
+    traces.sort(key=lambda trace: str(trace["turnId"]))
+    return _TraceProjection(
+        traces=traces,
+        eligible=len(traces),
+        empty=empty,
+        malformed=malformed,
+        duplicate_candidates=duplicate_candidates,
+        outside_work_set=outside_work_set,
+    )
+
+
 def export_lighthouse_shadow(
     database: Path,
     *,
@@ -123,6 +250,9 @@ def export_lighthouse_shadow(
     try:
         _preflight(connection)
         memories, work_episodes, work_semantics = _project_memories(connection)
+        memory_ids = {str(memory["id"]) for memory in memories}
+        edges, omitted_edges = _project_edges(connection, memory_ids)
+        trace_projection = _project_traces(connection, memory_ids)
         if connection.total_changes != 0:
             raise ExportError("SOURCE_MUTATED")
         document: dict[str, object] = {
@@ -133,19 +263,19 @@ def export_lighthouse_shadow(
                 "path": list(TECHNICAL_CONTEXT["path"]),
             },
             "memories": memories,
-            "edges": [],
-            "recallTraces": [],
+            "edges": edges,
+            "recallTraces": trace_projection.traces,
         }
         return document, ExportAudit(
             work_episodes=work_episodes,
             work_semantics=work_semantics,
-            provenance_edges=0,
-            omitted_provenance_edges=0,
-            eligible_traces=0,
-            excluded_empty=0,
-            excluded_malformed=0,
-            excluded_duplicate_candidates=0,
-            excluded_outside_work_set=0,
+            provenance_edges=len(edges),
+            omitted_provenance_edges=omitted_edges,
+            eligible_traces=trace_projection.eligible,
+            excluded_empty=trace_projection.empty,
+            excluded_malformed=trace_projection.malformed,
+            excluded_duplicate_candidates=trace_projection.duplicate_candidates,
+            excluded_outside_work_set=trace_projection.outside_work_set,
         )
     finally:
         if connection.in_transaction:
