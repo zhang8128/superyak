@@ -108,6 +108,29 @@ CONTEXT = {"id": "memory/technical", "path": ["memory", "technical"]}
 NOW = datetime(2026, 9, 1, tzinfo=timezone.utc).isoformat()
 
 
+def _valid_recall():
+    return recall_frame(
+        receiver="engram",
+        publisher="why",
+        context=CONTEXT,
+        purpose="session-recall",
+        query="rivers",
+        k=1,
+        at=NOW,
+    )
+
+
+def _valid_read():
+    return read_frame(
+        receiver="engram",
+        publisher="why",
+        context=CONTEXT,
+        purpose="session-recall",
+        turn_id="turn-1",
+        memory_ids=["m1"],
+    )
+
+
 def test_retrieve_returns_work_lane_only(tmp_path):
     pub = build_publisher(tmp_path)
     assert pub.open() is True
@@ -272,6 +295,47 @@ def test_unknown_publisher_and_unavailable_store(tmp_path):
     )
     assert gone["kind"] == "error"
     assert gone["code"] == "PUBLISHER_UNAVAILABLE"
+
+
+def test_missing_publisher_is_malformed_before_store_lookup(tmp_path):
+    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings())
+    frame = _valid_recall()
+    del frame["publisher"]
+
+    out = daemon.handle_frame(frame)
+
+    assert out["kind"] == "error"
+    assert out["code"] == "MALFORMED_FRAME"
+
+
+def test_invalid_recall_fields_are_malformed_before_store_lookup(tmp_path):
+    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings())
+    invalid_frames = []
+    for field, value in (
+        ("at", "not-a-timestamp"),
+        ("context", []),
+        ("k", True),
+        ("k", 0),
+    ):
+        frame = _valid_recall()
+        frame[field] = value
+        invalid_frames.append(frame)
+
+    for frame in invalid_frames:
+        out = daemon.handle_frame(frame)
+        assert out["kind"] == "error"
+        assert out["code"] == "MALFORMED_FRAME"
+
+
+def test_invalid_read_memory_ids_are_malformed_before_store_lookup(tmp_path):
+    daemon = PublisherDaemon({}, tmp_path / "s.sock", FakeEmbeddings())
+    frame = _valid_read()
+    frame["memoryIds"] = [1]
+
+    out = daemon.handle_frame(frame)
+
+    assert out["kind"] == "error"
+    assert out["code"] == "MALFORMED_FRAME"
 
 
 def test_socket_round_trip_leaves_store_unchanged(tmp_path):
