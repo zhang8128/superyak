@@ -114,6 +114,9 @@ function restrictEngramSnapshot(
           .filter((candidate) => surviving.has(candidate.memoryId))
           .map((candidate, index) => ({ ...candidate, rank: index + 1 })),
       })),
+    receipts: model.receipts.filter((receipt) =>
+      contextStartsWith(context.path, receipt.payload.context.path),
+    ),
   };
   const { digest: _digest, attestations: _attestations, ...common } = snapshot;
   return {

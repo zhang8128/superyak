@@ -1,3 +1,4 @@
+import { sealArtifact } from "@lighthouse/protocol";
 import { describe, expect, it } from "vitest";
 import { parseEngramExport } from "../src/export.js";
 
@@ -37,6 +38,31 @@ interface TestDocument {
   memories: [TestMemory, TestMemory];
   edges: [TestEdge];
   recallTraces: [TestTrace];
+  receipts?: unknown[];
+}
+
+function receipt(turnId: string, contextPath: string[]) {
+  return sealArtifact({
+    kind: "RecallReceipt",
+    protocolVersion: "0.1",
+    id: `urn:receipt:${turnId}`,
+    issuedAt: "2026-09-01T12:00:00Z",
+    issuer: "urn:lighthouse:engram",
+    payloadMediaType: "application/vnd.lighthouse.recall-receipt+json",
+    payload: {
+      turnId,
+      context: { id: contextPath.join("/"), path: contextPath },
+      purpose: "session-recall",
+      audience: "self",
+      action: "recall",
+      injected: false,
+      transformation: "weighted-rrf-v1",
+      receiverRule: { ruleId: null },
+      sources: [],
+      selected: [],
+      delivered: [],
+    },
+  });
 }
 
 function validExport(): TestDocument {
@@ -184,5 +210,56 @@ describe("portable Engram export", () => {
     expect(parseEngramExport(reversed)).toEqual(normalized);
     expect(normalized.memories.map(({ id }) => id)).toEqual(["memory-z", "memory-ä"]);
     expect(normalized.edges.map(({ weight }) => weight)).toEqual([0.2, 0.8]);
+  });
+});
+
+describe("portable Engram export 1.1", () => {
+  it("accepts 1.1 with receipts and normalizes receipt order", () => {
+    const document = changed((value) => {
+      value.formatVersion = "1.1";
+      value.receipts = [
+        receipt("turn-z", ["memory", "debugging"]),
+        receipt("turn-a", ["memory", "debugging"]),
+      ];
+    });
+    const parsed = parseEngramExport(document);
+    expect(parsed.receipts.map((item) => item.payload.turnId)).toEqual(["turn-a", "turn-z"]);
+  });
+
+  it("normalizes a 1.0 document to an empty receipts list", () => {
+    expect(parseEngramExport(validExport()).receipts).toEqual([]);
+  });
+
+  it("rejects receipts on a 1.0 document", () => {
+    const document = changed((value) => {
+      value.receipts = [receipt("turn-1", ["memory"])];
+    });
+    expect(() => parseEngramExport(document)).toThrow("RECEIPTS_REQUIRE_1_1");
+  });
+
+  it("rejects a receipt whose digest does not verify", () => {
+    const tampered = receipt("turn-1", ["memory"]);
+    tampered.payload.purpose = "tampered";
+    const document = changed((value) => {
+      value.formatVersion = "1.1";
+      value.receipts = [tampered];
+    });
+    expect(() => parseEngramExport(document)).toThrow("RECEIPT_DIGEST_MISMATCH");
+  });
+
+  it("rejects duplicate receipts for one turn and context", () => {
+    const document = changed((value) => {
+      value.formatVersion = "1.1";
+      value.receipts = [receipt("turn-1", ["memory"]), receipt("turn-1", ["memory"])];
+    });
+    expect(() => parseEngramExport(document)).toThrow("DUPLICATE_RECEIPT");
+  });
+
+  it("rejects receipts outside the declared root", () => {
+    const document = changed((value) => {
+      value.formatVersion = "1.1";
+      value.receipts = [receipt("turn-1", ["relationship"])];
+    });
+    expect(() => parseEngramExport(document)).toThrow("CONTEXT_OUTSIDE_ROOT");
   });
 });
