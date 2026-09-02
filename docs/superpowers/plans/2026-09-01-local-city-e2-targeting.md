@@ -24,7 +24,7 @@
 ### Work package brief (paste to the Codex lead)
 
 - **Base ref:** `main` at the integrator's step-zero commit (contains `margins.py`, `tests/test_recall_margins.py`).
-- **Scope:** Recall targeting fixes with measurement first: replay report, recency tiebreak mode, write-time lane derivation, `dream_verify` score split, lane filter before margin, session-end positive outcome auto-capture, CLAUDE.md update.
+- **Scope:** Recall targeting fixes with measurement first: replay report, recency tiebreak mode, write-time lane derivation, per-instance default lane (`[memory] default_lane`), `dream_verify` score split, lane filter before margin, session-end positive outcome auto-capture, CLAUDE.md update.
 - **Allowed files:** `scoring.py` (new), `scripts/margins_replay.py` (new), `docs/reports/2026-09-margins-replay.md` (new), `config.py` (`MemoryConfig` and `_DEFAULT_TOML` `[memory]` block only), `server.py` (only: the scoring loop in `recall()`, `_unbiased_top`, the margin block, the `_recall_scores[...]` population, the lane filter, `remember()` lane assignment, `dream_verify()`), `hooks/sleep.py`, `pyproject.toml` (`py-modules` list only), `CLAUDE.md`, `tests/test_scoring.py` (new), `tests/test_margins_replay.py` (new), `tests/test_recall_lane_margin.py` (new), `tests/test_remember_lane.py` (new), `tests/test_dream_verify_split.py` (new), `tests/test_sleep_outcomes.py` (new).
 - **Forbidden files:** `neighbors.py`, `lighthouse_policy.py`, `lighthouse_protocol.py`, `lighthouse_daemon.py`, `lighthouse_receipts.py`, `lighthouse_label.py`, `lighthouse_export.py`, the `response["neighbors"]` key, the `_observe_category_recall` call region in `recall()`, `storage.py`.
 - **Acceptance criteria:**
@@ -33,12 +33,13 @@
   3. `.venv/bin/python -m pytest tests/test_scoring.py tests/test_margins_replay.py -q` green; `score_candidate(..., mode="tiebreak")` bounds the recency contribution by `recency_cap`.
   4. `.venv/bin/python -m pytest tests/test_recall_margins.py -q` green with the default mode `tiebreak` (the counterfactual arm uses the same function as `recall()`).
   5. `.venv/bin/python -m pytest tests/test_remember_lane.py -q` green: `remember(context={"project": "x"})` stores `lane="work"`; `context={"project": "x", "lane": "personal"}` stores `personal`; `core=True` with a project tag stores `personal`.
-  6. `.venv/bin/python -m pytest tests/test_dream_verify_split.py -q` green: `dream_verify` returns `scores` (matched only) and `uninvited_scores`.
-  7. `.venv/bin/python -m pytest tests/test_recall_lane_margin.py -q` green: `recall(lane="work", max_results=3)` returns 3 work items and `margin["n"]` equals the work-lane candidate count.
-  8. `.venv/bin/python -m pytest tests/test_sleep_outcomes.py -q` green: a recall whose result id is cited by a later same-session episode gets `outcome = "used: auto: cited"`; an uncited recall keeps `NULL`; an existing outcome is untouched.
-  9. `.venv/bin/python -m pytest tests/ -q` green.
-  10. CLAUDE.md documents `recency_mode`/`recency_cap`, the lane derivation rule, `uninvited_scores`, lane-before-margin, and sleep-time auto-capture.
-- **Reports to produce:** `docs/reports/2026-09-margins-replay.md` (before Task 2), and the same script re-run after Task 5 appended to that file under "After" (integrator re-runs on a fresh copy; E3 re-measures independently).
+  6. `.venv/bin/python -m pytest tests/test_remember_lane.py -q` green for the per-instance default: `MemoryConfig().default_lane == "personal"`; with `default_lane = "work"` an untagged episode stores `work`, `context={"lane": "personal"}` stores `personal`, and `core=True` stores `personal`.
+  7. `.venv/bin/python -m pytest tests/test_dream_verify_split.py -q` green: `dream_verify` returns `scores` (matched only) and `uninvited_scores`.
+  8. `.venv/bin/python -m pytest tests/test_recall_lane_margin.py -q` green: `recall(lane="work", max_results=3)` returns 3 work items and `margin["n"]` equals the work-lane candidate count.
+  9. `.venv/bin/python -m pytest tests/test_sleep_outcomes.py -q` green: a recall whose result id is cited by a later same-session episode gets `outcome = "used: auto: cited"`; an uncited recall keeps `NULL`; an existing outcome is untouched.
+  10. `.venv/bin/python -m pytest tests/ -q` green.
+  11. CLAUDE.md documents `recency_mode`/`recency_cap`, the lane derivation rule including `default_lane`, `uninvited_scores`, lane-before-margin, and sleep-time auto-capture.
+- **Reports to produce:** `docs/reports/2026-09-margins-replay.md` (before Task 2), and the same script re-run after Task 6 appended to that file under "After" (integrator re-runs on a fresh copy; E3 re-measures independently).
 
 ---
 
@@ -49,7 +50,7 @@
 | `scoring.py` (new) | Pure recall score: `score_candidate(similarity, recency, auto_generated, *, mode, w_sim, w_rec, cap)`. No imports from `server`. |
 | `scripts/margins_replay.py` (new) | Read-only replay of logged recalls over a **copy** of a store, both modes, writes the markdown report. |
 | `docs/reports/2026-09-margins-replay.md` (new) | The measurement that licenses the formula change. |
-| `config.py` | `MemoryConfig.recency_mode`, `MemoryConfig.recency_cap`; defaults in `_DEFAULT_TOML`. |
+| `config.py` | `MemoryConfig.recency_mode`, `MemoryConfig.recency_cap`, `MemoryConfig.default_lane`; defaults in `_DEFAULT_TOML`. |
 | `server.py` | Use `score_candidate` in the scoring loop and `_unbiased_top`; `_derive_lane` in `remember()`; split `_recall_scores`; lane filter before margin. |
 | `hooks/sleep.py` | `auto_capture_outcomes(conn, session_id)` run at session end. |
 | `pyproject.toml` | Add `scoring` to `py-modules`. |
@@ -815,7 +816,142 @@ git commit -m "feat: derive memory lane from project context at write time"
 
 ---
 
-### Task 4: Split matched and uninvited scores in `dream_verify`
+### Task 4: Per-instance default lane
+
+An instance whose store is reference material end to end (a publisher such as `why` or `blocks` in the first neighborhood) should not depend on every `remember()` carrying a project tag. `[memory] default_lane` sets the lane an untagged episode gets in that instance.
+
+**Files:**
+- Modify: `config.py` (`MemoryConfig`, and the `[memory]` block in `_DEFAULT_TOML`)
+- Modify: `server.py` — `_derive_lane` (add a keyword-only parameter) and the `lane = _derive_lane(...)` call in `remember()`
+- Test: `tests/test_remember_lane.py` (append), `tests/test_scoring.py` (append one config test)
+
+**Interfaces:**
+- Consumes: `server._derive_lane(work, core, genome, context)` from Task 3.
+- Produces: `MemoryConfig.default_lane: str = "personal"`; `server._derive_lane(work, core, genome, context, *, default_lane: str = "personal") -> str`; `remember()` passes `_config.memory.default_lane`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_scoring.py`:
+
+```python
+def test_memory_config_default_lane_is_personal():
+    from config import MemoryConfig, _DEFAULT_TOML
+    assert MemoryConfig().default_lane == "personal"
+    assert 'default_lane = "personal"' in _DEFAULT_TOML
+```
+
+Append to `tests/test_remember_lane.py`:
+
+```python
+def test_default_config_stores_personal_for_untagged_episode(engram_server_env):
+    assert server._config.memory.default_lane == "personal"
+    out = server.remember(content="an untagged note in a default instance")
+    assert _lane(out["episode_id"]) == "personal"
+
+
+def test_work_default_lane_stores_work_for_untagged_episode(engram_server_env):
+    server._config.memory.default_lane = "work"
+    out = server.remember(content="an untagged note in a work-only instance")
+    assert _lane(out["episode_id"]) == "work"
+    assert out["lane"] == "work"
+
+
+def test_work_default_lane_is_overridden_by_explicit_personal_context(engram_server_env):
+    server._config.memory.default_lane = "work"
+    out = server.remember(content="something personal written in a work instance",
+                          context={"lane": "personal"})
+    assert _lane(out["episode_id"]) == "personal"
+
+
+def test_work_default_lane_never_makes_a_core_episode_work(engram_server_env):
+    server._config.memory.default_lane = "work"
+    out = server.remember(content="a formative moment recorded in a work instance", core=True)
+    assert _lane(out["episode_id"]) == "personal"
+
+
+def test_pure_derivation_with_default_lane():
+    assert server._derive_lane(False, False, False, None, default_lane="work") == "work"
+    assert server._derive_lane(False, False, False, None, default_lane="personal") == "personal"
+    assert server._derive_lane(False, False, False, {"lane": "personal"}, default_lane="work") == "personal"
+    assert server._derive_lane(False, True, False, None, default_lane="work") == "personal"
+    assert server._derive_lane(False, False, True, None, default_lane="work") == "personal"
+    assert server._derive_lane(False, False, False, {"project": "x"}, default_lane="personal") == "work"
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `.venv/bin/python -m pytest tests/test_scoring.py::test_memory_config_default_lane_is_personal tests/test_remember_lane.py -q`
+Expected: FAIL — `AttributeError: 'MemoryConfig' object has no attribute 'default_lane'` and `TypeError: _derive_lane() got an unexpected keyword argument 'default_lane'`
+
+- [ ] **Step 3: Add the config key**
+
+In `config.py`, `MemoryConfig`, after `recency_cap`:
+
+```python
+    # Lane an untagged remember() gets in this instance. "work" for instances
+    # that are reference material end to end (e.g. a Lighthouse publisher).
+    default_lane: str = "personal"
+```
+
+In `_DEFAULT_TOML`, append to the `[memory]` block:
+
+```toml
+default_lane = "personal"
+```
+
+- [ ] **Step 4: Extend `_derive_lane` and pass the config value**
+
+Replace `_derive_lane` with:
+
+```python
+def _derive_lane(work: bool, core: bool, genome: bool, context: dict | None, *,
+                 default_lane: str = "personal") -> str:
+    """Lane at write time.
+
+    `work=True` is explicit and wins. Otherwise a project tag in context, or an
+    instance whose `[memory] default_lane` is "work", marks reference material
+    and derives the work lane — the September 2026 store had 20 of 28 recent
+    personal-lane episodes carrying a project tag, which is how work
+    checkpoints leaked into identity recall. `context.lane == "personal"` opts
+    out. Core and genome are identity claims and stay personal (the work flag
+    with core/genome is already rejected upstream).
+    """
+    if work:
+        return "work"
+    if core or genome:
+        return "personal"
+    if context and context.get("lane") == "personal":
+        return "personal"
+    if context and context.get("project"):
+        return "work"
+    if default_lane == "work":
+        return "work"
+    return "personal"
+```
+
+In `remember()`, change the call to:
+
+```python
+    lane = _derive_lane(
+        work, core, genome, context,
+        default_lane=_config.memory.default_lane if _config else "personal")
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `.venv/bin/python -m pytest tests/test_scoring.py tests/test_remember_lane.py -q`
+Expected: all passed (Task 3's six tests still pass; the positional calls in `test_pure_derivation_rules` are unchanged by the keyword-only addition).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add config.py server.py tests/test_scoring.py tests/test_remember_lane.py
+git commit -m "feat: add per-instance default lane for untagged memories"
+```
+
+---
+
+### Task 5: Split matched and uninvited scores in `dream_verify`
 
 **Files:**
 - Modify: `server.py` — the `_recall_scores[recall_id] = {...}` line in `recall()`; `dream_verify()`
@@ -927,7 +1063,7 @@ git commit -m "fix: reveal matched and uninvited recall scores separately"
 
 ---
 
-### Task 5: Lane filter before the margin and truncation
+### Task 6: Lane filter before the margin and truncation
 
 **Files:**
 - Modify: `server.py` — insert a lane filter on `scored` between `scored.sort(...)` and the margin block; leave the existing post-uninvited lane filter in place
@@ -1029,7 +1165,7 @@ git commit -m "fix: apply lane filter before recall margin and truncation"
 
 ---
 
-### Task 6: Positive outcome auto-capture at session end
+### Task 7: Positive outcome auto-capture at session end
 
 **Files:**
 - Modify: `hooks/sleep.py` — add `auto_capture_outcomes(conn, session_id)`; call it from `sleep()` right after the connection is opened
@@ -1283,7 +1419,7 @@ git commit -m "feat: auto-capture positive recall outcomes at session end"
 
 ---
 
-### Task 7: Documentation
+### Task 8: Documentation
 
 **Files:**
 - Modify: `CLAUDE.md` — the **Memory lanes** paragraph, the **Tropical margins** paragraph, the `dream_verify` row of the MCP tools table, and the `hooks/wake.py` row's neighbor in Key Files (add a `hooks/sleep.py` row)
@@ -1294,8 +1430,9 @@ Append to the paragraph that begins `**Memory lanes:**`:
 
 ```
 Lane is derived at write time: `work=True` wins; otherwise a `project` key in
-`context` derives the work lane (`context.lane = "personal"` opts out); core
-and genome episodes stay personal. Lane filtering is applied to the ranked
+`context`, or an instance whose `[memory] default_lane = "work"` (default
+`"personal"`), derives the work lane (`context.lane = "personal"` opts out);
+core and genome episodes stay personal. Lane filtering is applied to the ranked
 candidate set before the margin and before truncation, so a lane-filtered
 recall can fill `max_results` and its margin describes the lane returned.
 ```
@@ -1343,7 +1480,7 @@ git commit -m "docs: document recency tiebreak, lane derivation, and outcome aut
 
 ---
 
-### Task 8: Final verification and the "After" replay
+### Task 9: Final verification and the "After" replay
 
 - [ ] **Step 1: Full suite**
 

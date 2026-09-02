@@ -297,14 +297,31 @@ hold, and the tests pin it the same way.
 
 ## 7. First neighborhood
 
-Receiver: `engram`. Publishers: `why` and `blocks`. Same owner, technical
-context, and the July 8 cross-repo review is evidence that missing pieces
-sit across these stores. Context path for this cycle is
-`["memory", "technical"]`, matching the shadow export. Both publishers
-publish work lane only. The receiver's policy grants `recall`, `read`, and
-`inject_context` for `why` and `blocks` in that context, purpose
-`session-recall`, audience `self`, with a validity interval ending at the
-cycle's close so the grant expires rather than lingers.
+Amended 2026-09-01 after the B0 census. The local instance stores other
+than `engram` were found empty of work-lane material: `why` and `blocks`
+are identical March 2026 snapshots with zero work-lane rows, `agi`, `claw`,
+and `gil` predate the lane migration, `code` does not open, and `smart` is
+an empty directory. Unbound projects route to the default instance, so
+every session since spring wrote to `engram`.
+
+Receiver: `engram`. Publisher: `lighthouse`, a new instance bound to
+`~/Projects/lighthouse` through that repository's `.engram/config.toml`.
+The L1 Codex team's sessions and any Claude session in that repository
+write to it during this cycle, so the second house is built by the people
+building the roads. Repo-bound technical instances write the work lane by
+default through a per-instance `[memory] default_lane` setting (E2). Context
+path for this cycle is `["memory", "technical"]`, matching the shadow
+export. The publisher publishes work lane only. The receiver's policy grants
+`recall`, `read`, and `inject_context` for `lighthouse` in that context,
+purpose `session-recall`, audience `self`, with a validity interval ending
+at the cycle's close so the grant expires rather than lingers.
+
+One publisher plus the receiver's own source is enough for the crossing,
+the receipt, the privacy count, and the metric. Fusion across several
+publishers is covered by the Lighthouse fixtures; a second live publisher
+is the next cycle's addition. The B0 spike re-runs against `lighthouse`
+once it holds at least thirty work-lane episodes, and E1's receiver arm
+waits for that result.
 
 ## 8. The spike (B0)
 
