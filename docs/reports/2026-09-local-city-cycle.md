@@ -69,3 +69,16 @@ later.
   regenerated (kind enum gains RecallReceipt only) and `biome.json` gains one
   exclusion for `fixtures/policy-conformance` so canonical fixture bytes
   survive lint. Both added to the WP allowed list for those changes only.
+- Engram team: the dev2/lead pair tripped the loop guard (8 messages per
+  30 minutes) on ordinary WP setup traffic. Cleared with `codex-team reset`.
+  Standing decisions given to the lead: devs use the main checkout's
+  interpreter read-only (`/Users/kairos/Projects/engram/.venv/bin/python`)
+  with their worktree as cwd and a per-dev `UV_CACHE_DIR` under /private/tmp,
+  because linked worktrees carry no venv and the sandbox denies ~/.cache/uv;
+  message traffic is batched one send per WP event. `jsonschema` installed
+  into the shared venv by the integrator so E1's tests can import it; the
+  pyproject change stays on E1's branch.
+- Follow-up for codex-team: `up` should provision an interpreter per worktree
+  (symlink or uv sync) and set UV_CACHE_DIR in the launch scripts; the loop
+  guard's default budget is too tight for a two-message brief plus
+  acceptance relay.
