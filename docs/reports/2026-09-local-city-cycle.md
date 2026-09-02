@@ -207,3 +207,27 @@ later.
    `codex-team down --task local-city-l1` in lighthouse and
    `codex-team down --task local-city-e` in engram (branches kept).
 7. Nothing has been pushed from either repository.
+
+## Road test (2026-09-02 morning, integrator)
+
+First live run of the merged publisher path, against the still-empty
+`lighthouse` store, before any MCP restart (the daemon is a fresh process,
+so it runs the merged code):
+
+- Publisher policy written and sealed with engram's `artifact_digest`
+  (`.engram/instances/lighthouse/lighthouse-policy.json`, one rule: allow
+  `recall` and `read` to `urn:engram:engram` in `memory/technical`, purpose
+  `session-recall`, valid to 2026-10-15). The TypeScript kit validates it
+  with the same digest (`a8f7cc4c…8f98`).
+- Daemon config `.engram/lighthouse-daemon.toml` (`publishers = ["lighthouse"]`);
+  daemon started on `.engram/lighthouse.sock`.
+- Probe over the socket: allowed recall answers `recall_result` with an
+  allow decision, a turn id, and zero candidates (empty store); a recall in
+  `memory/personal` and one from an unknown receiver both deny with
+  `NO_MATCHING_ALLOW`; `read` of an unknown id returns `content: null` under
+  an allow decision; an unknown publisher answers `PUBLISHER_UNAVAILABLE`.
+- Publisher store bytes unchanged across the probe. Four disclosures in the
+  sidecar, one per request, including the two denials.
+
+The road holds with the house empty. What it cannot show yet is recall
+quality; that needs content in the store and the receiver arm.
