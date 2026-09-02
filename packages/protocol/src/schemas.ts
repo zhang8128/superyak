@@ -269,10 +269,10 @@ export const recallReceiptPayloadSchema = z
       });
     }
     const selectedKeys = new Set(
-      payload.selected.map((item) => `${item.publisher} ${item.memoryId}`),
+      payload.selected.map((item) => JSON.stringify([item.publisher, item.memoryId])),
     );
     payload.delivered.forEach((item, index) => {
-      if (!selectedKeys.has(`${item.publisher} ${item.memoryId}`)) {
+      if (!selectedKeys.has(JSON.stringify([item.publisher, item.memoryId]))) {
         context.addIssue({
           code: "custom",
           message: `DELIVERED_NOT_SELECTED: ${item.publisher} ${item.memoryId}`,

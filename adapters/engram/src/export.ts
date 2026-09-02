@@ -138,7 +138,7 @@ function validateTraces(model: EngramExport, memoryIds: Set<string>): void {
 
 function validateReceipts(model: EngramExport): RecallReceipt[] {
   const receipts = model.receipts ?? [];
-  if (receipts.length > 0 && model.formatVersion !== "1.1") {
+  if (model.receipts !== undefined && model.formatVersion !== "1.1") {
     fail("RECEIPTS_REQUIRE_1_1", model.formatVersion);
   }
   const keys = new Set<string>();
@@ -168,7 +168,7 @@ export function parseEngramExport(input: unknown): EngramModel {
   validateTraces(parsed, memoryIds);
   const receipts = validateReceipts(parsed);
 
-  return {
+  const model: EngramModel = {
     ...parsed,
     receipts,
     memories: parsed.memories.toSorted((left, right) => compareCanonicalJson(left.id, right.id)),
@@ -182,4 +182,13 @@ export function parseEngramExport(input: unknown): EngramModel {
         compareCanonicalJson([left.turnId, left.contextPath], [right.turnId, right.contextPath]),
       ),
   };
+  if (model.formatVersion === "1.0") {
+    Object.defineProperty(model, "receipts", {
+      value: receipts,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return model;
 }

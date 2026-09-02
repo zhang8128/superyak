@@ -104,6 +104,20 @@ describe("RecallReceipt artifact", () => {
     expect(() => sealArtifact(input)).toThrow(/DELIVERED_NOT_SELECTED/);
   });
 
+  it("rejects delivered references whose tuple only matches through a delimiter collision", () => {
+    const input = unsigned();
+    const selected = input.payload.selected[0];
+    const delivered = input.payload.delivered[0];
+    if (selected === undefined || delivered === undefined) {
+      throw new Error("test fixture must include selected and delivered references");
+    }
+    selected.publisher = "a";
+    selected.memoryId = "b c";
+    delivered.publisher = "a b";
+    delivered.memoryId = "c";
+    expect(() => sealArtifact(input)).toThrow(/DELIVERED_NOT_SELECTED/);
+  });
+
   it("rejects delivered references whose read decision is not allow", () => {
     const input = unsigned();
     const delivered = input.payload.delivered[0];

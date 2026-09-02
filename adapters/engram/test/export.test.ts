@@ -237,6 +237,13 @@ describe("portable Engram export 1.1", () => {
     expect(() => parseEngramExport(document)).toThrow("RECEIPTS_REQUIRE_1_1");
   });
 
+  it("rejects an explicitly present empty receipts list on a 1.0 document", () => {
+    const document = changed((value) => {
+      value.receipts = [];
+    });
+    expect(() => parseEngramExport(document)).toThrow("RECEIPTS_REQUIRE_1_1");
+  });
+
   it("rejects a receipt whose digest does not verify", () => {
     const tampered = receipt("turn-1", ["memory"]);
     tampered.payload.purpose = "tampered";
