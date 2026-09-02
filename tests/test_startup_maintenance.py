@@ -110,6 +110,9 @@ def test_compressor_can_defer_and_discard_knowledge_feeds(engram_server_env):
     compressor = server._compressor
     fed = []
     compressor._knowledge_graph = type("KG", (), {"feed": lambda self, eps, semantic_content="": fed.append((eps, semantic_content))})()
+    # The served init turns on background feeds; this test exercises the
+    # defer/flush/discard mechanics through the synchronous path.
+    compressor.background_knowledge_feeds = False
 
     compressor.pending_knowledge_feeds = [([{"id": "e1"}], "sem-1")]
     assert compressor.flush_knowledge_feeds() == 1

@@ -420,3 +420,27 @@ On merged main: targeted 120 passed, and the original reproduction
 (receiver policy sealed with the weight written as `1.0`) canonicalizes
 to `1` and validates with the kit at digest `491bde6e…`. Nothing pushed.
 The engram team stood down again; the L1 team is idle at 5577a2d.
+
+**Knowledge feeds leave the tool call (Kairos: "if we can safely
+parallelize this, then do so").** Safe form is background and
+sequential, not N-wide: Ollama serves one generation per model at a time
+and Kuzu is a single-writer store, so parallel feeds would only contend.
+The hazard was the coroutine bridge: `_run_async` ran `asyncio.run` on
+whichever thread called it (FastMCP's loop thread for tools, via a
+one-worker executor), so a background feed and a recall search would have
+been two event loops sharing one Graphiti object, one Kuzu async
+connection, and one HTTP client. Now `KnowledgeGraph` owns one persistent
+loop thread (`_LoopThread`, the `_executor` handle the close-ordering
+tests already pin); `feed_background` schedules a feed and returns a
+future; `search` schedules and waits; the two interleave at the LLM
+await. `compress_commit` returns with `knowledge_feeds_queued`;
+`status()` shows `knowledge_feeds_pending`; `close()` cancels pending
+feeds. Startup auto-compress still drops its feeds (an hour of 27B
+extraction on a fresh house's genome would contend with dedup for the
+whole session). Malformed model JSON stays a per-episode failure count,
+as Kairos said it will keep happening. Live probe with `qwen3.8:27b-mlx`:
+`feed_background` returned in 0.000 s; three searches during the
+in-flight extraction took 0.03 s, 0.02 s, 0.01 s; the feed landed 11
+entities and 9 relationships after 248 s with the test suite running
+beside it; search then returned 5 facts; close was clean. Six tests in
+`tests/test_knowledge.py`.

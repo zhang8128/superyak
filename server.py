@@ -1379,6 +1379,9 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
         cohesion_config=_config.cohesion if _config else None,
         persistence_config=_config.persistence if _config else None,
     )
+    # Tool-driven compression returns while graph extraction runs on the
+    # knowledge loop (minutes per episode with a local 27B model).
+    _compressor.background_knowledge_feeds = True
 
     from reflection import Reflector
     _genome_db_path = ENGRAM_HOME / ".engram" / "genome" / "graph.db"
@@ -2821,6 +2824,9 @@ def status() -> dict:
     }
     if _sleep_maintenance_deferred:
         result["maintenance_pending"] = True
+    pending_feeds = getattr(_knowledge_graph, "pending_background_feeds", 0) if _knowledge_graph is not None else 0
+    if pending_feeds:
+        result["knowledge_feeds_pending"] = pending_feeds
 
     # Only include health warnings if there are problems
     health = {}

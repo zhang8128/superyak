@@ -221,6 +221,9 @@ class Compressor:
         # of running them (extraction is LLM-bound, ~30 s per episode locally).
         self.defer_knowledge_feeds = False
         self.pending_knowledge_feeds: list[tuple[list[dict], str]] = []
+        # The served process sets this so commit() returns while extraction
+        # runs on the knowledge loop instead of inside the tool call.
+        self.background_knowledge_feeds = False
         self._classification_config = classification_config
         self._cohesion = cohesion_config
         self._persistence = persistence_config
@@ -465,6 +468,8 @@ class Compressor:
         self._pending.pop(compress_id, None)
         if self.defer_knowledge_feeds:
             self.pending_knowledge_feeds.extend(knowledge_feeds)
+        elif self.background_knowledge_feeds:
+            result["knowledge_feeds_queued"] = self._feed_knowledge_graph(knowledge_feeds)
         else:
             self._feed_knowledge_graph(knowledge_feeds)
         return result
@@ -731,18 +736,28 @@ class Compressor:
 
     def _feed_knowledge_graph(
         self, knowledge_feeds: list[tuple[list[dict], str]],
-    ) -> None:
-        """Run queued external graph writes after the local commit succeeds."""
+    ) -> int:
+        """Run (or, in background mode, schedule) external graph writes after
+        the local commit succeeds. Returns how many feeds were handed over."""
         if self._knowledge_graph is None:
-            return
+            return 0
+        handed = 0
         for episodes, semantic_content in knowledge_feeds:
             try:
-                self._knowledge_graph.feed(
-                    episodes,
-                    semantic_content=semantic_content,
-                )
+                if self.background_knowledge_feeds:
+                    self._knowledge_graph.feed_background(
+                        episodes,
+                        semantic_content=semantic_content,
+                    )
+                else:
+                    self._knowledge_graph.feed(
+                        episodes,
+                        semantic_content=semantic_content,
+                    )
+                handed += 1
             except Exception:
                 logger.warning("Knowledge graph feed failed", exc_info=True)
+        return handed
 
     def flush_knowledge_feeds(self) -> int:
         """Run every queued knowledge-graph feed; returns how many were fed."""

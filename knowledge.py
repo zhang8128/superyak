@@ -11,6 +11,7 @@ Graphiti uses Kuzu (embedded) for storage and Ollama for extraction.
 from __future__ import annotations
 
 import asyncio
+import threading
 import logging
 import os
 from datetime import datetime, timezone
@@ -32,6 +33,53 @@ def _fmt_dt(dt) -> str | None:
     return str(dt)
 
 
+class _LoopThread:
+    """One persistent asyncio loop on a daemon thread for every Graphiti coroutine.
+
+    Graphiti's clients (Kuzu AsyncConnection, the async OpenAI client) are
+    bound to the loop that drives them, so background feeds and recall
+    searches must share one loop rather than each spinning up `asyncio.run`
+    on their own thread. On one loop they interleave at awaits: a search
+    proceeds while a feed waits on the LLM.
+    """
+
+    def __init__(self):
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="engram-knowledge-loop", daemon=True
+        )
+        self._thread.start()
+        self._ready.wait(5)
+
+    def _run(self):
+        asyncio.set_event_loop(self._loop)
+        self._loop.call_soon(self._ready.set)
+        try:
+            self._loop.run_forever()
+        finally:
+            pending = [t for t in asyncio.all_tasks(self._loop) if not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            self._loop.close()
+
+    def submit(self, coro):
+        """Schedule a coroutine; returns a concurrent.futures.Future."""
+        if threading.get_ident() == self._thread.ident:
+            raise RuntimeError("submit() called from the knowledge loop thread")
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+    def shutdown(self, *, wait: bool):
+        if self._loop.is_closed():
+            return
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=None if wait else 5)
+
+
 class KnowledgeGraph:
     """Bridge between engram and Graphiti.
 
@@ -45,6 +93,7 @@ class KnowledgeGraph:
         self._embedding_provider = embedding_provider
         self._graphiti = None
         self._executor = None
+        self._background_feeds: set = set()
 
         if not config.enabled:
             logger.info("Knowledge graph disabled")
@@ -165,25 +214,20 @@ class KnowledgeGraph:
         finally:
             conn.close()
 
-    def _run_async(self, coro):
-        """Run an async coroutine synchronously.
-
-        Graphiti's API is async. Engram's MCP tools are sync.
-        This bridges the gap.
-        """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        import concurrent.futures
+    def _ensure_executor(self):
         if self._executor is None:
-            self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            self._executor = _LoopThread()
+        return self._executor
 
-        if loop and loop.is_running():
-            return self._executor.submit(asyncio.run, coro).result(timeout=900)
-        else:
-            return asyncio.run(coro)
+    def _run_async(self, coro):
+        """Run a coroutine on the knowledge loop thread and wait for it.
+
+        Graphiti's API is async; engram's MCP tools are sync and are called
+        on FastMCP's own loop thread, so the wait must not block a loop that
+        the coroutine needs. It never does: the coroutine runs on the
+        dedicated knowledge loop.
+        """
+        return self._ensure_executor().submit(coro).result(timeout=900)
 
     def _shutdown_executor(self):
         if self._executor is not None:
@@ -195,21 +239,48 @@ class KnowledgeGraph:
         episodes: list[dict],
         semantic_content: str = "",
     ) -> dict | None:
-        """Feed episode cluster to Graphiti for entity/relationship extraction.
+        """Feed an episode cluster to Graphiti and wait for the extraction.
 
-        Called during compression after a semantic is created.
-        Each episode becomes a Graphiti episode with extraction.
-
-        Args:
-            episodes: List of engram episode dicts (id, content, created_at).
-            semantic_content: The semantic summary, used as source_description.
-
-        Returns:
-            Summary of extracted entities/relationships, or None if disabled.
+        Called during compression after a semantic is created. Each episode
+        becomes a Graphiti episode with entity and relationship extraction.
+        Returns a summary, or None if disabled.
         """
         if not self.enabled or not self._graphiti or not episodes:
             return None
+        return self._run_async(self._feed_coro(episodes, semantic_content))
 
+    def feed_background(
+        self,
+        episodes: list[dict],
+        semantic_content: str = "",
+    ):
+        """Schedule a feed on the knowledge loop and return at once.
+
+        Returns a concurrent.futures.Future with the feed summary, or None
+        if disabled. Feeds run one coroutine each on the shared loop, so
+        they serialize on the LLM and the store while a concurrent search
+        still interleaves. Outcomes are logged when they land.
+        """
+        if not self.enabled or not self._graphiti or not episodes:
+            return None
+        future = self._ensure_executor().submit(self._feed_coro(episodes, semantic_content))
+        self._background_feeds.add(future)
+
+        def _done(done_future):
+            self._background_feeds.discard(done_future)
+            if done_future.cancelled():
+                logger.info("Background knowledge feed cancelled")
+            elif done_future.exception() is not None:
+                logger.warning("Background knowledge feed failed: %s", done_future.exception())
+
+        future.add_done_callback(_done)
+        return future
+
+    @property
+    def pending_background_feeds(self) -> int:
+        return sum(1 for f in getattr(self, "_background_feeds", ()) if not f.done())
+
+    async def _feed_coro(self, episodes: list[dict], semantic_content: str) -> dict:
         from graphiti_core.nodes import EpisodeType
 
         total_nodes = 0
@@ -229,15 +300,13 @@ class KnowledgeGraph:
                 ref_time = datetime.now(timezone.utc)
 
             try:
-                result = self._run_async(
-                    self._graphiti.add_episode(
+                result = await self._graphiti.add_episode(
                         name=f"engram-{ep_id}",
                         episode_body=ep.get("content", ""),
                         source_description=semantic_content or "engram compression",
                         reference_time=ref_time,
                         source=EpisodeType.text,
                     )
-                )
                 total_nodes += len(result.nodes)
                 total_edges += len(result.edges)
                 fed += 1
@@ -345,6 +414,8 @@ class KnowledgeGraph:
     def close(self):
         """Clean up Graphiti resources."""
         first_error = None
+        for future in list(getattr(self, "_background_feeds", ())):
+            future.cancel()
         if self._graphiti is not None:
             try:
                 self._run_async(self._graphiti.close())

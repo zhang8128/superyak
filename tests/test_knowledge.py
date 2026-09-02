@@ -645,3 +645,139 @@ class TestKuzuFulltextIndices:
             kg.close()
             del kg
             gc.collect()
+
+
+def _bare_graph(graph_config):
+    """A KnowledgeGraph with a mocked Graphiti and no loop thread yet."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from knowledge import KnowledgeGraph
+
+    kg = KnowledgeGraph.__new__(KnowledgeGraph)
+    kg._config = graph_config
+    kg._config.enabled = True
+    kg._executor = None
+    kg._background_feeds = set()
+    kg._graphiti = MagicMock()
+    kg._graphiti.close = AsyncMock()
+    return kg, asyncio
+
+
+_EPISODE = {"id": "ep-bg", "content": "Vin trained with Kelsier", "created_at": "2026-03-25T10:00:00+00:00"}
+
+
+class TestBackgroundFeeds:
+    """compress_commit must return while extraction runs; recall must not wait
+    behind it. Both need every Graphiti coroutine on one persistent loop."""
+
+    def test_run_async_reuses_one_loop_thread_off_the_caller(self, graph_config):
+        import threading
+
+        kg, asyncio = _bare_graph(graph_config)
+        seen = []
+
+        async def probe():
+            seen.append((id(asyncio.get_running_loop()), threading.get_ident()))
+            return 1
+
+        assert kg._run_async(probe()) == 1
+        assert kg._run_async(probe()) == 1
+        try:
+            assert seen[0] == seen[1]
+            assert seen[0][1] != threading.get_ident()
+        finally:
+            kg.close()
+
+    def test_feed_background_returns_before_extraction_finishes(self, graph_config):
+        from unittest.mock import AsyncMock, MagicMock
+
+        kg, asyncio = _bare_graph(graph_config)
+
+        async def slow_add(**_kwargs):
+            await asyncio.sleep(0.4)
+            return MagicMock(nodes=[MagicMock()], edges=[])
+
+        kg._graphiti.add_episode = AsyncMock(side_effect=slow_add)
+        try:
+            future = kg.feed_background([_EPISODE], semantic_content="training")
+            assert future.done() is False
+            assert kg.pending_background_feeds == 1
+            result = future.result(timeout=5)
+            assert result["episodes_fed"] == 1
+            assert kg.pending_background_feeds == 0
+        finally:
+            kg.close()
+
+    def test_search_is_not_blocked_by_a_background_feed(self, graph_config):
+        import time
+        from unittest.mock import AsyncMock, MagicMock
+
+        kg, asyncio = _bare_graph(graph_config)
+
+        async def slow_add(**_kwargs):
+            await asyncio.sleep(1.0)
+            return MagicMock(nodes=[], edges=[])
+
+        kg._graphiti.add_episode = AsyncMock(side_effect=slow_add)
+        kg._graphiti.search = AsyncMock(return_value=[])
+        try:
+            future = kg.feed_background([_EPISODE], semantic_content="training")
+            t0 = time.monotonic()
+            assert kg.search("Kelsier") == {"facts": [], "historical": []}
+            assert time.monotonic() - t0 < 0.5, "search waited behind the feed"
+            assert future.done() is False
+            future.result(timeout=5)
+        finally:
+            kg.close()
+
+    def test_close_cancels_pending_background_feeds(self, graph_config):
+        import time
+        from unittest.mock import AsyncMock, MagicMock
+
+        kg, asyncio = _bare_graph(graph_config)
+
+        async def very_slow_add(**_kwargs):
+            await asyncio.sleep(30)
+            return MagicMock(nodes=[], edges=[])
+
+        kg._graphiti.add_episode = AsyncMock(side_effect=very_slow_add)
+        future = kg.feed_background([_EPISODE], semantic_content="training")
+        t0 = time.monotonic()
+        kg.close()
+        assert time.monotonic() - t0 < 5
+        assert future.cancelled() or future.done()
+        assert kg._graphiti is None
+        assert kg._executor is None
+
+    def test_disabled_graph_feed_background_is_none(self):
+        from config import GraphConfig
+        from knowledge import KnowledgeGraph
+
+        kg = KnowledgeGraph(GraphConfig(enabled=False))
+        assert kg.feed_background([_EPISODE]) is None
+
+
+class TestCompressorBackgroundFeeds:
+    def test_background_mode_queues_instead_of_blocking(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from compress import Compressor
+        from storage import Storage
+
+        store = Storage(str(tmp_path / "c.db"))
+        try:
+            graph = MagicMock()
+            compressor = Compressor(store, MagicMock(), None, knowledge_graph=graph)
+            feeds = [([_EPISODE], "sem-a"), ([_EPISODE], "sem-b")]
+
+            assert compressor._feed_knowledge_graph(feeds) == 2
+            assert graph.feed.call_count == 2
+            graph.feed_background.assert_not_called()
+
+            compressor.background_knowledge_feeds = True
+            assert compressor._feed_knowledge_graph(feeds) == 2
+            assert graph.feed_background.call_count == 2
+            assert graph.feed.call_count == 2
+        finally:
+            store.close()

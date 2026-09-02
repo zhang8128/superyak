@@ -164,9 +164,14 @@ docs/superpowers/specs/2026-06-12-off-device-assessment-design.md.
 
 **Knowledge graph:** Graphiti (Kuzu embedded) runs alongside engram for applied
 knowledge — entities, relationships, temporal facts. Fed by tool-driven
-`compress_commit` (startup auto-compress drops its feeds and counts them in the
-maintenance report: extraction is ~30 s per episode with a local 27B model),
-queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var (default: qwen3.8:27b-mlx).
+`compress_commit`, which returns at once while extraction runs on the knowledge
+loop thread (one persistent asyncio loop owns every Graphiti coroutine; feeds
+serialize on the LLM, a concurrent recall search interleaves; `status()` shows
+`knowledge_feeds_pending`). Startup auto-compress drops its feeds and counts them
+in the maintenance report: extraction is minutes per episode with a local 27B
+model, and the model occasionally emits malformed JSON, so feeds are best-effort
+per episode. Queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var
+(default: qwen3.8:27b-mlx).
 Extraction, embedding, and reranking stay local: Graphiti uses Ollama for
 extraction and explicit FastEmbed-backed clients for embedding and cosine
 reranking. engram creates the four Kuzu full-text indices Graphiti's search
