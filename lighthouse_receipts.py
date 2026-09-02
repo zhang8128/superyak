@@ -71,13 +71,20 @@ def build_receipt(
 
 
 def validate_receipt(receipt: dict) -> None:
+    payload = receipt.get("payload") if isinstance(receipt, dict) else None
+    if isinstance(payload, dict):
+        injected = payload.get("injected")
+        delivered = payload.get("delivered")
+        if (
+            isinstance(injected, bool)
+            and isinstance(delivered, list)
+            and injected != (len(delivered) > 0)
+        ):
+            raise ReceiptError("INJECTED_MISMATCH")
     if list(_VALIDATOR.iter_errors(receipt)):
         raise ReceiptError("SCHEMA_INVALID")
     if not verify_artifact_digest(receipt):
         raise ReceiptError("DIGEST_MISMATCH")
-    payload = receipt["payload"]
-    if payload["injected"] != (len(payload["delivered"]) > 0):
-        raise ReceiptError("INJECTED_MISMATCH")
 
 
 def write_receipt(

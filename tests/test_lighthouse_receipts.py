@@ -74,7 +74,7 @@ def test_injected_false_when_nothing_delivered():
     validate_receipt(receipt)
 
 
-def test_validate_rejects_unknown_member_and_injected_mismatch():
+def test_validate_rejects_unknown_member_and_digest_mismatch():
     receipt = sample()
     receipt["payload"]["extra"] = 1
     with pytest.raises(ReceiptError) as err:
@@ -82,18 +82,15 @@ def test_validate_rejects_unknown_member_and_injected_mismatch():
     assert err.value.code == "SCHEMA_INVALID"
 
     receipt = sample()
-    receipt["payload"]["injected"] = False
+    receipt["digest"]["value"] = "0" * 64
     with pytest.raises(ReceiptError) as err:
         validate_receipt(receipt)
     assert err.value.code == "DIGEST_MISMATCH"
 
 
-def test_validate_rejects_injected_mismatch_with_fresh_digest():
-    from lighthouse_protocol import artifact_digest
-
+def test_validate_rejects_injected_mismatch():
     receipt = sample()
     receipt["payload"]["injected"] = False
-    receipt["digest"] = artifact_digest(receipt)
     with pytest.raises(ReceiptError) as err:
         validate_receipt(receipt)
     assert err.value.code == "INJECTED_MISMATCH"
