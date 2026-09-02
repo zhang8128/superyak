@@ -159,3 +159,23 @@ later.
   lighthouse config, then the B0 rerun once that store has content.
 - Main after merge `927bcca`: full suite green (1673 passed, 1 skipped). Engram side is integrated
   for the night.
+- Lighthouse integration: all three WPs accepted (L1-A/L1-C at `4992a15`,
+  L1-B at `1c80c33`). Merged by the integrator in the team's integration
+  worktree as `7839f27`, acceptance list run there (pnpm check green; proof
+  passed with bridgeDigest `8f2194e9…6b4538` unchanged; recall proof passed;
+  schemas and 14 policy decisions regenerate clean; receipt fixtures
+  validate and reject correctly; shadow report emitted; preregistration
+  required; digest command prints one line), then merged into lighthouse
+  local main as `b178460` and re-verified (check green, both proofs pass).
+  Not pushed. Team marked its STATE done and stood down.
+- Cross-implementation conformance, the one result the cycle needed most:
+  with L1's 14 generated policy fixtures synced into engram, the Python
+  policy evaluator's decisions match the TypeScript kit's on all 16 cases
+  (14 generated plus 2 hand-vendored), and engram-built receipts validate
+  against the generated RecallReceipt schema with zero errors. Two
+  test-side mismatches remain (the generated request files name their
+  policy without a `.json` suffix; the generated schema also encodes the
+  injected invariant so two negative tests now see SCHEMA_INVALID instead
+  of the specific code). Assigned to dev1 as E1y: merge main, sync the
+  artifacts additively, tolerate the suffix, check the invariant before
+  schema validation. The main checkout was returned to its committed state.
