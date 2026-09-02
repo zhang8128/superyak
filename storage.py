@@ -49,6 +49,10 @@ def _sanitize_fts_query(query: str) -> str:
     return " ".join(f'"{t.replace(chr(34), chr(34)+chr(34))}"' for t in tokens)
 
 
+class ReadOnlyStorageError(RuntimeError):
+    """Raised when a mutation is attempted on a read-only Storage."""
+
+
 class Storage:
     """SQLite-backed storage for entities, relationships, episodes, and vectors."""
 
@@ -67,6 +71,7 @@ class Storage:
         self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
+        self.read_only = False
 
         # Load sqlite-vec extension
         self.conn.enable_load_extension(True)
@@ -94,9 +99,46 @@ class Storage:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA synchronous=NORMAL")
 
+    @classmethod
+    def open_read_only(cls, db_path: str | Path) -> "Storage":
+        """Open an existing store for retrieval only.
+
+        SQLite URI ``mode=ro`` plus ``query_only`` refuse writes at the
+        engine; the ``read_only`` flag makes ``transaction``/``_commit``
+        refuse at the API. No migrations, health rebuild, or WAL checkpoint
+        runs, so the database file's bytes are never touched.
+
+        ``immutable=1`` is deliberately not used: a live session in the
+        publisher's repository may be a legitimate concurrent writer.
+        """
+        path = Path(db_path)
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        self = cls.__new__(cls)
+        self.db_path = str(path)
+        self._check_same_thread = False
+        self.conn = sqlite3.connect(
+            f"file:{path.resolve()}?mode=ro", uri=True, check_same_thread=False
+        )
+        self._conn_closed = False
+        self.conn.row_factory = sqlite3.Row
+        self._transaction_depth = 0
+        self._migrations_dir = None
+        self.read_only = True
+        self.conn.enable_load_extension(True)
+        import sqlite_vec
+
+        sqlite_vec.load(self.conn)
+        self.conn.enable_load_extension(False)
+        self.conn.execute("PRAGMA query_only=ON")
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        return self
+
     @contextmanager
     def transaction(self) -> Iterator[None]:
         """Group storage writes into one atomic SQLite transaction."""
+        if getattr(self, "read_only", False):
+            raise ReadOnlyStorageError("storage opened read-only")
         outermost = self._transaction_depth == 0
         if outermost:
             self.conn.execute("BEGIN IMMEDIATE")
@@ -114,6 +156,8 @@ class Storage:
 
     def _commit(self) -> None:
         """Commit immediately unless an outer storage transaction owns it."""
+        if getattr(self, "read_only", False):
+            raise ReadOnlyStorageError("storage opened read-only")
         if self._transaction_depth == 0:
             self.conn.commit()
 
@@ -288,6 +332,11 @@ class Storage:
 
     def close(self) -> None:
         """Checkpoint WAL and close. Prevents vec0 corruption on unclean restart."""
+        if getattr(self, "read_only", False):
+            if not self._conn_closed:
+                self.conn.close()
+                self._conn_closed = True
+            return
         first_error = None
         if hasattr(self, "_cold_conn") and self._cold_conn is not None:
             try:

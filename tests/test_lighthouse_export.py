@@ -106,7 +106,7 @@ def test_exports_only_opaque_work_memories_without_mutating_source(tmp_path: Pat
 
     document, audit = export_lighthouse_shadow(database, instance="engram-test")
 
-    assert document["formatVersion"] == "1.0"
+    assert document["formatVersion"] == "1.1"
     assert document["instance"] == "engram-test"
     assert document["context"] == {
         "id": "memory/technical",
@@ -663,3 +663,64 @@ def test_cli_reports_usage_without_echoing_arguments() -> None:
     assert stdout.getvalue() == ""
     assert json.loads(stderr.getvalue()) == {"ok": False, "code": "USAGE"}
     assert "private-database-path" not in stderr.getvalue()
+
+
+def add_receipt_row(connection: sqlite3.Connection, receipt: dict) -> None:
+    connection.execute(
+        "INSERT INTO memory_log VALUES (?, ?, ?)",
+        (
+            "lighthouse_receipt",
+            json.dumps([]),
+            json.dumps({"recall_id": "r", "receipt": receipt}),
+        ),
+    )
+
+
+def sample_receipt(turn: str = "t1") -> dict:
+    from lighthouse_receipts import build_receipt
+
+    return build_receipt(
+        receiver="engram",
+        turn_id=turn,
+        context={
+            "id": "memory/technical",
+            "path": ["memory", "technical"],
+        },
+        purpose="session-recall",
+        sources=[],
+        selected=[],
+        delivered=[],
+        receiver_rule=None,
+        issued_at="2026-09-01T00:00:00+00:00",
+    )
+
+
+def test_export_carries_valid_receipts_and_drops_invalid(tmp_path):
+    database = tmp_path / "graph.db"
+    connection = build_database(database)
+    add_receipt_row(connection, sample_receipt("t1"))
+    bad = sample_receipt("t2")
+    bad["payload"]["injected"] = True
+    add_receipt_row(connection, bad)
+    connection.commit()
+    connection.close()
+
+    document, audit = export_lighthouse_shadow(database, instance="engram-local")
+
+    assert document["formatVersion"] == "1.1"
+    assert [
+        receipt["payload"]["turnId"] for receipt in document["receipts"]
+    ] == ["t1"]
+    assert audit.receipts == 1
+    assert audit.excluded_invalid_receipts == 1
+    assert "query" not in json.dumps(document)
+
+
+def test_export_without_receipts_has_empty_list(tmp_path):
+    database = tmp_path / "graph.db"
+    build_database(database).close()
+
+    document, audit = export_lighthouse_shadow(database, instance="engram-local")
+
+    assert document["receipts"] == []
+    assert audit.receipts == 0

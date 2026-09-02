@@ -23,6 +23,7 @@ from resonance import (
     form_resonances as _form_resonances,
     surface_resonances as _surface_resonances,
 )
+from scoring import score_candidate
 from storage import vec0_distance_to_similarity, _pack_embedding
 from transitions import TransitionGraph
 
@@ -166,7 +167,7 @@ _instance_name = None
 _initialized = False
 _genome_db_path = None
 _signals_db_path = None
-_recall_scores: dict[str, dict[str, float]] = {}
+_recall_scores: dict[str, dict[str, dict[str, float | None]]] = {}
 _recall_resonances: dict[str, list[dict]] = {}
 # Margins hidden alongside scores during dream-active recall, revealed by dream_verify.
 _recall_margins: dict[str, dict] = {}
@@ -1583,14 +1584,17 @@ def _recency_at(created_at: str | None, now: datetime) -> float:
         dt = datetime.fromisoformat(created_at)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return 1.0 / (1.0 + (now - dt).total_seconds() / 86400)
+        age_days = max(0.0, (now - dt).total_seconds() / 86400)
+        return 1.0 / (1.0 + age_days)
     except (TypeError, ValueError):
         return 1.0
 
 
 def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: int,
                   query: str, biased: dict[str, dict], now: datetime,
-                  w_sim: float, w_rec: float) -> str | None:
+                  w_sim: float, w_rec: float, *, mode: str | None = None,
+                  cap: float | None = None,
+                  lane: str | None = None) -> str | None:
     """The id recall would have ranked first without the dream/instinct bias.
 
     This is the control arm for margins.stability: same scoring, same layers,
@@ -1598,6 +1602,11 @@ def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: in
     compare against — the margin then reports `checked: False` rather than
     inventing a verdict.
     """
+    if mode is None:
+        mode = _config.memory.recency_mode if _config else "tiebreak"
+    if cap is None:
+        cap = _config.memory.recency_cap if _config else 0.02
+
     try:
         cand, _ = _vector_candidates(raw_embedding, layer, max_results, query)
     except Exception:
@@ -1616,16 +1625,27 @@ def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: in
         if hydrated and "created_at" in hydrated:
             created_at = hydrated.get("created_at")
             auto_generated = hydrated.get("auto_generated")
+            candidate_lane = hydrated.get("lane") or "personal"
         else:
             row = _row_for_layer(cid, info["layer"])
             if row is None:
                 continue
             created_at = row.get("created_at")
             auto_generated = row.get("auto_generated")
+            candidate_lane = row.get("lane") or "personal"
 
-        score = info["similarity"] * w_sim + _recency_at(created_at, now) * w_rec
-        if auto_generated:
-            score *= 0.7
+        if lane is not None and candidate_lane != lane:
+            continue
+
+        score = score_candidate(
+            info["similarity"],
+            _recency_at(created_at, now),
+            bool(auto_generated),
+            mode=mode,
+            w_sim=w_sim,
+            w_rec=w_rec,
+            cap=cap,
+        )
         if score > best_score:
             best_id, best_score = cid, score
 
@@ -1674,6 +1694,28 @@ def _ensure_indexed():
 # Core Memory Tools (Task 8)
 # ---------------------------------------------------------------------------
 
+def _derive_lane(
+    work: bool,
+    core: bool,
+    genome: bool,
+    context: dict | None,
+    *,
+    default_lane: str = "personal",
+) -> str:
+    """Derive an episode's lane from its write-time signals."""
+    if core or genome:
+        return "personal"
+    if context and context.get("lane") == "personal":
+        return "personal"
+    if work:
+        return "work"
+    if context and context.get("project"):
+        return "work"
+    if default_lane == "work":
+        return "work"
+    return "personal"
+
+
 @_server_tool()
 @_mutation_logged
 def remember(
@@ -1709,6 +1751,13 @@ def remember(
 
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s, work=%s)", len(content), core, source, work)
 
+    lane = _derive_lane(
+        work,
+        core,
+        genome,
+        context,
+        default_lane=_config.memory.default_lane if _config else "personal",
+    )
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]
 
@@ -1718,7 +1767,7 @@ def remember(
         content=content,
         embedding=embedding,
         context=context,
-        lane="work" if work else "personal",
+        lane=lane,
     )
 
     if genome:
@@ -1759,7 +1808,7 @@ def remember(
 
     _session_episode_count += 1
     result = {"episode_id": episode_id, "layer": "episode"}
-    if work:
+    if lane == "work":
         result["lane"] = "work"
 
     # Auto-compress when threshold reached
@@ -1950,6 +1999,8 @@ def recall(
 
     w_sim = _config.memory.similarity_weight if _config else 0.6
     w_rec = _config.memory.recency_weight if _config else 0.4
+    recency_mode = _config.memory.recency_mode if _config else "tiebreak"
+    recency_cap = _config.memory.recency_cap if _config else 0.02
 
     # Collect results: id -> {layer, similarity, created_at}
     candidates, search_errors = _vector_candidates(embedding, layer, max_results, query)
@@ -2020,23 +2071,16 @@ def recall(
             info["implication"] = inst.get("implication")
             info["source_semantic_ids"] = inst.get("source_semantic_ids", [])
 
-        # Compute recency
-        if created_at:
-            try:
-                dt = datetime.fromisoformat(created_at)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                days = (now - dt).total_seconds() / 86400
-            except (TypeError, ValueError):
-                days = 0.0
-        else:
-            days = 0.0
-
-        recency = 1.0 / (1.0 + days)
-        score = info["similarity"] * w_sim + recency * w_rec
-        # Penalize auto-generated semantics (concatenated, not AI-summarized)
-        if info.get("auto_generated"):
-            score *= 0.7
+        recency = _recency_at(created_at, now)
+        score = score_candidate(
+            info["similarity"],
+            recency,
+            bool(info.get("auto_generated")),
+            mode=recency_mode,
+            w_sim=w_sim,
+            w_rec=w_rec,
+            cap=recency_cap,
+        )
         # Kept so the counterfactual pass can reuse this hydration
         info["created_at"] = created_at
 
@@ -2089,8 +2133,13 @@ def recall(
 
     scored.sort(key=lambda x: x["score"], reverse=True)
 
-    # Tropical margin: how decided was this ranking? Measured on the full
-    # candidate set before truncation, so max_results=1 still has a real
+    # Filter before the margin and truncation so both describe the lane that
+    # the caller receives and a lane-specific recall can fill max_results.
+    if lane is not None:
+        scored = [r for r in scored if (r.get("lane") or "personal") == lane]
+
+    # Tropical margin: how decided was this ranking? Measured on the
+    # lane-filtered candidate set before truncation, so max_results=1 has a real
     # runner-up. Diagnostic only — it gates nothing, and a diagnostic must
     # never take recall down with it, so this is best-effort like the
     # uninvited, resonance, and category blocks below.
@@ -2108,7 +2157,9 @@ def recall(
         unbiased_top = None
         if bias_applied and scored:
             unbiased_top = _unbiased_top(raw_embedding, layer, max_results, query,
-                                         candidates, now, w_sim, w_rec)
+                                         candidates, now, w_sim, w_rec,
+                                         mode=recency_mode, cap=recency_cap,
+                                         lane=lane)
         margin["stability"] = margins.stability(
             scored[0]["id"] if scored else None, unbiased_top, bias_applied)
     except Exception:
@@ -2272,7 +2323,16 @@ def recall(
     # Real scores are stored for later verification.
     _residue_active = _has_active_residue()
     if _residue_active:
-        _recall_scores[recall_id] = {r["id"]: r.get("score") for r in results}
+        _recall_scores[recall_id] = {
+            "matched": {
+                r["id"]: r.get("score")
+                for r in results
+                if not r.get("uninvited")
+            },
+            "uninvited": {
+                r["id"]: r.get("score") for r in results if r.get("uninvited")
+            },
+        }
         # The margin is derived from the scores being hidden, and the ranking
         # it describes is exactly what the shuffle below conceals. Hide it on
         # the same terms and reveal it through dream_verify.
@@ -3323,15 +3383,20 @@ def dream_verify(recall_id: str) -> dict:
         recall_id: The recall_id from a previous recall() call.
     """
     _init()
-    scores = _recall_scores.get(recall_id)
-    if scores is None:
+    entry = _recall_scores.get(recall_id)
+    if entry is None:
         return {"error": "No hidden scores for this recall_id. Either it wasn't dream-influenced, or the session has reset."}
 
+    matched = entry["matched"]
+    uninvited = entry["uninvited"]
     # Sort by score descending so the instance can see which were strong matches
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1] or 0, reverse=True)
+    sorted_scores = sorted(matched.items(), key=lambda x: x[1] or 0, reverse=True)
     revealed = {
         "recall_id": recall_id,
         "scores": {rid: round(s, 4) if s else None for rid, s in sorted_scores},
+        "uninvited_scores": {
+            rid: round(s, 4) if s else None for rid, s in uninvited.items()
+        },
         "note": "Now you can see which memories were pulled by the dream. What did you engage with before checking?",
     }
     margin = _recall_margins.get(recall_id)

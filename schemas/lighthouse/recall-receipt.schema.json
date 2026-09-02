@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "kind", "id", "issuedAt", "issuer", "payloadMediaType", "payload", "digest"],
+  "properties": {
+    "protocolVersion": {"const": "0.1"},
+    "kind": {"const": "RecallReceipt"},
+    "id": {"type": "string", "minLength": 1},
+    "issuedAt": {"type": "string", "minLength": 20},
+    "issuer": {"type": "string", "minLength": 1},
+    "payloadMediaType": {"const": "application/vnd.lighthouse.recall-receipt+json"},
+    "attestations": {"type": "array"},
+    "extensions": {"type": "object"},
+    "digest": {"$ref": "#/$defs/digest"},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turnId", "context", "purpose", "audience", "action", "injected", "transformation", "receiverRule", "sources", "selected", "delivered"],
+      "properties": {
+        "turnId": {"type": "string", "minLength": 1},
+        "context": {"$ref": "#/$defs/context"},
+        "purpose": {"type": "string", "minLength": 1},
+        "audience": {"const": "self"},
+        "action": {"const": "recall"},
+        "injected": {"type": "boolean"},
+        "transformation": {"const": "weighted-rrf-v1"},
+        "receiverRule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ruleId"],
+          "properties": {"ruleId": {"type": ["string", "null"]}}
+        },
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+        "selected": {"type": "array", "items": {"$ref": "#/$defs/selected"}},
+        "delivered": {"type": "array", "items": {"$ref": "#/$defs/delivered"}}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": {"type": "string", "minLength": 1},
+        "value": {"type": "string", "minLength": 1}
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "path": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effect", "ruleId", "code"],
+      "properties": {
+        "effect": {"enum": ["allow", "deny"]},
+        "ruleId": {"type": ["string", "null"]},
+        "code": {"type": ["string", "null"]}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publisher", "role", "weight", "storeDigest", "policyDecision", "traceOutcome"],
+      "properties": {
+        "publisher": {"type": "string", "minLength": 1},
+        "role": {"enum": ["local", "remote"]},
+        "weight": {"type": "number", "minimum": 0},
+        "storeDigest": {"$ref": "#/$defs/digest"},
+        "policyDecision": {"$ref": "#/$defs/decision"},
+        "traceOutcome": {"enum": ["matched", "absent", "context-mismatched", "unavailable", "policy-denied"]}
+      }
+    },
+    "selected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publisher", "memoryId", "contentDigest", "score", "contributions"],
+      "properties": {
+        "publisher": {"type": "string", "minLength": 1},
+        "memoryId": {"type": "string", "minLength": 1},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "score": {"type": "number"},
+        "contributions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["publisher", "rank"],
+            "properties": {
+              "publisher": {"type": "string"},
+              "rank": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "delivered": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publisher", "memoryId", "readDecision"],
+      "properties": {
+        "publisher": {"type": "string", "minLength": 1},
+        "memoryId": {"type": "string", "minLength": 1},
+        "readDecision": {"$ref": "#/$defs/decision"}
+      }
+    }
+  }
+}

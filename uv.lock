@@ -430,6 +430,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastembed" },
     { name = "graphiti-core", extra = ["kuzu"] },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "networkx" },
     { name = "onnxruntime" },
@@ -456,6 +457,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'llm'" },
     { name = "fastembed", specifier = ">=0.7" },
     { name = "graphiti-core", extras = ["kuzu"], specifier = ">=0.5" },
+    { name = "jsonschema", specifier = ">=4.23" },
     { name = "mcp", specifier = ">=1.9,<2" },
     { name = "networkx", specifier = ">=3.6.1" },
     { name = "onnxruntime", specifier = ">=1.18" },

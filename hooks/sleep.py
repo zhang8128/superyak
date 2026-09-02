@@ -12,6 +12,7 @@ The visible fragments at wake are the book covers on the nightstand.
 The recall bias is the reading itself.
 """
 
+import json
 import os
 import random
 import re
@@ -38,6 +39,9 @@ DREAMS_PER_SLEEP = 5
 
 RESIDUE_DIM = 64
 NOISE_SIGMA = 0.15
+
+AUTO_OUTCOME = "used: auto: cited"
+CITING_OPERATIONS = ("mark_core", "instinct_feedback", "dream_react")
 
 # Affect words — same set as dreaming.py
 _AFFECT_WORDS = {
@@ -67,6 +71,78 @@ _POSITIVE = {
     "bright", "clear", "whole", "rest", "ease", "relief", "gratitude",
     "wonder", "surprise", "curious", "resonance", "home", "familiar",
 }
+
+
+def _table_exists(conn, name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def auto_capture_outcomes(conn, session_id) -> int:
+    """Mark positive recall outcomes supported by later same-session citations."""
+    if not session_id or not _table_exists(conn, "memory_log"):
+        return 0
+
+    recalls = conn.execute(
+        "SELECT id, timestamp, target_ids FROM memory_log "
+        "WHERE event_type = 'recall' AND outcome IS NULL "
+        "AND json_extract(context, '$.session_id') = ?",
+        (session_id,),
+    ).fetchall()
+    if not recalls:
+        return 0
+
+    episodes = conn.execute(
+        "SELECT created_at, content, COALESCE(context, '') AS context "
+        "FROM episodes WHERE session_id = ?",
+        (session_id,),
+    ).fetchall()
+    operations = []
+    if _table_exists(conn, "operation_log"):
+        placeholders = ",".join("?" for _ in CITING_OPERATIONS)
+        operations = conn.execute(
+            f"SELECT timestamp, target_ids FROM operation_log "
+            f"WHERE session_id = ? AND operation IN ({placeholders})",
+            (session_id, *CITING_OPERATIONS),
+        ).fetchall()
+
+    marked = 0
+    for recall in recalls:
+        targets = set(json.loads(recall["target_ids"] or "[]"))
+        if not targets:
+            continue
+        after = recall["timestamp"]
+        cited = any(
+            episode["created_at"] > after
+            and any(
+                target in (episode["content"] or "")
+                or target in (episode["context"] or "")
+                for target in targets
+            )
+            for episode in episodes
+        )
+        if not cited:
+            cited = any(
+                operation["timestamp"] > after
+                and set(json.loads(operation["target_ids"] or "[]")) & targets
+                for operation in operations
+            )
+        if cited:
+            conn.execute(
+                "UPDATE memory_log SET outcome = ? "
+                "WHERE id = ? AND outcome IS NULL",
+                (AUTO_OUTCOME, recall["id"]),
+            )
+            marked += 1
+
+    if marked:
+        conn.commit()
+    return marked
 
 
 def _load_instance_config():
@@ -142,6 +218,16 @@ def sleep():
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
         conn.row_factory = sqlite3.Row
+
+        try:
+            captured = auto_capture_outcomes(conn, ctx["session_id"])
+            if captured:
+                print(
+                    f"engram sleep: auto-captured {captured} recall outcome(s)",
+                    file=sys.stderr,
+                )
+        except Exception:
+            pass  # Outcome capture is observational; never block sleep.
 
         has_residue = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='residue'"

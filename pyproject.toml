@@ -19,6 +19,7 @@ dependencies = [
     "watchfiles>=1.0",
     "scipy>=1.14",
     "graphiti-core[kuzu]>=0.5",
+    "jsonschema>=4.23",
     "networkx>=3.6.1",
     "ripser>=0.6.15",
 ]
@@ -53,7 +54,11 @@ py-modules = [
     "graphiti_local",
     "indexer",
     "knowledge",
+    "lighthouse_daemon",
     "lighthouse_export",
+    "lighthouse_policy",
+    "lighthouse_protocol",
+    "lighthouse_receipts",
     "local_agent",
     "logging_config",
     "maintenance",
@@ -65,6 +70,7 @@ py-modules = [
     "reflection",
     "resonance",
     "resources",
+    "scoring",
     "server",
     "session_bindings",
     "sheaf",
@@ -76,6 +82,7 @@ py-modules = [
 [tool.setuptools.data-files]
 "share/engram/migrations" = ["migrations/*.sql"]
 "share/engram/prompts" = ["prompts/*.txt"]
+"share/engram/schemas/lighthouse" = ["schemas/lighthouse/*.json"]
 "share/engram/hooks" = ["hooks/*.py", "hooks/hooks.json"]
 "share/engram/skills/engram" = ["skills/engram/skill.md"]
 

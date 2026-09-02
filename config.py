@@ -66,6 +66,12 @@ class MemoryConfig:
     graph_expansion_depth: int = 2
     similarity_weight: float = 0.6
     recency_weight: float = 0.4
+    # "tiebreak" caps recency so it decides near-ties only; "additive" is
+    # the historical similarity*w_sim + recency*w_rec formula.
+    recency_mode: str = "tiebreak"
+    recency_cap: float = 0.02  # provisional — equals the near-tie threshold
+    # Lane an untagged remember() gets in this instance.
+    default_lane: str = "personal"
 
 
 @dataclass
@@ -201,6 +207,9 @@ max_recall_results = 20
 graph_expansion_depth = 2
 similarity_weight = 0.6
 recency_weight = 0.4
+recency_mode = "tiebreak"
+recency_cap = 0.02
+default_lane = "personal"
 
 [watcher]
 enabled = true
@@ -286,6 +295,9 @@ hard_boundary_confirmations = 2
 
 def load_config(project_root: Path | None = None) -> EngramConfig:
     """Load config from .engram/config.toml, creating defaults if missing."""
+    import logging
+    from dataclasses import fields as dataclass_fields
+
     if project_root is None:
         project_root = Path.cwd()
 
@@ -298,24 +310,42 @@ def load_config(project_root: Path | None = None) -> EngramConfig:
 
     raw = tomllib.loads(config_file.read_text())
 
+    def load_section(name: str, config_type):
+        values = raw.get(name, {})
+        allowed = {item.name for item in dataclass_fields(config_type)}
+        for key in sorted(set(values) - allowed):
+            logging.getLogger("engram.config").warning(
+                "Ignoring unknown config key [%s].%s in %s",
+                name,
+                key,
+                config_file,
+            )
+        return config_type(
+            **{key: value for key, value in values.items() if key in allowed}
+        )
+
     return EngramConfig(
-        embedding=EmbeddingConfig(**raw.get("embedding", {})),
-        indexing=IndexingConfig(**raw.get("indexing", {})),
-        extraction=ExtractionConfig(**raw.get("extraction", {})),
-        entity_resolution=EntityResolutionConfig(**raw.get("entity_resolution", {})),
-        memory=MemoryConfig(**raw.get("memory", {})),
-        watcher=WatcherConfig(**raw.get("watcher", {})),
-        communities=CommunityConfig(**raw.get("communities", {})),
-        ranking=RankingConfig(**raw.get("ranking", {})),
-        compression=CompressionConfig(**raw.get("compression", {})),
-        classification=ClassificationConfig(**raw.get("classification", {})),
-        reflection=ReflectionConfig(**raw.get("reflection", {})),
-        signals=SignalsConfig(**raw.get("signals", {})),
-        resonance=ResonanceConfig(**raw.get("resonance", {})),
-        graph=GraphConfig(**raw.get("graph", {})),
-        cohesion=CohesionConfig(**raw.get("cohesion", {})),
-        persistence=PersistenceConfig(**raw.get("persistence", {})),
-        category_evolution=CategoryEvolutionConfig(**raw.get("category_evolution", {})),
+        embedding=load_section("embedding", EmbeddingConfig),
+        indexing=load_section("indexing", IndexingConfig),
+        extraction=load_section("extraction", ExtractionConfig),
+        entity_resolution=load_section(
+            "entity_resolution", EntityResolutionConfig
+        ),
+        memory=load_section("memory", MemoryConfig),
+        watcher=load_section("watcher", WatcherConfig),
+        communities=load_section("communities", CommunityConfig),
+        ranking=load_section("ranking", RankingConfig),
+        compression=load_section("compression", CompressionConfig),
+        classification=load_section("classification", ClassificationConfig),
+        reflection=load_section("reflection", ReflectionConfig),
+        signals=load_section("signals", SignalsConfig),
+        resonance=load_section("resonance", ResonanceConfig),
+        graph=load_section("graph", GraphConfig),
+        cohesion=load_section("cohesion", CohesionConfig),
+        persistence=load_section("persistence", PersistenceConfig),
+        category_evolution=load_section(
+            "category_evolution", CategoryEvolutionConfig
+        ),
         instance=raw.get("instance"),
         session_context=raw.get("session_context"),
     )
@@ -347,14 +377,28 @@ def resolve_db_path(
     identity. If the selected store does not exist, the legacy top-level
     ``.engram/graph.db`` remains the compatibility fallback.
     """
+    import logging
+
     default = engram_home / ".engram" / "graph.db"
+    config_root = project_root or engram_home
     try:
-        config = load_config(project_root or engram_home)
-    except Exception:
+        config = load_config(config_root)
+    except Exception as error:
+        logging.getLogger("engram.config").warning(
+            "Could not load config %s: %s; falling back to %s",
+            config_root / ".engram" / "config.toml",
+            error,
+            default,
+        )
         config = None
     instance_name = resolve_instance_name(config, default_instance)
     if instance_name:
         instance_db = engram_home / ".engram" / "instances" / instance_name / "graph.db"
         if instance_db.exists():
             return instance_db
+        logging.getLogger("engram.config").warning(
+            "Configured instance store %s does not exist; falling back to %s",
+            instance_db,
+            default,
+        )
     return default
