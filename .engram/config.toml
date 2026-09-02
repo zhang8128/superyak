@@ -17,6 +17,7 @@ name_jaccard_threshold = 0.7
 embedding_similarity_threshold = 0.9
 
 [memory]
+default_lane = "work"
 max_recall_results = 20
 graph_expansion_depth = 2
 similarity_weight = 0.6
