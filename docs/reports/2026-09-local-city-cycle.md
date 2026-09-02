@@ -75,8 +75,8 @@ later.
   interpreter read-only (`/Users/kairos/Projects/engram/.venv/bin/python`)
   with their worktree as cwd and a per-dev `UV_CACHE_DIR` under /private/tmp,
   because linked worktrees carry no venv and the sandbox denies ~/.cache/uv;
-  message traffic is batched one send per WP event. `jsonschema` installed
-  into the shared venv by the integrator so E1's tests can import it; the
+  message traffic is batched one send per WP event. `jsonschema` 4.26.0 was
+  already importable from the shared venv, so E1's tests can import it; the
   pyproject change stays on E1's branch.
 - Follow-up for codex-team: `up` should provision an interpreter per worktree
   (symlink or uv sync) and set UV_CACHE_DIR in the launch scripts; the loop
