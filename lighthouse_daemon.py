@@ -38,6 +38,7 @@ from lighthouse_protocol import (
     error_frame,
     read_result_frame,
     recall_result_frame,
+    validate_frame,
 )
 from storage import Storage, vec0_distance_to_similarity
 
@@ -218,6 +219,11 @@ class PublisherDaemon:
 
     def handle_frame(self, frame: dict) -> dict:
         try:
+            validate_frame(frame)
+            if frame["kind"] not in ("recall", "read"):
+                return error_frame(
+                    "MALFORMED_FRAME", f"unexpected kind {frame['kind']}"
+                )
             publisher = self.publishers.get(frame.get("publisher"))
             if (
                 publisher is None
@@ -234,9 +240,8 @@ class PublisherDaemon:
                 return self._recall(publisher, frame)
             if frame["kind"] == "read":
                 return self._read(publisher, frame)
-            return error_frame(
-                "MALFORMED_FRAME", f"unexpected kind {frame['kind']}"
-            )
+        except FrameError as error:
+            return error_frame(error.code, "")
         except KeyError as error:
             return error_frame("MALFORMED_FRAME", f"missing {error}")
         except Exception:
