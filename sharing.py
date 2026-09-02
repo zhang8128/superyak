@@ -7,6 +7,7 @@ share never deletes a memory.
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -17,6 +18,11 @@ from lighthouse_protocol import content_digest
 AUDIENCE_COMMONS = "commons"
 GROUP_RE = re.compile(r"group:[a-z][a-z0-9-]{0,63}\Z")
 SHAREABLE_LAYERS = ("episode", "semantic")
+REASON_INVALID_AUDIENCE = "invalid_audience"
+REASON_INVALID_LAYER = "invalid_layer"
+INVALID_REASONS = (REASON_INVALID_AUDIENCE, REASON_INVALID_LAYER)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +52,17 @@ def _now() -> str:
 
 def _record(row) -> ShareRecord:
     return ShareRecord(**{key: row[key] for key in ShareRecord.__slots__})
+
+
+def _invalid_reasons(row) -> list[str]:
+    reasons = []
+    try:
+        validate_audience(row["audience"])
+    except (TypeError, ValueError):
+        reasons.append(REASON_INVALID_AUDIENCE)
+    if row["layer"] not in SHAREABLE_LAYERS:
+        reasons.append(REASON_INVALID_LAYER)
+    return sorted(reasons)
 
 
 def _get_published(published_storage, layer: str, memory_id: str):
@@ -169,7 +186,13 @@ def unshare(*, published_storage, share_id) -> bool:
         remaining = published_storage.conn.execute(
             "SELECT COUNT(*) FROM shared_memories WHERE memory_id = ?", (row["memory_id"],)
         ).fetchone()[0]
-        if remaining == 0:
+        if row["layer"] not in SHAREABLE_LAYERS:
+            logger.warning(
+                "unshare kept published copy for invalid layer: share_id=%s memory_id=%s",
+                share_id,
+                row["memory_id"],
+            )
+        elif remaining == 0:
             table = "episodes" if row["layer"] == "episode" else "semantics"
             vectors = "episode_vectors" if row["layer"] == "episode" else "semantic_vectors"
             published_storage.conn.execute(
@@ -182,13 +205,32 @@ def unshare(*, published_storage, share_id) -> bool:
 
 
 def list_shares(*, published_storage, audience=None) -> list[ShareRecord]:
-    sql = "SELECT * FROM shared_memories"
-    args: tuple = ()
-    if audience is not None:
-        sql += " WHERE audience = ?"
-        args = (validate_audience(audience),)
-    sql += " ORDER BY shared_at, share_id"
-    return [_record(row) for row in published_storage.conn.execute(sql, args)]
+    requested_audience = validate_audience(audience) if audience is not None else None
+    records = []
+    skipped = 0
+    for row in published_storage.conn.execute(
+        "SELECT * FROM shared_memories ORDER BY shared_at, share_id"
+    ):
+        if _invalid_reasons(row):
+            skipped += 1
+        elif requested_audience is None or row["audience"] == requested_audience:
+            records.append(_record(row))
+    if skipped:
+        logger.warning("list_shares skipped %d invalid share records", skipped)
+    return records
+
+
+def list_invalid_shares(*, published_storage) -> list[dict]:
+    invalid = []
+    for row in published_storage.conn.execute(
+        "SELECT * FROM shared_memories ORDER BY shared_at, share_id"
+    ):
+        reasons = _invalid_reasons(row)
+        if reasons:
+            item = {key: row[key] for key in ShareRecord.__slots__}
+            item["reasons"] = reasons
+            invalid.append(item)
+    return invalid
 
 
 def audiences_for(published_storage, memory_id: str) -> set[str]:
@@ -199,7 +241,9 @@ def audiences_for(published_storage, memory_id: str) -> set[str]:
     if not records:
         return set()
     layer = records[0]["layer"]
-    if layer not in SHAREABLE_LAYERS or any(row["layer"] != layer for row in records):
+    if any(_invalid_reasons(row) for row in records) or any(
+        row["layer"] != layer for row in records
+    ):
         return set()
     published_row = _get_published(published_storage, layer, memory_id)
     if published_row is None:
@@ -207,7 +251,4 @@ def audiences_for(published_storage, memory_id: str) -> set[str]:
     digest_value = content_digest(published_row.get("content", ""))["value"]
     if any(row["content_digest"] != digest_value for row in records):
         return set()
-    try:
-        return {validate_audience(row["audience"]) for row in records}
-    except (TypeError, ValueError):
-        return set()
+    return {row["audience"] for row in records}
