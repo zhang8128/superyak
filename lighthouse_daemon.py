@@ -3,10 +3,10 @@
 One process hosts the publisher side of every local engram instance listed
 in its config. Each store is opened read-only (never migrated or written),
 each instance carries its own deny-by-default ConnectionPolicy, and policy
-is evaluated before retrieval. Retrieval is restricted to work-lane
-episodes and semantics. Decisions and disclosures are appended to a sidecar
-SQLite file so the store's bytes never change. This module never imports
-``server.py``.
+is evaluated before retrieval. Retrieval is restricted to episodes and
+semantics explicitly shared to an audience the receiver may see. Decisions
+and disclosures are appended to a sidecar SQLite file so the store's bytes
+never change. This module never imports ``server.py``.
 
 Usage:
     python -m lighthouse_daemon --config ~/.engram/lighthouse-daemon.toml
@@ -39,7 +39,9 @@ from lighthouse_protocol import (
     read_result_frame,
     recall_result_frame,
     validate_frame,
+    verify_artifact_digest,
 )
+from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
 
 logger = logging.getLogger("engram.lighthouse_daemon")
@@ -85,12 +87,17 @@ class PublisherStore:
                 columns = {
                     row[1]
                     for row in self.storage.conn.execute(
-                        "PRAGMA table_info(episodes)"
+                        "PRAGMA table_info(shared_memories)"
                     )
                 }
-                if "lane" not in columns:
+                if not {
+                    "memory_id",
+                    "layer",
+                    "audience",
+                    "content_digest",
+                }.issubset(columns):
                     raise sqlite3.OperationalError(
-                        "episodes.lane missing (pre-migration store)"
+                        "shared_memories missing (pre-migration store)"
                     )
             except (PolicyError, FileNotFoundError, sqlite3.Error) as error:
                 logger.warning("publisher %s unavailable: %s", self.name, error)
@@ -146,10 +153,69 @@ class PublisherStore:
         return disclosure_id
 
 
-def retrieve(store: Storage, embeddings, query: str, k: int) -> list[dict]:
-    """Return work-lane episodes and semantics ranked by similarity."""
+def _allowed_audiences(policy_path: Path, receiver: str) -> frozenset[str]:
+    """Read one receiver's audience grant from the signed policy artifact."""
+    try:
+        artifact = json.loads(Path(policy_path).read_text(encoding="utf-8"))
+        if not isinstance(artifact, dict) or not verify_artifact_digest(artifact):
+            return frozenset()
+        extensions = artifact.get("extensions")
+        if not isinstance(extensions, dict):
+            return frozenset()
+        mapping = extensions.get("engram:audiences")
+        if not isinstance(mapping, dict):
+            return frozenset()
+        values = mapping.get(receiver)
+        if not isinstance(values, list):
+            return frozenset()
+        return frozenset(validate_audience(value) for value in values)
+    except (OSError, TypeError, ValueError):
+        return frozenset()
+
+
+def _shared_audiences(
+    store: Storage,
+    *,
+    memory_id: str,
+    layer: str,
+    content: str,
+) -> frozenset[str]:
+    """Return validated audiences for an intact published copy."""
+    records = store.conn.execute(
+        "SELECT layer, audience, content_digest FROM shared_memories "
+        "WHERE memory_id = ?",
+        (memory_id,),
+    ).fetchall()
+    if not records:
+        return frozenset()
+    digest = content_digest(content)["value"]
+    try:
+        if any(
+            record["layer"] != layer
+            or record["layer"] not in PUBLISHED_LAYERS
+            or record["content_digest"] != digest
+            for record in records
+        ):
+            return frozenset()
+        return frozenset(
+            validate_audience(record["audience"]) for record in records
+        )
+    except (TypeError, ValueError):
+        return frozenset()
+
+
+def retrieve(
+    store: Storage,
+    embeddings,
+    query: str,
+    k: int,
+    allowed_audiences: frozenset[str],
+) -> list[dict]:
+    """Return audience-visible episodes and semantics ranked by similarity."""
+    if not allowed_audiences:
+        return []
     vector = embeddings.embed([query], prefix="search_query")[0]
-    scored: list[tuple[float, str, str, dict]] = []
+    scored: list[tuple[float, str, str, dict, list[str]]] = []
     for layer in PUBLISHED_LAYERS:
         try:
             hits = store.search_vectors(layer, vector, k=max(k * 4, 8))
@@ -162,7 +228,18 @@ def retrieve(store: Storage, embeddings, query: str, k: int) -> list[dict]:
                 if layer == "episode"
                 else store.get_semantic(memory_id)
             )
-            if row is None or (row.get("lane") or "personal") != "work":
+            if row is None:
+                continue
+            audiences = sorted(
+                _shared_audiences(
+                    store,
+                    memory_id=memory_id,
+                    layer=layer,
+                    content=row.get("content", ""),
+                )
+                & allowed_audiences
+            )
+            if not audiences:
                 continue
             scored.append(
                 (
@@ -170,6 +247,7 @@ def retrieve(store: Storage, embeddings, query: str, k: int) -> list[dict]:
                     layer,
                     memory_id,
                     row,
+                    audiences,
                 )
             )
     scored.sort(key=lambda item: (-item[0], item[2]))
@@ -178,11 +256,11 @@ def retrieve(store: Storage, embeddings, query: str, k: int) -> list[dict]:
             "memoryId": memory_id,
             "rank": rank,
             "layer": layer,
-            "lane": "work",
+            "audiences": audiences,
             "contentDigest": content_digest(row.get("content", "")),
             "similarity": similarity,
         }
-        for rank, (similarity, layer, memory_id, row) in enumerate(
+        for rank, (similarity, layer, memory_id, row, audiences) in enumerate(
             scored[:k], start=1
         )
     ]
@@ -253,11 +331,16 @@ class PublisherDaemon:
         turn_id = str(uuid.uuid4())
         candidates: list[dict] = []
         if decision.effect == "allow":
+            allowed_audiences = _allowed_audiences(
+                publisher.policy_path,
+                f"urn:engram:{frame['receiver']}",
+            )
             candidates = retrieve(
                 publisher.storage,
                 self.embeddings,
                 frame["query"],
                 int(frame["k"]),
+                allowed_audiences,
             )
         disclosure_id = publisher.record_disclosure(
             {
@@ -287,19 +370,39 @@ class PublisherDaemon:
         decision = publisher.policy.decide(self._request(frame, "read"))
         items = []
         delivered: list[str] = []
+        allowed_audiences = frozenset()
+        if decision.effect == "allow":
+            allowed_audiences = _allowed_audiences(
+                publisher.policy_path,
+                f"urn:engram:{frame['receiver']}",
+            )
         for memory_id in frame["memoryIds"]:
             content = None
-            if decision.effect == "allow":
+            audiences: list[str] = []
+            if decision.effect == "allow" and allowed_audiences:
                 row = publisher.storage.get_episode(memory_id)
+                layer = "episode"
                 if row is None:
                     row = publisher.storage.get_semantic(memory_id)
-                if row is not None and (row.get("lane") or "personal") == "work":
-                    content = row.get("content", "")
-                    delivered.append(memory_id)
+                    layer = "semantic"
+                if row is not None:
+                    audiences = sorted(
+                        _shared_audiences(
+                            publisher.storage,
+                            memory_id=memory_id,
+                            layer=layer,
+                            content=row.get("content", ""),
+                        )
+                        & allowed_audiences
+                    )
+                    if audiences:
+                        content = row.get("content", "")
+                        delivered.append(memory_id)
             items.append(
                 {
                     "memoryId": memory_id,
                     "content": content,
+                    "audiences": audiences,
                     "decision": decision.to_json(),
                 }
             )
