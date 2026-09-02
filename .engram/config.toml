@@ -64,5 +64,3 @@ shadow = true
 influence_recall = false
 auto_commit = false
 
-[memory]
-default_lane = "work"
