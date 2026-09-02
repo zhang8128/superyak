@@ -83,11 +83,11 @@ ensures task facts don't drown out identity-level memories during recall.
 **Memory lanes:** Episodes and semantics carry a `lane` ('personal' | 'work').
 The work lane is reference material: it decays and recalls normally but never
 becomes core episodes, instincts, or reinforcement for personal semantics.
-Lane is derived at write time: `work=True` wins; otherwise a `project` key in
-`context`, or an instance whose `[memory] default_lane = "work"` (default
-`"personal"`), derives the work lane (`context.lane = "personal"` opts out);
-core and genome episodes stay personal. It remains correctable during compression
-review (summary `lane` override re-lanes source episodes). Lane filtering applies
+Lane is derived at write time: core and genome episodes stay personal, then
+`context.lane = "personal"` opts out of every work signal. Otherwise `work=True`,
+a `project` key in `context`, or an instance whose `[memory] default_lane = "work"`
+(default `"personal"`) derives the work lane. It remains correctable during
+compression review (summary `lane` override re-lanes source episodes). Lane filtering applies
 to the ranked candidate set before the margin and truncation, so a lane-filtered
 recall can fill `max_results` and its margin describes the returned lane.
 Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.

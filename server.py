@@ -1705,10 +1705,10 @@ def _derive_lane(
     """Derive an episode's lane from its write-time signals."""
     if core or genome:
         return "personal"
-    if work:
-        return "work"
     if context and context.get("lane") == "personal":
         return "personal"
+    if work:
+        return "work"
     if context and context.get("project"):
         return "work"
     if default_lane == "work":
