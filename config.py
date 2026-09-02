@@ -66,6 +66,10 @@ class MemoryConfig:
     graph_expansion_depth: int = 2
     similarity_weight: float = 0.6
     recency_weight: float = 0.4
+    # "tiebreak" caps recency so it decides near-ties only; "additive" is
+    # the historical similarity*w_sim + recency*w_rec formula.
+    recency_mode: str = "tiebreak"
+    recency_cap: float = 0.02  # provisional — equals the near-tie threshold
 
 
 @dataclass
@@ -201,6 +205,8 @@ max_recall_results = 20
 graph_expansion_depth = 2
 similarity_weight = 0.6
 recency_weight = 0.4
+recency_mode = "tiebreak"
+recency_cap = 0.02
 
 [watcher]
 enabled = true

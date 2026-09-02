@@ -23,6 +23,7 @@ from resonance import (
     form_resonances as _form_resonances,
     surface_resonances as _surface_resonances,
 )
+from scoring import score_candidate
 from storage import vec0_distance_to_similarity, _pack_embedding
 from transitions import TransitionGraph
 
@@ -1590,7 +1591,8 @@ def _recency_at(created_at: str | None, now: datetime) -> float:
 
 def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: int,
                   query: str, biased: dict[str, dict], now: datetime,
-                  w_sim: float, w_rec: float) -> str | None:
+                  w_sim: float, w_rec: float, *, mode: str | None = None,
+                  cap: float | None = None) -> str | None:
     """The id recall would have ranked first without the dream/instinct bias.
 
     This is the control arm for margins.stability: same scoring, same layers,
@@ -1598,6 +1600,11 @@ def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: in
     compare against — the margin then reports `checked: False` rather than
     inventing a verdict.
     """
+    if mode is None:
+        mode = _config.memory.recency_mode if _config else "tiebreak"
+    if cap is None:
+        cap = _config.memory.recency_cap if _config else 0.02
+
     try:
         cand, _ = _vector_candidates(raw_embedding, layer, max_results, query)
     except Exception:
@@ -1623,9 +1630,15 @@ def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: in
             created_at = row.get("created_at")
             auto_generated = row.get("auto_generated")
 
-        score = info["similarity"] * w_sim + _recency_at(created_at, now) * w_rec
-        if auto_generated:
-            score *= 0.7
+        score = score_candidate(
+            info["similarity"],
+            _recency_at(created_at, now),
+            bool(auto_generated),
+            mode=mode,
+            w_sim=w_sim,
+            w_rec=w_rec,
+            cap=cap,
+        )
         if score > best_score:
             best_id, best_score = cid, score
 
@@ -1950,6 +1963,8 @@ def recall(
 
     w_sim = _config.memory.similarity_weight if _config else 0.6
     w_rec = _config.memory.recency_weight if _config else 0.4
+    recency_mode = _config.memory.recency_mode if _config else "tiebreak"
+    recency_cap = _config.memory.recency_cap if _config else 0.02
 
     # Collect results: id -> {layer, similarity, created_at}
     candidates, search_errors = _vector_candidates(embedding, layer, max_results, query)
@@ -2033,10 +2048,15 @@ def recall(
             days = 0.0
 
         recency = 1.0 / (1.0 + days)
-        score = info["similarity"] * w_sim + recency * w_rec
-        # Penalize auto-generated semantics (concatenated, not AI-summarized)
-        if info.get("auto_generated"):
-            score *= 0.7
+        score = score_candidate(
+            info["similarity"],
+            recency,
+            bool(info.get("auto_generated")),
+            mode=recency_mode,
+            w_sim=w_sim,
+            w_rec=w_rec,
+            cap=recency_cap,
+        )
         # Kept so the counterfactual pass can reuse this hydration
         info["created_at"] = created_at
 
@@ -2108,7 +2128,8 @@ def recall(
         unbiased_top = None
         if bias_applied and scored:
             unbiased_top = _unbiased_top(raw_embedding, layer, max_results, query,
-                                         candidates, now, w_sim, w_rec)
+                                         candidates, now, w_sim, w_rec,
+                                         mode=recency_mode, cap=recency_cap)
         margin["stability"] = margins.stability(
             scored[0]["id"] if scored else None, unbiased_top, bias_applied)
     except Exception:

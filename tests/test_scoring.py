@@ -3,6 +3,7 @@
 import pytest
 
 from scoring import DEFAULT_RECENCY_CAP, MODES, score_candidate
+from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
 def test_modes_are_exactly_tiebreak_and_additive():
@@ -62,3 +63,58 @@ def test_unknown_mode_is_rejected():
 
 def test_default_cap_is_provisional_near_tie_threshold():
     assert DEFAULT_RECENCY_CAP == 0.02
+
+
+def test_memory_config_defaults_to_tiebreak():
+    from config import MemoryConfig
+
+    cfg = MemoryConfig()
+    assert cfg.recency_mode == "tiebreak"
+    assert cfg.recency_cap == 0.02
+
+
+def test_default_toml_declares_recency_keys():
+    from config import _DEFAULT_TOML
+
+    assert 'recency_mode = "tiebreak"' in _DEFAULT_TOML
+    assert "recency_cap = 0.02" in _DEFAULT_TOML
+
+
+def test_recall_modes_differ_by_the_recency_term(engram_server_env):
+    import server
+    from tests.test_recall_margins import seed
+
+    seed(1)
+    server._config.memory.recency_mode = "additive"
+    additive = server.recall(
+        query="episode number 0 about rivers and mapping", uninvited=0
+    )["results"][0]["score"]
+    server._config.memory.recency_mode = "tiebreak"
+    tiebreak = server.recall(
+        query="episode number 0 about rivers and mapping", uninvited=0
+    )["results"][0]["score"]
+
+    assert additive - tiebreak == pytest.approx(0.4 - 0.02, abs=0.02)
+
+
+def test_both_recall_arms_use_the_configured_mode(
+    engram_server_env, monkeypatch
+):
+    import server
+    from tests.test_recall_margins import add_session_bias, seed
+
+    seed(3)
+    seen: list[str] = []
+    real = server.score_candidate
+
+    def record_mode(*args, **kwargs):
+        seen.append(kwargs["mode"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(server, "score_candidate", record_mode)
+    add_session_bias("rivers and mapping")
+    out = server.recall(query="rivers and mapping", uninvited=0)
+
+    assert out["margin"]["stability"]["checked"] is True
+    assert set(seen) == {"tiebreak"}
+    assert len(seen) >= 2 * 3
