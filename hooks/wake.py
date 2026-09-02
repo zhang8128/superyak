@@ -196,6 +196,7 @@ def wake():
         instinct_actions = {inst["action"] for inst in instincts}
         all_semantics = conn.execute(
             "SELECT content, kind, confidence, created_at FROM semantics "
+            "WHERE lane = 'personal' "
             "ORDER BY confidence DESC LIMIT 20"
         ).fetchall()
         recent_semantics = [

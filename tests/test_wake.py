@@ -698,3 +698,29 @@ class TestWakeDates:
         msg = output["systemMessage"]
         residue_lines = [l for l in msg.splitlines() if l.startswith("- `")]
         assert residue_lines and re.search(r", \d{4}-\d{2}-\d{2}\]", residue_lines[0])
+
+
+class TestWakeLaneFilter:
+    def test_work_lane_semantics_stay_out_of_orientation(self, tmp_path):
+        """Wake orients on identity: work-lane semantics are reference material
+        and must not take up context at session start (DNA curation, 2026-09-02)."""
+        from storage import Storage
+        db_dir = tmp_path / ".engram"
+        db_dir.mkdir()
+        store = Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
+
+        personal_text = "The wing-flapping lesson: none of our flying machines flap"
+        work_text = "BG3 monk modding: _Monk variants apply MARTIAL_ARTS_BONUS"
+        for text in (personal_text, work_text):
+            store.add_semantic(
+                id=str(uuid.uuid4()), content=text, kind="fact",
+                confidence=1.0, embedding=[0.0] * 768, source_episode_ids=[],
+            )
+        store.conn.execute(
+            "UPDATE semantics SET lane = 'work' WHERE content = ?", (work_text,)
+        )
+        store.conn.commit()
+
+        msg = _run_wake(str(tmp_path))["systemMessage"]
+        assert personal_text in msg
+        assert work_text not in msg
