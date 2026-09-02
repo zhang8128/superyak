@@ -1,5 +1,7 @@
 """Pure recall scoring shared by recall(), the margin counterfactual, and the replay."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from scoring import DEFAULT_RECENCY_CAP, MODES, score_candidate
@@ -23,6 +25,16 @@ def test_tiebreak_bounds_recency_by_cap():
     )
     stale = score_candidate(
         0.8, 0.0, False, mode="tiebreak", w_sim=0.6, w_rec=0.4, cap=0.02
+    )
+    assert fresh - stale == pytest.approx(0.02)
+
+
+def test_tiebreak_clamps_out_of_range_recency_to_its_bounded_domain():
+    fresh = score_candidate(
+        0.8, 2.0, False, mode="tiebreak", w_sim=0.6, w_rec=0.4, cap=0.02
+    )
+    stale = score_candidate(
+        0.8, -1.0, False, mode="tiebreak", w_sim=0.6, w_rec=0.4, cap=0.02
     )
     assert fresh - stale == pytest.approx(0.02)
 
@@ -95,6 +107,14 @@ def test_recall_modes_differ_by_the_recency_term(engram_server_env):
     )["results"][0]["score"]
 
     assert additive - tiebreak == pytest.approx(0.4 - 0.02, abs=0.02)
+
+
+def test_future_timestamp_is_treated_as_fully_recent(engram_server_env):
+    import server
+
+    now = datetime.now(timezone.utc)
+    exactly_tomorrow = (now + timedelta(days=1)).isoformat()
+    assert server._recency_at(exactly_tomorrow, now) == 1.0
 
 
 def test_both_recall_arms_use_the_configured_mode(

@@ -1,6 +1,8 @@
 """Pure helpers of the replay script (no model, no database)."""
 
 import importlib.util
+import hashlib
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,18 @@ def test_rank_with_fewer_than_two_candidates_has_no_gamma():
     assert out["winner"] == "a"
     assert out["gamma"] is None
     assert out["near_tie"] is False
+
+
+def test_rank_preserves_search_order_when_scores_tie():
+    m = _load()
+    out = m.rank(
+        [cand("first", 0.8, 0.5), cand("z-last", 0.8, 0.5)],
+        mode="tiebreak",
+        w_sim=0.6,
+        w_rec=0.4,
+        cap=0.02,
+    )
+    assert out["winner"] == "first"
 
 
 def test_summarize_counts_near_ties_recent_winners_and_changes():
@@ -133,3 +147,38 @@ def test_refuses_live_instance_paths(tmp_path):
     live.touch()
     with pytest.raises(SystemExit):
         m.main([str(live), "--output", str(tmp_path / "r.md")])
+
+
+def test_refuses_symlink_to_live_instance_path(tmp_path):
+    m = _load()
+    live = tmp_path / ".engram" / "instances" / "engram" / "graph.db"
+    live.parent.mkdir(parents=True)
+    live.touch()
+    alias = tmp_path / "copy.db"
+    alias.symlink_to(live)
+
+    with pytest.raises(SystemExit):
+        m.main([str(alias), "--output", str(tmp_path / "r.md")])
+
+
+def test_replay_connection_is_query_only_and_leaves_source_bytes_unchanged(tmp_path):
+    m = _load()
+    database = tmp_path / "copy.db"
+    writer = sqlite3.connect(database)
+    writer.execute("CREATE TABLE sentinel (value TEXT)")
+    writer.execute("INSERT INTO sentinel VALUES ('unchanged')")
+    writer.commit()
+    writer.close()
+    before = hashlib.sha256(database.read_bytes()).digest()
+
+    connection = m._open_readonly(database)
+    try:
+        assert connection.execute("PRAGMA query_only").fetchone()[0] == 1
+        assert connection.total_changes == 0
+        assert connection.execute("SELECT value FROM sentinel").fetchone()[0] == "unchanged"
+        with pytest.raises(sqlite3.OperationalError):
+            connection.execute("INSERT INTO sentinel VALUES ('changed')")
+    finally:
+        connection.close()
+
+    assert hashlib.sha256(database.read_bytes()).digest() == before

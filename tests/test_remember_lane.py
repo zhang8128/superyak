@@ -56,6 +56,8 @@ def test_pure_derivation_rules():
         == "personal"
     )
     assert server._derive_lane(True, False, False, None) == "work"
+    assert server._derive_lane(True, True, False, None) == "personal"
+    assert server._derive_lane(True, False, True, None) == "personal"
     assert server._derive_lane(False, True, False, {"project": "x"}) == "personal"
     assert server._derive_lane(False, False, True, {"project": "x"}) == "personal"
     assert server._derive_lane(False, False, False, {"project": ""}) == "personal"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import server
+from tests.test_recall_margins import add_session_bias
 from tests.test_recall_margins import engram_server_env  # noqa: F401
 
 
@@ -59,3 +60,37 @@ def test_log_target_ids_match_returned_ids(engram_server_env):
         (out["recall_id"],),
     ).fetchone()
     assert json.loads(row["target_ids"]) == [r["id"] for r in out["results"]]
+
+
+def test_biased_lane_recall_counterfactual_stays_in_requested_lane(
+    engram_server_env, monkeypatch
+):
+    server._init()
+    server._config.compression.auto_threshold = 1000
+    work_id = server.remember(content="work rivers", work=True)["episode_id"]
+    personal_id = server.remember(content="personal rivers")["episode_id"]
+    add_session_bias("rivers")
+    searches = iter(
+        [
+            {
+                work_id: {"layer": "episode", "similarity": 0.9},
+                personal_id: {"layer": "episode", "similarity": 0.8},
+            },
+            {
+                personal_id: {"layer": "episode", "similarity": 0.99},
+                work_id: {"layer": "episode", "similarity": 0.7},
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        server, "_vector_candidates", lambda *_args, **_kwargs: (next(searches), [])
+    )
+
+    out = server.recall(query="rivers", lane="work", max_results=2, uninvited=0)
+
+    assert [row["id"] for row in out["results"]] == [work_id]
+    assert out["margin"]["stability"] == {
+        "checked": True,
+        "survives": True,
+        "displaced": None,
+    }
