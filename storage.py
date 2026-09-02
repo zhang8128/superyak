@@ -170,10 +170,15 @@ class Storage:
         )
         self.conn.commit()
 
-        row = self.conn.execute(
-            "SELECT MAX(version) FROM schema_version"
-        ).fetchone()
-        current = row[0] if row[0] is not None else 0
+        # Applied versions as a SET, not a high-water mark. A max-based check
+        # can never fill a gap: if version N is missing while N+1 is recorded,
+        # N would be skipped forever. Gaps are reachable whenever two branches
+        # add migrations concurrently and one is renumbered before it lands,
+        # and they were silently unrepairable until this became set membership.
+        applied = {
+            row[0]
+            for row in self.conn.execute("SELECT version FROM schema_version")
+        }
 
         mig_dir = Path(self._migrations_dir)
         if not mig_dir.exists():
@@ -186,7 +191,7 @@ class Storage:
             m = pattern.match(f.name)
             if m:
                 ver = int(m.group(1))
-                if ver > current:
+                if ver not in applied:
                     migrations.append((ver, f))
 
         for ver, path in sorted(migrations):
