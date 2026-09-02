@@ -346,7 +346,8 @@ export async function runReferenceRecallProof(fixtureRoot: string): Promise<Reca
       "receipt.no-injection",
       experiment.modes.every((candidate) =>
         candidate.turns.every(
-          (turn) => turn.receipt.action === "recall" && turn.receipt.injected === false,
+          (turn) =>
+            turn.receipt.payload.action === "recall" && turn.receipt.payload.injected === false,
         ),
       ),
       receiptDigests,

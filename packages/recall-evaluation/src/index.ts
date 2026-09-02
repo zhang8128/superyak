@@ -3,11 +3,14 @@ export { runRecallExperiment } from "./experiment.js";
 export { fuseRankings, memoryRefKey } from "./fusion.js";
 export { measureTurn } from "./metrics.js";
 export {
+  buildRecallReceipt,
   parseRecallReceipt,
+  type RecallReceiptBuildInput,
   type RecallReceiptVerification,
-  recallSelectionReceiptContentSchema,
-  recallSelectionReceiptSchema,
-  sealRecallReceipt,
+  type ReceiptDeliveredInput,
+  type ReceiptSelectedInput,
+  type ReceiptSourceInput,
+  receiptDigest,
   verifyRecallReceiptDigest,
 } from "./receipt.js";
 export {
@@ -29,8 +32,6 @@ export type {
   RecallExperimentReportContent,
   RecallMetrics,
   RecallModeReport,
-  RecallSelectionReceipt,
-  RecallSelectionReceiptContent,
   RecallSource,
   RecallSourceAdmission,
   RecallSourceDecision,
