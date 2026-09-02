@@ -65,3 +65,6 @@ shadow = true
 influence_recall = false
 auto_commit = false
 
+
+[graph]
+model = "qwen3.8:27b-mlx"
