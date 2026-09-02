@@ -108,6 +108,7 @@ class KnowledgeGraph:
             )
 
             self._run_async(graphiti.build_indices_and_constraints())
+            self._ensure_kuzu_fulltext_indices(driver)
         except Exception:
             resource = graphiti if graphiti is not None else driver
             try:
@@ -119,6 +120,50 @@ class KnowledgeGraph:
 
         self._graphiti = graphiti
         logger.info("Knowledge graph initialized (kuzu: %s, model: %s)", db_path, model)
+
+    @staticmethod
+    def _ensure_kuzu_fulltext_indices(driver) -> int:
+        """Create the full-text indices Graphiti's Kuzu search ops query.
+
+        graphiti-core 0.28.2: `KuzuDriver.build_indices_and_constraints` is a
+        no-op (its comment says the schema creates the indices; it does not),
+        while `driver/kuzu/operations/search_ops.py` queries
+        `node_name_and_summary` and three siblings with QUERY_FTS_INDEX. The
+        statements exist in `graph_queries.get_fulltext_indices(KUZU)`; only
+        the Neo4j and FalkorDB drivers run them. Until they exist every feed
+        fails with "Table Entity doesn't have an index with name
+        node_name_and_summary". CREATE_FTS_INDEX is not idempotent, so check
+        SHOW_INDEXES first. Returns how many indices were created.
+        """
+        import re
+
+        import kuzu
+        from graphiti_core.driver.driver import GraphProvider
+        from graphiti_core.graph_queries import get_fulltext_indices
+
+        database = getattr(driver, "db", None)
+        if not isinstance(database, kuzu.Database):
+            return 0  # not a live Kuzu store (other provider, or a test double)
+
+        conn = kuzu.Connection(database)
+        try:
+            existing = set()
+            result = conn.execute("CALL SHOW_INDEXES() RETURN *")
+            while result.has_next():
+                row = result.get_next()
+                existing.add((row[0], row[1]))
+            created = 0
+            for statement in get_fulltext_indices(GraphProvider.KUZU):
+                match = re.search(r"CREATE_FTS_INDEX\('(\w+)', '(\w+)'", statement)
+                if match and (match.group(1), match.group(2)) in existing:
+                    continue
+                conn.execute(statement)
+                created += 1
+            if created:
+                logger.info("Created %d Kuzu full-text indices for Graphiti search", created)
+            return created
+        finally:
+            conn.close()
 
     def _run_async(self, coro):
         """Run an async coroutine synchronously.

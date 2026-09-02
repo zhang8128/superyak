@@ -361,3 +361,47 @@ and waits on B0.
 
 The running MCP server in this session still executes the pre-fix code;
 the change takes effect at the next restart.
+
+## Midday, after Kairos's decisions (2026-09-02)
+
+Decisions given: dev1 gets the float-versus-int package, framed as typing;
+I lead codex-team infrastructure and planning; the L1 worktrees get main
+merged; the knowledge-graph index failure is a bug to fix.
+
+- **E1p sent.** Rewritten as a typing defect (JSON has one number type;
+  `canonical_json` serialized by Python's host type; the kit canonicalizes
+  by value per RFC 8785), base `main` at c60e722, seam limited to
+  `canonical_json` and its tests. Delivered to the engram lead by paste
+  buffer and submitted; the lead relayed it in one message and updated
+  STATE and its task context; dev1 fast-forwarded to c60e722 and ran a
+  baseline suite before touching the serializer.
+- **L1 worktrees.** dev1, dev2, and integration fast-forwarded to
+  lighthouse main 5577a2d (all three heads were ancestors); every
+  `.engram/config.toml` now parses (`instance = lighthouse`,
+  `default_lane = work`, `[graph]` model set). Their running sessions stay
+  bound to the engram store until respawned; respawn when there is work.
+- **codex-team 6a702b5.** Both role briefs gain a Memory section naming
+  the pre-approved engram tools (`remember`, `status`, `task_focus`,
+  `task_update`) and when to use them, outside the messaging budget. The
+  launcher warns when a worktree's `.engram/config.toml` fails to parse.
+  Suite 62 passed.
+- **Kuzu index bug, root cause.** graphiti-core 0.28.2's `KuzuDriver`:
+  `build_indices_and_constraints` is a no-op whose comment claims the
+  schema creates the indices; `SCHEMA_QUERIES` creates none; the four
+  `CREATE_FTS_INDEX` statements exist in `graph_queries.get_fulltext_indices
+  (KUZU)` but only the Neo4j and FalkorDB drivers call them; the Kuzu
+  search ops query `node_name_and_summary` regardless. Reproduced on a
+  scratch store (no index after schema, exact Binder exception, creation
+  works without loading an extension in kuzu 0.11.3, persists across
+  reopen, not idempotent). Fix: `KnowledgeGraph._ensure_kuzu_fulltext_indices`
+  runs the four statements at init after checking `SHOW_INDEXES`; two
+  tests in `tests/test_knowledge.py` (creation, idempotent re-init).
+- **Knowledge graph, end to end with `qwen3.8:27b-mlx`.** Feed 1: 10
+  entities, 7 relationships, search returns 7 facts. Feed 2: failed after
+  Graphiti's retries on malformed model JSON ("Invalid control character",
+  then "Extra data"), the same class as the August think-mode finding for
+  dedup. Times 200 s and 416 s per episode, measured while two full test
+  suites ran concurrently. The graph now accepts writes; the model's JSON
+  discipline and the per-episode cost are the next two items, and
+  `compress_commit` will take minutes per cluster until feeds leave the
+  tool call.

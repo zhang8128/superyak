@@ -586,3 +586,62 @@ class TestKnowledgeGraphIntegration:
             assert compress_id in compressor._pending
         finally:
             storage.close()
+
+
+class _StubEmbeddings:
+    """Enough of an embedding provider for KnowledgeGraph init; never called."""
+
+    def embed(self, texts, prefix=None):
+        return [[0.0] * 768 for _ in texts]
+
+
+class TestKuzuFulltextIndices:
+    """graphiti-core 0.28.2's Kuzu driver never creates the full-text indices its
+    own search ops query (`build_indices_and_constraints` is a no-op and the
+    schema has none), so every feed failed with "Table Entity doesn't have an
+    index with name node_name_and_summary". engram creates them at init."""
+
+    EXPECTED = {
+        ("Episodic", "episode_content"),
+        ("Entity", "node_name_and_summary"),
+        ("Community", "community_name"),
+        ("RelatesToNode_", "edge_name_and_fact"),
+    }
+
+    @staticmethod
+    def _indexes(kg):
+        import kuzu
+
+        conn = kuzu.Connection(kg._graphiti.driver.db)
+        try:
+            result = conn.execute("CALL SHOW_INDEXES() RETURN *")
+            rows = set()
+            while result.has_next():
+                row = result.get_next()
+                rows.add((row[0], row[1]))
+            return rows
+        finally:
+            conn.close()
+
+    def test_init_creates_the_fulltext_indices_kuzu_search_queries(self, graph_config):
+        from knowledge import KnowledgeGraph
+
+        kg = KnowledgeGraph(graph_config, embedding_provider=_StubEmbeddings())
+        assert kg.enabled is True
+        try:
+            assert self.EXPECTED <= self._indexes(kg)
+        finally:
+            kg.close()
+
+    def test_reinit_on_an_existing_store_is_idempotent(self, graph_config):
+        import gc
+
+        from knowledge import KnowledgeGraph
+
+        for _ in range(2):
+            kg = KnowledgeGraph(graph_config, embedding_provider=_StubEmbeddings())
+            assert kg.enabled is True, "second init on the same store must not degrade"
+            assert self.EXPECTED <= self._indexes(kg)
+            kg.close()
+            del kg
+            gc.collect()

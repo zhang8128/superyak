@@ -169,7 +169,9 @@ maintenance report: extraction is ~30 s per episode with a local 27B model),
 queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var (default: qwen3.8:27b-mlx).
 Extraction, embedding, and reranking stay local: Graphiti uses Ollama for
 extraction and explicit FastEmbed-backed clients for embedding and cosine
-reranking. Separate from identity layers.
+reranking. engram creates the four Kuzu full-text indices Graphiti's search
+queries (graphiti-core 0.28.2's Kuzu driver never does; without them every
+feed fails on `node_name_and_summary`). Separate from identity layers.
 
 **Operation attribution:** Mutation audit rows retain approved metadata only,
 never submitted content. Migration 026 scrubs historical `operation_log.details`
