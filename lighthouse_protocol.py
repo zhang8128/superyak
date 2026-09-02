@@ -31,11 +31,62 @@ def _check_finite(value: Any) -> None:
             _check_finite(item)
 
 
+def _canonical_number(value: int | float) -> str:
+    if isinstance(value, int):
+        return str(value)
+    if not math.isfinite(value):
+        raise ValueError("non-finite number is not JSON")
+    if value == 0:
+        return "0"
+
+    sign = "-" if value < 0 else ""
+    mantissa, separator, exponent_text = repr(abs(value)).lower().partition("e")
+    exponent = int(exponent_text) if separator else 0
+    whole, decimal_point, fraction = mantissa.partition(".")
+    combined = whole + fraction if decimal_point else whole
+    leading_zeroes = len(combined) - len(combined.lstrip("0"))
+    digits = combined.lstrip("0").rstrip("0")
+    decimal_position = len(whole) + exponent - leading_zeroes
+
+    if 0 < decimal_position <= 21:
+        if decimal_position >= len(digits):
+            rendered = digits + "0" * (decimal_position - len(digits))
+        else:
+            rendered = (
+                digits[:decimal_position]
+                + "."
+                + digits[decimal_position:]
+            )
+    elif -6 < decimal_position <= 0:
+        rendered = "0." + "0" * (-decimal_position) + digits
+    else:
+        rendered = digits[0]
+        if len(digits) > 1:
+            rendered += "." + digits[1:]
+        scientific_exponent = decimal_position - 1
+        exponent_sign = "+" if scientific_exponent >= 0 else ""
+        rendered += f"e{exponent_sign}{scientific_exponent}"
+    return sign + rendered
+
+
 def canonical_json(value: Any) -> str:
     _check_finite(value)
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    encoder = json.JSONEncoder(
+        ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
+    iterencode = json.encoder._make_iterencode(
+        {},
+        encoder.default,
+        json.encoder.encode_basestring,
+        encoder.indent,
+        _canonical_number,
+        encoder.key_separator,
+        encoder.item_separator,
+        encoder.sort_keys,
+        encoder.skipkeys,
+        False,
+    )
+    return "".join(iterencode(value, 0))
 
 
 def artifact_digest(artifact: dict) -> dict:
