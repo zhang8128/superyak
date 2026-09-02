@@ -167,7 +167,7 @@ _instance_name = None
 _initialized = False
 _genome_db_path = None
 _signals_db_path = None
-_recall_scores: dict[str, dict[str, float]] = {}
+_recall_scores: dict[str, dict[str, dict[str, float | None]]] = {}
 _recall_resonances: dict[str, list[dict]] = {}
 # Margins hidden alongside scores during dream-active recall, revealed by dream_verify.
 _recall_margins: dict[str, dict] = {}
@@ -2322,7 +2322,16 @@ def recall(
     # Real scores are stored for later verification.
     _residue_active = _has_active_residue()
     if _residue_active:
-        _recall_scores[recall_id] = {r["id"]: r.get("score") for r in results}
+        _recall_scores[recall_id] = {
+            "matched": {
+                r["id"]: r.get("score")
+                for r in results
+                if not r.get("uninvited")
+            },
+            "uninvited": {
+                r["id"]: r.get("score") for r in results if r.get("uninvited")
+            },
+        }
         # The margin is derived from the scores being hidden, and the ranking
         # it describes is exactly what the shuffle below conceals. Hide it on
         # the same terms and reveal it through dream_verify.
@@ -3373,15 +3382,20 @@ def dream_verify(recall_id: str) -> dict:
         recall_id: The recall_id from a previous recall() call.
     """
     _init()
-    scores = _recall_scores.get(recall_id)
-    if scores is None:
+    entry = _recall_scores.get(recall_id)
+    if entry is None:
         return {"error": "No hidden scores for this recall_id. Either it wasn't dream-influenced, or the session has reset."}
 
+    matched = entry["matched"]
+    uninvited = entry["uninvited"]
     # Sort by score descending so the instance can see which were strong matches
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1] or 0, reverse=True)
+    sorted_scores = sorted(matched.items(), key=lambda x: x[1] or 0, reverse=True)
     revealed = {
         "recall_id": recall_id,
         "scores": {rid: round(s, 4) if s else None for rid, s in sorted_scores},
+        "uninvited_scores": {
+            rid: round(s, 4) if s else None for rid, s in uninvited.items()
+        },
         "note": "Now you can see which memories were pulled by the dream. What did you engage with before checking?",
     }
     margin = _recall_margins.get(recall_id)
