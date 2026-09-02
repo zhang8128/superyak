@@ -82,3 +82,17 @@ later.
   (symlink or uv sync) and set UV_CACHE_DIR in the launch scripts; the loop
   guard's default budget is too tight for a two-message brief plus
   acceptance relay.
+- Both teams' devs could not commit: codex 0.152's workspace-write sandbox
+  keeps a linked worktree's gitdir read-only, so `git commit` failed on
+  `<repo>/.git/worktrees/<name>/index.lock` in every dev worktree. Verified
+  with `codex sandbox` on a scratch repo: default config fails; an explicit
+  `sandbox_workspace_write.writable_roots=["<repo>/.git"]` commits cleanly
+  with cwd, /tmp, and $TMPDIR still writable; a narrower grant errors on
+  `packed-refs.lock`. Launcher fixed with a test (codex-team 617df61), the
+  six live launch scripts patched, the four dev panes respawned in place
+  (`tmux respawn-pane -k`, pane ids preserved, worktrees untouched with all
+  uncommitted work). Leads kept their context and were told to re-send
+  assignments; leads get relaunched before integration. Uncommitted work at
+  relaunch: L1 dev1 (RecallReceipt schema, protocol tests), L1 dev2 (policy
+  fixtures, generator, biome exclusion), E dev1 (read-only Storage, protocol,
+  policy tests), E dev2 (replay report, scoring.py, tests).
