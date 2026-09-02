@@ -17,11 +17,14 @@ pnpm check
 pnpm build
 pnpm proof
 pnpm recall:proof
+pnpm policy:fixtures
 ```
 
 `pnpm proof` prints one canonical JSON conformance report. A successful report contains `"passed":true`, the exact profile IDs and bridge digest, and 15 named checks with their evidence digests.
 
-`pnpm recall:proof` prints a separate canonical report with 14 named checks. In the fixed fixture, local-only right-turn recall is `0.5`, policy-scoped recall is `1.0`, scoped forbidden exposure is `0`, and the indiscriminate negative control records one forbidden and unauthorized selection. Every selection receipt says `"injected":false`.
+`pnpm recall:proof` prints a separate canonical report with 14 named checks. In the fixed fixture, local-only right-turn recall is `0.5`, policy-scoped recall is `1.0`, scoped forbidden exposure is `0`, and the indiscriminate negative control records one forbidden and unauthorized selection. The reference proof's receipts say `"injected":false`; a live receiver's receipts say `true` only when their `delivered` list is non-empty, and the schema enforces the equivalence.
+
+`pnpm policy:fixtures` regenerates the shared policy decision fixtures; `git diff --exit-code fixtures/policy-conformance` must be clean.
 
 ## CLI
 
@@ -51,6 +54,15 @@ Run the memory-shaped conformance experiment:
 pnpm recall:proof
 ```
 
+Replay a receiver's 1.1 export against its own labels under a preregistration:
+
+```bash
+pnpm lighthouse recall shadow \
+  --preregistration fixtures/engram/receipts/preregistration.json \
+  --export fixtures/engram/receipts/receiver.engram.json \
+  --labels fixtures/engram/receipts/receiver.labels.json
+```
+
 The CLI consumes data files only. A bridge descriptor's implementation identifier is resolved from locally installed code; Lighthouse never imports executable code named by received artifacts.
 
 ## Repository
@@ -65,6 +77,7 @@ adapters/engram/      Opaque Engram recall-trace projection and evaluator
 bridges/hyper-adna/   Scoped reference translation
 packages/conformance/ Law harness, reports, and CLI
 packages/recall-evaluation/ Policy admission, rank fusion, metrics, and receipts
+fixtures/policy-conformance/  Shared policy decisions for other implementations
 fixtures/             Valid and negative-control source systems
 spec/                 Normative 0.1 summary and vocabulary
 ```

@@ -8,7 +8,7 @@ The keywords MUST, MUST NOT, REQUIRED, SHOULD, SHOULD NOT, and MAY are to be int
 
 ## Artifact envelope
 
-A Lighthouse artifact MUST conform to one schema in `schemas/` and MUST contain:
+A Lighthouse artifact MUST conform to one schema in `schemas/`. The 0.1 artifact kinds are `LighthouseDescriptor`, `Snapshot`, `Claim`, `BridgeDescriptor`, `TranslationWitness`, `ConnectionPolicy`, and `RecallReceipt`. A Lighthouse artifact MUST contain:
 
 - `kind` and literal `protocolVersion: "0.1"`;
 - publisher-scoped `id`, offset-aware `issuedAt`, and `issuer`;
@@ -76,7 +76,7 @@ Policy MUST NOT follow another publisher's trust relationships. Lighthouse membe
 
 The actions `read`, `recall`, `suggest`, `inject_context`, `derive`, `retain`, and `reshare` are independent. Permission for one grants none of the others.
 
-Future Engram adapters that inject active context MUST emit a local receipt identifying the source lighthouse, matched policy, declared purpose, selected material, and transformations. Revocation prevents future authorized access; it cannot guarantee that a recipient forgets plaintext already disclosed.
+An Engram receiver that delivers neighbor content into a recall response MUST emit a `RecallReceipt` whose `injected` member is true and whose `delivered` list names the material; the receipt identifies the source lighthouse, matched policy, declared purpose, selected material, and transformation. Revocation prevents future authorized access; it cannot guarantee that a recipient forgets plaintext already disclosed.
 
 ## Conformance
 
@@ -85,3 +85,5 @@ Conformance applies only to named profile versions, bridge digest, declared doma
 A passing exact report MUST include successful schema/digest validation, deterministic projections, restriction identity/composition, bridge identity/composition, satisfaction preservation, negative controls, honest out-of-domain obstruction, and scoped policy decisions. Every required check MUST pass. A report MUST be machine-readable and MUST identify artifact digests used as evidence.
 
 The 0.1 reference corpus proves only the shared Hyper workflow-dependency and aDNA typed-port fragment. Hyper lease/fencing/channel semantics remain explicitly unmapped.
+
+Policy evaluation is shared across implementations through `fixtures/policy-conformance/`; an implementation conforms only if it reproduces every committed decision byte for byte.
