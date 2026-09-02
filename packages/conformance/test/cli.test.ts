@@ -94,4 +94,22 @@ describe("Lighthouse CLI", () => {
       expect(out.join("")).toBe(`${canonicalize(decision)}\n`);
     }
   });
+
+  it("routes recall subcommands and validates a RecallReceipt", async () => {
+    const receiptsRoot = path.resolve(import.meta.dirname, "../../../fixtures/engram/receipts");
+    const out: string[] = [];
+    const err: string[] = [];
+    const io = {
+      stdout: (text: string) => out.push(text),
+      stderr: (text: string) => err.push(text),
+    };
+    expect(await runCli(["validate", path.join(receiptsRoot, "injected-true.json")], io)).toBe(0);
+    expect(JSON.parse(out[0] as string).kind).toBe("RecallReceipt");
+    expect(
+      await runCli(["validate", path.join(receiptsRoot, "invalid-injected-mismatch.json")], io),
+    ).toBe(1);
+    expect(JSON.parse(err[0] as string).code).toBe("SCHEMA_INVALID");
+    expect(await runCli(["recall", "shadow"], io)).toBe(1);
+    expect(JSON.parse(err[1] as string).code).toBe("PREREGISTRATION_REQUIRED");
+  });
 });
