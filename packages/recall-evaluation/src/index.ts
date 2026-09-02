@@ -1,6 +1,7 @@
 export { type RecallCliIo, runRecallCli } from "./cli.js";
 export { runRecallExperiment } from "./experiment.js";
 export { fuseRankings, memoryRefKey } from "./fusion.js";
+export { type LabelsDocument, parseLabelsDocument } from "./labels.js";
 export { measureTurn } from "./metrics.js";
 export {
   buildRecallReceipt,
