@@ -1,4 +1,4 @@
-"""Generate receiver ConnectionPolicy artifacts from group membership."""
+"""Generate publisher-held ConnectionPolicy artifacts from group membership."""
 
 from __future__ import annotations
 
@@ -54,49 +54,50 @@ def audiences_for_instance(
     return ["commons", *joined]
 
 
-def build_receiver_policy(
+def build_publisher_policy(
     *,
-    instance: str,
     publisher: str,
+    receivers: list[str],
     groups: dict[str, list[str]],
     issued_at: str,
     valid_from: str,
     valid_until: str,
 ) -> dict:
-    """Build and seal a receiver policy for one publisher."""
+    """Build and seal one publisher's grants for its receivers."""
+    rules = [
+        {
+            "id": f"allow-{receiver}-recall-read",
+            "effect": "allow",
+            "publishers": [f"urn:engram:{receiver}"],
+            "profiles": ["urn:lighthouse:profile:engram-recall-trace"],
+            "domains": ["memory.recall"],
+            "actions": ["recall", "read"],
+            "contexts": ["memory/technical"],
+            "claimMediaTypes": [
+                "application/vnd.engram.recall-rank-claim+json"
+            ],
+            "purposes": ["session-recall"],
+            "audiences": ["self"],
+            "validFrom": valid_from,
+            "validUntil": valid_until,
+            "requiredEvidence": [],
+            "requiredAttestations": [],
+        }
+        for receiver in receivers
+    ]
     artifact = {
         "kind": "ConnectionPolicy",
         "protocolVersion": "0.1",
-        "id": f"urn:policy:{instance}-receiver",
+        "id": f"urn:policy:{publisher}-publisher",
         "issuedAt": issued_at,
-        "issuer": f"urn:engram:{instance}",
+        "issuer": f"urn:engram:{publisher}",
         "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
-        "payload": {
-            "rules": [
-                {
-                    "id": f"allow-{publisher}-recall-read-inject",
-                    "effect": "allow",
-                    "publishers": [f"urn:engram:{publisher}"],
-                    "profiles": [
-                        "urn:lighthouse:profile:engram-recall-trace"
-                    ],
-                    "domains": ["memory.recall"],
-                    "actions": ["recall", "read", "inject_context"],
-                    "contexts": ["memory/technical"],
-                    "claimMediaTypes": [
-                        "application/vnd.engram.recall-rank-claim+json"
-                    ],
-                    "purposes": ["session-recall"],
-                    "audiences": ["self"],
-                    "validFrom": valid_from,
-                    "validUntil": valid_until,
-                    "requiredEvidence": [],
-                    "requiredAttestations": [],
-                }
-            ]
-        },
+        "payload": {"rules": rules},
         "extensions": {
-            "engram:audiences": audiences_for_instance(groups, instance)
+            "engram:audiences": {
+                f"urn:engram:{receiver}": audiences_for_instance(groups, receiver)
+                for receiver in receivers
+            }
         },
     }
     artifact["digest"] = artifact_digest(artifact)
