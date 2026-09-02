@@ -142,6 +142,9 @@ importers:
       '@lighthouse/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@lighthouse/recall-evaluation':
+        specifier: workspace:*
+        version: link:../recall-evaluation
     devDependencies:
       '@types/node':
         specifier: 24.0.0

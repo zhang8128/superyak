@@ -13,6 +13,7 @@
     "check": "pnpm build && pnpm lint && pnpm typecheck && pnpm test",
     "lighthouse": "tsx packages/conformance/src/cli.ts",
     "lint": "biome check .",
+    "policy:fixtures": "tsx scripts/generate-policy-fixtures.ts",
     "proof": "pnpm --filter @lighthouse/conformance proof",
     "recall:proof": "pnpm --filter @lighthouse/recall-evaluation proof",
     "schema:generate": "tsx scripts/generate-schemas.ts",

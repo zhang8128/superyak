@@ -1,0 +1,1 @@
+{"decision":{"allowed":false,"code":"EXPLICIT_DENY","ruleId":"deny-blocks-inject"},"policy":"local-city","request":"action-inject-context"}
