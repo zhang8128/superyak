@@ -297,6 +297,56 @@ describe("shadow evaluation", () => {
     ).toThrow("RECEIPT_SCORE_MISMATCH");
   });
 
+  it("refuses selected provenance relabeled from a different publisher", () => {
+    const receipt = receiptFor("turn-1", [[WHY, "why-missing-piece", 1]], false);
+    const selected = receipt.payload.selected[0];
+    if (selected === undefined) throw new Error("test receipt must contain a selected item");
+    const relabeled = sealArtifact({
+      ...(({ digest: _digest, ...rest }) => rest)(receipt),
+      payload: {
+        ...receipt.payload,
+        selected: [
+          {
+            ...selected,
+            score: 3 / 61,
+            contributions: [{ publisher: BLOCKS, rank: 1 }],
+          },
+        ],
+      },
+    });
+    const document = exportDocument([relabeled]);
+    expect(() =>
+      runShadowEvaluation({
+        exportDocument: document,
+        labels: labels(),
+        preregistration: preregistrationFor(document),
+        issuedAt: "2026-09-01T13:00:00Z",
+      }),
+    ).toThrow("RECEIPT_SCORE_MISMATCH");
+  });
+
+  it("refuses duplicate publisher-qualified selected references", () => {
+    const receipt = receiptFor("turn-1", [[WHY, "why-missing-piece", 1]], false);
+    const selected = receipt.payload.selected[0];
+    if (selected === undefined) throw new Error("test receipt must contain a selected item");
+    const duplicated = sealArtifact({
+      ...(({ digest: _digest, ...rest }) => rest)(receipt),
+      payload: {
+        ...receipt.payload,
+        selected: [selected, { ...selected }],
+      },
+    });
+    const document = exportDocument([duplicated]);
+    expect(() =>
+      runShadowEvaluation({
+        exportDocument: document,
+        labels: labels(),
+        preregistration: preregistrationFor(document),
+        issuedAt: "2026-09-01T13:00:00Z",
+      }),
+    ).toThrow("RECEIPT_SCORE_MISMATCH");
+  });
+
   it("refuses a receipt outside the labeled holdout context", () => {
     const receipt = receiptFor("turn-1", [[WHY, "why-missing-piece", 1]], false);
     const mismatched = sealArtifact({

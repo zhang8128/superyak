@@ -76,9 +76,18 @@ function verifyReceiptScores(receipt: RecallReceipt): void {
   const weights = new Map(
     receipt.payload.sources.map((source) => [source.publisher, source.weight]),
   );
+  const selectedKeys = new Set<string>();
   for (const item of receipt.payload.selected) {
+    const selectedKey = JSON.stringify([item.publisher, item.memoryId]);
+    if (selectedKeys.has(selectedKey)) {
+      throw new Error(`RECEIPT_SCORE_MISMATCH: ${item.memoryId}`);
+    }
+    selectedKeys.add(selectedKey);
     let expected = 0;
     for (const contribution of item.contributions) {
+      if (contribution.publisher !== item.publisher) {
+        throw new Error(`RECEIPT_SCORE_MISMATCH: ${item.memoryId}`);
+      }
       const weight = weights.get(contribution.publisher);
       if (weight === undefined) throw new Error(`RECEIPT_SCORE_MISMATCH: ${item.memoryId}`);
       expected += weight / (60 + contribution.rank);
