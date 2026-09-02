@@ -96,3 +96,7 @@ later.
   relaunch: L1 dev1 (RecallReceipt schema, protocol tests), L1 dev2 (policy
   fixtures, generator, biome exclusion), E dev1 (read-only Storage, protocol,
   policy tests), E dev2 (replay report, scoring.py, tests).
+- Live verification of the sandbox fix: engram dev1 made the previously
+  blocked commit from its relaunched pane (`011624d feat: add read-only
+  Storage open path for publishers` on team/local-city-e/dev1). No git
+  denials in any dev pane since the relaunch.
