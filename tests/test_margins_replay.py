@@ -3,6 +3,7 @@
 import importlib.util
 import hashlib
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,12 @@ def test_rank_preserves_search_order_when_scores_tie():
         cap=0.02,
     )
     assert out["winner"] == "first"
+
+
+def test_future_candidate_timestamp_is_fully_recent():
+    m = _load()
+    at = datetime.now(timezone.utc)
+    assert m._recency((at + timedelta(days=1)).isoformat(), at) == 1.0
 
 
 def test_summarize_counts_near_ties_recent_winners_and_changes():

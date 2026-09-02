@@ -114,7 +114,8 @@ def _recency(created_at: str | None, at: datetime) -> float:
     created = datetime.fromisoformat(created_at)
     if created.tzinfo is None:
         created = created.replace(tzinfo=timezone.utc)
-    return 1.0 / (1.0 + (at - created).total_seconds() / 86400)
+    age_days = max(0.0, (at - created).total_seconds() / 86400)
+    return 1.0 / (1.0 + age_days)
 
 
 def _age_days(created_at: str | None, at: datetime) -> float | None:

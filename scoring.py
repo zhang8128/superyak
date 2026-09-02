@@ -47,6 +47,7 @@ def score_candidate(
     """
     if mode not in MODES:
         raise ValueError(f"unknown recency_mode {mode!r}; expected one of {MODES}")
+    recency = max(0.0, min(1.0, recency))
     if mode == "additive":
         score = similarity * w_sim + recency * w_rec
     else:
