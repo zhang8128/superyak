@@ -29,13 +29,16 @@ def request_from_json(data: dict) -> PolicyRequest:
 
 def test_vendored_fixtures_match_typescript_decisions():
     cases = sorted((FIXTURES / "requests").glob("*.json"))
-    assert cases, "no vendored request fixtures"
+    assert len(cases) == 16
     for request_path in cases:
         case = json.loads(request_path.read_text())
         expected = json.loads(
             (FIXTURES / "decisions" / request_path.name).read_text()
         )
-        policy = load_policy(FIXTURES / "policies" / case["policy"])
+        policy_path = FIXTURES / "policies" / case["policy"]
+        if not policy_path.is_file():
+            policy_path = policy_path.with_suffix(".json")
+        policy = load_policy(policy_path)
         decision = policy.decide(request_from_json(case["request"])).to_lighthouse()
         assert decision == expected["decision"], request_path.name
 
