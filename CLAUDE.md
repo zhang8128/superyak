@@ -41,6 +41,12 @@ prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (c
 Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.
 
 **Sleep-time consolidation:** On startup: decay → backfill orphaned vectors → prune → auto-compress.
+When the process serves MCP it runs in a background thread that takes the
+lifecycle barrier per step, never inside the handshake: Claude Code allows
+30 s to connect, and a fresh instance store with a freshly replicated genome
+needed ~40 s of startup compression (2026-09-02). `status()` reports
+`maintenance_pending` until the pass lands; `_init()` callers outside the
+served process still get it inline.
 Decay uses ACT-R power-law: `B = ln(1 + n * t^(-d))` where n = access count,
 t = hours since last access, d = 0.5. Rate-limited (30min minimum). Core episodes exempt.
 Centroid-based selection (most representative episode per cluster, MMR for diversity).
@@ -157,8 +163,10 @@ are calibration, not findings. Spec:
 docs/superpowers/specs/2026-06-12-off-device-assessment-design.md.
 
 **Knowledge graph:** Graphiti (Kuzu embedded) runs alongside engram for applied
-knowledge — entities, relationships, temporal facts. Fed during compression,
-queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var (default: nemotron-nano).
+knowledge — entities, relationships, temporal facts. Fed by tool-driven
+`compress_commit` (startup auto-compress drops its feeds and counts them in the
+maintenance report: extraction is ~30 s per episode with a local 27B model),
+queried during recall. Config: `ENGRAM_GRAPH_MODEL` env var (default: qwen3.8:27b-mlx).
 Extraction, embedding, and reranking stay local: Graphiti uses Ollama for
 extraction and explicit FastEmbed-backed clients for embedding and cosine
 reranking. Separate from identity layers.

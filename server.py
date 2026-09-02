@@ -7,6 +7,7 @@ import logging
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 import uuid
 from functools import wraps
 from datetime import datetime, timezone
@@ -166,6 +167,10 @@ _session_episode_count = 0
 _instance_name = None
 _initialized = False
 _genome_db_path = None
+_framing_cfg = None
+# Sleep-time maintenance deferred past the MCP handshake (see _initialize_pre_serving).
+_sleep_maintenance_deferred = False
+_sleep_maintenance_thread = None
 _signals_db_path = None
 _recall_scores: dict[str, dict[str, dict[str, float | None]]] = {}
 _recall_resonances: dict[str, list[dict]] = {}
@@ -273,6 +278,7 @@ def _reset_server_child_state(
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher
     global _session_id, _session_episode_count, _instance_name, _initialized
     global _genome_db_path, _signals_db_path, _recall_scores, _recall_resonances
+    global _sleep_maintenance_deferred, _sleep_maintenance_thread
     global _recall_margins
     global _instinct_graph, _last_instinct_id, _knowledge_graph, _wander_visits
     global _clipboard, _category_store, _category_observer
@@ -333,6 +339,8 @@ def _reset_server_child_state(
     _instance_name = None
     _initialized = False
     _genome_db_path = None
+    _sleep_maintenance_deferred = False
+    _sleep_maintenance_thread = None
     _signals_db_path = None
     _recall_scores = {}
     _recall_resonances = {}
@@ -592,7 +600,7 @@ def _prepare_category_recall_lock() -> None:
     _prepare_server_process_locks()
 
 
-def _init(*, allow_startup_consolidation: bool = False):
+def _init(*, allow_startup_consolidation: bool = False, defer_sleep_maintenance: bool = False):
     global _initialization_cleanup_required
     _prepare_server_process_locks()
     _require_exec_after_initialized_fork()
@@ -616,7 +624,10 @@ def _init(*, allow_startup_consolidation: bool = False):
                             return _init_unlocked(
                                 allow_startup_consolidation=(
                                     allow_startup_consolidation is True
-                                )
+                                ),
+                                defer_sleep_maintenance=(
+                                    defer_sleep_maintenance is True
+                                ),
                             )
                         except Exception:
                             _initialization_cleanup_required = True
@@ -826,6 +837,7 @@ def _reset_failed_initialization_state() -> None:
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher
     global _session_id, _session_episode_count, _instance_name, _initialized
     global _genome_db_path, _signals_db_path, _recall_scores, _recall_resonances
+    global _sleep_maintenance_deferred, _sleep_maintenance_thread
     global _recall_margins
     global _instinct_graph, _last_instinct_id, _knowledge_graph, _wander_visits
     global _clipboard, _category_store, _category_observer
@@ -844,6 +856,8 @@ def _reset_failed_initialization_state() -> None:
     _instance_name = None
     _initialized = False
     _genome_db_path = None
+    _sleep_maintenance_deferred = False
+    _sleep_maintenance_thread = None
     _signals_db_path = None
     _recall_scores = {}
     _recall_resonances = {}
@@ -1048,8 +1062,208 @@ def _activate_category_observer(
         logger.warning("Category observer init failed (%s)", error_type)
 
 
-def _init_unlocked(*, allow_startup_consolidation: bool = False):
+def _startup_auto_compress(maint) -> None:
+    """Auto-compress at startup without feeding the knowledge graph.
+
+    Graph extraction is LLM-bound (~30 s per episode with a local 27B
+    model, measured 2026-09-02) and this step holds the lifecycle barrier,
+    so on a fresh store with a replicated genome it would stall the first
+    tool call for minutes. Queued feeds are dropped and counted in the
+    maintenance report; tool-driven compress_commit() still feeds the graph.
+    """
+    uncompressed = _storage.get_uncompressed_episodes()
+    if not uncompressed:
+        return
+    logger.info("Auto-compressing %d uncompressed episodes on init", len(uncompressed))
+    maint.note("auto-compress", pending=len(uncompressed))
+    _compressor.defer_knowledge_feeds = True
+    try:
+        _compressor.auto_compress()
+    finally:
+        _compressor.defer_knowledge_feeds = False
+        skipped = _compressor.discard_knowledge_feeds()
+    if skipped:
+        logger.info("Startup compression skipped %d knowledge-graph feeds", skipped)
+        maint.note("auto-compress", knowledge_feeds_skipped=skipped)
+
+
+@contextmanager
+def _maintenance_step_scope(guarded: bool):
+    """Hold the lifecycle barrier for one maintenance step when running deferred.
+
+    Per-step rather than per-pass, so a tool call that arrives during the
+    background pass waits for the current step only, not for all of them.
+    """
+    if not guarded:
+        yield
+        return
+    coordinator = _admit_server_operation()
+    try:
+        with _server_lifecycle_lock:
+            yield
+    finally:
+        if coordinator is not None:
+            coordinator.finish_operation()
+
+
+def _run_sleep_maintenance(guarded: bool = False) -> None:
+    """Sleep-time consolidation: decay, prune, compress, backfill, cohesion.
+
+    Runs inline from _init() for library and test callers, and from a
+    background thread under the lifecycle barrier when the process is
+    serving MCP (see _initialize_pre_serving), so the client handshake
+    never waits on consolidation. Every step records into the
+    maintenance report; failures surface via status() and wake.
+    """
+    # Sleep-time maintenance on init: decay → prune → compress
+    # This is engram's "consolidation during sleep" — runs between sessions.
+    # Each step records into the maintenance report (the pain channel):
+    # failures are swallowed so later steps still run, but they surface in
+    # status() and the wake orientation instead of dying in stderr.
+    from maintenance import MaintenanceReport
+    _maint = MaintenanceReport()
+    try:
+        # 1. Recompute decay: power-law activation based on access history
+        with _maintenance_step_scope(guarded), _maint.step("decay"):
+            multipliers = None
+            if _config.persistence.enabled:
+                # one-sleep-stale cache is fine for ±15% pressure
+                cached = _storage.get_persistence_scores()
+                multipliers = {eid: 1.0 + 0.15 * (2.0 * s["redundancy"] - 1.0)
+                               for eid, s in cached.items()}
+            decayed = _storage.apply_decay(decay_exponent=0.5,
+                                           exponent_multipliers=multipliers)
+            if decayed:
+                logger.info("Decay recomputed for %d episodes", decayed)
+
+        # 2. Prune: delete compressed episodes that have decayed past threshold
+        with _maintenance_step_scope(guarded), _maint.step("prune"):
+            if _config.persistence.enabled:
+                from persistence import guarded_prune
+                pruned = guarded_prune(_storage, _config.persistence)
+            else:
+                pruned = _storage.prune_decayed(threshold=0.05)
+            if pruned:
+                logger.info("Pruned %d decayed episodes", pruned)
+                _maint.note("prune", pruned=pruned)
+
+        # 2b. Prune weak instincts (overridden enough to drop below threshold)
+        with _maintenance_step_scope(guarded), _maint.step("instinct-prune"):
+            pruned_instincts = _storage.prune_weak_instincts(strength_threshold=0.1)
+            if pruned_instincts:
+                logger.info("Pruned %d weak instincts", pruned_instincts)
+
+        # 3. Auto-compress uncompressed episodes (crash recovery + consolidation)
+        with _maintenance_step_scope(guarded), _maint.step("auto-compress"):
+            _startup_auto_compress(_maint)
+
+        # 4. Backfill: embed any episodes that lost vectors (WAL corruption recovery)
+        with _maintenance_step_scope(guarded), _maint.step("episode-vector-backfill"):
+            orphaned = _storage.get_orphaned_episodes()
+            if orphaned:
+                for ep in orphaned:
+                    emb = _embeddings.embed([ep["content"]], prefix="search_document")[0]
+                    _storage.conn.execute(
+                        "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                        (ep["id"], _pack_embedding(emb)),
+                    )
+                _storage.conn.commit()
+                logger.info("Backfilled vectors for %d orphaned episodes", len(orphaned))
+
+        # 5. Backfill: embed any semantics that lost vectors (WAL corruption recovery)
+        with _maintenance_step_scope(guarded), _maint.step("semantic-vector-backfill"):
+            orphaned_sems = _storage.get_orphaned_semantics()
+            if orphaned_sems:
+                for sem in orphaned_sems:
+                    emb = _embeddings.embed([sem["content"]], prefix="search_document")[0]
+                    _storage.conn.execute(
+                        "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
+                        (sem["id"], _pack_embedding(emb)),
+                    )
+                _storage.conn.commit()
+                logger.info("Backfilled vectors for %d orphaned semantics", len(orphaned_sems))
+
+        # 6. Backfill: embed any instincts that lack vectors (pre-existing instincts)
+        with _maintenance_step_scope(guarded), _maint.step("instinct-vector-backfill"):
+            instincts = _storage.get_all_instincts()
+            backfilled = 0
+            for inst in instincts:
+                has_vec = _storage.conn.execute(
+                    "SELECT 1 FROM instinct_vectors WHERE id = ?", (inst["id"],)
+                ).fetchone()
+                if not has_vec:
+                    emb = _embeddings.embed([inst["action"]], prefix="search_document")[0]
+                    _storage.conn.execute(
+                        "INSERT INTO instinct_vectors (id, embedding) VALUES (?, ?)",
+                        (inst["id"], _pack_embedding(emb)),
+                    )
+                    backfilled += 1
+            if backfilled:
+                _storage.conn.commit()
+                logger.info("Backfilled vectors for %d instincts", backfilled)
+
+        # 6b. Backfill notice/implication for pre-existing instincts
+        with _maintenance_step_scope(guarded), _maint.step("instinct-perceptual-backfill"):
+            _backfill_instinct_perceptual(_storage, _embeddings)
+
+        # 7. Promote proximity suggestions to resonances (graph consolidation)
+        with _maintenance_step_scope(guarded), _maint.step("graph-promotion"):
+            from graph import MemoryGraph
+            _memory_graph = MemoryGraph(_storage)
+            promoted = _memory_graph.promote_suggestions(min_prior_sessions=2)
+            if promoted:
+                logger.info("Sleep: promoted %d proximity suggestions", promoted)
+
+        # 8. Coherence check — anchors + drift detection
+        with _maintenance_step_scope(guarded), _maint.step("coherence-check"):
+            from coherence import CoherenceChecker
+            _coherence_checker = CoherenceChecker(_storage)
+            coherence_report = _coherence_checker.run_full_check(session_id=_session_id)
+            if coherence_report["summary"] != "coherence stable":
+                logger.info("Coherence: %s", coherence_report["summary"])
+
+        # 9. Sheaf cohesion sleep pass (spec: 2026-06-13-sheaf-cohesion-design.md)
+        # NOTE: narration episodes written by the sleep pass lack embeddings on first run;
+        # they are backfilled by the orphan-vector pass on the NEXT startup.
+        with _maintenance_step_scope(guarded), _maint.step("cohesion-sleep-pass"):
+            from sheaf import run_sleep_pass
+            _cohesion_report = run_sleep_pass(
+                _storage,
+                embed_fn=lambda text: _embeddings.embed([text], prefix="search_document")[0],
+                framing_cfg=_framing_cfg,
+                cfg=_config.cohesion if _config else None,
+                persistence_cfg=_config.persistence if _config else None,
+            )
+            if _cohesion_report.get("subdivided"):
+                logger.info("cohesion pass subdivided: %s",
+                            [s["parent_id"] for s in _cohesion_report["subdivided"]])
+            if _cohesion_report.get("queued"):
+                logger.info("cohesion pass queued (LLM unavailable): %s",
+                            [q["parent_id"] for q in _cohesion_report["queued"]])
+            _maint.note("cohesion-sleep-pass",
+                        subdivided=len(_cohesion_report.get("subdivided", []) or []),
+                        queued=len(_cohesion_report.get("queued", []) or []))
+
+        # Persistence score refresh (spec: 2026-06-13-persistence-design.md)
+        # Always-on observation: feeds reflect previews and next-boot decay
+        # modulation; the cache is advisory, decisions recompute live.
+        with _maintenance_step_scope(guarded), _maint.step("persistence-score-refresh"):
+            from persistence import compute_scores
+            compute_scores(_storage, _config.persistence)
+    except Exception:
+        # Backstop for failures outside any step (should not happen — every
+        # step swallows its own); recorded so the pain channel still sees it.
+        logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
+        _maint.steps.append({"name": "maintenance-outer", "ok": False,
+                             "error": "unexpected failure outside step scope"})
+
+    with _maintenance_step_scope(guarded):
+        _maint.save(_storage.conn)
+
+
+def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_maintenance: bool = False):
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher, _session_id, _instance_name, _genome_db_path, _signals_db_path, _knowledge_graph, _initialized, _category_store, _category_observer, _category_status, _category_atexit_callback
+    global _framing_cfg, _sleep_maintenance_deferred
     if _initialized:
         return
     from embeddings import NomicEmbedProvider
@@ -1215,153 +1429,12 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False):
         except Exception:
             logger.warning("Federation sync failed — continuing without", exc_info=True)
 
-    # Sleep-time maintenance on init: decay → prune → compress
-    # This is engram's "consolidation during sleep" — runs between sessions.
-    # Each step records into the maintenance report (the pain channel):
-    # failures are swallowed so later steps still run, but they surface in
-    # status() and the wake orientation instead of dying in stderr.
-    from maintenance import MaintenanceReport
-    _maint = MaintenanceReport()
-    try:
-        # 1. Recompute decay: power-law activation based on access history
-        with _maint.step("decay"):
-            multipliers = None
-            if _config.persistence.enabled:
-                # one-sleep-stale cache is fine for ±15% pressure
-                cached = _storage.get_persistence_scores()
-                multipliers = {eid: 1.0 + 0.15 * (2.0 * s["redundancy"] - 1.0)
-                               for eid, s in cached.items()}
-            decayed = _storage.apply_decay(decay_exponent=0.5,
-                                           exponent_multipliers=multipliers)
-            if decayed:
-                logger.info("Decay recomputed for %d episodes", decayed)
-
-        # 2. Prune: delete compressed episodes that have decayed past threshold
-        with _maint.step("prune"):
-            if _config.persistence.enabled:
-                from persistence import guarded_prune
-                pruned = guarded_prune(_storage, _config.persistence)
-            else:
-                pruned = _storage.prune_decayed(threshold=0.05)
-            if pruned:
-                logger.info("Pruned %d decayed episodes", pruned)
-                _maint.note("prune", pruned=pruned)
-
-        # 2b. Prune weak instincts (overridden enough to drop below threshold)
-        with _maint.step("instinct-prune"):
-            pruned_instincts = _storage.prune_weak_instincts(strength_threshold=0.1)
-            if pruned_instincts:
-                logger.info("Pruned %d weak instincts", pruned_instincts)
-
-        # 3. Auto-compress uncompressed episodes (crash recovery + consolidation)
-        with _maint.step("auto-compress"):
-            uncompressed = _storage.get_uncompressed_episodes()
-            if uncompressed:
-                logger.info("Auto-compressing %d uncompressed episodes on init", len(uncompressed))
-                _maint.note("auto-compress", pending=len(uncompressed))
-                _compressor.auto_compress()
-
-        # 4. Backfill: embed any episodes that lost vectors (WAL corruption recovery)
-        with _maint.step("episode-vector-backfill"):
-            orphaned = _storage.get_orphaned_episodes()
-            if orphaned:
-                for ep in orphaned:
-                    emb = _embeddings.embed([ep["content"]], prefix="search_document")[0]
-                    _storage.conn.execute(
-                        "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
-                        (ep["id"], _pack_embedding(emb)),
-                    )
-                _storage.conn.commit()
-                logger.info("Backfilled vectors for %d orphaned episodes", len(orphaned))
-
-        # 5. Backfill: embed any semantics that lost vectors (WAL corruption recovery)
-        with _maint.step("semantic-vector-backfill"):
-            orphaned_sems = _storage.get_orphaned_semantics()
-            if orphaned_sems:
-                for sem in orphaned_sems:
-                    emb = _embeddings.embed([sem["content"]], prefix="search_document")[0]
-                    _storage.conn.execute(
-                        "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
-                        (sem["id"], _pack_embedding(emb)),
-                    )
-                _storage.conn.commit()
-                logger.info("Backfilled vectors for %d orphaned semantics", len(orphaned_sems))
-
-        # 6. Backfill: embed any instincts that lack vectors (pre-existing instincts)
-        with _maint.step("instinct-vector-backfill"):
-            instincts = _storage.get_all_instincts()
-            backfilled = 0
-            for inst in instincts:
-                has_vec = _storage.conn.execute(
-                    "SELECT 1 FROM instinct_vectors WHERE id = ?", (inst["id"],)
-                ).fetchone()
-                if not has_vec:
-                    emb = _embeddings.embed([inst["action"]], prefix="search_document")[0]
-                    _storage.conn.execute(
-                        "INSERT INTO instinct_vectors (id, embedding) VALUES (?, ?)",
-                        (inst["id"], _pack_embedding(emb)),
-                    )
-                    backfilled += 1
-            if backfilled:
-                _storage.conn.commit()
-                logger.info("Backfilled vectors for %d instincts", backfilled)
-
-        # 6b. Backfill notice/implication for pre-existing instincts
-        with _maint.step("instinct-perceptual-backfill"):
-            _backfill_instinct_perceptual(_storage, _embeddings)
-
-        # 7. Promote proximity suggestions to resonances (graph consolidation)
-        with _maint.step("graph-promotion"):
-            from graph import MemoryGraph
-            _memory_graph = MemoryGraph(_storage)
-            promoted = _memory_graph.promote_suggestions(min_prior_sessions=2)
-            if promoted:
-                logger.info("Sleep: promoted %d proximity suggestions", promoted)
-
-        # 8. Coherence check — anchors + drift detection
-        with _maint.step("coherence-check"):
-            from coherence import CoherenceChecker
-            _coherence_checker = CoherenceChecker(_storage)
-            coherence_report = _coherence_checker.run_full_check(session_id=_session_id)
-            if coherence_report["summary"] != "coherence stable":
-                logger.info("Coherence: %s", coherence_report["summary"])
-
-        # 9. Sheaf cohesion sleep pass (spec: 2026-06-13-sheaf-cohesion-design.md)
-        # NOTE: narration episodes written by the sleep pass lack embeddings on first run;
-        # they are backfilled by the orphan-vector pass on the NEXT startup.
-        with _maint.step("cohesion-sleep-pass"):
-            from sheaf import run_sleep_pass
-            _cohesion_report = run_sleep_pass(
-                _storage,
-                embed_fn=lambda text: _embeddings.embed([text], prefix="search_document")[0],
-                framing_cfg=_framing_cfg,
-                cfg=_config.cohesion if _config else None,
-                persistence_cfg=_config.persistence if _config else None,
-            )
-            if _cohesion_report.get("subdivided"):
-                logger.info("cohesion pass subdivided: %s",
-                            [s["parent_id"] for s in _cohesion_report["subdivided"]])
-            if _cohesion_report.get("queued"):
-                logger.info("cohesion pass queued (LLM unavailable): %s",
-                            [q["parent_id"] for q in _cohesion_report["queued"]])
-            _maint.note("cohesion-sleep-pass",
-                        subdivided=len(_cohesion_report.get("subdivided", []) or []),
-                        queued=len(_cohesion_report.get("queued", []) or []))
-
-        # Persistence score refresh (spec: 2026-06-13-persistence-design.md)
-        # Always-on observation: feeds reflect previews and next-boot decay
-        # modulation; the cache is advisory, decisions recompute live.
-        with _maint.step("persistence-score-refresh"):
-            from persistence import compute_scores
-            compute_scores(_storage, _config.persistence)
-    except Exception:
-        # Backstop for failures outside any step (should not happen — every
-        # step swallows its own); recorded so the pain channel still sees it.
-        logger.warning("Sleep-time maintenance failed — will retry next session", exc_info=True)
-        _maint.steps.append({"name": "maintenance-outer", "ok": False,
-                             "error": "unexpected failure outside step scope"})
-
-    _maint.save(_storage.conn)
+    if defer_sleep_maintenance:
+        _sleep_maintenance_deferred = True
+        logger.info("Sleep-time maintenance deferred until the server is serving")
+    else:
+        _sleep_maintenance_deferred = False
+        _run_sleep_maintenance()
 
     # Log session start
     _storage.add_log_entry(
@@ -2746,6 +2819,8 @@ def status() -> dict:
         "log_entries": _safe_count("memory_log"),
         "watcher_alive": watcher_alive,
     }
+    if _sleep_maintenance_deferred:
+        result["maintenance_pending"] = True
 
     # Only include health warnings if there are problems
     health = {}
@@ -3778,9 +3853,49 @@ def clipboard_view(situation: str = "") -> dict:
     return {"clipboard": view, "stats": stats}
 
 
+def _deferred_sleep_maintenance() -> None:
+    """Thread body: run sleep maintenance as one barrier-held operation."""
+    global _sleep_maintenance_deferred
+    try:
+        _run_sleep_maintenance(guarded=True)
+    except Exception:
+        logger.warning("Deferred sleep-time maintenance failed (non-fatal)", exc_info=True)
+    finally:
+        _sleep_maintenance_deferred = False
+
+
+def _start_deferred_sleep_maintenance():
+    """Start the deferred maintenance thread once the process can serve.
+
+    The thread takes the lifecycle barrier per maintenance step, so a tool
+    call that arrives mid-pass waits for the current step, never races it.
+    Returns the thread, or None when nothing was deferred.
+    """
+    global _sleep_maintenance_thread
+    if not (_initialized and _sleep_maintenance_deferred):
+        return None
+    thread = threading.Thread(
+        target=_deferred_sleep_maintenance,
+        name="engram-sleep-maintenance",
+        daemon=True,
+    )
+    _sleep_maintenance_thread = thread
+    _register_server_cleanup(thread, lambda: thread.join(timeout=30.0), "sleep-maintenance")
+    thread.start()
+    return thread
+
+
 def _initialize_pre_serving() -> None:
-    """Initialize one process with explicit startup-maintenance authority."""
-    _init(allow_startup_consolidation=True)
+    """Initialize one process with explicit startup-maintenance authority.
+
+    Sleep-time maintenance is deferred to a background thread so the MCP
+    handshake completes inside the client's connection budget (Claude Code
+    gives a server 30 s). Measured 2026-09-02: a fresh instance store with
+    the genome just replicated needed ~40 s of startup compression, and the
+    client gave up first, leaving that session without memory tools.
+    """
+    _init(allow_startup_consolidation=True, defer_sleep_maintenance=True)
+    _start_deferred_sleep_maintenance()
 
 
 if __name__ == "__main__":

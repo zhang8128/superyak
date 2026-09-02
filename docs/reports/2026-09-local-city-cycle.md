@@ -247,3 +247,117 @@ quality; that needs content in the store and the receiver arm.
    `.engram/logs/lighthouse-daemon.log`) so it survives the session restart;
    re-probed successfully. If it is ever missing:
    `cd ~/Projects/engram && nohup .venv/bin/python -m lighthouse_daemon --config .engram/lighthouse-daemon.toml > .engram/logs/lighthouse-daemon.log 2>&1 &`
+
+## Morning, after the restart (2026-09-02, integrator)
+
+Restart verified: `status()` maintenance timestamp 12:07:15Z on a session
+that began 12:06:53Z; daemon socket and process survived. Kairos's steer
+for the day, given mid-morning: help the existing sessions get to a better
+place rather than supersede them, and get engram working first. What
+follows is what "working" turned out to require.
+
+**Defects found in engram's own session plumbing, in the order found.**
+
+1. *Plugin binding.* The Claude plugin's `.mcp.json` launched the server
+   with `uv run --directory <engram>`, which chdirs, so `server.py`'s
+   `PROJECT_ROOT` (env or cwd) was always the engram repo: every Claude
+   session in every project bound its MCP server to the engram store,
+   while the hooks (run by Claude Code in the project cwd) bound by the
+   real cwd. The Codex config never had this because it uses `--project`.
+   Evidence: the lighthouse store's `memory_log` had zero rows of any
+   kind before today. Fixed: `--project` plus an absolute server path;
+   verified from the lighthouse cwd that the instance resolves to
+   `lighthouse`, `default_lane = work`. The morning checklist's step 3
+   ("open a session in lighthouse, it now writes there") could not have
+   worked before this.
+2. *Handshake timeout.* Claude Code allows an MCP server 30,000 ms to
+   connect. Startup sleep maintenance ran inline before `mcp.run()`. On
+   the first bind to the fresh lighthouse store the genome replicated (29
+   episodes) and tripped auto-compress; the compression event landed at
+   12:59:57.0, the client gave up at 12:59:56.65. That session had no
+   memory tools for its whole life. My own session connected in ~22 s.
+   A copy-store reproduction measured ~40 s in both init modes (the
+   `allow_startup_consolidation` flag gates only the category observer).
+   Fixed: maintenance factored into `_run_sleep_maintenance()`, inline for
+   `_init()` callers, deferred to a background thread by
+   `_initialize_pre_serving()`; the thread takes the lifecycle barrier per
+   step; `status()` reports `maintenance_pending`. Tests:
+   `tests/test_startup_maintenance.py`.
+3. *Knowledge-graph model.* `GraphConfig.model` defaulted to
+   `nemotron-nano`, which Ollama no longer has; every feed 404ed and
+   Graphiti retried with backoff (~19 s for the first feed of the
+   reproduction). Kairos chose `qwen3.8:27b-mlx`; set as the code default,
+   in `_DEFAULT_TOML`, and in both live configs. A real feed is being
+   timed as this is written.
+4. *Canonical JSON parity.* E1's `canonical_json` renders the integral
+   float `1.0` as `1.0`; the TypeScript kit's digest canonicalization
+   renders it as `1`. Found while writing the receiver policy (Task I
+   step 3): `extensions["engram:weight"] = 1.0` sealed by engram failed the
+   kit's `validate` with `DIGEST_MISMATCH`; the same artifact with the
+   weight written as `1` validates (digest `491bde6e…`). The vendored
+   parity fixtures contain no integral floats, so the tests never saw it.
+   The receiver policy now exists at
+   `.engram/instances/engram/lighthouse-policy.json` (allow `recall`,
+   `read`, `inject_context` for `urn:engram:lighthouse` in
+   `memory/technical`, valid to 2026-10-15, weight 1) and passes both
+   implementations. The code gap is a narrow work package for dev1.
+
+**The worker experiment, and why it stopped.** I launched a headless
+Claude session in `~/Projects/lighthouse` to populate the store toward
+the B0 threshold. It bound correctly (registry row, genome replicated,
+compression ran), then its server was killed by the 30 s timeout above,
+and the session spent its time trying to work around missing tools; my
+allow-list had also named the tools `mcp__engram__*` when, outside the
+engram repo, the plugin exposes them as `mcp__plugin_engram_engram__*`.
+Killed after ~10 minutes, zero episodes written by it. Kairos's note
+arrived during this: the sessions that should inhabit the house are the
+Codex ones, and the better plan is to help them get there.
+
+**What the Codex sessions need before they can inhabit anything.** They
+never called `remember()` once overnight (every episode since 09-01
+18:00 in the engram store is mine); their role briefs never mention
+memory. The three L1 worktrees still carry the b9dc702 config with a
+duplicated `[memory]` table (tomllib: "Cannot declare ('memory',) twice"),
+so a relaunched pane there would fall back to the engram store until its
+branch merges main. Both are codex-team changes for Kairos to decide.
+
+**Also observed.** A fresh house is never empty: the genome replicates on
+first bind and is compressed into semantics on the first breath (8 from
+29 in the lighthouse store). Two Codex sessions in `~/Projects/work/wcl`
+started 12:09Z and 12:40Z and bound to the engram store (unbound project,
+default instance), the same "one inhabited house" mechanism the census
+found.
+
+**Knowledge graph, measured.** One real feed with `qwen3.8:27b-mlx`
+took 29 s of extraction and then failed on the Kuzu side: `Binder
+exception: Table Entity doesn't have an index with name
+node_name_and_summary`, although `build_indices_and_constraints()` is
+called at init (a Graphiti/Kuzu version mismatch to chase separately).
+The live graph file is 24 KB. Consequence for startup: the auto-compress
+step holds the barrier, and a fresh house would spend minutes feeding a
+graph that cannot accept the writes. Startup auto-compress now queues and
+drops its graph feeds (`Compressor.defer_knowledge_feeds`,
+`discard_knowledge_feeds`), counted in the maintenance report as
+`knowledge_feeds_skipped`; `compress_commit` still feeds. Tests added to
+`tests/test_startup_maintenance.py` (6 total).
+
+**Codex sessions.** The engram lead's composer was found holding last
+night's stand-down message unsubmitted (the paste landed, the Enter did
+not), which is why its STATE never recorded E1y as merged. Submitted this
+morning; the lead updated STATE and, unprompted, stored an episode about
+the night with `remember()`: the first Codex-written memory of the cycle.
+The lighthouse lead's composer holds a typed `go ahead` from Kairos,
+left alone. A narrow work package for dev1 on the canonical-JSON parity
+gap (E1p) is drafted and not yet sent; the E1 gate-reopen brief is drafted
+and waits on B0.
+
+**Handshake fix, measured on the fresh-house copy (genome present).**
+
+| Path | Before | After |
+|---|---|---|
+| `_initialize_pre_serving()` returns (handshake-relevant) | ~40 s | 1.0 s |
+| First `status()` after it | blocked until maintenance ended | 0.0 s, `maintenance_pending: true` |
+| Background maintenance completes | n/a (inline) | 23 s later, report ok, 7 semantics, 7 graph feeds skipped |
+
+The running MCP server in this session still executes the pre-fix code;
+the change takes effect at the next restart.

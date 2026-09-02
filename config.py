@@ -111,7 +111,7 @@ class ResonanceConfig:
 @dataclass
 class GraphConfig:
     enabled: bool = True
-    model: str = "nemotron-nano"
+    model: str = "qwen3.8:27b-mlx"
     ollama_url: str = "http://localhost:11434"
     db_path: str = ""  # set at runtime based on ENGRAM_HOME
 
@@ -251,7 +251,7 @@ max_in_recall = 3
 
 [graph]
 enabled = true
-model = "nemotron-nano"
+model = "qwen3.8:27b-mlx"
 ollama_url = "http://localhost:11434"
 
 [cohesion]

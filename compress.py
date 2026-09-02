@@ -217,6 +217,10 @@ class Compressor:
         self._dedup = deduplicator
         self._framer = framer
         self._knowledge_graph = knowledge_graph
+        # Startup maintenance sets this so commit() queues graph feeds instead
+        # of running them (extraction is LLM-bound, ~30 s per episode locally).
+        self.defer_knowledge_feeds = False
+        self.pending_knowledge_feeds: list[tuple[list[dict], str]] = []
         self._classification_config = classification_config
         self._cohesion = cohesion_config
         self._persistence = persistence_config
@@ -459,7 +463,10 @@ class Compressor:
         with self._storage.transaction():
             result = self._commit_state(commit_state, summaries, knowledge_feeds)
         self._pending.pop(compress_id, None)
-        self._feed_knowledge_graph(knowledge_feeds)
+        if self.defer_knowledge_feeds:
+            self.pending_knowledge_feeds.extend(knowledge_feeds)
+        else:
+            self._feed_knowledge_graph(knowledge_feeds)
         return result
 
     def _commit_state(
@@ -736,6 +743,18 @@ class Compressor:
                 )
             except Exception:
                 logger.warning("Knowledge graph feed failed", exc_info=True)
+
+    def flush_knowledge_feeds(self) -> int:
+        """Run every queued knowledge-graph feed; returns how many were fed."""
+        feeds, self.pending_knowledge_feeds = self.pending_knowledge_feeds, []
+        self._feed_knowledge_graph(feeds)
+        return len(feeds)
+
+    def discard_knowledge_feeds(self) -> int:
+        """Drop queued knowledge-graph feeds; returns how many were dropped."""
+        dropped = len(self.pending_knowledge_feeds)
+        self.pending_knowledge_feeds = []
+        return dropped
 
     def _validate_commit(self, state: dict, summaries: list[dict]) -> None:
         """Validate a complete compression request before any state is changed."""
