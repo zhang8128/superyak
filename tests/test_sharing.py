@@ -3,8 +3,10 @@ import uuid
 
 import pytest
 
-from sharing import (AUDIENCE_COMMONS, ShareRecord, audiences_for, list_shares,
-                     share, unshare, validate_audience)
+from sharing import (AUDIENCE_COMMONS, INVALID_REASONS, REASON_INVALID_AUDIENCE,
+                     REASON_INVALID_LAYER, ShareRecord, audiences_for,
+                     list_invalid_shares, list_shares, share, unshare,
+                     validate_audience)
 from storage import Storage
 
 MIGRATIONS = "migrations"
@@ -241,3 +243,143 @@ def test_share_rolls_back_copy_and_vector_when_record_insert_fails(tmp_path, mon
     assert pub.conn.execute("SELECT COUNT(*) FROM episode_vectors").fetchone()[0] == 0
     assert pub.conn.execute("SELECT COUNT(*) FROM shared_memories").fetchone()[0] == 0
     assert pub.conn.in_transaction is False
+
+
+def test_corrupt_audience_is_visible_for_repair_but_not_disclosure(tmp_path, caplog):
+    src, pub = _stores(tmp_path)
+    eid = _episode(src)
+    rec = share(source_storage=src, published_storage=pub, source_id=eid, layer="episode",
+                audience="commons", reason="original provenance", source_instance="engram",
+                now="2026-09-02T12:00:00Z")
+    pub.conn.execute(
+        "UPDATE shared_memories SET audience = ? WHERE share_id = ?",
+        ("everyone", rec.share_id),
+    )
+    pub.conn.commit()
+
+    with caplog.at_level("WARNING", logger="sharing"):
+        assert list_shares(published_storage=pub) == []
+    warnings = [record for record in caplog.records if record.name == "sharing"]
+    assert len(warnings) == 1
+    assert warnings[0].getMessage() == "list_shares skipped 1 invalid share records"
+    assert rec.share_id not in warnings[0].getMessage()
+
+    assert list_invalid_shares(published_storage=pub) == [{
+        "share_id": rec.share_id,
+        "memory_id": rec.memory_id,
+        "source_instance": "engram",
+        "source_id": eid,
+        "layer": "episode",
+        "audience": "everyone",
+        "reason": "original provenance",
+        "content_digest": rec.content_digest,
+        "shared_at": "2026-09-02T12:00:00Z",
+        "reasons": [REASON_INVALID_AUDIENCE],
+    }]
+    assert list_invalid_shares(published_storage=pub)[0]["reasons"] == [
+        "invalid_audience"
+    ]
+    assert audiences_for(pub, rec.memory_id) == set()
+
+
+def test_corrupt_layer_is_visible_and_unshare_preserves_copy(tmp_path, caplog):
+    src, pub = _stores(tmp_path)
+    eid = _episode(src)
+    rec = share(source_storage=src, published_storage=pub, source_id=eid, layer="episode",
+                audience="commons", reason="original provenance", source_instance="engram",
+                now="2026-09-02T12:00:00Z")
+    pub.conn.execute(
+        "UPDATE shared_memories SET layer = ? WHERE share_id = ?",
+        ("instinct", rec.share_id),
+    )
+    pub.conn.commit()
+
+    with caplog.at_level("WARNING", logger="sharing"):
+        assert list_shares(published_storage=pub) == []
+    assert [record.getMessage() for record in caplog.records if record.name == "sharing"] == [
+        "list_shares skipped 1 invalid share records"
+    ]
+    assert list_invalid_shares(published_storage=pub) == [{
+        "share_id": rec.share_id,
+        "memory_id": rec.memory_id,
+        "source_instance": "engram",
+        "source_id": eid,
+        "layer": "instinct",
+        "audience": "commons",
+        "reason": "original provenance",
+        "content_digest": rec.content_digest,
+        "shared_at": "2026-09-02T12:00:00Z",
+        "reasons": [REASON_INVALID_LAYER],
+    }]
+    assert list_invalid_shares(published_storage=pub)[0]["reasons"] == ["invalid_layer"]
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        assert unshare(published_storage=pub, share_id=rec.share_id) is True
+    assert pub.conn.execute(
+        "SELECT 1 FROM shared_memories WHERE share_id = ?", (rec.share_id,)
+    ).fetchone() is None
+    assert pub.get_episode(rec.memory_id) is not None
+    assert [record.getMessage() for record in caplog.records if record.name == "sharing"] == [
+        f"unshare kept published copy for invalid layer: "
+        f"share_id={rec.share_id} memory_id={rec.memory_id}"
+    ]
+
+
+def test_share_with_corrupt_audience_and_layer_reports_both_sorted_reasons(tmp_path):
+    src, pub = _stores(tmp_path)
+    rec = share(source_storage=src, published_storage=pub, source_id=_episode(src),
+                layer="episode", audience="commons", reason="r", source_instance="engram")
+    pub.conn.execute(
+        "UPDATE shared_memories SET audience = ?, layer = ? WHERE share_id = ?",
+        ("everyone", "instinct", rec.share_id),
+    )
+    pub.conn.commit()
+
+    reasons = list_invalid_shares(published_storage=pub)[0]["reasons"]
+    assert reasons == [REASON_INVALID_AUDIENCE, REASON_INVALID_LAYER]
+    assert reasons == ["invalid_audience", "invalid_layer"]
+    assert INVALID_REASONS == tuple(reasons)
+    assert reasons == sorted(reasons)
+
+
+def test_valid_share_is_only_in_valid_listing(tmp_path):
+    src, pub = _stores(tmp_path)
+    rec = share(source_storage=src, published_storage=pub, source_id=_episode(src),
+                layer="episode", audience="commons", reason="r", source_instance="engram")
+
+    assert list_invalid_shares(published_storage=pub) == []
+    assert list_shares(published_storage=pub) == [rec]
+
+
+def test_invalid_shares_are_ordered_by_shared_at_then_share_id(tmp_path):
+    src, pub = _stores(tmp_path)
+    first = share(source_storage=src, published_storage=pub, source_id=_episode(src, "one"),
+                  layer="episode", audience="commons", reason="r", source_instance="engram",
+                  now="2026-09-02T12:00:00Z")
+    second = share(source_storage=src, published_storage=pub, source_id=_episode(src, "two"),
+                   layer="episode", audience="commons", reason="r", source_instance="engram",
+                   now="2026-09-02T12:00:00Z")
+    pub.conn.execute(
+        "UPDATE shared_memories SET share_id = ?, audience = ? WHERE share_id = ?",
+        ("z-share", "everyone", first.share_id),
+    )
+    pub.conn.execute(
+        "UPDATE shared_memories SET share_id = ?, audience = ? WHERE share_id = ?",
+        ("a-share", "everyone", second.share_id),
+    )
+    pub.conn.commit()
+
+    assert [row["share_id"] for row in list_invalid_shares(published_storage=pub)] == [
+        "a-share", "z-share"
+    ]
+
+
+def test_unknown_unshare_returns_false_without_mutation(tmp_path):
+    src, pub = _stores(tmp_path)
+    rec = share(source_storage=src, published_storage=pub, source_id=_episode(src),
+                layer="episode", audience="commons", reason="r", source_instance="engram")
+
+    assert unshare(published_storage=pub, share_id="missing") is False
+    assert list_shares(published_storage=pub) == [rec]
+    assert pub.get_episode(rec.memory_id) is not None
