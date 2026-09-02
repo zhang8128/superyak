@@ -120,9 +120,68 @@ def test_canonical_json_sorts_keys_and_strips_whitespace():
     )
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (1.0, "1"),
+        (-0.0, "0"),
+        (333333333.33333329, "333333333.3333333"),
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
+        (1e-6, "0.000001"),
+        (1e-7, "1e-7"),
+    ],
+)
+def test_canonical_json_uses_ecmascript_number_spelling(value, expected):
+    assert canonical_json(value) == expected
+
+
 def test_canonical_json_rejects_non_finite():
     with pytest.raises(ValueError):
         canonical_json({"x": float("inf")})
+
+
+def test_artifact_digest_matches_lighthouse_for_integral_float_extension():
+    policy = {
+        "kind": "ConnectionPolicy",
+        "protocolVersion": "0.1",
+        "id": "urn:policy:engram",
+        "issuedAt": "2026-09-01T00:00:00Z",
+        "issuer": "urn:engram:engram",
+        "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
+        "payload": {
+            "rules": [
+                {
+                    "id": "allow-lighthouse",
+                    "effect": "allow",
+                    "publishers": ["urn:engram:lighthouse"],
+                    "profiles": [
+                        "urn:lighthouse:profile:engram-recall-trace"
+                    ],
+                    "domains": ["memory.recall"],
+                    "actions": ["recall", "read", "inject_context"],
+                    "contexts": ["memory/technical"],
+                    "claimMediaTypes": [
+                        "application/vnd.engram.recall-rank-claim+json"
+                    ],
+                    "purposes": ["session-recall"],
+                    "audiences": ["self"],
+                    "validFrom": "2026-01-01T00:00:00Z",
+                    "validUntil": "2026-10-15T00:00:00Z",
+                    "requiredEvidence": [],
+                    "requiredAttestations": [],
+                }
+            ]
+        },
+        "extensions": {
+            "engram:weight": {"urn:engram:lighthouse": 1.0}
+        },
+    }
+
+    assert artifact_digest(policy) == {
+        "algorithm": "sha-256",
+        "value": "de44dc86720a2554dfe5535ec6fe017851f0262e225418edc9bceb9fdb006f5a",
+    }
 
 
 def test_artifact_digest_reproduces_lighthouse_reference_policy():
