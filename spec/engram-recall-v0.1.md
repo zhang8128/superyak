@@ -16,9 +16,16 @@ is `1.0.0`. Its signature ID is
 
 ## Portable export
 
-An adapter consumes one JSON source document with literal
-`formatVersion: "1.0"`. The document declares an instance, a non-empty root
-context, memories, graph edges, and recall traces.
+An adapter consumes one JSON source document with `formatVersion` of
+`"1.0"` or `"1.1"`. The document declares an instance, a non-empty root
+context, memories, graph edges, and recall traces. A 1.1 document MAY also
+declare `receipts`, an array of sealed `RecallReceipt` artifacts (see
+"Recall receipts" below). A 1.0 document MUST NOT declare `receipts`
+(`RECEIPTS_REQUIRE_1_1`). Every receipt MUST verify its digest
+(`RECEIPT_DIGEST_MISMATCH`), MUST lie beneath the export root
+(`CONTEXT_OUTSIDE_ROOT`), and MUST be unique per `(turnId, context.id)`
+(`DUPLICATE_RECEIPT`). Restriction retains a receipt only when its context
+lies beneath the requested context; receipts are never rewritten.
 
 A memory MUST declare:
 
@@ -189,30 +196,67 @@ These fixture gates are not general performance thresholds. Historical or
 live-shadow evaluation MUST preregister its own corpus, holdout, metrics, and
 uncertainty procedure.
 
-## Recall selection receipts
+## Recall receipts
 
-Every evaluated turn emits a content-addressed local receipt containing:
+A recall receipt is the core Lighthouse artifact kind `RecallReceipt`
+(`payloadMediaType` `application/vnd.lighthouse.recall-receipt+json`,
+schema `schemas/recall-receipt.schema.json`). Its payload carries the turn,
+context, purpose, audience `self`, action `recall`, a literal boolean
+`injected`, transformation `weighted-rrf-v1`, the receiver rule that
+matched, per-source records (publisher, role, local weight, store digest,
+policy decision, trace outcome), the selected opaque references with
+content digests, fused scores, and rank contributions, and the delivered
+references with their `read` decisions.
 
-- experiment, mode, and turn identifiers;
-- action `recall` and literal `injected: false`;
-- purpose and context;
-- selected opaque references, content digests, scores, and rank contributions;
-- source snapshot digests and local weights;
-- local markers and remote policy decisions;
-- per-source trace and admission outcomes;
-- transformation `weighted-rrf-v1`.
+Invariants enforced at seal time and in the generated schema:
 
-Receipts MUST NOT contain raw query or memory content. A receipt does not grant
-content delivery, injection, retention, derivation, or resharing. Those actions
-remain independently authorized.
+- `injected` MUST equal whether `delivered` is non-empty
+  (`RECEIPT_INJECTION_MISMATCH`);
+- every delivered reference MUST appear in `selected`
+  (`DELIVERED_NOT_SELECTED`);
+- every delivered reference MUST carry an `allow` read decision
+  (`DELIVERED_WITHOUT_ALLOW`);
+- policy decision records carry explicit `null` for an absent rule id or
+  code; members are never omitted.
 
-Receipt content MUST pass a strict runtime schema before hashing. Unknown
-members and any value other than literal `injected: false` MUST be rejected.
-Verification MUST distinguish malformed receipt structure from a digest
-mismatch.
+Receipts MUST NOT contain raw query or memory content. A receipt does not
+grant content delivery, injection, retention, derivation, or resharing
+beyond what its `delivered` list records; those actions remain
+independently authorized. The reference experiment emits receipts with
+`injected: false` and records its experiment id and mode under
+`extensions["lighthouse:experiment"]`.
 
-The receipt is package-level evidence in this version, not a new core
-Lighthouse artifact kind.
+## Labels document
+
+A receiver labels turns in a `*.labels.json` document:
+`{ formatVersion: "1.0", instance, turns: [{ turnId, context, purpose,
+relevant: [{ publisher, memoryId }], forbidden: [{ publisher, memoryId }] }] }`.
+Turn keys `(turnId, context.id)` MUST be unique (`DUPLICATE_LABEL_TURN`) and
+`relevant` MUST be non-empty (`EMPTY_RELEVANCE_JUDGMENT`). A remote publisher
+MUST NOT author this document.
+
+## Live-shadow evaluation
+
+`lighthouse recall shadow --preregistration <file> --export <file>
+--labels <file>` replays a receiver's 1.1 export against its labels. It
+MUST refuse to run without a preregistration (`PREREGISTRATION_REQUIRED`).
+The preregistration declares `receiverPublisher`, the `corpusDigest`
+(`sha-256` over the normalized export), `holdoutTurnIds`, `cutoff`,
+`metrics: ["rightTurnRecall", "nDCG"]`, and `bootstrap: { samples, seed }`.
+The export's digest MUST match (`CORPUS_DIGEST_MISMATCH`); every holdout
+turn MUST be labeled (`HOLDOUT_TURN_UNLABELED`) and MUST have a local trace
+in the labeled context (`HOLDOUT_TURN_MISSING_TRACE`,
+`HOLDOUT_TURN_CONTEXT_MISMATCH`). A receipt whose selected scores do not
+equal weighted reciprocal rank over its contributions and source weights is
+rejected (`RECEIPT_SCORE_MISMATCH`).
+
+`local-only` scores the local trace. `policy-scoped` scores the receipt's
+selected list, or the local trace when no receipt exists for the turn.
+The report (`RecallShadowReport`) carries macro-averaged recall and nDCG at
+the cutoff with seeded bootstrap intervals, summed forbidden exposure and
+unauthorized selection counts, holdout counts, the preregistration and
+corpus digests, and receipt digests. It carries no content and no query
+text. The shadow report is measurement, not a pass or fail gate.
 
 ## Reference proof boundary
 

@@ -1,4 +1,10 @@
-import type { ConnectionPolicy, ContextRef, Digest, Snapshot } from "@lighthouse/protocol";
+import type {
+  ConnectionPolicy,
+  ContextRef,
+  Digest,
+  RecallReceipt,
+  Snapshot,
+} from "@lighthouse/protocol";
 
 export interface MemoryRef {
   publisher: string;
@@ -79,39 +85,13 @@ export interface RecallSourceAdmission {
   candidateCount: number;
 }
 
-export interface RecallSelectionReceiptContent {
-  kind: "RecallSelectionReceipt";
-  version: "0.1";
-  experimentId: string;
-  issuedAt: string;
-  mode: RecallExperimentMode;
-  turnId: string;
-  action: "recall";
-  injected: false;
-  purpose: string;
-  context: ContextRef;
-  transformation: "weighted-rrf-v1";
-  selected: FusedCandidate[];
-  sources: Array<{
-    publisher: string;
-    snapshotDigest: Digest;
-    weight: number;
-  }>;
-  decisions: RecallSourceDecision[];
-  admissions: RecallSourceAdmission[];
-}
-
-export interface RecallSelectionReceipt extends RecallSelectionReceiptContent {
-  digest: Digest;
-}
-
 export interface RecallTurnReport {
   turnId: string;
   selected: FusedCandidate[];
   metrics: RecallMetrics;
   decisions: RecallSourceDecision[];
   admissions: RecallSourceAdmission[];
-  receipt: RecallSelectionReceipt;
+  receipt: RecallReceipt;
 }
 
 export interface RecallModeReport {

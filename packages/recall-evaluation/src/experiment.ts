@@ -4,11 +4,18 @@ import {
   engramModel,
 } from "@lighthouse/adapter-engram";
 import { evaluateConnectionPolicy } from "@lighthouse/calculus";
-import { compareCanonicalJson, digestJson, type JsonValue } from "@lighthouse/protocol";
+import {
+  compareCanonicalJson,
+  digestJson,
+  type JsonValue,
+  type PolicyDecisionRecord,
+  type RecallReceipt,
+} from "@lighthouse/protocol";
 import { fuseRankings } from "./fusion.js";
 import { measureTurn } from "./metrics.js";
-import { sealRecallReceipt } from "./receipt.js";
+import { buildRecallReceipt, type ReceiptSourceInput } from "./receipt.js";
 import type {
+  FusedCandidate,
   RankedContribution,
   RecallExperimentInput,
   RecallExperimentMode,
@@ -16,7 +23,6 @@ import type {
   RecallExperimentReportContent,
   RecallMetrics,
   RecallModeReport,
-  RecallSelectionReceiptContent,
   RecallSource,
   RecallSourceAdmission,
   RecallSourceDecision,
@@ -186,36 +192,69 @@ function sortedAdmissions(admissions: RecallSourceAdmission[]): RecallSourceAdmi
   );
 }
 
-function receiptContent(
+function traceOutcomeFor(admission: RecallSourceAdmission): ReceiptSourceInput["traceOutcome"] {
+  if (admission.admission === "policy-denied") return "policy-denied";
+  if (admission.trace === "matched") return "matched";
+  if (admission.trace === "absent") return "absent";
+  return "context-mismatched";
+}
+
+function policyDecisionFor(decision: RecallSourceDecision): PolicyDecisionRecord {
+  if (decision.allowed) return { effect: "allow", ruleId: decision.ruleId, code: null };
+  return { effect: "deny", ruleId: decision.ruleId ?? null, code: decision.code };
+}
+
+function buildTurnReceipt(
   input: RecallExperimentInput,
   mode: RecallExperimentMode,
   turn: RecallTurnJudgment,
   sources: RecallSource[],
   decisions: RecallSourceDecision[],
   admissions: RecallSourceAdmission[],
-  selected: ReturnType<typeof fuseRankings>,
-): RecallSelectionReceiptContent {
-  return {
-    kind: "RecallSelectionReceipt",
-    version: "0.1",
+  selected: FusedCandidate[],
+): RecallReceipt {
+  const decisionByPublisher = new Map(decisions.map((decision) => [decision.publisher, decision]));
+  const admissionByPublisher = new Map(
+    admissions.map((admission) => [admission.publisher, admission]),
+  );
+  return buildRecallReceipt({
+    id: `${input.id}:${mode}:${turn.turnId}`,
     experimentId: input.id,
     issuedAt: input.issuedAt,
+    issuer: input.receiverPublisher,
     mode,
     turnId: turn.turnId,
-    action: "recall",
-    injected: false,
-    purpose: turn.purpose,
     context: turn.context,
-    transformation: "weighted-rrf-v1",
-    selected,
-    sources: sources.map((source) => ({
-      publisher: source.snapshot.issuer,
-      snapshotDigest: source.snapshot.digest,
-      weight: source.weight,
+    purpose: turn.purpose,
+    injected: false,
+    receiverRuleId: null,
+    sources: sources.map((source) => {
+      const decision = decisionByPublisher.get(source.snapshot.issuer);
+      const admission = admissionByPublisher.get(source.snapshot.issuer);
+      if (decision === undefined || admission === undefined) {
+        throw new Error(`MISSING_SOURCE_DECISION: ${source.snapshot.issuer}`);
+      }
+      return {
+        publisher: source.snapshot.issuer,
+        role: source.role,
+        weight: source.weight,
+        storeDigest: { algorithm: "sha256", value: source.snapshot.digest.value },
+        policyDecision: policyDecisionFor(decision),
+        traceOutcome: traceOutcomeFor(admission),
+      };
+    }),
+    selected: selected.map((candidate) => ({
+      publisher: candidate.ref.publisher,
+      memoryId: candidate.ref.memoryId,
+      contentDigest: { algorithm: "sha256", value: candidate.contentDigest.value },
+      score: candidate.score,
+      contributions: candidate.contributions.map((contribution) => ({
+        publisher: contribution.ref.publisher,
+        rank: contribution.rank,
+      })),
     })),
-    decisions: sortedDecisions(decisions),
-    admissions: sortedAdmissions(admissions),
-  };
+    delivered: [],
+  });
 }
 
 function runTurn(
@@ -253,9 +292,7 @@ function runTurn(
     metrics,
     decisions,
     admissions,
-    receipt: sealRecallReceipt(
-      receiptContent(input, mode, turn, sources, decisions, admissions, selected),
-    ),
+    receipt: buildTurnReceipt(input, mode, turn, sources, decisions, admissions, selected),
   };
 }
 

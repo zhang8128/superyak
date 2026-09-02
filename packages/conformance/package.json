@@ -26,7 +26,8 @@
     "@lighthouse/adapter-hyper": "workspace:*",
     "@lighthouse/bridge-hyper-adna": "workspace:*",
     "@lighthouse/calculus": "workspace:*",
-    "@lighthouse/protocol": "workspace:*"
+    "@lighthouse/protocol": "workspace:*",
+    "@lighthouse/recall-evaluation": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.0.0",

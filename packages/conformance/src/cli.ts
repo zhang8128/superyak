@@ -9,6 +9,7 @@ import {
   parseArtifact,
   verifyArtifactDigest,
 } from "@lighthouse/protocol";
+import { runRecallCli } from "@lighthouse/recall-evaluation";
 import { runReferenceConformance } from "./reference.js";
 
 export interface CliIo {
@@ -137,7 +138,10 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
   if (command === "validate") return runValidate(rest, io);
   if (command === "prove") return runProof(rest, io);
   if (command === "authorize") return runAuthorize(rest, io);
-  return usage(io, "Expected validate, prove, or authorize");
+  if (command === "recall") {
+    return runRecallCli(rest, { stdout: io.stdout, stderr: io.stderr });
+  }
+  return usage(io, "Expected validate, prove, authorize, or recall");
 }
 
 const entrypoint = process.argv[1];

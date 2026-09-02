@@ -8,6 +8,7 @@ import {
   createEngramRankClaim,
   ENGRAM_RECALL_RANK_CLAIM_MEDIA_TYPE,
   engramAdapter,
+  engramModel,
 } from "../src/index.js";
 
 const metadata = {
@@ -62,6 +63,31 @@ function sourceDocument(): Record<string, unknown> {
   };
 }
 
+function receiptAt(contextPath: string[]) {
+  const turnId = contextPath.join("-");
+  return sealArtifact({
+    kind: "RecallReceipt",
+    protocolVersion: "0.1",
+    id: `urn:receipt:${turnId}`,
+    issuedAt: "2026-09-01T12:00:00Z",
+    issuer: "urn:lighthouse:engram",
+    payloadMediaType: "application/vnd.lighthouse.recall-receipt+json",
+    payload: {
+      turnId,
+      context: { id: contextPath.join("/"), path: contextPath },
+      purpose: "session-recall",
+      audience: "self",
+      action: "recall",
+      injected: false,
+      transformation: "weighted-rrf-v1",
+      receiverRule: { ruleId: null },
+      sources: [],
+      selected: [],
+      delivered: [],
+    },
+  });
+}
+
 async function sourceDirectory(prefix: string): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), prefix));
   await writeFile(path.join(root, "sample.engram.json"), JSON.stringify(sourceDocument()));
@@ -112,6 +138,26 @@ describe("Engram trace adapter", () => {
         { id: "memory/debugging/mcp", path: ["memory", "debugging", "mcp"] },
       ),
     ).toEqual({ passed: true });
+  });
+
+  it("restriction keeps only receipts inside the requested context", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "lighthouse-engram-receipts-"));
+    const document = {
+      ...sourceDocument(),
+      formatVersion: "1.1",
+      receipts: [
+        receiptAt(["memory", "debugging", "mcp"]),
+        receiptAt(["memory", "debugging", "bridge"]),
+      ],
+    };
+    await writeFile(path.join(root, "receiver.engram.json"), JSON.stringify(document));
+    const snapshot = await engramAdapter.project({ root, ...metadata });
+    const restricted = await engramAdapter.restrictSnapshot(snapshot, {
+      id: "memory/debugging/mcp",
+      path: ["memory", "debugging", "mcp"],
+    });
+    if (!restricted.ok) throw new Error(restricted.obstruction.code);
+    expect(engramModel(restricted.value)?.receipts).toHaveLength(1);
   });
 
   it("returns an honest obstruction outside the snapshot domain", async () => {

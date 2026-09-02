@@ -18,6 +18,7 @@ describe("JSON Schema generation", () => {
       "claim.schema.json",
       "connection-policy.schema.json",
       "lighthouse-descriptor.schema.json",
+      "recall-receipt.schema.json",
       "snapshot.schema.json",
       "translation-witness.schema.json",
     ];
@@ -94,5 +95,38 @@ describe("JSON Schema generation", () => {
 
     expect(accepted).toBe(false);
     expect(validate.errors?.some((error) => error.keyword === "not")).toBe(true);
+  });
+
+  it("preserves the receipt injection invariant for other languages", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "lighthouse-schema-receipt-"));
+    await generateSchemas(directory);
+    const schema = JSON.parse(
+      await readFile(path.join(directory, "recall-receipt.schema.json"), "utf8"),
+    );
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(schema);
+    const base = {
+      kind: "RecallReceipt",
+      protocolVersion: "0.1",
+      id: "urn:receipt:test",
+      issuedAt: "2026-09-01T12:00:00Z",
+      issuer: "urn:lighthouse:engram",
+      payloadMediaType: "application/vnd.lighthouse.recall-receipt+json",
+      payload: {
+        turnId: "turn-1",
+        context: { id: "memory/technical", path: ["memory", "technical"] },
+        purpose: "session-recall",
+        audience: "self",
+        action: "recall",
+        injected: true,
+        transformation: "weighted-rrf-v1",
+        receiverRule: { ruleId: null },
+        sources: [],
+        selected: [],
+        delivered: [],
+      },
+      digest: { algorithm: "sha-256", value: "0".repeat(64) },
+    };
+    expect(validate(base)).toBe(false);
+    expect(validate({ ...base, payload: { ...base.payload, injected: false } })).toBe(true);
   });
 });

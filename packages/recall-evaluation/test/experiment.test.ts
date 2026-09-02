@@ -199,13 +199,19 @@ describe("policy-scoped recall experiment", () => {
     const scopedTurn = mode(first, "policy-scoped").turns[0];
 
     expect(second.digest).toEqual(first.digest);
-    expect(scopedTurn?.receipt.action).toBe("recall");
-    expect(scopedTurn?.receipt.injected).toBe(false);
-    expect(scopedTurn?.receipt.decisions).toContainEqual({
+    expect(scopedTurn?.receipt.payload.action).toBe("recall");
+    expect(scopedTurn?.receipt.payload.injected).toBe(false);
+    expect(scopedTurn?.receipt.payload.sources).toContainEqual({
       publisher: "urn:crew",
       role: "remote",
-      allowed: true,
-      ruleId: "allow-crew-debug-recall",
+      weight: 2,
+      storeDigest: expect.objectContaining({ algorithm: "sha256" }),
+      policyDecision: {
+        effect: "allow",
+        ruleId: "allow-crew-debug-recall",
+        code: null,
+      },
+      traceOutcome: "matched",
     });
     expect(JSON.stringify(scopedTurn?.receipt)).not.toMatch(/"content"|"query"/);
   });
@@ -252,7 +258,18 @@ describe("policy-scoped recall experiment", () => {
       admission: "trace-unavailable",
       candidateCount: 0,
     });
-    expect(scopedTurn?.receipt.admissions).toEqual(scopedTurn?.admissions);
+    expect(scopedTurn?.receipt.payload.sources).toContainEqual({
+      publisher: "urn:crew",
+      role: "remote",
+      weight: 2,
+      storeDigest: expect.objectContaining({ algorithm: "sha256" }),
+      policyDecision: {
+        effect: "allow",
+        ruleId: "allow-crew-debug-recall",
+        code: null,
+      },
+      traceOutcome: "absent",
+    });
   });
 
   it("records a zero-weight matching source without selecting it", () => {
