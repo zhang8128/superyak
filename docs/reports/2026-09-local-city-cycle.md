@@ -231,3 +231,19 @@ so it runs the merged code):
 
 The road holds with the house empty. What it cannot show yet is recall
 quality; that needs content in the store and the receiver arm.
+
+## Morning checklist, progress (2026-09-02)
+
+1. Done except the restart: `[memory] recency_mode = "additive"` set in
+   `.engram/config.toml` (keeps today's behavior live; `tiebreak` stays
+   measured, not deployed, until E3 compares them). The restart is the
+   human's action: exit and reopen the Claude Code session in this repo.
+2. Done: `default_lane = "work"` re-added inside the existing `[memory]`
+   table of the lighthouse repo's config (lighthouse `58461b1`); verified
+   under the merged loader that the binding resolves to the lighthouse
+   store. Safe before the restart because every new engram process runs the
+   merged code; only this session's server is old.
+3. Daemon relaunched detached (`nohup`, pid recorded in
+   `.engram/logs/lighthouse-daemon.log`) so it survives the session restart;
+   re-probed successfully. If it is ever missing:
+   `cd ~/Projects/engram && nohup .venv/bin/python -m lighthouse_daemon --config .engram/lighthouse-daemon.toml > .engram/logs/lighthouse-daemon.log 2>&1 &`
