@@ -1,0 +1,68 @@
+instance = "lighthouse"
+[embedding]
+provider = "local"
+model = "nomic-embed-text-v1.5"
+dimension = 768
+
+[indexing]
+languages = ["python", "typescript", "javascript", "rust", "go"]
+exclude = ["node_modules", ".venv", "__pycache__", "dist", "build"]
+
+[extraction]
+provider = "heuristic"
+conflict_threshold = 0.85
+
+[entity_resolution]
+name_jaccard_threshold = 0.7
+embedding_similarity_threshold = 0.9
+
+[memory]
+max_recall_results = 20
+graph_expansion_depth = 2
+similarity_weight = 0.6
+recency_weight = 0.4
+
+[watcher]
+enabled = true
+debounce_ms = 500
+extensions = [".py", ".js", ".ts", ".tsx", ".rs", ".go"]
+
+[communities]
+min_size = 3
+max_depth = 3
+sub_cluster_threshold = 10
+cache_ttl_seconds = 300
+
+[ranking]
+similarity_weight = 0.5
+recency_weight = 0.3
+degree_weight = 0.2
+
+[compression]
+auto_threshold = 10
+cluster_similarity = 0.75
+reinforce_threshold = 0.70
+instinct_confidence = 0.5
+
+[reflection]
+enabled = true
+log_retention_days = 90
+staleness_days = 30
+
+[signals]
+retention_days = 30
+
+[cohesion]
+# Calibrated 2026-06-13 (spec: docs/superpowers/specs/2026-06-13-sheaf-cohesion-design.md).
+# dl_cost 0.05 = first sleep pass splits exactly Prism (gain 0.060), noise floor 0.012-0.018.
+enabled = true
+dl_cost = 0.05
+
+[category_evolution]
+enabled = true
+shadow = true
+influence_recall = false
+auto_commit = false
+
+[memory]
+default_lane = "work"
