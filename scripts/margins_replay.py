@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
+import struct
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,24 +42,22 @@ def rank(
     near_tie: float = NEAR_TIE,
 ) -> dict:
     """Return the winner, top-two gap, and near-tie state for ``cands``."""
-    scored = sorted(
+    scored = [
         (
-            (
-                score_candidate(
-                    c["similarity"],
-                    c["recency"],
-                    c.get("auto_generated", False),
-                    mode=mode,
-                    w_sim=w_sim,
-                    w_rec=w_rec,
-                    cap=cap,
-                ),
-                c["id"],
-            )
-            for c in cands
-        ),
-        reverse=True,
-    )
+            score_candidate(
+                c["similarity"],
+                c["recency"],
+                c.get("auto_generated", False),
+                mode=mode,
+                w_sim=w_sim,
+                w_rec=w_rec,
+                cap=cap,
+            ),
+            c["id"],
+        )
+        for c in cands
+    ]
+    scored.sort(key=lambda item: item[0], reverse=True)
     if not scored:
         return {"winner": None, "gamma": None, "near_tie": False}
     if len(scored) < 2:
@@ -101,11 +101,51 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def _refuse_live(path: Path) -> None:
-    if "instances" in path.parts and ".engram" in path.parts:
+    canonical = path.resolve()
+    if "instances" in canonical.parts and ".engram" in canonical.parts:
         sys.exit(
-            f"refusing to open a live instance store: {path}\n"
-            f'make a copy first: sqlite3 {path} ".backup /tmp/graph-copy.db"'
+            f"refusing to open a live instance store: {canonical}\n"
+            f'make a copy first: sqlite3 {canonical} ".backup /tmp/graph-copy.db"'
         )
+
+
+def _open_readonly(path: Path) -> sqlite3.Connection:
+    """Open a replay source without migrations, repairs, or write capability."""
+    canonical = path.resolve(strict=True)
+    connection = sqlite3.connect(f"{canonical.as_uri()}?mode=ro", uri=True)
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.enable_load_extension(True)
+        import sqlite_vec
+
+        sqlite_vec.load(connection)
+        connection.enable_load_extension(False)
+        connection.execute("PRAGMA query_only=ON")
+        return connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def _pack_embedding(embedding: list[float]) -> bytes:
+    return struct.pack(f"<{len(embedding)}f", *embedding)
+
+
+def _search_vectors(
+    connection: sqlite3.Connection,
+    table: str,
+    embedding: list[float],
+    *,
+    k: int,
+) -> list[tuple[str, float]]:
+    if table not in {"episode", "semantic"}:
+        raise ValueError(f"unsupported replay layer: {table}")
+    rows = connection.execute(
+        f"SELECT id, distance FROM {table}_vectors "
+        "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+        (_pack_embedding(embedding), k),
+    ).fetchall()
+    return [(row["id"], row["distance"]) for row in rows]
 
 
 def _recency(created_at: str | None, at: datetime) -> float:
@@ -129,13 +169,13 @@ def _age_days(created_at: str | None, at: datetime) -> float | None:
 
 def replay(db_copy: Path, limit: int) -> tuple[list[dict], dict]:
     from embeddings import NomicEmbedProvider
-    from storage import Storage, vec0_distance_to_similarity
+    from storage import vec0_distance_to_similarity
 
-    store = Storage(str(db_copy))
+    connection = _open_readonly(db_copy)
     embedder = NomicEmbedProvider()
     try:
         cfg = {"w_sim": 0.6, "w_rec": 0.4, "cap": DEFAULT_RECENCY_CAP}
-        logs = store.conn.execute(
+        logs = connection.execute(
             "SELECT timestamp, context FROM memory_log WHERE event_type = 'recall' "
             "AND layer = 'all' AND json_extract(context, '$.query') IS NOT NULL "
             "ORDER BY timestamp DESC LIMIT ?",
@@ -153,16 +193,20 @@ def replay(db_copy: Path, limit: int) -> tuple[list[dict], dict]:
             embedding = embedder.embed([query], prefix="search_query")[0]
             cands: list[dict] = []
             created: dict[str, str | None] = {}
-            for table, getter in (
-                ("episode", store.get_episode),
-                ("semantic", store.get_semantic),
+            for table, source_table in (
+                ("episode", "episodes"),
+                ("semantic", "semantics"),
             ):
-                for candidate_id, distance in store.search_vectors(
-                    table, embedding, k=40
+                for candidate_id, distance in _search_vectors(
+                    connection, table, embedding, k=40
                 ):
-                    row = getter(candidate_id)
+                    row = connection.execute(
+                        f"SELECT * FROM {source_table} WHERE id = ?",
+                        (candidate_id,),
+                    ).fetchone()
                     if row is None:
                         continue
+                    row = dict(row)
                     created[candidate_id] = row.get("created_at")
                     cands.append(
                         {
@@ -184,7 +228,7 @@ def replay(db_copy: Path, limit: int) -> tuple[list[dict], dict]:
             rows.append(entry)
         return rows, summarize(rows)
     finally:
-        store.close()
+        connection.close()
 
 
 def render(rows: list[dict], summary: dict, db_copy: Path, phase: str) -> str:
