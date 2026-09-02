@@ -83,8 +83,13 @@ ensures task facts don't drown out identity-level memories during recall.
 **Memory lanes:** Episodes and semantics carry a `lane` ('personal' | 'work').
 The work lane is reference material: it decays and recalls normally but never
 becomes core episodes, instincts, or reinforcement for personal semantics.
-Lane is set at write time (`remember(work=True)`) and correctable during
-compression review (summary `lane` override re-lanes source episodes).
+Lane is derived at write time: `work=True` wins; otherwise a `project` key in
+`context`, or an instance whose `[memory] default_lane = "work"` (default
+`"personal"`), derives the work lane (`context.lane = "personal"` opts out);
+core and genome episodes stay personal. It remains correctable during compression
+review (summary `lane` override re-lanes source episodes). Lane filtering applies
+to the ranked candidate set before the margin and truncation, so a lane-filtered
+recall can fill `max_results` and its margin describes the returned lane.
 Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.
 
 **Sheaf cohesion:** Each semantic gets a cohesion energy in [0,1] — the
@@ -119,8 +124,8 @@ Spec: docs/superpowers/specs/2026-06-13-persistence-design.md.
 **Tropical margins:** Recall scores every layer on one soft sum and returns the
 argmax, which always produces a winner — even when the top two differ by 0.001.
 The margin `gamma = top - runner_up` says whether that ranking was decided or a
-coin flip. Measured on the full candidate set before truncation, normalized by
-the score spread so it compares across queries, and flagged `fts_tie` when the
+coin flip. Measured on the lane-filtered candidate set before truncation,
+normalized by the score spread so it compares across queries, and flagged `fts_tie` when the
 runner-up arrived on the keyword fallback's flat 0.5 similarity (an artifact,
 not a failure to discriminate). A counterfactual arm re-runs the search with the
 unbiased query vector to report whether the winner survives the dream/instinct
@@ -134,6 +139,12 @@ re-sorts delivery the margin is flagged `influenced` rather than recomputed —
 it measures retrieval discrimination, not the downstream re-rank. Diagnostic
 only: it gates nothing, since our scores are uncalibrated cosine and there is
 no oracle. Observe via `reflect(focus="margins")`.
+Recall scoring is one function (`scoring.score_candidate`) shared by `recall()`,
+the counterfactual arm, and `scripts/margins_replay.py`. `[memory] recency_mode`
+selects `tiebreak` (default: recency contributes at most `recency_cap`, 0.02,
+provisional) or `additive` (the historical `similarity * 0.6 + recency * 0.4`).
+The replay report that licensed the default lives at
+`docs/reports/2026-09-margins-replay.md`.
 
 **Off-device assessments:** Scheduled sessions where wake withholds the entire
 orientation (instincts, semantics, residues, task context) and emits only a
@@ -174,7 +185,7 @@ payloads down to the same metadata-only representation.
 | `dream_capture(reaction)` | Capture a raw emotional reaction. Compressed into opaque residue. |
 | `dream_surface(n?)` | Surface dream residues from prior sessions. |
 | `dream_react(residue_id, reaction)` | React to a residue. Reaction feeds the next cycle. |
-| `dream_verify(recall_id)` | Reveal hidden scores from dream-influenced recall. Use after engaging. |
+| `dream_verify(recall_id)` | Reveal hidden scores from dream-influenced recall: `scores` (matched) and `uninvited_scores` (raw similarity of distant pulls) as separate maps. Use after engaging. |
 | `assessment_schedule(reason?)` | Schedule the next session as an off-device assessment (no wake orientation; tools available). `ENGRAM_ASSESSMENT=next\|skip` env overrides. |
 | `assessment_report(function_score, ...)` | Complete the active assessment: structured self-report + objective counters. History via `reflect(focus="assessments")`. |
 | `search_code(query)` | Search project source code via embeddings. |
@@ -202,6 +213,8 @@ payloads down to the same metadata-only representation.
 | `config.py` | Environment and path configuration |
 | `knowledge.py` | Graphiti bridge — entity extraction and temporal facts |
 | `hooks/wake.py` | SessionStart hook — loads instincts into context on boot |
+| `hooks/sleep.py` | Stop hook — dream residue distillation; marks this session's recalls `used: auto: cited` when a later act cited a result (positive evidence only) |
+| `scoring.py` | Recall score shared by `recall()`, its counterfactual, and the margins replay script |
 
 ## Testing
 
