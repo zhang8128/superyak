@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -80,19 +81,22 @@ class Deduplicator:
             "model": self._config.model,
             "prompt": prompt,
             "stream": False,
+            # Thinking models (e.g. gemma4) burn the whole num_predict budget
+            # on hidden reasoning and return "" unless thinking is disabled.
+            "think": False,
             "options": {"temperature": 0.0, "num_predict": 20},
         }
 
         try:
-            req = urllib.request.Request(
-                self._config.ollama_url,
-                data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=self._config.timeout) as resp:
-                result = json.loads(resp.read())
+            result = self._post(body)
 
             answer = result.get("response", "").strip().lower()
+            if not answer and result.get("done_reason") == "length":
+                logger.warning(
+                    "Dedup response empty with done_reason=length — model "
+                    "spent the token budget thinking; treating as different"
+                )
+                return False
             is_same = answer.startswith("same")
             logger.debug(
                 "Dedup: %r vs %r → %s (%s)",
@@ -102,6 +106,26 @@ class Deduplicator:
         except Exception:
             logger.warning("Dedup LLM call failed, treating as different", exc_info=True)
             return False
+
+    def _post(self, body: dict) -> dict:
+        """POST to Ollama; retry once without `think` if the model rejects it."""
+        try:
+            return self._post_once(body)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            if "think" in detail.lower() and "think" in body:
+                retry = {k: v for k, v in body.items() if k != "think"}
+                return self._post_once(retry)
+            raise
+
+    def _post_once(self, body: dict) -> dict:
+        req = urllib.request.Request(
+            self._config.ollama_url,
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self._config.timeout) as resp:
+            return json.loads(resp.read())
 
     def find_duplicates(self, items: list[dict], key: str = "content") -> list[tuple[int, int]]:
         """Find all duplicate pairs in a list of items.

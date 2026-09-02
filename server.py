@@ -14,6 +14,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+import margins
 from config import load_config, resolve_instance_name
 from indexer import incremental_index
 from logging_config import setup_logging
@@ -167,6 +168,8 @@ _genome_db_path = None
 _signals_db_path = None
 _recall_scores: dict[str, dict[str, float]] = {}
 _recall_resonances: dict[str, list[dict]] = {}
+# Margins hidden alongside scores during dream-active recall, revealed by dream_verify.
+_recall_margins: dict[str, dict] = {}
 _instinct_graph = None
 _last_instinct_id = None
 _knowledge_graph = None
@@ -269,6 +272,7 @@ def _reset_server_child_state(
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher
     global _session_id, _session_episode_count, _instance_name, _initialized
     global _genome_db_path, _signals_db_path, _recall_scores, _recall_resonances
+    global _recall_margins
     global _instinct_graph, _last_instinct_id, _knowledge_graph, _wander_visits
     global _clipboard, _category_store, _category_observer
     global _notepad_project, _notepad_global
@@ -331,6 +335,7 @@ def _reset_server_child_state(
     _signals_db_path = None
     _recall_scores = {}
     _recall_resonances = {}
+    _recall_margins = {}
     _instinct_graph = None
     _last_instinct_id = None
     _knowledge_graph = None
@@ -820,6 +825,7 @@ def _reset_failed_initialization_state() -> None:
     global _storage, _embeddings, _config, _compressor, _reflector, _watcher
     global _session_id, _session_episode_count, _instance_name, _initialized
     global _genome_db_path, _signals_db_path, _recall_scores, _recall_resonances
+    global _recall_margins
     global _instinct_graph, _last_instinct_id, _knowledge_graph, _wander_visits
     global _clipboard, _category_store, _category_observer
     global _category_status, _category_atexit_callback
@@ -840,6 +846,7 @@ def _reset_failed_initialization_state() -> None:
     _signals_db_path = None
     _recall_scores = {}
     _recall_resonances = {}
+    _recall_margins = {}
     _instinct_graph = None
     _last_instinct_id = None
     _knowledge_graph = None
@@ -1066,7 +1073,13 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False):
     _embeddings = NomicEmbedProvider()
 
     harness = os.environ.get("ENGRAM_HARNESS", "claude-code")
-    claude_session_id = os.environ.get("CLAUDE_SESSION_ID") if harness != "codex" else None
+    # Claude Code exports CLAUDE_CODE_SESSION_ID to MCP server processes;
+    # CLAUDE_SESSION_ID is kept as a legacy fallback only.
+    claude_session_id = (
+        (os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID"))
+        if harness != "codex"
+        else None
+    )
     bound_session_id = None
     if harness == "codex" and not claude_session_id:
         bound_session_id = _storage.resolve_session_binding(
@@ -1379,7 +1392,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False):
 
 def _apply_recall_bias(query_embedding: list[float],
                        dream_alpha: float = 0.15,
-                       instinct_alpha: float = 0.15) -> list[float]:
+                       instinct_alpha: float = 0.15) -> tuple[list[float], bool]:
     """Blend dream residues and session biases into a query embedding.
 
     Two sources of invisible influence on recall:
@@ -1389,6 +1402,10 @@ def _apply_recall_bias(query_embedding: list[float],
     Both tilt recall without the instance knowing. Dreams are deep and old.
     Instinct biases are immediate and contextual, weighted by their strength
     (which decays per message and reinforces on re-fire).
+
+    Returns the (possibly blended) embedding and whether any bias was applied.
+    The flag is what lets the margin's counterfactual know there is something
+    to remove — see margins.stability.
     """
     import struct
     import numpy as np
@@ -1460,7 +1477,7 @@ def _apply_recall_bias(query_embedding: list[float],
 
         # --- Blend ---
         if not has_dream and not has_session:
-            return query_embedding
+            return query_embedding, False
 
         # Compute effective blend
         blended = query_arr.copy()
@@ -1476,11 +1493,157 @@ def _apply_recall_bias(query_embedding: list[float],
         if norm > 0:
             blended = blended / norm
 
-        return blended.tolist()
+        return blended.tolist(), True
 
     except Exception:
         logger.warning("Recall bias failed", exc_info=True)
-        return query_embedding
+        return query_embedding, False
+
+
+def _vector_candidates(embedding: list[float], layer: str | None,
+                       max_results: int, query: str) -> tuple[dict[str, dict], list[str]]:
+    """Vector-search candidates for the active layers.
+
+    Extracted so the biased pass and the unbiased counterfactual pass rank
+    through identical logic — a margin computed against a differently-scored
+    control would measure the difference between two code paths, not the
+    effect of the bias.
+    """
+    candidates: dict[str, dict] = {}
+    errors: list[str] = []
+
+    if layer is None or layer == "episode":
+        try:
+            for eid, distance in _storage.search_vectors("episode", embedding, k=max_results * 2):
+                candidates[eid] = {
+                    "layer": "episode",
+                    "similarity": vec0_distance_to_similarity(distance),
+                }
+        except Exception:
+            errors.append("episode_vectors")
+            logger.warning("Episode vector search failed, falling back to FTS", exc_info=True)
+
+    if layer is None or layer == "semantic":
+        try:
+            for sid, distance in _storage.search_vectors("semantic", embedding, k=max_results * 2):
+                candidates[sid] = {
+                    "layer": "semantic",
+                    "similarity": vec0_distance_to_similarity(distance),
+                }
+        except Exception:
+            errors.append("semantic_vectors")
+            logger.warning("Semantic vector search failed, falling back to FTS", exc_info=True)
+
+    if layer is None or layer == "instinct":
+        try:
+            for iid, distance in _storage.search_vectors("instinct", embedding, k=max_results):
+                sim = vec0_distance_to_similarity(distance)
+                # Blend embedding similarity with instinct strength
+                inst = _storage.get_instinct(iid)
+                if inst:
+                    cluster_strengths = _storage.get_instinct_cluster_strengths(iid)
+                    if cluster_strengths:
+                        strength = max(cs["strength"] for cs in cluster_strengths)
+                    else:
+                        strength = inst.get("strength", 0.5)
+                else:
+                    strength = 0.5
+                candidates[iid] = {
+                    "layer": "instinct",
+                    "similarity": sim * 0.7 + strength * 0.3,
+                }
+        except Exception:
+            # Fallback to keyword matching if no vectors yet (e.g. pre-reindex)
+            errors.append("instinct_vectors")
+            logger.warning("Instinct vector search failed, falling back to keyword", exc_info=True)
+            try:
+                instincts = _storage.get_all_instincts()
+                query_lower = query.lower()
+                for inst in instincts:
+                    action = (inst.get("action") or "").lower()
+                    trigger = (inst.get("trigger") or "").lower()
+                    if (any(word in action for word in query_lower.split() if len(word) > 3)
+                            or any(word in trigger for word in query_lower.split() if len(word) > 3)):
+                        candidates[inst["id"]] = {
+                            "layer": "instinct",
+                            "similarity": inst.get("strength", 0.5),
+                        }
+            except Exception:
+                errors.append("instincts_keyword")
+                logger.warning("Instinct keyword fallback also failed", exc_info=True)
+
+    return candidates, errors
+
+
+def _recency_at(created_at: str | None, now: datetime) -> float:
+    """Recency term of the recall score: 1 / (1 + days since creation)."""
+    if not created_at:
+        return 1.0
+    try:
+        dt = datetime.fromisoformat(created_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return 1.0 / (1.0 + (now - dt).total_seconds() / 86400)
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: int,
+                  query: str, biased: dict[str, dict], now: datetime,
+                  w_sim: float, w_rec: float) -> str | None:
+    """The id recall would have ranked first without the dream/instinct bias.
+
+    This is the control arm for margins.stability: same scoring, same layers,
+    unperturbed query vector. Returns None if the pass yields nothing to
+    compare against — the margin then reports `checked: False` rather than
+    inventing a verdict.
+    """
+    try:
+        cand, _ = _vector_candidates(raw_embedding, layer, max_results, query)
+    except Exception:
+        logger.debug("Unbiased counterfactual search failed", exc_info=True)
+        return None
+
+    # Keyword hits are embedding-independent — carry them across unchanged so
+    # both arms rank the same candidate pool.
+    for cid, info in biased.items():
+        if info.get("from_fts") and cid not in cand:
+            cand[cid] = dict(info)
+
+    best_id, best_score = None, float("-inf")
+    for cid, info in cand.items():
+        hydrated = biased.get(cid)
+        if hydrated and "created_at" in hydrated:
+            created_at = hydrated.get("created_at")
+            auto_generated = hydrated.get("auto_generated")
+        else:
+            row = _row_for_layer(cid, info["layer"])
+            if row is None:
+                continue
+            created_at = row.get("created_at")
+            auto_generated = row.get("auto_generated")
+
+        score = info["similarity"] * w_sim + _recency_at(created_at, now) * w_rec
+        if auto_generated:
+            score *= 0.7
+        if score > best_score:
+            best_id, best_score = cid, score
+
+    return best_id
+
+
+def _row_for_layer(cid: str, layer: str) -> dict | None:
+    """Fetch a memory row by id for its layer, or None if it is gone."""
+    try:
+        if layer == "episode":
+            return _storage.get_episode(cid)
+        if layer == "semantic":
+            return _storage.get_semantic(cid)
+        if layer == "instinct":
+            return _storage.get_instinct(cid)
+    except Exception:
+        logger.debug("Row fetch failed for %s/%s", layer, cid, exc_info=True)
+    return None
 
 
 def _has_active_residue() -> bool:
@@ -1777,35 +1940,24 @@ def recall(
         results = _observe_category_recall(query, results, recall_id)
         return {"results": results, "recall_id": recall_id}
 
-    embedding = _embeddings.embed([query], prefix="search_query")[0]
+    raw_embedding = _embeddings.embed([query], prefix="search_query")[0]
     now = datetime.now(timezone.utc)
 
     # Dream residue bias: blend active residues into the query vector.
     # This makes some recall results get pulled by feelings the instance
     # can't fully account for — unreliable memory mixed with reliable.
-    embedding = _apply_recall_bias(embedding)
+    embedding, bias_applied = _apply_recall_bias(raw_embedding)
 
     w_sim = _config.memory.similarity_weight if _config else 0.6
     w_rec = _config.memory.recency_weight if _config else 0.4
 
     # Collect results: id -> {layer, similarity, created_at}
-    candidates: dict[str, dict] = {}
+    candidates, search_errors = _vector_candidates(embedding, layer, max_results, query)
 
-    search_errors: list[str] = []
-
-    # Episode search
+    # Keyword fallback. Driven by the query text, not the embedding, so it
+    # lands identically in the unbiased counterfactual pass — and it assigns a
+    # flat similarity, which is why margins track `from_fts` separately.
     if layer is None or layer == "episode":
-        try:
-            vec_results = _storage.search_vectors("episode", embedding, k=max_results * 2)
-            for eid, distance in vec_results:
-                candidates[eid] = {
-                    "layer": "episode",
-                    "similarity": vec0_distance_to_similarity(distance),
-                }
-        except Exception:
-            search_errors.append("episode_vectors")
-            logger.warning("Episode vector search failed, falling back to FTS", exc_info=True)
-
         try:
             fts_ids = _storage.search_episode_fts(query)
             for eid in fts_ids:
@@ -1813,24 +1965,13 @@ def recall(
                     candidates[eid] = {
                         "layer": "episode",
                         "similarity": 0.5,
+                        "from_fts": True,
                     }
         except Exception:
             search_errors.append("episode_fts")
             logger.warning("Episode FTS search failed", exc_info=True)
 
-    # Semantic search
     if layer is None or layer == "semantic":
-        try:
-            vec_results = _storage.search_vectors("semantic", embedding, k=max_results * 2)
-            for sid, distance in vec_results:
-                candidates[sid] = {
-                    "layer": "semantic",
-                    "similarity": vec0_distance_to_similarity(distance),
-                }
-        except Exception:
-            search_errors.append("semantic_vectors")
-            logger.warning("Semantic vector search failed, falling back to FTS", exc_info=True)
-
         try:
             fts_ids = _storage.search_semantic_fts(query)
             for sid in fts_ids:
@@ -1838,50 +1979,11 @@ def recall(
                     candidates[sid] = {
                         "layer": "semantic",
                         "similarity": 0.5,
+                        "from_fts": True,
                     }
         except Exception:
             search_errors.append("semantic_fts")
             logger.warning("Semantic FTS search failed", exc_info=True)
-
-    # Instinct matching — vector search like episodes/semantics
-    if layer is None or layer == "instinct":
-        try:
-            vec_results = _storage.search_vectors("instinct", embedding, k=max_results)
-            for iid, distance in vec_results:
-                sim = vec0_distance_to_similarity(distance)
-                # Blend embedding similarity with instinct strength
-                inst = _storage.get_instinct(iid)
-                if inst:
-                    cluster_strengths = _storage.get_instinct_cluster_strengths(iid)
-                    if cluster_strengths:
-                        strength = max(cs["strength"] for cs in cluster_strengths)
-                    else:
-                        strength = inst.get("strength", 0.5)
-                else:
-                    strength = 0.5
-                candidates[iid] = {
-                    "layer": "instinct",
-                    "similarity": sim * 0.7 + strength * 0.3,
-                }
-        except Exception:
-            # Fallback to keyword matching if no vectors yet (e.g. pre-reindex)
-            search_errors.append("instinct_vectors")
-            logger.warning("Instinct vector search failed, falling back to keyword", exc_info=True)
-            try:
-                instincts = _storage.get_all_instincts()
-                query_lower = query.lower()
-                for inst in instincts:
-                    action = (inst.get("action") or "").lower()
-                    trigger = (inst.get("trigger") or "").lower()
-                    if (any(word in action for word in query_lower.split() if len(word) > 3)
-                            or any(word in trigger for word in query_lower.split() if len(word) > 3)):
-                        candidates[inst["id"]] = {
-                            "layer": "instinct",
-                            "similarity": inst.get("strength", 0.5),
-                        }
-            except Exception:
-                search_errors.append("instincts_keyword")
-                logger.warning("Instinct keyword fallback also failed", exc_info=True)
 
     # Score and rank
     scored: list[dict] = []
@@ -1935,6 +2037,8 @@ def recall(
         # Penalize auto-generated semantics (concatenated, not AI-summarized)
         if info.get("auto_generated"):
             score *= 0.7
+        # Kept so the counterfactual pass can reuse this hydration
+        info["created_at"] = created_at
 
         result = {
             "id": cid,
@@ -1985,6 +2089,33 @@ def recall(
 
     scored.sort(key=lambda x: x["score"], reverse=True)
 
+    # Tropical margin: how decided was this ranking? Measured on the full
+    # candidate set before truncation, so max_results=1 still has a real
+    # runner-up. Diagnostic only — it gates nothing, and a diagnostic must
+    # never take recall down with it, so this is best-effort like the
+    # uninvited, resonance, and category blocks below.
+    margin = None
+    try:
+        margin = margins.margin_stats([
+            {
+                "id": r["id"],
+                "score": r["score"],
+                "similarity": candidates[r["id"]]["similarity"],
+                "from_fts": candidates[r["id"]].get("from_fts", False),
+            }
+            for r in scored
+        ])
+        unbiased_top = None
+        if bias_applied and scored:
+            unbiased_top = _unbiased_top(raw_embedding, layer, max_results, query,
+                                         candidates, now, w_sim, w_rec)
+        margin["stability"] = margins.stability(
+            scored[0]["id"] if scored else None, unbiased_top, bias_applied)
+    except Exception:
+        margin = None
+        search_errors.append("margin")
+        logger.warning("Margin computation failed (non-fatal)", exc_info=True)
+
     # All layers compete on score. No dedup — the source chain links are
     # too broad (compression creates catch-all buckets) and the old dedup
     # hid 95% of episodes. Let the scoring formula handle ranking.
@@ -1994,12 +2125,19 @@ def recall(
     recall_id = str(uuid.uuid4())
     result_ids = [r["id"] for r in results]
 
+    # The logged margin is the retrieval-time record. `influenced`, set later
+    # if category re-ranking changes delivery, is a delivery-time annotation
+    # and deliberately absent here.
+    log_context = {"recall_id": recall_id, "query": query, "session_id": _session_id}
+    if margin is not None:
+        log_context["margin"] = margin
+
     _storage.add_log_entry(
         id=str(uuid.uuid4()),
         event_type="recall",
         layer=layer or "all",
         target_ids=result_ids,
-        context={"recall_id": recall_id, "query": query, "session_id": _session_id},
+        context=log_context,
     )
 
     # Increment access count for episode results
@@ -2135,9 +2273,16 @@ def recall(
     _residue_active = _has_active_residue()
     if _residue_active:
         _recall_scores[recall_id] = {r["id"]: r.get("score") for r in results}
+        # The margin is derived from the scores being hidden, and the ranking
+        # it describes is exactly what the shuffle below conceals. Hide it on
+        # the same terms and reveal it through dream_verify.
+        if margin is not None:
+            _recall_margins[recall_id] = margin
         if len(_recall_scores) > 50:
             oldest = next(iter(_recall_scores))
             del _recall_scores[oldest]
+        if len(_recall_margins) > 50:
+            del _recall_margins[next(iter(_recall_margins))]
         for r in results:
             r.pop("score", None)
         # Shuffle slightly so order doesn't leak ranking
@@ -2183,8 +2328,18 @@ def recall(
         except Exception:
             logger.warning("Category search failed (non-fatal)", exc_info=True)
 
+    delivered_top = results[0]["id"] if results else None
     results = _observe_category_recall(query, results, recall_id)
+    if margin is not None and results and results[0]["id"] != delivered_top:
+        # Category influence re-scores and re-sorts what gets delivered. The
+        # margin still measures retrieval discrimination — the right subject —
+        # but it no longer describes the order the caller received, so say so
+        # rather than recompute it over a re-ranked, already-truncated set.
+        margin["influenced"] = True
+
     response = {"results": results, "recall_id": recall_id}
+    if margin is not None and not _residue_active:
+        response["margin"] = margin
     if resonant_results:
         response["resonant"] = resonant_results
     if transfers:
@@ -3174,11 +3329,15 @@ def dream_verify(recall_id: str) -> dict:
 
     # Sort by score descending so the instance can see which were strong matches
     sorted_scores = sorted(scores.items(), key=lambda x: x[1] or 0, reverse=True)
-    return {
+    revealed = {
         "recall_id": recall_id,
         "scores": {rid: round(s, 4) if s else None for rid, s in sorted_scores},
         "note": "Now you can see which memories were pulled by the dream. What did you engage with before checking?",
     }
+    margin = _recall_margins.get(recall_id)
+    if margin is not None:
+        revealed["margin"] = margin
+    return revealed
 
 
 @_server_tool()

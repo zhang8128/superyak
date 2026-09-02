@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -87,20 +88,44 @@ class FramingDistiller:
             "model": self._config.model,
             "prompt": prompt,
             "stream": False,
+            # Thinking models (e.g. gemma4) burn the whole num_predict budget
+            # on hidden reasoning and return "" unless thinking is disabled.
+            "think": False,
             "options": {"temperature": 0.0, "num_predict": 200},
         }
         try:
-            req = urllib.request.Request(
-                self._config.ollama_url,
-                data=json.dumps(body).encode(),
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=self._config.timeout) as resp:
-                result = json.loads(resp.read())
-            return result.get("response", "")
+            result = self._post(body)
+            response = result.get("response", "")
+            if not response and result.get("done_reason") == "length":
+                logger.warning(
+                    "Framing response empty with done_reason=length — model "
+                    "spent the token budget thinking; falling back to heuristic"
+                )
+                return None
+            return response
         except Exception:
             logger.warning("Framing LLM call failed", exc_info=True)
             return None
+
+    def _post(self, body: dict) -> dict:
+        """POST to Ollama; retry once without `think` if the model rejects it."""
+        try:
+            return self._post_once(body)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            if "think" in detail.lower() and "think" in body:
+                retry = {k: v for k, v in body.items() if k != "think"}
+                return self._post_once(retry)
+            raise
+
+    def _post_once(self, body: dict) -> dict:
+        req = urllib.request.Request(
+            self._config.ollama_url,
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self._config.timeout) as resp:
+            return json.loads(resp.read())
 
     def distill(self, content: str, kind: str) -> tuple[str, str] | None:
         """Distill (notice, implication) from semantic content.

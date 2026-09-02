@@ -98,3 +98,75 @@ def test_distill_returns_none_when_transport_fails():
     distiller = StubDistiller(response=None)
 
     assert distiller.distill("content", "preference") is None
+
+
+class FakeResponse:
+    def __init__(self, payload: dict):
+        self._data = json.dumps(payload).encode()
+
+    def read(self) -> bytes:
+        return self._data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_generate_disables_thinking(monkeypatch):
+    import urllib.request
+
+    bodies = []
+
+    def fake_urlopen(req, timeout=None):
+        bodies.append(json.loads(req.data))
+        return FakeResponse({"response": "ok", "done_reason": "stop"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    distiller = FramingDistiller()
+
+    assert distiller._generate("prompt") == "ok"
+    assert bodies[0]["think"] is False
+
+
+def test_generate_returns_none_on_thinking_burn(monkeypatch):
+    import urllib.request
+
+    def fake_urlopen(req, timeout=None):
+        return FakeResponse({"response": "", "done_reason": "length"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    distiller = FramingDistiller()
+
+    assert distiller._generate("prompt") is None
+
+
+def test_generate_retries_without_think_when_model_rejects_it(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    bodies = []
+    responses = iter([
+        urllib.error.HTTPError(
+            url="http://localhost:11434/api/generate", code=400,
+            msg="Bad Request", hdrs=None,
+            fp=io.BytesIO(b'{"error":"model does not support thinking"}'),
+        ),
+        FakeResponse({"response": "ok", "done_reason": "stop"}),
+    ])
+
+    def fake_urlopen(req, timeout=None):
+        bodies.append(json.loads(req.data))
+        result = next(responses)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    distiller = FramingDistiller()
+
+    assert distiller._generate("prompt") == "ok"
+    assert "think" in bodies[0]
+    assert "think" not in bodies[1]

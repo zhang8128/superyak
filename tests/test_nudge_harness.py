@@ -131,6 +131,8 @@ def test_sleep_extension_load_failure_closes_connection(
     monkeypatch.setattr(sleep, "PROJECT_ROOT", tmp_path)
     monkeypatch.setenv("ENGRAM_HARNESS", "codex")
     monkeypatch.setenv("ENGRAM_RUN_KEY", "codex:42")
+    monkeypatch.delenv("ENGRAM_WAKE", raising=False)  # never inherit from the outer shell
+    monkeypatch.delenv("CODEX_PAIR_SESSION_ID", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
         "session_id": "codex-hook-session", "hook_event_name": "Stop",
     })))
@@ -167,6 +169,9 @@ def test_sleep_attempts_close_when_binding_cleanup_raises(tmp_path, monkeypatch)
     sleep = _load("sleep")
     db_path = tmp_path / ".engram" / "graph.db"
     db_path.parent.mkdir(); db_path.touch()
+    monkeypatch.delenv("ENGRAM_HARNESS", raising=False)  # never inherit from the outer shell
+    monkeypatch.delenv("ENGRAM_WAKE", raising=False)
+    monkeypatch.delenv("CODEX_PAIR_SESSION_ID", raising=False)
     monkeypatch.setattr(sleep, "DB_PATH", db_path)
     monkeypatch.setattr(sleep, "ENGRAM_HOME", tmp_path)
     monkeypatch.setattr(sleep, "clear_session_binding", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))

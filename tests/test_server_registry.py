@@ -543,6 +543,7 @@ def engram_server_env(tmp_path, monkeypatch):
     server._server_atexit_callbacks.clear()
 
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.delenv("ENGRAM_HARNESS", raising=False)
     monkeypatch.delenv("ENGRAM_RUN_KEY", raising=False)
 
@@ -1663,3 +1664,30 @@ def test_nested_same_thread_init_defers_cleanup_until_outer_operation_finishes(
     assert watcher.stop_calls == 1
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         storage.conn.execute("SELECT 1")
+def test_claude_code_session_id_env_binds_server_session(engram_server_env, monkeypatch):
+    """Claude Code exports CLAUDE_CODE_SESSION_ID (not CLAUDE_SESSION_ID) to
+    MCP server processes — verified live 2026-07-13. Adopting it is what lets
+    the hook-side stamp (same session_id) fill model on this row."""
+    monkeypatch.setenv("ENGRAM_HARNESS", "claude-code")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-harness-session")
+    engram_server_env._init()
+    assert engram_server_env._session_id == "claude-harness-session"
+
+
+def test_claude_code_session_id_wins_over_legacy_name(engram_server_env, monkeypatch):
+    """When both names are set, the one the harness actually exports wins;
+    CLAUDE_SESSION_ID survives only as a legacy fallback."""
+    monkeypatch.setenv("ENGRAM_HARNESS", "claude-code")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "harness-session")
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "legacy-session")
+    engram_server_env._init()
+    assert engram_server_env._session_id == "harness-session"
+
+
+def test_codex_ignores_decoy_claude_code_session_id(engram_server_env, monkeypatch):
+    monkeypatch.setenv("ENGRAM_HARNESS", "codex")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "decoy-claude")
+    monkeypatch.setenv("ENGRAM_RUN_KEY", "codex:42")
+    _seed_bound_hook_row(engram_server_env)
+    engram_server_env._init()
+    assert engram_server_env._session_id == "hook-session"

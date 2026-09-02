@@ -57,6 +57,7 @@ py-modules = [
     "local_agent",
     "logging_config",
     "maintenance",
+    "margins",
     "mirror",
     "notepad",
     "operation_audit",

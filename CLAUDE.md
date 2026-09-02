@@ -116,6 +116,25 @@ flags for review. Recall's uninvited slot occasionally daydreams a random
 persistence.py /path/to/copy-of-graph.db`.
 Spec: docs/superpowers/specs/2026-06-13-persistence-design.md.
 
+**Tropical margins:** Recall scores every layer on one soft sum and returns the
+argmax, which always produces a winner — even when the top two differ by 0.001.
+The margin `gamma = top - runner_up` says whether that ranking was decided or a
+coin flip. Measured on the full candidate set before truncation, normalized by
+the score spread so it compares across queries, and flagged `fts_tie` when the
+runner-up arrived on the keyword fallback's flat 0.5 similarity (an artifact,
+not a failure to discriminate). A counterfactual arm re-runs the search with the
+unbiased query vector to report whether the winner survives the dream/instinct
+tilt (`_apply_recall_bias`, alpha=0.15) — engram's instance of the tropical
+stability criterion, measured rather than bounded. Hidden during dream-active
+recall on the same terms as scores and revealed via `dream_verify`; always
+logged. Two deliberate exclusions: `recall(layer="instinct")` gets no margin
+(it ranks on context-vector match, a different scoring regime that would
+average into an uninterpretable distribution), and when category influence
+re-sorts delivery the margin is flagged `influenced` rather than recomputed —
+it measures retrieval discrimination, not the downstream re-rank. Diagnostic
+only: it gates nothing, since our scores are uncalibrated cosine and there is
+no oracle. Observe via `reflect(focus="margins")`.
+
 **Off-device assessments:** Scheduled sessions where wake withholds the entire
 orientation (instincts, semantics, residues, task context) and emits only a
 marker — measuring memory function without the device, rehab-style. Self-report
@@ -143,7 +162,7 @@ payloads down to the same metadata-only representation.
 | `mark_core(episode_id)` | Retroactively mark an episode as core (exempt from decay). |
 | `core_memories()` | List all core episodes. |
 | `recall(query, lane?)` | Search across all layers. Returns `recall_id` for feedback. `lane="work"|"personal"` to filter. Scores hidden when dreaming. |
-| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs, assessments, cohesion, persistence. |
+| `reflect(focus?)` | Self-observation: usage, gaps, instincts, instinct_contexts, instinct_clusters, contradictions, vital_signs, assessments, cohesion, persistence, margins. |
 | `introspect()` | High-level self-portrait: kinds, instincts, health, activity. |
 | `status()` | Layer counts, watcher state, session_id. |
 | `compress()` | Manual compression cycle. `compress_commit` accepts `action="discard"` for junk clusters. |
@@ -175,6 +194,7 @@ payloads down to the same metadata-only representation.
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
 | `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
 | `maintenance.py` | Pain channel — per-step sleep-maintenance report, surfaced via `status()` and wake |
+| `margins.py` | Tropical margins — recall ranking separation, bias-stability counterfactual |
 | `dedup.py` | LLM-based duplicate detection |
 | `framing.py` | LLM-based instinct notice/implication distillation (`ENGRAM_FRAMING_MODEL`, defaults to dedup model) |
 | `indexer.py` | Source code indexing via tree-sitter |

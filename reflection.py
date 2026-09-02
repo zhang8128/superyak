@@ -702,6 +702,33 @@ class Reflector:
             "innovation": innovation_distribution(self._storage),
         }
 
+    def analyze_margins(self, limit: int = 200) -> dict:
+        """Tropical margins: how decided recall's rankings have been.
+
+        Reads the margin payloads written onto recall log entries. Read-only —
+        the margin gates nothing; this is the surface that would tell us
+        whether a near-tie threshold is worth calibrating.
+        """
+        import json as _json
+
+        from margins import distribution
+
+        rows = self._storage.conn.execute(
+            "SELECT context FROM memory_log WHERE event_type = 'recall' "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+        logged = []
+        for row in rows:
+            try:
+                margin = _json.loads(row["context"] or "{}").get("margin")
+            except (TypeError, ValueError):
+                continue
+            if margin:
+                logged.append(margin)
+        return distribution(logged)
+
     def reflect(self, focus=None) -> dict:
         """Dispatch to specific analysis based on focus."""
         if focus == "usage":
@@ -739,6 +766,10 @@ class Reflector:
         elif focus == "persistence":
             # Not in the no-focus default: filtrations per hub — heavier than other foci.
             return {"persistence": self.analyze_persistence()}
+        elif focus == "margins":
+            # Explicit only, like cohesion and persistence: a calibration
+            # surface, not part of the routine self-portrait.
+            return {"margins": self.analyze_margins()}
         elif focus == "category_evolution":
             # Explicit only: archive/compiler diagnostics stay out of default reflection.
             return {"category_evolution": self.analyze_category_evolution()}
