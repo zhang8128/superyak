@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TextIO
 
+from lighthouse_receipts import ReceiptError, validate_receipt
+
 
 TECHNICAL_CONTEXT = {"id": "memory/technical", "path": ["memory", "technical"]}
 REQUIRED_SCHEMA = {
@@ -40,6 +42,8 @@ class ExportAudit:
     excluded_malformed: int
     excluded_duplicate_candidates: int
     excluded_outside_work_set: int
+    receipts: int = 0
+    excluded_invalid_receipts: int = 0
 
 
 def _open_readonly(database: Path) -> sqlite3.Connection:
@@ -260,6 +264,32 @@ def _project_traces(
     )
 
 
+def _project_receipts(
+    connection: sqlite3.Connection,
+) -> tuple[list[dict], int]:
+    receipts: dict[str, dict] = {}
+    invalid = 0
+    for row in connection.execute(
+        "SELECT context FROM memory_log WHERE event_type = 'lighthouse_receipt'"
+    ):
+        try:
+            context = _parse_json(row["context"])
+        except (json.JSONDecodeError, ValueError, TypeError):
+            invalid += 1
+            continue
+        receipt = context.get("receipt") if isinstance(context, dict) else None
+        if not isinstance(receipt, dict):
+            invalid += 1
+            continue
+        try:
+            validate_receipt(receipt)
+        except ReceiptError:
+            invalid += 1
+            continue
+        receipts[str(receipt["id"])] = receipt
+    return [receipts[key] for key in sorted(receipts)], invalid
+
+
 def export_lighthouse_shadow(
     database: Path,
     *,
@@ -275,10 +305,11 @@ def export_lighthouse_shadow(
         memory_ids = {str(memory["id"]) for memory in memories}
         edges, omitted_edges = _project_edges(connection, memory_ids)
         trace_projection = _project_traces(connection, memory_ids)
+        receipts, invalid_receipts = _project_receipts(connection)
         if connection.total_changes != 0:
             raise ExportError("SOURCE_MUTATED")
         document: dict[str, object] = {
-            "formatVersion": "1.0",
+            "formatVersion": "1.1",
             "instance": instance,
             "context": {
                 "id": TECHNICAL_CONTEXT["id"],
@@ -287,6 +318,7 @@ def export_lighthouse_shadow(
             "memories": memories,
             "edges": edges,
             "recallTraces": trace_projection.traces,
+            "receipts": receipts,
         }
         return document, ExportAudit(
             work_episodes=work_episodes,
@@ -298,6 +330,8 @@ def export_lighthouse_shadow(
             excluded_malformed=trace_projection.malformed,
             excluded_duplicate_candidates=trace_projection.duplicate_candidates,
             excluded_outside_work_set=trace_projection.outside_work_set,
+            receipts=len(receipts),
+            excluded_invalid_receipts=invalid_receipts,
         )
     finally:
         try:
