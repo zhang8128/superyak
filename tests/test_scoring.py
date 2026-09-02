@@ -117,6 +117,20 @@ def test_future_timestamp_is_treated_as_fully_recent(engram_server_env):
     assert server._recency_at(exactly_tomorrow, now) == 1.0
 
 
+def test_recall_survives_future_candidate_timestamp(engram_server_env):
+    import server
+    from tests.test_recall_margins import seed
+
+    seed(1)
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    server._storage.conn.execute("UPDATE episodes SET created_at = ?", (tomorrow,))
+    server._storage.conn.commit()
+
+    out = server.recall(query="rivers and mapping", uninvited=0)
+
+    assert out["results"]
+
+
 def test_both_recall_arms_use_the_configured_mode(
     engram_server_env, monkeypatch
 ):

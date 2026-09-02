@@ -1593,7 +1593,8 @@ def _recency_at(created_at: str | None, now: datetime) -> float:
 def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: int,
                   query: str, biased: dict[str, dict], now: datetime,
                   w_sim: float, w_rec: float, *, mode: str | None = None,
-                  cap: float | None = None) -> str | None:
+                  cap: float | None = None,
+                  lane: str | None = None) -> str | None:
     """The id recall would have ranked first without the dream/instinct bias.
 
     This is the control arm for margins.stability: same scoring, same layers,
@@ -1624,12 +1625,17 @@ def _unbiased_top(raw_embedding: list[float], layer: str | None, max_results: in
         if hydrated and "created_at" in hydrated:
             created_at = hydrated.get("created_at")
             auto_generated = hydrated.get("auto_generated")
+            candidate_lane = hydrated.get("lane") or "personal"
         else:
             row = _row_for_layer(cid, info["layer"])
             if row is None:
                 continue
             created_at = row.get("created_at")
             auto_generated = row.get("auto_generated")
+            candidate_lane = row.get("lane") or "personal"
+
+        if lane is not None and candidate_lane != lane:
+            continue
 
         score = score_candidate(
             info["similarity"],
@@ -2164,7 +2170,8 @@ def recall(
         if bias_applied and scored:
             unbiased_top = _unbiased_top(raw_embedding, layer, max_results, query,
                                          candidates, now, w_sim, w_rec,
-                                         mode=recency_mode, cap=recency_cap)
+                                         mode=recency_mode, cap=recency_cap,
+                                         lane=lane)
         margin["stability"] = margins.stability(
             scored[0]["id"] if scored else None, unbiased_top, bias_applied)
     except Exception:
