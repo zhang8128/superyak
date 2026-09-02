@@ -118,3 +118,10 @@ def test_both_recall_arms_use_the_configured_mode(
     assert out["margin"]["stability"]["checked"] is True
     assert set(seen) == {"tiebreak"}
     assert len(seen) >= 2 * 3
+
+
+def test_memory_config_default_lane_is_personal():
+    from config import MemoryConfig, _DEFAULT_TOML
+
+    assert MemoryConfig().default_lane == "personal"
+    assert 'default_lane = "personal"' in _DEFAULT_TOML

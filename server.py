@@ -1688,7 +1688,12 @@ def _ensure_indexed():
 # ---------------------------------------------------------------------------
 
 def _derive_lane(
-    work: bool, core: bool, genome: bool, context: dict | None
+    work: bool,
+    core: bool,
+    genome: bool,
+    context: dict | None,
+    *,
+    default_lane: str = "personal",
 ) -> str:
     """Derive an episode's lane from its write-time signals."""
     if work:
@@ -1698,6 +1703,8 @@ def _derive_lane(
     if context and context.get("lane") == "personal":
         return "personal"
     if context and context.get("project"):
+        return "work"
+    if default_lane == "work":
         return "work"
     return "personal"
 
@@ -1737,7 +1744,13 @@ def remember(
 
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s, work=%s)", len(content), core, source, work)
 
-    lane = _derive_lane(work, core, genome, context)
+    lane = _derive_lane(
+        work,
+        core,
+        genome,
+        context,
+        default_lane=_config.memory.default_lane if _config else "personal",
+    )
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]
 

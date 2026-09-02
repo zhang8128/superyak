@@ -59,3 +59,80 @@ def test_pure_derivation_rules():
     assert server._derive_lane(False, True, False, {"project": "x"}) == "personal"
     assert server._derive_lane(False, False, True, {"project": "x"}) == "personal"
     assert server._derive_lane(False, False, False, {"project": ""}) == "personal"
+
+
+def test_default_config_stores_personal_for_untagged_episode(engram_server_env):
+    server._init()
+    assert server._config.memory.default_lane == "personal"
+    out = server.remember(content="an untagged note in a default instance")
+    assert _lane(out["episode_id"]) == "personal"
+
+
+def test_work_default_lane_stores_work_for_untagged_episode(engram_server_env):
+    server._init()
+    server._config.memory.default_lane = "work"
+    out = server.remember(content="an untagged note in a work-only instance")
+    assert _lane(out["episode_id"]) == "work"
+    assert out["lane"] == "work"
+
+
+def test_work_default_lane_is_overridden_by_personal_context(engram_server_env):
+    server._init()
+    server._config.memory.default_lane = "work"
+    out = server.remember(
+        content="something personal written in a work instance",
+        context={"lane": "personal"},
+    )
+    assert _lane(out["episode_id"]) == "personal"
+
+
+def test_work_default_lane_never_makes_core_episode_work(engram_server_env):
+    server._init()
+    server._config.memory.default_lane = "work"
+    out = server.remember(
+        content="a formative moment recorded in a work instance", core=True
+    )
+    assert _lane(out["episode_id"]) == "personal"
+
+
+def test_pure_derivation_with_default_lane():
+    assert (
+        server._derive_lane(
+            False, False, False, None, default_lane="work"
+        )
+        == "work"
+    )
+    assert (
+        server._derive_lane(
+            False, False, False, None, default_lane="personal"
+        )
+        == "personal"
+    )
+    assert (
+        server._derive_lane(
+            False,
+            False,
+            False,
+            {"lane": "personal"},
+            default_lane="work",
+        )
+        == "personal"
+    )
+    assert (
+        server._derive_lane(False, True, False, None, default_lane="work")
+        == "personal"
+    )
+    assert (
+        server._derive_lane(False, False, True, None, default_lane="work")
+        == "personal"
+    )
+    assert (
+        server._derive_lane(
+            False,
+            False,
+            False,
+            {"project": "x"},
+            default_lane="personal",
+        )
+        == "work"
+    )
