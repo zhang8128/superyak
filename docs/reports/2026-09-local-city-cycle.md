@@ -179,3 +179,31 @@ later.
   of the specific code). Assigned to dev1 as E1y: merge main, sync the
   artifacts additively, tolerate the suffix, check the invariant before
   schema validation. The main checkout was returned to its committed state.
+- E1y accepted (`2eb010d` artifact sync at lighthouse b178460, `363ae9f`
+  fixture suffix tolerance, `1f9dab1` validation order: invariant, then
+  schema, then digest). Fast-forwarded into main; full suite 1674 passed.
+  All 16 policy parity cases pass in the committed test. Engram main is
+  `1f9dab1`; both teams are complete for the night and standing down.
+
+## Morning checklist (2026-09-02)
+
+1. Restart the MCP server (exit and reopen the Claude Code session in
+   `~/Projects/engram`). Before that, decide `[memory] recency_mode`: the
+   plan's default is `tiebreak`; the replay above shows what changes.
+   Setting `additive` in `.engram/config.toml` keeps today's behavior with
+   no code change.
+2. After the restart, add `default_lane = "work"` inside the existing
+   `[memory]` table of `~/Projects/lighthouse/.engram/config.toml` and
+   commit it there.
+3. Open one Claude session in `~/Projects/lighthouse` and work normally for
+   a while; it now writes to the `lighthouse` instance. E3's step 7b
+   re-lanes anything written before step 2.
+4. When that store holds 30 episodes, run the B0 spike against it (plan
+   Task B0, neighbor `lighthouse`). On a go, reopen E1's gate: the engram
+   team's dev1 pane is alive and its plan Tasks 7 to 10 are next.
+5. E3 and S sessions have not started; their briefs are in the
+   coordination plan.
+6. Tear down the two codex-teams when you no longer need the panes:
+   `codex-team down --task local-city-l1` in lighthouse and
+   `codex-team down --task local-city-e` in engram (branches kept).
+7. Nothing has been pushed from either repository.
