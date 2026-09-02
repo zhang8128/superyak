@@ -1,4 +1,10 @@
-import { compareCanonicalJson } from "@lighthouse/protocol";
+import {
+  compareCanonicalJson,
+  parseArtifact,
+  type RecallReceipt,
+  recallReceiptSchema,
+  verifyArtifactDigest,
+} from "@lighthouse/protocol";
 import { z } from "zod";
 
 const nonEmptyString = z.string().min(1);
@@ -49,7 +55,7 @@ const recallTraceSchema = z
 
 const engramExportSchema = z
   .object({
-    formatVersion: z.literal("1.0"),
+    formatVersion: z.enum(["1.0", "1.1"]),
     instance: nonEmptyString,
     context: z
       .object({
@@ -60,6 +66,7 @@ const engramExportSchema = z
     memories: z.array(memorySchema),
     edges: z.array(edgeSchema),
     recallTraces: z.array(recallTraceSchema),
+    receipts: z.array(recallReceiptSchema).optional(),
   })
   .strict();
 
@@ -67,7 +74,7 @@ export type EngramMemory = z.infer<typeof memorySchema>;
 export type EngramEdge = z.infer<typeof edgeSchema>;
 export type EngramRecallTrace = z.infer<typeof recallTraceSchema>;
 export type EngramExport = z.infer<typeof engramExportSchema>;
-export type EngramModel = EngramExport;
+export type EngramModel = Omit<EngramExport, "receipts"> & { receipts: RecallReceipt[] };
 
 export function contextStartsWith(parent: string[], child: string[]): boolean {
   return parent.every((segment, index) => child[index] === segment);
@@ -129,14 +136,41 @@ function validateTraces(model: EngramExport, memoryIds: Set<string>): void {
   }
 }
 
+function validateReceipts(model: EngramExport): RecallReceipt[] {
+  const receipts = model.receipts ?? [];
+  if (model.receipts !== undefined && model.formatVersion !== "1.1") {
+    fail("RECEIPTS_REQUIRE_1_1", model.formatVersion);
+  }
+  const keys = new Set<string>();
+  for (const receipt of receipts) {
+    if (!verifyArtifactDigest(parseArtifact(receipt)).ok) {
+      fail("RECEIPT_DIGEST_MISMATCH", receipt.id);
+    }
+    if (!contextStartsWith(model.context.path, receipt.payload.context.path)) {
+      fail("CONTEXT_OUTSIDE_ROOT", receipt.id);
+    }
+    const key = JSON.stringify([receipt.payload.turnId, receipt.payload.context.id]);
+    if (keys.has(key)) fail("DUPLICATE_RECEIPT", receipt.payload.turnId);
+    keys.add(key);
+  }
+  return receipts.toSorted((left, right) =>
+    compareCanonicalJson(
+      [left.payload.turnId, left.payload.context.id],
+      [right.payload.turnId, right.payload.context.id],
+    ),
+  );
+}
+
 export function parseEngramExport(input: unknown): EngramModel {
   const parsed = engramExportSchema.parse(input);
   const memoryIds = validateMemories(parsed);
   validateEdges(parsed, memoryIds);
   validateTraces(parsed, memoryIds);
+  const receipts = validateReceipts(parsed);
 
-  return {
+  const model: EngramModel = {
     ...parsed,
+    receipts,
     memories: parsed.memories.toSorted((left, right) => compareCanonicalJson(left.id, right.id)),
     edges: parsed.edges.toSorted((left, right) => compareCanonicalJson(left, right)),
     recallTraces: parsed.recallTraces
@@ -148,4 +182,13 @@ export function parseEngramExport(input: unknown): EngramModel {
         compareCanonicalJson([left.turnId, left.contextPath], [right.turnId, right.contextPath]),
       ),
   };
+  if (model.formatVersion === "1.0") {
+    Object.defineProperty(model, "receipts", {
+      value: receipts,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return model;
 }

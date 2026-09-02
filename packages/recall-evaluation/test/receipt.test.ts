@@ -1,59 +1,67 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRecallReceipt,
   parseRecallReceipt,
-  type RecallSelectionReceiptContent,
-  sealRecallReceipt,
+  type RecallReceiptBuildInput,
   verifyRecallReceiptDigest,
 } from "../src/index.js";
 
-function content(): RecallSelectionReceiptContent {
+function input(): RecallReceiptBuildInput {
   return {
-    kind: "RecallSelectionReceipt",
-    version: "0.1",
-    experimentId: "urn:experiment:receipt",
+    id: "urn:receipt:experiment:turn-1",
     issuedAt: "2026-08-30T12:00:00Z",
+    issuer: "urn:lighthouse:receiver",
+    experimentId: "urn:experiment:receipt",
     mode: "policy-scoped",
     turnId: "turn-1",
-    action: "recall",
-    injected: false,
-    purpose: "debugging",
     context: { id: "memory/debugging", path: ["memory", "debugging"] },
-    transformation: "weighted-rrf-v1",
-    selected: [],
+    purpose: "debugging",
+    receiverRuleId: null,
     sources: [],
-    decisions: [],
-    admissions: [],
+    selected: [],
+    delivered: [],
   };
 }
 
-describe("recall selection receipts", () => {
-  it("strictly seals, parses, clones, and verifies receipt content", () => {
-    const input = content();
-    const receipt = sealRecallReceipt(input);
-    input.context.path.push("mutated-after-sealing");
-
+describe("recall receipts as Lighthouse artifacts", () => {
+  it("builds a sealed RecallReceipt with experiment data in extensions", () => {
+    const receipt = buildRecallReceipt(input());
+    expect(receipt.kind).toBe("RecallReceipt");
+    expect(receipt.payload.injected).toBe(false);
+    expect(receipt.payload.action).toBe("recall");
+    expect(receipt.extensions?.["lighthouse:experiment"]).toEqual({
+      experimentId: "urn:experiment:receipt",
+      mode: "policy-scoped",
+    });
     expect(parseRecallReceipt(receipt)).toEqual(receipt);
-    expect(receipt.context.path).toEqual(["memory", "debugging"]);
     expect(verifyRecallReceiptDigest(receipt)).toEqual({ ok: true });
   });
 
-  it("rejects unknown fields and claims of active injection", () => {
-    expect(() =>
-      sealRecallReceipt({ ...content(), privateContent: "do not seal" } as never),
-    ).toThrow();
-    expect(() => sealRecallReceipt({ ...content(), injected: true } as never)).toThrow();
+  it("refuses to claim injection when nothing was delivered", () => {
+    expect(() => buildRecallReceipt({ ...input(), injected: true })).toThrow(
+      /RECEIPT_INJECTION_MISMATCH/,
+    );
   });
 
   it("distinguishes malformed receipts from digest tampering", () => {
-    const receipt = sealRecallReceipt(content());
-
+    const receipt = buildRecallReceipt(input());
     expect(verifyRecallReceiptDigest({ ...receipt, privateContent: "unexpected" })).toEqual({
       ok: false,
       code: "INVALID_RECEIPT",
     });
-    expect(verifyRecallReceiptDigest({ ...receipt, purpose: "tampered" })).toEqual({
+    expect(
+      verifyRecallReceiptDigest({
+        ...receipt,
+        payload: { ...receipt.payload, purpose: "tampered" },
+      }),
+    ).toEqual({ ok: false, code: "DIGEST_MISMATCH" });
+  });
+
+  it("rejects artifacts of another kind", () => {
+    const receipt = buildRecallReceipt(input());
+    expect(verifyRecallReceiptDigest({ ...receipt, kind: "Snapshot" })).toEqual({
       ok: false,
-      code: "DIGEST_MISMATCH",
+      code: "INVALID_RECEIPT",
     });
   });
 });

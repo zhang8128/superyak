@@ -1,136 +1,99 @@
 import {
-  contextRefSchema,
-  digestJson,
-  digestSchema,
+  type ContextRef,
+  type Digest,
   type JsonValue,
-  verifyJsonDigest,
+  type PolicyDecisionRecord,
+  parseArtifact,
+  type RecallReceipt,
+  recallReceiptSchema,
+  sealArtifact,
+  verifyArtifactDigest,
 } from "@lighthouse/protocol";
-import { z } from "zod";
-import type { RecallSelectionReceipt, RecallSelectionReceiptContent } from "./types.js";
+import type { RecallExperimentMode } from "./types.js";
 
-const nonEmptyString = z.string().min(1);
-const memoryRefSchema = z
-  .object({
-    publisher: nonEmptyString,
-    memoryId: nonEmptyString,
-  })
-  .strict();
+export interface ReceiptSourceInput {
+  publisher: string;
+  role: "local" | "remote";
+  weight: number;
+  storeDigest: { algorithm: "sha256"; value: string };
+  policyDecision: PolicyDecisionRecord;
+  traceOutcome: "matched" | "absent" | "context-mismatched" | "unavailable" | "policy-denied";
+}
 
-const rankedContributionSchema = z
-  .object({
-    ref: memoryRefSchema,
-    contentDigest: digestSchema,
-    sourceSnapshotDigest: digestSchema,
-    rank: z.number().int().positive(),
-    sourceWeight: z.number().finite().nonnegative(),
-  })
-  .strict();
+export interface ReceiptSelectedInput {
+  publisher: string;
+  memoryId: string;
+  contentDigest: { algorithm: "sha256"; value: string };
+  score: number;
+  contributions: Array<{ publisher: string; rank: number }>;
+}
 
-const fusedCandidateSchema = z
-  .object({
-    ref: memoryRefSchema,
-    contentDigest: digestSchema,
-    score: z.number().finite().nonnegative(),
-    contributions: z.array(rankedContributionSchema),
-  })
-  .strict();
+export interface ReceiptDeliveredInput {
+  publisher: string;
+  memoryId: string;
+  readDecision: PolicyDecisionRecord;
+}
 
-const sourceDecisionSchema = z.union([
-  z
-    .object({
-      publisher: nonEmptyString,
-      role: z.literal("local"),
-      allowed: z.literal(true),
-      ruleId: z.literal("local:self"),
-    })
-    .strict(),
-  z
-    .object({
-      publisher: nonEmptyString,
-      role: z.literal("remote"),
-      allowed: z.literal(true),
-      ruleId: nonEmptyString,
-    })
-    .strict(),
-  z
-    .object({
-      publisher: nonEmptyString,
-      role: z.literal("remote"),
-      allowed: z.literal(false),
-      code: z.enum(["EXPLICIT_DENY", "NO_MATCHING_ALLOW", "OUTSIDE_VALIDITY"]),
-      ruleId: nonEmptyString.optional(),
-    })
-    .strict(),
-]);
-
-const sourceAdmissionSchema = z
-  .object({
-    publisher: nonEmptyString,
-    trace: z.enum(["matched", "absent", "context-mismatch"]),
-    admission: z.enum([
-      "admitted",
-      "mode-excluded",
-      "policy-denied",
-      "zero-weight",
-      "trace-unavailable",
-    ]),
-    candidateCount: z.number().int().nonnegative(),
-  })
-  .strict();
-
-export const recallSelectionReceiptContentSchema = z
-  .object({
-    kind: z.literal("RecallSelectionReceipt"),
-    version: z.literal("0.1"),
-    experimentId: nonEmptyString,
-    issuedAt: z.iso.datetime({ offset: true }),
-    mode: z.enum(["local-only", "policy-scoped", "indiscriminate-control"]),
-    turnId: nonEmptyString,
-    action: z.literal("recall"),
-    injected: z.literal(false),
-    purpose: nonEmptyString,
-    context: contextRefSchema,
-    transformation: z.literal("weighted-rrf-v1"),
-    selected: z.array(fusedCandidateSchema),
-    sources: z.array(
-      z
-        .object({
-          publisher: nonEmptyString,
-          snapshotDigest: digestSchema,
-          weight: z.number().finite().nonnegative(),
-        })
-        .strict(),
-    ),
-    decisions: z.array(sourceDecisionSchema),
-    admissions: z.array(sourceAdmissionSchema),
-  })
-  .strict();
-
-export const recallSelectionReceiptSchema = recallSelectionReceiptContentSchema.extend({
-  digest: digestSchema,
-});
+export interface RecallReceiptBuildInput {
+  id: string;
+  issuedAt: string;
+  issuer: string;
+  experimentId?: string | undefined;
+  mode?: RecallExperimentMode | undefined;
+  turnId: string;
+  context: ContextRef;
+  purpose: string;
+  injected?: boolean | undefined;
+  receiverRuleId: string | null;
+  sources: ReceiptSourceInput[];
+  selected: ReceiptSelectedInput[];
+  delivered: ReceiptDeliveredInput[];
+}
 
 export type RecallReceiptVerification =
   | { ok: true }
   | { ok: false; code: "INVALID_RECEIPT" | "DIGEST_MISMATCH" };
 
-export function sealRecallReceipt(content: RecallSelectionReceiptContent): RecallSelectionReceipt {
-  const parsed = recallSelectionReceiptContentSchema.parse(content);
-  return {
-    ...parsed,
-    digest: digestJson(parsed as unknown as JsonValue),
-  };
+export function buildRecallReceipt(input: RecallReceiptBuildInput): RecallReceipt {
+  const extensions: { [key: string]: JsonValue } = {};
+  if (input.experimentId !== undefined && input.mode !== undefined) {
+    extensions["lighthouse:experiment"] = { experimentId: input.experimentId, mode: input.mode };
+  }
+  return sealArtifact({
+    kind: "RecallReceipt",
+    protocolVersion: "0.1",
+    id: input.id,
+    issuedAt: input.issuedAt,
+    issuer: input.issuer,
+    payloadMediaType: "application/vnd.lighthouse.recall-receipt+json",
+    ...(Object.keys(extensions).length === 0 ? {} : { extensions }),
+    payload: {
+      turnId: input.turnId,
+      context: input.context,
+      purpose: input.purpose,
+      audience: "self",
+      action: "recall",
+      injected: input.injected ?? input.delivered.length > 0,
+      transformation: "weighted-rrf-v1",
+      receiverRule: { ruleId: input.receiverRuleId },
+      sources: input.sources,
+      selected: input.selected,
+      delivered: input.delivered,
+    },
+  });
 }
 
-export function parseRecallReceipt(input: unknown): RecallSelectionReceipt {
-  return recallSelectionReceiptSchema.parse(input);
+export function parseRecallReceipt(input: unknown): RecallReceipt {
+  return recallReceiptSchema.parse(input);
 }
 
 export function verifyRecallReceiptDigest(input: unknown): RecallReceiptVerification {
-  const parsed = recallSelectionReceiptSchema.safeParse(input);
+  const parsed = recallReceiptSchema.safeParse(input);
   if (!parsed.success) return { ok: false, code: "INVALID_RECEIPT" };
-  const { digest, ...content } = parsed.data;
-  return verifyJsonDigest(content as unknown as JsonValue, digest)
-    ? { ok: true }
-    : { ok: false, code: "DIGEST_MISMATCH" };
+  const artifact = parseArtifact(parsed.data);
+  return verifyArtifactDigest(artifact).ok ? { ok: true } : { ok: false, code: "DIGEST_MISMATCH" };
+}
+
+export function receiptDigest(receipt: RecallReceipt): Digest {
+  return receipt.digest;
 }

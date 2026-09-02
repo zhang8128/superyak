@@ -34,6 +34,12 @@ async function exportFile(root: string): Promise<string> {
   return path.join(root, candidates[0] as string);
 }
 
+function portableModel(model: EngramModel): JsonValue {
+  if (model.formatVersion === "1.1") return model as unknown as JsonValue;
+  const { receipts: _receipts, ...withoutReceipts } = model;
+  return withoutReceipts as unknown as JsonValue;
+}
+
 async function projectEngram(request: ProjectionRequest): Promise<Snapshot> {
   const source = await exportFile(request.root);
   const model = parseEngramExport(JSON.parse(await readFile(source, "utf8")));
@@ -48,7 +54,7 @@ async function projectEngram(request: ProjectionRequest): Promise<Snapshot> {
       profile: ENGRAM_PROFILE,
       signature: ENGRAM_SIGNATURE,
       context: model.context,
-      model: model as unknown as JsonValue,
+      model: portableModel(model),
       lineage: [],
     },
   });
@@ -114,6 +120,9 @@ function restrictEngramSnapshot(
           .filter((candidate) => surviving.has(candidate.memoryId))
           .map((candidate, index) => ({ ...candidate, rank: index + 1 })),
       })),
+    receipts: model.receipts.filter((receipt) =>
+      contextStartsWith(context.path, receipt.payload.context.path),
+    ),
   };
   const { digest: _digest, attestations: _attestations, ...common } = snapshot;
   return {
@@ -123,7 +132,7 @@ function restrictEngramSnapshot(
       payload: {
         ...snapshot.payload,
         context,
-        model: restrictedModel as unknown as JsonValue,
+        model: portableModel(restrictedModel),
       },
     }),
   };
