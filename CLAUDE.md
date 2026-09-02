@@ -86,6 +86,8 @@ becomes core episodes, instincts, or reinforcement for personal semantics.
 Lane is set at write time (`remember(work=True)`) and correctable during
 compression review (summary `lane` override re-lanes source episodes).
 Clustering is lane-pure. Spec: docs/superpowers/specs/2026-06-12-memory-lanes-design.md.
+Config routing warns when it ignores unknown section keys or falls back after a
+parse error or missing instance store.
 
 **Sheaf cohesion:** Each semantic gets a cohesion energy in [0,1] — the
 spectral gap of its source episodes' similarity graph, computed in the
