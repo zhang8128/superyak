@@ -2138,8 +2138,13 @@ def recall(
 
     scored.sort(key=lambda x: x["score"], reverse=True)
 
-    # Tropical margin: how decided was this ranking? Measured on the full
-    # candidate set before truncation, so max_results=1 still has a real
+    # Filter before the margin and truncation so both describe the lane that
+    # the caller receives and a lane-specific recall can fill max_results.
+    if lane is not None:
+        scored = [r for r in scored if (r.get("lane") or "personal") == lane]
+
+    # Tropical margin: how decided was this ranking? Measured on the
+    # lane-filtered candidate set before truncation, so max_results=1 has a real
     # runner-up. Diagnostic only — it gates nothing, and a diagnostic must
     # never take recall down with it, so this is best-effort like the
     # uninvited, resonance, and category blocks below.
