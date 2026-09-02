@@ -33,6 +33,16 @@ def test_work_flag_still_derives_work_lane(engram_server_env):
     assert _lane(out["episode_id"]) == "work"
 
 
+def test_explicit_personal_lane_overrides_work_flag(engram_server_env):
+    out = server.remember(
+        content="personal note written during a work session",
+        context={"lane": "personal"},
+        work=True,
+    )
+    assert _lane(out["episode_id"]) == "personal"
+    assert "lane" not in out
+
+
 def test_no_signal_stays_personal(engram_server_env):
     out = server.remember(content="a quiet thought with no project attached")
     assert _lane(out["episode_id"]) == "personal"
@@ -56,6 +66,12 @@ def test_pure_derivation_rules():
         == "personal"
     )
     assert server._derive_lane(True, False, False, None) == "work"
+    assert (
+        server._derive_lane(
+            True, False, False, {"lane": "personal", "project": "x"}
+        )
+        == "personal"
+    )
     assert server._derive_lane(True, True, False, None) == "personal"
     assert server._derive_lane(True, False, True, None) == "personal"
     assert server._derive_lane(False, True, False, {"project": "x"}) == "personal"
