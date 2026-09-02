@@ -114,10 +114,13 @@ publisher's own store, restricted to `lane = "work"` and to the episode and
 semantic layers. Instincts are never published. The daemon never opens a
 store for writing and never imports the MCP server.
 
-Every allow or deny decision is logged to the publisher's own `memory_log`
-as a `lighthouse_disclosure` event carrying receiver id, context, purpose,
-action, matched rule, and the ids and digests of anything returned. Content
-is never logged.
+Every allow or deny decision is logged as a disclosure carrying receiver id,
+context, purpose, action, matched rule, and the ids and digests of anything
+returned. Content is never logged. Because the publisher's store is opened
+read-only and must stay byte-identical, disclosures are written to a sidecar
+database `lighthouse-disclosures.db` beside the store, not to the store's
+`memory_log`. The sidecar is the publisher's disclosure log for every
+purpose in this document.
 
 ### 4.3 Socket protocol
 
@@ -382,13 +385,17 @@ All of the following, in one real Claude Code session against live stores:
    through the daemon, with content delivered under `neighbors`.
 2. **Receipt.** At least one `injected: true` receipt validated by the
    Lighthouse adapter, with the matching disclosure entries in the
-   publishers' logs.
+   publishers' disclosure sidecars.
 3. **Privacy.** Forbidden exposure is zero on a receiver-labeled holdout of
-   at least 30 turns, labeled by E3 before the run. The unsafe control
-   still trips both counters.
+   at least 30 turns. The holdout queries are chosen and committed before
+   the run; the turns are labeled by E3 after retrieval has recorded its
+   receipts and before any metric is computed. The unsafe control still
+   trips both counters.
 4. **Right-turn recall.** Policy-scoped versus local-only recall at k=5 and
-   nDCG, with a bootstrap interval, preregistered before the run. Reported,
-   not gated. No threshold is claimed this cycle.
+   nDCG, with a bootstrap interval. The preregistration (holdout turn ids,
+   corpus digest, metrics, cutoff, bootstrap seed) is committed after
+   labels and before the evaluation runs. Reported, not gated. No threshold
+   is claimed this cycle.
 5. **Non-mutation.** Publisher store files are byte-identical after the
    session. Access counts, strengths, and decay in `why` and `blocks` are
    unchanged.
