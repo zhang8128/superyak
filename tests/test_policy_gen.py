@@ -53,7 +53,7 @@ def test_publisher_policy_has_receiver_rules_and_audience_map(tmp_path):
     assert art["issuer"] == "urn:engram:lighthouse"
     assert art["id"] == "urn:policy:lighthouse-publisher"
     assert [rule["publishers"] for rule in art["payload"]["rules"]] == [
-        ["urn:engram:engram"], ["urn:engram:why"], ["urn:engram:stranger"],
+        ["urn:engram:engram"], ["urn:engram:stranger"], ["urn:engram:why"],
     ]
     assert art["extensions"]["engram:audiences"] == {
         "urn:engram:engram": ["commons", "group:crossing", "group:engram-system"],
@@ -83,12 +83,19 @@ def test_built_publisher_policy_loads_and_digests(tmp_path):
     load_policy(path)  # must not raise
 
 
-def test_regeneration_is_byte_stable(tmp_path):
+def test_receiver_permutations_have_identical_digest_and_bytes(tmp_path):
     g = _groups(tmp_path)
-    kw = dict(publisher="lighthouse", receivers=["engram", "why"], groups=g,
+    kw = dict(publisher="lighthouse", groups=g,
               issued_at="2026-09-02T00:00:00Z", valid_from="2026-09-01T00:00:00Z",
               valid_until="2027-01-01T00:00:00Z")
+    first = build_publisher_policy(
+        receivers=["engram", "why", "stranger"], **kw
+    )
+    second = build_publisher_policy(
+        receivers=["stranger", "engram", "why"], **kw
+    )
+    assert first["digest"] == second["digest"]
     a, b = tmp_path / "a.json", tmp_path / "b.json"
-    write_receiver_policy(a, build_publisher_policy(**kw))
-    write_receiver_policy(b, build_publisher_policy(**kw))
+    write_receiver_policy(a, first)
+    write_receiver_policy(b, second)
     assert a.read_bytes() == b.read_bytes()

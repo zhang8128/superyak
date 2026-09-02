@@ -64,6 +64,7 @@ def build_publisher_policy(
     valid_until: str,
 ) -> dict:
     """Build and seal one publisher's grants for its receivers."""
+    ordered_receivers = sorted(receivers)
     rules = [
         {
             "id": f"allow-{receiver}-recall-read",
@@ -83,7 +84,7 @@ def build_publisher_policy(
             "requiredEvidence": [],
             "requiredAttestations": [],
         }
-        for receiver in receivers
+        for receiver in ordered_receivers
     ]
     artifact = {
         "kind": "ConnectionPolicy",
@@ -96,7 +97,7 @@ def build_publisher_policy(
         "extensions": {
             "engram:audiences": {
                 f"urn:engram:{receiver}": audiences_for_instance(groups, receiver)
-                for receiver in receivers
+                for receiver in ordered_receivers
             }
         },
     }
