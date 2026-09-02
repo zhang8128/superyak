@@ -58,6 +58,7 @@ export const artifactKindSchema = z.enum([
   "BridgeDescriptor",
   "TranslationWitness",
   "ConnectionPolicy",
+  "RecallReceipt",
 ]);
 
 const descriptorPayloadSchema = z
@@ -190,6 +191,104 @@ const connectionPolicyPayloadSchema = z
   })
   .strict();
 
+export const memoryContentDigestSchema = z
+  .object({
+    algorithm: z.literal("sha256"),
+    value: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+
+export const policyDecisionRecordSchema = z
+  .object({
+    effect: z.enum(["allow", "deny"]),
+    ruleId: nonEmptyString.nullable(),
+    code: z.enum(["NO_MATCHING_ALLOW", "EXPLICIT_DENY", "OUTSIDE_VALIDITY"]).nullable(),
+  })
+  .strict();
+
+const receiptSourceSchema = z
+  .object({
+    publisher: nonEmptyString,
+    role: z.enum(["local", "remote"]),
+    weight: z.number().finite().nonnegative(),
+    storeDigest: memoryContentDigestSchema,
+    policyDecision: policyDecisionRecordSchema,
+    traceOutcome: z.enum([
+      "matched",
+      "absent",
+      "context-mismatched",
+      "unavailable",
+      "policy-denied",
+    ]),
+  })
+  .strict();
+
+const receiptContributionSchema = z
+  .object({ publisher: nonEmptyString, rank: z.number().int().positive() })
+  .strict();
+
+const receiptSelectedSchema = z
+  .object({
+    publisher: nonEmptyString,
+    memoryId: nonEmptyString,
+    contentDigest: memoryContentDigestSchema,
+    score: z.number().finite().nonnegative(),
+    contributions: z.array(receiptContributionSchema).min(1),
+  })
+  .strict();
+
+const receiptDeliveredSchema = z
+  .object({
+    publisher: nonEmptyString,
+    memoryId: nonEmptyString,
+    readDecision: policyDecisionRecordSchema,
+  })
+  .strict();
+
+export const recallReceiptPayloadSchema = z
+  .object({
+    turnId: nonEmptyString,
+    context: contextRefSchema,
+    purpose: nonEmptyString,
+    audience: z.literal("self"),
+    action: z.literal("recall"),
+    injected: z.boolean(),
+    transformation: z.literal("weighted-rrf-v1"),
+    receiverRule: z.object({ ruleId: nonEmptyString.nullable() }).strict(),
+    sources: z.array(receiptSourceSchema),
+    selected: z.array(receiptSelectedSchema),
+    delivered: z.array(receiptDeliveredSchema),
+  })
+  .strict()
+  .superRefine((payload, context) => {
+    if (payload.injected !== payload.delivered.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message: "RECEIPT_INJECTION_MISMATCH: injected must equal delivered.length > 0",
+        path: ["injected"],
+      });
+    }
+    const selectedKeys = new Set(
+      payload.selected.map((item) => `${item.publisher} ${item.memoryId}`),
+    );
+    payload.delivered.forEach((item, index) => {
+      if (!selectedKeys.has(`${item.publisher} ${item.memoryId}`)) {
+        context.addIssue({
+          code: "custom",
+          message: `DELIVERED_NOT_SELECTED: ${item.publisher} ${item.memoryId}`,
+          path: ["delivered", index],
+        });
+      }
+      if (item.readDecision.effect !== "allow") {
+        context.addIssue({
+          code: "custom",
+          message: `DELIVERED_WITHOUT_ALLOW: ${item.publisher} ${item.memoryId}`,
+          path: ["delivered", index, "readDecision"],
+        });
+      }
+    });
+  });
+
 const commonFields = {
   protocolVersion: z.literal("0.1"),
   id: nonEmptyString,
@@ -239,6 +338,7 @@ export const connectionPolicySchema = envelopeSchema(
   "ConnectionPolicy",
   connectionPolicyPayloadSchema,
 );
+export const recallReceiptSchema = envelopeSchema("RecallReceipt", recallReceiptPayloadSchema);
 
 export const lighthouseArtifactSchema = z.discriminatedUnion("kind", [
   lighthouseDescriptorSchema,
@@ -247,6 +347,7 @@ export const lighthouseArtifactSchema = z.discriminatedUnion("kind", [
   bridgeDescriptorSchema,
   translationWitnessSchema,
   connectionPolicySchema,
+  recallReceiptSchema,
 ]);
 
 export const unsignedArtifactSchema = z.discriminatedUnion("kind", [
@@ -256,6 +357,7 @@ export const unsignedArtifactSchema = z.discriminatedUnion("kind", [
   unsignedEnvelopeSchema("BridgeDescriptor", bridgePayloadSchema),
   unsignedEnvelopeSchema("TranslationWitness", witnessPayloadSchema),
   unsignedEnvelopeSchema("ConnectionPolicy", connectionPolicyPayloadSchema),
+  unsignedEnvelopeSchema("RecallReceipt", recallReceiptPayloadSchema),
 ]);
 
 export type ProfileRef = z.infer<typeof profileRefSchema>;
@@ -270,5 +372,8 @@ export type Claim = z.infer<typeof claimSchema>;
 export type BridgeDescriptor = z.infer<typeof bridgeDescriptorSchema>;
 export type TranslationWitness = z.infer<typeof translationWitnessSchema>;
 export type ConnectionPolicy = z.infer<typeof connectionPolicySchema>;
+export type RecallReceipt = z.infer<typeof recallReceiptSchema>;
+export type RecallReceiptPayload = z.infer<typeof recallReceiptPayloadSchema>;
+export type PolicyDecisionRecord = z.infer<typeof policyDecisionRecordSchema>;
 export type LighthouseArtifact = z.infer<typeof lighthouseArtifactSchema>;
 export type UnsignedLighthouseArtifact = z.infer<typeof unsignedArtifactSchema>;
