@@ -155,8 +155,17 @@ def test_resonance_feedback_weaken(seeded):
     assert r["strength"] == pytest.approx(0.45)
 
 
-def test_resonance_end_to_end(store):
-    """Full cycle: recalls build co-occurrence, PMI forms resonance, surface, feedback."""
+def test_resonance_end_to_end(store, monkeypatch):
+    """Full cycle: recalls build co-occurrence, PMI forms resonance, surface, feedback.
+
+    `surface_resonances` is probabilistic by design: it surfaces the other side
+    of a pair only when `random.random() < weight * strength`. With the 0.99
+    weight and strength set below that is a 98% coin, so an unpatched test fails
+    roughly one run in fifty, which is what made this test intermittently red in
+    full-suite runs while passing in isolation. The draw is pinned here so the
+    test measures the surfacing logic rather than the coin; the coin itself is
+    covered by test_surfacing_respects_the_probabilistic_gate.
+    """
     import numpy as np
     from resonance import form_resonances, surface_resonances
 
@@ -198,6 +207,7 @@ def test_resonance_end_to_end(store):
     store.conn.commit()
 
     existing = {"e2e-1"}
+    monkeypatch.setattr("resonance.random.random", lambda: 0.0)
     surfaced = surface_resonances(store, [{"id": "e2e-1", "layer": "episode"}],
                                   existing, max_resonant=2)
     assert len(surfaced) >= 1
@@ -337,3 +347,20 @@ def test_pmi_no_resonance_below_threshold(store):
     # Both appear in ALL recalls, so P(a,b) = P(a)*P(b), PMI = 0
     resonances = store.get_resonances_for("n-1")
     assert len(resonances) == 0, "Expected no resonance for chance-level co-occurrence"
+
+
+def test_surfacing_respects_the_probabilistic_gate(seeded, monkeypatch):
+    """The gate is `random.random() < weight * strength`, and it really gates."""
+    from resonance import surface_resonances
+
+    seeded.add_resonance("ep-1", "episode", "ep-2", "episode", similarity=0.9, weight=0.8)
+    rid = seeded.get_resonances_for("ep-1")[0]["id"]
+    seeded.conn.execute("UPDATE resonances SET weight=0.8, strength=0.5 WHERE id=?", (rid,))
+    seeded.conn.commit()
+    top = [{"id": "ep-1", "layer": "episode"}]
+
+    monkeypatch.setattr("resonance.random.random", lambda: 0.39)   # below 0.8*0.5
+    assert len(surface_resonances(seeded, top, {"ep-1"}, max_resonant=2)) == 1
+
+    monkeypatch.setattr("resonance.random.random", lambda: 0.41)   # above 0.8*0.5
+    assert surface_resonances(seeded, top, {"ep-1"}, max_resonant=2) == []
