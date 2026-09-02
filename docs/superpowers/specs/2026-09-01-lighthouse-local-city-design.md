@@ -299,9 +299,10 @@ hold, and the tests pin it the same way.
 
 Amended 2026-09-01 after the B0 census. The local instance stores other
 than `engram` were found empty of work-lane material: `why` and `blocks`
-are identical March 2026 snapshots with zero work-lane rows, `agi`, `claw`,
-and `gil` predate the lane migration, `code` does not open, and `smart` is
-an empty directory. Unbound projects route to the default instance, so
+are identical March 2026 snapshots with zero work-lane rows, `code` is a
+third March snapshot sharing 65 of its 69 episodes with them, `agi`,
+`claw`, and `gil` predate the lane migration, and `smart` is an empty
+directory. Unbound projects route to the default instance, so
 every session since spring wrote to `engram`.
 
 Receiver: `engram`. Publisher: `lighthouse`, a new instance bound to

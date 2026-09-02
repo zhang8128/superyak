@@ -25,7 +25,7 @@ work-lane episodes, and E1's receiver arm waits for that result.
 | agi | schema predates the lane column | | | | |
 | claw | schema predates the lane column | | | | |
 | gil | schema predates the lane column | | | | |
-| code | store does not open | | | | |
+| code | 69 | 0 | 0 | | 2026-03-21 (65 of 69 shared with why; the sqlite3 CLI could not open it read-only because its WAL side files were absent, Python could) |
 | smart | empty directory | | | | |
 
 Overlap by content hash:
