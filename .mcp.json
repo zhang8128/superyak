@@ -2,7 +2,7 @@
   "mcpServers": {
     "engram": {
       "command": "uv",
-      "args": ["run", "--directory", "/Users/kairos/Projects/engram", "python", "server.py"],
+      "args": ["run", "--project", "/Users/kairos/Projects/engram", "python", "/Users/kairos/Projects/engram/server.py"],
       "env": {
         "ENGRAM_DEFAULT_INSTANCE": "engram",
         "ENGRAM_HOME": "/Users/kairos/Projects/engram",
