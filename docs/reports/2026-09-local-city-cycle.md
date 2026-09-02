@@ -157,3 +157,5 @@ later.
   server still executes the pre-merge code; the restart is the morning's
   first action, followed by re-adding `default_lane = "work"` to the
   lighthouse config, then the B0 rerun once that store has content.
+- Main after merge `927bcca`: full suite green (1673 passed, 1 skipped). Engram side is integrated
+  for the night.
