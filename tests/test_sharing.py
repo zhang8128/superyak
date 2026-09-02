@@ -1,3 +1,4 @@
+import sqlite3
 import uuid
 
 import pytest
@@ -211,3 +212,32 @@ def test_second_audience_rejects_tampered_sibling_before_insert(tmp_path):
         share(source_storage=src, published_storage=pub, source_id=eid, layer="episode",
               audience="group:crossing", reason="r", source_instance="engram")
     assert [item.audience for item in list_shares(published_storage=pub)] == ["commons"]
+
+
+def test_share_rolls_back_copy_and_vector_when_record_insert_fails(tmp_path, monkeypatch):
+    class FailingSharedInsertConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, parameters=()):
+            if sql.startswith("INSERT INTO shared_memories"):
+                raise sqlite3.OperationalError("injected shared_memories insert failure")
+            return self._connection.execute(sql, parameters)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    src, pub = _stores(tmp_path)
+    eid = str(uuid.uuid4())
+    src.add_episode(id=eid, session_id=None, content="atomic copy",
+                    episode_type="test", embedding=[0.25] * 768)
+    monkeypatch.setattr(pub, "conn", FailingSharedInsertConnection(pub.conn))
+
+    with pytest.raises(sqlite3.OperationalError, match="injected shared_memories"):
+        share(source_storage=src, published_storage=pub, source_id=eid, layer="episode",
+              audience="commons", reason="r", source_instance="engram")
+
+    assert pub.conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 0
+    assert pub.conn.execute("SELECT COUNT(*) FROM episode_vectors").fetchone()[0] == 0
+    assert pub.conn.execute("SELECT COUNT(*) FROM shared_memories").fetchone()[0] == 0
+    assert pub.conn.in_transaction is False
