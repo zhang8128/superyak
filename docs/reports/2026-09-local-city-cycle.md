@@ -45,3 +45,27 @@ Coordinator, own MCP server), spec approved 2026-08-27. Three days later the
 protocol repo chose a sibling-repository design. Kairos's decision this cycle:
 reference only; nothing merged or imported; the service can become a publisher
 later.
+
+## Overnight log (2026-09-01 late)
+
+- 20:0x The lighthouse instance binding was broken from 19:11 until
+  lighthouse commit 760b88e. Two causes in sequence: the config I appended
+  duplicated the `[memory]` table (TOML parse error), and after fixing that,
+  `default_lane` is not yet a `MemoryConfig` field, so engram's loader raised
+  on it. Either way `resolve_db_path` swallows the exception and silently
+  falls back to the default store. Consequence: the L1 team's three Codex
+  sessions woke into the `engram` store (three `session_start` rows there
+  at 19:42) and will stay bound to it for their lifetime. The `lighthouse`
+  store has zero rows. The B0 gate cannot open overnight; the receiver arm
+  waits. The binding now resolves correctly for any session started in
+  `~/Projects/lighthouse` from here on. `default_lane = "work"` returns to
+  that config once E2 lands.
+- Follow-up defect for the engram lanes (not done overnight): a project
+  config that fails to parse silently reroutes memory to a different store.
+  `resolve_db_path` should fail loudly, or at least log at WARNING with the
+  parse error, and `MemoryConfig` should ignore unknown keys with a warning
+  instead of raising.
+- L1 lead escalation, authorized narrowly: `schemas/lighthouse-descriptor.schema.json`
+  regenerated (kind enum gains RecallReceipt only) and `biome.json` gains one
+  exclusion for `fixtures/policy-conformance` so canonical fixture bytes
+  survive lint. Both added to the WP allowed list for those changes only.
