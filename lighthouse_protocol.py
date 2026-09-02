@@ -33,7 +33,13 @@ def _check_finite(value: Any) -> None:
 
 def _canonical_number(value: int | float) -> str:
     if isinstance(value, int):
-        return str(value)
+        try:
+            binary64 = float(value)
+        except OverflowError as exc:
+            raise ValueError("integer is not an exact binary64 value") from exc
+        if not math.isfinite(binary64) or int(binary64) != value:
+            raise ValueError("integer is not an exact binary64 value")
+        value = binary64
     if not math.isfinite(value):
         raise ValueError("non-finite number is not JSON")
     if value == 0:
@@ -70,23 +76,64 @@ def _canonical_number(value: int | float) -> str:
 
 
 def canonical_json(value: Any) -> str:
-    _check_finite(value)
-    encoder = json.JSONEncoder(
-        ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
-    iterencode = json.encoder._make_iterencode(
-        {},
-        encoder.default,
-        json.encoder.encode_basestring,
-        encoder.indent,
-        _canonical_number,
-        encoder.key_separator,
-        encoder.item_separator,
-        encoder.sort_keys,
-        encoder.skipkeys,
-        False,
-    )
-    return "".join(iterencode(value, 0))
+    try:
+        _check_finite(value)
+    except RecursionError as exc:
+        raise ValueError("Circular reference detected") from exc
+
+    markers: set[int] = set()
+    default = json.JSONEncoder().default
+
+    def encode(item: Any) -> str:
+        if item is None:
+            return "null"
+        if item is True:
+            return "true"
+        if item is False:
+            return "false"
+        if isinstance(item, str):
+            return json.dumps(item, ensure_ascii=False)
+        if isinstance(item, (int, float)):
+            return _canonical_number(item)
+        if isinstance(item, (list, tuple)):
+            marker = id(item)
+            if marker in markers:
+                raise ValueError("Circular reference detected")
+            markers.add(marker)
+            try:
+                return "[" + ",".join(encode(member) for member in item) + "]"
+            finally:
+                markers.remove(marker)
+        if isinstance(item, dict):
+            marker = id(item)
+            if marker in markers:
+                raise ValueError("Circular reference detected")
+            markers.add(marker)
+            try:
+                members = []
+                for key, member in sorted(item.items()):
+                    if isinstance(key, str):
+                        encoded_key = json.dumps(key, ensure_ascii=False)
+                    elif key is True:
+                        encoded_key = '"true"'
+                    elif key is False:
+                        encoded_key = '"false"'
+                    elif key is None:
+                        encoded_key = '"null"'
+                    elif isinstance(key, (int, float)):
+                        encoded_key = json.dumps(_canonical_number(key))
+                    else:
+                        raise TypeError(
+                            "keys must be str, int, float, bool or None, "
+                            f"not {type(key).__name__}"
+                        )
+                    members.append(encoded_key + ":" + encode(member))
+                return "{" + ",".join(members) + "}"
+            finally:
+                markers.remove(marker)
+        return default(item)
+
+    return encode(value)
 
 
 def artifact_digest(artifact: dict) -> dict:
