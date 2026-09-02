@@ -1,0 +1,16 @@
+{
+  "policy": "local-city",
+  "request": {
+    "publisher": "urn:lighthouse:claw",
+    "profile": "urn:lighthouse:profile:engram-recall-trace",
+    "domain": "memory.recall",
+    "action": "read",
+    "context": "memory/technical",
+    "claimMediaType": "application/vnd.engram.recall-rank-claim+json",
+    "purpose": "session-recall",
+    "audience": "self",
+    "at": "2026-09-15T00:00:00Z",
+    "evidence": [],
+    "attestations": []
+  }
+}

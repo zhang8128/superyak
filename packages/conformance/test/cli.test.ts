@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { canonicalize, compareCanonicalJson } from "@lighthouse/protocol";
 import { describe, expect, it } from "vitest";
 import { type CliIo, runCli } from "../src/cli.js";
 
@@ -72,5 +73,25 @@ describe("Lighthouse CLI", () => {
       code: "EXPLICIT_DENY",
       ruleId: "deny-crew-context-injection",
     });
+  });
+
+  it("writes decision fixtures byte-identical to what authorize prints", async () => {
+    const root = path.resolve(import.meta.dirname, "../../../fixtures/policy-conformance");
+    const policyFile = path.join(root, "policies", "local-city.json");
+    const scratch = await mkdtemp(path.join(os.tmpdir(), "lighthouse-authorize-parity-"));
+    const requests = (await readdir(path.join(root, "requests"))).sort(compareCanonicalJson);
+    expect(requests).toHaveLength(14);
+    for (const file of requests) {
+      const document = JSON.parse(await readFile(path.join(root, "requests", file), "utf8"));
+      const requestFile = path.join(scratch, file);
+      await writeFile(requestFile, JSON.stringify(document.request));
+      const out: string[] = [];
+      await runCli(["authorize", policyFile, requestFile], {
+        stdout: (text) => out.push(text),
+        stderr: () => undefined,
+      });
+      const { decision } = JSON.parse(await readFile(path.join(root, "decisions", file), "utf8"));
+      expect(out.join("")).toBe(`${canonicalize(decision)}\n`);
+    }
   });
 });
