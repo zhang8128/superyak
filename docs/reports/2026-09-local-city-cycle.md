@@ -444,3 +444,22 @@ in-flight extraction took 0.03 s, 0.02 s, 0.01 s; the feed landed 11
 entities and 9 relationships after 248 s with the test suite running
 beside it; search then returned 5 facts; close was clean. Six tests in
 `tests/test_knowledge.py`.
+
+## Cleanup (2026-09-02 afternoon)
+
+Kairos: a remote is coming soon; clean up here. Both team STATE files
+preserved as `docs/reports/2026-09-local-city-team-state-e.md` (engram
+485d4fb) and `docs/reports/2026-09-local-city-team-state-l1.md`
+(lighthouse 0a9f615), then `codex-team down --purge-branches` for both
+teams: tmux sessions gone, worktrees removed, the six team branches
+deleted (every one was merged into its main), pre-push hooks removed,
+collab dirs inactive. Kept on purpose: the publisher daemon on
+`.engram/lighthouse.sock`, the lighthouse store (29 genome episodes, 8
+semantics, no work-lane rows yet), engram's older `.worktrees/`, and the
+August `ct-smoke-live` collab directory. Engram main 29ec3a9 (full suite
+1704 passed) plus the two docs commits; lighthouse main 0a9f615. Nothing
+pushed; no remote exists yet. The MCP server in the integrator session
+still runs the pre-morning code until restarted. Next: a session in
+`~/Projects/lighthouse` (it now binds correctly) until the store holds 30
+work-lane episodes, then B0, then a fresh engram team for the receiver
+arm with role briefs that carry the memory practice.
