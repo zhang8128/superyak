@@ -127,3 +127,28 @@ later.
   two exclusion lines. E: dev1 at 9 commits including the E1x routing
   warnings (`6192700`); dev2 at 17 commits; the lead found and assigned a
   lane-precedence fix (explicit personal beats work signals, per contracts).
+- Engram integration: both lanes accepted by reciprocal review (E1+E1x at
+  `5d9a9d4`, E2 at `4aa6483`). Merged by the integrator in the team's
+  integration worktree: dev1 fast-forward, dev2 as merge `a034f2a`, no
+  conflicts (pyproject py-modules and CLAUDE.md merged as separate hunks).
+  Full suite running on the integration branch.
+- **Decision point for the morning (not taken overnight).** E2's replay
+  report (`docs/reports/2026-09-margins-replay.md`, 200 historical recalls)
+  measures the recency change the plan specified as the default:
+
+  | Mode | Near-tie rate | Winner under 7d | Winner under 1d |
+  |---|---|---|---|
+  | additive (today) | 0.30 | 90.5% | 83.5% |
+  | tiebreak (new default) | 0.66 | 73.5% | 61.0% |
+
+  118 of 200 winners change. Recency dominance drops as intended, but the
+  near-tie rate doubles because the 0.02 near-tie threshold was calibrated
+  against additive scores; the margin instrument needs recalibration under
+  tiebreak. The code ships both modes behind `[memory] recency_mode`; the
+  live effect begins only at the MCP restart, which is yours. Options: restart
+  on the plan's default (tiebreak) and let E3 re-measure live, or set
+  `recency_mode = "additive"` in `.engram/config.toml` first and flip later.
+  No code change is needed either way.
+- Do not re-add `default_lane = "work"` to the lighthouse config until the
+  MCP server has been restarted on the merged code: the running server's
+  loader still raises on the unknown key and reroutes the binding.
