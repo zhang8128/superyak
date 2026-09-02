@@ -161,7 +161,7 @@ os.environ["ENGRAM_PROJECT_ROOT"] = os.environ["TEST_ENGRAM_HOME"]
 os.environ["ENGRAM_HARNESS"] = "codex"
 import server
 server._init()
-assert len(server.mcp._tool_manager.list_tools()) == 40
+assert len(server.mcp._tool_manager.list_tools()) == 43
 assert server.status()["layers"]["episodes"] == 0
 print("installed-wheel-startup-ok")
 """
