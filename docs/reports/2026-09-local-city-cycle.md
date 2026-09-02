@@ -108,3 +108,16 @@ later.
   told to batch. The guard's 8-per-30-minutes default is a constant in
   codex-team's server.py; raising it for future teams and making it
   env-configurable is the next launcher change.
+- E1 pre-gate complete: seven commits on team/local-city-e/dev1 (read-only
+  Storage, canonical JSON and digests, policy evaluator with kit parity
+  fixtures, socket frames, publisher daemon, receipts with strict schema,
+  exporter 1.1). Full suite 1528 passed, 1 failed on the packaging lock
+  check because the plan's `jsonschema>=4.23` direct dependency needs a
+  uv.lock refresh. Decisions given to the lead: uv.lock refresh authorized
+  on dev1's branch (its own commit, diff limited to jsonschema); the B0 gate
+  stays closed tonight; dev1 gets one narrow extra WP, E1x, for the routing
+  defect found tonight (load_config tolerates unknown keys with a WARNING,
+  resolve_db_path logs its fallback instead of failing silently), limited
+  to config.py's load_config/resolve_db_path and a new test file so it does
+  not touch E2's MemoryConfig. This is an integrator decision outside the
+  approved spec's lane scope; it is small, tested, and reversible.
