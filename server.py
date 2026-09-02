@@ -2071,19 +2071,7 @@ def recall(
             info["implication"] = inst.get("implication")
             info["source_semantic_ids"] = inst.get("source_semantic_ids", [])
 
-        # Compute recency
-        if created_at:
-            try:
-                dt = datetime.fromisoformat(created_at)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                days = (now - dt).total_seconds() / 86400
-            except (TypeError, ValueError):
-                days = 0.0
-        else:
-            days = 0.0
-
-        recency = 1.0 / (1.0 + days)
+        recency = _recency_at(created_at, now)
         score = score_candidate(
             info["similarity"],
             recency,

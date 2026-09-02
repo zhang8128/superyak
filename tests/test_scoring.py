@@ -117,18 +117,38 @@ def test_future_timestamp_is_treated_as_fully_recent(engram_server_env):
     assert server._recency_at(exactly_tomorrow, now) == 1.0
 
 
-def test_recall_survives_future_candidate_timestamp(engram_server_env):
+@pytest.mark.parametrize("days_ahead", [1, 2])
+def test_recall_treats_future_candidate_as_fully_recent(
+    engram_server_env, monkeypatch, days_ahead
+):
     import server
     from tests.test_recall_margins import seed
 
     seed(1)
-    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    server._storage.conn.execute("UPDATE episodes SET created_at = ?", (tomorrow,))
+    fixed_now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+    future = (fixed_now + timedelta(days=days_ahead)).isoformat()
+    server._storage.conn.execute("UPDATE episodes SET created_at = ?", (future,))
     server._storage.conn.commit()
+    monkeypatch.setattr(server, "datetime", FixedDateTime)
+    seen_recency = []
+    real_score = server.score_candidate
+
+    def record_recency(similarity, recency, auto_generated, **kwargs):
+        seen_recency.append(recency)
+        return real_score(similarity, recency, auto_generated, **kwargs)
+
+    monkeypatch.setattr(server, "score_candidate", record_recency)
 
     out = server.recall(query="rivers and mapping", uninvited=0)
 
     assert out["results"]
+    assert seen_recency == [1.0]
 
 
 def test_both_recall_arms_use_the_configured_mode(
