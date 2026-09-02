@@ -136,6 +136,37 @@ def test_canonical_json_uses_ecmascript_number_spelling(value, expected):
     assert canonical_json(value) == expected
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (10**20, "100000000000000000000"),
+        (10**21, "1e+21"),
+        (-(10**21), "-1e+21"),
+        (2**53, "9007199254740992"),
+        (2**68, "295147905179352830000"),
+        (10**21 + 131072, "1.0000000000000001e+21"),
+    ],
+)
+def test_canonical_json_uses_ecmascript_spelling_for_exact_integers(
+    value, expected
+):
+    assert canonical_json({"value": value}) == f'{{"value":{expected}}}'
+
+
+def test_canonical_json_rejects_integer_outside_binary64_precision():
+    with pytest.raises(ValueError, match="exact binary64"):
+        canonical_json(2**53 + 1)
+
+
+def test_canonical_json_preserves_container_and_type_errors():
+    circular = []
+    circular.append(circular)
+    with pytest.raises(ValueError, match="Circular reference detected"):
+        canonical_json(circular)
+    with pytest.raises(TypeError):
+        canonical_json(object())
+
+
 def test_canonical_json_rejects_non_finite():
     with pytest.raises(ValueError):
         canonical_json({"x": float("inf")})
