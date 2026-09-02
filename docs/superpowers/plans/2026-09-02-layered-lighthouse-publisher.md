@@ -18,8 +18,9 @@
 - Never write to `.engram/instances/*/graph.db` or `.engram/genome/graph.db` from a test. Tests build their own stores in `tmp_path`.
 - The daemon's four safety properties are invariants, not features: deny by default, policy evaluated before retrieval, read-only store access, every disclosure logged. A test that weakens any of them is a stop-and-report.
 - Audience vocabulary is closed: `commons`, or `group:<name>` where `<name>` matches `[a-z][a-z0-9-]{0,63}`. Anything else fails closed.
-- The policy extension key for audiences is exactly `engram:audiences`, a list of audience strings, on the policy artifact's `extensions` object.
+- The policy extension key for audiences is exactly `engram:audiences` on the policy artifact's `extensions` object, and its value is a MAP from a receiver's urn (`urn:engram:<instance>`) to that receiver's sorted audience list. It lives on the PUBLISHER-held artifact, because that is the policy the daemon evaluates and because a grant must not sit in a file the receiver owns.
 - `server.py` is a shared file. dev1 lands its two tool registrations first; dev2 rebases across them.
+- dev2 additionally owns `tests/test_lighthouse_daemon.py`: its content tests encode the work-lane rule this plan retires and must be re-expressed as shares. Every test of the four safety properties survives unchanged.
 - Commit after every green test. Never push.
 
 ---
@@ -30,7 +31,7 @@
 |---|---|
 | `migrations/027_shared_memories.sql` | the `shared_memories` table in the published house |
 | `sharing.py` | share record, `share`, `unshare`, `list_shares`, audience validation |
-| `policy_gen.py` | `.engram/groups.toml` to a receiver policy artifact |
+| `policy_gen.py` | `.engram/groups.toml` to the publisher-held policy artifact |
 | `lighthouse_daemon.py` | audience filter replaces the work-lane filter |
 | `server.py` | `share` and `unshare` MCP tools |
 | `tests/test_sharing.py`, `tests/test_policy_gen.py`, `tests/test_daemon_audiences.py` | one per module |

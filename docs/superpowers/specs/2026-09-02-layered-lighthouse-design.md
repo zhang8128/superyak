@@ -71,11 +71,26 @@ A repo may belong to several groups. Membership is proposed above and must be
 confirmed by the human before generation; the mechanism is the deliverable, the
 membership is the human's knowledge.
 
-Enforcement stays where it already is. A receiver's policy artifact names the
-publisher it may read and, in `extensions["engram:audiences"]`, the audiences it
-may see: `commons` plus one entry per group it belongs to. The daemon filters
-retrieved rows by the audiences the evaluated policy allows. A receiver with no
-policy sees nothing, unchanged.
+Enforcement stays where it already is, in the policy the daemon actually
+evaluates, which is the **publisher's**. The daemon builds its request from the
+receiver named in the frame and asks the publisher's own policy to decide
+(`lighthouse_daemon.py`: `publisher=f"urn:engram:{frame['receiver']}"`, then
+`publisher.policy.decide(...)`). A rule's `publishers` list therefore names the
+receivers allowed to read, despite its name.
+
+So the generated artifact is the publisher-held policy for the `lighthouse`
+instance: one allow rule per receiver instance, plus a top-level
+`extensions["engram:audiences"]` mapping each receiver's urn to the sorted
+audiences it may see, `commons` plus one entry per group it belongs to. The
+daemon reads that map from the policy artifact alongside the decision and
+filters retrieved rows to the intersection.
+
+**This placement is the security property, not a detail.** An earlier draft of
+this design put the audience grant in a policy artifact held by the receiver.
+That artifact is a file the receiving session owns, so any session could have
+widened its own access by editing it, and the daemon would never have read it
+anyway. Grants live with the publisher. A receiver with no rule sees nothing,
+unchanged.
 
 ## The reach, and when it widens
 
