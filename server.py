@@ -8,6 +8,7 @@ import os
 import sqlite3
 import threading
 from contextlib import contextmanager
+from dataclasses import asdict
 import uuid
 from functools import wraps
 from datetime import datetime, timezone
@@ -25,6 +26,8 @@ from resonance import (
     surface_resonances as _surface_resonances,
 )
 from scoring import score_candidate
+from sharing import (list_shares as _list_shares, share as _share_memory,
+                     unshare as _unshare_memory)
 from storage import vec0_distance_to_similarity, _pack_embedding
 from transitions import TransitionGraph
 
@@ -1899,6 +1902,91 @@ def remember(
             logger.warning("Auto-compress failed", exc_info=True)
 
     return result
+
+
+@contextmanager
+def _published_house_storage():
+    """Open the configured published house without ever creating it."""
+    path = ENGRAM_HOME / ".engram" / "instances" / "lighthouse" / "graph.db"
+    if not path.is_file():
+        yield path, None
+        return
+
+    from storage import Storage
+    store = Storage(str(path))
+    try:
+        yield path, store
+    finally:
+        store.close()
+
+
+@_server_tool()
+@_mutation_logged
+def share(
+    memory_id: str,
+    audience: str,
+    reason: str,
+    layer: str = "episode",
+) -> dict:
+    """Copy a local episode or semantic into the published house."""
+    _init()
+    logger.info(
+        "Tool called: share(memory_id=%s, audience=%s, layer=%s)",
+        memory_id,
+        audience,
+        layer,
+    )
+    with _published_house_storage() as (path, published_storage):
+        if published_storage is None:
+            return {"error": f"no published house at {path}"}
+        try:
+            record = _share_memory(
+                source_storage=_storage,
+                published_storage=published_storage,
+                source_id=memory_id,
+                layer=layer,
+                audience=audience,
+                reason=reason,
+                source_instance=_instance_name or "default",
+            )
+        except (TypeError, ValueError) as exc:
+            return {"error": str(exc)}
+        return asdict(record)
+
+
+@_server_tool()
+@_mutation_logged
+def unshare(share_id: str) -> dict:
+    """Withdraw one share from the published house."""
+    _init()
+    logger.info("Tool called: unshare(share_id=%s)", share_id)
+    with _published_house_storage() as (path, published_storage):
+        if published_storage is None:
+            return {"error": f"no published house at {path}"}
+        return {
+            "removed": _unshare_memory(
+                published_storage=published_storage,
+                share_id=share_id,
+            )
+        }
+
+
+@_server_tool()
+def shares(audience: str | None = None) -> dict:
+    """List valid shares, optionally restricted to one audience."""
+    _init()
+    logger.info("Tool called: shares(audience=%s)", audience)
+    with _published_house_storage() as (path, published_storage):
+        if published_storage is None:
+            return {"error": f"no published house at {path}"}
+        try:
+            records = _list_shares(
+                published_storage=published_storage,
+                audience=audience,
+            )
+        except (TypeError, ValueError) as exc:
+            return {"error": str(exc)}
+        return {"shares": [asdict(record) for record in records]}
 
 
 def _get_reading_gap_domains() -> list[str]:

@@ -73,6 +73,7 @@ py-modules = [
     "scoring",
     "server",
     "session_bindings",
+    "sharing",
     "sheaf",
     "storage",
     "transitions",
