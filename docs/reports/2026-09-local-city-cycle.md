@@ -405,3 +405,18 @@ merged; the knowledge-graph index failure is a bug to fix.
   discipline and the per-episode cost are the next two items, and
   `compress_commit` will take minutes per cluster until feeds leave the
   tool call.
+
+**E1p, closed.** dev1 implemented at eb0e1c5 (red 9164fa7, fix); dev2's
+challenge found the defect the reviewer note pointed at: on Python 3.13
+the private `_make_iterencode` routes ints past the new helper, so exact
+binary64 integers at 1e21 and above still diverged from ECMAScript, and
+the private dependency itself. Bounded fix at f59518d (red 133206c):
+exact binary64 integers get ECMAScript spelling, non-exact integers are
+rejected, the encoder is a public-API walk. Re-review READY with no
+findings; dev1 full suite 1696 passed (5m47s on a quiet machine; the
+earlier "stall" was my two concurrent suites plus the 27B probe). Merged
+into local main as e19e915 (main had moved to d8107b8; disjoint files).
+On merged main: targeted 120 passed, and the original reproduction
+(receiver policy sealed with the weight written as `1.0`) canonicalizes
+to `1` and validates with the kit at digest `491bde6e…`. Nothing pushed.
+The engram team stood down again; the L1 team is idle at 5577a2d.
