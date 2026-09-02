@@ -1687,6 +1687,21 @@ def _ensure_indexed():
 # Core Memory Tools (Task 8)
 # ---------------------------------------------------------------------------
 
+def _derive_lane(
+    work: bool, core: bool, genome: bool, context: dict | None
+) -> str:
+    """Derive an episode's lane from its write-time signals."""
+    if work:
+        return "work"
+    if core or genome:
+        return "personal"
+    if context and context.get("lane") == "personal":
+        return "personal"
+    if context and context.get("project"):
+        return "work"
+    return "personal"
+
+
 @_server_tool()
 @_mutation_logged
 def remember(
@@ -1722,6 +1737,7 @@ def remember(
 
     logger.info("Tool called: remember(content_len=%d, core=%s, source=%s, work=%s)", len(content), core, source, work)
 
+    lane = _derive_lane(work, core, genome, context)
     episode_id = str(uuid.uuid4())
     embedding = _embeddings.embed([content], prefix="search_document")[0]
 
@@ -1731,7 +1747,7 @@ def remember(
         content=content,
         embedding=embedding,
         context=context,
-        lane="work" if work else "personal",
+        lane=lane,
     )
 
     if genome:
@@ -1772,7 +1788,7 @@ def remember(
 
     _session_episode_count += 1
     result = {"episode_id": episode_id, "layer": "episode"}
-    if work:
+    if lane == "work":
         result["lane"] = "work"
 
     # Auto-compress when threshold reached
