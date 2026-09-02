@@ -32,9 +32,9 @@
 - **Allowed files:** `storage.py` (only: `ReadOnlyStorageError`, `open_read_only`, the `read_only` flag, guards in `_commit`, `transaction`, `close`), `lighthouse_policy.py`, `lighthouse_protocol.py`, `lighthouse_daemon.py`, `lighthouse_receipts.py`, `neighbors.py`, `lighthouse_label.py`, `lighthouse_export.py`, `schemas/lighthouse/recall-receipt.schema.json`, `tests/fixtures/lighthouse/policy/**`, `tests/test_storage_readonly.py`, `tests/test_lighthouse_policy.py`, `tests/test_lighthouse_protocol.py`, `tests/test_lighthouse_daemon.py`, `tests/test_lighthouse_receipts.py`, `tests/test_neighbors.py`, `tests/test_recall_neighbors.py`, `tests/test_lighthouse_export.py`, `tests/test_lighthouse_label.py`, `pyproject.toml` (dependency and `py-modules` additions only), `CLAUDE.md`, and in `server.py` only the block between `results = _observe_category_recall(query, results, recall_id)` and `return response` inside `recall()`.
 - **Forbidden files (the seam):** `recall()`'s scoring loop and `_vector_candidates`, the margin block, the lane filter, `remember()`, `dream_verify()`, `hooks/sleep.py`, `config.py`, `margins.py`, `reflection.py`.
 - **Acceptance criteria:**
-  1. `.venv/bin/python -m pytest tests/test_storage_readonly.py -q` passes; the test asserts `conn.total_changes == 0` and an unchanged file sha256 across a vector retrieval.
+  1. `.venv/bin/python -m pytest tests/test_storage_readonly.py -q` passes; the test asserts `conn.total_changes == 0` and an unchanged sha256 of `graph.db` only (WAL `-wal`/`-shm` side files are excluded) across a vector retrieval, and opens a WAL store whose side files were deleted after the writer closed.
   2. `.venv/bin/python -m pytest tests/test_lighthouse_policy.py -q` passes, including the vendored-fixture parity test and the digest test that reproduces `f12270e190c2961e56e0cc793dfe43199611d406fbedaa22e971156de33d8a3f` for the vendored policy.
-  3. `.venv/bin/python -m pytest tests/test_lighthouse_daemon.py -q` passes: policy before retrieval, work lane only, no instincts, disclosure sidecar written, unavailable store answers `PUBLISHER_UNAVAILABLE`, `graph.db` sha256 unchanged after serving.
+  3. `.venv/bin/python -m pytest tests/test_lighthouse_daemon.py -q` passes: policy before retrieval, work lane only, no instincts, disclosure sidecar written, unavailable store answers `PUBLISHER_UNAVAILABLE` (absent file, any `sqlite3.OperationalError` on open, or a pre-migration store whose `episodes` table lacks `lane`), `graph.db` sha256 unchanged after serving.
   4. `.venv/bin/python -m pytest tests/test_neighbors.py tests/test_recall_neighbors.py -q` passes: `neighbors` key present only when a receiver policy applies, never merged into `results`, daemon down leaves the recall response byte-identical apart from `degraded`, margin unaffected, receipt written with `injected == (len(delivered) > 0)`.
   5. `.venv/bin/python -m pytest tests/test_lighthouse_export.py -q` passes with `formatVersion == "1.1"` and a `receipts` section that carries no content or query text.
   6. `.venv/bin/python -m pytest tests/ -q` is green.
@@ -105,6 +105,9 @@ def sha(path: Path) -> str:
 
 
 def test_open_read_only_serves_vector_search_without_changes(tmp_path):
+    """Hashes graph.db only. Live stores are WAL mode, and a read-only
+    connection may create or change the -wal and -shm side files; those are
+    not the store and are excluded from the digest."""
     db = tmp_path / "graph.db"
     build_store(db)
     before = sha(db)
@@ -135,6 +138,24 @@ def test_open_read_only_refuses_mutation(tmp_path):
 def test_open_read_only_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         Storage.open_read_only(tmp_path / "absent.db")
+
+
+def test_open_read_only_works_when_wal_side_files_are_absent(tmp_path):
+    """Every instance store is WAL mode. After the writer closes, the -wal and
+    -shm side files may be gone. Python's sqlite3 module (library 3.49.1)
+    opens such a store with mode=ro and reads it; the sqlite3 CLI (3.51)
+    fails here with "unable to open database file (14)", which is a CLI
+    limitation, not a store problem. Verified on the live stores 2026-09-01."""
+    db = tmp_path / "graph.db"
+    build_store(db)
+    for suffix in ("-wal", "-shm"):
+        Path(str(db) + suffix).unlink(missing_ok=True)
+
+    ro = Storage.open_read_only(db)
+    assert ro.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert ro.conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 2
+    assert len(ro.search_vectors("episode", unit(1), k=2)) == 2
+    ro.close()
 
 
 def test_normal_storage_is_not_read_only(tmp_path):
@@ -170,6 +191,12 @@ Add the classmethod after `_restore_pragmas`:
         engine; the ``read_only`` flag makes ``transaction``/``_commit``
         refuse at the API. No migrations, no health rebuild, no WAL
         checkpoint on close: the file's bytes are never touched.
+
+        Never ``immutable=1``: a live session in the publisher's repository
+        is a legitimate concurrent writer, and ``immutable`` would read
+        inconsistent pages. ``mode=ro`` on a WAL store is safe and, from
+        Python's sqlite3 module, opens even when the -wal/-shm side files
+        are absent (verified on the live stores 2026-09-01).
         """
         path = Path(db_path)
         if not path.is_file():
@@ -177,8 +204,9 @@ Add the classmethod after `_restore_pragmas`:
         self = cls.__new__(cls)
         self.db_path = str(path)
         self._check_same_thread = False
+        # mode=ro only. Do not add immutable=1 (see docstring).
         self.conn = sqlite3.connect(
-            f"{path.resolve().as_uri()}?mode=ro", uri=True, check_same_thread=False
+            f"file:{path.resolve()}?mode=ro", uri=True, check_same_thread=False
         )
         self._conn_closed = False
         self.conn.row_factory = sqlite3.Row
@@ -221,7 +249,7 @@ At the top of `close`, before the cold-connection block:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_storage_readonly.py -q`
-Expected: 4 passed
+Expected: 5 passed
 
 - [ ] **Step 5: Commit**
 
@@ -1070,6 +1098,39 @@ def test_socket_round_trip_leaves_store_unchanged(tmp_path):
     assert hashlib.sha256(pub.db_path.read_bytes()).hexdigest() == before
 
 
+def test_operational_error_on_open_is_publisher_unavailable(tmp_path, monkeypatch):
+    pub = build_publisher(tmp_path)
+
+    def refuse(cls, path):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(Storage, "open_read_only", classmethod(refuse))
+    daemon = PublisherDaemon({"why": pub}, tmp_path / "s.sock", FakeEmbeddings())
+    out = daemon.handle_frame(recall_frame(receiver="engram", publisher="why", context=CONTEXT,
+                                           purpose="session-recall", query="x", k=1, at=NOW))
+    assert out["kind"] == "error" and out["code"] == "PUBLISHER_UNAVAILABLE"
+    assert pub.storage is None
+
+
+def test_pre_migration_store_without_lane_column_is_unavailable(tmp_path):
+    """agi, claw, and gil predate the lane migration: no lane column, nothing publishable."""
+    inst = tmp_path / ".engram" / "instances" / "agi"
+    inst.mkdir(parents=True)
+    conn = sqlite3.connect(inst / "graph.db")
+    conn.execute("CREATE TABLE episodes (id TEXT PRIMARY KEY, content TEXT)")
+    conn.commit()
+    conn.close()
+    write_policy(inst / "lighthouse-policy.json")
+    pub = PublisherStore(name="agi", db_path=inst / "graph.db",
+                         policy_path=inst / "lighthouse-policy.json",
+                         disclosures_path=inst / "lighthouse-disclosures.db")
+    daemon = PublisherDaemon({"agi": pub}, tmp_path / "s.sock", FakeEmbeddings())
+    out = daemon.handle_frame(recall_frame(receiver="engram", publisher="agi", context=CONTEXT,
+                                           purpose="session-recall", query="x", k=1, at=NOW))
+    assert out["kind"] == "error" and out["code"] == "PUBLISHER_UNAVAILABLE"
+    assert pub.storage is None
+
+
 def test_daemon_never_imports_server():
     import lighthouse_daemon
     source = Path(lighthouse_daemon.__file__).read_text()
@@ -1163,10 +1224,25 @@ class PublisherStore:
                 return True
             try:
                 self.policy = load_policy(self.policy_path)
+                # mode=ro only, never immutable=1: a live session in the
+                # publisher's repository is a legitimate concurrent writer.
                 self.storage = Storage.open_read_only(self.db_path)
+                columns = {row[1] for row in self.storage.conn.execute("PRAGMA table_info(episodes)")}
+                if "lane" not in columns:
+                    # Pre-migration instances (agi, claw, gil) have no lane
+                    # boundary and therefore nothing publishable.
+                    raise sqlite3.OperationalError("episodes.lane missing (pre-migration store)")
             except (PolicyError, FileNotFoundError, sqlite3.Error) as error:
+                # Any OperationalError on open (locked, unreadable, absent
+                # side files on a CLI-style open, etc.) is PUBLISHER_UNAVAILABLE.
                 logger.warning("publisher %s unavailable: %s", self.name, error)
+                if self.storage is not None:
+                    try:
+                        self.storage.close()
+                    except Exception:
+                        pass
                 self.storage = None
+                self.policy = None
                 return False
             return True
 
@@ -1378,7 +1454,7 @@ Note: `vec0_distance_to_similarity` is imported from `storage` (it lives at `sto
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_lighthouse_daemon.py -q`
-Expected: 8 passed
+Expected: 10 passed
 
 - [ ] **Step 5: Register and commit**
 
