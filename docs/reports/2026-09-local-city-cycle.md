@@ -152,3 +152,8 @@ later.
 - Do not re-add `default_lane = "work"` to the lighthouse config until the
   MCP server has been restarted on the merged code: the running server's
   loader still raises on the unknown key and reroutes the binding.
+- Engram integration branch: full suite 1673 passed, 1 skipped. Merged into
+  local main as `927bcca` (E1 through E1x, E2). Not pushed. The running MCP
+  server still executes the pre-merge code; the restart is the morning's
+  first action, followed by re-adding `default_lane = "work"` to the
+  lighthouse config, then the B0 rerun once that store has content.
