@@ -53,6 +53,7 @@ py-modules = [
     "graphiti_local",
     "indexer",
     "knowledge",
+    "lighthouse_daemon",
     "lighthouse_export",
     "lighthouse_policy",
     "lighthouse_protocol",
