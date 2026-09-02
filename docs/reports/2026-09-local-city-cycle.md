@@ -100,3 +100,11 @@ later.
   blocked commit from its relaunched pane (`011624d feat: add read-only
   Storage open path for publishers` on team/local-city-e/dev1). No git
   denials in any dev pane since the relaunch.
+- Lighthouse team: dev1 committed Task 1 (`da8afa9` RecallReceipt artifact
+  kind), dev2 committed Task 7 (`7e24d29` policy conformance fixtures);
+  lead started cross challenge reviews. The dev1/lead pair tripped the loop
+  guard a second time on legitimate traffic (16 and 15 messages per pair in
+  30 minutes during the relaunch and review cadence); reset again, leads
+  told to batch. The guard's 8-per-30-minutes default is a constant in
+  codex-team's server.py; raising it for future teams and making it
+  env-configurable is the next launcher change.
