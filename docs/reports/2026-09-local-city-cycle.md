@@ -121,3 +121,9 @@ later.
   to config.py's load_config/resolve_db_path and a new test file so it does
   not touch E2's MemoryConfig. This is an integrator decision outside the
   approved spec's lane scope; it is small, tested, and reversible.
+- L1: Task 5 committed (`cad10ff`); Task 6 escalated one more Biome
+  exclusion, `!!fixtures/engram/receipts`, so canonical receipt fixture bytes
+  survive lint. Authorized on the same terms; biome.json diff is now exactly
+  two exclusion lines. E: dev1 at 9 commits including the E1x routing
+  warnings (`6192700`); dev2 at 17 commits; the lead found and assigned a
+  lane-precedence fix (explicit personal beats work signals, per contracts).
