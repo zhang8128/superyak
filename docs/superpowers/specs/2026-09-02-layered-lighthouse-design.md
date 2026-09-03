@@ -71,11 +71,26 @@ A repo may belong to several groups. Membership is proposed above and must be
 confirmed by the human before generation; the mechanism is the deliverable, the
 membership is the human's knowledge.
 
-Enforcement stays where it already is. A receiver's policy artifact names the
-publisher it may read and, in `extensions["engram:audiences"]`, the audiences it
-may see: `commons` plus one entry per group it belongs to. The daemon filters
-retrieved rows by the audiences the evaluated policy allows. A receiver with no
-policy sees nothing, unchanged.
+Enforcement stays where it already is, in the policy the daemon actually
+evaluates, which is the **publisher's**. The daemon builds its request from the
+receiver named in the frame and asks the publisher's own policy to decide
+(`lighthouse_daemon.py`: `publisher=f"urn:engram:{frame['receiver']}"`, then
+`publisher.policy.decide(...)`). A rule's `publishers` list therefore names the
+receivers allowed to read, despite its name.
+
+So the generated artifact is the publisher-held policy for the `lighthouse`
+instance: one allow rule per receiver instance, plus a top-level
+`extensions["engram:audiences"]` mapping each receiver's urn to the sorted
+audiences it may see, `commons` plus one entry per group it belongs to. The
+daemon reads that map from the policy artifact alongside the decision and
+filters retrieved rows to the intersection.
+
+**This placement is the security property, not a detail.** An earlier draft of
+this design put the audience grant in a policy artifact held by the receiver.
+That artifact is a file the receiving session owns, so any session could have
+widened its own access by editing it, and the daemon would never have read it
+anyway. Grants live with the publisher. A receiver with no rule sees nothing,
+unchanged.
 
 ## The reach, and when it widens
 
@@ -94,12 +109,27 @@ see. An impasse is repetition within one session, measured as cosine similarity
 above 0.9 between the current query vector and an earlier one in the same
 session, which needs no threshold on an uncalibrated score.
 
-**The margin deliberately does not gate anything here.** It is the natural
-impasse signal and it is already computed and logged on every recall, but the
-architecture notes state that it gates nothing because the scores are
-uncalibrated cosine with no oracle. Turning it into a gate now would contradict
-that. The retrospective study is specified below instead, and the margin may
-become a third trigger only if it passes.
+**The margin runs in shadow from the start.** It is the natural impasse signal
+and it is already computed on every recall, but the architecture notes say it
+gates nothing, because the scores are uncalibrated cosine with no oracle. The
+first version of this design deferred it to a study, which was a deadlock: the
+margin can only be validated by watching it act, and a rule that forbids it
+acting until validated guarantees the evidence never accumulates.
+
+So it gets the treatment the evolving-category runtime already uses, with
+independent gates defaulting to observation:
+
+```toml
+[reach]
+margin_trigger_enabled = true    # evaluate the trigger
+margin_trigger_shadow = true     # log what it would have done
+margin_trigger_influence = false # act on it — requires the study to pass
+```
+
+In shadow the trigger is evaluated on every recall and its verdict is written
+to the recall log with the count it would have requested. Nothing about what
+recall returns changes. Promotion out of shadow requires the study below to
+pass on a sample the shadow itself produced.
 
 The count is a dial, never a switch: the shared tiers are always reachable at
 one result, so a failed trigger degrades to less reach, not none.
@@ -108,10 +138,39 @@ one result, so a failed trigger degrades to less reach, not none.
 
 Read-only, over the recall log. For every recall that carries outcome feedback,
 pair its margin with whether the result was marked used. Report the
-distribution and the rank correlation. The margin becomes a trigger only if
-low-margin recalls are meaningfully more often unused. Sample today is 58
-outcome-logged recalls of 314, which is small; the study reports its own power
-and may return "not enough evidence," which is an acceptable result.
+distribution and the rank correlation. The margin leaves shadow only if
+low-margin recalls are meaningfully more often unused.
+
+**Run 2026-09-02, before this section was written: NOT ENOUGH EVIDENCE.** Of
+314 logged recalls, 28 carry a margin and 60 carry outcome feedback, and the
+intersection is 14: ten used, four unused. The AUC of margin predicting
+usefulness is 0.350, below the 0.5 no-signal line, which with four negatives is
+noise and is reported as such. The study exposed two instrument faults that
+matter more than its result. Outcome capture is volitional and sits near 19% of
+recalls lifetime, so the pairing set grows slowly. And the outcome field encodes
+used or unused only as a free-text prefix, mixing the sleep hook's automatic
+`used: auto: cited` positives with deliberate judgment, so the label is not
+clean enough to learn from even at a larger sample.
+
+Both faults are addressed by the outcome-label change below, and the sample
+problem is why the trigger runs in shadow rather than waiting.
+
+## Outcome labels, so mistakes are recordable
+
+A memory that records mostly successes cannot learn from failure. Today
+`log_outcome` writes one free-text `outcome` column whose leading word carries
+the only machine-readable signal, and the sleep hook writes automatic citation
+positives into the same field. Three changes, none of which touch existing
+reads:
+
+- a `used` column holding `true`, `false`, or null for not-yet-judged, so an
+  unused result is a first-class value rather than a prefix;
+- an `origin` column separating `judged` (an instance's deliberate call) from
+  `auto` (the sleep hook's citation inference), so the two are never averaged;
+- the free-text note keeps its column and its meaning.
+
+Migration backfills `used` and `origin` from the existing prefixes, which is
+lossless because the prefixes are the only signal there has ever been.
 
 ## Drift between tiers
 

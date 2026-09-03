@@ -39,6 +39,7 @@ def write_policy(
     *,
     receiver: str = "engram",
     actions=("recall", "read"),
+    audience_map: dict[str, list[str]] | None = None,
 ) -> None:
     artifact = {
         "kind": "ConnectionPolicy",
@@ -71,28 +72,61 @@ def write_policy(
                 }
             ]
         },
+        "extensions": {
+            "engram:audiences": audience_map
+            if audience_map is not None
+            else {f"urn:engram:{receiver}": ["commons"]}
+        },
     }
     artifact["digest"] = artifact_digest(artifact)
     path.write_text(json.dumps(artifact))
+
+
+def insert_share(
+    store: Storage,
+    *,
+    memory_id: str,
+    content: str,
+    audience: str = "commons",
+    layer: str = "episode",
+) -> None:
+    store.conn.execute(
+        "INSERT INTO shared_memories (share_id, memory_id, source_instance, "
+        "source_id, layer, audience, reason, content_digest, shared_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            str(uuid.uuid4()),
+            memory_id,
+            "source",
+            memory_id,
+            layer,
+            audience,
+            "test fixture",
+            hashlib.sha256(content.encode()).hexdigest(),
+            "2026-09-01T00:00:00Z",
+        ),
+    )
+    store.conn.commit()
 
 
 def build_publisher(root: Path, name: str = "why") -> PublisherStore:
     inst = root / ".engram" / "instances" / name
     inst.mkdir(parents=True)
     store = Storage(str(inst / "graph.db"))
+    shared_id = str(uuid.uuid4())
+    shared_content = "shared: rivers need bridges"
     store.add_episode(
-        str(uuid.uuid4()),
+        shared_id,
         "s",
-        "work: rivers need bridges",
-        embedding=unit("work: rivers need bridges"),
-        lane="work",
+        shared_content,
+        embedding=unit(shared_content),
     )
+    insert_share(store, memory_id=shared_id, content=shared_content)
     store.add_episode(
         str(uuid.uuid4()),
         "s",
-        "personal: rivers at dusk",
+        "unshared: rivers at dusk",
         embedding=unit("rivers"),
-        lane="personal",
     )
     store.close()
     write_policy(inst / "lighthouse-policy.json")
@@ -131,12 +165,19 @@ def _valid_read():
     )
 
 
-def test_retrieve_returns_work_lane_only(tmp_path):
+def test_retrieve_returns_only_rows_shared_to_an_allowed_audience(tmp_path):
     pub = build_publisher(tmp_path)
     assert pub.open() is True
-    hits = retrieve(pub.storage, FakeEmbeddings(), "rivers", k=5)
+    hits = retrieve(
+        pub.storage,
+        FakeEmbeddings(),
+        "rivers",
+        k=5,
+        allowed_audiences=frozenset({"commons"}),
+    )
     assert hits
-    assert all(hit["lane"] == "work" for hit in hits)
+    assert all(hit["audiences"] == ["commons"] for hit in hits)
+    assert all("lane" not in hit for hit in hits)
     assert all(hit["layer"] in ("episode", "semantic") for hit in hits)
     assert hits[0]["rank"] == 1
     assert hits[0]["contentDigest"]["algorithm"] == "sha256"
@@ -177,7 +218,7 @@ def test_handle_recall_allows_and_discloses(tmp_path):
         publisher="why",
         context=CONTEXT,
         purpose="session-recall",
-        query="work: rivers need bridges",
+        query="shared: rivers need bridges",
         k=5,
         at=NOW,
     )
@@ -189,7 +230,7 @@ def test_handle_recall_allows_and_discloses(tmp_path):
     }
     assert len(out["candidates"]) == 1
     assert out["queryDigest"]["value"] == hashlib.sha256(
-        b"work: rivers need bridges"
+        b"shared: rivers need bridges"
     ).hexdigest()
     row = sqlite3.connect(pub.disclosures_path).execute(
         "SELECT action, memory_ids FROM disclosures"
@@ -210,7 +251,7 @@ def test_read_requires_read_action(tmp_path):
             publisher="why",
             context=CONTEXT,
             purpose="session-recall",
-            query="work: rivers need bridges",
+            query="shared: rivers need bridges",
             k=5,
             at=NOW,
         )
@@ -242,7 +283,7 @@ def test_read_delivers_content_when_allowed(tmp_path):
             publisher="why",
             context=CONTEXT,
             purpose="session-recall",
-            query="work: rivers need bridges",
+            query="shared: rivers need bridges",
             k=5,
             at=NOW,
         )
@@ -258,7 +299,8 @@ def test_read_delivers_content_when_allowed(tmp_path):
             memory_ids=[memory_id],
         )
     )
-    assert out["items"][0]["content"] == "work: rivers need bridges"
+    assert out["items"][0]["content"] == "shared: rivers need bridges"
+    assert out["items"][0]["audiences"] == ["commons"]
     assert out["items"][0]["decision"]["effect"] == "allow"
 
 
@@ -358,7 +400,7 @@ def test_socket_round_trip_leaves_store_unchanged(tmp_path):
                         publisher="why",
                         context=CONTEXT,
                         purpose="session-recall",
-                        query="work: rivers need bridges",
+                        query="shared: rivers need bridges",
                         k=3,
                         at=NOW,
                     )
@@ -402,7 +444,7 @@ def test_operational_error_on_open_is_publisher_unavailable(
     assert pub.storage is None
 
 
-def test_pre_migration_store_without_lane_column_is_unavailable(tmp_path):
+def test_pre_migration_store_without_shared_memories_is_unavailable(tmp_path):
     inst = tmp_path / ".engram" / "instances" / "agi"
     inst.mkdir(parents=True)
     connection = sqlite3.connect(inst / "graph.db")

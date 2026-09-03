@@ -18,8 +18,9 @@
 - Never write to `.engram/instances/*/graph.db` or `.engram/genome/graph.db` from a test. Tests build their own stores in `tmp_path`.
 - The daemon's four safety properties are invariants, not features: deny by default, policy evaluated before retrieval, read-only store access, every disclosure logged. A test that weakens any of them is a stop-and-report.
 - Audience vocabulary is closed: `commons`, or `group:<name>` where `<name>` matches `[a-z][a-z0-9-]{0,63}`. Anything else fails closed.
-- The policy extension key for audiences is exactly `engram:audiences`, a list of audience strings, on the policy artifact's `extensions` object.
+- The policy extension key for audiences is exactly `engram:audiences` on the policy artifact's `extensions` object, and its value is a MAP from a receiver's urn (`urn:engram:<instance>`) to that receiver's sorted audience list. It lives on the PUBLISHER-held artifact, because that is the policy the daemon evaluates and because a grant must not sit in a file the receiver owns.
 - `server.py` is a shared file. dev1 lands its two tool registrations first; dev2 rebases across them.
+- dev2 additionally owns `tests/test_lighthouse_daemon.py`: its content tests encode the work-lane rule this plan retires and must be re-expressed as shares. Every test of the four safety properties survives unchanged.
 - Commit after every green test. Never push.
 
 ---
@@ -30,7 +31,7 @@
 |---|---|
 | `migrations/027_shared_memories.sql` | the `shared_memories` table in the published house |
 | `sharing.py` | share record, `share`, `unshare`, `list_shares`, audience validation |
-| `policy_gen.py` | `.engram/groups.toml` to a receiver policy artifact |
+| `policy_gen.py` | `.engram/groups.toml` to the publisher-held policy artifact |
 | `lighthouse_daemon.py` | audience filter replaces the work-lane filter |
 | `server.py` | `share` and `unshare` MCP tools |
 | `tests/test_sharing.py`, `tests/test_policy_gen.py`, `tests/test_daemon_audiences.py` | one per module |
@@ -314,7 +315,9 @@ Expected: FAIL on `ImportError` for `share`
 
 - [ ] **Step 3: Implement**
 
-Add to `sharing.py`. Layer must be `episode` or `semantic`; `instinct` is never shareable. Embeddings for the copy are left absent; the existing `backfill_vectors` step embeds orphaned rows, and the daemon's vector search skips rows it cannot find, so a fresh share becomes searchable after the next maintenance pass. Note that in the docstring.
+Add to `sharing.py`. Layer must be `episode` or `semantic`; `instinct` is never shareable.
+
+**The copy carries the source's vector.** `Storage.get_vector(layer, id)` returns the stored embedding or `None`, and `add_episode`/`add_semantic` accept an `embedding` argument. Read the source vector and pass it through, so a shared row is searchable the moment it is shared and no embedder is needed inside `share`. A source row with no vector yet copies as `None` and becomes searchable after the next maintenance pass; say so in the docstring.
 
 ```python
 import uuid
@@ -355,14 +358,15 @@ def share(*, source_storage, published_storage, source_id, layer, audience, reas
         memory_id = sibling["memory_id"]
     else:
         memory_id = str(uuid.uuid4())
+        vector = source_storage.get_vector(layer, source_id)
         if layer == "episode":
             published_storage.add_episode(id=memory_id, session_id=None, content=content,
-                                          episode_type="shared")
+                                          episode_type="shared", embedding=vector)
         else:
             published_storage.add_semantic(id=memory_id, content=content,
                                            kind=row.get("kind", "fact"),
                                            confidence=row.get("confidence", 0.5),
-                                           embedding=None, source_episode_ids=[])
+                                           embedding=vector, source_episode_ids=[])
 
     record = ShareRecord(
         share_id=str(uuid.uuid4()), memory_id=memory_id, source_instance=source_instance,
@@ -493,10 +497,11 @@ def test_built_policy_loads_and_digests(tmp_path):
     assert art["issuer"] == "urn:engram:engram"
     assert art["payload"]["rules"][0]["publishers"] == ["urn:engram:lighthouse"]
     assert art["extensions"]["engram:audiences"] == ["commons", "group:crossing", "group:engram-system"]
-    assert art["digest"]["value"] == artifact_digest(art)
+    assert art["digest"] == artifact_digest(art)          # artifact_digest returns the whole dict
+    assert art["digest"]["algorithm"] == "sha-256"
     path = tmp_path / "lighthouse-policy.json"
     digest = write_receiver_policy(path, art)
-    assert digest == art["digest"]["value"]
+    assert digest == art["digest"]["value"]  # write_receiver_policy returns the hex value
     load_policy(path)  # must not raise
 
 
@@ -567,14 +572,13 @@ def published(tmp_path):
     ids = {}
     for name, audience in (("alpha", "commons"), ("beta", "group:crossing"), ("gamma", "group:research")):
         eid = str(uuid.uuid4())
-        src.add_episode(id=eid, session_id=None, content=f"{name} content about rivers", episode_type="test")
+        text = f"{name} content about rivers"
+        src.add_episode(id=eid, session_id=None, content=text, episode_type="test",
+                        embedding=FakeEmbeddings().embed([text])[0])
         src.conn.commit()
         rec = share(source_storage=src, published_storage=pub, source_id=eid, layer="episode",
                     audience=audience, reason="r", source_instance="engram")
         ids[name] = rec.memory_id
-    for mid in ids.values():
-        pub.backfill_vectors(FakeEmbeddings())
-        break
     return pub, ids
 
 
@@ -599,9 +603,10 @@ def test_empty_allowed_set_returns_nothing(published):
 def test_unshared_rows_are_never_returned(published, tmp_path):
     pub, _ = published
     orphan = str(uuid.uuid4())
-    pub.add_episode(id=orphan, session_id=None, content="rivers but never shared", episode_type="test")
+    text = "rivers but never shared"
+    pub.add_episode(id=orphan, session_id=None, content=text, episode_type="test",
+                    embedding=FakeEmbeddings().embed([text])[0])
     pub.conn.commit()
-    pub.backfill_vectors(FakeEmbeddings())
     out = retrieve(pub, FakeEmbeddings(), "rivers", 10, frozenset({"commons", "group:crossing", "group:research"}))
     assert orphan not in {e["memoryId"] for e in out}
 

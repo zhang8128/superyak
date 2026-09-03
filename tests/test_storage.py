@@ -1155,3 +1155,35 @@ def test_revive_preserves_lane(tmp_db, fake_embedding):
     tmp_db.revive_episode(eid, embed_fn=lambda content: emb)
     row = tmp_db.conn.execute("SELECT lane FROM episodes WHERE id = ?", (eid,)).fetchone()
     assert row["lane"] == "work"
+
+
+def test_migration_gap_is_filled_not_skipped(tmp_path):
+    """A missing version below the high-water mark must still be applied.
+
+    The runner used to select migrations with `version > MAX(version)`, so a
+    gap was unrepairable: delete version N while N+1 is recorded and N never
+    ran again. Gaps are reachable whenever two branches add migrations
+    concurrently and one is renumbered before it lands.
+    """
+    from pathlib import Path as _Path
+
+    from storage import Storage
+
+    migrations_dir = str(_Path(__file__).resolve().parent.parent / "migrations")
+
+    db_path = tmp_path / "gap.db"
+    store = Storage(str(db_path), migrations_dir=migrations_dir)
+    versions = {r[0] for r in store.conn.execute("SELECT version FROM schema_version")}
+    assert len(versions) >= 2
+    victim = sorted(versions)[-2]          # not the highest, so a gap is created
+    store.conn.execute("DELETE FROM schema_version WHERE version = ?", (victim,))
+    store.conn.commit()
+    store.close()
+
+    reopened = Storage(str(db_path), migrations_dir=migrations_dir)
+    try:
+        assert reopened.conn.execute(
+            "SELECT 1 FROM schema_version WHERE version = ?", (victim,)
+        ).fetchone(), f"migration {victim} was skipped because it sat below the max"
+    finally:
+        reopened.close()
