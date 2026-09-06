@@ -126,7 +126,7 @@ def test_unshared_rows_are_never_returned(published):
     assert orphan not in {entry["memoryId"] for entry in out}
 
 
-def test_entries_have_sorted_intersection_and_no_lane_key(published):
+def test_entries_have_sorted_intersection_and_explicit_lane(published):
     store, ids = published
     alpha = store.get_episode(ids["alpha"])
     _insert_share(
@@ -144,7 +144,7 @@ def test_entries_have_sorted_intersection_and_no_lane_key(published):
     )
     entry = next(item for item in out if item["memoryId"] == ids["alpha"])
     assert entry["audiences"] == ["commons", "group:crossing"]
-    assert "lane" not in entry
+    assert entry["lane"] == "personal"
 
 
 def test_shared_semantic_is_filtered_by_audience(published):
