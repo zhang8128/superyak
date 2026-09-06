@@ -56,6 +56,7 @@ class ContextStore:
                 created REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS events_thread ON events(thread, seq);
+            CREATE INDEX IF NOT EXISTS events_thread_kind ON events(thread, kind, seq);
             CREATE VIRTUAL TABLE IF NOT EXISTS event_search USING fts5(
                 content, thread UNINDEXED, event_id UNINDEXED, tokenize='unicode61'
             );
@@ -136,7 +137,7 @@ class ContextStore:
                 raise StoreConflict("Event ID already records different content")
             return self._event_row(old)
         self.conn.execute("INSERT INTO events(id,thread,role,kind,content,metadata,turn_id,created) VALUES(?,?,?,?,?,?,?,?)", (event_id, thread, role, kind, content, encoded, turn_id, time.time()))
-        if kind in {"message", "correction"}:
+        if kind in {"message", "correction", "coding_observation", "coding_task"}:
             self.conn.execute("INSERT INTO event_search(content,thread,event_id) VALUES(?,?,?)", (content[:self.PREVIEW_CHARS], thread, event_id))
         return self._event_row(self.conn.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone())
 
@@ -157,6 +158,27 @@ class ContextStore:
         with self._lock:
             return self._event_row(self.conn.execute("SELECT * FROM events WHERE thread=? AND id=?", (thread, event_id)).fetchone())
 
+    def event_page(self, thread, event_id, offset=0, limit=4096):
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 4096:
+            raise ValueError("Invalid event page")
+        with self._lock:
+            row = self.conn.execute("SELECT id,role,kind,substr(content,?,?) AS content,length(content) AS length,metadata FROM events WHERE thread=? AND id=?", (offset + 1, limit, thread, event_id)).fetchone()
+        if row is None:
+            return None
+        return {"id": row["id"], "role": row["role"], "kind": row["kind"], "text": row["content"],
+                "metadata": json.loads(row["metadata"]), "next_offset": offset + limit if offset + limit < row["length"] else None}
+
+    def latest_event(self, thread, kind):
+        """One exact original, independent of the searchable dialogue window."""
+        with self._lock:
+            return self._event_row(self.conn.execute("SELECT * FROM events WHERE thread=? AND kind=? ORDER BY seq DESC LIMIT 1", (thread, kind)).fetchone())
+
+    def recent_kind(self, thread, kind, limit=8):
+        """Bounded previews for task evidence; never load an entire transcript."""
+        with self._lock:
+            rows = self.conn.execute("SELECT id,seq,thread,role,kind,substr(content,1,?) AS content,length(content) AS full_length,metadata,turn_id,created FROM events WHERE thread=? AND kind=? ORDER BY seq DESC LIMIT ?", (self.PREVIEW_CHARS, thread, kind, max(0, min(int(limit), 32)))).fetchall()
+        return [self._event_row(row) for row in reversed(rows)]
+
     def recent(self, thread, limit=12, *, completed_only=False):
         limit = max(0, min(int(limit), 100))
         completed = " AND (turn_id IS NULL OR EXISTS(SELECT 1 FROM turns t WHERE t.id=events.turn_id AND t.status='completed'))" if completed_only else ""
@@ -164,7 +186,9 @@ class ContextStore:
             rows = self.conn.execute("SELECT id,seq,thread,role,kind,substr(content,1,?) AS content,length(content) AS full_length,metadata,turn_id,created FROM events WHERE thread=? AND kind IN ('message','correction')" + completed + " ORDER BY seq DESC LIMIT ?", (self.PREVIEW_CHARS, thread, limit)).fetchall()
         return [self._event_row(row) for row in reversed(rows)]
 
-    def search(self, thread, query, limit=12, *, completed_only=False):
+    def search(self, thread, query, limit=12, *, completed_only=False, kinds=("message", "correction")):
+        if not kinds or len(kinds) > 4 or any(k not in {"message", "correction", "coding_observation", "coding_task"} for k in kinds):
+            raise ValueError("Invalid searchable event kinds")
         # Quote terms instead of accepting arbitrary FTS operators from source text.
         terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query[:2000], re.UNICODE)))[:16]
         if not terms:
@@ -172,7 +196,8 @@ class ContextStore:
         match = " OR ".join('"' + term + '"' for term in terms)
         completed = " AND (e.turn_id IS NULL OR EXISTS(SELECT 1 FROM turns t WHERE t.id=e.turn_id AND t.status='completed'))" if completed_only else ""
         with self._lock:
-            rows = self.conn.execute("SELECT e.id,e.seq,e.thread,e.role,e.kind,substr(e.content,1,?) AS content,length(e.content) AS full_length,e.metadata,e.turn_id,e.created FROM event_search s JOIN events e ON e.id=s.event_id WHERE event_search MATCH ? AND s.thread=?" + completed + " ORDER BY bm25(event_search), e.seq DESC LIMIT ?", (self.PREVIEW_CHARS, match, thread, max(0, min(int(limit), 100)))).fetchall()
+            kind_filter = " AND e.kind IN (" + ",".join("?" for _ in kinds) + ")"
+            rows = self.conn.execute("SELECT e.id,e.seq,e.thread,e.role,e.kind,substr(e.content,1,?) AS content,length(e.content) AS full_length,e.metadata,e.turn_id,created FROM event_search s JOIN events e ON e.id=s.event_id WHERE event_search MATCH ? AND s.thread=?" + kind_filter + completed + " ORDER BY bm25(event_search), e.seq DESC LIMIT ?", (self.PREVIEW_CHARS, match, thread, *kinds, max(0, min(int(limit), 100)))).fetchall()
         return [self._event_row(row) for row in rows]
 
     @staticmethod
@@ -318,7 +343,11 @@ class ContextStore:
         with self._lock:
             events = self.conn.execute("SELECT count(*) FROM events WHERE thread=?", (thread,)).fetchone()[0]
             turns = [dict(row) for row in self.conn.execute("SELECT id,status,error FROM turns WHERE thread=? ORDER BY created DESC LIMIT 5", (thread,))]
-        return {"thread_id": thread, "events": events, "recent_turns": turns, "archive": str(self.path)}
+        result = {"thread_id": thread, "events": events, "recent_turns": turns, "archive": str(self.path)}
+        progress = self.latest_event(thread, "coding_progress")
+        if progress:
+            result["coding"] = json.loads(progress["content"])
+        return result
 
     def close(self):
         with self._lock:

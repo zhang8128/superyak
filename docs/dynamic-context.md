@@ -1,9 +1,109 @@
 # Dynamic context runtime
 
 This opt-in runtime automatically archives conversations and selects relevant
-originals before each invocation. It includes a terminal chat, a local browser
-chat, source inspection, and explicit correction/pin controls. It leaves the
+originals before each invocation. It includes terminal coding, terminal chat, a
+local browser chat, source inspection, and explicit correction/pin controls. It leaves the
 existing daemon, MCP server, and current Codex conversations unchanged.
+
+## Terminal coding
+
+Start a real coding task from the implementation worktree:
+
+```bash
+cd /Users/kairos/Projects/engram/.worktrees/dynamic-context
+ENGRAM_HOME=/Users/kairos/Projects/engram \
+  /Users/kairos/Projects/engram/.venv/bin/python -m context_cli \
+  --instance engram --thread parser-fix code --repo /path/to/your/repo \
+  'Fix the parser bug and run the relevant tests'
+```
+
+Replace the repository path, task name, and task text. This runs native Codex
+editing and shell tools with your managed ChatGPT login and selected model
+(`gpt-6-astra` by default). It streams command results, file changes, and progress
+in the terminal. No API key or browser is needed. If `--thread` is omitted, the
+command creates and prints a task name.
+
+Every episode receives the original task, your explicit corrections, a bounded
+repository snapshot, its latest checkpoint, and relevant archive/Engram evidence.
+Codex can search earlier task notes and tool-result excerpts, then read original
+events or output artifacts by ID. You do not need to call memory tools yourself.
+The search index covers bounded excerpts; it is not an exhaustive full-output
+search. External Engram retrieval remains the lexical adapter described below.
+
+When Codex checkpoints with work remaining, the runner starts another fresh
+episode automatically. A completed task returns exit code **0**. An episode
+limit, interruption, transport error, or request for your input returns **2**
+and prints the exact resume command. Configuration errors return **1**.
+The resume command is also printed before work starts, for crash recovery.
+
+```bash
+ENGRAM_HOME=/Users/kairos/Projects/engram \
+  /Users/kairos/Projects/engram/.venv/bin/python -m context_cli \
+  --instance engram --thread parser-fix code --repo /path/to/your/repo --resume
+```
+
+Resume retains the original task. Add an answer or a durable constraint with
+the existing correction command, then resume:
+
+```bash
+ENGRAM_HOME=/Users/kairos/Projects/engram \
+  /Users/kairos/Projects/engram/.venv/bin/python -m context_cli \
+  --instance engram --thread parser-fix correct public-api \
+  'Keep the existing public function signatures'
+```
+
+Use a new task name for a new goal. Resuming a completed task does no further
+work. Task identity is tied to the canonical repository directory and its
+filesystem identity. Renaming/replacing it requires starting a new task.
+Keep the printed resume command if using custom archive or memory paths: it
+includes their resolved locations and the run limits.
+
+The defaults allow **20 episodes**, **900 seconds per episode**, and **24 completed
+command/file/archive-tool operations per episode**. The runner asks for a
+checkpoint near the step limit or after **32,000 observed input tokens**, and
+interrupts at the step limit or **48,000 observed input tokens**. Override these
+with `--max-episodes`, `--episode-seconds`, `--max-steps`, `--soft-tokens`, and
+`--hard-tokens` after `code`. Provider transport also caps total protocol bytes.
+
+**These are episode controls, not a guarantee that Codex context never fills.**
+Usage arrives after an internal request and can overshoot a threshold. Codex
+still manages its own internal context and compaction. Input-envelope estimates
+and `--max-output` do not constrain every native model call. The coding command
+rejects `--strict` and API mode rather than changing billing or overstating its
+control. It currently has no interactive mid-episode steering UI; Ctrl-C pauses
+the task, and corrections plus resume continue it.
+
+Coding uses a workspace-write sandbox, including Codex's normal temporary
+directories, with network disabled by default. Codex
+retains native repository instructions and saved user approval rules. Actual
+permission requests forwarded by Codex are shown in the terminal for a one-time
+decision; noninteractive runs decline them. External MCP servers, plugins,
+hooks, and automatic subagents are disabled for this runner. The browser chat
+retains its separate read-only, tool-disabled subscription adapter.
+
+Visible provider events are archived before terminal presentation; large events
+are stored as artifacts. Generated checkpoints are explicitly fallible notes,
+not new user instructions. An interrupted or failed episode is **not replayed
+automatically**, because commands may already have changed files. Explicit resume
+restores that uncertainty and asks Codex to inspect actual state before retrying.
+An episode deadline stops the local app-server process group; background or
+remote effects cannot be assumed undone.
+
+`status`, `inspect`, `correct`, `unpin`, and `forget --yes` work with the same
+`--thread` and instance/data selectors. Status includes durable coding progress;
+inspection shows the selected source IDs and input-envelope estimate for the
+last episode. Forget removes the local task archive and its unshared artifacts.
+
+Terminal verification included a live Astra task that created `calc.py` and two
+passing unittest cases in a disposable repository. A second live task retrieved
+an original synthetic note through the archive tools, created `greet.py`, saved
+a continuation checkpoint, and automatically started a fresh episode that
+inspected and tested the files. Its test with three name cases also passed on an
+independent rerun. These smokes used only synthetic memory and the subscription
+adapter. Scripted tests cover twenty-episode continuity, interruption, recovery,
+source revocation, malformed checkpoints, and bounded archive access. Independent
+review also verified that closing the host stops a native command running in a
+separate macOS process group before it can make a delayed file write.
 
 ## Start with your Codex subscription
 
@@ -168,7 +268,7 @@ public multi-user server.
 
 ## Validation and next work
 
-The final implementation suite passed **1,848 tests**, with the same three
+The full suite with terminal coding passed **1,943 tests**, with the same three
 dependency/fork warnings present in the 1,761-test baseline. Independent review
 findings were reproduced, fixed, and rechecked. Wheel-building and installed-wheel
 startup checks are included in that suite.
@@ -186,6 +286,6 @@ subprocess isolation, provider deadlines, and API transport fixtures.
 
 The source-grounded 100-question human continuity pilot from the design has not
 been run. Neither budget tests nor the small live smoke establish that quality
-gate. Rich Engram recall parity, model-derived continuity, local-model tokenizer
+gate. Rich Engram recall parity, broader continuity evaluation, local-model tokenizer
 validation, category/sheaf influence, and Lighthouse networking remain separate
 work described in the [design](superpowers/specs/2026-09-05-dynamic-context-runtime-design.md).

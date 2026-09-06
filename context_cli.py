@@ -36,6 +36,8 @@ def build_parser():
     parser.add_argument("--strict", action="store_true", help="Reject adapters without per-model-call counting")
     parser.add_argument("--thread", default="default")
     sub = parser.add_subparsers(dest="command", required=True)
+    from context_coding_cli import add_code_parser
+    add_code_parser(sub)
     chat = sub.add_parser("chat", help="Chat interactively, or send one message")
     chat.add_argument("message", nargs="?")
     chat.add_argument("--event-id", help="Idempotent client ID for a one-shot message")
@@ -188,6 +190,9 @@ def main(argv=None):
     try:
         directory, memory = resolve_paths(args)
         store = ContextStore(directory / "context.db")
+        if args.command == "code":
+            from context_coding_cli import run_code
+            return run_code(args, store, memory)
         if args.command in {"status", "inspect", "unpin", "forget", "correct"}:
             if args.command == "status":
                 result = store.status(args.thread)
