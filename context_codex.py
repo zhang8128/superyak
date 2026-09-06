@@ -34,8 +34,9 @@ _DISABLED_FEATURES = (
 class _Session:
     """Single stdio peer, with deadlines applying to reads and writes alike."""
 
-    def __init__(self, command, cwd, timeout):
+    def __init__(self, command, cwd, timeout, on_message=None):
         self.deadline = time.monotonic() + timeout
+        self.on_message = on_message
         env = os.environ.copy()
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"):
             env.pop(key, None)
@@ -93,6 +94,8 @@ class _Session:
                     raise ProviderError("Malformed Codex JSON protocol") from exc
                 if not isinstance(message, dict):
                     raise ProviderError("Malformed Codex JSON envelope")
+                if self.on_message is not None:
+                    self.on_message(message)
                 self.messages.append(message)
         return writable
 
@@ -163,25 +166,50 @@ class _Session:
                 continue
             return message
 
+    def _descendant_groups(self):
+        """Native unified-exec tools can create sessions outside our own PGID."""
+        try:
+            result = subprocess.run(["ps", "-axo", "pid=,ppid=,pgid="],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    text=True, timeout=0.5, check=True)
+            if len(result.stdout) > MAX_PROTOCOL_BYTES:
+                return set()
+            processes = [tuple(map(int, line.split())) for line in result.stdout.splitlines()]
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return set()
+        descendants = {self.process.pid}
+        while True:
+            added = {pid for pid, parent, _ in processes if parent in descendants} - descendants
+            if not added:
+                break
+            descendants.update(added)
+        return {group for pid, _, group in processes
+                if pid in descendants and group > 0 and group != os.getpgrp()}
+
     def close(self):
-        # Signal the whole new session so tool descendants cannot outlive an
-        # errored/timed-out peer. Always wait to reap the child.
+        # EOF lets Codex stop its tool sessions itself. Killing it immediately
+        # can orphan native command groups on macOS (unified_exec uses setsid).
+        groups = {self.process.pid} | self._descendant_groups()
+        def signal_groups(sig):
+            for group in groups:
+                try:
+                    os.killpg(group, sig)
+                except (ProcessLookupError, PermissionError):
+                    continue
         try:
             self.process.stdin.close()
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                if self.process.poll() is None:
-                    raise
+                self.process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                # Catch native groups started between the first snapshot and
+                # EOF handling, while ancestry still belongs to this peer.
+                groups.update(self._descendant_groups())
+            signal_groups(signal.SIGTERM)
             try:
                 self.process.wait(timeout=0.25)
             except subprocess.TimeoutExpired:
                 pass
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                if self.process.poll() is None:
-                    raise
+            signal_groups(signal.SIGKILL)
             self.process.wait(timeout=1)
         finally:
             self.selector.close()
