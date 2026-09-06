@@ -41,6 +41,13 @@ py-modules = [
     "coherence",
     "compress",
     "config",
+    "context_cli",
+    "context_codex",
+    "context_compile",
+    "context_provider",
+    "context_runtime",
+    "context_sources",
+    "context_store",
     "daemon",
     "dedup",
     "deep_pass",
@@ -82,6 +89,7 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
+"share/engram" = ["context_chat.html"]
 "share/engram/migrations" = ["migrations/*.sql"]
 "share/engram/prompts" = ["prompts/*.txt"]
 "share/engram/schemas/lighthouse" = ["schemas/lighthouse/*.json"]

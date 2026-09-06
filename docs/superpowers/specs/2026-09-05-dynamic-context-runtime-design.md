@@ -2,7 +2,10 @@
 
 Date: 2026-09-05
 
-Status: Proposed architecture for review; no runtime changes enabled.
+Status: Approved for implementation. The opt-in first runtime is described in the
+[usage and validation guide](../../dynamic-context.md); Codex subscription mode
+currently operates between episodes, with internal per-model-call integration
+still outstanding.
 
 Recommended first host: Engram's local chat presentation, investigating a Codex subscription adapter first. A separate OpenAI API adapter remains the direct route to the strict request-budget contract. The core design supports either host boundary.
 

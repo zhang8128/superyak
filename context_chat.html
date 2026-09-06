@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engram</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#151b20;color:#e4e9e8}
+body{max-width:850px;margin:0 auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px}h1{font-size:24px;margin:0}small{color:#a7b8b5}button,textarea,input{font:inherit;border:1px solid #475a58;border-radius:8px;padding:10px;background:#202c30;color:inherit}button{cursor:pointer}button:hover{background:#2f4548}button:disabled{opacity:.5;cursor:wait}#messages{min-height:35vh;padding:20px 0}.message{white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0;padding:16px;border-radius:10px;line-height:1.55}.user{background:#243336}.assistant{background:#1b252a}.label{display:block;font-size:12px;color:#a7b8b5;margin-bottom:6px}form{display:flex;gap:10px;align-items:end}textarea{flex:1;min-height:64px;resize:vertical}details{margin-top:24px;border-top:1px solid #34444a;padding-top:16px}summary{cursor:pointer;color:#b5ceca}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:380px;overflow:auto}#error{color:#edb8a7;white-space:pre-wrap}#notes{display:grid;grid-template-columns:1fr;gap:8px;margin:12px 0}a{color:#b2d6cd}#sources button{display:block;font-size:12px;margin:6px 0;text-align:left;max-width:100%;overflow-wrap:anywhere}@media(max-width:500px){body{padding:16px}form{align-items:stretch;flex-direction:column}}
+</style>
+<header><div><h1>Engram</h1><small>Remembering across the conversation</small></div><button id="new">New conversation</button></header>
+<p><small id="status">Connecting…</small></p>
+<main id="messages" aria-live="polite"></main>
+<p id="error" role="alert"></p>
+<form id="compose"><textarea id="message" aria-label="Message" placeholder="What's on your mind?" required></textarea><button id="send">Send</button></form>
+<details id="context"><summary>Context in use</summary><p><small id="budget"></small></p><div id="sources"></div><pre id="manifest"></pre><pre id="original"></pre></details>
+<details><summary>Keep a correction or preference in view</summary><p><small>Give it a name so you can update or unpin it. Ordinary messages are already saved automatically.</small></p><div id="notes"><input id="note-key" aria-label="Note name" placeholder="Name, for example coordinator"><textarea id="note-content" aria-label="Correction or preference" placeholder="What should remain in view?"></textarea><div><button id="pin">Save</button> <button id="unpin">Unpin</button></div></div></details>
+<script>
+let thread = localStorage.getItem('engram-context-thread') || crypto.randomUUID();
+localStorage.setItem('engram-context-thread', thread);
+const el = id => document.getElementById(id);
+async function api(path, data){const response=await fetch(path,data?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data,thread_id:thread})}:{});const result=await response.json();if(!response.ok)throw new Error(result.error||'Request failed');return result;}
+function show(role,text){const node=document.createElement('div');node.className='message '+role;const label=document.createElement('span');label.className='label';label.textContent=role==='user'?'You':'Engram';node.append(label,document.createTextNode(text));el('messages').append(node);node.scrollIntoView({block:'end'});}
+async function context(){const data=await api('/context?thread_id='+encodeURIComponent(thread));el('sources').replaceChildren();el('original').textContent='';el('manifest').textContent=data?JSON.stringify(data,null,2):'No context has been sent yet.';if(!data){el('budget').textContent='';return;}const exact=data.capabilities.count_kind==='provider';el('budget').textContent=(exact?'Counted input: ':'Estimated selected input: ')+data.input_tokens+' · '+data.capabilities.budget_scope+' scope';for(const source of data.selected){const b=document.createElement('button');b.textContent=source.reason+' · '+source.id;b.onclick=async()=>{try{el('original').textContent=JSON.stringify(await api('/source?thread_id='+encodeURIComponent(thread)+'&id='+encodeURIComponent(source.id)),null,2);}catch(error){el('error').textContent=error.message;}};el('sources').append(b);}}
+async function load(){const status=await api('/status?thread_id='+encodeURIComponent(thread));el('status').textContent=status.model+' · '+status.capabilities.billing;const history=await api('/history?thread_id='+encodeURIComponent(thread));el('messages').replaceChildren();for(const item of history)show(item.role,item.content+(item.truncated?'\n[Excerpt]':''));await context();}
+el('compose').onsubmit=async event=>{event.preventDefault();const text=el('message').value;if(!text.trim())return;el('error').textContent='';el('send').disabled=true;el('new').disabled=true;show('user',text);el('message').value='';try{const result=await api('/chat',{message:text,event_id:crypto.randomUUID()});show('assistant',result.response);await context();}catch(error){el('error').textContent=error.message+' Your submitted message may already be archived; inspect context before retrying.';}finally{el('send').disabled=false;el('new').disabled=false;el('message').focus();}};
+el('new').onclick=async()=>{thread=crypto.randomUUID();localStorage.setItem('engram-context-thread',thread);el('error').textContent='';await load();};
+el('context').ontoggle=()=>{if(el('context').open)context().catch(error=>el('error').textContent=error.message);};
+for(const [id,path] of [['pin','/correct'],['unpin','/unpin']])el(id).onclick=async()=>{try{await api(path,{key:el('note-key').value,content:el('note-content').value});el('error').textContent='Saved. The next response will use the updated selection.';}catch(error){el('error').textContent=error.message;}};
+load().catch(error=>el('error').textContent=error.message);
+</script>
+</html>
