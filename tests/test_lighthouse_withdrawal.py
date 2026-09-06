@@ -133,6 +133,19 @@ def _disclosure(live, response):
 
 
 @pytest.mark.parametrize("action", ["recall", "read"])
+def test_caller_cannot_backdate_expired_publisher_grant(live_publisher, action):
+    from datetime import datetime, timezone
+    live = live_publisher
+    live.daemon.clock = lambda: datetime(2026, 9, 6, tzinfo=timezone.utc)
+    _rewrite_policy(live.publisher.policy_path, lambda artifact:
+                    artifact["payload"]["rules"][0].update(validUntil="2026-09-02T00:00:00Z"))
+    # _exchange sends September 1 on both recall and read frames.
+    response = _exchange(live, action)
+    assert _decision(response)["code"] == "OUTSIDE_VALIDITY"
+    _assert_withheld(response)
+
+
+@pytest.mark.parametrize("action", ["recall", "read"])
 @pytest.mark.parametrize(
     ("withdrawal", "code"),
     [("deny", "EXPLICIT_DENY"), ("expired", "OUTSIDE_VALIDITY"),
@@ -165,7 +178,7 @@ def test_action_withdrawal_after_delivery(live_publisher, action, withdrawal, co
 
 
 @pytest.mark.parametrize("action", ["recall", "read"])
-@pytest.mark.parametrize("invalid", ["json", "digest", "missing", "rule"])
+@pytest.mark.parametrize("invalid", ["json", "digest", "missing", "rule", "string_selector", "issuer"])
 def test_invalid_policy_never_reuses_earlier_allow(live_publisher, action, invalid):
     live = live_publisher
     before = live.publisher.db_path.read_bytes()
@@ -179,6 +192,10 @@ def test_invalid_policy_never_reuses_earlier_allow(live_publisher, action, inval
         path.write_text(json.dumps(artifact))
     elif invalid == "missing":
         path.unlink()
+    elif invalid == "string_selector":
+        _rewrite_policy(path, lambda artifact: artifact["payload"]["rules"][0].update(contexts="unrelated/*"))
+    elif invalid == "issuer":
+        _rewrite_policy(path, lambda artifact: artifact.update(issuer="urn:engram:stranger"))
     else:
         _rewrite_policy(
             path, lambda artifact: artifact["payload"]["rules"][0].pop("actions")
@@ -284,7 +301,7 @@ def test_invalid_published_lane_fails_closed(live_publisher, action):
 def test_withdrawn_action_denies_before_retrieval(live_publisher, action):
     live = live_publisher
     _assert_delivered(_exchange(live, action), live)
-    write_policy(live.publisher.policy_path, actions=())
+    _rewrite_policy(live.publisher.policy_path, lambda artifact: artifact["payload"].update(rules=[]))
 
     # Observe actual SQLite access after the authorization changes. A denial
     # must not even read a memory row or vector from the published store.

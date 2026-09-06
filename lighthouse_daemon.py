@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lighthouse_policy import Policy, PolicyRequest, load_policy
+from lighthouse_policy import Policy, PolicyRequest
+from lighthouse_validation import load_owned_policy
 from lighthouse_protocol import (
     FrameError,
     content_digest,
@@ -266,17 +267,18 @@ class PublisherDaemon:
         publishers: dict[str, PublisherStore],
         socket_path: Path,
         embeddings,
+        *, clock=None,
     ):
         self.publishers = publishers
         self.socket_path = Path(socket_path)
         self.embeddings = embeddings
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._server: socketserver.ThreadingUnixStreamServer | None = None
         self._ready = threading.Event()
 
     def _request(self, frame: dict, action: str) -> PolicyRequest:
-        at = datetime.fromisoformat(
-            str(frame.get("at", _now())).replace("Z", "+00:00")
-        )
+        # A receiver's recorded request time cannot extend a publisher grant.
+        at = self.clock()
         return PolicyRequest(
             publisher=f"urn:engram:{frame['receiver']}",
             profile=PROFILE,
@@ -308,7 +310,7 @@ class PublisherDaemon:
             # artifact for audiences: concurrent edits must not combine grants
             # from different policy snapshots.
             try:
-                policy = load_policy(publisher.policy_path)
+                policy = load_owned_policy(publisher.policy_path, publisher.name)
             except (OSError, ValueError, KeyError, TypeError) as error:
                 logger.warning(
                     "publisher %s policy unavailable: %s", publisher.name, error
