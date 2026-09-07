@@ -1,0 +1,17 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.engram/
+.venv/
+.worktrees/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+node_modules/
+dist/
+coverage/

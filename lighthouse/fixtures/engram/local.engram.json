@@ -1,0 +1,50 @@
+{
+  "formatVersion": "1.0",
+  "instance": "receiver-local",
+  "context": { "id": "memory", "path": ["memory"] },
+  "memories": [
+    {
+      "id": "local-debug-checklist",
+      "layer": "semantic",
+      "contentDigest": {
+        "algorithm": "sha256",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "contextPath": ["memory", "debugging", "mcp"],
+      "lane": "technical",
+      "origin": "organic"
+    },
+    {
+      "id": "local-bridge-digest",
+      "layer": "semantic",
+      "contentDigest": {
+        "algorithm": "sha256",
+        "value": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "contextPath": ["memory", "debugging", "bridge"],
+      "lane": "technical",
+      "origin": "organic"
+    }
+  ],
+  "edges": [],
+  "recallTraces": [
+    {
+      "turnId": "turn-missing-restart",
+      "queryDigest": {
+        "algorithm": "sha256",
+        "value": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "contextPath": ["memory", "debugging", "mcp"],
+      "candidates": [{ "memoryId": "local-debug-checklist", "rank": 1 }]
+    },
+    {
+      "turnId": "turn-local-bridge",
+      "queryDigest": {
+        "algorithm": "sha256",
+        "value": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "contextPath": ["memory", "debugging", "bridge"],
+      "candidates": [{ "memoryId": "local-bridge-digest", "rank": 1 }]
+    }
+  ]
+}

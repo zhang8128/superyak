@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+.worktrees/
+.DS_Store
+.engram/
+.serena/
+.superpowers/
+kernel/backups/

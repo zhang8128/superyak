@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["premature_action", "inquiry_quality", "identity_continuity", "parroting", "evidence"],
+  "properties": {
+    "premature_action": {"type": "boolean"},
+    "inquiry_quality": {"type": "integer", "minimum": 0, "maximum": 4},
+    "identity_continuity": {"type": "integer", "minimum": 0, "maximum": 4},
+    "parroting": {"type": "boolean"},
+    "evidence": {"type": "string", "minLength": 1}
+  }
+}

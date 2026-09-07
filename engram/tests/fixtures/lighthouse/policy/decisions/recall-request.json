@@ -1,0 +1,17 @@
+{
+  "policy": "workflow-policy.json",
+  "request": {
+    "publisher": "urn:lighthouse:trusted-crew",
+    "profile": "urn:lighthouse:profile:hyper-modules",
+    "domain": "personal.memory",
+    "action": "recall",
+    "context": "workflow/orders",
+    "claimMediaType": "application/vnd.hyper.dependency-claim+json",
+    "purpose": "debugging",
+    "audience": "self",
+    "at": "2026-09-01T00:00:00Z",
+    "evidence": [],
+    "attestations": []
+  },
+  "decision": {"allowed": true, "ruleId": "allow-crew-debug-recall"}
+}

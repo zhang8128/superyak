@@ -1,0 +1,19 @@
+{
+  "name": "engram",
+  "description": "Engram memory system — this repo is its own single-plugin marketplace so registration lives with the code it registers",
+  "owner": {
+    "name": "kairos"
+  },
+  "plugins": [
+    {
+      "name": "engram",
+      "description": "Layered memory — episodes, semantics, and instincts that evolve across sessions",
+      "version": "0.3.0",
+      "author": {
+        "name": "kairos"
+      },
+      "source": ".",
+      "category": "memory"
+    }
+  ]
+}

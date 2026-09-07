@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "measurement": "disposable repeated-natural-language replay timing without tracemalloc",
+  "generation_calls": 1000,
+  "completed_turns": 500,
+  "elapsed_seconds": 56.9571,
+  "search_calls": 1000,
+  "search_seconds": 32.9106,
+  "search_fraction_of_elapsed": 0.5778,
+  "intervals": [
+    {"through_generation_calls": 100, "interval_seconds": 3.6114, "cumulative_search_seconds": 0.6351},
+    {"through_generation_calls": 200, "interval_seconds": 4.1162, "cumulative_search_seconds": 1.9630},
+    {"through_generation_calls": 300, "interval_seconds": 4.4557, "cumulative_search_seconds": 3.7957},
+    {"through_generation_calls": 400, "interval_seconds": 4.2667, "cumulative_search_seconds": 5.8661},
+    {"through_generation_calls": 500, "interval_seconds": 5.0306, "cumulative_search_seconds": 8.4795},
+    {"through_generation_calls": 600, "interval_seconds": 4.5187, "cumulative_search_seconds": 11.2167},
+    {"through_generation_calls": 700, "interval_seconds": 4.8711, "cumulative_search_seconds": 14.4112},
+    {"through_generation_calls": 800, "interval_seconds": 7.0088, "cumulative_search_seconds": 19.2205},
+    {"through_generation_calls": 900, "interval_seconds": 8.9638, "cumulative_search_seconds": 25.5727},
+    {"through_generation_calls": 1000, "interval_seconds": 10.1142, "cumulative_search_seconds": 32.9106}
+  ],
+  "interpretation": "ContextStore.search was timed around each real runtime search call and accounted for 57.8% of wall time; repeated FTS terms caused growing query work. Remaining time includes compilation, canonical JSON serialization, SQLite/archive writes, tools, and provider fixture work.",
+  "limitations": [
+    "This diagnostic did not run tracemalloc.",
+    "The temporary archive was deleted when the process exited.",
+    "Function timing establishes aggregate search cost, not individual SQLite opcode cost.",
+    "This is mechanical runtime evidence, not continuity accuracy or live tokenizer certification."
+  ]
+}
