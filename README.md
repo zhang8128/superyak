@@ -44,6 +44,11 @@ by default. To run those tests, explicitly supply both
 
 ## Run Engram
 
+To ask another local Codex session a question, see
+[Codex session messaging](docs/codex-sessions.md). `make sessions` lists session
+metadata; the separate MCP server adds discovery, question, and reply tools.
+It uses Codex's native queue alongside Engram and Lighthouse.
+
 After setup, with the Codex CLI installed and authenticated:
 
 ```sh

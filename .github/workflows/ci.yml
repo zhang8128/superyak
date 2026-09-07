@@ -49,3 +49,23 @@ jobs:
       - run: make setup
       - run: make check-lighthouse
       - run: make check-integration
+
+  sessions:
+    name: Codex session delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.8.3"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: engram/uv.lock
+      - run: npm install --global @openai/codex@0.153.4
+      - run: make setup-engram
+      - run: uv run --locked --extra dev python -m pytest tests/test_session_bridge.py tests/test_session_cli.py tests/test_session_delivery.py -q -ra --tb=short
+        working-directory: engram

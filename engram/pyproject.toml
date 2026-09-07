@@ -31,6 +31,7 @@ llm = ["anthropic"]
 [project.scripts]
 engram-lighthouse-pilot = "lighthouse_pilot:main"
 engram-lighthouse-label = "lighthouse_label:main"
+superyak-sessions = "session_cli:main"
 
 [tool.setuptools]
 py-modules = [
@@ -96,6 +97,8 @@ py-modules = [
     "scoring",
     "server",
     "session_bindings",
+    "session_bridge",
+    "session_cli",
     "sharing",
     "sheaf",
     "storage",
