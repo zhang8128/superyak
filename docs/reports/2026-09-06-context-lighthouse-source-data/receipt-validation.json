@@ -1,0 +1,15 @@
+{
+  "kit_commit": "0a9f615e681f84386d0088fc0f5ddde18ed00966",
+  "results": [
+    {
+      "file": "0-source_preparation.json",
+      "exit_code": 0,
+      "output": "$ tsx packages/conformance/src/cli.ts validate /Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-source-data/receipts/0-source_preparation.json\n{\"digest\":{\"algorithm\":\"sha-256\",\"value\":\"b65c88d20fc08fadb3388104b9708aed218256d09dfe39d87ad57f4befc78e6c\"},\"id\":\"urn:engram:pilot-receiver:receipt:ee8282b7-1f14-40a5-b079-087037ccc54f\",\"kind\":\"RecallReceipt\",\"ok\":true}\n"
+    },
+    {
+      "file": "1-model_dispatch.json",
+      "exit_code": 0,
+      "output": "$ tsx packages/conformance/src/cli.ts validate /Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-source-data/receipts/1-model_dispatch.json\n{\"digest\":{\"algorithm\":\"sha-256\",\"value\":\"354452484d2d11572f783bb7eacf4e40d17fb1c283bc44d1b3dd08c32126e7be\"},\"id\":\"urn:engram:pilot-receiver:receipt:f65e87fb-6407-482c-a16c-ed8c39cf96d2\",\"kind\":\"RecallReceipt\",\"ok\":true}\n"
+    }
+  ]
+}

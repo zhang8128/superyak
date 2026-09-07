@@ -1,0 +1,174 @@
+{
+  "digest": {
+    "algorithm": "sha-256",
+    "value": "354452484d2d11572f783bb7eacf4e40d17fb1c283bc44d1b3dd08c32126e7be"
+  },
+  "extensions": {
+    "engram:contextRuntime": {
+      "meaning": "Authorized boundary delivery; does not establish model use or successful invocation.",
+      "payloadDigest": "b388071569c58f615228103b2e3743fa5b4bb1b55d74d5b1e5338f7b5d1cb946",
+      "settingsDigest": "7ebc738567cb8cd3426ff7919d1e70069ed701341ce158d5d89bdb29ffe00507",
+      "stage": "model_dispatch"
+    },
+    "engram:diagnostics": [],
+    "engram:receiverDecisions": [
+      {
+        "action": "recall",
+        "code": null,
+        "effect": "allow",
+        "phase": "model_dispatch_read",
+        "publisher": "urn:engram:pilot-publisher",
+        "ruleId": "pilot-grant"
+      },
+      {
+        "action": "read",
+        "code": null,
+        "effect": "allow",
+        "phase": "model_dispatch_read",
+        "publisher": "urn:engram:pilot-publisher",
+        "ruleId": "pilot-grant"
+      },
+      {
+        "action": "inject_context",
+        "code": null,
+        "effect": "allow",
+        "phase": "model_dispatch_read",
+        "publisher": "urn:engram:pilot-publisher",
+        "ruleId": "pilot-grant"
+      },
+      {
+        "action": "recall",
+        "code": null,
+        "effect": "allow",
+        "phase": "model_dispatch_delivery",
+        "publisher": "urn:engram:pilot-publisher",
+        "ruleId": "pilot-grant"
+      },
+      {
+        "action": "read",
+        "code": null,
+        "effect": "allow",
+        "phase": "model_dispatch_delivery",
+        "publisher": "urn:engram:pilot-publisher",
+        "ruleId": "pilot-grant"
+      },
+      {
+        "action": "inject_context",
+        "code": null,
+        "effect": "allow",
+        "phase": "model_dispatch_delivery",
+        "publisher": "urn:engram:pilot-publisher",
+        "ruleId": "pilot-grant"
+      }
+    ],
+    "engram:sourceDigestBasis": "canonical-received-trace-v1",
+    "engram:traceSnapshots": [
+      {
+        "candidates": [
+          {
+            "audiences": [
+              "commons"
+            ],
+            "contentDigest": {
+              "algorithm": "sha256",
+              "value": "2c95a2e3874f845d4fa8e34d78e69a461bbc4303d026e56a78743b7f2a795b70"
+            },
+            "lane": "personal",
+            "layer": "episode",
+            "memoryId": "573e808b-10ef-431b-a788-ad54a1c1380e",
+            "rank": 1
+          }
+        ],
+        "context": {
+          "id": "memory/technical",
+          "path": [
+            "memory",
+            "technical"
+          ]
+        },
+        "decision": {
+          "code": null,
+          "effect": "allow",
+          "ruleId": "pilot-grant"
+        },
+        "disclosureId": "9ac7a00f-fe7f-4357-8285-111a3ced9a06",
+        "publisher": "urn:engram:pilot-publisher",
+        "queryDigest": {
+          "algorithm": "sha256",
+          "value": "9ffe3b673ed3f008f9f44aaee2e7bc4764f2badefd2bc96cfc47966daa3baf96"
+        },
+        "turnId": "43368d8f-eb9d-40dc-92dc-10d73045baf3"
+      }
+    ],
+    "engram:unavailableSources": []
+  },
+  "id": "urn:engram:pilot-receiver:receipt:f65e87fb-6407-482c-a16c-ed8c39cf96d2",
+  "issuedAt": "2026-09-07T06:39:41.366647+00:00",
+  "issuer": "urn:engram:pilot-receiver",
+  "kind": "RecallReceipt",
+  "payload": {
+    "action": "recall",
+    "audience": "self",
+    "context": {
+      "id": "memory/technical",
+      "path": [
+        "memory",
+        "technical"
+      ]
+    },
+    "delivered": [
+      {
+        "memoryId": "573e808b-10ef-431b-a788-ad54a1c1380e",
+        "publisher": "urn:engram:pilot-publisher",
+        "readDecision": {
+          "code": null,
+          "effect": "allow",
+          "ruleId": "pilot-grant"
+        }
+      }
+    ],
+    "injected": true,
+    "purpose": "session-recall",
+    "receiverRule": {
+      "ruleId": "pilot-grant"
+    },
+    "selected": [
+      {
+        "contentDigest": {
+          "algorithm": "sha256",
+          "value": "2c95a2e3874f845d4fa8e34d78e69a461bbc4303d026e56a78743b7f2a795b70"
+        },
+        "contributions": [
+          {
+            "publisher": "urn:engram:pilot-publisher",
+            "rank": 1
+          }
+        ],
+        "memoryId": "573e808b-10ef-431b-a788-ad54a1c1380e",
+        "publisher": "urn:engram:pilot-publisher",
+        "score": 0.01639344262295082
+      }
+    ],
+    "sources": [
+      {
+        "policyDecision": {
+          "code": null,
+          "effect": "allow",
+          "ruleId": "pilot-grant"
+        },
+        "publisher": "urn:engram:pilot-publisher",
+        "role": "remote",
+        "storeDigest": {
+          "algorithm": "sha256",
+          "value": "e2db617774807c59beb4b2afe29cf10843405a1ea87caec17d33ae408dab320a"
+        },
+        "traceOutcome": "matched",
+        "weight": 1
+      }
+    ],
+    "transformation": "weighted-rrf-v1",
+    "turnId": "35577b9b-178a-4e81-b406-e954b9c27cae"
+  },
+  "payloadMediaType": "application/vnd.lighthouse.recall-receipt+json",
+  "protocolVersion": "0.1"
+}
