@@ -1,0 +1,155 @@
+{
+  "scope": "Preliminary supplied-byte-envelope comparison; human correctness ungraded, internal token parity unverified.",
+  "arms": {
+    "append_compact_comparator": {
+      "captured": 100,
+      "errors": 100,
+      "parse_failures": 0,
+      "answers_with_unavailable_citations": 0,
+      "expected_sources_cited": 0,
+      "responses_with_usage": 0,
+      "reported_input_tokens": 0,
+      "reported_output_tokens": 0,
+      "elapsed_seconds_sum": 0.0008376630039492738,
+      "latency_seconds_p50": 6.457999916165136e-06,
+      "latency_seconds_p95": 2.033300006587524e-05,
+      "human_correctness": null
+    },
+    "dynamic": {
+      "captured": 100,
+      "errors": 0,
+      "parse_failures": 0,
+      "answers_with_unavailable_citations": 0,
+      "expected_sources_cited": 99,
+      "responses_with_usage": 100,
+      "reported_input_tokens": 1192104,
+      "reported_output_tokens": 9688,
+      "elapsed_seconds_sum": 758.265646662996,
+      "latency_seconds_p50": 7.398111124999559,
+      "latency_seconds_p95": 11.97041629100022,
+      "human_correctness": null
+    },
+    "local_agent_context": {
+      "captured": 100,
+      "errors": 0,
+      "parse_failures": 0,
+      "answers_with_unavailable_citations": 0,
+      "expected_sources_cited": 96,
+      "responses_with_usage": 100,
+      "reported_input_tokens": 1070874,
+      "reported_output_tokens": 9613,
+      "elapsed_seconds_sum": 759.4073352860041,
+      "latency_seconds_p50": 7.453867833000004,
+      "latency_seconds_p95": 10.757526541000516,
+      "human_correctness": null
+    }
+  },
+  "uncertain_dispatches": [],
+  "by_split": {
+    "development": {
+      "append_compact_comparator": {
+        "captured": 30,
+        "errors": 30,
+        "parse_failures": 0,
+        "answers_with_unavailable_citations": 0,
+        "expected_sources_cited": 0,
+        "responses_with_usage": 0,
+        "reported_input_tokens": 0,
+        "reported_output_tokens": 0,
+        "elapsed_seconds_sum": 0.0002407890024187509,
+        "latency_seconds_p50": 6.125000254542101e-06,
+        "latency_seconds_p95": 2.0792000213987194e-05,
+        "human_correctness": null
+      },
+      "dynamic": {
+        "captured": 30,
+        "errors": 0,
+        "parse_failures": 0,
+        "answers_with_unavailable_citations": 0,
+        "expected_sources_cited": 30,
+        "responses_with_usage": 30,
+        "reported_input_tokens": 357743,
+        "reported_output_tokens": 3034,
+        "elapsed_seconds_sum": 234.71540758299852,
+        "latency_seconds_p50": 7.175038792000123,
+        "latency_seconds_p95": 14.94722237499991,
+        "human_correctness": null
+      },
+      "local_agent_context": {
+        "captured": 30,
+        "errors": 0,
+        "parse_failures": 0,
+        "answers_with_unavailable_citations": 0,
+        "expected_sources_cited": 30,
+        "responses_with_usage": 30,
+        "reported_input_tokens": 321260,
+        "reported_output_tokens": 2674,
+        "elapsed_seconds_sum": 223.48441287600326,
+        "latency_seconds_p50": 7.471036500000082,
+        "latency_seconds_p95": 11.314001749999989,
+        "human_correctness": null
+      }
+    },
+    "holdout": {
+      "append_compact_comparator": {
+        "captured": 70,
+        "errors": 70,
+        "parse_failures": 0,
+        "answers_with_unavailable_citations": 0,
+        "expected_sources_cited": 0,
+        "responses_with_usage": 0,
+        "reported_input_tokens": 0,
+        "reported_output_tokens": 0,
+        "elapsed_seconds_sum": 0.000596874001530523,
+        "latency_seconds_p50": 6.50000038149301e-06,
+        "latency_seconds_p95": 1.874999998108251e-05,
+        "human_correctness": null
+      },
+      "dynamic": {
+        "captured": 70,
+        "errors": 0,
+        "parse_failures": 0,
+        "answers_with_unavailable_citations": 0,
+        "expected_sources_cited": 69,
+        "responses_with_usage": 70,
+        "reported_input_tokens": 834361,
+        "reported_output_tokens": 6654,
+        "elapsed_seconds_sum": 523.5502390799975,
+        "latency_seconds_p50": 7.504391082999973,
+        "latency_seconds_p95": 11.195042209000349,
+        "human_correctness": null
+      },
+      "local_agent_context": {
+        "captured": 70,
+        "errors": 0,
+        "parse_failures": 0,
+        "answers_with_unavailable_citations": 0,
+        "expected_sources_cited": 66,
+        "responses_with_usage": 70,
+        "reported_input_tokens": 749614,
+        "reported_output_tokens": 6939,
+        "elapsed_seconds_sum": 535.9229224100009,
+        "latency_seconds_p50": 7.302825208000286,
+        "latency_seconds_p95": 10.757526541000516,
+        "human_correctness": null
+      }
+    }
+  },
+  "undispatched_cells": [],
+  "answer_dispatches": 200,
+  "compaction_dispatches": 2,
+  "compaction_usage_and_timing": {
+    "captured": 2,
+    "errors": 1,
+    "parse_failures": 0,
+    "answers_with_unavailable_citations": 0,
+    "expected_sources_cited": 0,
+    "responses_with_usage": 1,
+    "reported_input_tokens": 14246,
+    "reported_output_tokens": 2656,
+    "elapsed_seconds_sum": 206.52033579199997,
+    "latency_seconds_p50": 86.44615391699972,
+    "latency_seconds_p95": 120.07418187500025,
+    "human_correctness": null
+  }
+}

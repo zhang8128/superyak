@@ -337,9 +337,13 @@ reduced this to **0.66%** on the same 10,000-call workload. A separate fixed
 **10/100 to 99/100** with all expected originals supplied; the remaining timeout
 is retained in the report. Source availability does not establish answer quality.
 
-The [preliminary continuity comparison](reports/2026-09-06-context-continuity-protocol.md)
-captures live answers against two context baselines, with human ratings left
-unset. The source-grounded human continuity gate from the design has not passed.
+The [preliminary continuity capture](reports/2026-09-06-context-continuity-results.md)
+saved 100 dynamic-context answers and 100 answers using actual LocalAgent recall
+and formatting. Expected-source citation coverage was 99/100 and 96/100,
+respectively, with no unavailable citation IDs. The append-and-compact comparator
+timed out during preparation and supplied no scored answers. Human ratings remain
+unset in the [review page](reports/2026-09-06-context-continuity-review.html);
+the source-grounded human continuity gate from the design has not passed.
 Rich Engram recall parity, broader continuity evaluation, local-model tokenizer
 validation, category/sheaf influence, and Lighthouse networking remain separate
 work described in the [design](superpowers/specs/2026-09-05-dynamic-context-runtime-design.md).
