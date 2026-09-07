@@ -22,7 +22,8 @@ the originals before the monorepo integration changes.
 Develop new changes in `engram/` and `lighthouse/` here. Keep Python dependency
 updates in `engram/pyproject.toml` and `engram/uv.lock`, and Node dependency
 updates in Lighthouse's workspace and lockfile. CI checks both projects and
-their shared schemas on every pull request and push to `main`.
+their shared schemas on every pull request and branch push, including the
+initial import before the workflow exists on `main`.
 
 For history before the directory move, inspect the retained source commits:
 
