@@ -1,0 +1,15 @@
+# Terminal coding with durable context
+
+The user wants Engram to support long coding tasks in the terminal and accepts a separate command. Extend the existing isolated worktree and subscription integration. Keep the browser chat behavior intact.
+
+`context_cli code --repo PATH TASK` starts a named, durable task. `--thread NAME code --repo PATH --resume` continues it. Codex edits files and runs commands inside its native workspace-write sandbox (including standard temporary directories) using its managed ChatGPT login. No separately billed API fallback. Native repository instructions and saved user approvals remain active. External integrations remain disabled for this first version. Additional permission requests forwarded by Codex require an explicit terminal decision; noninteractive runs decline them.
+
+Each episode receives the original goal, explicit user corrections, a bounded repository snapshot, the latest derived checkpoint, and selected archive/Engram evidence. The checkpoint records status (`complete`, `continue`, or `needs_input`), summary, decisions, next steps, and checks. Generated notes remain evidence; they cannot replace the user goal or become user-authored pins. Actual repository state must be inspected before relying on a checkpoint.
+
+The runner archives visible app-server events as they arrive and persists a running marker before dispatch. At normal episode completion it saves the checkpoint and starts a fresh thread if more work remains. Token-usage notifications and completed tool counts trigger a request to wrap up, followed by interruption at a harder threshold. A hard interruption, protocol failure, timeout, or Ctrl-C pauses the task with uncertainty recorded; resume requires the explicit resume command and begins by inspecting the repository before retrying work. Never automatically replay an uncertain command. Completed tasks do not run again on resume. Task identity binds to a canonical repository path and its filesystem identity; a different or replaced repository is rejected.
+
+This is managed episode rotation, not replacement before every internal model call. Codex retains its native context/tool loop within an episode. Report observed usage and selection manifests; do not call input estimates exact tokens or guarantee that internal context never fills. Runs have finite episode, tool-step, byte, and time limits; reaching a run limit pauses with a resume command.
+
+Persist everything in the existing local ContextStore under the selected task thread. Keep large outputs in bounded artifacts and only bounded excerpts in the next request. Provide read-only, task-scoped archive search/read tools during episodes so omitted older evidence remains recoverable; attach original event/artifact IDs to excerpts. User corrections use the existing `correct` command. Thread deletion must remove coding records through the existing deletion path. No new database service or dependency is required.
+
+Verify with scripted app-server tests, durable recovery tests, regression tests, and a real subscription coding smoke in a disposable repository. Do not change the user's project during the smoke.

@@ -1,0 +1,3068 @@
+{
+  "schema_version": 1,
+  "fixture_sha256": "be562a36147b0e10fd8ad6df6f019526a5e576b09fb367ccbc9ca2ab3ee80266",
+  "split": "all",
+  "scope": "Synthetic source-selection benchmark; no model answers, human review, live tokenizer, richer Engram recall, or production rollout evaluated.",
+  "search_deadline_ms": 50.0,
+  "input_count_unit": "canonical JSON UTF-8 bytes",
+  "input_ceiling": 16000,
+  "elapsed_seconds": 8.830546666999908,
+  "by_scale": {
+    "25000": {
+      "probes": 100,
+      "all_expected_sources_rate": 0.1,
+      "mean_source_recall": 0.1,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 53.224917000079586,
+      "selection_ms_p95": 57.228542000302696,
+      "max_candidates": 11,
+      "max_input_bytes": 5981
+    }
+  },
+  "by_family": {
+    "conflicting_sources": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 53.36241700024402,
+      "selection_ms_p95": 55.13454100037052,
+      "max_candidates": 10,
+      "max_input_bytes": 5557
+    },
+    "delayed_detail": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 53.26333299944963,
+      "selection_ms_p95": 57.228542000302696,
+      "max_candidates": 10,
+      "max_input_bytes": 5596
+    },
+    "explicit_correction": {
+      "probes": 10,
+      "all_expected_sources_rate": 1.0,
+      "mean_source_recall": 1.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 53.224917000079586,
+      "selection_ms_p95": 61.39679199986858,
+      "max_candidates": 11,
+      "max_input_bytes": 5981
+    },
+    "paraphrase": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 52.75691600036225,
+      "selection_ms_p95": 56.54191699977673,
+      "max_candidates": 10,
+      "max_input_bytes": 5531
+    },
+    "personal_interlude": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 52.80258400034654,
+      "selection_ms_p95": 57.116415999189485,
+      "max_candidates": 10,
+      "max_input_bytes": 5571
+    },
+    "project_return": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 52.9469169996446,
+      "selection_ms_p95": 57.44962500011752,
+      "max_candidates": 10,
+      "max_input_bytes": 5528
+    },
+    "quoted_instruction": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 52.77283300074487,
+      "selection_ms_p95": 55.31912500009639,
+      "max_candidates": 10,
+      "max_input_bytes": 5560
+    },
+    "recent_reference": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 52.94825000055425,
+      "selection_ms_p95": 57.16449999999895,
+      "max_candidates": 10,
+      "max_input_bytes": 5237
+    },
+    "revised_plan": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 53.56220799967559,
+      "selection_ms_p95": 57.5645409999197,
+      "max_candidates": 10,
+      "max_input_bytes": 5529
+    },
+    "unicode": {
+      "probes": 10,
+      "all_expected_sources_rate": 0.0,
+      "mean_source_recall": 0.0,
+      "archive_timeout_rate": 1.0,
+      "required_constraint_failures": 0,
+      "foreign_source_count": 0,
+      "selection_ms_p50": 52.91345800014824,
+      "selection_ms_p95": 57.50566699953197,
+      "max_candidates": 10,
+      "max_input_bytes": 5513
+    }
+  },
+  "rows": [
+    {
+      "probe_id": "project_return-01",
+      "family": "project_return",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-2af290c08989d07bef428d10"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 57.44962500011752,
+      "candidate_count": 10,
+      "input_bytes": 5526
+    },
+    {
+      "probe_id": "project_return-02",
+      "family": "project_return",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-2a4519985fc22920e0bc588b"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.568832999895676,
+      "candidate_count": 10,
+      "input_bytes": 5528
+    },
+    {
+      "probe_id": "project_return-03",
+      "family": "project_return",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-9a164d9ad7a920c8cc40917e"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.69154200050252,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "project_return-04",
+      "family": "project_return",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e524533ff2d1ee3f88c2b963"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.73762500039447,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "project_return-05",
+      "family": "project_return",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-da5242dd0e8c694f218e3a02"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.9469169996446,
+      "candidate_count": 10,
+      "input_bytes": 5526
+    },
+    {
+      "probe_id": "project_return-06",
+      "family": "project_return",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-75d9ee2638e8321a50f71a8b"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.99654200007353,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "project_return-07",
+      "family": "project_return",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-86d9444d364aea3c59d6f70e"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.7946249994784,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "project_return-08",
+      "family": "project_return",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-47261d9fbbdfac8129ba9dcc"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.48416599988559,
+      "candidate_count": 10,
+      "input_bytes": 5526
+    },
+    {
+      "probe_id": "project_return-09",
+      "family": "project_return",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-f8da6e6cd58278c0e7d07590"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.36825000015233,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "project_return-10",
+      "family": "project_return",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-b9a74a3de6ff752c5baadc30"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.29212499964342,
+      "candidate_count": 10,
+      "input_bytes": 5528
+    },
+    {
+      "probe_id": "personal_interlude-01",
+      "family": "personal_interlude",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-f0580ddbca9ff1bcce8700e6"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.42875000042113,
+      "candidate_count": 10,
+      "input_bytes": 5569
+    },
+    {
+      "probe_id": "personal_interlude-02",
+      "family": "personal_interlude",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-a126ce43dc5b6c999bdadb42"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 57.116415999189485,
+      "candidate_count": 10,
+      "input_bytes": 5571
+    },
+    {
+      "probe_id": "personal_interlude-03",
+      "family": "personal_interlude",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-c63f7ee301071feb88be97e6"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.34783400010201,
+      "candidate_count": 10,
+      "input_bytes": 5571
+    },
+    {
+      "probe_id": "personal_interlude-04",
+      "family": "personal_interlude",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-6f6c33c5415e99c3fe5a465a"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.1089999994947,
+      "candidate_count": 10,
+      "input_bytes": 5570
+    },
+    {
+      "probe_id": "personal_interlude-05",
+      "family": "personal_interlude",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-24d9185dacfed9737eead8c0"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.67808299999888,
+      "candidate_count": 10,
+      "input_bytes": 5569
+    },
+    {
+      "probe_id": "personal_interlude-06",
+      "family": "personal_interlude",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-34ea94c62c627dd549bee120"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.64441600047576,
+      "candidate_count": 10,
+      "input_bytes": 5571
+    },
+    {
+      "probe_id": "personal_interlude-07",
+      "family": "personal_interlude",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-796716bbf283272e65c126d9"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.80258400034654,
+      "candidate_count": 10,
+      "input_bytes": 5570
+    },
+    {
+      "probe_id": "personal_interlude-08",
+      "family": "personal_interlude",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e7a0d1f7f347027ca2b947bb"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.0195420005839,
+      "candidate_count": 10,
+      "input_bytes": 5569
+    },
+    {
+      "probe_id": "personal_interlude-09",
+      "family": "personal_interlude",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-58563238397ce1770a7e44f7"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.74695800017071,
+      "candidate_count": 10,
+      "input_bytes": 5570
+    },
+    {
+      "probe_id": "personal_interlude-10",
+      "family": "personal_interlude",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-9da57ed18c557f6f0462b8ba"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 51.95191700022406,
+      "candidate_count": 10,
+      "input_bytes": 5571
+    },
+    {
+      "probe_id": "explicit_correction-01",
+      "family": "explicit_correction",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e40bc6b070270475716ccbb9"
+      ],
+      "selected_source_ids": [
+        "ev-e40bc6b070270475716ccbb9",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.32225000074686,
+      "candidate_count": 11,
+      "input_bytes": 5974
+    },
+    {
+      "probe_id": "explicit_correction-02",
+      "family": "explicit_correction",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-01f84cd1ae86168371605f13"
+      ],
+      "selected_source_ids": [
+        "ev-01f84cd1ae86168371605f13",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.63462500079186,
+      "candidate_count": 11,
+      "input_bytes": 5981
+    },
+    {
+      "probe_id": "explicit_correction-03",
+      "family": "explicit_correction",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-afb8edbebed5d493317f8825"
+      ],
+      "selected_source_ids": [
+        "ev-afb8edbebed5d493317f8825",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.51983300058782,
+      "candidate_count": 11,
+      "input_bytes": 5978
+    },
+    {
+      "probe_id": "explicit_correction-04",
+      "family": "explicit_correction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-8ce258bddccbbea9ad91ed36"
+      ],
+      "selected_source_ids": [
+        "ev-8ce258bddccbbea9ad91ed36",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.42137500044919,
+      "candidate_count": 11,
+      "input_bytes": 5977
+    },
+    {
+      "probe_id": "explicit_correction-05",
+      "family": "explicit_correction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-29f2a4fee3f095f0caa72cef"
+      ],
+      "selected_source_ids": [
+        "ev-29f2a4fee3f095f0caa72cef",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 60.20504200023424,
+      "candidate_count": 11,
+      "input_bytes": 5973
+    },
+    {
+      "probe_id": "explicit_correction-06",
+      "family": "explicit_correction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-95364a7e9d6f97c9e3b3d35e"
+      ],
+      "selected_source_ids": [
+        "ev-95364a7e9d6f97c9e3b3d35e",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.18391599939787,
+      "candidate_count": 11,
+      "input_bytes": 5979
+    },
+    {
+      "probe_id": "explicit_correction-07",
+      "family": "explicit_correction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-a4271659cdb718689cf273f7"
+      ],
+      "selected_source_ids": [
+        "ev-a4271659cdb718689cf273f7",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.224917000079586,
+      "candidate_count": 11,
+      "input_bytes": 5977
+    },
+    {
+      "probe_id": "explicit_correction-08",
+      "family": "explicit_correction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e4b564931024ab42f44ddc81"
+      ],
+      "selected_source_ids": [
+        "ev-e4b564931024ab42f44ddc81",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.24641600054747,
+      "candidate_count": 11,
+      "input_bytes": 5974
+    },
+    {
+      "probe_id": "explicit_correction-09",
+      "family": "explicit_correction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-0dd433210452b688dfc9562d"
+      ],
+      "selected_source_ids": [
+        "ev-0dd433210452b688dfc9562d",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.2351669999116,
+      "candidate_count": 11,
+      "input_bytes": 5977
+    },
+    {
+      "probe_id": "explicit_correction-10",
+      "family": "explicit_correction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-7891846659666ee99819f51e"
+      ],
+      "selected_source_ids": [
+        "ev-7891846659666ee99819f51e",
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": true,
+      "source_recall": 1.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 61.39679199986858,
+      "candidate_count": 11,
+      "input_bytes": 5979
+    },
+    {
+      "probe_id": "revised_plan-01",
+      "family": "revised_plan",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-9d71e1bc775f75b12368edb8"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 57.5645409999197,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "revised_plan-02",
+      "family": "revised_plan",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-2c45e0701ec675037c1cc37c"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 56.19191700043302,
+      "candidate_count": 10,
+      "input_bytes": 5529
+    },
+    {
+      "probe_id": "revised_plan-03",
+      "family": "revised_plan",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-0cbe87b22168604d3210c144"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.56220799967559,
+      "candidate_count": 10,
+      "input_bytes": 5528
+    },
+    {
+      "probe_id": "revised_plan-04",
+      "family": "revised_plan",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-37e5e66dac48e15f00f8a13f"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 55.458707999605394,
+      "candidate_count": 10,
+      "input_bytes": 5528
+    },
+    {
+      "probe_id": "revised_plan-05",
+      "family": "revised_plan",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-8c0b6b52aa884fa81e03948c"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.703958000165585,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "revised_plan-06",
+      "family": "revised_plan",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-8e808df4f724f9ed55349dc0"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.697459000228264,
+      "candidate_count": 10,
+      "input_bytes": 5528
+    },
+    {
+      "probe_id": "revised_plan-07",
+      "family": "revised_plan",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-8949614dca645d2af7046913"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.449208000529325,
+      "candidate_count": 10,
+      "input_bytes": 5528
+    },
+    {
+      "probe_id": "revised_plan-08",
+      "family": "revised_plan",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-4d652c165677754141eedbaa"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.47383300047659,
+      "candidate_count": 10,
+      "input_bytes": 5527
+    },
+    {
+      "probe_id": "revised_plan-09",
+      "family": "revised_plan",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-0414018d7ee1b4c1945dab28"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 56.164250000620086,
+      "candidate_count": 10,
+      "input_bytes": 5528
+    },
+    {
+      "probe_id": "revised_plan-10",
+      "family": "revised_plan",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-5d7e10021d3a9a1519cbc82f"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.13029200008168,
+      "candidate_count": 10,
+      "input_bytes": 5529
+    },
+    {
+      "probe_id": "conflicting_sources-01",
+      "family": "conflicting_sources",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-69c54cd208f9766fee4375a6",
+        "ev-c6fb648f158e68173178db99"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.36241700024402,
+      "candidate_count": 10,
+      "input_bytes": 5555
+    },
+    {
+      "probe_id": "conflicting_sources-02",
+      "family": "conflicting_sources",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-1e8af57bf60d50f7b05072fe",
+        "ev-bc8487e3bc8401cecb68fd90"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.04558399984671,
+      "candidate_count": 10,
+      "input_bytes": 5557
+    },
+    {
+      "probe_id": "conflicting_sources-03",
+      "family": "conflicting_sources",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-3606a245950f82d2c4c1e6ad",
+        "ev-bc8d3e290a41c7084d2b2499"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.64737499985495,
+      "candidate_count": 10,
+      "input_bytes": 5556
+    },
+    {
+      "probe_id": "conflicting_sources-04",
+      "family": "conflicting_sources",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e2ee8e713e01f23a723ea333",
+        "ev-e825e756809d82cf040c6f0d"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.465834000031464,
+      "candidate_count": 10,
+      "input_bytes": 5556
+    },
+    {
+      "probe_id": "conflicting_sources-05",
+      "family": "conflicting_sources",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-6f5e28e985c7c5ea6a0d94b5",
+        "ev-ccbf40e8ca60d42605271f5e"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.57291700056521,
+      "candidate_count": 10,
+      "input_bytes": 5555
+    },
+    {
+      "probe_id": "conflicting_sources-06",
+      "family": "conflicting_sources",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-95e05dfd890392b50d24c379",
+        "ev-b1087359cf990391361c6bf9"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.616625000562635,
+      "candidate_count": 10,
+      "input_bytes": 5556
+    },
+    {
+      "probe_id": "conflicting_sources-07",
+      "family": "conflicting_sources",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-4889f56a97626f905504c5d4",
+        "ev-e1f86dfc17a272a8631a5852"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.285916000073485,
+      "candidate_count": 10,
+      "input_bytes": 5556
+    },
+    {
+      "probe_id": "conflicting_sources-08",
+      "family": "conflicting_sources",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-7973f1b7a0bde837df7ba45c",
+        "ev-e0bd97a13272ed71e9f450c7"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.3620829999345,
+      "candidate_count": 10,
+      "input_bytes": 5555
+    },
+    {
+      "probe_id": "conflicting_sources-09",
+      "family": "conflicting_sources",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-1b1d7e58b5823ca85017f800",
+        "ev-e628abbb1d441071d3b26053"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 55.13454100037052,
+      "candidate_count": 10,
+      "input_bytes": 5556
+    },
+    {
+      "probe_id": "conflicting_sources-10",
+      "family": "conflicting_sources",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-3d84faeeda4b8b3f32602716",
+        "ev-cc36618b244201b0556fdc97"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.23579200032691,
+      "candidate_count": 10,
+      "input_bytes": 5557
+    },
+    {
+      "probe_id": "recent_reference-01",
+      "family": "recent_reference",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-beb7c6b8cfa5c169a43d6d4b"
+      ],
+      "selected_source_ids": [
+        "ev-924aa8086fa914ac7e6ecaa5",
+        "ev-eb5ff75b0749341b67ba5998",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 57.16449999999895,
+      "candidate_count": 10,
+      "input_bytes": 5233
+    },
+    {
+      "probe_id": "recent_reference-02",
+      "family": "recent_reference",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-27151d3eef2e98cd94d6a677"
+      ],
+      "selected_source_ids": [
+        "ev-5e76df4a02f4d6495747f5f9",
+        "ev-ed2ea52a8afb2a1d116c94bb",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.41162499987695,
+      "candidate_count": 10,
+      "input_bytes": 5237
+    },
+    {
+      "probe_id": "recent_reference-03",
+      "family": "recent_reference",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-1584ce71f05db13af66c41b3"
+      ],
+      "selected_source_ids": [
+        "ev-51e13a539b7ce414169bd6c8",
+        "ev-b1ffa2a046190985e273aac9",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.9003340006966,
+      "candidate_count": 10,
+      "input_bytes": 5235
+    },
+    {
+      "probe_id": "recent_reference-04",
+      "family": "recent_reference",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-d7f120fe7f1695152a07c510"
+      ],
+      "selected_source_ids": [
+        "ev-1c949d2d1401900ea78bd66a",
+        "ev-ba014b89133e934891b86122",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.94183399969188,
+      "candidate_count": 10,
+      "input_bytes": 5235
+    },
+    {
+      "probe_id": "recent_reference-05",
+      "family": "recent_reference",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-175e5b989ce10809e17515ff"
+      ],
+      "selected_source_ids": [
+        "ev-8ece84cc8a35773907a8db1b",
+        "ev-bf462ebfb8ffc217147a2611",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.26604200015572,
+      "candidate_count": 10,
+      "input_bytes": 5233
+    },
+    {
+      "probe_id": "recent_reference-06",
+      "family": "recent_reference",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-9dcbc8a5cb2eafcabe679aa3"
+      ],
+      "selected_source_ids": [
+        "ev-65be2e81a375694de7bccef4",
+        "ev-cae76ce44848fa0140d4a784",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.94825000055425,
+      "candidate_count": 10,
+      "input_bytes": 5235
+    },
+    {
+      "probe_id": "recent_reference-07",
+      "family": "recent_reference",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-13fc0f6d5c5b15d28672b749"
+      ],
+      "selected_source_ids": [
+        "ev-1844ce25ff2c0937725bbdf6",
+        "ev-a8ac3055f72b6da822dcc3c4",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.00450000070123,
+      "candidate_count": 10,
+      "input_bytes": 5235
+    },
+    {
+      "probe_id": "recent_reference-08",
+      "family": "recent_reference",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-d9737b051e41ad96d213e78b"
+      ],
+      "selected_source_ids": [
+        "ev-3cc83e6b21e7316fed7595dd",
+        "ev-cc00109c13337331b2ca2150",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.95966600008251,
+      "candidate_count": 10,
+      "input_bytes": 5233
+    },
+    {
+      "probe_id": "recent_reference-09",
+      "family": "recent_reference",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-8bc28efcc614a28722236042"
+      ],
+      "selected_source_ids": [
+        "ev-a711336cbdcbd1d719808c9d",
+        "ev-bf0982556143ddfa97f25ae0",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.84974999995029,
+      "candidate_count": 10,
+      "input_bytes": 5235
+    },
+    {
+      "probe_id": "recent_reference-10",
+      "family": "recent_reference",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-0b479a3e6bd951a758304624"
+      ],
+      "selected_source_ids": [
+        "ev-0e396843ea409fe793ed36a0",
+        "ev-fa6c6781e38481cb0b0f8c33",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 56.064417000015965,
+      "candidate_count": 10,
+      "input_bytes": 5237
+    },
+    {
+      "probe_id": "delayed_detail-01",
+      "family": "delayed_detail",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-0dd1217e1bbe39846430075a"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.38670900073339,
+      "candidate_count": 10,
+      "input_bytes": 5594
+    },
+    {
+      "probe_id": "delayed_detail-02",
+      "family": "delayed_detail",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-b947d87c2f5b73c635896798"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.15941699952964,
+      "candidate_count": 10,
+      "input_bytes": 5596
+    },
+    {
+      "probe_id": "delayed_detail-03",
+      "family": "delayed_detail",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-45dd6dd0a12e76c2b860d315"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.35474999992584,
+      "candidate_count": 10,
+      "input_bytes": 5595
+    },
+    {
+      "probe_id": "delayed_detail-04",
+      "family": "delayed_detail",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-853669ebf9b013ef6ac4f8f7"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.49791699952766,
+      "candidate_count": 10,
+      "input_bytes": 5595
+    },
+    {
+      "probe_id": "delayed_detail-05",
+      "family": "delayed_detail",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-42d0ce3f2e236325d2597b8e"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.26333299944963,
+      "candidate_count": 10,
+      "input_bytes": 5594
+    },
+    {
+      "probe_id": "delayed_detail-06",
+      "family": "delayed_detail",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-7a7c815afa7296f9d1d90515"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.3188329993427,
+      "candidate_count": 10,
+      "input_bytes": 5595
+    },
+    {
+      "probe_id": "delayed_detail-07",
+      "family": "delayed_detail",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-928aa01dcb7925b071784dc0"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.685041999211535,
+      "candidate_count": 10,
+      "input_bytes": 5595
+    },
+    {
+      "probe_id": "delayed_detail-08",
+      "family": "delayed_detail",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-26c42c1c4699146a5f3e1a2c"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 57.228542000302696,
+      "candidate_count": 10,
+      "input_bytes": 5594
+    },
+    {
+      "probe_id": "delayed_detail-09",
+      "family": "delayed_detail",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-d5d8cfc1698664b0d77c17f7"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.78874999951222,
+      "candidate_count": 10,
+      "input_bytes": 5595
+    },
+    {
+      "probe_id": "delayed_detail-10",
+      "family": "delayed_detail",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-4246cb0a88b32bfe910d7fe1"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.71766699934233,
+      "candidate_count": 10,
+      "input_bytes": 5596
+    },
+    {
+      "probe_id": "unicode-01",
+      "family": "unicode",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-4fffbb015e4b03b569d40d84"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.33287500000006,
+      "candidate_count": 10,
+      "input_bytes": 5513
+    },
+    {
+      "probe_id": "unicode-02",
+      "family": "unicode",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e6bffcaf70f8da192ddb3e13"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.50979100057884,
+      "candidate_count": 10,
+      "input_bytes": 5512
+    },
+    {
+      "probe_id": "unicode-03",
+      "family": "unicode",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-73f65f99cf925fccea030a04"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.59745799978555,
+      "candidate_count": 10,
+      "input_bytes": 5511
+    },
+    {
+      "probe_id": "unicode-04",
+      "family": "unicode",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-c5da338812f8a96af4a29897"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.67408399959095,
+      "candidate_count": 10,
+      "input_bytes": 5512
+    },
+    {
+      "probe_id": "unicode-05",
+      "family": "unicode",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-eb269d26d57604da051010ac"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.88216700046178,
+      "candidate_count": 10,
+      "input_bytes": 5511
+    },
+    {
+      "probe_id": "unicode-06",
+      "family": "unicode",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-4942a380d79209e42338cd1c"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.33737500020652,
+      "candidate_count": 10,
+      "input_bytes": 5511
+    },
+    {
+      "probe_id": "unicode-07",
+      "family": "unicode",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-1ac1a519d62730842af3acb6"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 57.50566699953197,
+      "candidate_count": 10,
+      "input_bytes": 5512
+    },
+    {
+      "probe_id": "unicode-08",
+      "family": "unicode",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e59f530b11431e02c30f6da4"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.1680410005938,
+      "candidate_count": 10,
+      "input_bytes": 5512
+    },
+    {
+      "probe_id": "unicode-09",
+      "family": "unicode",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-f08916258455db8e8ba9dd15"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.196500000718515,
+      "candidate_count": 10,
+      "input_bytes": 5511
+    },
+    {
+      "probe_id": "unicode-10",
+      "family": "unicode",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-81363f05f49bc503c2d400a5"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.91345800014824,
+      "candidate_count": 10,
+      "input_bytes": 5513
+    },
+    {
+      "probe_id": "quoted_instruction-01",
+      "family": "quoted_instruction",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-ef95e4b2edf50337eaeaf36a"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.89683399951173,
+      "candidate_count": 10,
+      "input_bytes": 5558
+    },
+    {
+      "probe_id": "quoted_instruction-02",
+      "family": "quoted_instruction",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-de9546df1f8ab1cd5aae18ca"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.126458999737224,
+      "candidate_count": 10,
+      "input_bytes": 5560
+    },
+    {
+      "probe_id": "quoted_instruction-03",
+      "family": "quoted_instruction",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-33a4fecca1c7081084fea8bd"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.22208299983322,
+      "candidate_count": 10,
+      "input_bytes": 5559
+    },
+    {
+      "probe_id": "quoted_instruction-04",
+      "family": "quoted_instruction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-9af2e3a3db2ad9a77b672b73"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.21424999985902,
+      "candidate_count": 10,
+      "input_bytes": 5559
+    },
+    {
+      "probe_id": "quoted_instruction-05",
+      "family": "quoted_instruction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-b358c577340823f7010299ae"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.51787500037608,
+      "candidate_count": 10,
+      "input_bytes": 5558
+    },
+    {
+      "probe_id": "quoted_instruction-06",
+      "family": "quoted_instruction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-6b8e133f2f7df8c63ad9149b"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 55.31912500009639,
+      "candidate_count": 10,
+      "input_bytes": 5559
+    },
+    {
+      "probe_id": "quoted_instruction-07",
+      "family": "quoted_instruction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-7b6d7c1fb08ca76122a416bb"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.77283300074487,
+      "candidate_count": 10,
+      "input_bytes": 5559
+    },
+    {
+      "probe_id": "quoted_instruction-08",
+      "family": "quoted_instruction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-4216aa587414ac0779f9d0c8"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 55.06449999938923,
+      "candidate_count": 10,
+      "input_bytes": 5558
+    },
+    {
+      "probe_id": "quoted_instruction-09",
+      "family": "quoted_instruction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-cb0040e7fa41e27b70b98236"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.48020800011,
+      "candidate_count": 10,
+      "input_bytes": 5559
+    },
+    {
+      "probe_id": "quoted_instruction-10",
+      "family": "quoted_instruction",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-8c858fabd046bc13cce20870"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.67520799952763,
+      "candidate_count": 10,
+      "input_bytes": 5560
+    },
+    {
+      "probe_id": "paraphrase-01",
+      "family": "paraphrase",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-64c6d77c6e1c384ec0db67dd"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 55.22525000014866,
+      "candidate_count": 10,
+      "input_bytes": 5529
+    },
+    {
+      "probe_id": "paraphrase-02",
+      "family": "paraphrase",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-e9a316e54801ab44c2669963"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.75691600036225,
+      "candidate_count": 10,
+      "input_bytes": 5531
+    },
+    {
+      "probe_id": "paraphrase-03",
+      "family": "paraphrase",
+      "split": "development",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-8a1c6d32bbaa05090da5ef8c"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 54.00916600046912,
+      "candidate_count": 10,
+      "input_bytes": 5531
+    },
+    {
+      "probe_id": "paraphrase-04",
+      "family": "paraphrase",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-5e2d0e2178faa60f9dfc5d85"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.59741699976439,
+      "candidate_count": 10,
+      "input_bytes": 5530
+    },
+    {
+      "probe_id": "paraphrase-05",
+      "family": "paraphrase",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-1fdd08d913c8930c7208e472"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.70083400046133,
+      "candidate_count": 10,
+      "input_bytes": 5529
+    },
+    {
+      "probe_id": "paraphrase-06",
+      "family": "paraphrase",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-5e6ebc4199386e6aa297c374"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.71424999955343,
+      "candidate_count": 10,
+      "input_bytes": 5531
+    },
+    {
+      "probe_id": "paraphrase-07",
+      "family": "paraphrase",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-31c8745f2089a30457358c48"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 53.914875000373286,
+      "candidate_count": 10,
+      "input_bytes": 5530
+    },
+    {
+      "probe_id": "paraphrase-08",
+      "family": "paraphrase",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-c2296e38552e45f5d5fb3038"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 56.54191699977673,
+      "candidate_count": 10,
+      "input_bytes": 5529
+    },
+    {
+      "probe_id": "paraphrase-09",
+      "family": "paraphrase",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-f2c9e42d419a0dd3cd1cd8c4"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.53770800027269,
+      "candidate_count": 10,
+      "input_bytes": 5530
+    },
+    {
+      "probe_id": "paraphrase-10",
+      "family": "paraphrase",
+      "split": "holdout",
+      "noise_events": 25000,
+      "expected_source_ids": [
+        "ev-10f945971f535c71a90d5f39"
+      ],
+      "selected_source_ids": [
+        "noise:24990",
+        "noise:24991",
+        "noise:24992",
+        "noise:24993",
+        "noise:24994",
+        "noise:24995",
+        "noise:24996",
+        "noise:24997",
+        "noise:24998",
+        "noise:24999"
+      ],
+      "all_expected_sources_selected": false,
+      "source_recall": 0.0,
+      "required_constraints_present": true,
+      "foreign_source_count": 0,
+      "archive_timeout": true,
+      "selection_ms": 52.30091699922923,
+      "candidate_count": 10,
+      "input_bytes": 5531
+    }
+  ]
+}

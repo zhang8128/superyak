@@ -1,0 +1,19 @@
+Classify this memory episode. Return one or more kinds as a comma-separated list.
+Most important kind first.
+
+Kinds:
+- reading: about a book, passage, or reading session
+- design: about building, architecture, implementation
+- observation: noticing something about the world or a system
+- disposition: noticing something about how I think or act — self-correction, behavioral pattern, tendency caught by someone else, a habit identified
+- relational: about a person or relationship
+- factual: a fact, event, or technical detail
+- reflection: philosophical or recursive self-examination
+
+Episode content:
+{content}
+
+Episode context:
+{context}
+
+Return ONLY the comma-separated kinds, nothing else. Example: disposition, observation

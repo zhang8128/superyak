@@ -1,0 +1,90 @@
+{
+  "allocations": {
+    "current_bytes_after_warmup": 39649,
+    "current_bytes_at_end": 1006610,
+    "method": "tracemalloc.get_traced_memory after gc.collect; Python-traced allocation bytes only, not process RSS or SQLite native allocations",
+    "peak_bytes_after_warmup": 1946872,
+    "peak_bytes_during_warmup": 2101252,
+    "peak_python_traced_bytes": 2101252,
+    "retained_growth_bound_bytes": 33554432,
+    "retained_growth_bytes": 966961,
+    "retained_growth_within_bound": true,
+    "tracer_started_by_replay": true
+  },
+  "archive": {
+    "artifact_payload_bytes_at_end": 1093558,
+    "artifacts_at_end": 111,
+    "event_growth_after_warmup": 24500,
+    "events_after_warmup": 500,
+    "events_at_end": 25000,
+    "events_at_start": 0,
+    "manifests_at_end": 10000,
+    "path": null,
+    "turns_at_end": 5000
+  },
+  "budget": {
+    "all_generation_calls_compliant": true,
+    "context_window": 262144,
+    "count_method": "canonical JSON UTF-8 byte length; one byte is one synthetic admission unit",
+    "count_unit": "synthetic_utf8_json_bytes",
+    "input_ceiling": 131072,
+    "margin": 1024,
+    "max_input_count": 13718,
+    "output_reserve": 4096
+  },
+  "calls": {
+    "actual_generation_calls": 10000,
+    "completed_turns": 5000,
+    "count_operations": 10000,
+    "counted_payload_dispatch_matches": 10000,
+    "requested_generation_calls": 10000,
+    "tool_calls": 5000,
+    "tool_continuations": 5000
+  },
+  "candidates": {
+    "all_manifests_within_bound": true,
+    "archive_retrieval_incomplete_manifests": 66,
+    "archive_search_deadline_ms": 50.0,
+    "bound": 32,
+    "manifests_checked": 10000,
+    "max_observed": 20,
+    "max_selected": 20
+  },
+  "configuration": {
+    "archive_disposition": "temporary_deleted",
+    "artifact_bytes": 1048576,
+    "max_retained_growth_bytes": 33554432,
+    "model_calls": 10000,
+    "warmup_calls": 200
+  },
+  "result": {
+    "kind": "synthetic_mechanical_acceptance",
+    "ok": true
+  },
+  "schema_version": 1,
+  "scope": {
+    "continuity_accuracy": "not evaluated",
+    "counter_certification": "synthetic only; not a live tokenizer certification",
+    "private_data": "none",
+    "provider": "deterministic synthetic provider; no network or model calls"
+  },
+  "timing": {
+    "elapsed_seconds": 274.33082062500034,
+    "generation_calls_per_second": 36.45233873910804
+  },
+  "tools": {
+    "call_output_pair_checks": 5000,
+    "large_artifact_bytes": 1048576,
+    "max_decoded_page_bytes": 4096,
+    "max_serialized_tool_output_bytes": 5593,
+    "read_only": true,
+    "requested_page_bytes": 4096,
+    "tool": "archive_read"
+  },
+  "usage": {
+    "reported_input_units": 78593740,
+    "reported_output_units": 360000,
+    "reported_total_units": 78953740,
+    "responses_with_usage": 10000
+  }
+}

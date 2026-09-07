@@ -1,0 +1,14 @@
+{
+  "2026-09-06-context-lighthouse-source.md": "c06c5cda9f45a6d69c330ec2e90e2931fff8f771995a1f9c560ff93f35066c91",
+  "2026-09-06-context-lighthouse-source-evidence.tar.gz": "fb4cf6f7af976ac26e1539d800179dc8f85ba1178195e135ae685d24309ad388",
+  "2026-09-06-context-lighthouse-source-data/full-suite-before-review-fixes.log": "53f51905f0ad6f43b9dc1dbb4086b07d76573c7a81ec81c635aeeb5283aba658",
+  "2026-09-06-context-lighthouse-source-data/full-suite-final.log": "8444c5ba383029e7028c04c7f2d03f9eadf4531ef844bc032d89487bfcf47ba6",
+  "2026-09-06-context-lighthouse-source-data/provenance.json": "d16b85b6d97975f116ebcae54c861ae147ef9a938a7e082b348ba21a3bf2e465",
+  "2026-09-06-context-lighthouse-source-data/provider-response.json": "6b4acb6b7f6f70d227c5a0de2dcbf591a6a9037e9661172704e2880eca5959b0",
+  "2026-09-06-context-lighthouse-source-data/receipt-validation.json": "f935dc003e2eab1401cdb18eb1aa6c3dab87605241140ca598e683ffc58a30b6",
+  "2026-09-06-context-lighthouse-source-data/receipts/0-source_preparation.json": "1617ea4156addd8d1345a4ffedafbb0a22bf600a8696020ac3ddd9b1b027a945",
+  "2026-09-06-context-lighthouse-source-data/receipts/1-model_dispatch.json": "d5d4ee5d70b284c61755c9fb68c44e283cecc0cf3db503958a99d3e8a03d7486",
+  "2026-09-06-context-lighthouse-source-data/report.json": "1e93c628757332f82a0587d34429d60486c058fa05e54e96a6aaa9c52b17c16e",
+  "2026-09-06-context-lighthouse-source-data/reproduce.py": "2ee79d7755cf6ff087fe6c2ce1ebebea3d8d9c6cb0911a95d2c93581a1528cbd",
+  "2026-09-06-context-lighthouse-source-data/supplied-request.json": "55a6e95b73813310289ba56278f67a5cab48d9e3355445cccb5a95055989c58b"
+}

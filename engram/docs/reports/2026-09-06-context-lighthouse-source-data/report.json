@@ -1,0 +1,103 @@
+{
+  "synthetic": true,
+  "human_usefulness_evaluated": false,
+  "provider": "codex",
+  "model": "gpt-6-astra",
+  "provider_dispatches": 1,
+  "elapsed_seconds": 15.864491791999171,
+  "expected_account_supplied": true,
+  "restricted_account_absent": true,
+  "private_source_unchanged": true,
+  "publisher_unchanged": true,
+  "response": "The upstream support should be inspected.",
+  "usage": {
+    "input_tokens": 10332,
+    "output_tokens": 42,
+    "total_tokens": 10374,
+    "codex": {
+      "total": {
+        "totalTokens": 10374,
+        "inputTokens": 10332,
+        "cachedInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 42,
+        "reasoningOutputTokens": 29
+      },
+      "last": {
+        "totalTokens": 10374,
+        "inputTokens": 10332,
+        "cachedInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 42,
+        "reasoningOutputTokens": 29
+      },
+      "modelContextWindow": 258400
+    }
+  },
+  "capabilities": {
+    "strict": false,
+    "budget_scope": "episode",
+    "count_kind": "estimate",
+    "billing": "subscription"
+  },
+  "manifest": {
+    "active_items": 0,
+    "active_source_versions": {},
+    "capabilities": {
+      "billing": "subscription",
+      "budget_scope": "episode",
+      "count_kind": "estimate",
+      "strict": false
+    },
+    "compiler_version": 2,
+    "context_window": 40000,
+    "count_attempts": 1,
+    "input_ceiling": 24000,
+    "input_tokens": 2193,
+    "margin": 1000,
+    "model": "gpt-6-astra",
+    "omitted_count": 0,
+    "output_reserve": 8000,
+    "payload_digest": "b388071569c58f615228103b2e3743fa5b4bb1b55d74d5b1e5338f7b5d1cb946",
+    "selected": [
+      {
+        "dependencies": [],
+        "id": "lighthouse:pilot-publisher:573e808b-10ef-431b-a788-ad54a1c1380e",
+        "reason": "Lighthouse shared account",
+        "representation": 0,
+        "required": false,
+        "sequence": null,
+        "source_id": "lighthouse:pilot-publisher:573e808b-10ef-431b-a788-ad54a1c1380e",
+        "version": "876fef43630adb3fb6d6ecd018ded3868bfdc75a4f102775bbce2a8c61a0d594"
+      }
+    ],
+    "selected_ids": [
+      "lighthouse:pilot-publisher:573e808b-10ef-431b-a788-ad54a1c1380e"
+    ],
+    "source_coverage": [
+      {
+        "candidates": 1,
+        "coverage": "bounded source sample",
+        "diagnostics": [],
+        "elapsed_ms": 11,
+        "enabled": true,
+        "mode": "lighthouse",
+        "receipt_id": "urn:engram:pilot-receiver:receipt:ee8282b7-1f14-40a5-b079-087037ccc54f"
+      }
+    ],
+    "source_dispatch": [
+      {
+        "invalidated_ids": [],
+        "mode": "lighthouse",
+        "receipt_id": "urn:engram:pilot-receiver:receipt:f65e87fb-6407-482c-a16c-ed8c39cf96d2",
+        "receipt_ids": [
+          "urn:engram:pilot-receiver:receipt:f65e87fb-6407-482c-a16c-ed8c39cf96d2"
+        ]
+      }
+    ],
+    "step": 0,
+    "tool_source_snapshots": [],
+    "turn_id": "35577b9b-178a-4e81-b406-e954b9c27cae"
+  },
+  "source_account": "Synthetic bridge maintenance: inspect the upstream support."
+}

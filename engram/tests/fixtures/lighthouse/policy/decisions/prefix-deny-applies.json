@@ -1,0 +1,1 @@
+{"decision":{"allowed":false,"code":"EXPLICIT_DENY","ruleId":"deny-gil-memory-prefix"},"policy":"local-city","request":"prefix-deny-applies"}

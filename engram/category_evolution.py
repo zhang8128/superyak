@@ -1,0 +1,2396 @@
+"""Deterministic, read-only replay from the legacy category SQLite store."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict, dataclass
+from functools import lru_cache
+import hashlib
+import json
+import logging
+import math
+import os
+from pathlib import Path
+import sqlite3
+import sys
+import tempfile
+import threading
+from typing import Iterable, Literal, Mapping, Sequence
+import uuid
+import weakref
+
+
+logger = logging.getLogger(__name__)
+
+
+_FORK_OBSERVERS: weakref.WeakSet = weakref.WeakSet()
+_FORK_REGISTRY_LOCK = threading.RLock()
+_FORK_ACQUIRED: list[object] = []
+_CATEGORY_AT_FORK_REGISTERED = False
+
+
+def _before_category_fork() -> None:
+    """Quiesce observer-owned SQLite work before duplicating process state."""
+    global _FORK_ACQUIRED
+    _FORK_REGISTRY_LOCK.acquire()
+    observers = sorted(tuple(_FORK_OBSERVERS), key=id)
+    acquired: list[object] = []
+    try:
+        for observer in observers:
+            observer._lock.acquire()
+            acquired.append(observer)
+    except BaseException:
+        for observer in reversed(acquired):
+            observer._lock.release()
+        _FORK_REGISTRY_LOCK.release()
+        raise
+    _FORK_ACQUIRED = acquired
+
+
+def _after_category_fork_parent() -> None:
+    global _FORK_ACQUIRED
+    for observer in reversed(_FORK_ACQUIRED):
+        observer._lock.release()
+    _FORK_ACQUIRED = []
+    _FORK_REGISTRY_LOCK.release()
+
+
+def _after_category_fork_child() -> None:
+    global _FORK_ACQUIRED, _FORK_REGISTRY_LOCK
+    # The forking thread acquired every observer lock, so no SQLite operation
+    # was active at the split. Replace synchronization objects before child
+    # recovery closes and reopens the quiesced inherited handles.
+    current_pid = os.getpid()
+    for observer in _FORK_ACQUIRED:
+        observer._lock = threading.RLock()
+        observer._lock_pid = current_pid
+    _FORK_ACQUIRED = []
+    _FORK_REGISTRY_LOCK = threading.RLock()
+
+
+if hasattr(os, "register_at_fork") and not _CATEGORY_AT_FORK_REGISTERED:
+    os.register_at_fork(
+        before=_before_category_fork,
+        after_in_parent=_after_category_fork_parent,
+        after_in_child=_after_category_fork_child,
+    )
+    _CATEGORY_AT_FORK_REGISTERED = True
+
+from categories import (
+    Boundary,
+    CategoryQuotaExceeded,
+    CellDraft,
+    EvolvingCategoryStore,
+    MAX_CATEGORY_IDENTIFIER_BYTES,
+    _now_iso,
+    _staged_epoch_membership,
+)
+from category_compile import CategoryCompiler, CompiledCategory, CompileBudget
+from category_context import ContextObservation, ContextTracker
+
+
+LEGACY_NAMESPACE = uuid.UUID("f4210ab5-b9e8-53ba-b3ca-261db44a9223")
+OBSERVER_NAMESPACE = uuid.UUID("ed05cb22-d6e4-54c1-8f92-0f4d74556a07")
+_MAX_DERIVED_SNAPSHOT_BYTES = 64 * 1024 * 1024
+_V2_TABLES = frozenset(
+    {
+        "cat_schema_version",
+        "cat_events",
+        "cat_contexts",
+        "cat_cells",
+        "cat_boundaries",
+        "cat_weight_observations",
+        "cat_rewrites",
+        "cat_pending_rewrites",
+        "cat_rewrite_members",
+        "cat_epochs",
+        "cat_epoch_parents",
+        "cat_epoch_members",
+        "cat_snapshots",
+    }
+)
+_REPLAY_STATE_TABLES = (
+    "cat_schema_version",
+    "cat_events",
+    "cat_contexts",
+    "cat_cells",
+    "cat_boundaries",
+    "cat_weight_observations",
+    "cat_rewrites",
+    "cat_pending_rewrites",
+    "cat_rewrite_members",
+    "cat_epochs",
+    "cat_epoch_parents",
+    "cat_epoch_members",
+    "cat_snapshots",
+)
+_PRE_MEMBERSHIP_V2_TABLES = _V2_TABLES - {
+    "cat_pending_rewrites",
+    "cat_epoch_members",
+}
+_PRE_MEMBERSHIP_REPLAY_STATE_TABLES = tuple(
+    table
+    for table in _REPLAY_STATE_TABLES
+    if table in _PRE_MEMBERSHIP_V2_TABLES
+)
+_IMMUTABLE_V2_TABLES = _V2_TABLES - {"cat_pending_rewrites", "cat_snapshots"}
+_EXPECTED_IMMUTABILITY_TRIGGERS = frozenset(
+    f"{table}_{operation}"
+    for table in _IMMUTABLE_V2_TABLES
+    for operation in ("no_update", "no_delete")
+)
+_EXPECTED_V2_TRIGGERS = _EXPECTED_IMMUTABILITY_TRIGGERS | {
+    "cat_events_pending_rewrite_proposed",
+    "cat_events_pending_rewrite_terminal",
+}
+_PRE_MEMBERSHIP_EXPECTED_TRIGGERS = frozenset(
+    f"{table}_{operation}"
+    for table in _PRE_MEMBERSHIP_V2_TABLES - {"cat_snapshots"}
+    for operation in ("no_update", "no_delete")
+)
+_PRE_MEMBERSHIP_SCHEMA_OBJECTS = frozenset(
+    {
+        "cat_pending_rewrites",
+        "cat_epoch_members",
+        "cat_events_pending_rewrite_proposed",
+        "cat_events_pending_rewrite_terminal",
+        "idx_cat_events_rewrite_disposition",
+        "idx_cat_epoch_members_cell",
+        "cat_epoch_members_no_update",
+        "cat_epoch_members_no_delete",
+    }
+)
+_VEC_SHADOW_TABLES = frozenset(
+    {
+        "cat_vectors_chunks",
+        "cat_vectors_info",
+        "cat_vectors_rowids",
+        "cat_vectors_vector_chunks00",
+        "sqlite_sequence",
+    }
+)
+_SUPPORTED_VEC0_DDL = (
+    "create virtual table cat_vectors using vec0(cell_id text primary key, embedding float[768])"
+)
+
+
+@dataclass(frozen=True)
+class LegacyImportReport:
+    legacy_total: int
+    proxy_zero_cells: int
+    imported_one_cells: int
+    imported_two_cells: int
+    opaque_cells: int
+    unexplained_loss: int
+    root_epoch_id: str
+    snapshot_hash: str
+
+
+@dataclass(frozen=True)
+class RewriteEvidence:
+    evidence_event_ids: tuple[str, ...]
+    cohesion_gain: float
+    persistence_score: float
+    complexity_cost: float
+    explicit_correction: bool = False
+
+
+@dataclass(frozen=True)
+class RewriteProposal:
+    id: str
+    kind: Literal["create", "retire", "retype", "split", "merge"]
+    locus_id: str
+    context_id: str | None
+    input_ids: tuple[str, ...]
+    outputs: tuple[CellDraft, ...]
+    witness_ids: tuple[str, ...]
+    evidence: RewriteEvidence
+
+
+@dataclass(frozen=True)
+class EvolutionPolicy:
+    min_persistence_score: float = 0.10
+    rewrite_budget: int = 32
+    max_members: int = 32
+    max_active_branches: int = 4
+
+    def __post_init__(self) -> None:
+        _validate_structural_limits(self)
+
+
+_MAX_REWRITE_BUDGET = 32
+_MAX_REWRITE_MEMBERS = 32
+_MAX_ACTIVE_BRANCHES = 4
+
+
+def _validate_structural_limits(policy: EvolutionPolicy) -> None:
+    limits = {
+        "rewrite_budget": policy.rewrite_budget,
+        "max_members": policy.max_members,
+        "max_active_branches": policy.max_active_branches,
+    }
+    for name, value in limits.items():
+        if type(value) is not int:
+            raise TypeError(f"{name} must be an integer")
+    if not 0 <= policy.rewrite_budget <= _MAX_REWRITE_BUDGET:
+        raise ValueError("rewrite_budget must be between 0 and 32")
+    if not 0 <= policy.max_members <= _MAX_REWRITE_MEMBERS:
+        raise ValueError("max_members must be between 0 and 32")
+    if not 1 <= policy.max_active_branches <= _MAX_ACTIVE_BRANCHES:
+        raise ValueError("max_active_branches must be between 1 and 4")
+
+
+def is_eligible(evidence: RewriteEvidence, policy: EvolutionPolicy) -> bool:
+    """Apply the non-bypassable rewrite eligibility rule."""
+    if evidence.explicit_correction:
+        return True
+    return (
+        evidence.cohesion_gain > evidence.complexity_cost
+        and evidence.persistence_score >= policy.min_persistence_score
+    )
+
+
+_REWRITE_KINDS = frozenset({"create", "retire", "retype", "split", "merge"})
+_DISPOSITION_KINDS = {
+    "rewrite_proposed": "proposed",
+    "rewrite_committed": "committed",
+    "rewrite_rejected": "rejected",
+    "rewrite_superseded": "superseded",
+}
+EVOLUTION_NAMESPACE = uuid.UUID("30406ca9-f69f-5d0c-a3c1-c955de79d194")
+
+
+class EvolutionEngine:
+    """Validate and publish structural rewrites through immutable history."""
+
+    def __init__(
+        self,
+        store: EvolvingCategoryStore,
+        policy: EvolutionPolicy | None = None,
+    ):
+        self.store = store
+        self.policy = policy or EvolutionPolicy()
+        if not isinstance(self.policy, EvolutionPolicy):
+            raise TypeError("policy must be an EvolutionPolicy")
+        _validate_structural_limits(self.policy)
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self.store.connection
+
+    def propose(self, proposal: RewriteProposal) -> str:
+        """Archive a proposal and its inactive outputs in one transaction."""
+        self._validate_proposal(proposal)
+        payload = {
+            "rewrite_id": proposal.id,
+            "kind": proposal.kind,
+            "locus_id": proposal.locus_id,
+            "context_id": proposal.context_id,
+            "evidence": asdict(proposal.evidence),
+        }
+        payload_json = _canonical_json(payload)
+        with self.store.transaction() as connection:
+            member_ids = (
+                *proposal.input_ids,
+                *(draft.id for draft in proposal.outputs),
+                *proposal.witness_ids,
+                *proposal.evidence.evidence_event_ids,
+            )
+            proposal_id_bytes = len(proposal.id.encode("utf-8"))
+            member_bytes = sum(
+                len(str(identifier).encode("utf-8")) for identifier in member_ids
+            )
+            self.store.reserve_write_bytes(
+                proposal_id_bytes * (1 + len(member_ids))
+                + len(payload_json.encode("utf-8"))
+                + member_bytes,
+                row_count=1 + len(member_ids),
+            )
+            event_id = self.store.append_event("rewrite_proposed", payload)
+            connection.execute(
+                """
+                INSERT INTO cat_rewrites
+                    (id, context_id, created_event_id, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal.id,
+                    proposal.context_id,
+                    event_id,
+                    payload_json,
+                    _now_iso(),
+                ),
+            )
+            for draft in sorted(proposal.outputs, key=lambda item: (item.dimension, item.id)):
+                self.store.create_cell(draft, created_event_id=event_id)
+            self._insert_members(connection, proposal)
+        return proposal.id
+
+    propose_rewrite = propose
+
+    def _validate_proposal(self, proposal: RewriteProposal) -> None:
+        self.store._bounded_text(
+            proposal.id,
+            MAX_CATEGORY_IDENTIFIER_BYTES,
+            "rewrite identifier",
+        )
+        if not proposal.id or proposal.kind not in _REWRITE_KINDS:
+            raise ValueError("rewrite proposal requires an id and supported kind")
+        if self.connection.execute(
+            "SELECT 1 FROM cat_rewrites WHERE id = ?", (proposal.id,)
+        ).fetchone():
+            raise ValueError("rewrite proposal id already exists")
+        groups = (
+            proposal.input_ids,
+            tuple(draft.id for draft in proposal.outputs),
+            proposal.witness_ids,
+            proposal.evidence.evidence_event_ids,
+        )
+        total_members = sum(len(group) for group in groups)
+        if total_members > self.policy.max_members:
+            raise ValueError("rewrite member limit exceeded")
+        if any(len(set(group)) != len(group) for group in groups):
+            raise ValueError("rewrite member roles cannot contain duplicates")
+        if any(not math.isfinite(value) for value in (
+            proposal.evidence.cohesion_gain,
+            proposal.evidence.persistence_score,
+            proposal.evidence.complexity_cost,
+        )):
+            raise ValueError("rewrite evidence values must be finite")
+        shapes = {
+            "create": (len(proposal.input_ids) == 0 and len(proposal.outputs) >= 1),
+            "retire": (len(proposal.input_ids) >= 1 and len(proposal.outputs) == 0),
+            "retype": (len(proposal.input_ids) == 1 and len(proposal.outputs) == 1),
+            "split": (len(proposal.input_ids) == 1 and len(proposal.outputs) >= 2),
+            "merge": (len(proposal.input_ids) >= 2 and len(proposal.outputs) == 1),
+        }
+        if not shapes[proposal.kind]:
+            raise ValueError(f"invalid {proposal.kind} rewrite lineage")
+        for cell_id in (*proposal.input_ids, *proposal.witness_ids):
+            if self.store.get_cell(cell_id) is None:
+                raise ValueError(f"rewrite member cell does not exist: {cell_id}")
+        for event_id in proposal.evidence.evidence_event_ids:
+            if self.connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (event_id,)
+            ).fetchone() is None:
+                raise ValueError(f"rewrite evidence event does not exist: {event_id}")
+        output_ids = {draft.id for draft in proposal.outputs}
+        if any(self.store.get_cell(cell_id) is not None for cell_id in output_ids):
+            raise ValueError("rewrite output cell already exists")
+
+    @staticmethod
+    def _insert_members(
+        connection: sqlite3.Connection, proposal: RewriteProposal
+    ) -> None:
+        member_groups = (
+            ("input", proposal.input_ids, True),
+            ("output", tuple(draft.id for draft in proposal.outputs), True),
+            ("witness", proposal.witness_ids, True),
+            ("evidence", proposal.evidence.evidence_event_ids, False),
+        )
+        for role, identifiers, are_cells in member_groups:
+            for position, identifier in enumerate(identifiers):
+                connection.execute(
+                    """
+                    INSERT INTO cat_rewrite_members
+                        (rewrite_id, role, position, cell_id, external_id)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        proposal.id,
+                        role,
+                        position,
+                        identifier if are_cells else None,
+                        None if are_cells else identifier,
+                    ),
+                )
+
+    def latest_disposition(self, rewrite_id: str) -> str | None:
+        """Derive status from the newest immutable disposition event."""
+        row = self.connection.execute(
+            """
+            SELECT kind FROM cat_events
+            WHERE kind IN ('rewrite_proposed','rewrite_committed',
+                           'rewrite_rejected','rewrite_superseded')
+              AND json_extract(payload_json, '$.rewrite_id') = ?
+            ORDER BY rowid DESC LIMIT 1
+            """,
+            (rewrite_id,),
+        ).fetchone()
+        return _DISPOSITION_KINDS[str(row["kind"])] if row is not None else None
+
+    rewrite_disposition = latest_disposition
+
+    def lineage(self, rewrite_id: str) -> dict[str, tuple[str, ...]]:
+        result: dict[str, tuple[str, ...]] = {}
+        for role in ("input", "output", "witness", "evidence"):
+            rows = self.connection.execute(
+                """
+                SELECT cell_id, external_id FROM cat_rewrite_members
+                WHERE rewrite_id = ? AND role = ? ORDER BY position
+                """,
+                (rewrite_id, role),
+            ).fetchall()
+            result[role] = tuple(row["cell_id"] or row["external_id"] for row in rows)
+        return result
+
+    def commit(
+        self,
+        rewrite_id: str,
+        parent_epoch_ids: Sequence[str],
+        *,
+        epoch_id: str | None = None,
+    ) -> str | None:
+        """Commit an eligible proposal, or append a rejection without publishing it."""
+        rewrite_id = self.store._bounded_text(
+            rewrite_id, MAX_CATEGORY_IDENTIFIER_BYTES, "rewrite identifier"
+        )
+        parents = tuple(
+            self.store._bounded_text(
+                parent_id, MAX_CATEGORY_IDENTIFIER_BYTES, "epoch parent identifier"
+            )
+            for parent_id in parent_epoch_ids
+        )
+        identifier = self.store._bounded_text(
+            epoch_id or self._epoch_id(rewrite_id, parents),
+            MAX_CATEGORY_IDENTIFIER_BYTES,
+            "epoch identifier",
+        )
+        try:
+            with self.store.transaction(immediate=True) as connection:
+                rewrite = connection.execute(
+                    "SELECT payload_json FROM cat_rewrites WHERE id = ?", (rewrite_id,)
+                ).fetchone()
+                if rewrite is None:
+                    raise ValueError("rewrite proposal does not exist")
+                disposition = self.latest_disposition(rewrite_id)
+                if disposition == "committed":
+                    committed = connection.execute(
+                        "SELECT id FROM cat_epochs WHERE rewrite_id = ?",
+                        (rewrite_id,),
+                    ).fetchone()
+                    return str(committed["id"]) if committed else None
+                if disposition != "proposed":
+                    return None
+
+                try:
+                    payload = json.loads(rewrite["payload_json"])
+                    evidence = RewriteEvidence(**payload["evidence"])
+                    self._validate_commit(
+                        rewrite_id, payload["kind"], evidence, parents, identifier
+                    )
+                    parent_active: set[str] = set()
+                    for parent_id in parents:
+                        parent_active.update(self.active_cell_ids(parent_id))
+                    lineage = self.lineage(rewrite_id)
+                    if not set(lineage["input"]) <= parent_active:
+                        raise ValueError(
+                            "rewrite inputs are not active in the parent epochs"
+                        )
+                    active_set = parent_active.difference(lineage["input"])
+                    active_set.update(lineage["output"])
+                    active = tuple(sorted(active_set))
+                except (KeyError, TypeError, ValueError) as exc:
+                    self.store.append_event(
+                        "rewrite_rejected",
+                        {"rewrite_id": rewrite_id, "reason": str(exc)},
+                    )
+                    return None
+
+                content_hash = canonical_snapshot_hash(active)
+                identifier_bytes = len(identifier.encode("utf-8"))
+                self.store.reserve_write_bytes(
+                    identifier_bytes * (1 + len(parents))
+                    + len(rewrite_id.encode("utf-8"))
+                    + sum(len(parent.encode("utf-8")) for parent in parents),
+                    row_count=1 + len(parents),
+                )
+                event_id = self.store.append_event(
+                    "rewrite_committed",
+                    {
+                        "rewrite_id": rewrite_id,
+                        "epoch_id": identifier,
+                        "parent_epoch_ids": parents,
+                        "snapshot_hash": content_hash,
+                    },
+                )
+                connection.execute(
+                    """
+                    INSERT INTO cat_epochs (id, rewrite_id, created_event_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (identifier, rewrite_id, event_id, _now_iso()),
+                )
+                for position, parent_id in enumerate(parents):
+                    connection.execute(
+                        """
+                        INSERT INTO cat_epoch_parents (epoch_id, position, parent_id)
+                        VALUES (?, ?, ?)
+                        """,
+                        (identifier, position, parent_id),
+                    )
+                self._write_derived_snapshot(identifier, active)
+                return identifier
+        except sqlite3.IntegrityError:
+            # The unique rewrite index is the final race backstop.  The failed
+            # transaction (including its event) is already rolled back here.
+            committed = self.connection.execute(
+                "SELECT id FROM cat_epochs WHERE rewrite_id = ?", (rewrite_id,)
+            ).fetchone()
+            if committed is not None:
+                return str(committed["id"])
+            raise
+
+    commit_rewrite = commit
+
+    def _validate_commit(
+        self,
+        rewrite_id: str,
+        kind: str,
+        evidence: RewriteEvidence,
+        parents: tuple[str, ...],
+        epoch_id: str,
+    ) -> None:
+        if not is_eligible(evidence, self.policy):
+            raise ValueError("rewrite evidence is not eligible")
+        if not parents or len(set(parents)) != len(parents):
+            raise ValueError("rewrite commit requires distinct epoch parents")
+        if self.connection.execute(
+            "SELECT 1 FROM cat_epochs WHERE id = ?", (epoch_id,)
+        ).fetchone():
+            raise ValueError("epoch id already exists and would violate parent acyclicity")
+        for parent_id in parents:
+            if self.connection.execute(
+                "SELECT 1 FROM cat_epochs WHERE id = ?", (parent_id,)
+            ).fetchone() is None:
+                raise ValueError("epoch parent does not exist")
+        lineage = self.lineage(rewrite_id)
+        member_count = sum(len(members) for members in lineage.values())
+        if member_count > self.policy.max_members:
+            raise ValueError("rewrite member limit exceeded")
+        expected_shapes = {
+            "create": (not lineage["input"] and bool(lineage["output"])),
+            "retire": (bool(lineage["input"]) and not lineage["output"]),
+            "retype": (len(lineage["input"]) == 1 and len(lineage["output"]) == 1),
+            "split": (len(lineage["input"]) == 1 and len(lineage["output"]) >= 2),
+            "merge": (len(lineage["input"]) >= 2 and len(lineage["output"]) == 1),
+        }
+        if kind not in expected_shapes or not expected_shapes[kind]:
+            raise ValueError("rewrite lineage is invalid")
+        for cell_id in (*lineage["input"], *lineage["output"], *lineage["witness"]):
+            if self.store.get_cell(cell_id) is None:
+                raise ValueError("rewrite lineage references a missing cell")
+        leaf_rows = self.connection.execute(
+            """
+            SELECT id FROM cat_epochs AS epoch
+            WHERE NOT EXISTS (
+                SELECT 1 FROM cat_epoch_parents AS edge WHERE edge.parent_id = epoch.id
+            )
+            """
+        ).fetchall()
+        leaves = {str(row["id"]) for row in leaf_rows}
+        future_branch_count = len(leaves.difference(parents)) + 1
+        if future_branch_count > self.policy.max_active_branches:
+            raise ValueError("active branch limit exceeded")
+
+    def epoch_parents(self, epoch_id: str) -> tuple[str, ...]:
+        return tuple(
+            str(row["parent_id"])
+            for row in self.connection.execute(
+                "SELECT parent_id FROM cat_epoch_parents WHERE epoch_id=? ORDER BY position",
+                (epoch_id,),
+            )
+        )
+
+    def create_root_epoch(
+        self,
+        epoch_id: str,
+        active_cell_ids: Iterable[str],
+        *,
+        event_id: str | None = None,
+    ) -> str:
+        """Create a parentless epoch for an imported or newly seeded active set."""
+        epoch_id = self.store._bounded_text(
+            epoch_id, MAX_CATEGORY_IDENTIFIER_BYTES, "epoch identifier"
+        )
+        active = tuple(sorted(set(active_cell_ids)))
+        with self.store.transaction(immediate=True) as connection:
+            epoch_id_bytes = len(epoch_id.encode("utf-8"))
+            self.store.reserve_write_bytes(
+                epoch_id_bytes * (1 + len(active))
+                + sum(len(str(cell_id).encode("utf-8")) for cell_id in active),
+                row_count=1 + len(active),
+            )
+            if connection.execute(
+                "SELECT 1 FROM cat_epochs WHERE id = ?", (epoch_id,)
+            ).fetchone():
+                raise ValueError("epoch parent identity already exists")
+            leaf_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM cat_epochs AS epoch
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM cat_epoch_parents AS edge
+                    WHERE edge.parent_id = epoch.id
+                )
+                """
+            ).fetchone()[0]
+            if leaf_count + 1 > self.policy.max_active_branches:
+                raise ValueError("active branch limit exceeded")
+            for cell_id in active:
+                if self.store.get_cell(cell_id) is None:
+                    raise ValueError("root epoch active cell does not exist")
+                if connection.execute(
+                    """
+                    SELECT 1 FROM cat_rewrite_members
+                    WHERE role = 'output' AND cell_id = ? LIMIT 1
+                    """,
+                    (cell_id,),
+                ).fetchone():
+                    raise ValueError("root epoch cannot activate a rewrite output")
+            if event_id is not None and connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (event_id,)
+            ).fetchone() is None:
+                raise ValueError("root epoch event does not exist")
+            created_event_id = self.store.append_event(
+                "epoch_created",
+                {
+                    "epoch_id": epoch_id,
+                    "membership_hash": canonical_snapshot_hash(active),
+                    "member_count": len(active),
+                    "source_event_id": event_id,
+                },
+            )
+            connection.execute(
+                "INSERT INTO cat_epochs (id, created_event_id, created_at) VALUES (?, ?, ?)",
+                (epoch_id, created_event_id, _now_iso()),
+            )
+            connection.executemany(
+                "INSERT INTO cat_epoch_members (epoch_id, position, cell_id) "
+                "VALUES (?, ?, ?)",
+                (
+                    (epoch_id, position, cell_id)
+                    for position, cell_id in enumerate(active)
+                ),
+            )
+            self._write_derived_snapshot(epoch_id, active)
+        return epoch_id
+
+    def active_cell_ids(self, epoch_id: str) -> tuple[str, ...]:
+        """Return canonical state, rebuilding a corrupt derived snapshot from history."""
+        rebuilt = self._rebuild_active(epoch_id, set())
+        canonical_json = json.dumps(rebuilt, separators=(",", ":"))
+        content_hash = canonical_snapshot_hash(rebuilt)
+        snapshot = self.connection.execute(
+            """
+            SELECT id, active_cell_ids_json, content_hash FROM cat_snapshots
+            WHERE epoch_id = ? ORDER BY rowid DESC LIMIT 1
+            """,
+            (epoch_id,),
+        ).fetchone()
+        valid = (
+            snapshot is not None
+            and snapshot["active_cell_ids_json"] == canonical_json
+            and snapshot["content_hash"] == content_hash
+        )
+        if not valid:
+            try:
+                self._write_derived_snapshot(epoch_id, rebuilt, replace=True)
+            except CategoryQuotaExceeded:
+                # Reads derive canonical state from immutable events/epochs;
+                # a full archive must not turn a cache repair into a read failure.
+                pass
+        return rebuilt
+
+    select_epoch = active_cell_ids
+
+    def _rebuild_active(
+        self, epoch_id: str, _visiting: set[str] | None = None
+    ) -> tuple[str, ...]:
+        """Rebuild one DAG with bounded file-backed state and slot reuse."""
+
+        def load_root(
+            members_table: str,
+            slot_id: int,
+            root_epoch_id: str,
+            event_id: str | None,
+        ) -> int:
+            active = self._root_active_ids(root_epoch_id, event_id)
+            if len(active) > 1_000_000:
+                raise ValueError("epoch reconstruction limit exceeded")
+            self.connection.executemany(
+                f'INSERT INTO temp."{members_table}" VALUES (?, ?)',
+                ((slot_id, cell_id) for cell_id in active),
+            )
+            return len(active)
+
+        with _staged_epoch_membership(
+            self.connection,
+            epoch_id,
+            table_prefix="cat_rebuild",
+            max_epochs=1_000_000,
+            max_members=1_000_000,
+            check_budget=lambda: None,
+            resource_error=lambda: ValueError("epoch reconstruction limit exceeded"),
+            load_root=load_root,
+        ) as (members_table, slot_id, _member_count):
+            return tuple(
+                str(row[0])
+                for row in self.connection.execute(
+                    f'SELECT cell_id FROM temp."{members_table}" '
+                    "WHERE slot_id = ? ORDER BY cell_id",
+                    (slot_id,),
+                )
+            )
+
+    def _root_active_ids(self, epoch_id: str, event_id: str | None) -> tuple[str, ...]:
+        members = tuple(
+            str(row[0])
+            for row in self.connection.execute(
+                "SELECT cell_id FROM cat_epoch_members "
+                "WHERE epoch_id = ? ORDER BY position",
+                (epoch_id,),
+            )
+        )
+        if members:
+            return members
+        if event_id is None:
+            return ()
+        event = self.connection.execute(
+            "SELECT payload_json FROM cat_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        if event is not None:
+            try:
+                payload = json.loads(event["payload_json"])
+                if payload.get("member_count") == 0:
+                    return ()
+                explicit = payload.get("active_cell_ids")
+                if isinstance(explicit, list) and all(isinstance(item, str) for item in explicit):
+                    return tuple(sorted(set(explicit)))
+            except (TypeError, json.JSONDecodeError):
+                pass
+        return tuple(
+            str(row["id"])
+            for row in self.connection.execute(
+                "SELECT id FROM cat_cells WHERE created_event_id = ? ORDER BY id", (event_id,)
+            )
+        )
+
+    def _write_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        epoch_id: str,
+        active_cell_ids: Iterable[str],
+    ) -> None:
+        active = tuple(sorted(set(active_cell_ids)))
+        snapshot_id = str(uuid.uuid5(EVOLUTION_NAMESPACE, f"snapshot:{epoch_id}"))
+        active_json = json.dumps(active, separators=(",", ":"))
+        if len(active_json.encode("utf-8")) > _MAX_DERIVED_SNAPSHOT_BYTES:
+            raise CategoryQuotaExceeded("category snapshot byte limit exceeded")
+        connection.execute(
+            """
+            INSERT INTO cat_snapshots
+                (id, epoch_id, active_cell_ids_json, content_hash, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                epoch_id,
+                active_json,
+                canonical_snapshot_hash(active),
+                _now_iso(),
+            ),
+        )
+
+    def _write_derived_snapshot(
+        self, epoch_id: str, active_cell_ids: Iterable[str], *, replace: bool = False
+    ) -> bool:
+        """Write replaceable snapshot state, returning false when high-water skips it."""
+        active = tuple(sorted(set(active_cell_ids)))
+        active_json = json.dumps(active, separators=(",", ":"))
+        if len(active_json.encode("utf-8")) > _MAX_DERIVED_SNAPSHOT_BYTES:
+            return False
+        reservation = self.store._write_reservation(
+            epoch_id,
+            active_json,
+            row_count=2 if replace else 1,
+        )
+        with self.store.derived_transaction(reserved_bytes=reservation) as connection:
+            if connection is None:
+                return False
+            if replace:
+                connection.execute("DELETE FROM cat_snapshots WHERE epoch_id = ?", (epoch_id,))
+            self._write_snapshot(connection, epoch_id, active)
+        return connection.committed
+
+    @staticmethod
+    def _epoch_id(rewrite_id: str, parents: tuple[str, ...]) -> str:
+        material = _canonical_json({"rewrite_id": rewrite_id, "parents": parents})
+        return str(uuid.uuid5(EVOLUTION_NAMESPACE, f"epoch:{material}"))
+
+    def consolidate(
+        self, rewrite_ids: Iterable[str], parent_epoch_id: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Commit eligible proposals in deterministic policy order and budget."""
+        candidates: list[tuple[bool, float, str, str]] = []
+        seen: set[str] = set()
+        for rewrite_id in rewrite_ids:
+            if rewrite_id in seen or self.latest_disposition(rewrite_id) != "proposed":
+                continue
+            seen.add(rewrite_id)
+            row = self.connection.execute(
+                "SELECT payload_json, created_at FROM cat_rewrites WHERE id = ?",
+                (rewrite_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            payload = json.loads(row["payload_json"])
+            evidence = RewriteEvidence(**payload["evidence"])
+            candidates.append(
+                (
+                    evidence.explicit_correction,
+                    evidence.cohesion_gain - evidence.complexity_cost,
+                    str(row["created_at"]),
+                    rewrite_id,
+                )
+            )
+        candidates.sort(key=lambda item: (-int(item[0]), -item[1], item[2], item[3]))
+
+        committed: list[tuple[str, str]] = []
+        current_parent = parent_epoch_id
+        for _explicit, _gain, _created, rewrite_id in candidates:
+            if len(committed) >= self.policy.rewrite_budget:
+                break
+            epoch_id = self.commit(rewrite_id, (current_parent,))
+            if epoch_id is not None:
+                committed.append((rewrite_id, epoch_id))
+                current_parent = epoch_id
+        return tuple(committed)
+
+
+class CategoryObserver:
+    """Best-effort v2 observation and bounded recall compilation.
+
+    Request-path methods append observations only. Structural rewrite commits
+    are confined to optional startup consolidation.
+    """
+
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        shadow: bool = True,
+        influence_recall: bool = False,
+        auto_commit: bool = False,
+        allow_startup_consolidation: bool = True,
+        archive_quota_bytes: int = 3_000_000_000_000,
+        archive_high_watermark_ratio: float = 0.90,
+        max_traversal_depth: int = 4,
+        max_neighbors: int = 64,
+        max_candidates: int = 50_000,
+        compile_wall_time_ms: int = 500,
+        consolidation_rewrite_budget: int = 32,
+        max_rewrite_members: int = 32,
+        max_active_branches: int = 4,
+        soft_boundary_threshold: float = 0.35,
+        hard_boundary_threshold: float = 0.65,
+        hard_boundary_confirmations: int = 2,
+        protected_database_identities: Iterable[
+            tuple[str | Path, tuple[int, int] | None]
+        ] = (),
+    ) -> None:
+        # Malformed configuration must fail closed: only exact booleans can
+        # disable shadowing or activate influence/consolidation.
+        self.shadow = shadow is not False
+        self.influence_recall = influence_recall is True
+        self.auto_commit = auto_commit is True
+        self._last_error: str | None = None
+        self._compiler_truncations = 0
+        self._closed = False
+        self._lock = threading.RLock()
+        self._lock_pid = os.getpid()
+        self._database_path = Path(database_path)
+        self._store_options = {
+            "quota_bytes": archive_quota_bytes,
+            "high_watermark_ratio": archive_high_watermark_ratio,
+            "protected_database_identities": tuple(protected_database_identities),
+        }
+        self._compile_budget = CompileBudget(
+            max_depth=max_traversal_depth,
+            max_neighbors=max_neighbors,
+            max_candidates=max_candidates,
+            wall_time_ms=compile_wall_time_ms,
+        )
+        self._evolution_policy = EvolutionPolicy(
+            rewrite_budget=consolidation_rewrite_budget,
+            max_members=max_rewrite_members,
+            max_active_branches=max_active_branches,
+        )
+        self._tracker_options = {
+            "hard_confirmations": hard_boundary_confirmations,
+            "soft_threshold": soft_boundary_threshold,
+            "hard_threshold": hard_boundary_threshold,
+        }
+        self._resource_pid = self._lock_pid
+        self._tracker_resets = 0
+        self.store: EvolvingCategoryStore | None = None
+        self.compiler: CategoryCompiler | None = None
+        self.engine: EvolutionEngine | None = None
+        with _FORK_REGISTRY_LOCK:
+            try:
+                self._open_resources()
+                if self.auto_commit and allow_startup_consolidation is True:
+                    try:
+                        self._consolidate_startup()
+                    except Exception as exc:
+                        self._record_error(exc)
+                        logger.warning(
+                            "Category startup consolidation failed (%s)",
+                            type(exc).__name__,
+                        )
+                _FORK_OBSERVERS.add(self)
+            except Exception:
+                if self.compiler is not None:
+                    self.compiler.close()
+                if self.store is not None:
+                    self.store.close()
+                raise
+
+    def _open_resources(self) -> None:
+        connection: sqlite3.Connection | None = sqlite3.connect(
+            self._database_path, timeout=0, check_same_thread=False
+        )
+        store: EvolvingCategoryStore | None = None
+        try:
+            store = EvolvingCategoryStore(connection, **self._store_options)
+            connection = None
+            compiler = CategoryCompiler(store, self._compile_budget)
+            self.store = store
+            self.compiler = compiler
+            self.engine = EvolutionEngine(store, self._evolution_policy)
+            self._tracker = ContextTracker(**self._tracker_options)
+        except Exception:
+            if connection is not None:
+                connection.close()
+            elif store is not None:
+                store.close()
+            raise
+
+    def _ensure_process(self) -> None:
+        current_pid = os.getpid()
+        if current_pid == self._resource_pid or self._closed:
+            return
+        old_compiler, old_store = self.compiler, self.store
+        self.compiler = None
+        self.store = None
+        self.engine = None
+        try:
+            if old_compiler is not None:
+                # Conditions owned by threads that vanished at fork remain
+                # locked forever in the child. No compiler operation can be in
+                # flight here, so replace the inherited synchronization shell
+                # before closing its child-side connections.
+                old_compiler._pool_condition = threading.Condition()
+                old_compiler.close()
+        except Exception as exc:
+            self._record_error(exc)
+        try:
+            if old_store is not None:
+                old_store.close()
+        except Exception as exc:
+            self._record_error(exc)
+        self._open_resources()
+        self._resource_pid = current_pid
+        self._tracker_resets += 1
+
+    def assert_database_isolated(self) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        self.store.assert_database_isolated()
+
+    def _prepare_public_lock(self) -> None:
+        current_pid = os.getpid()
+        if current_pid == self._lock_pid:
+            return
+        # Actual fork children install their lock eagerly in the at-fork hook.
+        # This registry-serialized fallback supports child-recovery tests without
+        # allowing concurrent first callers to create independent locks.
+        with _FORK_REGISTRY_LOCK:
+            if current_pid != self._lock_pid:
+                self._lock = threading.RLock()
+                self._lock_pid = current_pid
+
+    @staticmethod
+    def proxy_id(memory_id: str) -> str:
+        # Reuse replay identities so observed recalls compile against migrated
+        # active epochs instead of creating a parallel proxy namespace.
+        return legacy_proxy_id(memory_id)
+
+    @staticmethod
+    def _stable_id(kind: str, material: Mapping[str, object]) -> str:
+        encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
+        return str(uuid.uuid5(OBSERVER_NAMESPACE, f"{kind}:{encoded}"))
+
+    @classmethod
+    def _recall_event_id(cls, recall_id: str) -> str:
+        return cls._stable_id("recall", {"recall_id": str(recall_id)})
+
+    @staticmethod
+    def _terms(query: str) -> tuple[str, ...]:
+        import re
+
+        return tuple(sorted(set(re.findall(r"[^\W_]+", query.casefold(), re.UNICODE))))[:32]
+
+    def observe_recall(
+        self,
+        query: str,
+        result_ids: Iterable[str],
+        *,
+        source: str,
+        observed_at,
+        recall_id: str | None = None,
+    ) -> None:
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                self._observe_recall(
+                    query,
+                    result_ids,
+                    source=source,
+                    observed_at=observed_at,
+                    recall_id=recall_id,
+                )
+            except Exception as exc:
+                self._record_error(exc)
+                raise
+
+    def _observe_recall(
+        self,
+        query: str,
+        result_ids: Iterable[str],
+        *,
+        source: str,
+        observed_at,
+        recall_id: str | None,
+    ) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        ids = tuple(dict.fromkeys(str(result_id) for result_id in result_ids))
+        terms = self._terms(query)
+        timestamp = observed_at.isoformat()
+        recall_material = {
+            "terms": terms,
+            "result_ids": ids,
+            "source": str(source),
+            "observed_at": timestamp,
+            "recall_id": recall_id,
+        }
+        recall_identity = (
+            {"recall_id": recall_id} if recall_id is not None else recall_material
+        )
+        recall_event_id = self._stable_id("recall", recall_identity)
+        with self.store.transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (recall_event_id,)
+            ).fetchone():
+                return
+
+            next_tracker = self._tracker.clone()
+            observation = ContextObservation(
+                goal={term: 1.0 for term in terms},
+                sources={str(source): 1.0} if source else {},
+                observed_at=observed_at,
+            )
+            decision = next_tracker.observe(observation)
+            context_features = {
+                "goal": {term: 1.0 for term in terms},
+                "sources": {str(source): 1.0} if source else {},
+            }
+            context_id = self.store.create_context(context_features)
+            self.store.append_event(
+                "recall_observed",
+                {
+                    "context_id": context_id,
+                    "observed_at": timestamp,
+                    "result_count": len(ids),
+                    "result_ids": ids,
+                    "recall_id": recall_id,
+                    "source": str(source),
+                    "terms": terms,
+                },
+                event_id=recall_event_id,
+            )
+            boundary_payload = {
+                "recall_event_id": recall_event_id,
+                "context_id": context_id,
+                "tracker_context_id": decision.context_id,
+                "kind": decision.kind,
+                "score": decision.score,
+                "confirmations": decision.confirmations,
+                "components": dict(decision.components),
+            }
+            self.store.append_event(
+                "context_boundary",
+                boundary_payload,
+                event_id=self._stable_id("boundary", boundary_payload),
+            )
+            for rank, memory_id in enumerate(ids):
+                proxy_event_payload = {
+                    "recall_event_id": recall_event_id,
+                    "recall_id": recall_id,
+                    "memory_id": memory_id,
+                    "proxy_id": self.proxy_id(memory_id),
+                    "baseline_rank": rank,
+                }
+                proxy_event_id = self._stable_id("proxy-event", proxy_event_payload)
+                self.store.append_event(
+                    "proxy_observed", proxy_event_payload, event_id=proxy_event_id
+                )
+                proxy_id = self.proxy_id(memory_id)
+                if self.store.get_cell(proxy_id) is None:
+                    self.store.create_cell(
+                        CellDraft(
+                            proxy_id,
+                            0,
+                            "memory proxy",
+                            context_id=context_id,
+                            payload={"external_id": memory_id, "proxy": True},
+                        ),
+                        created_event_id=proxy_event_id,
+                    )
+        self._tracker = next_tracker
+
+    def observe_delivery(self, recall_id: str, result_ids: Iterable[str]) -> None:
+        """Append the result order actually delivered for one observed recall."""
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                self._observe_delivery(recall_id, result_ids)
+            except Exception as exc:
+                self._record_error(exc)
+                raise
+
+    def _observe_delivery(self, recall_id: str, result_ids: Iterable[str]) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        ids = tuple(str(result_id) for result_id in result_ids)
+        delivery_id = self._stable_id("delivery", {"recall_id": str(recall_id)})
+        with self.store.transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (delivery_id,)
+            ).fetchone():
+                return
+            recall_event = connection.execute(
+                "SELECT id FROM cat_events WHERE id = ? AND kind='recall_observed'",
+                (self._recall_event_id(recall_id),),
+            ).fetchone()
+            recall_event_id = (
+                str(recall_event[0]) if recall_event is not None else None
+            )
+            delivery_payload = {
+                "recall_id": str(recall_id),
+                "recall_event_id": recall_event_id,
+                "result_ids": ids,
+                "correlated": recall_event_id is not None,
+            }
+            self.store.append_event(
+                "recall_delivered", delivery_payload, event_id=delivery_id
+            )
+            for rank, memory_id in enumerate(ids):
+                payload = {
+                    "delivery_event_id": delivery_id,
+                    "recall_event_id": recall_event_id,
+                    "recall_id": str(recall_id),
+                    "memory_id": memory_id,
+                    "proxy_id": self.proxy_id(memory_id),
+                    "delivered_rank": rank,
+                }
+                self.store.append_event(
+                    "proxy_delivered",
+                    payload,
+                    event_id=self._stable_id("proxy-delivered", payload),
+                )
+
+    def observe_outcome(self, recall_id: str, used: bool, note: str | None) -> None:
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                self._observe_outcome(recall_id, used, note)
+            except Exception as exc:
+                self._record_error(exc)
+                raise
+
+    def _observe_outcome(self, recall_id: str, used: bool, note: str | None) -> None:
+        if self._closed or self.store is None:
+            raise RuntimeError("category observer is closed")
+        outcome_material = {
+            "recall_id": str(recall_id),
+            "used": bool(used),
+            "note": note,
+        }
+        event_id = self._stable_id("outcome", outcome_material)
+        with self.store.transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM cat_events WHERE id = ?", (event_id,)
+            ).fetchone():
+                return
+            recall_event = connection.execute(
+                "SELECT id FROM cat_events WHERE id = ? AND kind='recall_observed'",
+                (self._recall_event_id(recall_id),),
+            ).fetchone()
+            recall_event_id = (
+                str(recall_event[0]) if recall_event is not None else None
+            )
+            payload = {
+                **outcome_material,
+                "recall_event_id": recall_event_id,
+                "correlated": recall_event_id is not None,
+                "orphaned": recall_event_id is None,
+            }
+            self.store.append_event("recall_outcome", payload, event_id=event_id)
+
+    def compile_for_recall(
+        self, seed_ids: tuple[str, ...], base_tokens: int = 0
+    ) -> CompiledCategory:
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                return self._compile_for_recall(seed_ids, base_tokens)
+            except Exception as exc:
+                self._record_error(exc)
+                raise
+
+    def _compile_for_recall(
+        self, seed_ids: tuple[str, ...], base_tokens: int = 0
+    ) -> CompiledCategory:
+        if self._closed or self.store is None or self.compiler is None:
+            raise RuntimeError("category observer is closed")
+        if type(seed_ids) is not tuple:
+            raise TypeError("recall seed IDs must be an exact tuple")
+        if len(seed_ids) > 50_000:
+            raise ValueError("recall seed ID limit exceeded")
+        if any(type(seed_id) is not str for seed_id in seed_ids):
+            raise TypeError("recall seed IDs must be exact strings")
+        epoch_id = self._current_epoch()
+        if epoch_id is None:
+            return CompiledCategory("", None, (), 0, 0, False, False)
+        compiled = self.compiler.compile(
+            epoch_id,
+            None,
+            tuple(self.proxy_id(seed_id) for seed_id in seed_ids),
+            base_tokens,
+        )
+        if compiled.truncated:
+            self._compiler_truncations += 1
+        return compiled
+
+    @classmethod
+    def adjust_results(
+        cls,
+        results: Iterable[dict],
+        compiled: CompiledCategory,
+        influence: float = 0.10,
+    ) -> list[dict]:
+        category_scores = {
+            cell.id: float(cell.score)
+            for cell in compiled.cells
+            if isinstance(cell.score, (int, float))
+            and not isinstance(cell.score, bool)
+            and math.isfinite(float(cell.score))
+        }
+        ranked = []
+        for index, original in enumerate(results):
+            result = dict(original)
+            baseline = result.get("score")
+            category = category_scores.get(cls.proxy_id(str(result.get("id", ""))))
+            valid_baseline = (
+                isinstance(baseline, (int, float))
+                and not isinstance(baseline, bool)
+                and math.isfinite(float(baseline))
+            )
+            if valid_baseline and category is not None:
+                score = (1.0 - influence) * float(baseline) + influence * category
+                result["score"] = score
+                ranked.append((0, -score, str(result.get("id", "")), index, result))
+            elif valid_baseline:
+                ranked.append((0, -float(baseline), str(result.get("id", "")), index, result))
+            else:
+                ranked.append((1, index, "", index, result))
+        ranked.sort(key=lambda item: item[:4])
+        return [item[4] for item in ranked]
+
+    def record_error(self, exc: BaseException) -> None:
+        """Retain only an error type for content-safe reflection diagnostics."""
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+            except Exception:
+                pass
+            self._record_error(exc)
+
+    def _record_error(self, exc: BaseException) -> None:
+        self._last_error = type(exc).__name__
+
+    def report(self) -> dict:
+        self._prepare_public_lock()
+        with self._lock:
+            try:
+                self._ensure_process()
+                return self._report()
+            except Exception as exc:
+                self._record_error(exc)
+                raise
+
+    def _report(self) -> dict:
+        if self._closed or self.store is None or self.engine is None:
+            raise RuntimeError("category observer is closed")
+        connection = self.store.connection
+        counts = {
+            str(row[0]): int(row[1])
+            for row in connection.execute(
+                "SELECT dimension, COUNT(*) FROM cat_cells GROUP BY dimension ORDER BY dimension"
+            )
+        }
+        dispositions = {
+            name: 0
+            for name in ("proposed", "committed", "rejected", "superseded")
+        }
+        for row in connection.execute(
+            "WITH ranked AS ("
+            " SELECT kind, ROW_NUMBER() OVER ("
+            "   PARTITION BY json_extract(payload_json, '$.rewrite_id') "
+            "   ORDER BY rowid DESC"
+            " ) AS rank FROM cat_events WHERE kind IN "
+            " ('rewrite_proposed','rewrite_committed',"
+            "  'rewrite_rejected','rewrite_superseded')"
+            ") SELECT kind, COUNT(*) FROM ranked WHERE rank = 1 GROUP BY kind"
+        ):
+            dispositions[_DISPOSITION_KINDS[str(row[0])]] = int(row[1])
+        recent_boundaries = []
+        for row in connection.execute(
+            "SELECT payload_json FROM cat_events WHERE kind='context_boundary' "
+            "ORDER BY rowid DESC LIMIT 10"
+        ):
+            payload = json.loads(row[0])
+            recent_boundaries.append(
+                {
+                    "kind": payload.get("kind"),
+                    "score": payload.get("score"),
+                    "confirmations": payload.get("confirmations"),
+                    "context_id": payload.get("context_id"),
+                }
+            )
+        pressure = self.store.pressure()
+        outcome_counts = connection.execute(
+            "SELECT "
+            "SUM(CASE WHEN json_extract(payload_json, '$.correlated') = 1 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN json_extract(payload_json, '$.orphaned') = 1 THEN 1 ELSE 0 END) "
+            "FROM cat_events WHERE kind='recall_outcome'"
+        ).fetchone()
+        return {
+            "available": True,
+            "flags": {
+                "enabled": True,
+                "shadow": self.shadow,
+                "influence_recall": self.influence_recall,
+                "auto_commit": self.auto_commit,
+            },
+            "counts_by_dimension": counts,
+            "proposal_dispositions": dispositions,
+            "current_epoch": self._current_epoch(),
+            "recent_boundaries": recent_boundaries,
+            "compiler_truncations": self._compiler_truncations,
+            "quota_pressure": asdict(pressure),
+            "last_error": self._last_error,
+            "outcomes": {
+                "correlated": int(outcome_counts[0] or 0),
+                "orphaned": int(outcome_counts[1] or 0),
+            },
+            "tracker_state": {
+                "scope": "process_local",
+                "resets": self._tracker_resets,
+            },
+        }
+
+    def _current_epoch(self) -> str | None:
+        assert self.store is not None
+        row = self.store.connection.execute(
+            "SELECT epoch.id FROM cat_epochs AS epoch "
+            "WHERE NOT EXISTS (SELECT 1 FROM cat_epoch_parents AS edge "
+            "WHERE edge.parent_id = epoch.id) "
+            "ORDER BY epoch.created_at DESC, epoch.id DESC LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row is not None else None
+
+    def _consolidate_startup(self) -> None:
+        assert self.store is not None and self.engine is not None
+        epoch_id = self._current_epoch()
+        if epoch_id is None:
+            return
+        rewrite_ids = tuple(
+            str(row[0])
+            for row in self.store.connection.execute(
+                "SELECT pending.rewrite_id FROM cat_pending_rewrites AS pending "
+                "JOIN cat_rewrites AS rewrite ON rewrite.id = pending.rewrite_id "
+                "ORDER BY pending.rewrite_id LIMIT 50000"
+            )
+        )
+        if rewrite_ids:
+            self.engine.consolidate(rewrite_ids, epoch_id)
+
+    def close(self) -> None:
+        self._prepare_public_lock()
+        with _FORK_REGISTRY_LOCK:
+            with self._lock:
+                if self._closed:
+                    return
+                if self.compiler is not None:
+                    try:
+                        self.compiler.close()
+                    except Exception as exc:
+                        self._record_error(exc)
+                        raise
+                    self.compiler = None
+                if self.store is not None:
+                    try:
+                        self.store.close()
+                    except Exception as exc:
+                        self._record_error(exc)
+                        raise
+                    self.store = None
+                self.engine = None
+                self._closed = True
+                _FORK_OBSERVERS.discard(self)
+
+
+@dataclass(frozen=True)
+class _LegacyCell:
+    id: str
+    level: int
+    source_id: str | None
+    target_id: str | None
+    content: str
+    context: object
+    created_at: object
+    accessed_at: object
+    access_count: object
+
+
+@dataclass(frozen=True)
+class _ReplayPlan:
+    drafts: tuple[CellDraft, ...]
+    proxy_zero_cells: int
+    imported_one_cells: int
+    imported_two_cells: int
+    opaque_cells: int
+    unexplained_loss: int
+
+
+def legacy_proxy_id(memory_id: str) -> str:
+    """Return the stable v2 zero-cell identity for one external memory."""
+    return str(uuid.uuid5(LEGACY_NAMESPACE, f"memory:{memory_id}"))
+
+
+def canonical_snapshot_hash(cell_ids: Iterable[str]) -> str:
+    """Hash a snapshot's active identities independently of insertion order."""
+    payload = json.dumps(sorted(set(cell_ids)), separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _stable_id(kind: str, content_hash: str) -> str:
+    return str(uuid.uuid5(LEGACY_NAMESPACE, f"{kind}:{content_hash}"))
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _type_tagged_sqlite_value(value: object) -> list[str]:
+    """Encode SQLite values without collapsing distinct source representations."""
+    if value is None:
+        return ["null", ""]
+    if isinstance(value, bool):
+        return ["bool", "true" if value else "false"]
+    if isinstance(value, int):
+        return ["int", str(value)]
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("legacy source contains a non-finite floating-point value")
+        return ["float", value.hex()]
+    if isinstance(value, str):
+        return ["text", value]
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return ["blob", bytes(value).hex()]
+    raise ValueError(f"unsupported SQLite value type: {type(value).__name__}")
+
+
+def _raw_source_fingerprint(rows: Sequence[_LegacyCell]) -> str:
+    """Fingerprint every selected legacy field, including rows that become loss."""
+    payload = {
+        "columns": [
+            "id",
+            "level",
+            "source_id",
+            "target_id",
+            "content",
+            "context",
+            "created_at",
+            "accessed_at",
+            "access_count",
+        ],
+        "rows": [
+            [
+                _type_tagged_sqlite_value(value)
+                for value in (
+                    row.id,
+                    row.level,
+                    row.source_id,
+                    row.target_id,
+                    row.content,
+                    row.context,
+                    row.created_at,
+                    row.accessed_at,
+                    row.access_count,
+                )
+            ]
+            for row in rows
+        ],
+    }
+    return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
+
+
+def _read_legacy_rows(legacy_path: Path) -> list[_LegacyCell]:
+    """Read the legacy table via SQLite's read-only URI mode."""
+    connection = sqlite3.connect(f"{legacy_path.resolve().as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        rows = connection.execute(
+            """
+            SELECT id, level, source_id, target_id, content, context,
+                   created_at, accessed_at, access_count
+            FROM cells
+            ORDER BY level, id
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+    return [
+        _LegacyCell(
+            id=row["id"],
+            level=row["level"],
+            source_id=row["source_id"],
+            target_id=row["target_id"],
+            content=row["content"],
+            context=row["context"],
+            created_at=row["created_at"],
+            accessed_at=row["accessed_at"],
+            access_count=row["access_count"],
+        )
+        for row in rows
+    ]
+
+
+def _is_valid_row(row: _LegacyCell) -> bool:
+    basic_fields_valid = (
+        isinstance(row.id, str)
+        and bool(row.id)
+        and isinstance(row.level, int)
+        and not isinstance(row.level, bool)
+        and row.level >= 0
+        and isinstance(row.content, str)
+    )
+    if not basic_fields_valid:
+        return False
+    try:
+        _canonical_json(_legacy_payload(row))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _has_pair_of_references(row: _LegacyCell) -> bool:
+    return (
+        isinstance(row.source_id, str)
+        and bool(row.source_id)
+        and isinstance(row.target_id, str)
+        and bool(row.target_id)
+    )
+
+
+def _legacy_payload(row: _LegacyCell) -> Mapping[str, object]:
+    """Keep legacy metadata as opaque data instead of interpreting or repairing it."""
+    return {
+        "legacy": {
+            "level": row.level,
+            "source_id": row.source_id,
+            "target_id": row.target_id,
+            "context": row.context,
+            "created_at": row.created_at,
+            "accessed_at": row.accessed_at,
+            "access_count": row.access_count,
+        }
+    }
+
+
+def _plan_cells(cells: Sequence[_LegacyCell]) -> _ReplayPlan:
+    """Prepare dependency-ordered v2 drafts without mutating either database."""
+    valid_rows = [row for row in cells if _is_valid_row(row)]
+    loss = len(cells) - len(valid_rows)
+    drafts: list[CellDraft] = []
+    known_ids: set[str] = set()
+    legacy_ids = {row.id for row in valid_rows}
+
+    level_one = [row for row in valid_rows if row.level == 1]
+    usable_one = [row for row in level_one if _has_pair_of_references(row)]
+    loss += len(level_one) - len(usable_one)
+
+    proxy_ids = {
+        legacy_proxy_id(memory_id)
+        for row in usable_one
+        for memory_id in (row.source_id, row.target_id)
+        if memory_id is not None
+    }
+    # A collision would overwrite an isolated legacy identity, so reject the
+    # affected dependent rows rather than creating a replacement identity.
+    colliding_proxies = proxy_ids & legacy_ids
+    if colliding_proxies:
+        usable_before_collision = len(usable_one)
+        usable_one = [
+            row
+            for row in usable_one
+            if legacy_proxy_id(row.source_id or "") not in colliding_proxies
+            and legacy_proxy_id(row.target_id or "") not in colliding_proxies
+        ]
+        loss += usable_before_collision - len(usable_one)
+        proxy_ids = {
+            legacy_proxy_id(memory_id)
+            for row in usable_one
+            for memory_id in (row.source_id, row.target_id)
+            if memory_id is not None
+    }
+
+    for proxy_id in sorted(proxy_ids):
+        drafts.append(
+            CellDraft(proxy_id, 0, "legacy memory proxy", payload={"legacy_proxy": True})
+        )
+        known_ids.add(proxy_id)
+
+    # Legacy zero-cells have no v1 boundary semantics.  Preserve their ID and
+    # metadata as a v2 zero-cell, while malformed rows remain explicit loss.
+    for row in (row for row in valid_rows if row.level == 0):
+        if row.id in known_ids:
+            loss += 1
+            continue
+        drafts.append(CellDraft(row.id, 0, row.content, payload=_legacy_payload(row)))
+        known_ids.add(row.id)
+
+    imported_one = 0
+    imported_one_ids: set[str] = set()
+    for row in usable_one:
+        source_id = legacy_proxy_id(row.source_id or "")
+        target_id = legacy_proxy_id(row.target_id or "")
+        if row.id in known_ids:
+            loss += 1
+            continue
+        drafts.append(
+            CellDraft(
+                row.id,
+                1,
+                row.content,
+                (Boundary("source", 0, source_id), Boundary("target", 0, target_id)),
+                payload=_legacy_payload(row),
+            )
+        )
+        known_ids.add(row.id)
+        imported_one_ids.add(row.id)
+        imported_one += 1
+
+    imported_two = 0
+    for row in (row for row in valid_rows if row.level == 2):
+        if (
+            not _has_pair_of_references(row)
+            or row.source_id not in imported_one_ids
+            or row.target_id not in imported_one_ids
+        ):
+            loss += 1
+            continue
+        if row.id in known_ids:
+            loss += 1
+            continue
+        drafts.append(
+            CellDraft(
+                row.id,
+                2,
+                row.content,
+                (Boundary("source", 0, row.source_id), Boundary("target", 0, row.target_id)),
+                payload=_legacy_payload(row),
+            )
+        )
+        known_ids.add(row.id)
+        imported_two += 1
+
+    opaque = 0
+    for row in (row for row in valid_rows if row.level > 2):
+        if row.id in known_ids:
+            loss += 1
+            continue
+        drafts.append(
+            CellDraft(row.id, row.level, row.content, payload=_legacy_payload(row))
+        )
+        known_ids.add(row.id)
+        opaque += 1
+
+    return _ReplayPlan(
+        drafts=tuple(drafts),
+        proxy_zero_cells=len(proxy_ids),
+        imported_one_cells=imported_one,
+        imported_two_cells=imported_two,
+        opaque_cells=opaque,
+        unexplained_loss=loss,
+    )
+
+
+def _ordered_boundaries(draft: CellDraft) -> list[dict[str, object]]:
+    return [
+        {"side": boundary.side, "position": boundary.position, "cell_id": boundary.cell_id}
+        for boundary in sorted(
+            draft.boundaries,
+            key=lambda boundary: (0 if boundary.side == "source" else 1, boundary.position),
+        )
+    ]
+
+
+def _replay_manifest(
+    plan: _ReplayPlan,
+    *,
+    legacy_total: int,
+    raw_source_fingerprint: str,
+    snapshot_id: str,
+    root_epoch_id: str,
+    snapshot_hash: str,
+) -> dict[str, object]:
+    """Describe every persisted replay artifact that must match on re-run."""
+    return {
+        "raw_source_fingerprint": raw_source_fingerprint,
+        "cells": [
+            {
+                "id": draft.id,
+                "dimension": draft.dimension,
+                "content": draft.content,
+                "payload": draft.payload,
+                "boundaries": _ordered_boundaries(draft),
+            }
+            for draft in sorted(plan.drafts, key=lambda draft: draft.id)
+        ],
+        "event": {"kind": "legacy_import_summary"},
+        "epoch": {"id": root_epoch_id, "rewrite_id": None, "parents": []},
+        "snapshot": {
+            "id": snapshot_id,
+            "epoch_id": root_epoch_id,
+            "active_cell_ids": sorted(draft.id for draft in plan.drafts),
+            "content_hash": snapshot_hash,
+        },
+        "report": {
+            "legacy_total": legacy_total,
+            "proxy_zero_cells": plan.proxy_zero_cells,
+            "imported_one_cells": plan.imported_one_cells,
+            "imported_two_cells": plan.imported_two_cells,
+            "opaque_cells": plan.opaque_cells,
+            "unexplained_loss": plan.unexplained_loss,
+        },
+    }
+
+
+def _manifest_fingerprint(manifest: Mapping[str, object]) -> str:
+    return hashlib.sha256(_canonical_json(manifest).encode()).hexdigest()
+
+
+def _canonical_ddl(sql: str) -> str:
+    """Normalize only unquoted SQL syntax while preserving literal semantics."""
+    result: list[str] = []
+    quote: str | None = None
+    pending_space = False
+    index = 0
+    while index < len(sql):
+        character = sql[index]
+        if quote is None:
+            if character.isspace():
+                pending_space = bool(result)
+            else:
+                if pending_space:
+                    result.append(" ")
+                    pending_space = False
+                result.append(character if character in "'\"`[" else character.lower())
+                if character == "'":
+                    quote = "'"
+                elif character == '"':
+                    quote = '"'
+                elif character == "`":
+                    quote = "`"
+                elif character == "[":
+                    quote = "]"
+            index += 1
+            continue
+
+        result.append(character)
+        if character == quote:
+            escaped_quote = quote in ("'", '"') and index + 1 < len(sql) and sql[index + 1] == quote
+            escaped_bracket = quote == "]" and index + 1 < len(sql) and sql[index + 1] == "]"
+            if escaped_quote or escaped_bracket:
+                result.append(sql[index + 1])
+                index += 1
+            else:
+                quote = None
+        index += 1
+    return "".join(result).strip()
+
+
+def _schema_definitions(connection: sqlite3.Connection) -> tuple[tuple[str, str, str], ...]:
+    """Return all non-vector schema objects whose definitions affect replay safety."""
+    definitions = []
+    for row in connection.execute(
+        "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL"
+    ):
+        object_type, name, sql = row
+        if (
+            (object_type == "table" and name in _V2_TABLES)
+            or object_type == "index"
+            or object_type == "trigger"
+        ):
+            definitions.append((object_type, name, _canonical_ddl(sql)))
+    return tuple(sorted(definitions))
+
+
+@lru_cache(maxsize=1)
+def _supported_schema_definitions() -> tuple[tuple[str, str, str], ...]:
+    """Build the exact supported core schema from the v2 store itself."""
+    connection = sqlite3.connect(":memory:")
+    try:
+        EvolvingCategoryStore(connection)
+        return _schema_definitions(connection)
+    finally:
+        connection.close()
+
+
+def _validate_schema_definitions(
+    connection: sqlite3.Connection,
+) -> Literal["current", "pre-unique-index", "pre-membership-projection"]:
+    """Accept current DDL or its one safe, immediately preceding fingerprint."""
+    actual = _schema_definitions(connection)
+    supported = _supported_schema_definitions()
+    if actual == supported:
+        return "current"
+    predecessor = tuple(
+        definition
+        for definition in supported
+        if not (
+            definition[0] == "index"
+            and definition[1] == "idx_cat_epochs_rewrite_unique"
+        )
+    )
+    if actual == predecessor:
+        return "pre-unique-index"
+    pre_membership = tuple(
+        definition
+        for definition in supported
+        if definition[1] not in _PRE_MEMBERSHIP_SCHEMA_OBJECTS
+    )
+    if actual == pre_membership:
+        return "pre-membership-projection"
+    raise ValueError("output is incompatible with legacy replay")
+
+
+def _validate_completed_replay(
+    connection: sqlite3.Connection,
+    plan: _ReplayPlan,
+    *,
+    event_id: str,
+    event_payload_json: str,
+    root_epoch_id: str,
+    snapshot_id: str,
+    active_cell_ids_json: str,
+    snapshot_hash: str,
+    schema_version: Literal[
+        "current", "pre-unique-index", "pre-membership-projection"
+    ],
+) -> bool:
+    """Return true only when an existing output is the exact expected replay."""
+    snapshot = connection.execute(
+        """
+        SELECT epoch_id, active_cell_ids_json, content_hash
+        FROM cat_snapshots WHERE id = ?
+        """,
+        (snapshot_id,),
+    ).fetchone()
+    expected_counts = {
+        "cat_schema_version": 1,
+        "cat_events": 1,
+        "cat_contexts": 0,
+        "cat_cells": len(plan.drafts),
+        "cat_boundaries": sum(len(draft.boundaries) for draft in plan.drafts),
+        "cat_weight_observations": 0,
+        "cat_rewrites": 0,
+        "cat_pending_rewrites": 0,
+        "cat_rewrite_members": 0,
+        "cat_epochs": 1,
+        "cat_epoch_parents": 0,
+        "cat_epoch_members": len(plan.drafts),
+        "cat_snapshots": 1,
+    }
+    replay_tables = _REPLAY_STATE_TABLES
+    expected_triggers = _EXPECTED_V2_TRIGGERS
+    if schema_version == "pre-membership-projection":
+        replay_tables = _PRE_MEMBERSHIP_REPLAY_STATE_TABLES
+        expected_triggers = _PRE_MEMBERSHIP_EXPECTED_TRIGGERS
+        expected_counts = {
+            table: count
+            for table, count in expected_counts.items()
+            if table in _PRE_MEMBERSHIP_V2_TABLES
+        }
+    actual_counts = {
+        table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        for table in replay_tables
+    }
+    schema_versions = [
+        row[0]
+        for row in connection.execute(
+            "SELECT version FROM cat_schema_version ORDER BY version"
+        )
+    ]
+    trigger_names = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        )
+    }
+    if (
+        schema_versions != [1]
+        or trigger_names != expected_triggers
+    ):
+        raise ValueError("output is incompatible with legacy replay")
+    if snapshot is None:
+        if any(
+            count
+            for table, count in actual_counts.items()
+            if table != "cat_schema_version"
+        ):
+            raise ValueError("output contains conflicting legacy replay state")
+        return False
+    if (
+        snapshot["epoch_id"] != root_epoch_id
+        or snapshot["active_cell_ids_json"] != active_cell_ids_json
+        or snapshot["content_hash"] != snapshot_hash
+        or actual_counts != expected_counts
+    ):
+        raise ValueError("existing legacy replay snapshot does not match source")
+
+    event = connection.execute(
+        "SELECT kind, payload_json FROM cat_events WHERE id = ?", (event_id,)
+    ).fetchone()
+    epoch = connection.execute(
+        "SELECT rewrite_id, created_event_id FROM cat_epochs WHERE id = ?", (root_epoch_id,)
+    ).fetchone()
+    if (
+        event is None
+        or event["kind"] != "legacy_import_summary"
+        or event["payload_json"] != event_payload_json
+        or epoch is None
+        or epoch["rewrite_id"] is not None
+        or epoch["created_event_id"] != event_id
+        or connection.execute(
+            "SELECT COUNT(*) FROM cat_epoch_parents WHERE epoch_id = ?", (root_epoch_id,)
+        ).fetchone()[0]
+        != 0
+        or connection.execute(
+            "SELECT COUNT(*) FROM cat_events WHERE kind = 'legacy_import_summary'"
+        ).fetchone()[0]
+        != 1
+    ):
+        raise ValueError("existing legacy replay state does not match source")
+
+    if schema_version != "pre-membership-projection":
+        epoch_members = [
+            (int(row[0]), str(row[1]))
+            for row in connection.execute(
+                "SELECT position, cell_id FROM cat_epoch_members "
+                "WHERE epoch_id = ? ORDER BY position",
+                (root_epoch_id,),
+            )
+        ]
+        expected_members = [
+            (position, cell_id)
+            for position, cell_id in enumerate(
+                sorted(draft.id for draft in plan.drafts)
+            )
+        ]
+        if epoch_members != expected_members:
+            raise ValueError("existing legacy replay membership does not match source")
+
+    for draft in plan.drafts:
+        cell = connection.execute(
+            """
+            SELECT dimension, content, context_id, payload_json, content_hash, created_event_id
+            FROM cat_cells WHERE id = ?
+            """,
+            (draft.id,),
+        ).fetchone()
+        if (
+            cell is None
+            or cell["dimension"] != draft.dimension
+            or cell["content"] != draft.content
+            or cell["context_id"] != draft.context_id
+            or cell["payload_json"] != _canonical_json(draft.payload)
+            or cell["content_hash"] != _content_hash(draft.content)
+            or cell["created_event_id"] != event_id
+        ):
+            raise ValueError("existing legacy replay cells do not match source")
+        boundaries = connection.execute(
+            """
+            SELECT side, position, boundary_id FROM cat_boundaries WHERE cell_id = ?
+            ORDER BY CASE side WHEN 'source' THEN 0 ELSE 1 END, position
+            """,
+            (draft.id,),
+        ).fetchall()
+        expected_boundaries = [
+            (boundary["side"], boundary["position"], boundary["cell_id"])
+            for boundary in _ordered_boundaries(draft)
+        ]
+        if [tuple(boundary) for boundary in boundaries] != expected_boundaries:
+            raise ValueError("existing legacy replay boundaries do not match source")
+    return True
+
+
+def _preflight_existing_output(
+    output: Path,
+    plan: _ReplayPlan,
+    *,
+    event_id: str,
+    event_payload_json: str,
+    root_epoch_id: str,
+    snapshot_id: str,
+    active_cell_ids_json: str,
+    snapshot_hash: str,
+) -> bool:
+    """Inspect an existing output read-only before v2 schema initialization."""
+    if not output.exists():
+        return False
+    connection = sqlite3.connect(f"{output.as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        tables = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if not tables:
+            return False
+        if not _PRE_MEMBERSHIP_V2_TABLES <= tables:
+            raise ValueError("output is incompatible with legacy replay")
+        try:
+            schema_version = _validate_schema_definitions(connection)
+            core_tables = (
+                _PRE_MEMBERSHIP_V2_TABLES
+                if schema_version == "pre-membership-projection"
+                else _V2_TABLES
+            )
+            if not core_tables <= tables:
+                raise ValueError("output is incompatible with legacy replay")
+            if "cat_vectors" in tables:
+                permitted_tables = core_tables | {"cat_vectors"} | _VEC_SHADOW_TABLES
+                if not _VEC_SHADOW_TABLES <= tables or not tables <= permitted_tables:
+                    raise ValueError("output is incompatible with legacy replay")
+                vector_sql = connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cat_vectors'"
+                ).fetchone()["sql"]
+                normalized_vector_sql = _canonical_ddl(vector_sql or "")
+                if (
+                    normalized_vector_sql != _SUPPORTED_VEC0_DDL
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_chunks"
+                    ).fetchone()[0]
+                    != 0
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_rowids"
+                    ).fetchone()[0]
+                    != 0
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_vector_chunks00"
+                    ).fetchone()[0]
+                    != 0
+                    or connection.execute(
+                        "SELECT COUNT(*) FROM cat_vectors_info"
+                    ).fetchone()[0]
+                    != 4
+                ):
+                    raise ValueError("output is incompatible with legacy replay")
+            elif not tables <= core_tables:
+                raise ValueError("output is incompatible with legacy replay")
+            completed = _validate_completed_replay(
+                connection,
+                plan,
+                event_id=event_id,
+                event_payload_json=event_payload_json,
+                root_epoch_id=root_epoch_id,
+                snapshot_id=snapshot_id,
+                active_cell_ids_json=active_cell_ids_json,
+                snapshot_hash=snapshot_hash,
+                schema_version=schema_version,
+            )
+            if schema_version != "current" and not completed:
+                raise ValueError("output is incompatible with legacy replay")
+            return completed
+        except sqlite3.Error as exc:
+            raise ValueError("output is incompatible with legacy replay") from exc
+    finally:
+        connection.close()
+
+
+def _report(
+    plan: _ReplayPlan,
+    legacy_total: int,
+    root_epoch_id: str,
+    snapshot_hash: str,
+) -> LegacyImportReport:
+    return LegacyImportReport(
+        legacy_total=legacy_total,
+        proxy_zero_cells=plan.proxy_zero_cells,
+        imported_one_cells=plan.imported_one_cells,
+        imported_two_cells=plan.imported_two_cells,
+        opaque_cells=plan.opaque_cells,
+        unexplained_loss=plan.unexplained_loss,
+        root_epoch_id=root_epoch_id,
+        snapshot_hash=snapshot_hash,
+    )
+
+
+def _remove_staged_sqlite_files(path: Path) -> None:
+    for candidate in (path, Path(f"{path}-journal"), Path(f"{path}-wal"), Path(f"{path}-shm")):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as database:
+        os.fsync(database.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        directory_fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _publish_staged_output(staged_output: Path, output: Path) -> None:
+    _fsync_file(staged_output)
+    os.replace(staged_output, output)
+    _fsync_directory(output.parent)
+
+
+def _bootstrap_staged_output(
+    staged_output: Path,
+    plan: _ReplayPlan,
+    *,
+    event_id: str,
+    event_payload: Mapping[str, object],
+    root_epoch_id: str,
+    snapshot_id: str,
+    active_cell_ids_json: str,
+    snapshot_hash: str,
+) -> None:
+    connection = sqlite3.connect(staged_output)
+    store: EvolvingCategoryStore | None = None
+    try:
+        store = EvolvingCategoryStore(connection)
+        with store.transaction() as transaction:
+            store.append_event(
+                "legacy_import_summary", event_payload, event_id=event_id
+            )
+            for draft in plan.drafts:
+                store.create_cell(draft, created_event_id=event_id)
+            member_ids = tuple(sorted(draft.id for draft in plan.drafts))
+            store.reserve_write_bytes(
+                len(root_epoch_id.encode("utf-8")) * (1 + len(member_ids))
+                + sum(len(member_id.encode("utf-8")) for member_id in member_ids),
+                row_count=1 + len(member_ids),
+            )
+            transaction.execute(
+                """
+                INSERT INTO cat_epochs (id, created_event_id, created_at)
+                VALUES (?, ?, datetime('now'))
+                """,
+                (root_epoch_id, event_id),
+            )
+            transaction.executemany(
+                "INSERT INTO cat_epoch_members (epoch_id, position, cell_id) "
+                "VALUES (?, ?, ?)",
+                (
+                    (root_epoch_id, position, cell_id)
+                    for position, cell_id in enumerate(member_ids)
+                ),
+            )
+            snapshot_reservation = store._write_reservation(
+                snapshot_id, root_epoch_id, active_cell_ids_json
+            )
+            with store.derived_transaction(
+                reserved_bytes=snapshot_reservation
+            ) as derived:
+                if derived is None:
+                    raise CategoryQuotaExceeded("legacy replay requires a snapshot artifact")
+                derived.execute(
+                    """
+                    INSERT INTO cat_snapshots (id, epoch_id, active_cell_ids_json, content_hash, created_at)
+                    VALUES (?, ?, ?, ?, datetime('now'))
+                    """,
+                    (
+                        snapshot_id,
+                        root_epoch_id,
+                        active_cell_ids_json,
+                        snapshot_hash,
+                    ),
+                )
+            if not derived.committed:
+                raise CategoryQuotaExceeded("legacy replay requires a snapshot artifact")
+    finally:
+        if store is None:
+            connection.close()
+        else:
+            store.close()
+
+
+def import_legacy_category(
+    legacy_path: str | Path, output_path: str | Path
+) -> LegacyImportReport:
+    """Copy one legacy category history into an isolated v2 database.
+
+    The source is always opened read-only.  Missing or malformed references
+    are reported as loss; this routine never creates category cells for them.
+    """
+    legacy = Path(legacy_path).resolve()
+    output = Path(output_path).resolve()
+    if legacy == output or (output.exists() and os.path.samefile(legacy, output)):
+        raise ValueError("legacy input and v2 output must resolve to different paths")
+
+    rows = _read_legacy_rows(legacy)
+    raw_source_fingerprint = _raw_source_fingerprint(rows)
+    plan = _plan_cells(rows)
+    active_cell_ids_json = json.dumps(
+        sorted(draft.id for draft in plan.drafts), separators=(",", ":")
+    )
+    snapshot_hash = canonical_snapshot_hash(draft.id for draft in plan.drafts)
+    root_epoch_id = _stable_id("legacy-root-epoch", snapshot_hash)
+    snapshot_id = _stable_id("legacy-snapshot", snapshot_hash)
+    manifest = _replay_manifest(
+        plan,
+        legacy_total=len(rows),
+        raw_source_fingerprint=raw_source_fingerprint,
+        snapshot_id=snapshot_id,
+        root_epoch_id=root_epoch_id,
+        snapshot_hash=snapshot_hash,
+    )
+    manifest_fingerprint = _manifest_fingerprint(manifest)
+    event_id = _stable_id("legacy-import-summary", manifest_fingerprint)
+    event_payload = {
+        "manifest_fingerprint": manifest_fingerprint,
+        "raw_source_fingerprint": raw_source_fingerprint,
+    }
+    event_payload_json = _canonical_json(event_payload)
+    if output.exists() and output.stat().st_size == 0:
+        preflight_matches = False
+    else:
+        preflight_matches = _preflight_existing_output(
+            output,
+            plan,
+            event_id=event_id,
+            event_payload_json=event_payload_json,
+            root_epoch_id=root_epoch_id,
+            snapshot_id=snapshot_id,
+            active_cell_ids_json=active_cell_ids_json,
+            snapshot_hash=snapshot_hash,
+        )
+    if preflight_matches:
+        return _report(plan, len(rows), root_epoch_id, snapshot_hash)
+
+    descriptor, staged_name = tempfile.mkstemp(
+        dir=output.parent,
+        prefix=f".{output.name}.",
+        suffix=".replay.tmp",
+    )
+    os.close(descriptor)
+    staged_output = Path(staged_name)
+    try:
+        _bootstrap_staged_output(
+            staged_output,
+            plan,
+            event_id=event_id,
+            event_payload=event_payload,
+            root_epoch_id=root_epoch_id,
+            snapshot_id=snapshot_id,
+            active_cell_ids_json=active_cell_ids_json,
+            snapshot_hash=snapshot_hash,
+        )
+        if not _preflight_existing_output(
+            staged_output,
+            plan,
+            event_id=event_id,
+            event_payload_json=event_payload_json,
+            root_epoch_id=root_epoch_id,
+            snapshot_id=snapshot_id,
+            active_cell_ids_json=active_cell_ids_json,
+            snapshot_hash=snapshot_hash,
+        ):
+            raise RuntimeError("staged legacy replay did not validate")
+        _publish_staged_output(staged_output, output)
+        return _report(plan, len(rows), root_epoch_id, snapshot_hash)
+    finally:
+        _remove_staged_sqlite_files(staged_output)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    class _ReplayArgumentParser(argparse.ArgumentParser):
+        def error(self, message: str) -> None:
+            raise ValueError(message)
+
+    parser = _ReplayArgumentParser(description=__doc__)
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    replay = subcommands.add_parser("replay", help="replay a legacy category database")
+    replay.add_argument("--legacy", required=True, type=Path)
+    replay.add_argument("--output", required=True, type=Path)
+    replay.add_argument("--json", action="store_true", dest="as_json")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+        if args.command != "replay":
+            raise ValueError("a command is required")
+        report = import_legacy_category(args.legacy, args.output)
+    except (CategoryQuotaExceeded, OSError, sqlite3.Error, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.as_json:
+        print(json.dumps(asdict(report), sort_keys=True))
+    else:
+        print(report)
+    return 2 if report.unexplained_loss else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,22 @@
+{
+  "2026-09-06-context-assistant-assessment.json": "dc42c0771b69a30f5f827c234cb3d12b5ab71a571aa903fb1dec8e854de4ef53",
+  "2026-09-06-context-assistant-assessment.md": "13d45d526bac69d6bc07af6fb1fd8fdc9047298cc49a8190039e469b0684fd27",
+  "2026-09-06-context-assistant-flags-review.html": "e7a1996f8d93d8483469914ce8da12c18c49d2497e2835e6e38250c140b4b8c4",
+  "2026-09-06-context-bounded-compaction-evidence.tar.gz": "f712bf5c7e8989580c46f9e432bfc9256d7b8d5e8369ee25381aa8ca877da09f",
+  "2026-09-06-context-bounded-compaction-results.json": "120f67fab947b7ea2dae92525c418850410191af2f30630db5ed35e7e4ec26c4",
+  "2026-09-06-context-bounded-compaction-review.html": "8585d17f4576e79e2a16a87135e1a47580acae0d75b5fd0f5ccfaa2a673d4986",
+  "2026-09-06-context-compaction-followup-evidence.tar.gz": "8a360ae5b9c0f7dd560f1e9b308d645b4d2423aae61c85a0c5c9df09bfad3775",
+  "2026-09-06-context-compaction-followup-results.json": "4001f8b846c9e59ecca5f16e68b354d433820dc8c2e8a995aead9fe0c9bde6d8",
+  "2026-09-06-context-compaction-followup-results.md": "715ca3f083dab385a66065b4db8054e40c221aec3b4e9de63c65c2a09bc18c37",
+  "2026-09-06-context-compaction-followup-review.html": "7bd8ae9489929678fbbaab29ac32f0ff5b6126c46301c10a3117663e87cbc4db",
+  "2026-09-06-context-followups-verification.json": "0c088547fb855d38f6a4cfd4bc19cd7d857f6e40c96c7370a610af5dd74b93af",
+  "2026-09-06-context-lighthouse-integration.md": "b58bc181aa91e636ed35712031058de7f8dd9b4a32b8e729d50dbde6aa69bd33",
+  "2026-09-06-context-lighthouse-pilot/full-suite.log": "351a142f7db64d249be74c8520351fac893cd5fd631699eb0f512bb283afd4ce",
+  "2026-09-06-context-lighthouse-pilot/receipts/allowed.json": "20f536c3f0197bfd6cca8f1cbd3ec39293717e8090b44e9d37f3bf7e715d2424",
+  "2026-09-06-context-lighthouse-pilot/receipts/denied.json": "db69451cf76a47264556feeb39ca0c0b07f28139ab1e3f588c61a312d14e2254",
+  "2026-09-06-context-lighthouse-pilot/receipts/policy_withdrawn.json": "f85f37dffcae46088ccef2a2bfd734a1fa38e22c73886d381dea33c29864ab8d",
+  "2026-09-06-context-lighthouse-pilot/receipts/unshared.json": "dc5e48c981f0fd6c4d19a4d3fb01237ad0a7c700bf96705a69ff1903546979c2",
+  "2026-09-06-context-lighthouse-pilot/report.json": "09c71e164d4666357d937cfe2009cb826399d38842c851020ff2ac94f56e7e68",
+  "2026-09-06-context-lighthouse-pilot/sha256.json": "93bc6c4b9a0aa5e30fe115798da1feeae160280dcc0f1f0638e78469118effb6",
+  "2026-09-06-context-lighthouse-pilot/validation.json": "b5bccfa89f6fde16299e4df9c22524f402af712ec2539d135e6ab9bba6a2c075"
+}

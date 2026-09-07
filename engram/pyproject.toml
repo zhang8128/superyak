@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "engram"
+version = "0.3.0"
+description = "Memory across sessions — episodes, semantics, instincts"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.9,<2",
+    "sqlite-vec>=0.1.6",
+    "onnxruntime>=1.18",
+    "fastembed>=0.7",
+    "tree-sitter>=0.24",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "tree-sitter-typescript>=0.23",
+    "watchfiles>=1.0",
+    "scipy>=1.14",
+    "graphiti-core[kuzu]>=0.5",
+    "jsonschema>=4.23",
+    "networkx>=3.6.1",
+    "ripser>=0.6.15",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0"]
+llm = ["anthropic"]
+
+[project.scripts]
+engram-lighthouse-pilot = "lighthouse_pilot:main"
+engram-lighthouse-label = "lighthouse_label:main"
+
+[tool.setuptools]
+py-modules = [
+    "ask",
+    "categories",
+    "category_compile",
+    "category_context",
+    "category_evolution",
+    "cli",
+    "clipboard",
+    "clusters",
+    "coherence",
+    "compress",
+    "config",
+    "context_cli",
+    "context_coding",
+    "context_coding_cli",
+    "context_coding_memory",
+    "context_coding_provider",
+    "context_codex",
+    "context_compile",
+    "context_provider",
+    "context_runtime",
+    "context_sources",
+    "context_lighthouse",
+    "context_store",
+    "daemon",
+    "dedup",
+    "deep_pass",
+    "divergence",
+    "dreaming",
+    "embeddings",
+    "engine",
+    "federation",
+    "framing",
+    "graph",
+    "graphiti_local",
+    "indexer",
+    "knowledge",
+    "lighthouse_daemon",
+    "lighthouse_client",
+    "lighthouse_export",
+    "lighthouse_label",
+    "lighthouse_pilot",
+    "lighthouse_policy",
+    "lighthouse_protocol",
+    "lighthouse_receipts",
+    "lighthouse_receiver_config",
+    "lighthouse_validation",
+    "local_agent",
+    "logging_config",
+    "maintenance",
+    "margins",
+    "mirror",
+    "neighbors",
+    "notepad",
+    "operation_audit",
+    "persistence",
+    "policy_gen",
+    "reflection",
+    "resonance",
+    "resources",
+    "scoring",
+    "server",
+    "session_bindings",
+    "sharing",
+    "sheaf",
+    "storage",
+    "transitions",
+    "watcher",
+]
+
+[tool.setuptools.data-files]
+"share/engram" = ["context_chat.html"]
+"share/engram/migrations" = ["migrations/*.sql"]
+"share/engram/prompts" = ["prompts/*.txt"]
+"share/engram/schemas/lighthouse" = ["schemas/lighthouse/*.json"]
+"share/engram/hooks" = ["hooks/*.py", "hooks/hooks.json"]
+"share/engram/skills/engram" = ["skills/engram/skill.md"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
