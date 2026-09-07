@@ -36,6 +36,7 @@ class ContextStore:
     MAX_EVENT_BYTES = 4_000_000
     MAX_ARTIFACT_BYTES = 16_000_000
     SEARCH_TIMEOUT_SECONDS = 0.05
+    SEARCH_TERM_MATCH_LIMIT = 32
 
     def __init__(self, path: str | Path):
         self.path = Path(path).resolve()
@@ -198,14 +199,39 @@ class ContextStore:
         terms = list(dict.fromkeys(re.findall(r"[^\W_]+", query[:2000], re.UNICODE)))[:16]
         if not terms:
             return []
-        match = " OR ".join('"' + term + '"' for term in terms)
         completed = " AND (e.turn_id IS NULL OR EXISTS(SELECT 1 FROM turns t WHERE t.id=e.turn_id AND t.status='completed'))" if completed_only else ""
         with self._lock:
             kind_filter = " AND e.kind IN (" + ",".join("?" for _ in kinds) + ")"
+            matching = " FROM event_search s JOIN events e ON e.id=s.event_id WHERE event_search MATCH ? AND s.thread=?" + kind_filter + completed
             deadline = time.monotonic() + self.SEARCH_TIMEOUT_SECONDS
+            owns_snapshot = not self.conn.in_transaction
+            if owns_snapshot:
+                self.conn.execute("BEGIN")
             self.conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
             try:
-                rows = self.conn.execute("SELECT e.id,e.seq,e.thread,e.role,e.kind,substr(e.content,1,?) AS content,length(e.content) AS full_length,e.metadata,e.turn_id,created FROM event_search s JOIN events e ON e.id=s.event_id WHERE event_search MATCH ? AND s.thread=?" + kind_filter + completed + " ORDER BY bm25(event_search), e.seq DESC LIMIT ?", (self.PREVIEW_CHARS, match, thread, *kinds, max(0, min(int(limit), 100)))).fetchall()
+                # Classify each term with at most 33 eligible row IDs. Probing
+                # in the index's natural order avoids ranking a common term's
+                # whole posting list. The same thread/kind/completion filters
+                # apply here and to the eventual result query.
+                # Preserve the original query for <=512 eligible events, where
+                # probing adds work without reducing a large ranking set. This
+                # reads at most 513 eligible rows; filtered-out rows may also
+                # be visited. The shared deadline guards that scan too.
+                small_archive = self.conn.execute("SELECT 1 FROM events e WHERE e.thread=?" + kind_filter + completed + " LIMIT 1 OFFSET 512", (thread, *kinds)).fetchone() is None
+                distinctive = list(terms) if small_archive else []
+                for term in (() if small_archive else terms):
+                    hits = self.conn.execute("SELECT s.rowid" + matching + " LIMIT ?", ('"' + term + '"', thread, *kinds, self.SEARCH_TERM_MATCH_LIMIT + 1)).fetchall()
+                    if 0 < len(hits) <= self.SEARCH_TERM_MATCH_LIMIT:
+                        distinctive.append(term)
+                    if time.monotonic() >= deadline:
+                        raise ArchiveSearchTimeout("Archive search deadline exceeded; retrieval is incomplete")
+                # At most 16 * 32 eligible matches enter the ranked union.
+                # Broad-only queries use recent matches, rather than spending
+                # the whole deadline ranking repeated dialogue. This remains
+                # a bounded recall sample, not exhaustive relevance ranking.
+                match = " OR ".join('"' + term + '"' for term in (distinctive or terms))
+                ordering = "bm25(event_search), e.seq DESC" if distinctive else "s.rowid DESC"
+                rows = self.conn.execute("SELECT e.id,e.seq,e.thread,e.role,e.kind,substr(e.content,1,?) AS content,length(e.content) AS full_length,e.metadata,e.turn_id,created" + matching + " ORDER BY " + ordering + " LIMIT ?", (self.PREVIEW_CHARS, match, thread, *kinds, max(0, min(int(limit), 100)))).fetchall()
                 if time.monotonic() >= deadline:
                     raise ArchiveSearchTimeout("Archive search deadline exceeded; retrieval is incomplete")
             except sqlite3.OperationalError as exc:
@@ -216,6 +242,8 @@ class ContextStore:
                 # This connection also serves capture, corrections and other
                 # threads; an expired search callback must never leak to them.
                 self.conn.set_progress_handler(None, 0)
+                if owns_snapshot:
+                    self.conn.rollback()
         return [self._event_row(row) for row in rows]
 
     @staticmethod

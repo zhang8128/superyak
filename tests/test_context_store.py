@@ -117,6 +117,71 @@ def test_archive_search_deadline_interrupts_query_and_restores_connection(tmp_pa
         store.close()
 
 
+@pytest.mark.parametrize("query,expect_old", [("the label zephyr", True), ("the label", False)])
+def test_search_recovers_old_distinctive_sources_under_bounded_query_work(tmp_path, monkeypatch, query, expect_old):
+    import itertools
+
+    store = ContextStore(tmp_path / "context.db")
+    original = store.append("t", "user", "The zephyr label is violet.")
+    with store._write():
+        for i in range(6000):
+            store._insert_event("t", "user", "The label is amber in this routine check.", "message", f"noise-{i}", None, {})
+    # A deterministic work clock advances at progress callbacks instead of
+    # asserting a machine-dependent wall time. A full repeated-term ranking
+    # exhausts the allowance; recovering the rare original should not.
+    with monkeypatch.context() as clock:
+        ticks = itertools.count()
+        clock.setattr("context_store.time.monotonic", lambda: next(ticks) / 1000)
+        result = store.search("t", query, limit=1)
+    assert result[0]["id"] == (original["id"] if expect_old else "noise-5999")
+    store.close()
+
+
+def test_search_term_probes_and_ranking_share_a_snapshot(tmp_path):
+    store = ContextStore(tmp_path / "context.db")
+    other = ContextStore(tmp_path / "context.db")
+    original = store.append("t", "user", "anchor unique", event_id="original")
+    with store._write():
+        for i in range(600):
+            store._insert_event("t", "user", "unrelated background", "message", f"background-{i}", None, {})
+    probes = []
+
+    def append_between_probes(sql):
+        if sql.startswith("SELECT s.rowid"):
+            probes.append(sql)
+            if len(probes) == 2:
+                other.append("t", "user", "anchor unique", event_id="concurrent")
+
+    store.conn.set_trace_callback(append_between_probes)
+    try:
+        assert store.search("t", "anchor unique", limit=1)[0]["id"] == original["id"]
+        assert len(probes) == 2
+        store.conn.set_trace_callback(None)
+        assert store.search("t", "anchor unique", limit=1)[0]["id"] == "concurrent"
+        assert not store.conn.in_transaction
+    finally:
+        store.conn.set_trace_callback(None)
+        store.close()
+        other.close()
+
+
+def test_large_search_term_probes_use_the_same_eligibility_as_results(tmp_path):
+    store = ContextStore(tmp_path / "context.db")
+    original = store.append("t", "user", "anchor shared", event_id="original")
+    turn = store.begin_turn("t", "pending", "anchor shared")
+    with store._write():
+        for i in range(600):
+            store._insert_event("t", "user", "shared routine", "message", f"background-{i}", None, {})
+        for i in range(40):
+            store._insert_event("foreign", "user", "anchor shared", "message", f"foreign-{i}", None, {})
+            store._insert_event("t", "user", "anchor shared", "coding_observation", f"coding-{i}", None, {})
+            store._insert_event("t", "user", "anchor shared", "message", f"pending-{i}", turn["id"], {})
+    # Counting any excluded group makes 'anchor' appear broad, incorrectly
+    # selecting a recent 'shared routine' instead of this older original.
+    assert store.search("t", "anchor shared", limit=1, completed_only=True)[0]["id"] == original["id"]
+    store.close()
+
+
 def test_manifests_and_event_capture_are_thread_scoped(tmp_path):
     store = ContextStore(tmp_path / "context.db")
     with ThreadPoolExecutor(max_workers=4) as pool:
