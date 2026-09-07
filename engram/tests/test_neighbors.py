@@ -242,7 +242,9 @@ def test_receiver_policy_matches_vendored_lighthouse_schema(crossing):
     args, _, _, _ = crossing
     loaded = load_receiver_policy(args["policy_path"], "engram")
     assert loaded.issuer == "urn:engram:engram"
-    upstream = Path(os.environ.get("LIGHTHOUSE_REPO", Path.home() / "Projects/lighthouse")) / "schemas/connection-policy.schema.json"
+    upstream = Path(os.environ.get(
+        "LIGHTHOUSE_REPO", Path(__file__).resolve().parents[2] / "lighthouse"
+    )) / "schemas/connection-policy.schema.json"
     if not upstream.is_file():
         pytest.skip("optional sibling Lighthouse kit unavailable; set LIGHTHOUSE_REPO")
     assert (Path(__file__).resolve().parents[1] / "schemas/lighthouse/connection-policy.schema.json").read_bytes() == upstream.read_bytes()

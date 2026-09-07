@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -143,9 +144,9 @@ def test_decisions_serialize_with_explicit_nulls_and_store_digest_shape():
 
 
 def test_vendored_schema_matches_lighthouse_when_present():
-    kit = Path(
-        "/Users/kairos/Projects/lighthouse/schemas/recall-receipt.schema.json"
-    )
+    kit = Path(os.environ.get(
+        "LIGHTHOUSE_REPO", Path(__file__).resolve().parents[2] / "lighthouse"
+    )) / "schemas/recall-receipt.schema.json"
     if not kit.exists():
         pytest.skip("lighthouse checkout or schema not present")
     ours = json.loads(
