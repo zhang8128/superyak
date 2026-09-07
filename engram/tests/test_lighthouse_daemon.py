@@ -383,8 +383,8 @@ def test_invalid_read_memory_ids_are_malformed_before_store_lookup(tmp_path):
 def test_socket_round_trip_leaves_store_unchanged(tmp_path):
     pub = build_publisher(tmp_path)
     before = hashlib.sha256(pub.db_path.read_bytes()).hexdigest()
-    # Darwin's sockaddr_un.sun_path is shorter than pytest's nested tmp path.
-    sock_path = Path("/private/tmp") / f"engram-lh-{uuid.uuid4().hex}.sock"
+    # Keep the socket path short on both macOS and Linux.
+    sock_path = Path("/tmp") / f"engram-lh-{uuid.uuid4().hex}.sock"
     daemon = PublisherDaemon({"why": pub}, sock_path, FakeEmbeddings())
     thread = threading.Thread(target=daemon.serve_forever, daemon=True)
     thread.start()

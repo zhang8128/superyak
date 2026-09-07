@@ -26,7 +26,7 @@ setup-lighthouse:
 check: check-engram check-lighthouse check-integration
 
 check-engram:
-	cd engram && LIGHTHOUSE_REPO="$(CURDIR)/lighthouse" uv run --locked --extra dev python -m pytest -q --tb=short
+	cd engram && LIGHTHOUSE_REPO="$(CURDIR)/lighthouse" uv run --locked --extra dev python -m pytest -q -ra --tb=short
 
 check-lighthouse:
 	cd lighthouse && pnpm check && pnpm proof && pnpm recall:proof
