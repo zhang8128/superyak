@@ -228,9 +228,12 @@ Archive ranking has a 50 ms query deadline, checked periodically by SQLite and
 again when the query returns. If it expires, chat and coding continue with their
 recent dialogue, current goal, and explicit notes; manifests report incomplete
 archive coverage. Archive search tools also return an explicit incomplete result.
-A bounded result count alone did not bound search time as repeated terms
-accumulated. This deadline bounds ranking work at the cost of potentially missing
-older context, which remains part of the continuity evaluation. The deadline is
+Large archives first probe the query's terms for distinctive matches, then rank
+that smaller union; broad-only queries return recent matches. Small archives
+retain BM25 ordering. This substantially reduced repeated-history timeouts in
+the [fixed retrieval benchmark](reports/2026-09-06-context-retrieval-evaluation.md).
+When a distinctive term exists, broad-only matches are excluded, so incidental
+rare words can still reduce recall. The deadline is
 cooperative, not an exact 50 ms wall-clock guarantee: lock waiting, native work
 between progress callbacks, and OS scheduling can add elapsed time.
 
@@ -288,10 +291,10 @@ public multi-user server.
 
 ## Validation and next work
 
-The completion run passed **1,950 tests** across the repository, with three
-existing dependency/fork warnings. After adding the archive-search deadline,
-all **192 context tests** passed against the final implementation. The full
-repository suite was not repeated after that scoped change. Independent review
+The retrieval/evaluation follow-up passed **1,973 tests** across the repository,
+with three existing dependency/fork warnings. An existing category-validation
+test was made deterministic after its 5 ms deadline expired before validation
+under load; production category behavior was unchanged. Independent review
 findings were reproduced, fixed, and rechecked. Wheel-building and installed-wheel
 startup checks are included in the full suite. Browser checks covered historical
 correction inspection after revision/unpin, thread reload, and new conversations.
@@ -328,11 +331,15 @@ The [completion report](reports/2026-09-06-context-runtime-completion.md) record
 the successful 10,000-call replay: all counted payloads matched dispatch, all
 budgets passed, and sampled RSS grew by 0.484 MiB as the archive reached 25,000
 events. **85.47% of archive searches hit the deadline** on its repeated-text
-workload. That is a substantial retrieval limitation; the fallback preserves
-required context but does not establish long-session recall quality.
+workload. The [retrieval follow-up](reports/2026-09-06-context-retrieval-evaluation.md)
+reduced this to **0.66%** on the same 10,000-call workload. A separate fixed
+100-question source-selection repeat at 25,000 routine entries improved from
+**10/100 to 99/100** with all expected originals supplied; the remaining timeout
+is retained in the report. Source availability does not establish answer quality.
 
-The source-grounded 100-question human continuity pilot from the design has not
-been run. Neither budget tests nor the small live smoke establish that quality
-gate. Rich Engram recall parity, broader continuity evaluation, local-model tokenizer
+The [preliminary continuity comparison](reports/2026-09-06-context-continuity-protocol.md)
+captures live answers against two context baselines, with human ratings left
+unset. The source-grounded human continuity gate from the design has not passed.
+Rich Engram recall parity, broader continuity evaluation, local-model tokenizer
 validation, category/sheaf influence, and Lighthouse networking remain separate
 work described in the [design](superpowers/specs/2026-09-05-dynamic-context-runtime-design.md).

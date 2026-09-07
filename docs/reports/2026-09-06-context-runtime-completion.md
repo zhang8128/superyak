@@ -122,6 +122,10 @@ Strict per-call admission is available only through the explicitly selected
 Responses API adapter and its separate billing. The installed Codex 0.153.4
 app-server schema was checked during this work.
 
+Follow-up: the [fixed retrieval evaluation](2026-09-06-context-retrieval-evaluation.md)
+reduced repeated-history timeouts to 0.66% and documents the remaining recall
+tradeoffs. This report retains the original measurements.
+
 The design's 100-question human continuity pilot has not been run. The lexical
 Engram source is not equivalent to richer MCP recall. Live-tokenizer checks for
 additional providers, category/sheaf influence, and Lighthouse networking remain

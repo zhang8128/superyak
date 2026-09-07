@@ -2117,7 +2117,7 @@ def test_blocking_seed_iterable_is_rejected_without_invocation(store):
     assert time.monotonic() - started < 0.05
 
 
-def test_seed_string_subclass_is_rejected_without_hashing_caller_code(store):
+def test_seed_string_subclass_is_rejected_without_hashing_caller_code(store, monkeypatch):
     """Exact tuple validation also requires inert built-in string elements."""
     _root(store, CellDraft("seed", 0, "seed"))
 
@@ -2126,12 +2126,14 @@ def test_seed_string_subclass_is_rejected_without_hashing_caller_code(store):
 
         def __hash__(self):
             self.hashed = True
-            time.sleep(0.08)
-            return super().__hash__()
+            pytest.fail("Input validation must not invoke a caller's hash method")
 
+    # This test targets type validation, not deadline fallback. A real 5 ms
+    # budget can expire while opening/staging the read snapshot under load,
+    # legitimately returning an empty result before examining the seed.
+    monkeypatch.setattr("category_compile.time.monotonic_ns", lambda: 0)
     seed = SlowString("seed")
     compiler = CategoryCompiler(store, CompileBudget(wall_time_ms=5))
-    started = time.monotonic()
     try:
         with pytest.raises(TypeError, match="strings"):
             compiler.compile("root", seed_cell_ids=(seed,))
@@ -2139,7 +2141,6 @@ def test_seed_string_subclass_is_rejected_without_hashing_caller_code(store):
         compiler.close()
 
     assert seed.hashed is False
-    assert time.monotonic() - started < 0.05
 
 
 def test_active_seed_filtering_is_batched_and_deadline_bounded(store, monkeypatch):
