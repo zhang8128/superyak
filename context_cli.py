@@ -24,7 +24,9 @@ def build_parser():
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--instance")
     parser.add_argument("--engram-db", type=Path)
-    parser.add_argument("--no-engram", action="store_true", help="Use only this runtime's conversation archive")
+    parser.add_argument("--no-engram", action="store_true", help="Disable local Engram memory retrieval")
+    parser.add_argument("--lighthouse-context", help="Explicit Lighthouse context for this chat process, e.g. memory/technical")
+    parser.add_argument("--lighthouse-purpose", help="Explicit Lighthouse purpose; requires --lighthouse-context and --instance")
     parser.add_argument("--provider", choices=("codex", "responses"), default="codex")
     parser.add_argument("--model", default="gpt-6-astra")
     parser.add_argument("--context-window", type=int, help="Verified model context capacity; required for API mode")
@@ -67,6 +69,7 @@ def resolve_paths(args):
 
 
 def make_runtime(args, store, memory):
+    instance = validate_lighthouse_args(args, memory)
     if args.provider == "responses" and not args.context_window:
         raise ValueError("API mode requires --context-window from a verified model profile; API billing is separate")
     if args.strict and args.provider == "codex":
@@ -78,7 +81,27 @@ def make_runtime(args, store, memory):
     else:
         provider = ResponsesProvider(model=args.model, timeout=args.timeout)
     sources = () if args.no_engram else (EngramSource(memory),)
+    if instance is not None:
+        from context_lighthouse import LighthouseSource
+        sources += (LighthouseSource(store, receiver=args.instance, instance_dir=instance,
+                                    context_id=args.lighthouse_context, purpose=args.lighthouse_purpose),)
     return ContextRuntime(store, provider, budget, sources=sources)
+
+
+def validate_lighthouse_args(args, memory):
+    context, purpose = args.lighthouse_context, args.lighthouse_purpose
+    if context is None and purpose is None:
+        return None
+    from lighthouse_receiver_config import NAME, context_ref
+    if (not context or not purpose or not args.instance or not NAME.fullmatch(args.instance)
+            or args.command not in {'chat', 'serve'} or len(purpose) > 256):
+        raise ValueError('Lighthouse needs --instance, --lighthouse-context and --lighthouse-purpose on chat or serve')
+    context_ref(context)
+    home = Path(os.environ.get('ENGRAM_HOME', Path(__file__).resolve().parent)).resolve()
+    instance = home / '.engram' / 'instances' / args.instance
+    if memory != (instance / 'graph.db').resolve() or not memory.is_file():
+        raise ValueError('Lighthouse needs the existing named receiver database; a different --engram-db is not supported')
+    return instance
 
 
 def make_server(runtime, port=7433):
@@ -189,6 +212,7 @@ def main(argv=None):
     runtime = None
     try:
         directory, memory = resolve_paths(args)
+        validate_lighthouse_args(args, memory)
         store = ContextStore(directory / "context.db")
         if args.command == "code":
             from context_coding_cli import run_code

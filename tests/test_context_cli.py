@@ -32,6 +32,29 @@ def test_default_subscription_and_named_instance_paths(tmp_path, monkeypatch):
         resolve_paths(build_parser().parse_args(["--instance", "../escape", "chat", "hello"]))
 
 
+def test_lighthouse_is_explicit_and_uses_existing_named_receiver(tmp_path, monkeypatch):
+    from context_cli import make_runtime, validate_lighthouse_args
+    import context_codex
+    monkeypatch.setenv('ENGRAM_HOME', str(tmp_path))
+    monkeypatch.setattr(context_codex, 'CodexProvider', lambda **kw: Provider())
+    common = ['--instance', 'mira', '--lighthouse-context', 'memory/technical',
+              '--lighthouse-purpose', 'session-recall']
+    args = build_parser().parse_args(common + ['chat', 'hello'])
+    directory, memory = resolve_paths(args)
+    memory.parent.mkdir(parents=True)
+    memory.touch()
+    runtime = make_runtime(args, ContextStore(directory / 'context.db'), memory)
+    assert [s.mode for s in runtime.sources] == ['sqlite_lexical', 'lighthouse']
+    runtime.close()
+    for argv in [common + ['code', '--repo', str(tmp_path), 'task'],
+                 ['--lighthouse-context', 'memory/technical', 'chat'],
+                 common + ['--engram-db', str(tmp_path / 'unrelated.db'), 'chat']]:
+        args = build_parser().parse_args(argv)
+        _, selected_memory = resolve_paths(args)
+        with pytest.raises(ValueError, match='Lighthouse'):
+            validate_lighthouse_args(args, selected_memory)
+
+
 def test_http_chat_context_and_thread_isolation(tmp_path):
     runtime = ContextRuntime(ContextStore(tmp_path / "runtime.db"), Provider(), Budget())
     server = make_server(runtime, port=0)

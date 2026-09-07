@@ -72,7 +72,11 @@ class ContextRuntime:
         self.max_seconds = max_seconds
         self.instructions = instructions
 
-    def _candidates(self, thread, current, current_id):
+    def _turn_sources(self, thread, turn_id=None, *, deadline=None):
+        return tuple(source.for_turn(thread, turn_id, deadline=deadline) if hasattr(source, 'for_turn') else source
+                     for source in self.sources)
+
+    def _candidates(self, thread, current, current_id, *, sources=None):
         recent = [r for r in self.store.recent(thread, 10, completed_only=True) if r["id"] != current_id]
         # Keep the immediate question/answer intact, so pronouns and short replies
         # still have their original referents. Other originals are optional.
@@ -99,7 +103,7 @@ class ContextRuntime:
             if row["id"] != current_id and row["id"] not in candidates:
                 text = row["content"] + ("\n[Excerpt; original is available by source ID.]" if row["truncated"] else "")
                 candidates[row["id"]] = Candidate(row["id"], row["role"], (text,), score=50-index, reason="archive recall", sequence=row["seq"])
-        for source in self.sources:
+        for source in self.sources if sources is None else sources:
             start = time.monotonic()
             try:
                 found = source.search(query, limit=8)
@@ -107,13 +111,13 @@ class ContextRuntime:
                     if candidate.required:
                         raise ValueError("Memory sources cannot require their own inclusion")
                     candidates.setdefault(candidate.id, candidate)
-                coverage.append({"mode": source.mode, "candidates": len(found), "elapsed_ms": round(1000*(time.monotonic()-start)), "coverage": "bounded source sample"})
+                coverage.append({"mode": source.mode, "candidates": len(found), "elapsed_ms": round(1000*(time.monotonic()-start)), "coverage": "bounded source sample", **getattr(source, 'coverage', {})})
             except (OSError, ValueError, RuntimeError) as exc:
                 coverage.append({"mode": source.mode, "error": type(exc).__name__})
         return list(candidates.values()), coverage
 
-    def _source_valid(self, candidate):
-        for source in self.sources:
+    def _source_valid(self, candidate, sources=None):
+        for source in self.sources if sources is None else sources:
             try:
                 if source.valid(candidate):
                     return True
@@ -126,14 +130,16 @@ class ContextRuntime:
         encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False).encode()
         return hashlib.sha256(encoded).hexdigest()
 
-    def _check_active_sources(self, thread, candidates, reads):
+    def _check_active_sources(self, thread, candidates, reads, *, sources=None):
         # Opaque provider items can depend on any source in the preceding call.
         # Removing a recalled candidate cannot retract those derived items, so
         # preserve the episode in the archive and stop instead of replaying it.
-        valid = all(self._source_valid(candidate) for candidate in candidates.values())
+        valid = all(self._source_valid(candidate, sources) for candidate in candidates.values())
         for snapshot in reads:
+            if not valid:
+                break
             try:
-                current = self.read_source(thread, snapshot["id"], offset=snapshot["offset"], limit=snapshot["limit"])
+                current = self.read_source(thread, snapshot["id"], offset=snapshot["offset"], limit=snapshot["limit"], sources=sources)
                 valid = valid and self._read_digest(current) == snapshot["digest"]
             except (OSError, ValueError, RuntimeError, sqlite3.Error):
                 valid = False
@@ -159,17 +165,30 @@ class ContextRuntime:
             source_reads = []
             calls_seen = set()
             try:
+                sources = self._turn_sources(thread_id, turn['id'], deadline=started + self.max_seconds)
                 for step in range(self.max_calls):
                     if time.monotonic() - started > self.max_seconds:
                         raise ContextCapacityError("Turn time limit reached")
-                    self._check_active_sources(thread_id, active_candidates, source_reads)
-                    candidates, coverage = self._candidates(thread_id, message, turn["id"] + ":user")
+                    self._check_active_sources(thread_id, active_candidates, source_reads, sources=sources)
+                    candidates, coverage = self._candidates(thread_id, message, turn["id"] + ":user", sources=sources)
                     strict = self.provider.capabilities.get("strict", False)
                     for _ in range(3):
                         request = self.compiler.compile(instructions=self.instructions, current=message, candidates=candidates, active_items=active, provider=provider, tools=TOOLS if strict else [])
-                        self._check_active_sources(thread_id, active_candidates, source_reads)
+                        self._check_active_sources(thread_id, active_candidates, source_reads, sources=sources)
                         selected = set(request.manifest["selected_ids"])
-                        invalid = {c.id for c in candidates if c.id in selected and c.version is not None and not self._source_valid(c)}
+                        invalid = {c.id for c in candidates if c.id in selected and c.version is not None and not self._source_valid(c, sources)}
+                        dispatch = []
+                        if not invalid:
+                            dependencies = {c.id: c for c in candidates if c.id in selected and c.version is not None}
+                            dependencies.update(active_candidates)
+                            for source in sources:
+                                if hasattr(source, 'prepare_dispatch'):
+                                    revoked, detail = source.prepare_dispatch(list(dependencies.values()), request.manifest['payload_digest'], reads=source_reads)
+                                    if revoked.intersection(set(active_candidates) | {r['id'] for r in source_reads}):
+                                        raise ContextCapacityError('Source used by the active tool episode became unavailable before dispatch')
+                                    invalid.update(revoked)
+                                    if detail is not None:
+                                        dispatch.append(detail)
                         if not invalid:
                             break
                         candidates = [c for c in candidates if c.id not in invalid]
@@ -178,7 +197,7 @@ class ContextRuntime:
                         raise ContextCapacityError("Source snapshots changed repeatedly during request preparation")
                     manifest = {**request.manifest, "turn_id": turn["id"], "step": step, "source_coverage": coverage,
                                 "active_source_versions": {key: candidate.version for key, candidate in active_candidates.items()},
-                                "tool_source_snapshots": list(source_reads)}
+                                "tool_source_snapshots": list(source_reads), "source_dispatch": dispatch}
                     manifest_id = self.store.save_manifest(thread_id, manifest)
                     response = provider.generate(request.payload)
                     raw = json.dumps(response, ensure_ascii=False, allow_nan=False).encode()
@@ -201,9 +220,11 @@ class ContextRuntime:
                                 raise ProviderError("Missing or reused tool call ID")
                             calls_seen.add(call_id)
                             prior_reads = len(source_reads)
-                            result = self._tool(thread_id, call, snapshots=source_reads)
+                            result = self._tool(thread_id, call, snapshots=source_reads, sources=sources)
                             item = {"type": "function_call_output", "call_id": call_id, "output": json.dumps(result, ensure_ascii=False)}
-                            self.store.append(thread_id, "tool", item["output"], kind="tool", turn_id=turn["id"], metadata={"call_id": call_id, "name": call.get("name"), "source_snapshots": source_reads[prior_reads:]})
+                            remote_read = any(r['id'].startswith('lighthouse:') for r in source_reads[prior_reads:])
+                            archived_output = 'Lighthouse source page delivered; body not retained' if remote_read else item['output']
+                            self.store.append(thread_id, "tool", archived_output, kind="tool", turn_id=turn["id"], metadata={"call_id": call_id, "name": call.get("name"), "source_snapshots": source_reads[prior_reads:]})
                             active.append(item)
                         continue
                     text = "\n".join(part.get("text", part.get("refusal", "")) for item in output if item.get("type") == "message" for part in item.get("content", []) if part.get("type") in {"output_text", "refusal"})
@@ -218,7 +239,7 @@ class ContextRuntime:
                 self.store.fail_turn(turn["id"], str(exc), status=status)
                 raise
 
-    def _tool(self, thread, call, *, snapshots=None):
+    def _tool(self, thread, call, *, snapshots=None, sources=None):
         try:
             args = json.loads(call.get("arguments", "{}"))
             if not isinstance(args, dict):
@@ -233,8 +254,8 @@ class ContextRuntime:
                 source_id, offset, limit = args.get("id"), args.get("offset", 0), args.get("limit", 2048)
                 if not isinstance(source_id, str) or type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 4096:
                     raise ValueError("Invalid archive page")
-                result = self.read_source(thread, source_id, offset=offset, limit=limit)
-                if snapshots is not None and source_id.startswith("engram:") and "error" not in result:
+                result = self.read_source(thread, source_id, offset=offset, limit=limit, sources=sources)
+                if snapshots is not None and source_id.startswith(("engram:", "lighthouse:")) and "error" not in result:
                     snapshots.append({"id": source_id, "offset": offset, "limit": limit, "digest": self._read_digest(result)})
                 return result
             raise ValueError("Unsupported read-only tool")
@@ -243,10 +264,16 @@ class ContextRuntime:
         except (ValueError, KeyError) as exc:
             return {"error": str(exc)}
 
-    def read_source(self, thread, source_id, *, offset=0, limit=4096):
+    def read_source(self, thread, source_id, *, offset=0, limit=4096, sources=None):
         try:
             if not isinstance(source_id, str) or type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 4096:
                 raise ValueError("Invalid source page")
+            if sources is None and source_id.startswith('lighthouse:'):
+                # Inspection writes a receipt. Serialize it with chat/forget so
+                # an in-flight inspection cannot recreate a forgotten thread.
+                with self.store.lease(thread):
+                    return self.read_source(thread, source_id, offset=offset, limit=limit,
+                                            sources=self._turn_sources(thread))
             if source_id.startswith("state:"):
                 state = next((s for s in self.store.state(thread) if s["key"] == source_id[6:]), None)
                 if state is None:
@@ -255,8 +282,8 @@ class ContextRuntime:
             row = self.store.event(thread, source_id)
             if row:
                 return {"id": source_id, "role": row["role"], "text": row["content"][offset:offset+limit], "next_offset": offset+limit if offset+limit < len(row["content"]) else None}
-            if source_id.startswith("engram:"):
-                for source in self.sources:
+            if source_id.startswith(("engram:", "lighthouse:")):
+                for source in self._turn_sources(thread) if sources is None else sources:
                     found = source.read(source_id, offset=offset, limit=limit)
                     if found:
                         return found

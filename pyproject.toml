@@ -55,6 +55,7 @@ py-modules = [
     "context_provider",
     "context_runtime",
     "context_sources",
+    "context_lighthouse",
     "context_store",
     "daemon",
     "dedup",

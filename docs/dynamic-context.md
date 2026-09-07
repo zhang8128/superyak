@@ -200,6 +200,75 @@ no live separately billed API invocation was performed for this implementation.
 
 ## Recall and inspection
 
+### Opt into Lighthouse sources for chat
+
+An existing named receiver can use its configured Lighthouse publishers in
+terminal or browser chat. Configure the receiver and publisher policies using
+the [receiver guide](lighthouse-receiver.md), then declare both context and
+purpose for the chat process:
+
+```bash
+ENGRAM_HOME=/Users/kairos/Projects/engram \
+  /Users/kairos/Projects/engram/.venv/bin/python -m context_cli \
+  --instance engram --lighthouse-context memory/technical \
+  --lighthouse-purpose session-recall serve
+```
+
+Replace `serve` with `chat` for the terminal. The declaration applies to every
+thread handled by that process. Each consultation sends the explicitly chosen
+publishers a bounded retrieval query made from the current message (up to 1,500
+characters) and the latest two dialogue excerpts (up to 250 characters each).
+Context and purpose are never inferred from conversation text. Missing flags,
+missing settings, or disabled settings leave Lighthouse inactive. Coding mode
+does not accept these flags. A different `--engram-db` cannot borrow a named
+receiver's settings; `--no-engram` disables only local lexical retrieval.
+
+Shared accounts remain optional evidence under the same compiler budget. They
+carry publisher-qualified IDs, layer, lane, audiences, a content digest, and a
+version of the supplied account. The receiver writes a content-free preparation
+receipt before exposing the account to the compiler. After counting, it re-reads
+selected shares through the publisher and rechecks receiver settings and all
+delivery grants. Changed, denied, or unavailable shares are removed and the
+request is counted again. The runtime stops an unfinished tool episode if it
+already depends on a withdrawn source, including a source read through a tool.
+
+The existing settings limit consultation to eight publishers and five shares,
+with 32 KiB of content in total. A dispatch revalidation pass shares one socket
+deadline across its reads (two seconds by default, at most ten). Context
+recompilation is limited to three attempts. All Lighthouse reads in an active
+turn also respect its remaining time; source-page validation stops at its first
+invalid dependency. A malformed peer response leaves healthy peers eligible,
+although a peer exhausting the shared deadline can suppress the whole pass.
+No retrieval or validation failure
+causes an automatic provider retry or discards the local conversation.
+
+The manifest's `source_coverage` lists preparation receipts and diagnostics;
+`source_dispatch` lists receipts for the final dispatch admission. Receipt
+extensions distinguish `source_preparation`, `model_dispatch`, and
+`source_inspection`. Here `injected` describes delivery across that named
+boundary. It does not prove generation succeeded or that a model used a memory.
+In API mode, preflight counting can already send supplied content to the
+provider; withdrawal cannot undo that earlier disclosure. Checks authorize
+request construction, not an atomic lock on another process's future policy.
+
+Source bodies stay in the turn's working memory. Receipts and manifests retain
+metadata, not the bodies; `archive_search` does not index neighbor content.
+`archive_read` and the browser's source inspector fetch an original again under
+current permissions, using only a handle found in that thread's recent eight
+receipts. Old or unavailable handles can fail inspection. Raw Lighthouse tool
+pages are omitted from durable tool-event content. The ordinary visible answer
+and provider response are still archived and can contain quoted or derived
+material; withdrawal does not erase answers already received. `forget --yes`
+removes the thread's receipts together with its existing archive. Inspection
+shares the thread lease with chat and forgetting.
+
+Validation uses deterministic recording providers and a real disposable Unix
+socket publisher. It establishes delivery, denial, withdrawal, retention, and
+budget behavior; it does not establish answer usefulness. No live grants or
+running services are configured by installing this implementation.
+
+### Local archive and Engram sources
+
 Ordinary conversation requires no memory-tool ceremony. Each user event is
 committed before inference; completed answers are saved with their turn result.
 Search indexes originals immediately. Failed turns stay available for inspection
