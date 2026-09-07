@@ -4,7 +4,7 @@ import tarfile
 
 import pytest
 
-from scripts.context_compaction_followup import initialize, prepare, report
+from scripts.context_compaction_followup import initialize, prepare, project_summary, report
 from scripts.context_continuity_pilot import _records
 
 
@@ -85,3 +85,28 @@ def test_success_builds_only_new_comparator_cells_without_changing_parent(parent
     assert not any(c.get("preparation_error") for c in cells)
     assert (parent / "answers.jsonl").read_bytes() == before
     assert not (destination / "dispatches.jsonl").exists()
+
+
+def test_summary_projection_preserves_whole_entries_and_has_a_hard_byte_cap():
+    rows = [{"text": "λ" * 1600, "source_ids": ["ev-first"]},
+            {"text": "second fact" * 300, "source_ids": ["ev-second"]}]
+    selected = project_summary(rows, {"ev-first", "ev-second"})
+    assert selected == rows[:1]
+    assert project_summary(selected, {"ev-first"}) == selected
+    assert rows[1]["source_ids"] == ["ev-second"]
+
+
+def test_projection_rejects_invented_sources_even_in_omitted_entries():
+    rows = [{"text": "x" * 5990, "source_ids": []},
+            {"text": "x", "source_ids": ["invented"]}]
+    with pytest.raises(ValueError, match="source"):
+        project_summary(rows, set())
+
+
+def test_bounded_profile_cannot_resume_a_different_profile(parent, tmp_path):
+    destination = tmp_path / "bounded"
+    config = initialize(parent, destination, bounded=True)
+    assert config["summary_admission"] == "whole_entry_prefix"
+    assert config["compaction_reasoning_effort"] == "low"
+    with pytest.raises(ValueError, match="configuration"):
+        initialize(parent, destination)

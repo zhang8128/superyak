@@ -93,11 +93,11 @@ def answer_checks(raw, payload, expected):
     return result
 
 
-def validate_summary(summary, allowed):
+def validate_summary(summary, allowed, *, max_bytes=SUMMARY_CAP):
     if not isinstance(summary, list) or any(not isinstance(r, dict) or not isinstance(r.get("text"), str)
         or not isinstance(r.get("source_ids"), list) or any(not isinstance(s, str) for s in r["source_ids"]) for r in summary):
         raise ValueError("Malformed summary")
-    if len(canonical(summary).encode()) > SUMMARY_CAP:
+    if max_bytes is not None and len(canonical(summary).encode()) > max_bytes:
         raise ValueError("Summary exceeds its byte cap")
     cited = {s for r in summary for s in r["source_ids"]} | _ids(summary)
     if not cited <= allowed:
@@ -229,7 +229,7 @@ def _legacy_payloads(fixture, transcript):
             engine.close()
 
 
-def _compact_prefix(transcript, directory, provider_factory=CodexProvider):
+def _compact_prefix(transcript, directory, provider_factory=CodexProvider, *, summary_validator=validate_summary):
     cache = {r["step"]: r for r in _records(directory / "compactions.jsonl")}
     dispatched = {r["step"]: r for r in _records(directory / "compaction-dispatches.jsonl")}
     summary, offset, step = [], 0, 0
@@ -266,7 +266,7 @@ def _compact_prefix(transcript, directory, provider_factory=CodexProvider):
                 value = json.loads(_text(response))
                 if not isinstance(value, dict) or "summary" not in value:
                     raise ValueError("Malformed compaction response: expected a summary object")
-                summary = validate_summary(value["summary"], _ids(payload))
+                summary = summary_validator(value["summary"], _ids(payload))
                 record = {"step": step, "request_digest": digest, "summary": summary, "response": response, "elapsed_seconds": time.monotonic() - started, "through_entries": offset + len(chunk)}
                 _journal(directory / "compactions.jsonl", record)
             except Exception as exc:
@@ -279,7 +279,7 @@ def _compact_prefix(transcript, directory, provider_factory=CodexProvider):
             finally:
                 provider.close()
             print(f"Compacted prefix through {offset + len(chunk)}/{len(transcript)} entries", file=sys.stderr, flush=True)
-        summary = validate_summary(record["summary"], _ids(payload))
+        summary = summary_validator(record["summary"], _ids(payload))
         offset += len(chunk)
         step += 1
     return summary
