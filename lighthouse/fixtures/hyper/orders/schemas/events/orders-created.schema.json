@@ -1,0 +1,10 @@
+{
+  "$id": "orders.created.v1",
+  "mediaType": "application/vnd.example.order+json",
+  "type": "object",
+  "required": ["orderId"],
+  "properties": {
+    "orderId": { "type": "string" }
+  },
+  "additionalProperties": false
+}

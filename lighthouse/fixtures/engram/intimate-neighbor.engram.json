@@ -1,0 +1,30 @@
+{
+  "formatVersion": "1.0",
+  "instance": "intimate-neighbor",
+  "context": { "id": "memory", "path": ["memory"] },
+  "memories": [
+    {
+      "id": "private-relationship-event",
+      "layer": "episode",
+      "contentDigest": {
+        "algorithm": "sha256",
+        "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "contextPath": ["memory", "relationship"],
+      "lane": "personal",
+      "origin": "lived"
+    }
+  ],
+  "edges": [],
+  "recallTraces": [
+    {
+      "turnId": "turn-missing-restart",
+      "queryDigest": {
+        "algorithm": "sha256",
+        "value": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "contextPath": ["memory", "relationship"],
+      "candidates": [{ "memoryId": "private-relationship-event", "rank": 1 }]
+    }
+  ]
+}

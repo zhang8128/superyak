@@ -1,0 +1,1 @@
+{"bootstrap":{"samples":1000,"seed":20260901},"corpusDigest":{"algorithm":"sha-256","value":"5ef770eeabade99dfc1e26cd6a11bde9a7ee639955266e1498062a6d4bb33bc6"},"cutoff":5,"holdoutTurnIds":["turn-1","turn-2"],"metrics":["rightTurnRecall","nDCG"],"receiverPublisher":"urn:engram:engram"}

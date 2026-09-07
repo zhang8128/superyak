@@ -1,0 +1,4 @@
+.worktrees/
+coverage/
+dist/
+node_modules/

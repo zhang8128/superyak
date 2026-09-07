@@ -1,0 +1,15 @@
+{
+  "id": "orders:consumer",
+  "version": "1.0.0",
+  "events": {
+    "publishes": {},
+    "subscribes": {
+      "orders.created.v1": {
+        "schema": "schemas/events/orders-created.schema.json"
+      }
+    }
+  },
+  "data": {
+    "queries": []
+  }
+}

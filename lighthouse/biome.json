@@ -1,0 +1,26 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!!.worktrees",
+      "!!**/dist",
+      "!!**/coverage",
+      "!!**/node_modules",
+      "!!fixtures/engram/receipts",
+      "!!fixtures/policy-conformance",
+      "!!schemas"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  }
+}

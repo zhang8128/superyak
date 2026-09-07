@@ -1,0 +1,18 @@
+{
+  "formatVersion": "1.0",
+  "instance": "invalid",
+  "context": { "id": "memory", "path": ["memory"] },
+  "memories": [],
+  "edges": [],
+  "recallTraces": [
+    {
+      "turnId": "turn-invalid",
+      "queryDigest": {
+        "algorithm": "sha256",
+        "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "contextPath": ["memory", "debugging"],
+      "candidates": [{ "memoryId": "absent-memory", "rank": 1 }]
+    }
+  ]
+}

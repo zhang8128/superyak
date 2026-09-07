@@ -1,0 +1,15 @@
+{
+  "id": "orders:producer",
+  "version": "1.0.0",
+  "events": {
+    "publishes": {
+      "orders.created.v1": {
+        "schema": "schemas/events/orders-created.schema.json"
+      }
+    },
+    "subscribes": {}
+  },
+  "data": {
+    "queries": []
+  }
+}

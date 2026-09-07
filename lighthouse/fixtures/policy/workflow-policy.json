@@ -1,0 +1,80 @@
+{
+  "kind": "ConnectionPolicy",
+  "protocolVersion": "0.1",
+  "id": "urn:policy:local-connections",
+  "issuedAt": "2026-08-30T12:00:00Z",
+  "issuer": "urn:lighthouse:local",
+  "payloadMediaType": "application/vnd.lighthouse.connection-policy+json",
+  "payload": {
+    "rules": [
+      {
+        "id": "allow-french-lab-workflow-read",
+        "effect": "allow",
+        "publishers": ["urn:lighthouse:french-cheese-institute"],
+        "profiles": ["urn:lighthouse:profile:hyper-modules"],
+        "domains": ["workflow.structure"],
+        "actions": ["read"],
+        "contexts": ["workflow/orders"],
+        "claimMediaTypes": ["application/vnd.hyper.dependency-claim+json"],
+        "purposes": ["coordination"],
+        "audiences": ["self"],
+        "validFrom": "2026-08-30T00:00:00Z",
+        "validUntil": "2027-08-30T00:00:00Z",
+        "requiredEvidence": [],
+        "requiredAttestations": []
+      },
+      {
+        "id": "allow-crew-debug-recall",
+        "effect": "allow",
+        "publishers": ["urn:lighthouse:trusted-crew"],
+        "profiles": ["urn:lighthouse:profile:hyper-modules"],
+        "domains": ["personal.memory"],
+        "actions": ["recall"],
+        "contexts": ["workflow/orders"],
+        "claimMediaTypes": ["application/vnd.hyper.dependency-claim+json"],
+        "purposes": ["debugging"],
+        "audiences": ["self"],
+        "validFrom": "2026-08-30T00:00:00Z",
+        "validUntil": "2027-08-30T00:00:00Z",
+        "requiredEvidence": [],
+        "requiredAttestations": []
+      },
+      {
+        "id": "deny-crew-context-injection",
+        "effect": "deny",
+        "publishers": ["urn:lighthouse:trusted-crew"],
+        "profiles": ["urn:lighthouse:profile:hyper-modules"],
+        "domains": ["personal.memory"],
+        "actions": ["inject_context"],
+        "contexts": ["workflow/orders"],
+        "claimMediaTypes": ["application/vnd.hyper.dependency-claim+json"],
+        "purposes": ["debugging"],
+        "audiences": ["self"],
+        "validFrom": "2026-08-30T00:00:00Z",
+        "validUntil": "2027-08-30T00:00:00Z",
+        "requiredEvidence": [],
+        "requiredAttestations": []
+      },
+      {
+        "id": "deny-crew-reshare",
+        "effect": "deny",
+        "publishers": ["urn:lighthouse:trusted-crew"],
+        "profiles": ["urn:lighthouse:profile:hyper-modules"],
+        "domains": ["personal.memory"],
+        "actions": ["reshare"],
+        "contexts": ["workflow/orders"],
+        "claimMediaTypes": ["application/vnd.hyper.dependency-claim+json"],
+        "purposes": ["debugging"],
+        "audiences": ["self"],
+        "validFrom": "2026-08-30T00:00:00Z",
+        "validUntil": "2027-08-30T00:00:00Z",
+        "requiredEvidence": [],
+        "requiredAttestations": []
+      }
+    ]
+  },
+  "digest": {
+    "algorithm": "sha-256",
+    "value": "f12270e190c2961e56e0cc793dfe43199611d406fbedaa22e971156de33d8a3f"
+  }
+}

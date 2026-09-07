@@ -1,0 +1,7 @@
+packages:
+  - "packages/*"
+  - "adapters/*"
+  - "bridges/*"
+
+allowBuilds:
+  esbuild: true
