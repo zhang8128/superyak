@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lighthouse_policy import Policy, PolicyError, PolicyRequest, load_policy
+from lighthouse_policy import Policy, PolicyRequest
+from lighthouse_validation import load_owned_policy
 from lighthouse_protocol import (
     FrameError,
     content_digest,
@@ -39,7 +40,6 @@ from lighthouse_protocol import (
     read_result_frame,
     recall_result_frame,
     validate_frame,
-    verify_artifact_digest,
 )
 from sharing import validate_audience
 from storage import Storage, vec0_distance_to_similarity
@@ -70,7 +70,6 @@ class PublisherStore:
     policy_path: Path
     disclosures_path: Path
     storage: Storage | None = None
-    policy: Policy | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
@@ -78,11 +77,11 @@ class PublisherStore:
         return f"urn:engram:{self.name}"
 
     def open(self) -> bool:
+        """Open only the read-only store; authorization is per operation."""
         with self._lock:
-            if self.storage is not None and self.policy is not None:
+            if self.storage is not None:
                 return True
             try:
-                self.policy = load_policy(self.policy_path)
                 self.storage = Storage.open_read_only(self.db_path)
                 columns = {
                     row[1]
@@ -99,7 +98,7 @@ class PublisherStore:
                     raise sqlite3.OperationalError(
                         "shared_memories missing (pre-migration store)"
                     )
-            except (PolicyError, FileNotFoundError, sqlite3.Error) as error:
+            except (FileNotFoundError, sqlite3.Error) as error:
                 logger.warning("publisher %s unavailable: %s", self.name, error)
                 if self.storage is not None:
                     try:
@@ -107,7 +106,6 @@ class PublisherStore:
                     except Exception:
                         pass
                 self.storage = None
-                self.policy = None
                 return False
             return True
 
@@ -119,7 +117,6 @@ class PublisherStore:
                 except Exception:
                     pass
             self.storage = None
-            self.policy = None
 
     def store_digest(self) -> dict:
         return {
@@ -153,13 +150,10 @@ class PublisherStore:
         return disclosure_id
 
 
-def _allowed_audiences(policy_path: Path, receiver: str) -> frozenset[str]:
-    """Read one receiver's audience grant from the signed policy artifact."""
+def _allowed_audiences(policy: Policy, receiver: str) -> frozenset[str]:
+    """Read audience grants from the operation's validated policy snapshot."""
     try:
-        artifact = json.loads(Path(policy_path).read_text(encoding="utf-8"))
-        if not isinstance(artifact, dict) or not verify_artifact_digest(artifact):
-            return frozenset()
-        extensions = artifact.get("extensions")
+        extensions = policy.artifact.get("extensions")
         if not isinstance(extensions, dict):
             return frozenset()
         mapping = extensions.get("engram:audiences")
@@ -169,7 +163,7 @@ def _allowed_audiences(policy_path: Path, receiver: str) -> frozenset[str]:
         if not isinstance(values, list):
             return frozenset()
         return frozenset(validate_audience(value) for value in values)
-    except (OSError, TypeError, ValueError):
+    except (TypeError, ValueError):
         return frozenset()
 
 
@@ -228,7 +222,7 @@ def retrieve(
                 if layer == "episode"
                 else store.get_semantic(memory_id)
             )
-            if row is None:
+            if row is None or row.get("lane") not in ("personal", "work"):
                 continue
             audiences = sorted(
                 _shared_audiences(
@@ -256,6 +250,7 @@ def retrieve(
             "memoryId": memory_id,
             "rank": rank,
             "layer": layer,
+            "lane": row["lane"],
             "audiences": audiences,
             "contentDigest": content_digest(row.get("content", "")),
             "similarity": similarity,
@@ -272,17 +267,18 @@ class PublisherDaemon:
         publishers: dict[str, PublisherStore],
         socket_path: Path,
         embeddings,
+        *, clock=None,
     ):
         self.publishers = publishers
         self.socket_path = Path(socket_path)
         self.embeddings = embeddings
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._server: socketserver.ThreadingUnixStreamServer | None = None
         self._ready = threading.Event()
 
     def _request(self, frame: dict, action: str) -> PolicyRequest:
-        at = datetime.fromisoformat(
-            str(frame.get("at", _now())).replace("Z", "+00:00")
-        )
+        # A receiver's recorded request time cannot extend a publisher grant.
+        at = self.clock()
         return PolicyRequest(
             publisher=f"urn:engram:{frame['receiver']}",
             profile=PROFILE,
@@ -303,36 +299,42 @@ class PublisherDaemon:
                     "MALFORMED_FRAME", f"unexpected kind {frame['kind']}"
                 )
             publisher = self.publishers.get(frame.get("publisher"))
-            if (
-                publisher is None
-                or not publisher.db_path.is_file()
-                or not publisher.open()
-            ):
+            if publisher is None or not publisher.db_path.is_file():
                 if publisher is not None:
                     publisher.reset()
                 return error_frame(
                     "PUBLISHER_UNAVAILABLE",
                     "no such publisher or store unavailable",
                 )
+            # Never retain action permissions between requests or reread the
+            # artifact for audiences: concurrent edits must not combine grants
+            # from different policy snapshots.
+            try:
+                policy = load_owned_policy(publisher.policy_path, publisher.name)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                logger.warning(
+                    "publisher %s policy unavailable: %s", publisher.name, error
+                )
+                return error_frame("PUBLISHER_UNAVAILABLE", "policy unavailable")
+            if not publisher.open():
+                return error_frame("PUBLISHER_UNAVAILABLE", "store unavailable")
             if frame["kind"] == "recall":
-                return self._recall(publisher, frame)
+                return self._recall(publisher, frame, policy)
             if frame["kind"] == "read":
-                return self._read(publisher, frame)
+                return self._read(publisher, frame, policy)
         except FrameError as error:
             return error_frame(error.code, "")
-        except KeyError as error:
-            return error_frame("MALFORMED_FRAME", f"missing {error}")
         except Exception:
             logger.warning("frame handling failed", exc_info=True)
             return error_frame("PUBLISHER_UNAVAILABLE", "internal failure")
 
-    def _recall(self, publisher: PublisherStore, frame: dict) -> dict:
-        decision = publisher.policy.decide(self._request(frame, "recall"))
+    def _recall(self, publisher: PublisherStore, frame: dict, policy: Policy) -> dict:
+        decision = policy.decide(self._request(frame, "recall"))
         turn_id = str(uuid.uuid4())
         candidates: list[dict] = []
         if decision.effect == "allow":
             allowed_audiences = _allowed_audiences(
-                publisher.policy_path,
+                policy,
                 f"urn:engram:{frame['receiver']}",
             )
             candidates = retrieve(
@@ -366,14 +368,14 @@ class PublisherDaemon:
             disclosure_id=disclosure_id,
         )
 
-    def _read(self, publisher: PublisherStore, frame: dict) -> dict:
-        decision = publisher.policy.decide(self._request(frame, "read"))
+    def _read(self, publisher: PublisherStore, frame: dict, policy: Policy) -> dict:
+        decision = policy.decide(self._request(frame, "read"))
         items = []
         delivered: list[str] = []
         allowed_audiences = frozenset()
         if decision.effect == "allow":
             allowed_audiences = _allowed_audiences(
-                publisher.policy_path,
+                policy,
                 f"urn:engram:{frame['receiver']}",
             )
         for memory_id in frame["memoryIds"]:
@@ -385,7 +387,7 @@ class PublisherDaemon:
                 if row is None:
                     row = publisher.storage.get_semantic(memory_id)
                     layer = "semantic"
-                if row is not None:
+                if row is not None and row.get("lane") in ("personal", "work"):
                     audiences = sorted(
                         _shared_audiences(
                             publisher.storage,

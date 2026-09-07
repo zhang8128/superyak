@@ -28,6 +28,10 @@ dependencies = [
 dev = ["pytest>=9.0"]
 llm = ["anthropic"]
 
+[project.scripts]
+engram-lighthouse-pilot = "lighthouse_pilot:main"
+engram-lighthouse-label = "lighthouse_label:main"
+
 [tool.setuptools]
 py-modules = [
     "ask",
@@ -66,15 +70,21 @@ py-modules = [
     "indexer",
     "knowledge",
     "lighthouse_daemon",
+    "lighthouse_client",
     "lighthouse_export",
+    "lighthouse_label",
+    "lighthouse_pilot",
     "lighthouse_policy",
     "lighthouse_protocol",
     "lighthouse_receipts",
+    "lighthouse_receiver_config",
+    "lighthouse_validation",
     "local_agent",
     "logging_config",
     "maintenance",
     "margins",
     "mirror",
+    "neighbors",
     "notepad",
     "operation_audit",
     "persistence",

@@ -177,7 +177,7 @@ def test_retrieve_returns_only_rows_shared_to_an_allowed_audience(tmp_path):
     )
     assert hits
     assert all(hit["audiences"] == ["commons"] for hit in hits)
-    assert all("lane" not in hit for hit in hits)
+    assert all(hit["lane"] == "personal" for hit in hits)
     assert all(hit["layer"] in ("episode", "semantic") for hit in hits)
     assert hits[0]["rank"] == 1
     assert hits[0]["contentDigest"]["algorithm"] == "sha256"

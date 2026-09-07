@@ -149,7 +149,7 @@ These cover parts of the problem. Their compatibility with the intended
 Lighthouse profiles must be checked; listing them is not an implementation
 decision.
 
-## Current priority: dynamic working context
+## Priority recorded September 5: dynamic working context
 
 The immediate work is automatic memory preparation and a bounded context
 assembled before each model call, including calls within tool-using turns.
@@ -163,3 +163,29 @@ as needed. Keep only a short pointer to this note in active task context.
 The eventual runtime must enforce the full input budget plus response reserve,
 not merely limit the number of recalled memories. Runtime integration and
 behavioral validation are still required; saving this note enables neither.
+
+## September 6: a working local receiver
+
+The terminal context runtime is implemented on the separate `feat/dynamic-context`
+branch. Work has returned to Lighthouse, with an opt-in receiver on
+`feat/lighthouse-receiver`. It chooses explicit publishers, checks separate
+query/read/context-delivery grants, preserves their lane and audience metadata,
+and returns verified neighbor memories separately from local recall. A saved
+receipt identifies the received trace and the decisions supporting delivery.
+
+A disposable socket pilot demonstrates permitted delivery, receiver denial,
+publisher policy withdrawal, and unsharing without altering private sources.
+Publisher authorization uses one strictly validated policy snapshot and its own
+clock. Receiver settings and actual sharing grants remain owner-controlled;
+the pilot does not enable live connections.
+
+This completes a local mechanism, not the human usefulness study or an
+authenticated cross-machine network. The next measured expansion should put
+one independently operated system across an authenticated boundary, preserve
+source identity and scoped choice, and collect participant judgments. The
+higher-category/sheaf model remains a way to represent relationships,
+translations, incompatibilities and revisions; this milestone does not turn it
+into global agreement or alter recall through sheaf influence.
+
+See [receiver usage](../lighthouse-receiver.md) and the
+[receiver design](../superpowers/specs/2026-09-06-lighthouse-receiver-design.md).
