@@ -27,10 +27,10 @@ this plan records completion of that implementation, not a replacement design.
 - [x] Bound archive query time after profiling exposed growing ranking cost.
   Keep recent/required context and explicitly report incomplete retrieval when
   the SQLite deadline expires, in both chat and coding paths.
-- [ ] Measure at least 10,000 synthetic runtime model calls including tool
+- [x] Measure at least 10,000 synthetic runtime model calls including tool
   continuations and a growing archive; record counted/dispatched equality,
   budget compliance, bounded candidate counts, and runtime allocation growth.
-- [ ] Recheck the fixes independently; run the final targeted and repository
+- [x] Recheck the fixes independently; run the final targeted and repository
   checks, then document exact results and start a local review instance.
 
 The existing human continuity pilot and strict Codex-internal request integration
@@ -57,3 +57,16 @@ retained. A 50 ms SQLite progress deadline now stops ranking and marks coverage
 incomplete; its cost is potentially missing old sources. Three regressions failed
 first and the store/runtime/coding/replay group then passed 53 tests. The code
 also carries immutable correction references through coding manifests.
+
+Final evidence is saved in the [completion report](../../reports/2026-09-06-context-runtime-completion.md)
+with the raw runtime, RSS, and diagnostic JSON. The 10,000-call runtime replay
+passed its resource and request-handling checks in 738.511 seconds, with 5,000
+tool continuations and 25,000 archived events. Sampled RSS grew 0.484 MiB.
+Archive retrieval was incomplete on 85.47% of the repeated-text workload; this
+is a material recall limitation, not a passed continuity gate.
+
+The full repository suite passed 1,950 tests before the deadline change, then
+all 192 context tests passed on the final implementation. Browser correction
+inspection/reload/new-thread checks and the live synthetic subscription smoke
+passed. Independent scoped re-reviews had no material findings remaining. The
+opt-in browser preview is running on loopback port 7433 from this worktree.

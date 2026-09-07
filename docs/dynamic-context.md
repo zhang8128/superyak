@@ -230,7 +230,9 @@ recent dialogue, current goal, and explicit notes; manifests report incomplete
 archive coverage. Archive search tools also return an explicit incomplete result.
 A bounded result count alone did not bound search time as repeated terms
 accumulated. This deadline bounds ranking work at the cost of potentially missing
-older context, which remains part of the continuity evaluation.
+older context, which remains part of the continuity evaluation. The deadline is
+cooperative, not an exact 50 ms wall-clock guarantee: lock waiting, native work
+between progress callbacks, and OS scheduling can add elapsed time.
 
 Use **Context in use** in the browser to inspect the actual selection, its
 reasons, count method, omitted count, model, and source versions. Click an entry
@@ -286,16 +288,21 @@ public multi-user server.
 
 ## Validation and next work
 
-The full suite with terminal coding passed **1,943 tests**, with the same three
-dependency/fork warnings present in the 1,761-test baseline. Independent review
+The completion run passed **1,950 tests** across the repository, with three
+existing dependency/fork warnings. After adding the archive-search deadline,
+all **192 context tests** passed against the final implementation. The full
+repository suite was not repeated after that scoped change. Independent review
 findings were reproduced, fixed, and rechecked. Wheel-building and installed-wheel
-startup checks are included in that suite.
+startup checks are included in the full suite. Browser checks covered historical
+correction inspection after revision/unpin, thread reload, and new conversations.
 
 An additional end-to-end subscription check used two fresh Astra episodes with
 no existing Engram source: the first recorded a teal garden bench; the second
 recalled its color from the automatically archived exchange. Four original
 messages were saved and two were selected for the second response. This is a
 small integration check, not the long-session quality evaluation below.
+The completion run also verified a fresh Astra subscription response using only
+a synthetic prompt and no existing Engram source.
 
 Tests cover 10,000 synthetic compile cycles, full-payload admission, mandatory
 overflow, ordered tool/opaque items, idempotence and restart, correction capture,
@@ -312,9 +319,17 @@ continuations through a deterministic synthetic provider:
 Its default workload executes 10,000 synthetic generation calls and 5,000
 paginated artifact reads while the persisted archive grows. It checks the
 counted/dispatched payloads, configured budget, active tool groups, and candidate
-bounds. The JSON report distinguishes Python-traced allocations from process
-resident memory. Its byte counter is an artificial test profile, not a model
+bounds, and reports incomplete archive retrievals caused by the search deadline.
+Its allocation figures measure Python allocations only; process resident memory
+requires a separate sampler. Its byte counter is an artificial test profile, not a model
 tokenizer; this run consumes no model allowance and measures no answer quality.
+
+The [completion report](reports/2026-09-06-context-runtime-completion.md) records
+the successful 10,000-call replay: all counted payloads matched dispatch, all
+budgets passed, and sampled RSS grew by 0.484 MiB as the archive reached 25,000
+events. **85.47% of archive searches hit the deadline** on its repeated-text
+workload. That is a substantial retrieval limitation; the fallback preserves
+required context but does not establish long-session recall quality.
 
 The source-grounded 100-question human continuity pilot from the design has not
 been run. Neither budget tests nor the small live smoke establish that quality
