@@ -212,6 +212,11 @@ It is simpler than both embedding retrieval and the MCP server's richer recall.
 Source versions are rechecked after counting; changed/deleted selections are
 removed and recounted before dispatch. This checks local availability at
 preparation time, not retroactive withdrawal from a service already sent data.
+Within an unfinished tool episode, previously supplied external sources and
+external source pages returned by archive tools remain dependencies. If one
+changes or becomes unavailable, the runtime archives and stops that episode
+before further generation. Start a new turn to use the current sources; the
+runtime does not silently replay old tool text or derived provider items.
 
 Selected dialogue renders chronologically, regardless of retrieval score. The
 immediate completed exchange and explicit user notes remain required. Original
@@ -236,6 +241,11 @@ reliably extract every natural-language correction, infer task boundaries, or
 promote dialogue automatically into verified semantic facts. Those need separate
 continuity evaluation. You can keep relevant decisions explicit without manually
 capturing every exchange.
+
+New context manifests retain the original correction event ID and version.
+Inspecting an earlier call therefore shows the correction used by that call,
+even after the note is revised or unpinned. Older manifests that recorded only
+a mutable `state:<key>` do not gain this provenance retroactively.
 
 ## Recovery and retention
 

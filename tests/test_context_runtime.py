@@ -227,3 +227,65 @@ def test_source_deleted_during_count_is_removed_and_recounted(tmp_path):
     assert "violet secret value" not in json.dumps(provider.requests[-1])
     assert len(provider.counted) == 2
     runtime.close()
+
+
+@pytest.mark.parametrize("change", ["delete", "revise"])
+@pytest.mark.parametrize("via_tool", [True, False])
+def test_changed_source_stops_active_episode_before_redisclosure(tmp_path, change, via_tool):
+    import sqlite3
+    from context_sources import EngramSource
+
+    memory = tmp_path / "engram.db"
+    with sqlite3.connect(memory) as conn:
+        conn.execute("CREATE TABLE episodes(id TEXT,content TEXT,core INTEGER)")
+        conn.execute("INSERT INTO episodes VALUES('e1','violet confidential old value',0)")
+    store = ContextStore(tmp_path / "runtime.db")
+    call = {"type": "function_call", "call_id": "original", "name": "archive_read" if via_tool else "archive_search",
+            "arguments": json.dumps({"id": "engram:episode:e1"} if via_tool else {"query": "garden"})}
+    provider = RecordingProvider([{"id": "first", "status": "completed", "output": [call], "usage": None}, answer("stale answer")])
+    count = provider.count
+
+    def change_during_continuation(payload):
+        if any(item.get("type") == "function_call_output" for item in payload["input"]):
+            with sqlite3.connect(memory) as conn:
+                if change == "delete":
+                    conn.execute("DELETE FROM episodes")
+                else:
+                    conn.execute("UPDATE episodes SET content='revised account'")
+        return count(payload)
+
+    provider.count = change_during_continuation
+    runtime = ContextRuntime(store, provider, Budget(), sources=(EngramSource(memory),))
+    # The ID-only query does not recall the source: its first exposure is the
+    # tool result. The other case tests evidence from the preceding model call.
+    message = "Read engram:episode:e1" if via_tool else "Recall the violet value"
+    try:
+        with pytest.raises(ContextCapacityError, match="[Ss]ource"):
+            runtime.chat("t", message)
+        assert len(provider.requests) == 1
+        assert store.status("t")["recent_turns"][0]["status"] == "capacity_stopped"
+        assert store.recent("t")[0]["content"] == message
+        assert store.recent_kind("t", "provider")  # Preserve the interrupted episode.
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("change", ["revise", "unpin"])
+def test_historical_correction_manifest_resolves_its_original(tmp_path, change):
+    store = ContextStore(tmp_path / "runtime.db")
+    runtime = ContextRuntime(store, RecordingProvider(), Budget())
+    try:
+        original = runtime.correct("t", "coordinator", "Mira is the coordinator")
+        result = runtime.chat("t", "Who is coordinating?")
+        manifest = store.manifest("t", result["manifest_id"])
+        note = next(item for item in manifest["selected"] if item["id"] == "state:coordinator")
+        if change == "revise":
+            runtime.correct("t", "coordinator", "Nora is the coordinator")
+        else:
+            store.unpin("t", "coordinator")
+        viewed = runtime.read_source("t", note.get("source_id", note["id"]))
+        assert viewed.get("text") == "Mira is the coordinator"
+        assert note["source_id"] == original["source_id"]
+        assert note["version"] == original["source_id"]
+    finally:
+        runtime.close()

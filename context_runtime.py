@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import sqlite3
 import time
 import uuid
 
@@ -84,7 +86,7 @@ class ContextRuntime:
         for row in self.store.state(thread):
             key = "state:" + row["key"]
             text = json.dumps({"key": row["key"], "content": row["content"], "source_id": row["source_id"], "updated": row["updated"]}, ensure_ascii=False)
-            candidates[key] = Candidate(key, "user", (text,), required=True, reason="explicit user correction or pin")
+            candidates[key] = Candidate(key, "user", (text,), required=True, reason="explicit user correction or pin", source_id=row["source_id"])
         # Include conversational referents in a bounded retrieval query.
         query = current[:1500] + " " + " ".join(r["content"][:250] for r in recent[-2:])
         for index, row in enumerate(self.store.search(thread, query, limit=16, completed_only=True)):
@@ -105,6 +107,34 @@ class ContextRuntime:
                 coverage.append({"mode": source.mode, "error": type(exc).__name__})
         return list(candidates.values()), coverage
 
+    def _source_valid(self, candidate):
+        for source in self.sources:
+            try:
+                if source.valid(candidate):
+                    return True
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                continue
+        return False
+
+    @staticmethod
+    def _read_digest(result):
+        encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _check_active_sources(self, thread, candidates, reads):
+        # Opaque provider items can depend on any source in the preceding call.
+        # Removing a recalled candidate cannot retract those derived items, so
+        # preserve the episode in the archive and stop instead of replaying it.
+        valid = all(self._source_valid(candidate) for candidate in candidates.values())
+        for snapshot in reads:
+            try:
+                current = self.read_source(thread, snapshot["id"], offset=snapshot["offset"], limit=snapshot["limit"])
+                valid = valid and self._read_digest(current) == snapshot["digest"]
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                valid = False
+        if not valid:
+            raise ContextCapacityError("Source used by the active tool episode changed or became unavailable; start a new turn to use current sources")
+
     def chat(self, thread_id, message, event_id=None):
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Message must be nonempty text")
@@ -120,24 +150,30 @@ class ContextRuntime:
             started = time.monotonic()
             provider = _DeadlineProvider(self.provider, started + self.max_seconds)
             active = []
+            active_candidates = {}
+            source_reads = []
             calls_seen = set()
             try:
                 for step in range(self.max_calls):
                     if time.monotonic() - started > self.max_seconds:
                         raise ContextCapacityError("Turn time limit reached")
+                    self._check_active_sources(thread_id, active_candidates, source_reads)
                     candidates, coverage = self._candidates(thread_id, message, turn["id"] + ":user")
                     strict = self.provider.capabilities.get("strict", False)
                     for _ in range(3):
                         request = self.compiler.compile(instructions=self.instructions, current=message, candidates=candidates, active_items=active, provider=provider, tools=TOOLS if strict else [])
+                        self._check_active_sources(thread_id, active_candidates, source_reads)
                         selected = set(request.manifest["selected_ids"])
-                        invalid = {c.id for c in candidates if c.id in selected and c.version is not None and not any(source.valid(c) for source in self.sources)}
+                        invalid = {c.id for c in candidates if c.id in selected and c.version is not None and not self._source_valid(c)}
                         if not invalid:
                             break
                         candidates = [c for c in candidates if c.id not in invalid]
                         coverage.append({"invalidated_ids": sorted(invalid), "reason": "source changed or became unavailable before dispatch"})
                     else:
                         raise ContextCapacityError("Source snapshots changed repeatedly during request preparation")
-                    manifest = {**request.manifest, "turn_id": turn["id"], "step": step, "source_coverage": coverage}
+                    manifest = {**request.manifest, "turn_id": turn["id"], "step": step, "source_coverage": coverage,
+                                "active_source_versions": {key: candidate.version for key, candidate in active_candidates.items()},
+                                "tool_source_snapshots": list(source_reads)}
                     manifest_id = self.store.save_manifest(thread_id, manifest)
                     response = provider.generate(request.payload)
                     raw = json.dumps(response, ensure_ascii=False, allow_nan=False).encode()
@@ -152,15 +188,17 @@ class ContextRuntime:
                             raise ProviderError("Episode host unexpectedly returned client tool calls")
                         if len(tool_calls) > 8:
                             raise ContextCapacityError("Too many tool calls in one response")
+                        active_candidates.update({c.id: c for c in candidates if c.id in selected and c.version is not None})
                         active.extend(output)  # Preserve all original opaque/provider items.
                         for call in tool_calls:
                             call_id = call.get("call_id")
                             if not isinstance(call_id, str) or call_id in calls_seen:
                                 raise ProviderError("Missing or reused tool call ID")
                             calls_seen.add(call_id)
-                            result = self._tool(thread_id, call)
+                            prior_reads = len(source_reads)
+                            result = self._tool(thread_id, call, snapshots=source_reads)
                             item = {"type": "function_call_output", "call_id": call_id, "output": json.dumps(result, ensure_ascii=False)}
-                            self.store.append(thread_id, "tool", item["output"], kind="tool", turn_id=turn["id"], metadata={"call_id": call_id, "name": call.get("name")})
+                            self.store.append(thread_id, "tool", item["output"], kind="tool", turn_id=turn["id"], metadata={"call_id": call_id, "name": call.get("name"), "source_snapshots": source_reads[prior_reads:]})
                             active.append(item)
                         continue
                     text = "\n".join(part.get("text", part.get("refusal", "")) for item in output if item.get("type") == "message" for part in item.get("content", []) if part.get("type") in {"output_text", "refusal"})
@@ -175,7 +213,7 @@ class ContextRuntime:
                 self.store.fail_turn(turn["id"], str(exc), status=status)
                 raise
 
-    def _tool(self, thread, call):
+    def _tool(self, thread, call, *, snapshots=None):
         try:
             args = json.loads(call.get("arguments", "{}"))
             if not isinstance(args, dict):
@@ -190,7 +228,10 @@ class ContextRuntime:
                 source_id, offset, limit = args.get("id"), args.get("offset", 0), args.get("limit", 2048)
                 if not isinstance(source_id, str) or type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 4096:
                     raise ValueError("Invalid archive page")
-                return self.read_source(thread, source_id, offset=offset, limit=limit)
+                result = self.read_source(thread, source_id, offset=offset, limit=limit)
+                if snapshots is not None and source_id.startswith("engram:") and "error" not in result:
+                    snapshots.append({"id": source_id, "offset": offset, "limit": limit, "digest": self._read_digest(result)})
+                return result
             raise ValueError("Unsupported read-only tool")
         except (ValueError, KeyError) as exc:
             return {"error": str(exc)}

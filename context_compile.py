@@ -44,6 +44,7 @@ class Candidate:
     dependencies: tuple[str, ...] = ()
     sequence: int | None = None
     version: str | None = None
+    source_id: str | None = None
 
     def __post_init__(self):
         if not self.id or self.role not in {"user", "assistant"} or not self.representations or not all(isinstance(x, str) for x in self.representations):
@@ -137,7 +138,7 @@ class ContextCompiler:
                 if key.startswith("state:"):
                     return (2, 0, key)
                 return (1, c.sequence, key) if c.sequence is not None else (0, 0, key)
-            evidence = [{"role": lookup[key].role, "content": _encode({"source_id": key, "kind": lookup[key].reason, "sequence": lookup[key].sequence, "version": lookup[key].version, "representation": selection[key], "evidence": lookup[key].representations[selection[key]]})} for key in sorted(selection, key=order)]
+            evidence = [{"role": lookup[key].role, "content": _encode({"source_id": lookup[key].source_id or key, "kind": lookup[key].reason, "sequence": lookup[key].sequence, "version": lookup[key].version or lookup[key].source_id, "representation": selection[key], "evidence": lookup[key].representations[selection[key]]})} for key in sorted(selection, key=order)]
             return {"model": provider.model, "instructions": instructions, "input": evidence + [{"role": "user", "content": current}] + list(active_items), "tools": list(tools), "store": False, "truncation": "disabled", "max_output_tokens": budget.output_reserve}
 
         # Planning estimates are deliberately separate from the admission count.
@@ -183,5 +184,5 @@ class ContextCompiler:
                 selected = dict(mandatory)
             if count_attempts >= budget.max_count_attempts:
                 raise ContextCapacityError("Context count attempt limit reached")
-        manifest = {"compiler_version": 1, "model": provider.model, "capabilities": dict(caps), "selected_ids": list(selected), "selected": [{"id": key, "reason": lookup[key].reason, "sequence": lookup[key].sequence, "version": lookup[key].version, "representation": index, "required": key in mandatory, "dependencies": list(lookup[key].dependencies)} for key, index in selected.items()], "omitted_count": len(candidates) - len(selected), "input_tokens": count, "input_ceiling": limit, "output_reserve": budget.output_reserve, "context_window": budget.context_window, "margin": budget.margin, "count_attempts": count_attempts, "payload_digest": hashlib.sha256(serialized.encode()).hexdigest(), "active_items": len(active_items)}
+        manifest = {"compiler_version": 2, "model": provider.model, "capabilities": dict(caps), "selected_ids": list(selected), "selected": [{"id": key, "source_id": lookup[key].source_id or key, "reason": lookup[key].reason, "sequence": lookup[key].sequence, "version": lookup[key].version or lookup[key].source_id, "representation": index, "required": key in mandatory, "dependencies": list(lookup[key].dependencies)} for key, index in selected.items()], "omitted_count": len(candidates) - len(selected), "input_tokens": count, "input_ceiling": limit, "output_reserve": budget.output_reserve, "context_window": budget.context_window, "margin": budget.margin, "count_attempts": count_attempts, "payload_digest": hashlib.sha256(serialized.encode()).hexdigest(), "active_items": len(active_items)}
         return CompiledRequest(serialized, manifest)
