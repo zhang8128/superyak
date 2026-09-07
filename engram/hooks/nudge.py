@@ -17,6 +17,7 @@ Echoes are memory speaking unprompted. They only fire at high similarity
 """
 
 import os
+import hashlib
 import sqlite3
 import struct
 import sys
@@ -508,54 +509,58 @@ def nudge():
         # If novel, encode. Surprise = high embedding distance from recent context.
         AUTO_CAPTURE_MIN_LEN = 50
         NOVELTY_THRESHOLD = 0.65  # Below this similarity = novel enough to save
-        if len(prompt) >= AUTO_CAPTURE_MIN_LEN:
-            should_save = True
+        try:
+            # Echo bookkeeping is already committed. Keep this optional write
+            # atomic so a failed vector insert cannot leave an unindexed episode
+            # or prevent the contextual output assembled below.
+            with conn:
+                if len(prompt) >= AUTO_CAPTURE_MIN_LEN:
+                    should_save = True
 
-            # Check novelty against recent episodes
-            has_ep_vec = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='episode_vectors'"
-            ).fetchone()
-            if has_ep_vec:
-                recent_hits = conn.execute(
-                    "SELECT id, distance FROM episode_vectors "
-                    "WHERE embedding MATCH ? AND k = 3 ORDER BY distance",
-                    (packed_query,)
-                ).fetchall()
-                for hit in recent_hits:
-                    sim = _distance_to_similarity(hit["distance"])
-                    if sim >= NOVELTY_THRESHOLD:
-                        should_save = False
-                        break
+                    # Check novelty against recent episodes.
+                    recent_hits = conn.execute(
+                        "SELECT id, distance FROM episode_vectors "
+                        "WHERE embedding MATCH ? AND k = 3 ORDER BY distance",
+                        (packed_query,)
+                    ).fetchall()
+                    for hit in recent_hits:
+                        sim = _distance_to_similarity(hit["distance"])
+                        if sim >= NOVELTY_THRESHOLD:
+                            should_save = False
+                            break
 
-            if should_save:
-                import uuid as _uuid
-                ep_id = str(_uuid.uuid4())
-                conn.execute(
-                    "INSERT OR IGNORE INTO episodes (id, content, created_at, origin, session_id) "
-                    "VALUES (?, ?, ?, 'auto', ?)",
-                    (ep_id, prompt, now, ctx["session_id"]),
-                )
-                conn.execute(
-                    "INSERT OR IGNORE INTO episode_vectors (id, embedding) VALUES (?, ?)",
-                    (ep_id, packed_query),
-                )
-                conn.commit()
+                    if should_save:
+                        import uuid as _uuid
+                        ep_id = str(_uuid.uuid4())
+                        conn.execute(
+                            "INSERT INTO episodes "
+                            "(id, content, created_at, source, session_id, content_hash, lane) "
+                            "VALUES (?, ?, ?, 'auto', ?, ?, 'work')",
+                            (ep_id, prompt, now, ctx["session_id"], hashlib.sha256(prompt.encode()).hexdigest()),
+                        )
+                        conn.execute(
+                            "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
+                            (ep_id, packed_query),
+                        )
+        except Exception:
+            print("# nudge: optional prompt capture failed", file=sys.stderr)
 
         # Continuous pruning: prune a few low-activation auto-captured episodes each message.
         # Routine memories decay and get cleaned up during the session, not just between sessions.
         INLINE_PRUNE_LIMIT = 3
         PRUNE_DECAY_THRESHOLD = 0.08
         try:
-            weak = conn.execute(
-                "SELECT id FROM episodes WHERE origin = 'auto' AND core = 0 "
-                "AND decay_strength < ? ORDER BY decay_strength ASC LIMIT ?",
-                (PRUNE_DECAY_THRESHOLD, INLINE_PRUNE_LIMIT),
-            ).fetchall()
-            for w in weak:
-                conn.execute("DELETE FROM episode_vectors WHERE id = ?", (w["id"],))
-                conn.execute("DELETE FROM episodes WHERE id = ?", (w["id"],))
-            if weak:
-                conn.commit()
+            # A later optional write (such as dream capture) must never commit
+            # a partial prune after one of these deletes fails.
+            with conn:
+                weak = conn.execute(
+                    "SELECT id FROM episodes WHERE source = 'auto' AND core = 0 "
+                    "AND decay_strength < ? ORDER BY decay_strength ASC LIMIT ?",
+                    (PRUNE_DECAY_THRESHOLD, INLINE_PRUNE_LIMIT),
+                ).fetchall()
+                for w in weak:
+                    conn.execute("DELETE FROM episode_vectors WHERE id = ?", (w["id"],))
+                    conn.execute("DELETE FROM episodes WHERE id = ?", (w["id"],))
         except Exception:
             pass  # pruning is non-fatal
 
