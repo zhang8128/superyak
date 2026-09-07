@@ -1,0 +1,65 @@
+{
+  "engram_commit": "86785947e400138c691284ead30d6293cc11a391",
+  "lighthouse_kit_commit": "0a9f615e681f84386d0088fc0f5ddde18ed00966",
+  "full_suite": {
+    "command": "/Users/kairos/Projects/engram/.venv/bin/python -m pytest -q --tb=short",
+    "passed": 2172,
+    "warnings": 3,
+    "elapsed_seconds": 327.11,
+    "log": "full-suite.log"
+  },
+  "receipt_validation": [
+    {
+      "receipt": "receipts/allowed.json",
+      "sha256": "20f536c3f0197bfd6cca8f1cbd3ec39293717e8090b44e9d37f3bf7e715d2424",
+      "command": [
+        "pnpm",
+        "lighthouse",
+        "validate",
+        "/Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/allowed.json"
+      ],
+      "exit_code": 0,
+      "stdout": "{\"digest\":{\"algorithm\":\"sha-256\",\"value\":\"3312e4e9125fc80204cc323669481a14dbdc04a45a4388969e6ab90962791bc8\"},\"id\":\"urn:engram:pilot-receiver:receipt:923c59c9-01e0-47e0-a52a-506651e3d6c6\",\"kind\":\"RecallReceipt\",\"ok\":true}\n",
+      "stderr": "$ tsx packages/conformance/src/cli.ts validate /Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/allowed.json\n"
+    },
+    {
+      "receipt": "receipts/denied.json",
+      "sha256": "db69451cf76a47264556feeb39ca0c0b07f28139ab1e3f588c61a312d14e2254",
+      "command": [
+        "pnpm",
+        "lighthouse",
+        "validate",
+        "/Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/denied.json"
+      ],
+      "exit_code": 0,
+      "stdout": "{\"digest\":{\"algorithm\":\"sha-256\",\"value\":\"7cfec381d934c815e28dd099dcbf4e94c55d299c3fcd08b0ceb3aa2ae6e644c5\"},\"id\":\"urn:engram:pilot-receiver:receipt:422f19ae-9fc8-4c95-bc28-5600bbb8358c\",\"kind\":\"RecallReceipt\",\"ok\":true}\n",
+      "stderr": "$ tsx packages/conformance/src/cli.ts validate /Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/denied.json\n"
+    },
+    {
+      "receipt": "receipts/policy_withdrawn.json",
+      "sha256": "f85f37dffcae46088ccef2a2bfd734a1fa38e22c73886d381dea33c29864ab8d",
+      "command": [
+        "pnpm",
+        "lighthouse",
+        "validate",
+        "/Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/policy_withdrawn.json"
+      ],
+      "exit_code": 0,
+      "stdout": "{\"digest\":{\"algorithm\":\"sha-256\",\"value\":\"1baf6c129dbe479dabfa66d91b8ea8e96563309949ed67818e7a102e3e5a1352\"},\"id\":\"urn:engram:pilot-receiver:receipt:71d7f2d9-70fd-4d3b-b375-86860dc64d44\",\"kind\":\"RecallReceipt\",\"ok\":true}\n",
+      "stderr": "$ tsx packages/conformance/src/cli.ts validate /Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/policy_withdrawn.json\n"
+    },
+    {
+      "receipt": "receipts/unshared.json",
+      "sha256": "dc5e48c981f0fd6c4d19a4d3fb01237ad0a7c700bf96705a69ff1903546979c2",
+      "command": [
+        "pnpm",
+        "lighthouse",
+        "validate",
+        "/Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/unshared.json"
+      ],
+      "exit_code": 0,
+      "stdout": "{\"digest\":{\"algorithm\":\"sha-256\",\"value\":\"e77cf55c9e63bd205e15c5cba0651b963c17d661b4c533da06e8584e666191e5\"},\"id\":\"urn:engram:pilot-receiver:receipt:e78a5022-7d41-4d67-9f04-a1217db38da6\",\"kind\":\"RecallReceipt\",\"ok\":true}\n",
+      "stderr": "$ tsx packages/conformance/src/cli.ts validate /Users/kairos/Projects/engram/.worktrees/dynamic-context/docs/reports/2026-09-06-context-lighthouse-pilot/receipts/unshared.json\n"
+    }
+  ]
+}

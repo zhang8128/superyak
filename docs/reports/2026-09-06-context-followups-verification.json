@@ -1,0 +1,51 @@
+{
+  "verified_commit": "86785947e400138c691284ead30d6293cc11a391",
+  "parent_manifest_sha256": "2799cf512ebff5a5d84598356287fbfad3e223ee868edb84bc94c29ff58103f4",
+  "original_published_artifact_checksums_unchanged": true,
+  "archives": [
+    {
+      "artifact": "2026-09-06-context-compaction-followup-evidence.tar.gz",
+      "files_verified": 14,
+      "review_records": 300,
+      "historical_answers_unchanged": 200,
+      "new_preparation_failures": 100,
+      "human_ratings_unset": true
+    },
+    {
+      "artifact": "2026-09-06-context-bounded-compaction-evidence.tar.gz",
+      "files_verified": 14,
+      "review_records": 300,
+      "historical_answers_unchanged": 200,
+      "new_preparation_failures": 100,
+      "human_ratings_unset": true
+    }
+  ],
+  "browser_checks": {
+    "engine": "Playwright Chromium headless",
+    "pages": 3,
+    "captured_total_counts": [
+      [
+        20,
+        20
+      ],
+      [
+        200,
+        300
+      ],
+      [
+        200,
+        300
+      ]
+    ],
+    "blank_human_fields": true,
+    "navigation": true,
+    "supplied_context_inspection": true,
+    "page_errors": []
+  },
+  "assistant_assessment": {
+    "records": 200,
+    "human_ratings_unset": true,
+    "overall_factual_verdicts_unset": true
+  },
+  "full_merged_suite_evidence": "2026-09-06-context-lighthouse-pilot/validation.json"
+}

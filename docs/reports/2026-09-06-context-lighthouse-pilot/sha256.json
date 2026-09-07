@@ -1,0 +1,9 @@
+{
+  "full-suite.log": "351a142f7db64d249be74c8520351fac893cd5fd631699eb0f512bb283afd4ce",
+  "receipts/allowed.json": "20f536c3f0197bfd6cca8f1cbd3ec39293717e8090b44e9d37f3bf7e715d2424",
+  "receipts/denied.json": "db69451cf76a47264556feeb39ca0c0b07f28139ab1e3f588c61a312d14e2254",
+  "receipts/policy_withdrawn.json": "f85f37dffcae46088ccef2a2bfd734a1fa38e22c73886d381dea33c29864ab8d",
+  "receipts/unshared.json": "dc5e48c981f0fd6c4d19a4d3fb01237ad0a7c700bf96705a69ff1903546979c2",
+  "report.json": "09c71e164d4666357d937cfe2009cb826399d38842c851020ff2ac94f56e7e68",
+  "validation.json": "b5bccfa89f6fde16299e4df9c22524f402af712ec2539d135e6ab9bba6a2c075"
+}
