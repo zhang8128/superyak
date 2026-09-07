@@ -11,7 +11,7 @@ import uuid
 
 from context_compile import Budget, Candidate, ContextCompiler, ContextCapacityError
 from context_provider import ProviderError
-from context_store import ContextStore, StoreConflict
+from context_store import ArchiveSearchTimeout, ContextStore, StoreConflict
 
 
 INSTRUCTIONS = """You are an Engram conversation assistant. Attend to the user's actual intent,
@@ -89,11 +89,16 @@ class ContextRuntime:
             candidates[key] = Candidate(key, "user", (text,), required=True, reason="explicit user correction or pin", source_id=row["source_id"])
         # Include conversational referents in a bounded retrieval query.
         query = current[:1500] + " " + " ".join(r["content"][:250] for r in recent[-2:])
-        for index, row in enumerate(self.store.search(thread, query, limit=16, completed_only=True)):
+        coverage = []
+        try:
+            recalled = self.store.search(thread, query, limit=16, completed_only=True)
+        except ArchiveSearchTimeout:
+            recalled = []
+            coverage.append({"mode": "archive_fts", "error": "ArchiveSearchTimeout", "coverage": "incomplete", "deadline_ms": self.store.SEARCH_TIMEOUT_SECONDS * 1000})
+        for index, row in enumerate(recalled):
             if row["id"] != current_id and row["id"] not in candidates:
                 text = row["content"] + ("\n[Excerpt; original is available by source ID.]" if row["truncated"] else "")
                 candidates[row["id"]] = Candidate(row["id"], row["role"], (text,), score=50-index, reason="archive recall", sequence=row["seq"])
-        coverage = []
         for source in self.sources:
             start = time.monotonic()
             try:
@@ -233,6 +238,8 @@ class ContextRuntime:
                     snapshots.append({"id": source_id, "offset": offset, "limit": limit, "digest": self._read_digest(result)})
                 return result
             raise ValueError("Unsupported read-only tool")
+        except ArchiveSearchTimeout as exc:
+            return {"error": "ArchiveSearchTimeout", "coverage": "incomplete", "message": str(exc)}
         except (ValueError, KeyError) as exc:
             return {"error": str(exc)}
 

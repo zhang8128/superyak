@@ -24,6 +24,9 @@ this plan records completion of that implementation, not a replacement design.
 - [x] Add failing regressions for correction revision/unpin after a model call.
   Record immutable original event references in each manifest and use those
   references in the browser's source inspector.
+- [x] Bound archive query time after profiling exposed growing ranking cost.
+  Keep recent/required context and explicitly report incomplete retrieval when
+  the SQLite deadline expires, in both chat and coding paths.
 - [ ] Measure at least 10,000 synthetic runtime model calls including tool
   continuations and a growing archive; record counted/dispatched equality,
   budget compliance, bounded candidate counts, and runtime allocation growth.
@@ -46,3 +49,11 @@ All six regressions failed before the fixes; the runtime/compiler/source/CLI
 checks passed afterward (32 tests). Scoped independent re-review accepted both
 fixes with no additional material findings. Prior selected evidence also remains
 an episode dependency, because opaque provider items may derive from it.
+
+The repeated-prose replay exposed unbounded archive ranking time. A separate
+1,000-call profile measured 32.91 seconds in search out of 56.96 seconds total;
+100-call intervals grew from 3.61 to 10.11 seconds. The original workload was
+retained. A 50 ms SQLite progress deadline now stops ranking and marks coverage
+incomplete; its cost is potentially missing old sources. Three regressions failed
+first and the store/runtime/coding/replay group then passed 53 tests. The code
+also carries immutable correction references through coding manifests.

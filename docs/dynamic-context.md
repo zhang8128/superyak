@@ -224,6 +224,14 @@ roles, source IDs, versions, and excerpt markers stay attached. No recalled
 instruction becomes a developer instruction, and mere selection does not
 reinforce a memory.
 
+Archive ranking has a 50 ms query deadline, checked periodically by SQLite and
+again when the query returns. If it expires, chat and coding continue with their
+recent dialogue, current goal, and explicit notes; manifests report incomplete
+archive coverage. Archive search tools also return an explicit incomplete result.
+A bounded result count alone did not bound search time as repeated terms
+accumulated. This deadline bounds ranking work at the cost of potentially missing
+older context, which remains part of the continuity evaluation.
+
 Use **Context in use** in the browser to inspect the actual selection, its
 reasons, count method, omitted count, model, and source versions. Click an entry
 to read its original. The CLI equivalent is:
@@ -293,6 +301,20 @@ Tests cover 10,000 synthetic compile cycles, full-payload admission, mandatory
 overflow, ordered tool/opaque items, idempotence and restart, correction capture,
 chronological referents, source invalidation, deletion recovery, HTTP parsing,
 subprocess isolation, provider deadlines, and API transport fixtures.
+
+The standalone runtime replay exercises actual archive/compiler/tool
+continuations through a deterministic synthetic provider:
+
+```bash
+.venv/bin/python scripts/context_runtime_replay.py > context-runtime-replay.json
+```
+
+Its default workload executes 10,000 synthetic generation calls and 5,000
+paginated artifact reads while the persisted archive grows. It checks the
+counted/dispatched payloads, configured budget, active tool groups, and candidate
+bounds. The JSON report distinguishes Python-traced allocations from process
+resident memory. Its byte counter is an artificial test profile, not a model
+tokenizer; this run consumes no model allowance and measures no answer quality.
 
 The source-grounded 100-question human continuity pilot from the design has not
 been run. Neither budget tests nor the small live smoke establish that quality

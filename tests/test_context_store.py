@@ -96,6 +96,27 @@ def test_recent_and_search_do_not_materialize_full_large_events(tmp_path):
     store.close()
 
 
+def test_archive_search_deadline_interrupts_query_and_restores_connection(tmp_path, monkeypatch):
+    import itertools
+    import sqlite3
+
+    store = ContextStore(tmp_path / "context.db")
+    for i in range(30):
+        store.append("t", "user", f"needle {i}")
+    try:
+        with monkeypatch.context() as clock:
+            ticks = itertools.count()
+            clock.setattr("context_store.time.monotonic", lambda: float(next(ticks)))
+            with pytest.raises(sqlite3.OperationalError, match="deadline"):
+                store.search("t", "needle")
+        # The progress callback belongs only to that search; later writes and
+        # searches must remain usable after the interrupted statement.
+        event = store.append("t", "user", "a distinct recoverymarker")
+        assert store.search("t", "recoverymarker")[0]["id"] == event["id"]
+    finally:
+        store.close()
+
+
 def test_manifests_and_event_capture_are_thread_scoped(tmp_path):
     store = ContextStore(tmp_path / "context.db")
     with ThreadPoolExecutor(max_workers=4) as pool:

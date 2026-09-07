@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from context_runtime import TOOLS as CHAT_TOOLS
+from context_store import ArchiveSearchTimeout
 
 
 SEARCH_KINDS = ('message', 'correction', 'coding_observation', 'coding_task')
@@ -58,5 +59,7 @@ class CodingMemory:
             return {'id': source_id, 'text': data.decode('utf-8', errors='replace'), 'offset_unit': 'bytes',
                     'next_offset': offset + len(data) if len(data) == limit else None,
                     'encoding': 'UTF-8 display; a page boundary may split a character'}
+        except ArchiveSearchTimeout as exc:
+            return {'error': 'ArchiveSearchTimeout', 'coverage': 'incomplete', 'message': str(exc)}
         except (ValueError, KeyError, OSError, sqlite3.Error) as exc:
             return {'error': str(exc)}

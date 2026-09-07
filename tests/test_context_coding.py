@@ -73,6 +73,33 @@ def test_two_episodes_restore_goal_checkpoint_and_observed_output(tmp_path):
     r.close()
 
 
+def test_archive_deadline_keeps_coding_goal_and_pin_provenance(tmp_path, monkeypatch):
+    from context_store import ArchiveSearchTimeout
+
+    r = runtime(tmp_path, [completed()])
+    original = r.store.record_state('task', 'api', 'Keep public API stable')
+
+    def expired(*args, **kwargs):
+        raise ArchiveSearchTimeout('Archive search deadline exceeded; retrieval is incomplete')
+
+    monkeypatch.setattr(r.store, 'search', expired)
+    try:
+        result = r.run('task', 'Implement a parser and test it')
+        assert result['status'] == 'complete'
+        assert 'Implement a parser and test it' in json.dumps(r.provider.requests[0])
+        manifest = r.store.manifest('task')
+        assert any(item.get('error') == 'ArchiveSearchTimeout' for item in manifest['coding']['source_coverage'])
+        pin = next(item for item in manifest['selected'] if item['id'] == 'state:api')
+        assert pin['source_id'] == original['source_id']
+        r.store.unpin('task', 'api')
+        assert r.memory.call('task', 'archive_read', {'id': pin['source_id']})['text'] == 'Keep public API stable'
+        tool_result = r.memory.call('task', 'archive_search', {'query': 'parser'})
+        assert tool_result['coverage'] == 'incomplete'
+        assert tool_result['error'] == 'ArchiveSearchTimeout'
+    finally:
+        r.close()
+
+
 def assert_running(store):
     assert json.loads(store.latest_event('task', 'coding_progress')['content'])['status'] == 'running'
 

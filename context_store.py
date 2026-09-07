@@ -23,6 +23,10 @@ class ThreadBusy(StoreConflict):
     """Another runtime currently owns this thread."""
 
 
+class ArchiveSearchTimeout(sqlite3.OperationalError):
+    """A bounded archive search stopped before its ranking was complete."""
+
+
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -31,6 +35,7 @@ class ContextStore:
     PREVIEW_CHARS = 8192
     MAX_EVENT_BYTES = 4_000_000
     MAX_ARTIFACT_BYTES = 16_000_000
+    SEARCH_TIMEOUT_SECONDS = 0.05
 
     def __init__(self, path: str | Path):
         self.path = Path(path).resolve()
@@ -197,7 +202,20 @@ class ContextStore:
         completed = " AND (e.turn_id IS NULL OR EXISTS(SELECT 1 FROM turns t WHERE t.id=e.turn_id AND t.status='completed'))" if completed_only else ""
         with self._lock:
             kind_filter = " AND e.kind IN (" + ",".join("?" for _ in kinds) + ")"
-            rows = self.conn.execute("SELECT e.id,e.seq,e.thread,e.role,e.kind,substr(e.content,1,?) AS content,length(e.content) AS full_length,e.metadata,e.turn_id,created FROM event_search s JOIN events e ON e.id=s.event_id WHERE event_search MATCH ? AND s.thread=?" + kind_filter + completed + " ORDER BY bm25(event_search), e.seq DESC LIMIT ?", (self.PREVIEW_CHARS, match, thread, *kinds, max(0, min(int(limit), 100)))).fetchall()
+            deadline = time.monotonic() + self.SEARCH_TIMEOUT_SECONDS
+            self.conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+            try:
+                rows = self.conn.execute("SELECT e.id,e.seq,e.thread,e.role,e.kind,substr(e.content,1,?) AS content,length(e.content) AS full_length,e.metadata,e.turn_id,created FROM event_search s JOIN events e ON e.id=s.event_id WHERE event_search MATCH ? AND s.thread=?" + kind_filter + completed + " ORDER BY bm25(event_search), e.seq DESC LIMIT ?", (self.PREVIEW_CHARS, match, thread, *kinds, max(0, min(int(limit), 100)))).fetchall()
+                if time.monotonic() >= deadline:
+                    raise ArchiveSearchTimeout("Archive search deadline exceeded; retrieval is incomplete")
+            except sqlite3.OperationalError as exc:
+                if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+                    raise ArchiveSearchTimeout("Archive search deadline exceeded; retrieval is incomplete") from exc
+                raise
+            finally:
+                # This connection also serves capture, corrections and other
+                # threads; an expired search callback must never leak to them.
+                self.conn.set_progress_handler(None, 0)
         return [self._event_row(row) for row in rows]
 
     @staticmethod

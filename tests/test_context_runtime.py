@@ -289,3 +289,30 @@ def test_historical_correction_manifest_resolves_its_original(tmp_path, change):
         assert note["version"] == original["source_id"]
     finally:
         runtime.close()
+
+
+def test_archive_deadline_preserves_continuity_and_reports_missing_coverage(tmp_path, monkeypatch):
+    from context_store import ArchiveSearchTimeout
+
+    store = ContextStore(tmp_path / "runtime.db")
+    store.append("t", "user", "The current pilot is at the library")
+    store.append("t", "assistant", "We were discussing the library pilot")
+    call = {"type": "function_call", "call_id": "search", "name": "archive_search", "arguments": '{"query":"library"}'}
+    provider = RecordingProvider([{"id": "first", "status": "completed", "output": [call], "usage": None}, answer("I can use the recent pilot conversation")])
+    runtime = ContextRuntime(store, provider, Budget())
+
+    def expired(*args, **kwargs):
+        raise ArchiveSearchTimeout("Archive search deadline exceeded; retrieval is incomplete")
+
+    monkeypatch.setattr(store, "search", expired)
+    try:
+        result = runtime.chat("t", "Return to that")
+        assert "library pilot" in json.dumps(provider.requests[0])
+        tool_result = json.loads(provider.requests[1]["input"][-1]["output"])
+        assert tool_result["coverage"] == "incomplete"
+        assert tool_result["error"] == "ArchiveSearchTimeout"
+        manifest = store.manifest("t", result["manifest_id"])
+        assert any(item.get("error") == "ArchiveSearchTimeout" for item in manifest["source_coverage"])
+        assert result["response"] == "I can use the recent pilot conversation"
+    finally:
+        runtime.close()

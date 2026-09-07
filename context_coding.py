@@ -13,7 +13,7 @@ import time
 from context_compile import Budget, Candidate, ContextCompiler, ContextCapacityError
 from context_coding_memory import CodingMemory, SEARCH_KINDS, TOOLS
 from context_provider import ProviderError
-from context_store import StoreConflict
+from context_store import ArchiveSearchTimeout, StoreConflict
 
 
 INSTRUCTIONS = """You are working on a durable Engram coding task in this repository.
@@ -158,7 +158,7 @@ class CodingRuntime:
         candidates[row['id']] = Candidate(row['id'], 'assistant', (row['content'],), required=True, reason='observed repository state', sequence=row['seq'])
         for pin in self.store.state(thread):
             key = 'state:' + pin['key']
-            candidates[key] = Candidate(key, 'user', (_json(pin),), required=True, reason='explicit user correction or pin')
+            candidates[key] = Candidate(key, 'user', (_json(pin),), required=True, reason='explicit user correction or pin', source_id=pin['source_id'])
         for row in self.store.recent_kind(thread, 'coding_observation', 6):
             representations = tuple(_json({'excerpt': row['content'][:limit], 'source_role': 'tool',
                 'original_event_id': row['metadata'].get('event_id'), 'artifact_id': row['metadata'].get('artifact_id')}) for limit in (1600, 500))
@@ -166,7 +166,13 @@ class CodingRuntime:
                 score=120 + row['seq'] / 1e9, reason='observed tool result; excerpt', sequence=row['seq'])
         checkpoint = progress.get('checkpoint') or {}
         query = ' '.join(checkpoint.get('next_steps', []))[:900] + ' ' + task['content'][:900]
-        for i, row in enumerate(self.store.search(thread, query, limit=12, kinds=SEARCH_KINDS)):
+        coverage = []
+        try:
+            recalled = self.store.search(thread, query, limit=12, kinds=SEARCH_KINDS)
+        except ArchiveSearchTimeout:
+            recalled = []
+            coverage.append({'mode': 'archive_fts', 'error': 'ArchiveSearchTimeout', 'coverage': 'incomplete', 'deadline_ms': self.store.SEARCH_TIMEOUT_SECONDS * 1000})
+        for i, row in enumerate(recalled):
             if row['id'] == task['id']:
                 continue  # The exact original goal is already the current item.
             if row['role'] in {'user', 'assistant', 'tool'}:
@@ -174,7 +180,6 @@ class CodingRuntime:
                 candidates.setdefault(row['id'], Candidate(row['id'], 'assistant' if row['role'] == 'tool' else row['role'], (text,),
                     score=50-i, reason='earlier task dialogue; possibly superseded', sequence=row['seq']))
         external = {}
-        coverage = []
         for source in self.sources:
             try:
                 found = source.search(query, limit=6)
