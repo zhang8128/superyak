@@ -1,17 +1,24 @@
 {
   "mcpServers": {
     "engram": {
-      "command": "uv",
-      "args": ["run", "--project", "/Users/kairos/Projects/engram", "python", "/Users/kairos/Projects/engram/server.py"],
+      "command": "sh",
+      "args": [
+        "-c",
+        "exec \"$HOME/.local/bin/superyak-runtime\" mcp"
+      ],
       "env": {
-        "ENGRAM_DEFAULT_INSTANCE": "engram",
-        "ENGRAM_HOME": "/Users/kairos/Projects/engram",
         "ENGRAM_HARNESS": "claude-code"
       }
     },
     "reader": {
       "command": "uv",
-      "args": ["run", "--directory", "/Users/kairos/Projects/reader", "python", "server.py"],
+      "args": [
+        "run",
+        "--directory",
+        "/Users/kairos/Projects/reader",
+        "python",
+        "server.py"
+      ],
       "env": {
         "READER_HOME": "/Users/kairos/Projects/reader"
       }

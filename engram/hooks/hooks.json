@@ -1,5 +1,5 @@
 {
-  "description": "Engram memory hooks — wake into memories, nudge mid-conversation, dream on exit. Absolute paths on purpose: the plugin installer snapshots this repo into ~/.claude/plugins/cache, and ${CLAUDE_PLUGIN_ROOT} may resolve there — stale hook code and a forked .engram store. This plugin is machine-bound (it points at one live memory store), so the hooks pin the live repo.",
+  "description": "Engram memory hooks use the installed Superyak runtime. The launcher resolves canonical source and its explicit memory-home configuration, including when this plugin is cached.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ENGRAM_DEFAULT_INSTANCE=engram python3 \"$HOME/Projects/engram/hooks/nudge.py\"",
+            "command": "ENGRAM_HARNESS=claude-code \"$HOME/.local/bin/superyak-runtime\" hook nudge",
             "timeout": 10
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ENGRAM_DEFAULT_INSTANCE=engram python3 \"$HOME/Projects/engram/hooks/wake.py\"",
+            "command": "ENGRAM_HARNESS=claude-code \"$HOME/.local/bin/superyak-runtime\" hook wake",
             "timeout": 10
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ENGRAM_DEFAULT_INSTANCE=engram python3 \"$HOME/Projects/engram/hooks/sleep.py\"",
+            "command": "ENGRAM_HARNESS=claude-code \"$HOME/.local/bin/superyak-runtime\" hook sleep",
             "timeout": 5
           }
         ]
