@@ -111,7 +111,16 @@ def canonical_json(value: Any) -> str:
             markers.add(marker)
             try:
                 members = []
-                for key, member in sorted(item.items()):
+                # ECMAScript compares string keys by UTF-16 code units, so
+                # supplementary characters sort before the upper BMP range.
+                ordered = sorted(
+                    item.items(),
+                    key=lambda entry: (
+                        entry[0].encode("utf-16-be", errors="surrogatepass")
+                        if isinstance(entry[0], str) else entry[0]
+                    ),
+                )
+                for key, member in ordered:
                     if isinstance(key, str):
                         encoded_key = json.dumps(key, ensure_ascii=False)
                     elif key is True:

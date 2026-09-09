@@ -33,8 +33,12 @@ separately through `make check-engram`, `make check-lighthouse`, and
 
 The interoperability check uses disposable synthetic stores and a real local
 Unix socket. It checks both shared schemas and validates four Engram receipts
-with Lighthouse's CLI, including denial and withdrawal scenarios. It requires
-no model credentials or configured live publishers.
+with Lighthouse's CLI, including denial and withdrawal scenarios. It also
+checks Unicode artifact digests and scoped receipt exports across both languages.
+These cross-language regression tests require the built Lighthouse packages in
+`make check-integration`; Python-only test runs skip them when that setup is absent.
+The interoperability check requires no model credentials or configured live
+publishers.
 
 Two Engram tests inspect a developer's live Codex configuration and are skipped
 by default. To run those tests, explicitly supply both

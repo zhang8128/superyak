@@ -130,25 +130,28 @@ def _backfill_instinct_perceptual(storage, embeddings):
         trigger = inst.get("trigger", "preference")
         notice, implication = _generate_perceptual_framing(action, trigger)
 
-        storage.conn.execute(
-            "UPDATE instincts SET notice = ?, implication = ? WHERE id = ?",
-            (notice, implication, inst["id"]),
-        )
-
-        # Store context vector
+        # Model work must not hold SQLite's writer slot. Another process may
+        # edit or fill this instinct while it runs, so recheck before writing.
         ctx_emb = embeddings.embed([notice], prefix="search_document")[0]
-        if ctx_emb is not None:
-            # Check if context vector already exists
-            has_ctx = storage.conn.execute(
-                "SELECT 1 FROM instinct_context_vectors WHERE id = ?", (inst["id"],)
-            ).fetchone()
-            if not has_ctx:
-                storage.add_instinct_context_vector(inst["id"], ctx_emb)
+        with storage.transaction():
+            updated = storage.conn.execute(
+                "UPDATE instincts SET notice = ?, implication = ? "
+                "WHERE id = ? AND notice IS NULL AND action = ? AND trigger = ? "
+                "AND implication IS ?",
+                (notice, implication, inst["id"], action, trigger, inst.get("implication")),
+            ).rowcount
+            if not updated:
+                continue
+            if ctx_emb is not None:
+                has_ctx = storage.conn.execute(
+                    "SELECT 1 FROM instinct_context_vectors WHERE id = ?", (inst["id"],)
+                ).fetchone()
+                if not has_ctx:
+                    storage.add_instinct_context_vector(inst["id"], ctx_emb)
 
         backfilled += 1
 
     if backfilled:
-        storage.conn.commit()
         logger.info("Backfilled notice/implication for %d instincts", backfilled)
 
     return backfilled
@@ -1109,6 +1112,35 @@ def _maintenance_step_scope(guarded: bool):
             coordinator.finish_operation()
 
 
+def _backfill_missing_vector(storage, embeddings, source_table, vector_table, text_column, row):
+    """Embed a snapshot, then atomically fill only its unchanged, missing vector.
+
+    Table/column names come only from the three maintenance call sites below.
+    The lifecycle barrier protects this connection; the short transaction also
+    serializes with other processes writing to the same memory store.
+    """
+    text = row[text_column]
+    embedding = embeddings.embed([text], prefix="search_document")[0]
+    packed = _pack_embedding(embedding)
+    with storage.transaction():
+        current = storage.conn.execute(
+            f"SELECT 1 FROM {source_table} WHERE id = ? AND {text_column} = ?",
+            (row["id"], text),
+        ).fetchone()
+        if current is None:
+            return False
+        existing = storage.conn.execute(
+            f"SELECT 1 FROM {vector_table} WHERE id = ?", (row["id"],)
+        ).fetchone()
+        if existing is not None:
+            return False
+        storage.conn.execute(
+            f"INSERT INTO {vector_table} (id, embedding) VALUES (?, ?)",
+            (row["id"], packed),
+        )
+    return True
+
+
 def _run_sleep_maintenance(guarded: bool = False) -> None:
     """Sleep-time consolidation: decay, prune, compress, backfill, cohesion.
 
@@ -1164,27 +1196,23 @@ def _run_sleep_maintenance(guarded: bool = False) -> None:
         with _maintenance_step_scope(guarded), _maint.step("episode-vector-backfill"):
             orphaned = _storage.get_orphaned_episodes()
             if orphaned:
+                backfilled = 0
                 for ep in orphaned:
-                    emb = _embeddings.embed([ep["content"]], prefix="search_document")[0]
-                    _storage.conn.execute(
-                        "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
-                        (ep["id"], _pack_embedding(emb)),
+                    backfilled += _backfill_missing_vector(
+                        _storage, _embeddings, "episodes", "episode_vectors", "content", ep,
                     )
-                _storage.conn.commit()
-                logger.info("Backfilled vectors for %d orphaned episodes", len(orphaned))
+                logger.info("Backfilled vectors for %d orphaned episodes", backfilled)
 
         # 5. Backfill: embed any semantics that lost vectors (WAL corruption recovery)
         with _maintenance_step_scope(guarded), _maint.step("semantic-vector-backfill"):
             orphaned_sems = _storage.get_orphaned_semantics()
             if orphaned_sems:
+                backfilled = 0
                 for sem in orphaned_sems:
-                    emb = _embeddings.embed([sem["content"]], prefix="search_document")[0]
-                    _storage.conn.execute(
-                        "INSERT INTO semantic_vectors (id, embedding) VALUES (?, ?)",
-                        (sem["id"], _pack_embedding(emb)),
+                    backfilled += _backfill_missing_vector(
+                        _storage, _embeddings, "semantics", "semantic_vectors", "content", sem,
                     )
-                _storage.conn.commit()
-                logger.info("Backfilled vectors for %d orphaned semantics", len(orphaned_sems))
+                logger.info("Backfilled vectors for %d orphaned semantics", backfilled)
 
         # 6. Backfill: embed any instincts that lack vectors (pre-existing instincts)
         with _maintenance_step_scope(guarded), _maint.step("instinct-vector-backfill"):
@@ -1195,14 +1223,10 @@ def _run_sleep_maintenance(guarded: bool = False) -> None:
                     "SELECT 1 FROM instinct_vectors WHERE id = ?", (inst["id"],)
                 ).fetchone()
                 if not has_vec:
-                    emb = _embeddings.embed([inst["action"]], prefix="search_document")[0]
-                    _storage.conn.execute(
-                        "INSERT INTO instinct_vectors (id, embedding) VALUES (?, ?)",
-                        (inst["id"], _pack_embedding(emb)),
+                    backfilled += _backfill_missing_vector(
+                        _storage, _embeddings, "instincts", "instinct_vectors", "action", inst,
                     )
-                    backfilled += 1
             if backfilled:
-                _storage.conn.commit()
                 logger.info("Backfilled vectors for %d instincts", backfilled)
 
         # 6b. Backfill notice/implication for pre-existing instincts

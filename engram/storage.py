@@ -147,7 +147,7 @@ class Storage:
             yield
             if outermost:
                 self.conn.commit()
-        except Exception:
+        except BaseException:
             if outermost and self.conn.in_transaction:
                 self.conn.rollback()
             raise

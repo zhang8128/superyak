@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import uuid
 import sqlite3
+import asyncio
+import shutil
+from pathlib import Path
 
 import pytest
 from datetime import datetime, timezone
@@ -299,6 +302,103 @@ def test_storage_transaction_defers_helper_commits_and_rolls_back(tmp_db):
 
     assert tmp_db.get_episode(episode_id) is None
     assert tmp_db.conn.in_transaction is False
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit, asyncio.CancelledError])
+@pytest.mark.parametrize("nested", [False, True])
+def test_storage_transaction_rolls_back_interruption(tmp_db, interruption, nested):
+    def interrupted_write():
+        tmp_db.add_episode("interrupted", "session", "Must not survive cancellation")
+        raise interruption()
+
+    with pytest.raises(interruption):
+        with tmp_db.transaction():
+            if nested:
+                with tmp_db.transaction():
+                    interrupted_write()
+            else:
+                interrupted_write()
+
+    assert tmp_db.conn.in_transaction is False
+    assert tmp_db.get_episode("interrupted") is None
+    other = sqlite3.connect(tmp_db.db_path, timeout=0.01)
+    try:
+        other.execute("BEGIN IMMEDIATE")
+        other.rollback()
+    finally:
+        other.close()
+    with tmp_db.transaction():
+        tmp_db.add_episode("successful", "session", "A later write succeeds")
+    assert tmp_db.get_episode("successful") is not None
+    assert tmp_db.get_episode("interrupted") is None
+
+
+def _populated_pre_disposition_store(tmp_path):
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    source = Path(__file__).resolve().parent.parent / "migrations"
+    for path in source.glob("*.sql"):
+        if int(path.name.split("_", 1)[0]) <= 14:
+            shutil.copyfile(path, migrations / path.name)
+    database = tmp_path / "graph.db"
+    store = Storage(str(database), migrations_dir=str(migrations))
+    try:
+        store.conn.execute("INSERT INTO episodes(id,content,created_at) VALUES ('ep','original evidence','2026-01-01')")
+        store.conn.execute("INSERT INTO semantics(rowid,id,content,kind,created_at) VALUES (17,'earlier','earlier finding','fact','2026-01-01'),(42,'revised','revised finding','fact','2026-01-02')")
+        store.conn.execute("UPDATE semantics SET contradicted_by='revised' WHERE id='earlier'")
+        store.conn.execute("INSERT INTO semantic_sources(semantic_id,episode_id,similarity) VALUES ('earlier','ep',0.875),('revised','ep',NULL)")
+        store.conn.execute("INSERT INTO instincts(id,trigger,action,created_at) VALUES ('instinct','context','attend','2026-01-01')")
+        store.conn.execute("INSERT INTO instinct_sources(instinct_id,semantic_id) VALUES ('instinct','earlier'),('instinct','revised')")
+        from storage import _pack_embedding
+        store.conn.execute("INSERT INTO semantic_vectors(id,embedding) VALUES ('revised',?)", (_pack_embedding([1.0] + [0.0] * 767),))
+        store.conn.commit()
+    finally:
+        store.close()
+    return database, migrations, source
+
+
+def _assert_disposition_provenance(connection):
+    assert [tuple(row) for row in connection.execute("SELECT semantic_id,episode_id,similarity FROM semantic_sources ORDER BY semantic_id")] == [
+        ("earlier", "ep", 0.875), ("revised", "ep", None),
+    ]
+    assert [tuple(row) for row in connection.execute("SELECT instinct_id,semantic_id FROM instinct_sources ORDER BY semantic_id")] == [
+        ("instinct", "earlier"), ("instinct", "revised"),
+    ]
+    assert connection.execute("SELECT contradicted_by FROM semantics WHERE id='earlier'").fetchone()[0] == "revised"
+    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("latest", [15, 27])
+def test_disposition_migration_preserves_populated_provenance(tmp_path, latest):
+    database, migrations, source = _populated_pre_disposition_store(tmp_path)
+    for path in source.glob("*.sql"):
+        if 15 <= int(path.name.split("_", 1)[0]) <= latest:
+            shutil.copyfile(path, migrations / path.name)
+    for _ in range(2):
+        store = Storage(str(database), migrations_dir=str(migrations))
+        try:
+            _assert_disposition_provenance(store.conn)
+            assert [tuple(row) for row in store.conn.execute("SELECT rowid,id FROM semantics ORDER BY rowid")] == [(17, "earlier"), (42, "revised")]
+            assert store.conn.execute("SELECT s.id FROM semantic_fts f JOIN semantics s ON s.rowid=f.rowid WHERE semantic_fts MATCH 'revised'").fetchone()[0] == "revised"
+            assert store.search_vectors("semantic", [1.0] + [0.0] * 767, k=1) == [("revised", 0.0)]
+            assert store.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        finally:
+            store.close()
+
+
+def test_failed_disposition_upgrade_preserves_populated_provenance(tmp_path):
+    database, migrations, source = _populated_pre_disposition_store(tmp_path)
+    (migrations / "015_dispositions.sql").write_text(
+        (source / "015_dispositions.sql").read_text() + "\nTHIS IS NOT SQL;\n"
+    )
+    with pytest.raises(sqlite3.OperationalError, match='near "THIS"'):
+        Storage(str(database), migrations_dir=str(migrations))
+    connection = sqlite3.connect(database)
+    try:
+        _assert_disposition_provenance(connection)
+        assert connection.execute("SELECT max(version) FROM schema_version").fetchone()[0] == 14
+    finally:
+        connection.close()
 
 
 def test_storage_transaction_rolls_back_when_outer_commit_fails(tmp_db):

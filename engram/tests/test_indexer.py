@@ -160,7 +160,7 @@ def test_index_file_creates_entities(tmp_db, tmp_path):
     f.write_text(SAMPLE_PYTHON)
 
     mock_embed = MagicMock()
-    mock_embed.embed.return_value = [[0.1] * 768] * 10  # enough for all symbols
+    mock_embed.embed.side_effect = lambda texts: [[0.1] * 768 for _ in texts]
 
     index_file(tmp_db, mock_embed, f, "python", tmp_path)
 
@@ -179,7 +179,7 @@ def test_reindex_file_updates_entities(tmp_db, tmp_path):
     f.write_text(SAMPLE_PYTHON)
 
     mock_embed = MagicMock()
-    mock_embed.embed.return_value = [[0.1] * 768] * 10
+    mock_embed.embed.side_effect = lambda texts: [[0.1] * 768 for _ in texts]
 
     index_file(tmp_db, mock_embed, f, "python", tmp_path)
     index_file(tmp_db, mock_embed, f, "python", tmp_path)
@@ -195,7 +195,7 @@ def test_delete_stale_symbols(tmp_db, tmp_path):
     f.write_text(SAMPLE_PYTHON)
 
     mock_embed = MagicMock()
-    mock_embed.embed.return_value = [[0.1] * 768] * 10
+    mock_embed.embed.side_effect = lambda texts: [[0.1] * 768 for _ in texts]
 
     index_file(tmp_db, mock_embed, f, "python", tmp_path)
     assert tmp_db.get_entity("symbol:sample.py::greet") is not None
@@ -220,7 +220,7 @@ def test_incremental_via_git_diff(tmp_db, tmp_path):
     f.write_text("def foo(): pass\n")
 
     mock_embed = MagicMock()
-    mock_embed.embed.return_value = [[0.1] * 768] * 5
+    mock_embed.embed.side_effect = lambda texts: [[0.1] * 768 for _ in texts]
 
     from config import EngramConfig
 

@@ -724,3 +724,32 @@ def test_export_without_receipts_has_empty_list(tmp_path):
 
     assert document["receipts"] == []
     assert audit.receipts == 0
+
+
+@pytest.mark.parametrize("path, included", [
+    (["memory", "technical"], True),
+    (["memory", "technical", "python"], True),
+    (["memory", "research"], False),
+    (["memory"], False),
+    (["memory", "technicality"], False),
+])
+def test_export_scopes_valid_receipts_without_counting_them_invalid(
+    tmp_path, path, included,
+):
+    from lighthouse_protocol import artifact_digest
+
+    database = tmp_path / "graph.db"
+    connection = build_database(database)
+    receipt = sample_receipt()
+    receipt["payload"]["context"] = {"id": "/".join(path), "path": path}
+    receipt["digest"] = artifact_digest(receipt)
+    add_receipt_row(connection, receipt)
+    connection.commit()
+    connection.close()
+
+    document, audit = export_lighthouse_shadow(database, instance="engram-local")
+
+    assert document["receipts"] == ([receipt] if included else [])
+    assert audit.receipts == int(included)
+    assert audit.excluded_invalid_receipts == 0
+    assert audit.excluded_outside_context_receipts == int(not included)

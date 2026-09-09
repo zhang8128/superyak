@@ -120,6 +120,16 @@ def test_canonical_json_sorts_keys_and_strips_whitespace():
     )
 
 
+def test_canonical_json_sorts_nested_keys_by_utf16_code_units():
+    assert canonical_json({
+        "values": {"\ue000": 1, "\U00010000": 2},
+        "array": [{"\ue000": "bmp", "\U00010000": "supplementary"}],
+    }) == (
+        '{"array":[{"\U00010000":"supplementary","\ue000":"bmp"}],'
+        '"values":{"\U00010000":2,"\ue000":1}}'
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

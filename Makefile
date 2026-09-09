@@ -38,6 +38,7 @@ check-lighthouse:
 
 check-integration:
 	cd engram && uv run --locked --extra dev python ../scripts/check_integration.py
+	cd engram && ENGRAM_REQUIRE_LIGHTHOUSE_INTEROP=1 LIGHTHOUSE_REPO="$(CURDIR)/lighthouse" uv run --locked --extra dev python -m pytest tests/test_lighthouse_interop.py -q -ra --tb=short
 
 chat:
 	cd engram && uv run --locked python -m context_cli $(ENGRAM_ARGS) chat $(CHAT_ARGS)

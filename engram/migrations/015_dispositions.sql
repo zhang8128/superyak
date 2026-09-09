@@ -5,8 +5,8 @@
 --   CHECK (kind IN ('fact', 'relationship', 'preference', 'constraint'))
 --
 -- SQLite doesn't support ALTER CONSTRAINT, so we recreate the table
--- with the extended CHECK. FTS triggers reference by rowid and survive
--- the recreation since we preserve rowids via VACUUM-safe copy.
+-- with the extended CHECK. Preserve rowids and incoming provenance before
+-- dropping the old table: foreign-key cascades run inside the migration too.
 
 -- Step 1: Create new table with extended CHECK
 CREATE TABLE semantics_new (
@@ -23,17 +23,30 @@ CREATE TABLE semantics_new (
 );
 
 -- Step 2: Copy all existing data
-INSERT INTO semantics_new (id, content, kind, confidence, created_at,
+INSERT INTO semantics_new (rowid, id, content, kind, confidence, created_at,
     reinforced_count, last_reinforced, contradicted_by, auto_generated, content_hash)
-SELECT id, content, kind, confidence, created_at,
+SELECT rowid, id, content, kind, confidence, created_at,
     reinforced_count, last_reinforced, contradicted_by, auto_generated, content_hash
 FROM semantics;
 
--- Step 3: Drop old table (CASCADE will handle semantic_sources FK via app-level)
+-- Step 3: Save the junction rows that DROP TABLE will cascade-delete. These
+-- temporary copies and the table replacement share the runner's transaction.
+CREATE TEMP TABLE disposition_semantic_sources AS
+SELECT semantic_id, episode_id, similarity FROM semantic_sources;
+CREATE TEMP TABLE disposition_instinct_sources AS
+SELECT instinct_id, semantic_id FROM instinct_sources;
+
 DROP TABLE semantics;
 
 -- Step 4: Rename new table
 ALTER TABLE semantics_new RENAME TO semantics;
+
+INSERT INTO semantic_sources (semantic_id, episode_id, similarity)
+SELECT semantic_id, episode_id, similarity FROM disposition_semantic_sources;
+INSERT INTO instinct_sources (instinct_id, semantic_id)
+SELECT instinct_id, semantic_id FROM disposition_instinct_sources;
+DROP TABLE disposition_semantic_sources;
+DROP TABLE disposition_instinct_sources;
 
 -- Step 5: Recreate indexes
 CREATE INDEX IF NOT EXISTS idx_semantics_kind ON semantics(kind);

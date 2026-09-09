@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import heapq
 import json
 import logging
 import os
 import socketserver
 import sqlite3
+import struct
 import sys
 import threading
 import tomllib
@@ -50,6 +52,7 @@ PROFILE = "urn:lighthouse:profile:engram-recall-trace"
 DOMAIN = "memory.recall"
 CLAIM_TYPE = "application/vnd.engram.recall-rank-claim+json"
 PUBLISHED_LAYERS = ("episode", "semantic")
+_RETRIEVAL_BATCH_SIZE = 256
 
 _SIDECAR_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS disclosures ("
@@ -198,6 +201,59 @@ def _shared_audiences(
         return frozenset()
 
 
+def _rank_shared_layer(
+    store: Storage,
+    layer: str,
+    vector: list[float],
+    k: int,
+    allowed_audiences: frozenset[str],
+) -> list[tuple[float, str, str, dict, list[str]]]:
+    """Rank every intact authorized copy, with bounded queries and working set."""
+    packed_vector = struct.pack(f"<{len(vector)}f", *vector)
+    best: list[tuple[float, str, str, dict, list[str]]] = []
+    after = ""
+    while True:
+        rows = store.conn.execute(
+            f"SELECT id, content, lane FROM {layer}s AS memory "
+            "WHERE id > ? AND lane IN ('personal', 'work') AND EXISTS ("
+            "SELECT 1 FROM shared_memories AS shared "
+            "WHERE shared.memory_id = memory.id AND shared.layer = ?) "
+            "ORDER BY id LIMIT ?",
+            (after, layer, _RETRIEVAL_BATCH_SIZE),
+        ).fetchall()
+        if not rows:
+            return best
+        after = rows[-1]["id"]
+        eligible = {}
+        for record in rows:
+            row = dict(record)
+            audiences = sorted(
+                _shared_audiences(
+                    store, memory_id=row["id"], layer=layer,
+                    content=row["content"],
+                ) & allowed_audiences
+            )
+            if audiences:
+                eligible[row["id"]] = (row, audiences)
+        if not eligible:
+            continue
+        placeholders = ",".join("?" for _ in eligible)
+        # A scalar distance over authorized IDs avoids global KNN truncation.
+        # This also admits every distance tie before the final memory-ID sort.
+        hits = store.conn.execute(
+            f"SELECT id, vec_distance_L2(embedding, ?) AS distance "
+            f"FROM {layer}_vectors WHERE id IN ({placeholders})",
+            (packed_vector, *eligible),
+        ).fetchall()
+        for memory_id, distance in hits:
+            row, audiences = eligible[memory_id]
+            best.append((
+                vec0_distance_to_similarity(distance), layer, memory_id,
+                row, audiences,
+            ))
+        best = heapq.nsmallest(k, best, key=lambda item: (-item[0], item[2]))
+
+
 def retrieve(
     store: Storage,
     embeddings,
@@ -212,38 +268,12 @@ def retrieve(
     scored: list[tuple[float, str, str, dict, list[str]]] = []
     for layer in PUBLISHED_LAYERS:
         try:
-            hits = store.search_vectors(layer, vector, k=max(k * 4, 8))
+            scored.extend(_rank_shared_layer(
+                store, layer, vector, k, allowed_audiences,
+            ))
         except Exception:
             logger.debug("vector search failed for %s", layer, exc_info=True)
             continue
-        for memory_id, distance in hits:
-            row = (
-                store.get_episode(memory_id)
-                if layer == "episode"
-                else store.get_semantic(memory_id)
-            )
-            if row is None or row.get("lane") not in ("personal", "work"):
-                continue
-            audiences = sorted(
-                _shared_audiences(
-                    store,
-                    memory_id=memory_id,
-                    layer=layer,
-                    content=row.get("content", ""),
-                )
-                & allowed_audiences
-            )
-            if not audiences:
-                continue
-            scored.append(
-                (
-                    vec0_distance_to_similarity(distance),
-                    layer,
-                    memory_id,
-                    row,
-                    audiences,
-                )
-            )
     scored.sort(key=lambda item: (-item[0], item[2]))
     return [
         {

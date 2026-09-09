@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from lighthouse_daemon import PublisherDaemon, PublisherStore, retrieve
 from lighthouse_protocol import (
     artifact_digest,
@@ -181,6 +183,87 @@ def test_retrieve_returns_only_rows_shared_to_an_allowed_audience(tmp_path):
     assert all(hit["layer"] in ("episode", "semantic") for hit in hits)
     assert hits[0]["rank"] == 1
     assert hits[0]["contentDigest"]["algorithm"] == "sha256"
+
+
+@pytest.mark.parametrize("layer", ["episode", "semantic"])
+@pytest.mark.parametrize("excluded", ["unshared", "other-audience", "bad-digest"])
+def test_retrieve_finds_shared_memory_beyond_global_nearest_neighbors(
+    tmp_db, layer, excluded,
+):
+    query = "rivers"
+
+    def add_memory(memory_id, content, vector):
+        if layer == "episode":
+            tmp_db.add_episode(memory_id, "s", content, embedding=vector)
+        else:
+            tmp_db.add_semantic(memory_id, content, "fact", 1.0, vector, [])
+
+    for index in range(80):
+        add_memory(
+            f"unshared-{index:03}", f"private row {index}", unit(query),
+        )
+        if excluded != "unshared":
+            insert_share(
+                tmp_db, memory_id=f"unshared-{index:03}", layer=layer,
+                content="wrong digest" if excluded == "bad-digest" else f"private row {index}",
+                audience="group:other" if excluded == "other-audience" else "commons",
+            )
+    add_memory("eligible", "shared bridge", unit("bridge"))
+    insert_share(tmp_db, memory_id="eligible", content="shared bridge", layer=layer)
+
+    hits = retrieve(
+        tmp_db, FakeEmbeddings(), query, k=20,
+        allowed_audiences=frozenset({"commons"}),
+    )
+
+    assert [hit["memoryId"] for hit in hits] == ["eligible"]
+    assert hits[0]["rank"] == 1
+    assert hits[0]["audiences"] == ["commons"]
+
+
+def test_retrieve_ranks_all_shared_pages_and_breaks_cross_layer_ties_by_id(tmp_db):
+    for layer in ("episode", "semantic"):
+        for index in range(300):
+            memory_id = f"{layer}-{index:03}"
+            vector = unit("rivers" if index >= 290 else "bridge")
+            if layer == "episode":
+                tmp_db.add_episode(memory_id, "s", memory_id, embedding=vector)
+            else:
+                tmp_db.add_semantic(memory_id, memory_id, "fact", 1.0, vector, [])
+            insert_share(tmp_db, memory_id=memory_id, content=memory_id, layer=layer)
+
+    hits = retrieve(
+        tmp_db, FakeEmbeddings(), "rivers", k=20,
+        allowed_audiences=frozenset({"commons"}),
+    )
+
+    assert [hit["memoryId"] for hit in hits] == [
+        f"{layer}-{index:03}"
+        for layer in ("episode", "semantic") for index in range(290, 300)
+    ]
+    assert [hit["rank"] for hit in hits] == list(range(1, 21))
+    assert all(hit["similarity"] == 1.0 for hit in hits)
+
+
+@pytest.mark.parametrize("corruption", ["audience", "layer", "content_digest"])
+def test_retrieve_excludes_copy_with_corrupt_sibling_share(tmp_db, corruption):
+    for memory_id in ("valid", "corrupt"):
+        tmp_db.add_episode(memory_id, "s", memory_id, embedding=unit("rivers"))
+        insert_share(tmp_db, memory_id=memory_id, content=memory_id)
+    insert_share(tmp_db, memory_id="corrupt", content="corrupt", audience="group:other")
+    tmp_db.conn.execute(
+        f"UPDATE shared_memories SET {corruption} = ? "
+        "WHERE memory_id = ? AND audience = ?",
+        ("invalid", "corrupt", "group:other"),
+    )
+    tmp_db.conn.commit()
+
+    hits = retrieve(
+        tmp_db, FakeEmbeddings(), "rivers", k=20,
+        allowed_audiences=frozenset({"commons"}),
+    )
+
+    assert [hit["memoryId"] for hit in hits] == ["valid"]
 
 
 def test_handle_recall_denies_before_retrieval(tmp_path):

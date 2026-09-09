@@ -44,6 +44,7 @@ class ExportAudit:
     excluded_outside_work_set: int
     receipts: int = 0
     excluded_invalid_receipts: int = 0
+    excluded_outside_context_receipts: int = 0
 
 
 def _open_readonly(database: Path) -> sqlite3.Connection:
@@ -266,9 +267,11 @@ def _project_traces(
 
 def _project_receipts(
     connection: sqlite3.Connection,
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict], int, int]:
     receipts: dict[str, dict] = {}
     invalid = 0
+    outside_context = 0
+    root_path = TECHNICAL_CONTEXT["path"]
     for row in connection.execute(
         "SELECT context FROM memory_log WHERE event_type = 'lighthouse_receipt'"
     ):
@@ -286,8 +289,11 @@ def _project_receipts(
         except ReceiptError:
             invalid += 1
             continue
+        if receipt["payload"]["context"]["path"][:len(root_path)] != root_path:
+            outside_context += 1
+            continue
         receipts[str(receipt["id"])] = receipt
-    return [receipts[key] for key in sorted(receipts)], invalid
+    return [receipts[key] for key in sorted(receipts)], invalid, outside_context
 
 
 def export_lighthouse_shadow(
@@ -305,7 +311,7 @@ def export_lighthouse_shadow(
         memory_ids = {str(memory["id"]) for memory in memories}
         edges, omitted_edges = _project_edges(connection, memory_ids)
         trace_projection = _project_traces(connection, memory_ids)
-        receipts, invalid_receipts = _project_receipts(connection)
+        receipts, invalid_receipts, outside_context_receipts = _project_receipts(connection)
         if connection.total_changes != 0:
             raise ExportError("SOURCE_MUTATED")
         document: dict[str, object] = {
@@ -332,6 +338,7 @@ def export_lighthouse_shadow(
             excluded_outside_work_set=trace_projection.outside_work_set,
             receipts=len(receipts),
             excluded_invalid_receipts=invalid_receipts,
+            excluded_outside_context_receipts=outside_context_receipts,
         )
     finally:
         try:

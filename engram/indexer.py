@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 logger = logging.getLogger("engram.indexer")
@@ -47,13 +47,22 @@ _JS_QUERIES = {
     "class": "(class_declaration name: (identifier) @name) @def",
     "method": "(method_definition name: (property_identifier) @name) @def",
     "arrow": "(variable_declarator name: (identifier) @name value: (arrow_function) @def)",
-    "import": "(import_declaration) @import",
+    "import": "(import_statement) @import",
+}
+
+_TS_QUERIES = {
+    **_JS_QUERIES,
+    "class": "(class_declaration name: (type_identifier) @name) @def",
+    "function": "[(function_declaration name: (identifier) @name) @def "
+                "(function_signature name: (identifier) @name) @def]",
+    "method": "[(method_definition name: (property_identifier) @name) @def "
+              "(method_signature name: (property_identifier) @name) @def]",
 }
 
 QUERIES: dict[str, dict[str, str]] = {
     "python": _PY_QUERIES,
     "javascript": _JS_QUERIES,
-    "typescript": _JS_QUERIES,  # TS uses same node types as JS for these
+    "typescript": _TS_QUERIES,
 }
 
 
@@ -64,6 +73,40 @@ def _node_text(node, source_bytes: bytes) -> str:
 def _body_preview(node, source_bytes: bytes, max_len: int = 300) -> str:
     text = _node_text(node, source_bytes)
     return text[:max_len]
+
+
+_NAMED_SCOPES = {
+    "class_definition", "function_definition", "class_declaration",
+    "function_declaration", "generator_function_declaration", "method_definition",
+    "internal_module", "module", "interface_declaration",
+}
+_EXPRESSION_SCOPES = {"arrow_function", "function_expression", "generator_function", "class", "object"}
+
+
+def _qualified_name(def_node, name: str, source: bytes) -> str:
+    """Include enclosing lexical scopes, including bound JS/TS expressions."""
+    parts = [name]
+    node = def_node.parent
+    while node is not None:
+        if node.type in _NAMED_SCOPES | _EXPRESSION_SCOPES:
+            name_node = node.child_by_field_name("name")
+            if name_node is None and node.type in _EXPRESSION_SCOPES:
+                parent = node.parent
+                if parent is not None:
+                    if parent.type in {"variable_declarator", "field_definition", "public_field_definition"}:
+                        name_node = parent.child_by_field_name("name")
+                    elif parent.type == "pair":
+                        name_node = parent.child_by_field_name("key")
+                    elif parent.type == "assignment_expression":
+                        name_node = parent.child_by_field_name("left")
+                if name_node is None:
+                    # Anonymous callbacks/objects still introduce distinct scopes.
+                    row, column = node.start_point
+                    parts.append(f"<{node.type}@{row + 1}:{column + 1}>")
+            if name_node is not None:
+                parts.append(_node_text(name_node, source))
+        node = node.parent
+    return ".".join(reversed(parts))
 
 
 # --- Public API ---
@@ -141,8 +184,10 @@ def parse_file(file_path: Path, language: str) -> list[dict]:
                 seen_methods.add(name_node.id)
                 symbols.append({
                     "name": name,
+                    "qualified_name": _qualified_name(def_node or name_node, name, source),
                     "kind": "method",
                     "line": name_node.start_point.row + 1,
+                    "column": name_node.start_point.column + 1,
                     "body_preview": _body_preview(def_node or name_node, source),
                 })
 
@@ -157,8 +202,10 @@ def parse_file(file_path: Path, language: str) -> list[dict]:
                 name = _node_text(name_node, source)
                 symbols.append({
                     "name": name,
+                    "qualified_name": _qualified_name(def_node or name_node, name, source),
                     "kind": "function",
                     "line": name_node.start_point.row + 1,
+                    "column": name_node.start_point.column + 1,
                     "body_preview": _body_preview(def_node or name_node, source),
                 })
 
@@ -171,8 +218,10 @@ def parse_file(file_path: Path, language: str) -> list[dict]:
                 name = _node_text(name_node, source)
                 symbols.append({
                     "name": name,
+                    "qualified_name": _qualified_name(def_node or name_node, name, source),
                     "kind": "class",
                     "line": name_node.start_point.row + 1,
+                    "column": name_node.start_point.column + 1,
                     "body_preview": _body_preview(def_node or name_node, source),
                 })
 
@@ -185,11 +234,19 @@ def parse_file(file_path: Path, language: str) -> list[dict]:
                 name = _node_text(name_node, source)
                 symbols.append({
                     "name": name,
+                    "qualified_name": _qualified_name(def_node or name_node, name, source),
                     "kind": "function",
                     "line": name_node.start_point.row + 1,
+                    "column": name_node.start_point.column + 1,
                     "body_preview": _body_preview(def_node or name_node, source),
                 })
 
+    # Overloads, accessors, and redefinitions can share the same lexical name.
+    # Keep ordinary names stable; only collisions need a source-position suffix.
+    counts = Counter(sym["qualified_name"] for sym in symbols)
+    for sym in symbols:
+        if counts[sym["qualified_name"]] > 1:
+            sym["qualified_name"] += f"@{sym['line']}:{sym['column']}"
     return symbols
 
 
@@ -249,8 +306,8 @@ def _import_target(text: str, language: str) -> str | None:
     return None
 
 
-def _entity_id(relative_path: str, symbol_name: str) -> str:
-    return f"symbol:{relative_path}::{symbol_name}"
+def _entity_id(relative_path: str, qualified_name: str) -> str:
+    return f"symbol:{relative_path}::{qualified_name}"
 
 
 def _file_entity_prefix(relative_path: str) -> str:
@@ -267,41 +324,46 @@ def index_file(
     """Index a single file: parse symbols, create entities, create edges, embed."""
     relative_path = str(file_path.relative_to(project_root))
 
-    # Delete existing symbols for this file
-    _delete_file_symbols(storage, relative_path)
-
     symbols = parse_file(file_path, language)
-    logger.debug("File indexed: %s (%d symbols)", relative_path, len(symbols))
-    if not symbols:
-        return
-
-    edges = extract_edges(file_path, symbols, language)
+    edges = extract_edges(file_path, symbols, language) if symbols else []
 
     # Build embedding texts
     embed_texts = []
     for sym in symbols:
-        text = f"{sym['kind']} {sym['name']} in {relative_path}: {sym['body_preview'][:200]}"
+        text = f"{sym['kind']} {sym['qualified_name']} in {relative_path}: {sym['body_preview'][:200]}"
         embed_texts.append(text)
 
-    embeddings = embedding_provider.embed(embed_texts)
+    # Finish preparation before touching the old index, including lazy providers.
+    embeddings = list(embedding_provider.embed(embed_texts)) if symbols else []
+    if len(embeddings) != len(symbols):
+        raise ValueError("Embedding count does not match symbol count")
 
-    # Store entities
+    replacements = []
     for sym, emb in zip(symbols, embeddings):
-        eid = _entity_id(relative_path, sym["name"])
+        eid = _entity_id(relative_path, sym["qualified_name"])
         metadata = {
             "file": relative_path,
             "line": sym["line"],
             "kind": sym["kind"],
             "language": language,
+            "qualified_name": sym["qualified_name"],
         }
-        storage.add_entity(
+        replacements.append(dict(
             id=eid,
             name=sym["name"],
             entity_type="symbol",
-            description=f"{sym['kind']} {sym['name']} in {relative_path}",
+            description=f"{sym['kind']} {sym['qualified_name']} in {relative_path}",
             metadata=metadata,
             embedding=emb,
-        )
+        ))
+
+    # Entity rows, FTS triggers, and vectors are replaced as one SQLite write.
+    with storage.transaction():
+        _delete_file_symbols(storage, relative_path)
+        for entity in replacements:
+            storage.add_entity(**entity)
+
+    logger.debug("File indexed: %s (%d symbols)", relative_path, len(symbols))
 
     # Store import edges as relationships (best-effort, targets may not exist as entities)
     for edge in edges:
@@ -315,8 +377,8 @@ def _delete_file_symbols(storage, relative_path: str) -> None:
     prefix = _file_entity_prefix(relative_path)
     # Query all entities matching this file
     rows = storage.conn.execute(
-        "SELECT id FROM entities WHERE entity_type = 'symbol' AND id LIKE ?",
-        (prefix + "%",),
+        "SELECT id FROM entities WHERE entity_type = 'symbol' AND substr(id, 1, ?) = ?",
+        (len(prefix), prefix),
     ).fetchall()
     for row in rows:
         storage.delete_entity(row[0])
@@ -385,7 +447,8 @@ def incremental_index(storage, embedding_provider, project_root: Path, config) -
 
         if not fpath.exists():
             # File was deleted — remove its symbols
-            _delete_file_symbols(storage, str(rel))
+            with storage.transaction():
+                _delete_file_symbols(storage, str(rel))
             count += 1
         else:
             index_file(storage, embedding_provider, fpath, lang, project_root)
