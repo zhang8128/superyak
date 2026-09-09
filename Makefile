@@ -3,8 +3,11 @@ PYTHON_VERSION ?= 3.13
 ENGRAM_ARGS ?=
 CHAT_ARGS ?=
 SERVE_ARGS ?=
+SESSION_ARGS ?= list
+RUNTIME_CONFIG ?= $(HOME)/.config/superyak/runtime.json
+RUNTIME_ARGS ?=
 
-.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve
+.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions status
 
 help:
 	@echo "make setup              Install both projects from their lockfiles"
@@ -13,6 +16,8 @@ help:
 	@echo "make check-lighthouse   Build, lint, typecheck, test, and run protocol proofs"
 	@echo "make check-integration  Compare schemas and validate real-socket receipts"
 	@echo "make chat / make serve  Start Engram chat / its local web interface"
+	@echo "make sessions           List Codex sessions; SESSION_ARGS accepts ask/result"
+	@echo "make status             Inspect the configured runtime without writing state"
 
 setup: setup-engram setup-lighthouse
 
@@ -39,3 +44,9 @@ chat:
 
 serve:
 	cd engram && uv run --locked python -m context_cli $(ENGRAM_ARGS) serve $(SERVE_ARGS)
+
+sessions:
+	cd engram && uv run --locked python -m session_cli $(SESSION_ARGS)
+
+status:
+	engram/.venv/bin/python scripts/runtime.py --config "$(RUNTIME_CONFIG)" $(RUNTIME_ARGS) status

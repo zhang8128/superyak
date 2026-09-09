@@ -13,20 +13,60 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_claude_plugin_defaults_unbound_projects_to_engram_instance():
+def test_claude_plugin_routes_mcp_and_hooks_through_shared_runtime(tmp_path):
     mcp_config = json.loads((PROJECT_ROOT / ".mcp.json").read_text())
-    engram_env = mcp_config["mcpServers"]["engram"]["env"]
-    assert engram_env["ENGRAM_DEFAULT_INSTANCE"] == "engram"
-
     hooks_config = json.loads((PROJECT_ROOT / "hooks" / "hooks.json").read_text())
-    commands = [
-        hook["command"]
-        for registrations in hooks_config["hooks"].values()
-        for registration in registrations
-        for hook in registration["hooks"]
-    ]
-    assert commands
-    assert all("ENGRAM_DEFAULT_INSTANCE=engram" in command for command in commands)
+    wrapper = tmp_path / ".local" / "bin" / "superyak-runtime"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "path = pathlib.Path(os.environ['RUNTIME_RECORD'])\n"
+        "records = json.loads(path.read_text()) if path.exists() else []\n"
+        "records.append({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+        "'harness': os.environ.get('ENGRAM_HARNESS'), "
+        "'home': os.environ.get('ENGRAM_HOME'), "
+        "'default': os.environ.get('ENGRAM_DEFAULT_INSTANCE')})\n"
+        "path.write_text(json.dumps(records))\n"
+    )
+    wrapper.chmod(0o755)
+    record = tmp_path / "record.json"
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    clean_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("ENGRAM_HOME", "ENGRAM_DEFAULT_INSTANCE")
+    }
+    clean_env.update(HOME=str(tmp_path), RUNTIME_RECORD=str(record))
+
+    engram = mcp_config["mcpServers"]["engram"]
+    subprocess.run(
+        [engram["command"], *engram["args"]],
+        cwd=caller,
+        env={**clean_env, **engram["env"]},
+        check=True,
+    )
+    for registrations in hooks_config["hooks"].values():
+        for registration in registrations:
+            for hook in registration["hooks"]:
+                subprocess.run(
+                    ["sh", "-c", hook["command"]],
+                    cwd=caller,
+                    env=clean_env,
+                    check=True,
+                )
+
+    records = json.loads(record.read_text())
+    assert {tuple(item["argv"]) for item in records} == {
+        ("mcp",),
+        ("hook", "wake"),
+        ("hook", "nudge"),
+        ("hook", "sleep"),
+    }
+    assert all(item["cwd"] == str(caller) for item in records)
+    assert all(item["harness"] == "claude-code" for item in records)
+    assert all(item["home"] is None and item["default"] is None for item in records)
 
 
 def _build_wheel(tmp_path: Path) -> Path:

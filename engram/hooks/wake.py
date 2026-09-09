@@ -16,10 +16,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+HOOK_DIR = Path(__file__).resolve().parent
+SOURCE_ROOT = HOOK_DIR.parent
+sys.path.insert(0, str(SOURCE_ROOT))
+sys.path.insert(0, str(HOOK_DIR))
 from harness import bind_session, emit, read_context, stamp_registry
 
-ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
+ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", SOURCE_ROOT))
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"
 
 # PROJECT_ROOT is the working directory (for config reading), consistent with server.py
@@ -512,7 +515,6 @@ def wake():
 
         # --- Between-session deep pass ---
         try:
-            sys.path.insert(0, str(ENGRAM_HOME))
             from deep_pass import deep_pass as run_deep_pass
             from embeddings import NomicEmbedProvider
             from storage import Storage

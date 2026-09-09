@@ -44,6 +44,11 @@ by default. To run those tests, explicitly supply both
 
 ## Run Engram
 
+To ask another local Codex session a question, see
+[Codex session messaging](docs/codex-sessions.md). `make sessions` lists session
+metadata; the separate MCP server adds discovery, question, and reply tools.
+It uses Codex's native queue alongside Engram and Lighthouse.
+
 After setup, with the Codex CLI installed and authenticated:
 
 ```sh
@@ -68,6 +73,13 @@ bindings, move memory databases, or change a running service. The former
 Lighthouse project binding is available as an optional
 [`engram-project.toml` example](lighthouse/examples/engram-project.toml);
 actual `.engram/` state is ignored.
+
+For a shared installation, use the repository's canonical
+[`scripts/runtime.py`](scripts/runtime.py) launcher to keep source code separate
+from the existing memory home. The launcher requires an explicit runtime JSON
+file and provides MCP, hook, publisher, and read-only status commands. See
+[Runtime installation](docs/runtime-installation.md) for the configuration,
+stable wrapper, supervision, health, restart, and rollback procedures.
 
 Both source histories are retained. See the
 [migration record](docs/monorepo-migration.md) for exact source revisions and
