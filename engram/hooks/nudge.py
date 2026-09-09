@@ -24,9 +24,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(ENGRAM_HOME))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+HOOK_DIR = Path(__file__).resolve().parent
+SOURCE_ROOT = HOOK_DIR.parent
+ENGRAM_HOME = Path(os.environ.get("ENGRAM_HOME", SOURCE_ROOT))
+sys.path.insert(0, str(SOURCE_ROOT))
+sys.path.insert(0, str(HOOK_DIR))
 from harness import emit, read_context, stamp_registry
 
 DB_PATH = ENGRAM_HOME / ".engram" / "graph.db"

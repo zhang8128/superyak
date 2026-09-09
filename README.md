@@ -74,6 +74,13 @@ Lighthouse project binding is available as an optional
 [`engram-project.toml` example](lighthouse/examples/engram-project.toml);
 actual `.engram/` state is ignored.
 
+For a shared installation, use the repository's canonical
+[`scripts/runtime.py`](scripts/runtime.py) launcher to keep source code separate
+from the existing memory home. The launcher requires an explicit runtime JSON
+file and provides MCP, hook, publisher, and read-only status commands. See
+[Runtime installation](docs/runtime-installation.md) for the configuration,
+stable wrapper, supervision, health, restart, and rollback procedures.
+
 Both source histories are retained. See the
 [migration record](docs/monorepo-migration.md) for exact source revisions and
 the relationship to the original checkouts.
