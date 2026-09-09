@@ -12,11 +12,13 @@ import re
 import socket
 import sqlite3
 import sys
+import tempfile
 import tomllib
 
 
 MAX_CONFIG_BYTES = 16_384
 MAX_RECEIPT_BYTES = 65_536
+MAX_DATABASE_SNAPSHOT_BYTES = 512 * 1024 * 1024
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
 ENGRAM_ROOT = SOURCE_ROOT / "engram"
@@ -25,6 +27,10 @@ INTERPRETER = ENGRAM_ROOT / ".venv" / "bin" / "python"
 
 class RuntimeConfigurationError(ValueError):
     """A bounded, user-facing installation error."""
+
+
+class SnapshotLimitError(OSError):
+    """The private status snapshot exceeded its fixed byte budget."""
 
 
 def _bounded_text(path: Path, limit: int = MAX_CONFIG_BYTES) -> str:
@@ -100,6 +106,19 @@ def _parseable_json(path: Path) -> bool:
         return isinstance(json.loads(_bounded_text(path)), dict)
     except (RuntimeConfigurationError, json.JSONDecodeError):
         return False
+
+
+def _publisher_socket_path(
+    config_path: Path, memory_home: Path, socket_value: str | None
+) -> Path:
+    path = (
+        Path(socket_value)
+        if socket_value is not None
+        else memory_home / ".engram" / "lighthouse.sock"
+    )
+    if not path.is_absolute():
+        path = config_path.parent / path
+    return path.resolve()
 
 
 def _git_directory(source_root: Path) -> Path | None:
@@ -281,13 +300,7 @@ def _publisher_status(memory_home: Path) -> tuple[dict, Path | None, list[str]]:
             "state": "invalid",
             "error": "invalid publisher configuration",
         }, None, ["publisher configuration is invalid"]
-    socket_path = (
-        Path(socket_value)
-        if socket_value is not None
-        else memory_home / ".engram" / "lighthouse.sock"
-    )
-    if not socket_path.is_absolute():
-        socket_path = (config_path.parent / socket_path).resolve()
+    socket_path = _publisher_socket_path(config_path, memory_home, socket_value)
     resources = []
     available = True
     for publisher in publishers:
@@ -331,16 +344,29 @@ def _socket_status(path: Path | None) -> tuple[dict, bool]:
     return {"path": str(path), "connected": True}, True
 
 
-def _latest_receipt(database: Path) -> tuple[dict | None, str | None]:
-    if not database.is_file():
-        return None, None
+def _file_identity(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _copy_bounded(source: Path, destination: Path, budget: int) -> int:
+    copied = 0
+    with source.open("rb") as input_stream, destination.open("xb") as output_stream:
+        while chunk := input_stream.read(min(1024 * 1024, budget - copied + 1)):
+            copied += len(chunk)
+            if copied > budget:
+                raise SnapshotLimitError
+            output_stream.write(chunk)
+    return copied
+
+
+def _receipt_from_snapshot(database: Path) -> tuple[dict | None, str | None]:
     connection = None
     try:
-        connection = sqlite3.connect(
-            database.resolve().as_uri() + "?mode=ro",
-            uri=True,
-            timeout=0.25,
-        )
+        connection = sqlite3.connect(str(database), timeout=0.25)
         connection.execute("PRAGMA query_only = ON")
         row = connection.execute(
             "SELECT timestamp, substr(context, 1, ?), length(context) "
@@ -363,6 +389,48 @@ def _latest_receipt(database: Path) -> tuple[dict | None, str | None]:
     finally:
         if connection is not None:
             connection.close()
+
+
+def _latest_receipt(database: Path) -> tuple[dict | None, str | None]:
+    if not database.is_file():
+        return None, None
+    wal = Path(str(database) + "-wal")
+    try:
+        with tempfile.TemporaryDirectory(prefix="superyak-status-") as directory:
+            temporary_root = Path(directory)
+            for attempt in range(3):
+                snapshot_dir = temporary_root / str(attempt)
+                snapshot_dir.mkdir()
+                snapshot = snapshot_dir / "graph.db"
+                snapshot_wal = Path(str(snapshot) + "-wal")
+                try:
+                    database_before = _file_identity(database)
+                    wal_before = _file_identity(wal)
+                    expected_size = (database_before[2] if database_before else 0) + (
+                        wal_before[2] if wal_before else 0
+                    )
+                    if expected_size > MAX_DATABASE_SNAPSHOT_BYTES:
+                        return None, "database snapshot exceeds status byte limit"
+                    copied = _copy_bounded(
+                        database, snapshot, MAX_DATABASE_SNAPSHOT_BYTES
+                    )
+                    if wal_before is not None:
+                        _copy_bounded(
+                            wal,
+                            snapshot_wal,
+                            MAX_DATABASE_SNAPSHOT_BYTES - copied,
+                        )
+                    database_after = _file_identity(database)
+                    wal_after = _file_identity(wal)
+                except SnapshotLimitError:
+                    return None, "database snapshot exceeds status byte limit"
+                except OSError:
+                    continue
+                if database_before == database_after and wal_before == wal_after:
+                    return _receipt_from_snapshot(snapshot)
+    except OSError:
+        return None, "Lighthouse receipt snapshot failed"
+    return None, "database changed during status inspection"
 
 
 def _status(memory_home: Path, default_instance: str) -> int:
@@ -479,10 +547,15 @@ def _command_argv(command: str, hook: str | None, memory_home: Path) -> list[str
             raise RuntimeConfigurationError(
                 f"invalid publisher configuration: {daemon_config}"
             )
+        socket_path = _publisher_socket_path(
+            daemon_config, memory_home, socket_value
+        )
         return [
             str(ENGRAM_ROOT / "lighthouse_daemon.py"),
             "--config",
             str(daemon_config),
+            "--socket",
+            str(socket_path),
         ]
     raise RuntimeConfigurationError(f"unsupported command: {command}")
 

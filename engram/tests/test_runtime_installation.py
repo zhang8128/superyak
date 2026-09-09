@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import socket
 import sqlite3
@@ -114,7 +115,12 @@ def _tree_snapshot(root: Path) -> dict[str, tuple[str, str]]:
         (
             ("publisher",),
             "engram/lighthouse_daemon.py",
-            ["--config", ".engram/lighthouse-daemon.toml"],
+            [
+                "--config",
+                ".engram/lighthouse-daemon.toml",
+                "--socket",
+                ".engram/lighthouse.sock",
+            ],
         ),
     ],
 )
@@ -180,6 +186,32 @@ def test_instance_override_replaces_only_the_configured_default(tmp_path):
     assert observed["instance"] == "research"
     assert observed["engram_home"] == str(memory_home)
     assert observed["sentinel"] == "yes"
+
+
+def test_publisher_resolves_relative_socket_independently_of_caller_cwd(tmp_path):
+    source, launcher = _synthetic_source(tmp_path)
+    memory_home = tmp_path / "memory"
+    memory_home.mkdir()
+    daemon_config = memory_home / ".engram" / "lighthouse-daemon.toml"
+    _write(daemon_config, 'publishers = ["lighthouse"]\nsocket = "publisher.sock"\n')
+    config = _runtime_config(tmp_path / "runtime.json", memory_home)
+    caller = tmp_path / "unrelated-caller"
+    caller.mkdir()
+    record = tmp_path / "exec.json"
+    env = {**os.environ, "RECORD_EXEC": str(record)}
+
+    result = _run_launcher(launcher, config, "publisher", cwd=caller, env=env)
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(record.read_text(encoding="utf-8"))
+    assert observed["argv"] == [
+        str(source / "engram" / "lighthouse_daemon.py"),
+        "--config",
+        str(daemon_config),
+        "--socket",
+        str(daemon_config.parent / "publisher.sock"),
+    ]
+    assert observed["cwd"] == str(caller)
 
 
 @pytest.mark.parametrize(
@@ -392,6 +424,102 @@ def test_status_reports_healthy_installation_and_latest_receipt_without_content(
     }
     assert "SECRET" not in result.stdout
     assert _tree_snapshot(tmp_path) == before
+
+
+def test_status_does_not_create_sidecars_for_a_checkpointed_wal_database(tmp_path):
+    _, launcher, memory_home, config, socket_path = _healthy_status_tree(
+        tmp_path, receipt=False
+    )
+    database = memory_home / ".engram" / "instances" / "engram" / "graph.db"
+    database.unlink()
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute(
+        "CREATE TABLE memory_log (id TEXT, timestamp TEXT, event_type TEXT, context TEXT)"
+    )
+    connection.commit()
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    connection.close()
+    assert not Path(str(database) + "-wal").exists()
+    assert not Path(str(database) + "-shm").exists()
+    before = _tree_snapshot(memory_home)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    try:
+        result = _run_launcher(launcher, config, "status")
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["latest_lighthouse_receipt"] is None
+    assert _tree_snapshot(memory_home) == before
+
+
+def test_status_reads_latest_active_wal_receipt_without_touching_source_files(
+    tmp_path,
+):
+    _, launcher, memory_home, config, socket_path = _healthy_status_tree(
+        tmp_path, receipt=False
+    )
+    database = memory_home / ".engram" / "instances" / "engram" / "graph.db"
+    database.unlink()
+    writer = sqlite3.connect(database)
+    writer.execute("PRAGMA journal_mode = WAL")
+    writer.execute("PRAGMA wal_autocheckpoint = 0")
+    writer.execute(
+        "CREATE TABLE memory_log (id TEXT, timestamp TEXT, event_type TEXT, context TEXT)"
+    )
+    writer.commit()
+    writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    writer.execute(
+        "INSERT INTO memory_log VALUES (?, ?, ?, ?)",
+        (
+            "row-in-wal",
+            "2026-09-09T18:06:05+00:00",
+            "lighthouse_receipt",
+            json.dumps(
+                {
+                    "receipt": {"id": "urn:engram:engram:receipt:active-wal"},
+                    "query": "ACTIVE WAL SECRET",
+                }
+            ),
+        ),
+    )
+    writer.commit()
+    assert Path(str(database) + "-wal").is_file()
+    before = _tree_snapshot(memory_home)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(socket_path))
+    listener.listen(1)
+    try:
+        result = _run_launcher(launcher, config, "status")
+        after = _tree_snapshot(memory_home)
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+        writer.close()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["latest_lighthouse_receipt"] == {
+        "id": "urn:engram:engram:receipt:active-wal",
+        "timestamp": "2026-09-09T18:06:05+00:00",
+    }
+    assert "SECRET" not in result.stdout
+    assert after == before
+
+
+def test_receipt_snapshot_refuses_to_copy_more_than_its_byte_budget(tmp_path):
+    database = tmp_path / "graph.db"
+    _create_memory_log(database)
+    runtime = runpy.run_path(str(RUNTIME))
+    runtime["_latest_receipt"].__globals__["MAX_DATABASE_SNAPSHOT_BYTES"] = 1
+
+    receipt, error = runtime["_latest_receipt"](database)
+
+    assert receipt is None
+    assert error == "database snapshot exceeds status byte limit"
 
 
 def test_status_identifies_disconnected_socket_and_allows_no_receipt(tmp_path):

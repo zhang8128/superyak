@@ -123,12 +123,16 @@ unreadable policy are `invalid`; a configured socket that cannot be connected
 is reported as disconnected. A new installation can be healthy with
 `latest_lighthouse_receipt: null`.
 
-Status uses bounded file reads, a bounded socket connection without sending a
-request, and a read-only SQLite metadata query. It does not import the Engram
-server, initialize embeddings or models, run migrations, expose environment
-values, or print query or memory content. A parseable policy report means only
-that bounded JSON parsing succeeded; authorization is verified by the explicit
-Lighthouse crossing tests.
+Status uses bounded file reads and a bounded socket connection without sending
+a request. For receipt metadata, it copies the database and current WAL into a
+private temporary directory, checks source identity, size, and modification
+time around the copy, then queries only that snapshot. The copy has a fixed
+size and retry limit and is removed afterward; the source store receives no
+sidecar or database writes. Status does not import the Engram server, initialize
+embeddings or models, run migrations, expose environment values, or print query
+or memory content. A parseable policy report means only that bounded JSON
+parsing succeeded; authorization is verified by the explicit Lighthouse
+crossing tests.
 
 ## Preserve data and roll back
 
