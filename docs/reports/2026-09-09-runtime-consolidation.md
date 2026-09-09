@@ -60,6 +60,11 @@ work. The user chose to let that session finish, so it has not been interrupted.
 Retry the installed recall/receipt verification after it releases the write lock.
 No successful live crossing or live receipt is claimed.
 
+The later [repair activation follow-up](2026-09-09-review-repairs.md#activation-follow-up)
+records a successful publisher restart and socket recall at repair commit
+`9d91297`. Fresh MCP retries were still blocked by startup maintenance and a
+concurrent receiver writer; the original pending verification is not resolved.
+
 Already-running MCP hosts retain their loaded code until they reconnect. Future
 launches through the old compatibility paths select the canonical runtime.
 

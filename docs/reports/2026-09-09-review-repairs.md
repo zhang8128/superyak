@@ -60,10 +60,10 @@ log is `/tmp/superyak-review-repairs-check-20260909.log` on the repair host.
 
 ## Operational limits
 
-No live memory stores, policies, or service configurations were changed by this
-repair task. Existing MCP processes must reconnect, and an existing publisher
-must restart, to load the updated source. The lifecycle barrier still serializes
-each maintenance step inside one process; the backfill repair releases SQLite's
+The code repair did not change live memory stores, policies, or service
+configurations. Existing MCP processes must reconnect to load the updated
+source. The lifecycle barrier still serializes each maintenance step inside one
+process; the backfill repair releases SQLite's
 writer slot for other processes during embedding.
 
 The migration repair protects stores that have not yet applied version 015.
@@ -71,3 +71,29 @@ Previously deleted provenance requires an authoritative backup or another
 verified source; these changes do not invent replacement links. Exact shared
 retrieval scans the shared candidate pool; large-store latency has not been
 benchmarked by this repair task.
+
+## Activation follow-up
+
+After approval, the supervised publisher exited cleanly on SIGINT and launchd
+replaced PID 86114 with PID 36170 at 15:15:19 PDT. The replacement launched from
+the canonical checkout at repair commit `9d91297`. A real socket recall under the
+existing `memory/technical` / `session-recall` policy returned one authorized
+candidate in 1.082 seconds. Installed status reports no configuration errors.
+
+Existing Codex MCP connections were not replaced: these hosts have no exposed
+control socket, and the installed CLI has no MCP reconnect command. Reopening
+those Codex sessions will launch the repaired source through the existing
+bindings.
+
+Live receiver verification remains incomplete. A fresh MCP handshake and tool
+listing succeeded, but its status call timed out after 60 seconds while startup
+maintenance was active. A second fresh connection failed while writing its session-start
+log because the receiver database was locked. A read-only lock query at 15:21:53
+PDT identified another session's canonical MCP process, PID 38899, as the writer.
+The temporary verification processes exited; existing sessions were left intact.
+No successful live receiver crossing or persisted receipt is claimed. These
+checks invoked normal startup operations, which can write session logs and run
+maintenance; they made no manual memory, sharing-policy, or configuration edits.
+
+Private metadata and logs are in
+`~/.local/state/superyak/verification/review-activation-20260909T221816Z`.
