@@ -56,8 +56,9 @@ audience or expiry was expanded. The receiver's existing expiry is October 15,
 failed while writing its session-start log because a separate, already-running
 legacy MCP process owns the receiver database's write lock. Lock ownership was
 confirmed without modifying the database. That process is still doing embedding
-work. It has not been interrupted; permission to restart only that older MCP
-process is pending. No successful live crossing or live receipt is claimed.
+work. The user chose to let that session finish, so it has not been interrupted.
+Retry the installed recall/receipt verification after it releases the write lock.
+No successful live crossing or live receipt is claimed.
 
 Already-running MCP hosts retain their loaded code until they reconnect. Future
 launches through the old compatibility paths select the canonical runtime.
@@ -80,6 +81,10 @@ restore database snapshots indiscriminately.
 
 `superyak-restore-lighthouse-path-20260909.py` separately checks/restores the
 archived standalone Lighthouse path; use `--apply` only when restoring that
-layout. Both rollback preflights passed after installation. Installation commits
+layout. The archive's nine ignored dependency directories were removed during
+cleanup; its source, history, and project state remain intact. Reinstall with
+`pnpm install --frozen-lockfile` and `pnpm build` before running the restored
+archive. Canonical dependencies were retained. Both rollback preflights passed
+after installation. Installation commits
 remain in Git history if files are restored; original refs are recorded in
 `git-before-cutover.json`.
