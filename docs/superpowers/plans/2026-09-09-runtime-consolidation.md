@@ -28,9 +28,9 @@
 Files: existing capture and session messaging changes.
 - [x] Fetch origin and create integrate/runtime-consolidation in existing automation worktree.
 - [x] Merge origin/feat/codex-session-messaging into the capture-fix history without conflicts.
-- [ ] Review existing branch changes and their recorded independent reviews.
-- [ ] Run make check-engram, make check-lighthouse, make check-integration.
-- [ ] Commit the verified integration merge.
+- [x] Review existing branch changes and their recorded independent reviews.
+- [x] Run make check-engram, make check-lighthouse, make check-integration.
+- [x] Commit the verified integration merge.
 
 ### Task 2: Separate source from state and provide the canonical launcher
 
@@ -57,24 +57,26 @@ Interfaces:
 - Add make status invoking scripts/runtime.py status, with explicit configuration documented.
 
 Execution:
-- [ ] Write subprocess regressions that give ENGRAM_HOME stale module files and prove installed hook imports/data routing; run them red before modifying hooks.
-- [ ] Write launcher behavior tests using a synthetic source layout/interpreter, controlled cwd/config/env, and temporary stores/socket. Assert actual argv/env/cwd and status output/exit rather than source strings. Cover missing config/interpreter, instance override, unavailable socket, healthy receiver and receipts, missing database, and no writes.
-- [ ] Implement minimal launcher and import corrections, run focused tests green.
-- [ ] Document the config example, launch commands, shared installation binding, live-data preservation, restart semantics, publisher supervision, scoped receiver setup, health meaning, and rollback.
-- [ ] Run the full Engram suite once, integration checks, and git diff --check. Self-review, commit only task files, and record evidence.
-- [ ] Controller arranges independent task review; fix verified issues and rerun covering tests.
+- [x] Write subprocess regressions that give ENGRAM_HOME stale module files and prove installed hook imports/data routing; run them red before modifying hooks.
+- [x] Write launcher behavior tests using a synthetic source layout/interpreter, controlled cwd/config/env, and temporary stores/socket. Assert actual argv/env/cwd and status output/exit rather than source strings. Cover missing config/interpreter, instance override, unavailable socket, healthy receiver and receipts, missing database, and no writes.
+- [x] Implement minimal launcher and import corrections, run focused tests green.
+- [x] Document the config example, launch commands, shared installation binding, live-data preservation, restart semantics, publisher supervision, scoped receiver setup, health meaning, and rollback.
+- [x] Run the full Engram suite once, integration checks, and git diff --check. Self-review, commit only task files, and record evidence.
+- [x] Controller arranges independent task review; fix verified issues and rerun covering tests.
 
 ### Task 3: Install and verify
 
 Controller-owned operational task, after Task 2:
-- [ ] Back up affected user config files and take SQLite online backups of affected live stores. Record paths, hashes and permission modes without secrets.
-- [ ] Review the final combined branch; integrate to canonical main with ordinary Git history and preserve both prior PR ancestries.
-- [ ] Write ~/.config/superyak/runtime.json with the existing memory_home and default_instance=engram.
-- [ ] Point Codex MCP/hooks and Claude/plugin bindings at scripts/runtime.py using canonical source Python. Preserve unrelated settings and run keys.
-- [ ] Install a user LaunchAgent to run publisher under the canonical launcher; retain existing publisher policy and shares.
-- [ ] Enable only receiver engram -> publisher lighthouse, using existing memory/technical, session-recall, recall/read/inject_context grants; keep existing expiry.
+- [x] Back up affected user config files and take SQLite online backups of affected live stores. Record paths, hashes and permission modes without secrets.
+- [x] Review the final combined branch; integrate to canonical main with ordinary Git history and preserve both prior PR ancestries.
+- [x] Write ~/.config/superyak/runtime.json with the existing memory_home and default_instance=engram.
+- [x] Point Codex MCP/hooks and Claude/plugin bindings at scripts/runtime.py using canonical source Python. Preserve unrelated settings and run keys.
+- [x] Install a user LaunchAgent to run publisher under the canonical launcher; retain existing publisher policy and shares.
+- [x] Enable only receiver engram -> publisher lighthouse, using existing memory/technical, session-recall, recall/read/inject_context grants; keep existing expiry.
 - [ ] Verify fresh MCP initialization exposes receiver arguments; test live delivery and persisted receipt without publishing synthetic material. Run denial/withdrawal controls in the disposable pilot.
-- [ ] Verify hook capture, installed code origins, original data paths, health, supervised restart and clean source trees.
-- [ ] Freeze standalone development with explicit canonical pointers. Retain data and compatibility paths while old sessions exist; do not break active sessions by moving their modules.
-- [ ] Document operational evidence, backup/rollback paths, canonical source, and any unavoidable existing-session reconnect requirement.
+- [x] Verify hook capture, installed code origins, original data paths, health, supervised restart and clean source trees.
+- [x] Freeze standalone development with explicit canonical pointers. Retain data and compatibility paths while old sessions exist; do not break active sessions by moving their modules.
+- [x] Document operational evidence, backup/rollback paths, canonical source, and any unavoidable existing-session reconnect requirement.
 
+
+Execution evidence: docs/reports/2026-09-09-runtime-consolidation.md. Live recall/receipt verification is pending a legacy MCP writer releasing the original receiver database; no successful live crossing is claimed.
