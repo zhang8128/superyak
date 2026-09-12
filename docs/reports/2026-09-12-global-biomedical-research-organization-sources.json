@@ -1,0 +1,512 @@
+[
+  {
+    "citation_number": 1,
+    "title": "Translational Science Spectrum",
+    "url_or_relative_path": "https://ncats.nih.gov/about/about-translational-science/spectrum",
+    "topic": "Research activity",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "National Center for Advancing Translational Sciences. Translational Science Spectrum. Undated official overview."
+  },
+  {
+    "citation_number": 2,
+    "title": "What is health policy and systems research?",
+    "url_or_relative_path": "https://ahpsr.who.int/what-we-do/what-is-health-policy-and-systems-research-%28hpsr%29",
+    "topic": "Health systems",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "WHO Alliance for Health Policy and Systems Research. What is health policy and systems research?. Undated official overview."
+  },
+  {
+    "citation_number": 3,
+    "title": "Research Portfolio Online Reporting Tools",
+    "url_or_relative_path": "https://www.report.nih.gov/",
+    "topic": "Funding and outputs",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "National Institutes of Health. Research Portfolio Online Reporting Tools. Official funding and research-output information portal."
+  },
+  {
+    "citation_number": 4,
+    "title": "Global Core Biodata Resources",
+    "url_or_relative_path": "https://globalbiodata.org/what-we-do/global-core-biodata-resources/",
+    "topic": "Infrastructure sustainability",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Global Biodata Coalition. Global Core Biodata Resources. Resource definitions and preservation rationale."
+  },
+  {
+    "citation_number": 5,
+    "title": "Global Observatory on Health Research and Development",
+    "url_or_relative_path": "https://www.who.int/observatories/global-observatory-on-health-research-and-development",
+    "topic": "Global distribution",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "World Health Organization. Global Observatory on Health Research and Development. Official observatory; constituent datasets have their own reporting periods."
+  },
+  {
+    "citation_number": 6,
+    "title": "About INSDC",
+    "url_or_relative_path": "https://www.insdc.org/about-insdc/",
+    "topic": "International archives",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "International Nucleotide Sequence Database Collaboration. About INSDC. Official membership, scope, exchange, and access description."
+  },
+  {
+    "citation_number": 7,
+    "title": "Who we are",
+    "url_or_relative_path": "https://elixir-europe.org/about-us/who-we-are",
+    "topic": "Europe",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "ELIXIR. Who we are. Official institutional overview."
+  },
+  {
+    "citation_number": 8,
+    "title": "Database resources of the National Genomics Data Center, China National Center for Bioinformation in 2026",
+    "url_or_relative_path": "https://academic.oup.com/nar/article/54/D1/D28/8373952",
+    "topic": "China",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Indexed article extract; full publisher page unavailable. Only repository distinctions used.",
+    "full_citation": "National Genomics Data Center, China National Center for Bioinformation. Database resources of the National Genomics Data Center, China National Center for Bioinformation in 2026. *Nucleic Acids Research* 54(D1), 2026, D28 onward. Repository distinctions used from indexed article text; full publisher page unavailable."
+  },
+  {
+    "citation_number": 9,
+    "title": "Annual Report 2024–25",
+    "url_or_relative_path": "https://dbtindia.gov.in/sites/default/files/DBT%20Annual%20Report%202024-25.pdf",
+    "topic": "India",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Indexed annual-report section; full report not audited. Reporting period 2024–25.",
+    "full_citation": "Government of India, Department of Biotechnology. Annual Report 2024–25. IBDC section; accessible indexed report text. Descriptions refer to that reporting period."
+  },
+  {
+    "citation_number": 10,
+    "title": "About us",
+    "url_or_relative_path": "https://www.trustplatform.sg/about-us/",
+    "topic": "Singapore",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "TRUST. About us. Singapore health research platform; page updated 14 July 2026."
+  },
+  {
+    "citation_number": 11,
+    "title": "About PRECISE",
+    "url_or_relative_path": "https://www.npm.sg/about-us/",
+    "topic": "Singapore",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Precision Health Research, Singapore. About PRECISE. Official program overview; page updated 8 June 2026."
+  },
+  {
+    "citation_number": 12,
+    "title": "Africa CDC Launches AGARI, a Continent-Wide Genomic Data Platform to Strengthen Outbreak Response",
+    "url_or_relative_path": "https://africacdc.org/news-item/africa-cdc-launches-agari-a-continent-wide-genomic-data-platform-to-strengthen-outbreak-response/",
+    "topic": "Africa",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Africa Centres for Disease Control and Prevention. Africa CDC Launches AGARI, a Continent-Wide Genomic Data Platform to Strengthen Outbreak Response. 21 November 2025."
+  },
+  {
+    "citation_number": 13,
+    "title": "Tips and major resources",
+    "url_or_relative_path": "https://www.paho.org/en/tips-and-major-resources",
+    "topic": "Latin America and Caribbean",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Pan American Health Organization. Tips and major resources. Official guide to regional and global health-information resources, including LILACS and Global Index Medicus."
+  },
+  {
+    "citation_number": 14,
+    "title": "International Clinical Trials Registry Platform",
+    "url_or_relative_path": "https://www.who.int/ictrp/en/",
+    "topic": "Trial registration",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "World Health Organization. International Clinical Trials Registry Platform. Official platform overview."
+  },
+  {
+    "citation_number": 15,
+    "title": "European Reference Networks",
+    "url_or_relative_path": "https://health.ec.europa.eu/rare-diseases-and-european-reference-networks/european-reference-networks_en",
+    "topic": "Clinical collaboration",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "European Commission. European Reference Networks and Work of the ERNs. Official network and case-management descriptions."
+  },
+  {
+    "citation_number": 15,
+    "title": "Work of the ERNs",
+    "url_or_relative_path": "https://health.ec.europa.eu/rare-diseases-and-european-reference-networks/european-reference-networks/work-erns_en",
+    "topic": "Clinical collaboration",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "European Commission. European Reference Networks and Work of the ERNs. Official network and case-management descriptions."
+  },
+  {
+    "citation_number": 16,
+    "title": "Patient-Led Research Fund",
+    "url_or_relative_path": "https://patientresearchcovid19.com/projects/patient-led-research-fund/",
+    "topic": "Patient-led research",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Patient-Led Research Collaborative. Patient-Led Research Fund. Fund awards announced November 2022; subsequent project updates are later."
+  },
+  {
+    "citation_number": 17,
+    "title": "MG Patient Registry",
+    "url_or_relative_path": "https://myasthenia.org/living-with-mg/after-your-diagnosis/mg-patient-registry/",
+    "topic": "Patient registries",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Myasthenia Gravis Foundation of America. MG Patient Registry. Official description of the Vitaccess Real MG Registry collaboration."
+  },
+  {
+    "citation_number": 18,
+    "title": "FHIR Overview",
+    "url_or_relative_path": "https://fhir.hl7.org/fhir/overview.html",
+    "topic": "Clinical exchange",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Health Level Seven International. FHIR Overview. FHIR R5, version 5.0.0."
+  },
+  {
+    "citation_number": 19,
+    "title": "Data Standardization",
+    "url_or_relative_path": "https://www.ohdsi.org/data-standardization/",
+    "topic": "Observational analysis",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Observational Health Data Sciences and Informatics. Data Standardization. OMOP CDM rationale and analytical purpose. OHDSI's ATLAS software is distinct from this project's Atlas workbench."
+  },
+  {
+    "citation_number": 20,
+    "title": "Study Data Tabulation Model",
+    "url_or_relative_path": "https://www.cdisc.org/standards/foundational/sdtm",
+    "topic": "Study tabulation",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Clinical Data Interchange Standards Consortium. Study Data Tabulation Model. Official SDTM overview."
+  },
+  {
+    "citation_number": 21,
+    "title": "Analysis Data Model",
+    "url_or_relative_path": "https://www.cdisc.org/standards/foundational/adam",
+    "topic": "Analysis datasets",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Clinical Data Interchange Standards Consortium. Analysis Data Model. Official ADaM overview."
+  },
+  {
+    "citation_number": 22,
+    "title": "Metadata",
+    "url_or_relative_path": "https://data.humancellatlas.org/metadata",
+    "topic": "Data integration",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Human Cell Atlas. Metadata. Integration, contextual metadata, annotations, and schema evolution."
+  },
+  {
+    "citation_number": 23,
+    "title": "OBO Foundry Principles",
+    "url_or_relative_path": "https://obofoundry.org/principles/fp-000-summary.html",
+    "topic": "Ontologies",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "OBO Foundry. OBO Foundry Principles. Shared ontology principles, identifiers, scope, and versioning."
+  },
+  {
+    "citation_number": 24,
+    "title": "Guide to GO evidence codes",
+    "url_or_relative_path": "https://geneontology.org/docs/guide-go-evidence-codes/",
+    "topic": "Annotation evidence",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Gene Ontology Consortium. Guide to GO evidence codes and GO annotations. Official annotation and evidence documentation."
+  },
+  {
+    "citation_number": 24,
+    "title": "GO annotations",
+    "url_or_relative_path": "https://www.geneontology.org/docs/go-annotations/",
+    "topic": "Annotation evidence",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Gene Ontology Consortium. Guide to GO evidence codes and GO annotations. Official annotation and evidence documentation."
+  },
+  {
+    "citation_number": 25,
+    "title": "ClinVar: Introduction",
+    "url_or_relative_path": "https://www.ncbi.nlm.nih.gov/clinvar/intro/",
+    "topic": "Competing interpretations",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "National Center for Biotechnology Information. ClinVar: Introduction. Submission, classification, and archival model."
+  },
+  {
+    "citation_number": 26,
+    "title": "ClinVar review status",
+    "url_or_relative_path": "https://www.ncbi.nlm.nih.gov/clinvar/docs/review_status/",
+    "topic": "Review status",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "National Center for Biotechnology Information. ClinVar review status. Official criteria and interpretation."
+  },
+  {
+    "citation_number": 27,
+    "title": "Target–disease associations",
+    "url_or_relative_path": "https://platform-docs.opentargets.org/associations",
+    "topic": "Association scores",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Open Targets. Target–disease associations. Association aggregation, direct and indirect evidence, and score limitations."
+  },
+  {
+    "citation_number": 28,
+    "title": "Chapter 14: Completing “Summary of findings” tables and grading the certainty of the evidence",
+    "url_or_relative_path": "https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-14",
+    "topic": "Clinical evidence synthesis",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Schünemann HJ, Higgins JPT, Vist GE, and colleagues. Chapter 14: Completing “Summary of findings” tables and grading the certainty of the evidence. *Cochrane Handbook*, version 6.5 (2024); chapter updated August 2023."
+  },
+  {
+    "citation_number": 29,
+    "title": "The SSSOM data model",
+    "url_or_relative_path": "https://mapping-commons.github.io/sssom/1.0/spec-model/",
+    "topic": "Semantic mappings",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Mapping Commons. The SSSOM data model. Version 1.0 documentation; mappings, justifications, predicates, and unmapped entities."
+  },
+  {
+    "citation_number": 30,
+    "title": "Biolink Model",
+    "url_or_relative_path": "https://biolink.github.io/biolink-model/",
+    "topic": "Biomedical graphs",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Biolink Model contributors. Biolink Model. Official biomedical knowledge-graph model documentation."
+  },
+  {
+    "citation_number": 31,
+    "title": "KnowledgeLevelEnum",
+    "url_or_relative_path": "https://biolink.github.io/biolink-model/KnowledgeLevelEnum/",
+    "topic": "Knowledge types",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Biolink Model contributors. KnowledgeLevelEnum. Official distinctions between kinds of knowledge represented in associations."
+  },
+  {
+    "citation_number": 32,
+    "title": "What is SBML?",
+    "url_or_relative_path": "https://sbml.org/documents/what-is-sbml/",
+    "topic": "Quantitative models",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "SBML community. What is SBML?. Scope and purpose of Systems Biology Markup Language."
+  },
+  {
+    "citation_number": 33,
+    "title": "PROV-DM: The PROV Data Model",
+    "url_or_relative_path": "https://www.w3.org/TR/prov-dm/",
+    "topic": "Provenance",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Moreau L, Missier P, editors; W3C Provenance Working Group. PROV-DM: The PROV Data Model. W3C Recommendation, 30 April 2013."
+  },
+  {
+    "citation_number": 34,
+    "title": "Workflow Run RO-Crate",
+    "url_or_relative_path": "https://www.researchobject.org/workflow-run-crate/",
+    "topic": "Computational runs",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Research Object community. Workflow Run RO-Crate. Official profiles and links to the 2024 methods publication."
+  },
+  {
+    "citation_number": 35,
+    "title": "EGA metadata schema",
+    "url_or_relative_path": "https://ega-archive.org/submission/metadata/ega-schema/",
+    "topic": "Governance metadata",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "European Genome-phenome Archive. EGA metadata schema. Study metadata and dataset, policy, and access-committee objects."
+  },
+  {
+    "citation_number": 36,
+    "title": "Federated EGA",
+    "url_or_relative_path": "https://ega-archive.org/about/projects-and-funders/federated-ega/",
+    "topic": "Federated custody",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "European Genome-phenome Archive. Federated EGA. Current overview of the network and central services."
+  },
+  {
+    "citation_number": 37,
+    "title": "Beacon API",
+    "url_or_relative_path": "https://www.ga4gh.org/product/beacon-api/",
+    "topic": "Data discovery",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Global Alliance for Genomics and Health. Beacon API. Official discovery standard overview."
+  },
+  {
+    "citation_number": 38,
+    "title": "Data Use Ontology",
+    "url_or_relative_path": "https://www.ga4gh.org/product/data-use-ontology-duo/",
+    "topic": "Use permissions",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Global Alliance for Genomics and Health. Data Use Ontology. Official permitted-use terminology overview."
+  },
+  {
+    "citation_number": 39,
+    "title": "FAIR Principles",
+    "url_or_relative_path": "https://www.gofair.foundation/fair-principles",
+    "topic": "Data reuse",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "GO FAIR Foundation. FAIR Principles. Includes A1.2 on authentication and authorization where necessary."
+  },
+  {
+    "citation_number": 40,
+    "title": "The CARE Principles for Indigenous Data Governance",
+    "url_or_relative_path": "https://datascience.codata.org/en/articles/dsj-2020-043",
+    "topic": "Indigenous data governance",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Indexed article abstract; principles only.",
+    "full_citation": "Carroll SR and colleagues. The CARE Principles for Indigenous Data Governance. *Data Science Journal* 19, 43, 2020. Principles used from the indexed article abstract."
+  },
+  {
+    "citation_number": 41,
+    "title": "Phenopackets",
+    "url_or_relative_path": "https://www.ga4gh.org/product/phenopackets/",
+    "topic": "Phenotype exchange",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Global Alliance for Genomics and Health. Phenopackets. Official standard overview and clinical scope."
+  },
+  {
+    "citation_number": 42,
+    "title": "Myasthenia Gravis",
+    "url_or_relative_path": "https://www.ninds.nih.gov/sites/default/files/2025-05/myasthenia-gravis.pdf",
+    "topic": "MG biological context",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Indexed booklet text, printed page 3. General biology only; no treatment guidance.",
+    "full_citation": "National Institute of Neurological Disorders and Stroke. Myasthenia Gravis. Patient-information booklet; indexed text, antibody mechanism discussion on printed page 3. Used for general biology, not current treatment recommendations."
+  },
+  {
+    "citation_number": 43,
+    "title": "Atlas research proof of concept",
+    "url_or_relative_path": "../atlas-research-poc.md",
+    "topic": "Local implementation",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Local implementation record",
+    "access_note": "Local documentation read",
+    "full_citation": "Superyak project. Atlas research proof of concept. Local implementation documentation at commit `3d44f2f`, 12 September 2026; mechanism evidence, not independent scientific validation."
+  },
+  {
+    "citation_number": 44,
+    "title": "aDNA compatibility",
+    "url_or_relative_path": "../adna-compatibility.md",
+    "topic": "Local implementation",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Local implementation record",
+    "access_note": "Local documentation read",
+    "full_citation": "Superyak project. aDNA compatibility. Local adapter and projection documentation; implementation introduced at commit `b01c475`."
+  },
+  {
+    "citation_number": 45,
+    "title": "Stampede3 deployment",
+    "url_or_relative_path": "../stampede3-deployment.md",
+    "topic": "Local implementation",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Local implementation record",
+    "access_note": "Local documentation read",
+    "full_citation": "Superyak project. Stampede3 deployment. Local launcher documentation; prepared execution path rather than a measured cluster deployment."
+  },
+  {
+    "citation_number": 46,
+    "title": "Cell Annotation Metadata",
+    "url_or_relative_path": "https://data.humancellatlas.org/metadata/cell-annotation",
+    "topic": "Annotation context",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Human Cell Atlas. Cell Annotation Metadata. Official annotation-set schema description."
+  },
+  {
+    "citation_number": 47,
+    "title": "About Europe PMC",
+    "url_or_relative_path": "https://europepmc.org/about",
+    "topic": "Literature discovery",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "Europe PMC. About Europe PMC. Official description of literature types and links to related resources; live corpus counts omitted."
+  },
+  {
+    "citation_number": 48,
+    "title": "Access to UK Biobank data",
+    "url_or_relative_path": "https://www.ukbiobank.ac.uk/about-us/how-we-work/access-to-uk-biobank-data/",
+    "topic": "Cohort access",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "UK Biobank. Access to UK Biobank data. Official access model and research environment description."
+  },
+  {
+    "citation_number": 49,
+    "title": "Apply for access",
+    "url_or_relative_path": "https://www.ukbiobank.ac.uk/use-our-data/apply-for-access/",
+    "topic": "Time-sensitive access status",
+    "reviewed_on": "2026-09-12",
+    "source_type": "Primary source",
+    "access_note": "Official page or indexed primary-source text",
+    "full_citation": "UK Biobank. Apply for access. Application pause and intended late-2026 reopening, observed 12 September 2026; this status is time-sensitive."
+  }
+]

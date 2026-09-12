@@ -1,5 +1,16 @@
 # Start a Stampede3 memory campaign
 
+**Whole-cluster scope:** Kairos has confirmed access to the entire Stampede3
+reservation. The [whole-cluster proposal](reports/2026-09-12-stampede3-whole-cluster-plan.md)
+supersedes the four-node example as a capacity plan. This page describes the
+existing bounded launcher; it has not yet been extended to execute that proposal.
+
+**Current direction:** iterate on the real research architecture locally with
+Atlas, while keeping Intel/Stampede3 bring-up separate until access arrives.
+See [research rounds](stampede3-research-rounds.md). This page describes the
+prepared synthetic test preset; the Atlas research workflow is not yet wired
+into this launcher.
+
 The launcher prepares and submits the Intel PVC campaign with one command. It
 uses a bundled, explicitly fictional engineering evidence task. Patient or
 participant details are not needed to start. The offline rehearsal uses real

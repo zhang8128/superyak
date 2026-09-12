@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>The Organization of Biomedical Research and a Federated Research System</title><style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #181818; background: white; font: 18px/1.65 Georgia, "Times New Roman", serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 54px 54px 80px; }
+h1,h2,h3,nav,table { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+h1 { font-size: 2.05rem; line-height: 1.18; margin: 0 0 26px; font-weight: 650; letter-spacing: -.02em; }
+h2 { font-size: 1.5rem; line-height: 1.3; margin: 2.5em 0 .85em; padding-top: .5em; }
+h3 { font-size: 1.13rem; line-height: 1.35; margin: 1.65em 0 .6em; }
+p { margin: 0 0 1.1em; }
+a { color: #303030; text-decoration-thickness: 1px; text-underline-offset: .15em; overflow-wrap: anywhere; }
+a:focus-visible,summary:focus-visible,.table-scroll:focus-visible { outline: 2px solid #181818; outline-offset: 4px; }
+nav { font-size: .94rem; margin: 0 0 30px; }
+nav ol { columns: 2; padding-left: 1.5em; }
+nav li { break-inside: avoid; margin: .25em 0; }
+summary { cursor: pointer; width: fit-content; text-decoration: underline; text-underline-offset: .2em; }
+sup { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: .72em; line-height: 0; }
+.citation { padding: 0 .12em; }
+code { font: .9em/1.6 ui-monospace, Menlo, Consolas, monospace; white-space: normal; overflow-wrap: anywhere; }
+.table-scroll { overflow-x: auto; margin: 1.4em 0 1.65em; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; line-height: 1.5; }
+th,td { border: 1px solid #ccc; padding: 12px 13px; vertical-align: top; text-align: left; }
+th { background: #eee; font-weight: 650; }
+td:first-child { min-width: 135px; width: 23%; }
+tr { break-inside: avoid; }
+.sources { font-size: .94rem; line-height: 1.55; padding-left: 2em; }
+.sources li { margin: 0 0 .95em; padding-left: .25em; scroll-margin-top: 25px; }
+:target { outline: 1px solid #888; outline-offset: 6px; }
+@media (max-width: 700px) {
+  body { font-size: 17px; }
+  main { padding: 28px 20px 50px; }
+  h1 { font-size: 1.7rem; }
+  h2 { font-size: 1.3rem; }
+  nav ol { columns: 1; }
+  table { min-width: 680px; }
+}
+@media print {
+  @page { size: A4; margin: 18mm; }
+  body { font-size: 10.5pt; line-height: 1.45; }
+  main { max-width: none; padding: 0; }
+  nav { display: none; }
+  h1 { font-size: 23pt; }
+  h2 { font-size: 15pt; margin-top: 1.8em; }
+  h3 { font-size: 11.5pt; }
+  h1,h2,h3 { break-after: avoid; }
+  p { orphans: 3; widows: 3; }
+  table { min-width: 0; font-size: 8.5pt; }
+  th,td { padding: 7px; }
+  .table-scroll { overflow: visible; }
+  .sources { font-size: 9pt; }
+  a { color: inherit; }
+}
+</style></head><body><main><h1>The Organization of Biomedical Research and a Federated Research System</h1>
+<nav aria-label="Report contents"><details><summary>Contents</summary><ol><li><a href="#principal-findings">Principal findings</a></li><li><a href="#institutions-studies-and-research-communities">Institutions, studies, and research communities</a></li><li><a href="#the-global-infrastructure-landscape">The global infrastructure landscape</a></li><li><a href="#records-concepts-and-analytical-representations">Records, concepts, and analytical representations</a></li><li><a href="#evidence-interpretation-and-disagreement">Evidence, interpretation, and disagreement</a></li><li><a href="#federation-access-and-authority">Federation, access, and authority</a></li><li><a href="#a-mathematical-foundation">A mathematical foundation</a></li><li><a href="#superyak-adna-and-research-communities">Superyak, aDNA, and research communities</a></li><li><a href="#a-worked-research-path-for-myasthenia-gravis-and-complex-disease">A worked research path for myasthenia gravis and complex disease</a></li><li><a href="#evaluation-and-development-priorities">Evaluation and development priorities</a></li><li><a href="#scope-and-unresolved-questions">Scope and unresolved questions</a></li><li><a href="#sources">Sources</a></li></ol></details></nav>
+<h2 id="principal-findings">Principal findings</h2>
+<p>Biology and healthcare research are organized through several overlapping systems. Institutions allocate resources and responsibility; studies define questions and populations; repositories preserve particular kinds of data; ontologies name biological entities and relationships; clinical systems record care; evidence syntheses assess findings for particular decisions. None supplies a complete account of a person or a disease. The most useful architecture for connecting them must preserve the differences between those accounts while making their relationships inspectable.</p>
+<p>The proposed foundation for Superyak is therefore <strong>a federation of traceable observations, studies, interpretations, models, and questions, with explicit mappings between them</strong>. A knowledge graph is one useful view of that foundation. Timelines, cohort tables, experimental matrices, narratives, and executable models are equally necessary views. This is an architectural recommendation drawn from the landscape below, rather than an established universal standard.</p>
+<p>Three distinctions matter immediately. An article is a report of research, and may contain several studies or analyses. A database association is a qualified assertion with a history, rather than an unqualified fact. An agent's memory is an account of its experience and reasoning, rather than independent evidence for a biomedical conclusion. The system can support sustained communities of researchers without conflating those objects.</p>
+<p>The strongest precedents are already plural: international sequence archives exchange records; clinical networks convene expertise around cases; common data models enable comparable analyses; and curation systems retain evidence types and competing classifications. Their limitations suggest a practical direction: preserve original records, record transformations, keep disagreements addressable, and let people retain control over their participation. The difficult work is maintaining these relationships over time, including when interpretations, institutions, and software change.</p>
+<h2 id="institutions-studies-and-research-communities">Institutions, studies, and research communities</h2>
+<h3>Research activity</h3>
+<p>The familiar progression from basic science to clinical care is an incomplete map. NCATS describes translation as a spectrum with movement in multiple directions and patient involvement throughout. Basic investigation, preclinical work, clinical research, implementation, and public health interact; clinical research also includes observational and behavioral work. A disappointing clinical result can produce a new biological question, while difficulties delivering care can motivate implementation research.<sup><a class="citation" href="#source-1" aria-label="Source 1">1</a></sup></p>
+<p>Health policy and systems research adds another set of objects: organizations, incentives, financing arrangements, professional behavior, and the experience of accessing services. The WHO Alliance describes an interdisciplinary field drawing on economics, sociology, anthropology, political science, public health, and epidemiology.<sup><a class="citation" href="#source-2" aria-label="Source 2">2</a></sup> For complex illness, a system organized exclusively around molecular mechanisms would miss questions about disability, coordination, caregiver burden, and whether an intervention can actually be used.</p>
+<p>An operational map has at least four interacting levels. A laboratory or clinical team performs work. A study or protocol gives that work a question, population, methods, and intended analyses. Institutions, funders, and sponsors establish resources and responsibilities. Journals, archives, registries, professional networks, and knowledge bases make selected outputs available to others. These levels should be linked explicitly: a paper's author affiliation, a study's sponsor, and the custodian of its underlying data can be different organizations.</p>
+<p>Funding records expose part of this structure. NIH RePORT connects funded projects to outputs including publications and patents, while its disease categories support administrative reporting.<sup><a class="citation" href="#source-3" aria-label="Source 3">3</a></sup> Such categories are useful for finding activity, but should not become the system's ontology of disease. A grant is neither a complete description of a scientific program nor a guarantee that its data are available. Commercial research, unpublished analyses, local quality improvement, and informal collaboration are only partly visible through public records.</p>
+<h3>Persistence and incentives</h3>
+<p>Research also depends on sustained services: accession assignment, curation, metadata repair, software maintenance, access review, training, and preservation. The Global Biodata Coalition distinguishes primary archives from resources that add interpretation and integration. Its coordination work addresses the long-term funding of this shared infrastructure.<sup><a class="citation" href="#source-4" aria-label="Source 4">4</a></sup> These functions deserve explicit ownership in a research system; generating more candidate findings does not automatically maintain their dependencies.</p>
+<p>The WHO Global Observatory on Health R&amp;D organizes information about research activity, needs, capacity, and gaps.<sup><a class="citation" href="#source-5" aria-label="Source 5">5</a></sup> Its existence is itself instructive: the distribution of research cannot be inferred from a literature search alone. Bibliographic coverage, funding visibility, local disease burden, and research capacity are different measurements. A high volume of accessible publications should not be interpreted as a complete account of either global knowledge or unmet need.</p>
+<p>For a small nonprofit, the implication is selective participation in existing infrastructure. Building a durable connection to a few relevant archives, communities, and standards is a more defensible starting point than attempting to reproduce their entire curation and governance workload. That recommendation concerns institutional sustainability; it does not imply that the research community should be judged chiefly by throughput.</p>
+<h3>Participants and expertise</h3>
+<p>Collaboration can be organized around a person rather than a database. European Reference Networks connect providers working on rare and complex conditions. Their clinical patient management system supports secure cross-border case discussion, with access mediated through healthcare providers and patient consent.<sup><a class="citation" href="#source-15" aria-label="Source 15">15</a></sup> This offers a precedent for assembling complementary expertise around a case, although it is not an unrestricted peer-to-peer agent network.</p>
+<p>Patients can also set agendas and allocate resources. The Patient-Led Research Collaborative's research fund awarded $5 million in November 2022 through a patient-led process.<sup><a class="citation" href="#source-16" aria-label="Source 16">16</a></sup> In myasthenia gravis, the MGFA–Vitaccess registry collects recurring contributions from people living with the disease to support understanding of its course, outcomes, and trial design.<sup><a class="citation" href="#source-17" aria-label="Source 17">17</a></sup> These examples support treating a participant as an author of questions and interpretations, with knowledge of daily life that may be absent from institutional records.</p>
+<h2 id="the-global-infrastructure-landscape">The global infrastructure landscape</h2>
+<p>The following map is selective. Its purpose is to show different organizational forms and points of connection, rather than rank countries or estimate their share of world research.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>Region or network</th>
+<th>Documented example</th>
+<th>Organizing unit and architectural lesson</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Japan, Europe, United States; international submissions</td>
+<td>The International Nucleotide Sequence Database Collaboration links DDBJ, EMBL-EBI, and NCBI. Its scope includes sequence data and associated project and sample records.</td>
+<td>Persistent accessions and coordinated exchange can connect geographically distributed archives. INSDC accepts openly available data; controlled human data require another route.<sup><a class="citation" href="#source-6" aria-label="Source 6">6</a></sup></td>
+</tr>
+<tr>
+<td>Europe</td>
+<td>ELIXIR connects national nodes and shared life-science services.</td>
+<td>A federation can coordinate institutions, expertise, training, and infrastructure without requiring every participant to run an identical application.<sup><a class="citation" href="#source-7" aria-label="Source 7">7</a></sup></td>
+</tr>
+<tr>
+<td>China</td>
+<td>The National Genomics Data Center's 2026 resource paper distinguishes open non-human sequence archiving in GSA from controlled human omics archiving in GSA-Human.</td>
+<td>Resource discovery must identify both scientific scope and the conditions under which data can be accessed.<sup><a class="citation" href="#source-8" aria-label="Source 8">8</a></sup></td>
+</tr>
+<tr>
+<td>India</td>
+<td>The Department of Biotechnology's 2024–25 report describes the Indian Biological Data Centre at RCB and portals covering multiple biological data types, including GenomeIndia archiving.</td>
+<td>National infrastructure can connect large research programs while maintaining local custodianship and data-access arrangements.<sup><a class="citation" href="#source-9" aria-label="Source 9">9</a></sup></td>
+</tr>
+<tr>
+<td>Singapore</td>
+<td>TRUST provides a governed environment for cross-institution health research; PRECISE coordinates the National Precision Medicine effort.</td>
+<td>Linkage, institutional relationships, and approved analytical environments are part of the research infrastructure, alongside datasets.<sup><a class="citation" href="#source-10" aria-label="Source 10">10</a></sup><sup><a class="citation" href="#source-11" aria-label="Source 11">11</a></sup></td>
+</tr>
+<tr>
+<td>Africa</td>
+<td>Africa CDC announced the launch of AGARI on 21 November 2025 for sharing and analyzing pathogen genomic information.</td>
+<td>Regional infrastructure is organized around public-health needs and regional participation; its existence should not be reduced to a source feeding an external index.<sup><a class="citation" href="#source-12" aria-label="Source 12">12</a></sup></td>
+</tr>
+<tr>
+<td>Latin America and the Caribbean</td>
+<td>PAHO/BIREME's Virtual Health Library and LILACS connect regional health literature; Global Index Medicus complements major bibliographic indexes.</td>
+<td>Language and regional publication channels affect discoverability. Searching only the most familiar English-language resources will miss relevant material.<sup><a class="citation" href="#source-13" aria-label="Source 13">13</a></sup></td>
+</tr>
+<tr>
+<td>Global clinical research</td>
+<td>WHO's ICTRP search system aggregates records supplied by registries in its international network.</td>
+<td>Registration, publication, and results are distinct records. ICTRP is an aggregation platform, rather than the registry in which an investigator directly registers a trial.<sup><a class="citation" href="#source-14" aria-label="Source 14">14</a></sup></td>
+</tr>
+</tbody>
+</table></div>
+<p>These examples describe a mixture of local custody, central discovery services, shared standards, and institutional agreements. “Federated” does not by itself specify whether raw data, metadata, analysis code, or only results move between sites. Nor does it establish that an individual project has permission or funding to use a service.</p>
+<p>Singapore's infrastructure is especially relevant to collaboration there, but proximity to TRUST or PRECISE does not establish access for a hackathon. Their published materials identify organized programs and access routes, rather than a public pool of patient records. The immediate use for this project is understanding possible partners and interfaces; no existing affiliation or data entitlement is assumed.</p>
+<p>Public literature has a different distribution system. Europe PMC integrates articles, preprints, abstracts, full text where available, and links to related research resources.<sup><a class="citation" href="#source-47" aria-label="Source 47">47</a></sup> A literature connector should preserve which version and which portion of a work it actually retrieved. An abstract-only record cannot support the same methodological inspection as a full paper with supplements, and access to an article does not imply access to its underlying data.</p>
+<p>Cohort resources introduce another boundary. UK Biobank describes access for eligible researchers through an approved research environment. Its application page, as observed for this report, says new applications are paused and an intended reopening is in late 2026.<sup><a class="citation" href="#source-48" aria-label="Source 48">48</a></sup><sup><a class="citation" href="#source-49" aria-label="Source 49">49</a></sup> This illustrates why a resource catalog needs a dated access status as well as a scientific description. A valuable dataset can be discoverable while unavailable for the present project.</p>
+<h2 id="records-concepts-and-analytical-representations">Records, concepts, and analytical representations</h2>
+<h3>Standards and their different purposes</h3>
+<p>Several established standards can describe related phenomena while preserving different meanings. Their overlap is useful, but they are not interchangeable.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>Representation</th>
+<th>Main purpose</th>
+<th>What should remain visible when using it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HL7 FHIR</td>
+<td>Exchange of clinical information through defined resources and interfaces</td>
+<td>Source system, implementation profile, version, and the original clinical context. The R5 specification is a reference here, not a claim that every provider deploys R5.<sup><a class="citation" href="#source-18" aria-label="Source 18">18</a></sup></td>
+</tr>
+<tr>
+<td>OMOP Common Data Model</td>
+<td>Consistent structure and vocabulary for observational health-data analysis</td>
+<td>Original codes, transformation decisions, cohort definitions, and the purpose for which source data were collected.<sup><a class="citation" href="#source-19" aria-label="Source 19">19</a></sup></td>
+</tr>
+<tr>
+<td>CDISC SDTM</td>
+<td>Organization of study tabulation data</td>
+<td>Study design and the appropriate implementation guide, rather than treating study tables as a general patient record.<sup><a class="citation" href="#source-20" aria-label="Source 20">20</a></sup></td>
+</tr>
+<tr>
+<td>CDISC ADaM</td>
+<td>Analysis datasets and metadata, with traceability to study data and results</td>
+<td>The analysis population, derivations, and assumptions behind an estimate.<sup><a class="citation" href="#source-21" aria-label="Source 21">21</a></sup></td>
+</tr>
+<tr>
+<td>GA4GH Phenopackets</td>
+<td>Exchange of phenotypic and associated clinical information</td>
+<td>Onset, severity, relevant findings, and connections to other records; the packet is a structured view of a case.<sup><a class="citation" href="#source-41" aria-label="Source 41">41</a></sup></td>
+</tr>
+<tr>
+<td>OBO ontologies and Gene Ontology annotations</td>
+<td>Shared biological concepts and qualified functional annotations</td>
+<td>The ontology version, relation type, evidence category, and source supporting an annotation.<sup><a class="citation" href="#source-23" aria-label="Source 23">23</a></sup><sup><a class="citation" href="#source-24" aria-label="Source 24">24</a></sup></td>
+</tr>
+<tr>
+<td>SBML</td>
+<td>Exchange of quantitative biological models</td>
+<td>Model structure, parameters, interpretation, and the conditions needed for simulation.<sup><a class="citation" href="#source-32" aria-label="Source 32">32</a></sup></td>
+</tr>
+</tbody>
+</table></div>
+<p>FHIR and OMOP illustrate a consequential distinction. A record used to deliver care and a record used to reimburse care can encode related events differently. OHDSI explicitly identifies such differences as part of the motivation for its common model.<sup><a class="citation" href="#source-19" aria-label="Source 19">19</a></sup> Harmonization makes comparable analysis possible; it should also retain enough history to explain why a value was mapped, excluded, or reinterpreted.</p>
+<p>Biological data introduce additional structure. The Human Cell Atlas separates metadata used for integration, richer contextual metadata, and cell annotations. Its documentation explains that inadequate correction can make similar cells appear different, while excessive correction can erase biological variation.<sup><a class="citation" href="#source-22" aria-label="Source 22">22</a></sup> Integration therefore changes what can be inferred. It is an analytical operation with assumptions, rather than a neutral step that merely makes files fit together.</p>
+<p>Cell labels also have authorship. HCA's cell-annotation schema records ontology terms, synonyms, and broader categories for particular annotation sets.<sup><a class="citation" href="#source-46" aria-label="Source 46">46</a></sup> A system should be able to retain an investigator's original labels alongside a later alignment. Disagreement may indicate a mistaken annotation, a difference in resolution, or a biological distinction; the mapping alone does not decide which explanation is correct.</p>
+<h3>Identity and time</h3>
+<p>The recommended identity rule is to preserve identifiers in their issuing namespaces. A hospital patient identifier, a laboratory specimen accession, a study participant identifier, and a repository sample accession have different scopes. Even identical strings are not enough to merge them. A correspondence should be a separately attributable assertion with its method, evidence, validity period where relevant, and review history.</p>
+<p>Clinical observations need at least two temporal perspectives: when something occurred or was measured, and when it was recorded or learned. Uncertain dates should remain uncertain intervals or expressions. A correction should create a new version and identify what it supersedes, so that the system can reconstruct both the current account and what a researcher previously knew.</p>
+<p>This is a proposed design requirement, not a claim that all existing standards implement it identically. It also applies to missingness: “not assessed,” “not documented,” “explicitly absent,” and “unknown” should not collapse into one false value. Units, reference ranges, specimen conditions, and measurement methods should remain attached wherever they are available. An unmapped narrative should survive extraction, especially when no structured field adequately captures the experience described.</p>
+<h2 id="evidence-interpretation-and-disagreement">Evidence, interpretation, and disagreement</h2>
+<p>Biomedical knowledge resources already make distinctions that an agent system should retain. ClinVar archives classifications submitted by different organizations and can expose disagreement between them.<sup><a class="citation" href="#source-25" aria-label="Source 25">25</a></sup> Its review status summarizes aspects of submission and review, including expert-panel involvement; it is not a numerical probability that a variant interpretation is true.<sup><a class="citation" href="#source-26" aria-label="Source 26">26</a></sup> The useful object is the classification with its submitter, condition, evidence, date, and status.</p>
+<p>Gene Ontology's evidence codes distinguish categories such as experimental support, computational inference, and author statements.<sup><a class="citation" href="#source-24" aria-label="Source 24">24</a></sup> These are statements about how an annotation is supported. Converting all annotations into identical graph edges would discard a central part of their meaning.</p>
+<p>Open Targets provides a particularly clear warning against overinterpreting scores. Its target–disease association scores aggregate heterogeneous evidence with a heuristic; the documentation explicitly says they are not confidence scores. Direct evidence and evidence propagated through disease relationships can also contribute differently.<sup><a class="citation" href="#source-27" aria-label="Source 27">27</a></sup> A low score may reflect limited investigation, while a high score does not by itself establish that an intervention will help a particular person.</p>
+<p>For clinical intervention questions, Cochrane's GRADE guidance evaluates a body of evidence for a specified outcome across domains including bias, inconsistency, indirectness, imprecision, and publication bias.<sup><a class="citation" href="#source-28" aria-label="Source 28">28</a></sup> That is a different task from assigning quality to a gene annotation or evaluating a mechanistic simulation. The architecture needs several forms of evidence assessment, each with a stated purpose.</p>
+<p>The proposed evidence unit is consequently larger than a sentence-level claim. An <strong>evidence packet</strong> should connect a research question to a study or analysis, its population and conditions, its result, the supporting source locations, and an assessment of what the result does and does not establish. A paper may yield several packets. Several papers may report the same underlying study. A database may repeat a result from those papers.</p>
+<p>Dependency tracking is essential here. Five sources repeating an analysis of one cohort are not five independent replications. Agent agreement is likewise not independent corroboration when agents share the same evidence, model, or prior summaries. The system should retain links between overlapping populations, reused datasets, derivative analyses, and summaries. Where independence is unknown, that uncertainty should be recorded rather than resolved by counting citations.</p>
+<p>Disagreement should remain attached to the object being disputed: identity, measurement, annotation, effect estimate, causal explanation, applicability, or priority. A review can then improve one layer without silently rewriting all the others. For example, correcting an extraction error need not invalidate the original paper, while discovering a shared cohort may change an evidence synthesis without changing either study's reported estimate.</p>
+<h2 id="federation-access-and-authority">Federation, access, and authority</h2>
+<p>Federation has several independent dimensions: discovery, custody of data, permission decisions, execution of analyses, and exchange of conclusions. The European Genome-phenome Archive makes some of these distinctions concrete. Its metadata model includes datasets, policies, and data access committees as objects.<sup><a class="citation" href="#source-35" aria-label="Source 35">35</a></sup> Federated EGA connects repositories with central coordination and catalog services; it is not a fully symmetric mesh in which every participant possesses every record.<sup><a class="citation" href="#source-36" aria-label="Source 36">36</a></sup></p>
+<p>GA4GH Beacon provides a way to discover biomedical data through structured queries.<sup><a class="citation" href="#source-37" aria-label="Source 37">37</a></sup> The Data Use Ontology describes permitted-use categories that can support matching and access decisions.<sup><a class="citation" href="#source-38" aria-label="Source 38">38</a></sup> Neither discovering a dataset nor finding a compatible use label grants access by itself. FAIR principles also explicitly allow authentication and authorization; reusable data need not be openly downloadable.<sup><a class="citation" href="#source-39" aria-label="Source 39">39</a></sup></p>
+<p>The CARE Principles add collective benefit, authority to control, responsibility, and ethics to discussions of Indigenous data governance.<sup><a class="citation" href="#source-40" aria-label="Source 40">40</a></sup> Their particular context matters: they should not be treated as a generic consent checkbox. They demonstrate why the identity of the people or community entitled to decide cannot always be represented by a single administrator account.</p>
+<p>For Superyak, the recommendation is local ownership with explicit, scoped sharing and discoverable access routes. A participant may share a question, a redacted observation, an assessment, or a result without publishing an entire record or memory store. Administration of one peer should not imply authority over all peers. Transport identity, source attribution, and scientific credibility should be evaluated separately: an authenticated sender can still be mistaken.</p>
+<p>The system should support a person declining a request, correcting a record, pausing participation, or exporting their own work. Revocation requires realistic semantics: it can prevent future authorized access and request deletion of copies, but cannot make a recipient forget material already seen. These are proposed product behaviors and trust boundaries, rather than a claim of legal compliance or a mechanism already implemented across the project.</p>
+<h2 id="a-mathematical-foundation">A mathematical foundation</h2>
+<p>The following model is a design proposal. It combines established representations where their assumptions fit, without claiming that one mathematical object already captures biomedical knowledge.</p>
+<h3>Typed objects and qualified relations</h3>
+<p>Let the system's records form typed collections, with explicit relationships between them. An illustrative disjoint union is:</p>
+<p><code>O = Persons ⊔ Samples ⊔ Observations ⊔ Studies ⊔ Datasets ⊔ Runs ⊔ Claims ⊔ Assessments ⊔ Models ⊔ Questions ⊔ Decisions ⊔ Sources ⊔ Mappings ⊔ Memories ⊔ …</code>.</p>
+<p>Each object is a record about something, rather than the thing itself. A person object is a scoped reference, not necessarily a globally resolved identity. An observation records an account of a measurement or experience; a claim is an interpretation with scope. Models, questions, decisions, and memories retain their distinct purposes. Additional types should cover protocols, actors, custodians, and access rules as their relationships are specified.</p>
+<p>A useful qualified relation has the form:</p>
+<p><code>r = (subject, predicate, object, context, evidence, asserting_actor, version)</code>.</p>
+<p>The relation is itself addressable. Context may include organism, tissue, population, experimental conditions, time, and outcome definition. Evidence points to packets and source locations; the asserting actor may be a person, organization, software process, or agent. Richer n-ary observations can be represented as objects with typed roles rather than forced into a single binary edge.</p>
+<p>Biolink provides a precedent for typed biomedical associations and distinctions among direct observation, statistical association, prediction, logical entailment, and other knowledge levels.<sup><a class="citation" href="#source-30" aria-label="Source 30">30</a></sup><sup><a class="citation" href="#source-31" aria-label="Source 31">31</a></sup> Such distinctions belong in interchange contracts. A path through a graph can identify a promising connection without being a valid chain of causal inference.</p>
+<h3>Multiple projections</h3>
+<p>The same underlying objects should support different projections: a clinical timeline, a study table, a molecular network, a source-dependency graph, and a narrative account. These views need not contain identical information. Each should declare its inputs, transformation, omissions, and intended interpretation.</p>
+<p>For a view transformation <code>f: X → Y</code>, store the transformation version and a loss description <code>L_f</code>. If a return mapping <code>g: Y → X</code> exists, the meaningful check is whether <code>g(f(x))</code> preserves a specified set of invariants. An exact round trip is not always possible. The system should state which identifiers, dates, relations, and source references are preserved rather than claiming unrestricted equivalence.</p>
+<p>Ontology alignment should similarly be represented as data. SSSOM requires a justification for mappings, distinguishes mapping relations, and can explicitly represent an entity for which no corresponding term was found.<sup><a class="citation" href="#source-29" aria-label="Source 29">29</a></sup> For this system, “no adequate mapping” is a useful result. It preserves a boundary at which a later researcher may improve the representation.</p>
+<h3>Provenance and recursive memory</h3>
+<p>Use a directed acyclic graph for immutable artifact versions and their material derivation: source snapshot, extraction run, evidence packet, synthesis, and revision. A feedback process produces new versions, rather than a cycle in that version-level dependency graph. The biological model itself can still contain cycles, and a community's conversations can revisit previous ideas repeatedly.</p>
+<p>W3C PROV supplies entities, activities, agents, derivation, and provenance bundles, including ways to describe the provenance of provenance.<sup><a class="citation" href="#source-33" aria-label="Source 33">33</a></sup> Workflow Run RO-Crate adds a practical packaging precedent for computational runs, their inputs, outputs, software, and workflow details.<sup><a class="citation" href="#source-34" aria-label="Source 34">34</a></sup> These structures are suitable for connecting a cluster result back to the exact records and transformations that produced it.</p>
+<p>Memory of memory can then be represented without erasing layers. A source supports an observation; an agent remembers considering that observation; a later reflection examines that earlier memory. The reflection's lineage should connect to both the memory and the source, while preserving the difference between them. Repeated reflection can change an agent's interpretation, but does not create a new independent observation of the biological world.</p>
+<h3>Context and formal models</h3>
+<p>Contexts can sometimes be partially ordered by restriction: a statement about a defined subgroup has a narrower scope than one about a containing population. But the set of all scientific contexts need not have a unique least upper bound or greatest lower bound. Calling this a mathematical lattice would require constructing and testing those operations, not relying on a project name.</p>
+<p>Category-theoretic or sheaf-based formulations may eventually help characterize composable mappings or local accounts that do not reconcile globally. Their value should be tested against a concrete problem, such as detecting incompatible phenotype mappings or explaining why two study views cannot be joined. An initial typed model with explicit partial mappings can expose the needed structure before choosing that formalism.</p>
+<p>Statistical and mechanistic models should remain executable objects with named assumptions. A probability model for an effect estimate, a causal model for an intervention, and a dynamical model of a biological process answer different questions. SBML already supports an important class of quantitative biological models, while explicitly not attempting to be a universal modeling language.<sup><a class="citation" href="#source-32" aria-label="Source 32">32</a></sup> An agent should be able to propose or compare models without treating every relationship in the shared graph as an equation.</p>
+<p>Confidence is best represented initially as several assessments: extraction fidelity, source reliability, study limitations, relevance to the question, uncertainty in an estimate, and applicability to the case. Calibrated probabilities can be added where there is a specified target and evaluation data. A single global score would otherwise hide why two conclusions differ.</p>
+<h2 id="superyak-adna-and-research-communities">Superyak, aDNA, and research communities</h2>
+<h3>Existing foundations</h3>
+<p>The local proof of concept already exercises useful mechanisms: separate Engram stores, explicit audience-bound sharing, source-aware Atlas proposals, recorded model calls, and recovery without repeating completed work.<sup><a class="citation" href="#source-43" aria-label="Source 43">43</a></sup> Its deliberately narrow article task tested the base structure. It was not intended as a complete mathematical organization of research.</p>
+<p>The aDNA adapter preserves source identities and supports bounded local project access and lattice projections.<sup><a class="citation" href="#source-44" aria-label="Source 44">44</a></sup> These are useful foundations for adapters and interchange. They do not yet establish complete semantic round trips, cryptographic trust in every source, live peer application exchange, or a multiuser clinical application. The Stampede launcher likewise supplies scheduling and recovery mechanisms, with live Intel inference and cross-node research transport still requiring work and measurement.<sup><a class="citation" href="#source-45" aria-label="Source 45">45</a></sup></p>
+<h3>Recommended responsibilities</h3>
+<p>The architecture should distinguish four responsibilities. Participant peers hold their records, private memories, and sharing decisions. Research resources provide versioned evidence and access routes. Compute services execute bounded analyses and model requests. Participant-facing views explain findings, disagreements, and next questions in an accessible form. A peer may perform several responsibilities, but none should be assumed merely from network reachability.</p>
+<p>Biological lighthouses could organize expertise around molecular immunology, neuromuscular physiology, clinical trajectories, pharmacology, methods, and lived experience. These would be perspectives on shared objects, with their own questions and working memories. Cross-perspective tasks are necessary because a division by specialty can otherwise reproduce the fragmentation the system is meant to address.</p>
+<p>Agent identities should be independent of inference replicas. Many persistent researchers can share a model service while retaining different histories, responsibilities, and relationships. A small group using a more capable model can coordinate and critique, but its conclusions should remain reviewable proposals. More model capacity does not turn a coordinator into an independent source of biological evidence.</p>
+<p>Task contracts should expand beyond single-article extraction. Useful assignments include reconstructing a study's design, comparing outcome definitions, identifying dataset overlap, proposing a mechanistic explanation, searching for contrary evidence, testing a mapping, assessing applicability, and tracing a correction through prior conclusions. Each task should specify its question, admissible inputs, expected output type, and unresolved assumptions. Agents need room to follow useful questions, while their published conclusions retain evidence boundaries.</p>
+<h3>Standards at the boundaries</h3>
+<p>For one complex case, prioritize source-preserving uploads and provider-specific record ingestion, with FHIR where supported and a Phenopacket view where useful. Preserve narrative and unmapped fields. Add OMOP when a concrete cohort analysis requires it; adopting a common model does not require forcing every object into it at the start.</p>
+<p>Use existing biological identifiers and ontology versions, with Biolink-style qualified relations and SSSOM-style mappings. Package substantial analyses with provenance compatible with PROV and Workflow Run RO-Crate. Maintain the existing private/shared memory distinction, and add dependencies from published findings to source versions and analysis runs. These are proposed extensions, not completed changes to the repository.</p>
+<p>The display should begin with a person's question and show what is known, what remains uncertain, where accounts differ, and what new evidence would help. Source and transformation details should be available on demand. Screens, speech, and interaction burden should be designed around participants' actual abilities; the underlying graph need not become the main user interface.</p>
+<h2 id="a-worked-research-path-for-myasthenia-gravis-and-complex-disease">A worked research path for myasthenia gravis and complex disease</h2>
+<p>This is an illustrative workflow using public or synthetic material, not an account of an identified patient. NINDS describes myasthenia gravis as an autoimmune disorder affecting transmission at the neuromuscular junction, including mechanisms involving acetylcholine-receptor or MuSK antibodies.<sup><a class="citation" href="#source-42" aria-label="Source 42">42</a></sup> That establishes several relevant biological perspectives, while leaving open what any particular person's unresolved difficulties require investigating.</p>
+<p><strong>The initiating object is a question.</strong> For example: “Which parts of this person's functional variation are explained by existing evidence, and which remain unresolved?” Record who asked, why it matters, the time horizon, and what kind of answer would be useful. Preserve the person's own account alongside the formal question. A research question about function need not begin as a search for a gene.</p>
+<p><strong>The case becomes a versioned timeline.</strong> Keep each reported symptom, assessment, laboratory result, exposure, and relevant event attached to its source and temporal uncertainty. Distinguish a clinical diagnosis from an agent's hypothesis and a reported experience from a measurement. Represent missing assessments explicitly. Produce a structured phenotype view without deleting details that do not map cleanly.</p>
+<p><strong>Parallel inquiries connect the case to different kinds of knowledge.</strong> One group reconstructs the chronology and searches for inconsistencies. Another examines relevant physiological or immunological explanations. A methods group identifies which studies actually measured comparable outcomes. A participant-oriented group checks whether those outcomes address the person's priorities. Their outputs should connect to the same case questions without being forced into consensus.</p>
+<p><strong>Evidence packets connect studies to hypotheses.</strong> A trial registration supplies planned study information; a paper supplies reported analyses; a dataset description identifies the population and measurements that may be available. The packet records relevant inclusion criteria, outcome definitions, effect estimates where available, and limitations. If a paper's methods cannot be inspected, that becomes a limit on the packet rather than a detail invented by an agent.</p>
+<p><strong>Models propose discriminating observations.</strong> Competing explanations can state what they would predict, which existing observations they explain poorly, and what information would distinguish them. A simulation or reanalysis should run only when the necessary data and assumptions are explicit. The desired output is a defensible research dossier for discussion, not an automatic treatment decision inferred from a graph path.</p>
+<p><strong>The dossier remains revisable.</strong> A corrected date, new result, changed patient priority, or reinterpreted study should identify affected findings and reopen the relevant questions. Some conclusions may remain unchanged; others may become unsupported. The system should preserve that history so participants can understand both the current account and why it changed.</p>
+<h2 id="evaluation-and-development-priorities">Evaluation and development priorities</h2>
+<p>The first representation experiment should compare the existing article-focused approach with study-centered evidence packets and a case-question workflow on matched public or synthetic tasks. Hold retrieved source passages and evaluation questions constant where the comparison is intended to isolate memory or representation effects. Include conflicting reports, uncertain dates, an unmappable concept, overlapping datasets, and a later correction.</p>
+<p>Evaluate several outcomes separately:</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Comparison table"><table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Observable test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Identity preservation</td>
+<td>Different namespaces remain distinct; justified correspondences are retained without silent merges.</td>
+</tr>
+<tr>
+<td>Evidence fidelity</td>
+<td>Findings point to supporting source locations and do not exceed the available text or analysis.</td>
+</tr>
+<tr>
+<td>Study dependence</td>
+<td>Repeated reports of one study are recognized; apparent corroboration is not inflated by duplicated evidence.</td>
+</tr>
+<tr>
+<td>Semantic preservation</td>
+<td>A view records lost or unmapped information and passes its stated round-trip invariants.</td>
+</tr>
+<tr>
+<td>Disagreement</td>
+<td>Conflicting interpretations remain discoverable with their reasons and contexts.</td>
+</tr>
+<tr>
+<td>Revision</td>
+<td>A source correction identifies affected outputs and supports rebuilding or qualifying them.</td>
+</tr>
+<tr>
+<td>Participant usefulness</td>
+<td>People can identify the answer, uncertainty, and relevance without reconstructing the entire graph.</td>
+</tr>
+<tr>
+<td>Continuity and autonomy</td>
+<td>A peer can pause, recover, export its work, and decline a sharing request without losing unrelated work.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Known injected errors can provide objective checks. Scientific adequacy also needs assessment independent of the same model that generated the findings, including domain review where the question warrants it. Reviewer disagreement should itself be recorded. Agreement scores alone can reward conformity and conceal shared mistakes.</p>
+<p>Development can proceed in three overlapping streams: refine the object and mapping model locally; perform useful public-source case-domain research; and benchmark the actual cluster inference and transport setup. The continuing community should remain separate from controlled experimental copies so that methodological comparison does not repeatedly erase its history.</p>
+<p>For an allocation week, prepare reproducible source bundles and tasks before access, run parallel comparisons within measured capacity, and checkpoint artifacts in a form that returns to participant peers. The durable output should include an evidence dossier, reusable mappings, dependency records, and unresolved questions, as well as performance measurements. Agent count is a capacity parameter; it is not the measure of whether the system helped anyone understand a difficult problem.</p>
+<h2 id="scope-and-unresolved-questions">Scope and unresolved questions</h2>
+<p>This report reflects sources reviewed as of 12 September 2026. It combines official standards, infrastructure documentation, organizational publications, and local implementation records. These establish documented purposes and mechanisms; they do not independently measure adoption, reliability, or scientific benefit. Some source pages are undated, and their inclusion does not imply that every described capability was operationally tested.</p>
+<p>The geographic coverage is selective and does not constitute a census. Commercial R&amp;D, local-language literature beyond the examples included, routine laboratory work, and informal clinical collaboration are underrepresented. Detailed economic comparisons and jurisdiction-specific legal requirements are outside scope. The China resource paper and India's annual report support narrowly bounded descriptions from accessible indexed material; they were not audited in full.</p>
+<p>For the proposed system, the main unresolved questions are the actual case's research priorities, which record sources can be connected, how collaborators want to work, and which analyses have adequate data. Stanley's private clinical plans were not available for this report. These gaps do not prevent work on public evidence, synthetic cases, representation fidelity, or memory experiments. They do limit claims about a finished clinical workflow and the usefulness of any particular model population.</p>
+<h2 id="sources">Sources</h2>
+<p><a href="2026-09-12-global-biomedical-research-organization-sources.csv">Download the source catalog (CSV)</a> · <a href="2026-09-12-global-biomedical-research-organization.md">Markdown document</a></p>
+<ol class="sources">
+<li id="source-1">National Center for Advancing Translational Sciences. <a href="https://ncats.nih.gov/about/about-translational-science/spectrum">Translational Science Spectrum</a>. Undated official overview.</li>
+<li id="source-2">WHO Alliance for Health Policy and Systems Research. <a href="https://ahpsr.who.int/what-we-do/what-is-health-policy-and-systems-research-%28hpsr%29">What is health policy and systems research?</a>. Undated official overview.</li>
+<li id="source-3">National Institutes of Health. <a href="https://www.report.nih.gov/">Research Portfolio Online Reporting Tools</a>. Official funding and research-output information portal.</li>
+<li id="source-4">Global Biodata Coalition. <a href="https://globalbiodata.org/what-we-do/global-core-biodata-resources/">Global Core Biodata Resources</a>. Resource definitions and preservation rationale.</li>
+<li id="source-5">World Health Organization. <a href="https://www.who.int/observatories/global-observatory-on-health-research-and-development">Global Observatory on Health Research and Development</a>. Official observatory; constituent datasets have their own reporting periods.</li>
+<li id="source-6">International Nucleotide Sequence Database Collaboration. <a href="https://www.insdc.org/about-insdc/">About INSDC</a>. Official membership, scope, exchange, and access description.</li>
+<li id="source-7">ELIXIR. <a href="https://elixir-europe.org/about-us/who-we-are">Who we are</a>. Official institutional overview.</li>
+<li id="source-8">National Genomics Data Center, China National Center for Bioinformation. <a href="https://academic.oup.com/nar/article/54/D1/D28/8373952">Database resources of the National Genomics Data Center, China National Center for Bioinformation in 2026</a>. <em>Nucleic Acids Research</em> 54(D1), 2026, D28 onward. Repository distinctions used from indexed article text; full publisher page unavailable.</li>
+<li id="source-9">Government of India, Department of Biotechnology. <a href="https://dbtindia.gov.in/sites/default/files/DBT%20Annual%20Report%202024-25.pdf">Annual Report 2024–25</a>. IBDC section; accessible indexed report text. Descriptions refer to that reporting period.</li>
+<li id="source-10">TRUST. <a href="https://www.trustplatform.sg/about-us/">About us</a>. Singapore health research platform; page updated 14 July 2026.</li>
+<li id="source-11">Precision Health Research, Singapore. <a href="https://www.npm.sg/about-us/">About PRECISE</a>. Official program overview; page updated 8 June 2026.</li>
+<li id="source-12">Africa Centres for Disease Control and Prevention. <a href="https://africacdc.org/news-item/africa-cdc-launches-agari-a-continent-wide-genomic-data-platform-to-strengthen-outbreak-response/">Africa CDC Launches AGARI, a Continent-Wide Genomic Data Platform to Strengthen Outbreak Response</a>. 21 November 2025.</li>
+<li id="source-13">Pan American Health Organization. <a href="https://www.paho.org/en/tips-and-major-resources">Tips and major resources</a>. Official guide to regional and global health-information resources, including LILACS and Global Index Medicus.</li>
+<li id="source-14">World Health Organization. <a href="https://www.who.int/ictrp/en/">International Clinical Trials Registry Platform</a>. Official platform overview.</li>
+<li id="source-15">European Commission. <a href="https://health.ec.europa.eu/rare-diseases-and-european-reference-networks/european-reference-networks_en">European Reference Networks</a> and <a href="https://health.ec.europa.eu/rare-diseases-and-european-reference-networks/european-reference-networks/work-erns_en">Work of the ERNs</a>. Official network and case-management descriptions.</li>
+<li id="source-16">Patient-Led Research Collaborative. <a href="https://patientresearchcovid19.com/projects/patient-led-research-fund/">Patient-Led Research Fund</a>. Fund awards announced November 2022; subsequent project updates are later.</li>
+<li id="source-17">Myasthenia Gravis Foundation of America. <a href="https://myasthenia.org/living-with-mg/after-your-diagnosis/mg-patient-registry/">MG Patient Registry</a>. Official description of the Vitaccess Real MG Registry collaboration.</li>
+<li id="source-18">Health Level Seven International. <a href="https://fhir.hl7.org/fhir/overview.html">FHIR Overview</a>. FHIR R5, version 5.0.0.</li>
+<li id="source-19">Observational Health Data Sciences and Informatics. <a href="https://www.ohdsi.org/data-standardization/">Data Standardization</a>. OMOP CDM rationale and analytical purpose. OHDSI's ATLAS software is distinct from this project's Atlas workbench.</li>
+<li id="source-20">Clinical Data Interchange Standards Consortium. <a href="https://www.cdisc.org/standards/foundational/sdtm">Study Data Tabulation Model</a>. Official SDTM overview.</li>
+<li id="source-21">Clinical Data Interchange Standards Consortium. <a href="https://www.cdisc.org/standards/foundational/adam">Analysis Data Model</a>. Official ADaM overview.</li>
+<li id="source-22">Human Cell Atlas. <a href="https://data.humancellatlas.org/metadata">Metadata</a>. Integration, contextual metadata, annotations, and schema evolution.</li>
+<li id="source-23">OBO Foundry. <a href="https://obofoundry.org/principles/fp-000-summary.html">OBO Foundry Principles</a>. Shared ontology principles, identifiers, scope, and versioning.</li>
+<li id="source-24">Gene Ontology Consortium. <a href="https://geneontology.org/docs/guide-go-evidence-codes/">Guide to GO evidence codes</a> and <a href="https://www.geneontology.org/docs/go-annotations/">GO annotations</a>. Official annotation and evidence documentation.</li>
+<li id="source-25">National Center for Biotechnology Information. <a href="https://www.ncbi.nlm.nih.gov/clinvar/intro/">ClinVar: Introduction</a>. Submission, classification, and archival model.</li>
+<li id="source-26">National Center for Biotechnology Information. <a href="https://www.ncbi.nlm.nih.gov/clinvar/docs/review_status/">ClinVar review status</a>. Official criteria and interpretation.</li>
+<li id="source-27">Open Targets. <a href="https://platform-docs.opentargets.org/associations">Target–disease associations</a>. Association aggregation, direct and indirect evidence, and score limitations.</li>
+<li id="source-28">Schünemann HJ, Higgins JPT, Vist GE, and colleagues. <a href="https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-14">Chapter 14: Completing “Summary of findings” tables and grading the certainty of the evidence</a>. <em>Cochrane Handbook</em>, version 6.5 (2024); chapter updated August 2023.</li>
+<li id="source-29">Mapping Commons. <a href="https://mapping-commons.github.io/sssom/1.0/spec-model/">The SSSOM data model</a>. Version 1.0 documentation; mappings, justifications, predicates, and unmapped entities.</li>
+<li id="source-30">Biolink Model contributors. <a href="https://biolink.github.io/biolink-model/">Biolink Model</a>. Official biomedical knowledge-graph model documentation.</li>
+<li id="source-31">Biolink Model contributors. <a href="https://biolink.github.io/biolink-model/KnowledgeLevelEnum/">KnowledgeLevelEnum</a>. Official distinctions between kinds of knowledge represented in associations.</li>
+<li id="source-32">SBML community. <a href="https://sbml.org/documents/what-is-sbml/">What is SBML?</a>. Scope and purpose of Systems Biology Markup Language.</li>
+<li id="source-33">Moreau L, Missier P, editors; W3C Provenance Working Group. <a href="https://www.w3.org/TR/prov-dm/">PROV-DM: The PROV Data Model</a>. W3C Recommendation, 30 April 2013.</li>
+<li id="source-34">Research Object community. <a href="https://www.researchobject.org/workflow-run-crate/">Workflow Run RO-Crate</a>. Official profiles and links to the 2024 methods publication.</li>
+<li id="source-35">European Genome-phenome Archive. <a href="https://ega-archive.org/submission/metadata/ega-schema/">EGA metadata schema</a>. Study metadata and dataset, policy, and access-committee objects.</li>
+<li id="source-36">European Genome-phenome Archive. <a href="https://ega-archive.org/about/projects-and-funders/federated-ega/">Federated EGA</a>. Current overview of the network and central services.</li>
+<li id="source-37">Global Alliance for Genomics and Health. <a href="https://www.ga4gh.org/product/beacon-api/">Beacon API</a>. Official discovery standard overview.</li>
+<li id="source-38">Global Alliance for Genomics and Health. <a href="https://www.ga4gh.org/product/data-use-ontology-duo/">Data Use Ontology</a>. Official permitted-use terminology overview.</li>
+<li id="source-39">GO FAIR Foundation. <a href="https://www.gofair.foundation/fair-principles">FAIR Principles</a>. Includes A1.2 on authentication and authorization where necessary.</li>
+<li id="source-40">Carroll SR and colleagues. <a href="https://datascience.codata.org/en/articles/dsj-2020-043">The CARE Principles for Indigenous Data Governance</a>. <em>Data Science Journal</em> 19, 43, 2020. Principles used from the indexed article abstract.</li>
+<li id="source-41">Global Alliance for Genomics and Health. <a href="https://www.ga4gh.org/product/phenopackets/">Phenopackets</a>. Official standard overview and clinical scope.</li>
+<li id="source-42">National Institute of Neurological Disorders and Stroke. <a href="https://www.ninds.nih.gov/sites/default/files/2025-05/myasthenia-gravis.pdf">Myasthenia Gravis</a>. Patient-information booklet; indexed text, antibody mechanism discussion on printed page 3. Used for general biology, not current treatment recommendations.</li>
+<li id="source-43">Superyak project. <a href="../atlas-research-poc.md">Atlas research proof of concept</a>. Local implementation documentation at commit <code>3d44f2f</code>, 12 September 2026; mechanism evidence, not independent scientific validation.</li>
+<li id="source-44">Superyak project. <a href="../adna-compatibility.md">aDNA compatibility</a>. Local adapter and projection documentation; implementation introduced at commit <code>b01c475</code>.</li>
+<li id="source-45">Superyak project. <a href="../stampede3-deployment.md">Stampede3 deployment</a>. Local launcher documentation; prepared execution path rather than a measured cluster deployment.</li>
+<li id="source-46">Human Cell Atlas. <a href="https://data.humancellatlas.org/metadata/cell-annotation">Cell Annotation Metadata</a>. Official annotation-set schema description.</li>
+<li id="source-47">Europe PMC. <a href="https://europepmc.org/about">About Europe PMC</a>. Official description of literature types and links to related resources; live corpus counts omitted.</li>
+<li id="source-48">UK Biobank. <a href="https://www.ukbiobank.ac.uk/about-us/how-we-work/access-to-uk-biobank-data/">Access to UK Biobank data</a>. Official access model and research environment description.</li>
+<li id="source-49">UK Biobank. <a href="https://www.ukbiobank.ac.uk/use-our-data/apply-for-access/">Apply for access</a>. Application pause and intended late-2026 reopening, observed 12 September 2026; this status is time-sensitive.</li>
+</ol>
+</main></body></html>
