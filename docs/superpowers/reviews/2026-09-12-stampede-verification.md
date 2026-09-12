@@ -17,6 +17,8 @@ model download, or Intel inference was performed.
 - `make check-integration`: two matching schemas, seven socket checks, four
   receipts validated by TypeScript, and three required interoperability tests
   passed. These existing modules were unchanged by the launch addition.
+- Main-checkout `make stampede-plan` passed after local integration at `e417885`;
+  it reports only SSH login and allocation account missing.
 - Full offline rehearsal: 20 cells completed with 156 scripted model calls.
   Repeating it restored completed cells with zero new calls. Usage and hardware
   are explicitly unmeasured in the simulation.

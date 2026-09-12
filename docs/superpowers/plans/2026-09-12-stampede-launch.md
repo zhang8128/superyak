@@ -55,4 +55,6 @@ Own `deploy/stampede/provider.py`, `deploy/stampede/simulate.py`, `engram/tests/
 - [x] Add a clearly labeled deterministic simulation using the actual experiment APIs. Verify a whole small matrix, distinct stores, results, and resume without extra completed turns.
 - [x] Wire one launch command and a double-click local wrapper if useful. Document exact connection/account configuration, plan/launch/status/fetch/resume commands, source exclusions, and unverified hardware checks.
 - [x] Finish the parallel research worksheet revision, including 16 cells plus four reference runs and wave/node-hour accounting. Update report/handoff to match the executable scope.
-- [ ] Run all relevant tests, the offline campaign, archive inspection, shell syntax checks, and repository integration checks; conduct independent component and whole-change review. Integrate only owned changes into the user's working checkout.
+- [x] Run all relevant tests, the offline campaign, archive inspection, shell syntax checks, and repository integration checks; conduct independent component and whole-change review. Integrate only owned changes into the user's working checkout.
+
+Local integration completed on `main` at `e417885`. Verification and independent review are recorded in `docs/superpowers/reviews/2026-09-12-stampede-verification.md` and its linked review. Main-checkout plan and full rehearsal passed; repetition made zero additional scripted calls. No remote deployment or push occurred.
