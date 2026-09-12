@@ -61,6 +61,6 @@ Files: Makefile, CI, launcher allowlist, user guide and verification report.
 - [x] Add `make research-task`, separate tests, CLI and extracted-source smoke.
 - [x] Run relevant/full suites, independent review and a bounded real Qwen task;
   replay it with the endpoint unavailable and compare artifact hashes.
-- [ ] Integrate locally, activate the transport fix with a controlled MG restart,
+- [x] Integrate locally, activate the transport fix with a controlled MG restart,
   verify resumed identity/state and update handoff. Whole-cluster execution and
   multi-researcher comparisons remain the next measured integration slice.

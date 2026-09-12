@@ -87,3 +87,25 @@ No cluster job, model download, external message or push was performed. The
 current synthetic cluster launcher remains distinct from the portable task CLI.
 The next measured slice is individual/shared researcher memory and corrections;
 whole-Stampede3 placement and the agreed four K3/four GLM leads remain the plan.
+
+## Local integration and live activation
+
+Implementation commit `d39ea19` was fast-forwarded into local `main` after all
+checks. The MG worker stopped cooperatively after 22 completed cycles; all 188
+state-file hashes matched across integration before restart. The worker restarted
+as PID 73977 with the same model/options, stable research identity and persisted
+rotation at turn 22. All 38 previously saved draft/graph-draft/turn files checked
+remained unchanged. It resumed the question role with no startup error. Process
+cycle counters restart at zero; durable research history does not.
+
+Operational evidence is `.engram/atlas/operations/mg-portable-reload/`. Main also
+replayed the preserved native task offline with all files unchanged. The existing
+uncommitted `HANDOFF.md` was preserved and extended. Only the Atlas MG worker was
+restarted; no model server, Engram MCP, Pi or cluster service was restarted.
+
+The subsequent status check confirmed a completed post-reload question turn and
+continued overlap work. That question candidate failed the existing exact-quote
+validation and produced no saved graph finding; the worker retained the error
+and advanced. This is a model-output rejection, not a successful research result
+or a transport failure. The latest observed status is retained in
+`mg-portable-reload/latest-status.json`.
