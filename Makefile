@@ -7,8 +7,11 @@ SESSION_ARGS ?= list
 ADNA_ARGS ?= --help
 RUNTIME_CONFIG ?= $(HOME)/.config/superyak/runtime.json
 RUNTIME_ARGS ?=
+STAMPEDE_PYTHON ?= $(CURDIR)/engram/.venv/bin/python
+STAMPEDE_CONFIG ?= $(CURDIR)/.engram/stampede/config.json
+STAMPEDE_ARGS ?=
 
-.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions adna status
+.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede
 
 help:
 	@echo "make setup              Install both projects from their lockfiles"
@@ -20,6 +23,11 @@ help:
 	@echo "make sessions           List Codex sessions; SESSION_ARGS accepts ask/result"
 	@echo "make adna               Inspect aDNA projects without a model; set ADNA_ARGS"
 	@echo "make status             Inspect the configured runtime without writing state"
+	@echo "make stampede-config    Create the local Stampede3 connection config once"
+	@echo "make stampede-plan      Inspect the campaign without connecting"
+	@echo "make stampede-deploy    Stage, prepare, and submit the configured campaign"
+	@echo "make stampede-simulate  Rehearse the whole small matrix locally"
+	@echo "make stampede           Run status/fetch/resume using STAMPEDE_ARGS"
 
 setup: setup-engram setup-lighthouse
 
@@ -56,3 +64,20 @@ adna:
 
 status:
 	engram/.venv/bin/python scripts/runtime.py --config "$(RUNTIME_CONFIG)" $(RUNTIME_ARGS) status
+
+stampede-config:
+	@mkdir -p "$$(dirname "$(STAMPEDE_CONFIG)")"
+	@test -f "$(STAMPEDE_CONFIG)" || cp deploy/stampede/config.example.json "$(STAMPEDE_CONFIG)"
+	@echo "Stampede3 configuration: $(STAMPEDE_CONFIG)"
+
+stampede-plan: stampede-config
+	"$(STAMPEDE_PYTHON)" -m deploy.stampede plan --config "$(STAMPEDE_CONFIG)"
+
+stampede-deploy:
+	"$(STAMPEDE_PYTHON)" -m deploy.stampede deploy --config "$(STAMPEDE_CONFIG)"
+
+stampede-simulate:
+	"$(STAMPEDE_PYTHON)" -m deploy.stampede simulate $(STAMPEDE_ARGS)
+
+stampede:
+	"$(STAMPEDE_PYTHON)" -m deploy.stampede $(STAMPEDE_ARGS)

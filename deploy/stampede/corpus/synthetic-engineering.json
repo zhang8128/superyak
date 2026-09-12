@@ -1,0 +1,13 @@
+{
+  "id": "synthetic-valve-review-v1",
+  "synthetic": true,
+  "description": "Entirely fictional engineering evidence, for memory mechanism evaluation only.",
+  "question": "Assess whether the fictional Delta cooling valve is ready for a controlled bench trial. Distinguish observations from inference, cite source identifiers, and revise your assessment when evidence changes.",
+  "sources": [
+    {"id": "intake-log", "title": "Initial intake log", "text": "Fictional technician Iris recorded three successful valve closures at the indicated 40 kPa. The gauge calibration was not checked.", "parents": [], "round": 0, "cohort": 0},
+    {"id": "bench-log", "title": "Independent bench log", "text": "Fictional technician Rowan observed one delayed closure in three tests at an indicated 40 kPa. The controller firmware version was not recorded.", "parents": [], "round": 0, "cohort": 1},
+    {"id": "gauge-correction", "title": "Later calibration correction", "text": "A later fictional calibration check found that the intake-log gauge read 10 kPa high. Those tests therefore occurred at approximately 30 kPa, not 40 kPa. This does not establish performance at 40 kPa.", "parents": ["intake-log"], "supersedes": ["intake-log"], "round": 1, "cohort": 0},
+    {"id": "firmware-note", "title": "Later firmware note", "text": "The fictional bench-log controller used firmware R2; the intended trial uses R3. No evidence here establishes that R3 fixes delayed closure.", "parents": ["bench-log"], "round": 1, "cohort": 1},
+    {"id": "sealed-calibration", "title": "Withheld negative control", "text": "This fictional sealed record must never be exposed to an agent.", "parents": [], "denied": true}
+  ]
+}

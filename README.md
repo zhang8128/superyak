@@ -46,6 +46,18 @@ by default. To run those tests, explicitly supply both
 `ENGRAM_LIVE_CODEX_PROJECT=/absolute/path/to/the/bound/engram` when running
 `make check-engram`. An explicitly supplied invalid configuration fails the tests.
 
+## Prepare Stampede3
+
+The [Stampede3 launcher](docs/stampede3-deployment.md) stages an Intel PVC campaign
+with individual/shared memory comparisons and a separate continuing community.
+It starts with bundled synthetic evidence, so patient or participant details are
+not needed. Run `make stampede-plan` to create and inspect the local configuration,
+then fill in its SSH login and allocation account when access arrives.
+`make stampede-deploy` starts staging and submission; on macOS, you can instead
+double-click [Start Stampede3.command](scripts/Start%20Stampede3.command).
+`make stampede-simulate` rehearses memory and recovery locally. Intel hardware
+compatibility is verified during the first compute allocation.
+
 ## Run Engram
 
 To use an existing aDNA project, see [aDNA compatibility](docs/adna-compatibility.md).

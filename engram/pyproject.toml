@@ -118,4 +118,4 @@ py-modules = [
 "share/engram/skills/engram" = ["skills/engram/skill.md"]
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = [".", ".."]
