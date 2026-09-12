@@ -26,6 +26,7 @@ export const ADNA_PORT_CLAIM_MEDIA_TYPE = "application/vnd.adna.port-compatibili
 
 export interface AdnaNode {
   id: string;
+  ref?: string;
   inputs: Record<string, string>;
   outputs: Record<string, string>;
   contextPath: string[];
@@ -34,6 +35,7 @@ export interface AdnaNode {
 export interface AdnaEdge {
   from: string;
   to: string;
+  port?: string;
   dataMapping: Record<string, string>;
   contextPath: string[];
 }
@@ -58,7 +60,8 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function stringRecord(value: unknown, label: string): Record<string, string> {
-  const record = asRecord(value) ?? {};
+  const record = value === undefined ? {} : asRecord(value);
+  if (record === undefined) throw new Error(`${label} must be an object`);
   const result: Record<string, string> = {};
   for (const key of Object.keys(record).sort()) {
     const item = record[key];
@@ -75,11 +78,17 @@ async function latticeFile(root: string): Promise<string> {
     .sort();
   const selected = candidates[0];
   if (selected === undefined) throw new Error(`No aDNA lattice YAML found in ${root}`);
+  if (candidates.length !== 1)
+    throw new Error("Multiple aDNA lattices found; select an explicit file");
   return path.join(root, selected);
 }
 
 function parseLattice(value: unknown): { name: string; model: AdnaModel } {
-  const lattice = asRecord(value);
+  const document = asRecord(value);
+  const lattice = document && "lattice" in document ? asRecord(document.lattice) : document;
+  if (document && "lattice" in document && ("nodes" in document || "name" in document)) {
+    throw new Error("Ambiguous aDNA lattice envelope");
+  }
   if (
     typeof lattice?.name !== "string" ||
     !Array.isArray(lattice.nodes) ||
@@ -89,13 +98,20 @@ function parseLattice(value: unknown): { name: string; model: AdnaModel } {
   }
   const contextPath = ["workflow", lattice.name];
   const nodes: AdnaNode[] = [];
+  const ids = new Set<string>();
   for (const item of lattice.nodes) {
     const node = asRecord(item);
-    const config = asRecord(node?.config) ?? {};
-    if (typeof node?.id !== "string") throw new Error("Invalid aDNA node id");
+    const config = node?.config === undefined ? {} : asRecord(node.config);
+    if (config === undefined) throw new Error("Invalid aDNA node config");
+    if (typeof node?.id !== "string" || !node.id || ids.has(node.id))
+      throw new Error("Invalid or duplicate aDNA node id");
+    ids.add(node.id);
     if (node.id === "lattice_interface") continue;
+    if (node.ref !== undefined && (typeof node.ref !== "string" || !node.ref))
+      throw new Error("Invalid aDNA node reference");
     nodes.push({
       id: node.id,
+      ...(typeof node.ref === "string" ? { ref: node.ref } : {}),
       inputs: stringRecord(config.inputs, `${node.id}.inputs`),
       outputs: stringRecord(config.outputs, `${node.id}.outputs`),
       contextPath,
@@ -106,9 +122,15 @@ function parseLattice(value: unknown): { name: string; model: AdnaModel } {
     if (typeof edge?.from !== "string" || typeof edge.to !== "string") {
       throw new Error("Invalid aDNA edge endpoints");
     }
+    if (!nodes.some((n) => n.id === edge.from) || !nodes.some((n) => n.id === edge.to)) {
+      throw new Error("aDNA edge has a missing executable endpoint");
+    }
+    if (edge.port !== undefined && typeof edge.port !== "string")
+      throw new Error("Invalid aDNA edge port");
     return {
       from: edge.from,
       to: edge.to,
+      ...(typeof edge.port === "string" ? { port: edge.port } : {}),
       dataMapping: stringRecord(edge.data_mapping, `${edge.from}->${edge.to}.data_mapping`),
       contextPath,
     };
@@ -233,11 +255,32 @@ function evaluateAdna(snapshot: Snapshot, claim: Claim): Evaluation {
       edge.to === sentence.inputNodeId &&
       edge.dataMapping[sentence.outputPort] === sentence.inputPort,
   );
-  return connected &&
+  if (
+    connected &&
     outputNode?.outputs[sentence.outputPort] === sentence.valueType &&
     inputNode?.inputs[sentence.inputPort] === sentence.valueType
-    ? "satisfied"
-    : "violated";
+  ) {
+    return "satisfied";
+  }
+  const edgeExists = model.edges.some(
+    (edge) => edge.from === sentence.outputNodeId && edge.to === sentence.inputNodeId,
+  );
+  if (
+    edgeExists &&
+    outputNode &&
+    inputNode &&
+    (outputNode.outputs[sentence.outputPort] === undefined ||
+      inputNode.inputs[sentence.inputPort] === undefined ||
+      model.edges.some(
+        (edge) =>
+          edge.from === sentence.outputNodeId &&
+          edge.to === sentence.inputNodeId &&
+          Object.keys(edge.dataMapping).length === 0,
+      ))
+  ) {
+    return "indeterminate";
+  }
+  return "violated";
 }
 
 export const adnaAdapter: InstitutionAdapter = {
@@ -266,6 +309,9 @@ export function createAdnaPortClaim(
   snapshot: Snapshot,
   input: AdnaPortClaimInput = defaultPortClaim,
 ): Claim {
+  const contextPath =
+    adnaModel(snapshot).nodes.find((node) => node.id === input.outputNodeId)?.contextPath ??
+    snapshot.payload.context.path;
   return sealArtifact({
     kind: "Claim",
     protocolVersion: "0.1",
@@ -276,7 +322,7 @@ export function createAdnaPortClaim(
     payload: {
       profile: ADNA_PROFILE,
       signature: snapshot.payload.signature,
-      context: { id: "workflow/orders", path: ["workflow", "orders"] },
+      context: { id: contextPath.join("/"), path: contextPath },
       sentenceMediaType: ADNA_PORT_CLAIM_MEDIA_TYPE,
       sentence: input as unknown as JsonValue,
       snapshotDigests: [snapshot.digest],

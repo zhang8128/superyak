@@ -27,9 +27,18 @@ class CodingMemory:
                 if set(args) != {'query'} or not isinstance(query, str) or len(query) > 2000:
                     raise ValueError('Archive query must be text of at most 2000 characters')
                 rows = self.store.search(thread, query, limit=6, kinds=SEARCH_KINDS)
-                return {'results': [{'id': r['id'], 'role': r['role'], 'excerpt': r['content'][:800],
-                    'metadata': r['metadata']} for r in rows],
-                    'coverage': 'Bounded index of task goals, checkpoints, corrections, and tool-result excerpts; read originals by ID.'}
+                results = [{'id': r['id'], 'role': r['role'], 'excerpt': r['content'][:800],
+                            'metadata': r['metadata']} for r in rows]
+                coverage = []
+                for source in self.sources:
+                    if getattr(source, 'mode', None) == 'adna_project':
+                        results.extend({'id': c.id, 'role': c.role, 'excerpt': c.representations[0][:2000],
+                                        'metadata': {'version': c.version, 'kind': c.reason}}
+                                       for c in source.search(query, limit=3))
+                        coverage.append(dict(source.coverage))
+                return {'results': results,
+                    'source_coverage': coverage,
+                    'coverage': 'Bounded index of task goals, checkpoints, corrections, tool-result excerpts, and selected aDNA documents; read originals by ID.'}
             if name != 'archive_read':
                 raise ValueError('Unsupported read-only archive tool')
             if set(args) - {'id', 'offset', 'limit'}:
@@ -49,7 +58,7 @@ class CodingMemory:
             row = self.store.event_page(thread, source_id, offset, limit)
             if row:
                 return {**row, 'offset_unit': 'characters'}
-            if source_id.startswith('engram:'):
+            if source_id.startswith(('engram:', 'adna:')):
                 for source in self.sources:
                     row = source.read(source_id, offset=offset, limit=limit)
                     if row:

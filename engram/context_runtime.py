@@ -30,7 +30,7 @@ to be useful. Do not turn every conversation into a work assignment."""
 
 
 TOOLS = [
-    {"type": "function", "name": "archive_search", "description": "Search original messages in this thread's archive.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}},
+    {"type": "function", "name": "archive_search", "description": "Search original messages in this thread's archive and explicitly selected aDNA projects.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}},
     {"type": "function", "name": "archive_read", "description": "Read a bounded page from a source event or artifact available in this thread. Text offsets are characters; artifact offsets are bytes.", "parameters": {"type": "object", "properties": {"id": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 4096}}, "required": ["id"], "additionalProperties": False}},
 ]
 
@@ -249,13 +249,29 @@ class ContextRuntime:
                 if not isinstance(query, str) or len(query) > 2000:
                     raise ValueError("Query must be text of at most 2000 characters")
                 rows = self.store.search(thread, query, limit=5)
-                return {"results": [{"id": r["id"], "role": r["role"], "excerpt": r["content"][:600]} for r in rows], "coverage": "bounded text index"}
+                results = [{"id": r["id"], "role": r["role"], "excerpt": r["content"][:600]} for r in rows]
+                coverage = []
+                for source in self.sources if sources is None else sources:
+                    if getattr(source, 'mode', None) != 'adna_project':
+                        continue
+                    for candidate in source.search(query, limit=3):
+                        # The page includes the full document hash, so search
+                        # evidence is invalidated even if a later page changes.
+                        page = source.read(candidate.id, offset=0, limit=1)
+                        if page is None or page['version'] != candidate.version:
+                            continue
+                        results.append({'id': candidate.id, 'role': candidate.role,
+                                        'excerpt': candidate.representations[0][:2000], 'version': candidate.version})
+                        if snapshots is not None:
+                            snapshots.append({'id': candidate.id, 'offset': 0, 'limit': 1, 'digest': self._read_digest(page)})
+                    coverage.append(dict(source.coverage))
+                return {"results": results, "coverage": "bounded text index and selected aDNA documents", "source_coverage": coverage}
             if call.get("name") == "archive_read":
                 source_id, offset, limit = args.get("id"), args.get("offset", 0), args.get("limit", 2048)
                 if not isinstance(source_id, str) or type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 4096:
                     raise ValueError("Invalid archive page")
                 result = self.read_source(thread, source_id, offset=offset, limit=limit, sources=sources)
-                if snapshots is not None and source_id.startswith(("engram:", "lighthouse:")) and "error" not in result:
+                if snapshots is not None and source_id.startswith(("engram:", "lighthouse:", "adna:")) and "error" not in result:
                     snapshots.append({"id": source_id, "offset": offset, "limit": limit, "digest": self._read_digest(result)})
                 return result
             raise ValueError("Unsupported read-only tool")
@@ -282,7 +298,7 @@ class ContextRuntime:
             row = self.store.event(thread, source_id)
             if row:
                 return {"id": source_id, "role": row["role"], "text": row["content"][offset:offset+limit], "next_offset": offset+limit if offset+limit < len(row["content"]) else None}
-            if source_id.startswith(("engram:", "lighthouse:")):
+            if source_id.startswith(("engram:", "lighthouse:", "adna:")):
                 for source in self._turn_sources(thread) if sources is None else sources:
                     found = source.read(source_id, offset=offset, limit=limit)
                     if found:

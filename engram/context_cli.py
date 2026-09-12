@@ -25,6 +25,8 @@ def build_parser():
     parser.add_argument("--instance")
     parser.add_argument("--engram-db", type=Path)
     parser.add_argument("--no-engram", action="store_true", help="Disable local Engram memory retrieval")
+    parser.add_argument("--adna-project", action="append", default=[], metavar="INSTANCE=PATH",
+                        help="Use an explicit aDNA project as read-only context; repeat for distinct origins")
     parser.add_argument("--lighthouse-context", help="Explicit Lighthouse context for this chat process, e.g. memory/technical")
     parser.add_argument("--lighthouse-purpose", help="Explicit Lighthouse purpose; requires --lighthouse-context and --instance")
     parser.add_argument("--provider", choices=("codex", "responses"), default="codex")
@@ -69,6 +71,8 @@ def resolve_paths(args):
 
 
 def make_runtime(args, store, memory):
+    from context_adna import parse_projects
+    adna = parse_projects(args.adna_project)
     instance = validate_lighthouse_args(args, memory)
     if args.provider == "responses" and not args.context_window:
         raise ValueError("API mode requires --context-window from a verified model profile; API billing is separate")
@@ -81,6 +85,7 @@ def make_runtime(args, store, memory):
     else:
         provider = ResponsesProvider(model=args.model, timeout=args.timeout)
     sources = () if args.no_engram else (EngramSource(memory),)
+    sources += adna
     if instance is not None:
         from context_lighthouse import LighthouseSource
         sources += (LighthouseSource(store, receiver=args.instance, instance_dir=instance,
@@ -213,6 +218,8 @@ def main(argv=None):
     try:
         directory, memory = resolve_paths(args)
         validate_lighthouse_args(args, memory)
+        from context_adna import parse_projects
+        parse_projects(args.adna_project)
         store = ContextStore(directory / "context.db")
         if args.command == "code":
             from context_coding_cli import run_code

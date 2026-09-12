@@ -48,6 +48,12 @@ by default. To run those tests, explicitly supply both
 
 ## Run Engram
 
+To use an existing aDNA project, see [aDNA compatibility](docs/adna-compatibility.md).
+`make adna ADNA_ARGS='inspect clinic=/path/to/Clinic.aDNA'` inspects a project
+without a model. Add `--adna-project clinic=/path/to/Clinic.aDNA` to chat or
+coding options to retrieve its attributed documents. Lighthouse also accepts
+the current aDNA lattice format through its `project-adna` command.
+
 To ask another local Codex session a question, see
 [Codex session messaging](docs/codex-sessions.md). `make sessions` lists session
 metadata; the separate MCP server adds discovery, question, and reply tools.

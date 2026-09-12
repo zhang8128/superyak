@@ -4,10 +4,11 @@ ENGRAM_ARGS ?=
 CHAT_ARGS ?=
 SERVE_ARGS ?=
 SESSION_ARGS ?= list
+ADNA_ARGS ?= --help
 RUNTIME_CONFIG ?= $(HOME)/.config/superyak/runtime.json
 RUNTIME_ARGS ?=
 
-.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions status
+.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions adna status
 
 help:
 	@echo "make setup              Install both projects from their lockfiles"
@@ -17,6 +18,7 @@ help:
 	@echo "make check-integration  Compare schemas and validate real-socket receipts"
 	@echo "make chat / make serve  Start Engram chat / its local web interface"
 	@echo "make sessions           List Codex sessions; SESSION_ARGS accepts ask/result"
+	@echo "make adna               Inspect aDNA projects without a model; set ADNA_ARGS"
 	@echo "make status             Inspect the configured runtime without writing state"
 
 setup: setup-engram setup-lighthouse
@@ -48,6 +50,9 @@ serve:
 
 sessions:
 	cd engram && uv run --locked python -m session_cli $(SESSION_ARGS)
+
+adna:
+	@cd engram && uv run --locked python -m adna_cli $(ADNA_ARGS)
 
 status:
 	engram/.venv/bin/python scripts/runtime.py --config "$(RUNTIME_CONFIG)" $(RUNTIME_ARGS) status

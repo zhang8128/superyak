@@ -183,7 +183,7 @@ class CodingRuntime:
         for source in self.sources:
             try:
                 found = source.search(query, limit=6)
-                coverage.append({'mode': source.mode, 'candidates': len(found)})
+                coverage.append({'mode': source.mode, 'candidates': len(found), **getattr(source, 'coverage', {})})
                 for candidate in found[:6]:
                     if candidate.required:
                         raise ValueError('External memory cannot require its own inclusion')

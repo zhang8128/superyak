@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { adnaAdapter } from "@lighthouse/adapter-adna";
 import { type AuthorizationRequest, evaluateConnectionPolicy } from "@lighthouse/calculus";
 import {
   type ConnectionPolicy,
@@ -138,10 +139,48 @@ export async function runCli(args: string[], io: CliIo): Promise<number> {
   if (command === "validate") return runValidate(rest, io);
   if (command === "prove") return runProof(rest, io);
   if (command === "authorize") return runAuthorize(rest, io);
+  if (command === "project-adna") return runProjectAdna(rest, io);
   if (command === "recall") {
     return runRecallCli(rest, { stdout: io.stdout, stderr: io.stderr });
   }
-  return usage(io, "Expected validate, prove, authorize, or recall");
+  return usage(io, "Expected validate, prove, authorize, project-adna, or recall");
+}
+
+async function runProjectAdna(args: string[], io: CliIo): Promise<number> {
+  const [root, ...flags] = args;
+  const values = new Map<string, string>();
+  for (let index = 0; index < flags.length; index += 2) {
+    const key = flags[index];
+    const value = flags[index + 1];
+    if (!key || !["--issuer", "--id", "--issued-at"].includes(key) || !value || values.has(key)) {
+      return usage(
+        io,
+        "project-adna requires <file-or-directory> --issuer <uri> --id <uri> --issued-at <ISO timestamp>",
+      );
+    }
+    values.set(key, value);
+  }
+  const issuer = values.get("--issuer");
+  const id = values.get("--id");
+  const issuedAt = values.get("--issued-at");
+  if (!root || !issuer || !id || !issuedAt) {
+    return usage(
+      io,
+      "project-adna requires <file-or-directory> --issuer <uri> --id <uri> --issued-at <ISO timestamp>",
+    );
+  }
+  try {
+    const snapshot = parseArtifact(await adnaAdapter.project({ root, issuer, id, issuedAt }));
+    emit(io, "stdout", snapshot);
+    return 0;
+  } catch (error) {
+    emit(io, "stderr", {
+      ok: false,
+      code: "ADNA_PROJECTION_INVALID",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return 1;
+  }
 }
 
 const entrypoint = process.argv[1];

@@ -78,6 +78,8 @@ def approve_terminal(request):
 
 
 def make_coding_runtime(args, store, memory):
+    from context_adna import parse_projects
+    adna = parse_projects(getattr(args, 'adna_project', []))
     from context_coding_provider import CodingProvider
     if args.provider != 'codex':
         raise ValueError('Terminal coding currently uses the Codex subscription adapter; API fallback is disabled')
@@ -88,7 +90,8 @@ def make_coding_runtime(args, store, memory):
     provider = CodingProvider(model=args.model, cwd=args.repo.resolve(), timeout=args.episode_seconds,
         soft_tokens=args.soft_tokens, hard_tokens=args.hard_tokens, max_steps=args.max_steps, approve=approve_terminal)
     try:
-        return CodingRuntime(store, provider, budget, sources=() if args.no_engram else (EngramSource(memory),),
+        sources = (() if args.no_engram else (EngramSource(memory),)) + adna
+        return CodingRuntime(store, provider, budget, sources=sources,
                              max_episodes=args.max_episodes, on_event=render_event)
     except BaseException:
         provider.close()
@@ -109,6 +112,9 @@ def resume_command(args, store, memory):
         command.extend([flag, str(value)])
     if args.context_window:
         command.extend(['--context-window', str(args.context_window)])
+    from context_adna import parse_projects
+    for source in parse_projects(getattr(args, 'adna_project', [])):
+        command.extend(['--adna-project', f'{source.origin}={source.project}'])
     command.extend(['code', '--repo', str(args.repo.resolve()), '--resume',
         '--max-episodes', str(args.max_episodes), '--episode-seconds', str(args.episode_seconds),
         '--soft-tokens', str(args.soft_tokens), '--hard-tokens', str(args.hard_tokens), '--max-steps', str(args.max_steps)])

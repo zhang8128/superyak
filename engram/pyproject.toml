@@ -32,10 +32,12 @@ llm = ["anthropic"]
 engram-lighthouse-pilot = "lighthouse_pilot:main"
 engram-lighthouse-label = "lighthouse_label:main"
 superyak-sessions = "session_cli:main"
+superyak-adna = "adna_cli:main"
 
 [tool.setuptools]
 py-modules = [
     "ask",
+    "adna_cli",
     "categories",
     "category_compile",
     "category_context",
@@ -47,6 +49,7 @@ py-modules = [
     "compress",
     "config",
     "context_cli",
+    "context_adna",
     "context_coding",
     "context_coding_cli",
     "context_coding_memory",

@@ -5,6 +5,12 @@ originals before each invocation. It includes terminal coding, terminal chat, a
 local browser chat, source inspection, and explicit correction/pin controls. It leaves the
 existing daemon, MCP server, and current Codex conversations unchanged.
 
+Select existing aDNA knowledge with repeatable `--adna-project INSTANCE=PATH`
+options before the subcommand. Chat, browser chat, and coding can retrieve its
+original documents with attributed IDs and content versions. See the
+[aDNA integration guide](../../docs/adna-compatibility.md) for supported layouts,
+source inspection, process scope, and Lighthouse lattice export.
+
 ## Terminal coding
 
 Start a real coding task from the implementation worktree:

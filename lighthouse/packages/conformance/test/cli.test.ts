@@ -21,6 +21,45 @@ function memoryIo() {
 }
 
 describe("Lighthouse CLI", () => {
+  it("projects a selected aDNA file to a verifiable snapshot with explicit issuer metadata", async () => {
+    const file = path.join(fixtureRoot, "adna/orders.lattice.yaml");
+    const args = [
+      "project-adna",
+      file,
+      "--issuer",
+      "urn:peer:clinic",
+      "--id",
+      "urn:snapshot:clinic:orders",
+      "--issued-at",
+      "2026-09-11T12:00:00Z",
+    ];
+    const { io, output } = memoryIo();
+    expect(await runCli(args, io)).toBe(0);
+    const snapshot = JSON.parse(output.stdout);
+    expect(snapshot).toMatchObject({
+      kind: "Snapshot",
+      issuer: "urn:peer:clinic",
+      id: "urn:snapshot:clinic:orders",
+    });
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "lighthouse-adna-cli-"));
+    const exported = path.join(temporary, "snapshot.json");
+    await writeFile(exported, output.stdout);
+    expect(await runCli(["validate", exported], memoryIo().io)).toBe(0);
+    const repeated = memoryIo();
+    expect(await runCli(args, repeated.io)).toBe(0);
+    expect(repeated.output.stdout).toBe(output.stdout);
+    expect(await runCli(["project-adna", file], memoryIo().io)).toBe(2);
+    expect(await runCli([...args, "--guess-identity"], memoryIo().io)).toBe(2);
+    const bad = memoryIo();
+    expect(
+      await runCli(
+        args.map((s) => (s === file ? path.join(temporary, "missing.yaml") : s)),
+        bad.io,
+      ),
+    ).toBe(1);
+    expect(JSON.parse(bad.output.stderr).code).toBe("ADNA_PROJECTION_INVALID");
+  });
+
   it("returns zero and machine-readable JSON for the valid proof", async () => {
     const { io, output } = memoryIo();
 
