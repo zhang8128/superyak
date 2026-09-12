@@ -48,6 +48,11 @@ by default. To run those tests, explicitly supply both
 
 ## Prepare Stampede3
 
+For the agreed Kimi K3 / GLM-5.3 lead pairing, use the bounded
+[model protocol probe](docs/lead-model-probes.md). `make lead-probe` shows how to
+test an existing endpoint with an initial observation and a source correction.
+Model loading and hardware placement remain separate measurements.
+
 For real public-source research before cluster access, use the separate
 [Atlas research POC](docs/atlas-research-poc.md): `make research-poc` runs two
 logical researchers across individual/shared memory conditions using an existing

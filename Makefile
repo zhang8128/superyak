@@ -12,8 +12,9 @@ STAMPEDE_CONFIG ?= $(CURDIR)/.engram/stampede/config.json
 STAMPEDE_ARGS ?=
 RESEARCH_POC_ARGS ?=
 RESEARCH_POC_PYTHON ?= $(CURDIR)/engram/.venv/bin/python
+LEAD_PROBE_ARGS ?= --help
 
-.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc
+.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc lead-probe
 
 help:
 	@echo "make setup              Install both projects from their lockfiles"
@@ -31,6 +32,7 @@ help:
 	@echo "make stampede-simulate  Rehearse the whole small matrix locally"
 	@echo "make stampede           Run status/fetch/resume using STAMPEDE_ARGS"
 	@echo "make research-poc       Run/resume local Atlas research; RESEARCH_POC_ARGS sets options"
+	@echo "make lead-probe         Probe an existing model endpoint; LEAD_PROBE_ARGS sets options"
 
 setup: setup-engram setup-lighthouse
 
@@ -87,3 +89,6 @@ stampede:
 
 research-poc:
 	"$(RESEARCH_POC_PYTHON)" -m research_poc $(RESEARCH_POC_ARGS)
+
+lead-probe:
+	"$(STAMPEDE_PYTHON)" -m deploy.stampede.probe $(LEAD_PROBE_ARGS)

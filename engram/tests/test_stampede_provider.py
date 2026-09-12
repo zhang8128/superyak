@@ -145,3 +145,69 @@ def test_invalid_request_limits_do_not_reach_server(provider_module, service, kw
     with pytest.raises(ValueError):
         provider_module.LocalModel(endpoint, "test-model").generate([{"role": "user", "content": "x"}], **kwargs)
     assert requests == []
+
+
+@pytest.mark.parametrize("protocol", ["kimi-k3", "glm-5.3"])
+def test_lead_turn_preserves_complete_assistant_state_without_disabling_thinking(provider_module, service, protocol):
+    endpoint, responses, requests = service
+    first = completion()
+    first["choices"][0]["message"].update(
+        reasoning_content="Synthetic protocol fixture: source version one.",
+        tool_calls=[], refusal=None,
+    )
+    responses.extend([(200, first, 0), (200, first, 0)])
+    model = provider_module.LocalModel(endpoint, "test-model", protocol=protocol, reasoning_effort="low")
+    history = [{"role": "user", "content": "Read version one."}]
+    result = model.generate(history)
+    assert result["assistant_message"] == first["choices"][0]["message"]
+    history.extend([result["assistant_message"], {"role": "user", "content": "Now use the correction."}])
+    model.generate(history)
+    assert requests[1]["body"]["messages"][1] == first["choices"][0]["message"]
+    for request in requests:
+        body = request["body"]
+        assert body["reasoning_effort"] == "low"
+        assert "response_format" not in body
+        assert body.get("chat_template_kwargs", {}).get("enable_thinking") is not False
+        if protocol == "glm-5.3":
+            assert body["chat_template_kwargs"]["clear_thinking"] is False
+    # A shared provider has no accumulated conversation of its own.
+    responses.append((200, first, 0))
+    model.generate([{"role": "user", "content": "A different researcher."}])
+    assert requests[2]["body"]["messages"] == [{"role": "user", "content": "A different researcher."}]
+
+
+@pytest.mark.parametrize("protocol,reasoning", [("kimi-k3", None), ("kimi-k3", 3), ("glm-5.3", {})])
+def test_invalid_lead_state_cannot_be_returned_as_a_completed_turn(provider_module, service, protocol, reasoning):
+    endpoint, responses, _ = service
+    answer = completion()
+    answer["choices"][0]["message"]["reasoning_content"] = reasoning
+    responses.append((200, answer, 0))
+    with pytest.raises(provider_module.LocalModelError):
+        provider_module.LocalModel(endpoint, "test-model", protocol=protocol).generate(
+            [{"role": "user", "content": "x"}])
+
+
+@pytest.mark.parametrize("options", [
+    {"protocol": "unknown"},
+    {"protocol": "kimi-k3", "reasoning_effort": "medium"},
+    {"reasoning_effort": "high"},
+])
+def test_invalid_protocol_settings_fail_before_sending(provider_module, service, options):
+    endpoint, _, requests = service
+    with pytest.raises(ValueError):
+        provider_module.LocalModel(endpoint, "test-model", **options)
+    assert requests == []
+
+
+def test_text_probe_rejects_tool_execution_requests_even_in_lead_mode(provider_module, service):
+    endpoint, responses, _ = service
+    answer = completion()
+    answer["choices"][0].update(finish_reason="tool_calls")
+    answer["choices"][0]["message"].update(
+        reasoning_content="Synthetic protocol fixture.",
+        tool_calls=[{"id": "call-1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+    )
+    responses.append((200, answer, 0))
+    with pytest.raises(provider_module.LocalModelError):
+        provider_module.LocalModel(endpoint, "test-model", protocol="kimi-k3").generate(
+            [{"role": "user", "content": "x"}])

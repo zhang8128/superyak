@@ -45,6 +45,7 @@ def _source_tree(root: Path) -> Path:
         "deploy/stampede/__init__.py": "",
         "deploy/stampede/cluster.py": "VALUE = 1\n",
         "deploy/stampede/export.py": "def create_export(): pass\n",
+        "deploy/stampede/probe.py": "def run_probe(): pass\n",
         "deploy/stampede/bootstrap.sh": "#!/bin/bash\nexit 0\n",
         "deploy/stampede/corpus/task.json": '{"kind":"synthetic"}\n',
         "engram/storage.py": "class Storage: pass\n",
@@ -115,6 +116,7 @@ def test_prepare_bundle_is_deterministic_and_excludes_private_files(tmp_path):
         assert names == sorted(names)
         assert "deploy/stampede/cluster.py" in names
         assert "deploy/stampede/export.py" in names
+        assert archive.extractfile("deploy/stampede/probe.py").read() == b"def run_probe(): pass\n"
         assert "deploy/stampede/bootstrap.sh" in names
         assert "deploy/stampede/corpus/task.json" in names
         assert "engram/storage.py" in names

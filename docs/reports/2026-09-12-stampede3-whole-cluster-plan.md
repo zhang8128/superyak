@@ -56,6 +56,11 @@ Cadence can differ across the community. Some agents may interact frequently; ot
 
 ## Preparation and measurement
 
+The [two-turn model probe](../lead-model-probes.md) now provides a bounded text
+protocol check for an existing endpoint, including preserved assistant state
+and response to a fictional source correction. It does not load models or
+establish hardware compatibility.
+
 Run CPU and GPU compatibility probes and representative research tasks in parallel across hardware classes. Compare supported precision choices using identical evidence and questions within each experimental comparison. Record model revisions, backend support, input/output lengths, memory use, failures, and latency; preserve hardware and precision as explicit factors in research comparisons.
 
 Separate the continuing community from experimental copies. Route evidence through topic-based discovery and explicit sharing, while preserving each participant's private history and source dependencies. Reserve the supporting nodes for actual research computations as well as the infrastructure required to sustain the community.

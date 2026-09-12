@@ -33,6 +33,7 @@ _ALLOWED_EXACT = {
     "deploy/stampede/export.py",
     "deploy/stampede/launcher.py",
     "deploy/stampede/profiles.py",
+    "deploy/stampede/probe.py",
     "deploy/stampede/provider.py",
     "deploy/stampede/simulate.py",
     "engram/pyproject.toml",
