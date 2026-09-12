@@ -121,7 +121,7 @@ def _allowed_source(path: Path, source: Path) -> bool:
     if posix in _ALLOWED_EXACT:
         return True
     top = relative.parts[0] if relative.parts else ""
-    if top == "research_poc":
+    if top in {"research_poc", "research_tasks"}:
         return len(relative.parts) == 2 and path.suffix == ".py"
     if top == "atlas":
         return (len(relative.parts) == 3 and relative.parts[1] == "workbench"

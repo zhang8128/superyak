@@ -72,6 +72,11 @@ the [integration plan](docs/atlas-integration.md) defines the next executable sl
 
 ## Prepare Stampede3
 
+Use [portable research tasks](docs/portable-research-tasks.md) to freeze one cached
+MG source and compare an extraction/review turn through local or cluster model
+protocols. `make research-task` shows explicit export/run commands; replay checks
+saved evidence and responses without another model call.
+
 For the agreed Kimi K3 / GLM-5.3 lead pairing, use the bounded
 [model protocol probe](docs/lead-model-probes.md). `make lead-probe` shows how to
 test an existing endpoint with an initial observation and a source correction.

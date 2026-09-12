@@ -16,6 +16,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = Path(os.environ.get("ATLAS_TEST_SOURCE", str(ROOT / "atlas")))
 
 
+@pytest.fixture(autouse=True)
+def no_unexpected_http(monkeypatch):
+    def blocked(*args, **kwargs):
+        raise AssertionError("POC bridge tests must replace the HTTP boundary before making requests")
+
+    monkeypatch.setattr("http.client.HTTPConnection.connect", blocked)
+
+
 @pytest.fixture(scope="module")
 def atlas(tmp_path_factory):
     assert (ROOT / "research_poc/atlas_bridge.py").exists(), "Atlas bridge is not implemented"
@@ -170,6 +178,18 @@ def model_response(analysis, model="qwen3.8:27b-mlx"):
             "eval_count": 52, "message": {"role": "assistant", "content": json.dumps(analysis)}}
 
 
+def model_transport(monkeypatch, research_model, reply):
+    def response(request, timeout, maximum, *, lane="model"):
+        assert lane == "model"
+        return reply(request, timeout, maximum)
+
+    def body(request, timeout, maximum, *, lane="model"):
+        return json.dumps(response(request, timeout, maximum, lane=lane), ensure_ascii=False).encode("utf-8")
+
+    monkeypatch.setattr(research_model, "_json_response", response)
+    monkeypatch.setattr(research_model, "_request_bytes", body)
+
+
 def test_model_preserves_source_boundaries_metrics_and_explicit_publication(atlas, document, monkeypatch):
     bridge, _, _, prepared = atlas
     from workbench import research_model
@@ -185,7 +205,7 @@ def test_model_preserves_source_boundaries_metrics_and_explicit_publication(atla
         return model_response({"verdict": "supported", "reason": "The supplied source supports the narrow claim.",
                                "evidence": [{"passage_id": "p0001"}]})
 
-    monkeypatch.setattr(research_model, "_json_response", reply)
+    model_transport(monkeypatch, research_model, reply)
     model = bridge.AtlasModel()
     assert model.check()["digest"] == "model-digest"
     result = model.generate(prepared["question"], document,
@@ -219,7 +239,7 @@ def test_invalid_model_output_is_rejected_without_retry(atlas, document, monkeyp
         requests.append(request)
         return model_response(candidate() | {"private_note": "Private", "publish": True} | change)
 
-    monkeypatch.setattr(research_model, "_json_response", reply)
+    model_transport(monkeypatch, research_model, reply)
     with pytest.raises(ValueError) as caught:
         bridge.AtlasModel().generate(prepared["question"], document, [])
     assert len(requests) == 1
@@ -232,7 +252,7 @@ def test_model_cannot_quote_cached_passage_omitted_from_prompt(atlas, document, 
     document["passages"][0]["text"] += " Measured cellular state fate prediction." * 150
     document["passages"].append({"id": "p0002", "locator": "Body, paragraph 2",
                                  "text": "Second unrelated passage supports nothing. " + "Filler. " * 800})
-    monkeypatch.setattr(research_model, "_json_response", lambda *args: model_response(
+    model_transport(monkeypatch, research_model, lambda *args: model_response(
         candidate() | {"passage_id": "p0002", "quote": "Second unrelated passage supports nothing.",
                        "private_note": "Private", "publish": True}))
     with pytest.raises(ValueError, match="supplied") as caught:
@@ -243,7 +263,7 @@ def test_model_cannot_quote_cached_passage_omitted_from_prompt(atlas, document, 
 def test_model_rejects_server_model_substitution(atlas, document, monkeypatch):
     bridge, _, _, prepared = atlas
     from workbench import research_model
-    monkeypatch.setattr(research_model, "_json_response", lambda *args: model_response(
+    model_transport(monkeypatch, research_model, lambda *args: model_response(
         candidate() | {"private_note": "Private", "publish": True}, model="unexpected:latest"))
     with pytest.raises(ValueError, match="identity"):
         bridge.AtlasModel().generate(prepared["question"], document, [])
@@ -253,7 +273,7 @@ def test_malformed_response_retains_raw_usage_and_request_manifest(atlas, docume
     bridge, _, _, prepared = atlas
     from workbench import research_model
     response = model_response({"wrong": "shape"})
-    monkeypatch.setattr(research_model, "_json_response", lambda *args: response)
+    model_transport(monkeypatch, research_model, lambda *args: response)
     with pytest.raises(ValueError) as caught:
         bridge.AtlasModel().generate(prepared["question"], document, [])
     assert caught.value.result["response"]["prompt_eval_count"] == 321
@@ -265,7 +285,7 @@ def test_review_model_substitution_retains_usage(atlas, document, monkeypatch):
     from workbench import research_model
     response = model_response({"verdict": "supported", "reason": "Narrow claim matches supplied passage.",
                                "evidence": [{"passage_id": "p0001"}]}, model="unexpected:latest")
-    monkeypatch.setattr(research_model, "_json_response", lambda *args: response)
+    model_transport(monkeypatch, research_model, lambda *args: response)
     with pytest.raises(ValueError) as caught:
         bridge.AtlasModel().review(prepared["question"], document, candidate())
     assert caught.value.result["metrics"]["prompt_eval_count"] == 321

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from urllib.parse import urlsplit
 from urllib.request import Request
 
 from .research_context import ContextBudget, compile_request
-from .research_sources import PASSAGE_CHAR_LIMIT, _json_response, _timeout
+from .research_sources import PASSAGE_CHAR_LIMIT, _json_response, _request_bytes, _timeout
 
 
 ANALYSIS_STRINGS = ("title", "summary", "scope", "limitations", "passage_id", "quote", "rationale")
@@ -61,6 +62,29 @@ def _document_data(document: dict) -> dict:
     return data
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Ollama JSON contains a duplicate object key")
+        result[key] = value
+    return result
+
+
+def _invalid_constant(value):
+    raise ValueError("Ollama JSON contains a nonfinite number")
+
+
+def _strict_object(text):
+    value = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
+    # Reject overflowed numbers and unpaired Unicode surrogates before an audit
+    # artifact receives a value that cannot be written as finite UTF-8 JSON.
+    json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if not isinstance(value, dict):
+        raise ValueError("Ollama JSON response must be an object")
+    return value
+
+
 class Ollama:
     # Change only when extraction behavior improves enough to retry older failures.
     analysis_revision = "current-document-with-rejection-feedback-v1"
@@ -84,9 +108,11 @@ class Ollama:
         self.timeout = _timeout(timeout)
         self.context_budget = context_budget or ContextBudget(output_reserve=1800)
         self.last_context_manifest = None
+        self.last_request = None
+        self.last_response_body = None
 
     def check(self) -> dict:
-        response = _json_response(Request(self.base_url + "/api/tags"), self.timeout, 1024 * 1024)
+        response = _json_response(Request(self.base_url + "/api/tags"), self.timeout, 1024 * 1024, lane="model")
         models = response.get("models")
         if not isinstance(models, list):
             raise ValueError("Ollama tags response must contain a models list")
@@ -103,18 +129,31 @@ class Ollama:
     def _chat(self, instruction: str, data: dict, schema: dict) -> dict:
         self.last_context_manifest = None
         self.last_response = None
+        self.last_response_body = None
+        self.last_request = None
         compiled = compile_request(model=self.model, instructions=UNTRUSTED + instruction,
             question=data["question"], context=data["context"], schema=schema,
             document=data.get("document"), prior_queries=data.get("prior_queries", []),
             previous_rejection=data.get("previous_rejection"), candidate=data.get("candidate"),
             required_passage_ids=data.get("required_passage_ids", ()), budget=self.context_budget)
         self.last_context_manifest = compiled.manifest
+        self.last_request = compiled.serialized
         started = time.monotonic()
-        response = _json_response(Request(
+        body = _request_bytes(Request(
             self.base_url + "/api/chat", data=compiled.serialized.encode("utf-8"),
             headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST",
-        ), self.timeout, 1024 * 1024)
+        ), self.timeout, 1024 * 1024, lane="model")
         elapsed = time.monotonic() - started
+        try:
+            self.last_response_body = body.decode("utf-8")
+            raw_response = {"raw_body": self.last_response_body}
+        except UnicodeError:
+            raw_response = {"raw_body_base64": base64.b64encode(body).decode("ascii")}
+            self.last_response_body = raw_response
+        self.last_response = {"response": raw_response, "context_manifest": compiled.manifest}
+        if not isinstance(self.last_response_body, str):
+            raise ValueError("Ollama returned invalid UTF-8")
+        response = _strict_object(self.last_response_body)
         self.last_response = {"response": response, "context_manifest": compiled.manifest}
         if response.get("error"):
             raise RuntimeError(f"Ollama inference failed: {response['error']}")
@@ -129,7 +168,7 @@ class Ollama:
         if message.get("tool_calls"):
             raise ValueError("Ollama returned unexpected tool calls")
         try:
-            analysis = json.loads(message["content"])
+            analysis = _strict_object(message["content"])
         except json.JSONDecodeError as exc:
             raise ValueError("Ollama returned malformed JSON content") from exc
         if not isinstance(analysis, dict) or set(analysis) != set(schema["required"]):

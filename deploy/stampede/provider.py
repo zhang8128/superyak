@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import math
@@ -17,6 +18,19 @@ MAX_REQUEST_BYTES = 1024 * 1024
 
 class LocalModelError(RuntimeError):
     """A local model call did not produce a validated completed response."""
+
+
+def _response_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Local model response contains duplicate JSON keys")
+        result[key] = value
+    return result
+
+
+def _invalid_constant(value):
+    raise ValueError("Local model response contains a nonfinite JSON number")
 
 
 class LocalModel:
@@ -37,10 +51,10 @@ class LocalModel:
             raise ValueError("An explicit local model name is required")
         if type(seed) is not int or not 0 <= seed <= 2**31 - 1:
             raise ValueError("Model seed must be a nonnegative 32-bit integer")
-        if protocol not in ("synthetic", "kimi-k3", "glm-5.3"):
+        if protocol not in ("synthetic", "research", "kimi-k3", "glm-5.3"):
             raise ValueError("Unknown local model protocol")
         if reasoning_effort is not None and (
-                protocol == "synthetic" or reasoning_effort not in ("low", "high", "max")):
+                protocol in ("synthetic", "research") or reasoning_effort not in ("low", "high", "max")):
             raise ValueError("Lead reasoning effort must be low, high, or max")
         self.base_url = base_url
         self.host = "127.0.0.1" if parsed.hostname == "localhost" else parsed.hostname
@@ -49,6 +63,9 @@ class LocalModel:
         self.seed = seed
         self.protocol = protocol
         self.reasoning_effort = reasoning_effort or "max"
+        self.last_request = None
+        self.last_response = None
+        self.last_response_body = None
 
     def _valid_message(self, message: dict) -> bool:
         if (not isinstance(message, dict)
@@ -59,20 +76,25 @@ class LocalModel:
             return set(message) == {"role", "content"}
         # Keep the complete returned assistant object for that agent's next turn.
         # This text-only boundary does not execute or resolve tool calls.
-        if message.get("tool_calls") or message.get("function_call"):
+        if message.get("tool_calls") or message.get("function_call") or message.get("refusal"):
             return False
         reasoning = message.get("reasoning_content")
         return (isinstance(reasoning, str)
                 or (reasoning is None and self.protocol != "kimi-k3"))
 
     def generate(self, messages: list[dict], *, max_tokens: int = 512,
-                 timeout_s: float = 120) -> dict:
+                 timeout_s: float = 120, request_byte_limit: int | None = None) -> dict:
+        self.last_request = None
+        self.last_response = None
+        self.last_response_body = None
         if type(max_tokens) is not int or not 1 <= max_tokens <= 32768:
             raise ValueError("Output token limit must be between 1 and 32768")
         if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)) or not math.isfinite(timeout_s) or not 0 < timeout_s <= 3600:
             raise ValueError("Request timeout must be positive, finite, and at most 3600 seconds")
         if not isinstance(messages, list) or not 1 <= len(messages) <= 64:
             raise ValueError("One to 64 text messages are required")
+        if request_byte_limit is not None and (type(request_byte_limit) is not int or request_byte_limit < 1):
+            raise ValueError("Request byte budget must be a positive integer")
         for message in messages:
             if not self._valid_message(message):
                 raise ValueError("Local research message is invalid for the configured protocol")
@@ -83,6 +105,10 @@ class LocalModel:
         if self.protocol == "synthetic":
             payload.update(response_format={"type": "json_object"},
                            chat_template_kwargs={"enable_thinking": False})
+        elif self.protocol == "research":
+            # Atlas supplies its schema in the messages and validates the answer.
+            # Forced JSON mode is deliberately absent from this opt-in protocol.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         else:
             payload["reasoning_effort"] = self.reasoning_effort
             if self.protocol == "glm-5.3":
@@ -91,7 +117,8 @@ class LocalModel:
             encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
         except (UnicodeError, ValueError, TypeError) as exc:
             raise ValueError("Local model request is not valid UTF-8 JSON") from exc
-        if len(encoded) > MAX_REQUEST_BYTES:
+        self.last_request = encoded.decode("utf-8")
+        if len(encoded) > min(MAX_REQUEST_BYTES, request_byte_limit or MAX_REQUEST_BYTES):
             raise ValueError("Local model request exceeds its byte budget")
         deadline = time.monotonic() + timeout_s
         connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout_s)
@@ -113,7 +140,15 @@ class LocalModel:
                 _remaining(deadline)
                 if len(body) > MAX_RESPONSE_BYTES:
                     raise LocalModelError("Local model response exceeds its byte budget")
-            result = json.loads(body)
+            self.last_response = {"raw_body_base64": base64.b64encode(body).decode("ascii")}
+            body_text = body.decode("utf-8")
+            self.last_response_body = body_text
+            self.last_response = {"raw_body": body_text}
+            result = json.loads(body_text, object_pairs_hook=_response_object,
+                                parse_constant=_invalid_constant)
+            json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            # Retain even rejected replies before checking completion or identity.
+            self.last_response = result
         except LocalModelError:
             raise
         except (OSError, TimeoutError, http.client.HTTPException, ValueError, UnicodeError) as exc:
@@ -129,6 +164,7 @@ class LocalModel:
         message = choice.get("message")
         if (choice.get("finish_reason") != "stop" or not isinstance(message, dict)
                 or message.get("role") != "assistant" or message.get("tool_calls")
+                or message.get("function_call") or message.get("refusal")
                 or not isinstance(message.get("content"), str) or not message["content"].strip()):
             raise LocalModelError("Local model response is incomplete or is not an assistant text answer")
         if self.protocol != "synthetic":
@@ -148,7 +184,8 @@ class LocalModel:
                 raise LocalModelError("Local model usage is malformed")
             counts[target] = value
         completed = {"text": message["content"], "model": self.model,
-                     "request_id": result.get("id"), "seed": self.seed, **counts}
+                     "request_id": result.get("id"), "seed": self.seed, **counts,
+                     "raw_response": result, "raw_body": body_text}
         if self.protocol != "synthetic":
             completed["assistant_message"] = message
         return completed

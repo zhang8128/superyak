@@ -12,12 +12,14 @@ STAMPEDE_CONFIG ?= $(CURDIR)/.engram/stampede/config.json
 STAMPEDE_ARGS ?=
 RESEARCH_POC_ARGS ?=
 RESEARCH_POC_PYTHON ?= $(CURDIR)/engram/.venv/bin/python
+RESEARCH_TASK_ARGS ?= --help
+RESEARCH_TASK_PYTHON ?= $(CURDIR)/engram/.venv/bin/python
 LEAD_PROBE_ARGS ?= --help
 ATLAS_PYTHON ?= $(CURDIR)/atlas/.venv/bin/python
 ATLAS_PROJECT ?= $(CURDIR)/.engram/atlas/project
 ATLAS_ARGS ?= --help
 
-.PHONY: help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc lead-probe
+.PHONY: help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup              Install all three components from their lockfiles"
@@ -25,6 +27,7 @@ help:
 	@echo "make check-engram       Run the Python suite"
 	@echo "make check-lighthouse   Build, lint, typecheck, test, and run protocol proofs"
 	@echo "make check-atlas        Run the Atlas research workbench suite"
+	@echo "make check-research-tasks Run portable task tests in a separate process"
 	@echo "make check-integration  Compare schemas and validate real-socket receipts"
 	@echo "make chat / make serve  Start Engram chat / its local web interface"
 	@echo "make sessions           List Codex sessions; SESSION_ARGS accepts ask/result"
@@ -36,6 +39,7 @@ help:
 	@echo "make stampede-simulate  Rehearse the whole small matrix locally"
 	@echo "make stampede           Run status/fetch/resume using STAMPEDE_ARGS"
 	@echo "make research-poc       Run/resume local Atlas research; RESEARCH_POC_ARGS sets options"
+	@echo "make research-task      Export/run one frozen task; RESEARCH_TASK_ARGS sets options"
 	@echo "make lead-probe         Probe an existing model endpoint; LEAD_PROBE_ARGS sets options"
 	@echo "make atlas-demo         Render the public research pilot offline"
 	@echo "make atlas              Atlas project CLI; ATLAS_ARGS defaults to --help"
@@ -52,13 +56,16 @@ setup-lighthouse:
 	cd lighthouse && pnpm install --frozen-lockfile
 	cd lighthouse && pnpm build
 
-check: check-engram check-lighthouse check-atlas check-integration
+check: check-engram check-lighthouse check-atlas check-integration check-research-tasks
 
 check-engram:
 	cd engram && LIGHTHOUSE_REPO="$(CURDIR)/lighthouse" uv run --locked --extra dev python -m pytest -q -ra --tb=short
 
 check-atlas:
 	cd atlas && uv run --locked --extra dev --extra mcp python -m pytest -q -ra --tb=short
+
+check-research-tasks:
+	"$(RESEARCH_TASK_PYTHON)" -m pytest tests/research_tasks -q -ra --tb=short
 
 check-lighthouse:
 	cd lighthouse && pnpm check && pnpm proof && pnpm recall:proof
@@ -108,6 +115,9 @@ stampede:
 
 research-poc:
 	"$(RESEARCH_POC_PYTHON)" -m research_poc $(RESEARCH_POC_ARGS)
+
+research-task:
+	"$(RESEARCH_TASK_PYTHON)" -m research_tasks $(RESEARCH_TASK_ARGS)
 
 lead-probe:
 	"$(STAMPEDE_PYTHON)" -m deploy.stampede.probe $(LEAD_PROBE_ARGS)

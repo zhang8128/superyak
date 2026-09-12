@@ -1,5 +1,6 @@
 """Local model inference validation through controlled HTTP responses."""
 
+import base64
 import io
 import json
 
@@ -238,8 +239,79 @@ def test_model_transport_limits_are_reported_as_failures(monkeypatch, document, 
     from workbench.research_model import Ollama
 
     transport(monkeypatch, [response])
+    model = Ollama(MODEL)
     with pytest.raises(RuntimeError):
-        Ollama(MODEL).extract("fate", document, {})
+        model.extract("fate", document, {})
+    assert model.last_response is None
+    assert model.last_response_body is None
+
+
+@pytest.mark.parametrize("body", [
+    b'{"model":"broken fixture"', b'[]',
+    b'{"model":"fixture","count":NaN}',
+    b'{"model":"fixture","count":1e999}',
+    b'{"model":"fixture","model":"second"}',
+    b'{"model":"fixture","metadata":"\\ud800"}',
+])
+def test_invalid_outer_model_json_remains_exact_and_safe_to_checkpoint(monkeypatch, body):
+    from workbench.research_model import Ollama
+
+    requests = transport(monkeypatch, [body])
+    model = Ollama(MODEL)
+    with pytest.raises(ValueError):
+        model.plan("A fixture question", [], [])
+    assert model.last_response["response"] == {"raw_body": body.decode("utf-8")}
+    assert model.last_response_body == body.decode("utf-8")
+    assert model.last_response["context_manifest"] == model.last_context_manifest
+    json.dumps(model.last_response, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    assert len(requests) == 1
+
+
+def test_invalid_utf8_model_body_is_preserved_losslessly(monkeypatch):
+    from workbench.research_model import Ollama
+
+    body = b'{"value":"\xff"}'
+    requests = transport(monkeypatch, [body])
+    model = Ollama(MODEL)
+    with pytest.raises(ValueError):
+        model.plan("A fixture question", [], [])
+    raw = model.last_response["response"]
+    assert base64.b64decode(raw["raw_body_base64"]) == body
+    assert model.last_response_body == raw
+    json.dumps(model.last_response, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    assert len(requests) == 1
+
+
+def test_successful_model_body_is_retained_exactly_and_preflight_failure_clears_it(monkeypatch):
+    from workbench.research_model import Ollama
+
+    answer = completion({"query": "fixture query"})
+    body = b" \n" + json.dumps(answer, indent=2).encode() + b"\n"
+    requests = transport(monkeypatch, [body])
+    model = Ollama(MODEL)
+    assert model.plan("A fixture question", [], []) == "fixture query"
+    assert model.last_response_body.encode("utf-8") == body
+    assert model.last_response == {"response": answer, "context_manifest": model.last_context_manifest}
+    with pytest.raises(ValueError):
+        model.plan("", [], [])
+    assert model.last_response_body is None
+    assert model.last_response is None
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("text", ['{"query":"first","query":"second"}', '{"query":"\\ud800"}'])
+def test_invalid_inner_model_json_is_rejected_without_losing_assistant_state(monkeypatch, text):
+    from workbench.research_model import Ollama
+
+    answer = completion({}, message={"role": "assistant", "content": text,
+                                     "thinking": "Original fixture reasoning"})
+    requests = transport(monkeypatch, [answer])
+    model = Ollama(MODEL)
+    with pytest.raises(ValueError):
+        model.plan("A fixture question", [], [])
+    assert model.last_response["response"] == answer
+    json.dumps(model.last_response, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    assert len(requests) == 1
 
 
 def test_long_or_ambiguous_passages_are_rejected_before_inference(monkeypatch, document):

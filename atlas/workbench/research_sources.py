@@ -14,63 +14,71 @@ import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 from xml.etree import ElementTree
 
+from .research_http import _NoRedirect, _remaining, open_with_deadline
 
 API_BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 PASSAGE_CHAR_LIMIT = 18000
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise HTTPError(req.full_url, code, "Redirects are disabled", headers, fp)
+_REQUEST_STATE = threading.local()
+_REQUEST_SLOTS = {lane: threading.BoundedSemaphore(1) for lane in ("paper", "model")}
 
 
 # The single transport boundary is replaceable in tests; adapters never follow
 # provider-supplied URLs, redirects, or model-generated URLs.
-urlopen = build_opener(_NoRedirect()).open
-_REQUEST_SLOT = threading.BoundedSemaphore(1)
+def urlopen(request, *, timeout):
+    return open_with_deadline(request, timeout=timeout, deadline=_REQUEST_STATE.deadline,
+                              use_environment_proxy=_REQUEST_STATE.lane == "paper")
 
 
-def _request_bytes(request: Request, timeout: float, max_bytes: int) -> bytes:
+def _request_bytes(request: Request, timeout: float, max_bytes: int, *, lane: str = "paper") -> bytes:
     """Bound elapsed time, including DNS, headers, and continuously arriving body data.
 
-    urllib's timeout only limits socket inactivity. One daemon transport thread
-    lets the caller stop at its deadline even before urllib exposes a response.
-    The slot remains occupied through cleanup, so a stuck resolver/header read
-    cannot accumulate another abandoned thread on each retry.
+    Absolute socket deadlines cover headers and body, and prevent late dispatch
+    after DNS/connect. One daemon per fixed lane bounds an uninterruptible DNS
+    call without blocking the other lane. A lane remains occupied until its
+    worker cleans up; retries cannot accumulate abandoned threads.
     """
     deadline = time.monotonic() + _timeout(timeout)
-    if not _REQUEST_SLOT.acquire(blocking=False):
-        raise RuntimeError("Previous HTTP request is still finishing; one request may be in flight")
+    slot = _REQUEST_SLOTS[lane]
+    if not slot.acquire(blocking=False):
+        raise RuntimeError(f"Previous {lane} HTTP request is still finishing; one request may be in flight in this lane")
     done, cancelled = threading.Event(), threading.Event()
     state_lock = threading.Lock()
     state = {"response": None}
 
     def receive():
         try:
+            _REQUEST_STATE.deadline = deadline
+            _REQUEST_STATE.lane = lane
+            _remaining(deadline)
             with urlopen(request, timeout=timeout) as response:
                 with state_lock:
                     state["response"] = response
                 if cancelled.is_set():
                     raise TimeoutError("HTTP request deadline expired")
                 body = response.read(max_bytes + 1)
+                _remaining(deadline)
             if len(body) > max_bytes:
                 raise RuntimeError(f"HTTP response exceeds size limit ({max_bytes} bytes)")
             state["body"] = body
         except (OSError, URLError, HTTPException) as exc:
+            if isinstance(exc, HTTPError):
+                exc.close()
             state["error"] = RuntimeError(f"HTTP request failed: {exc}")
         except Exception as exc:
             state["error"] = exc
         finally:
-            _REQUEST_SLOT.release()
+            slot.release()
             done.set()
 
     try:
-        threading.Thread(target=receive, name="atlas-http-request", daemon=True).start()
+        threading.Thread(target=receive, name=f"atlas-http-{lane}", daemon=True).start()
     except Exception:
-        _REQUEST_SLOT.release()
+        slot.release()
         raise
     if not done.wait(max(0, deadline - time.monotonic())):
         cancelled.set()
@@ -88,9 +96,9 @@ def _request_bytes(request: Request, timeout: float, max_bytes: int) -> bytes:
     return state["body"]
 
 
-def _json_response(request: Request, timeout: float, max_bytes: int) -> dict:
+def _json_response(request: Request, timeout: float, max_bytes: int, *, lane: str = "paper") -> dict:
     try:
-        value = json.loads(_request_bytes(request, timeout, max_bytes))
+        value = json.loads(_request_bytes(request, timeout, max_bytes, lane=lane))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("Provider returned invalid JSON") from exc
     if not isinstance(value, dict):

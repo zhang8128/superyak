@@ -28,7 +28,7 @@ jobs:
       - run: make atlas ATLAS_ARGS='context q-fate'
 
   engram:
-    name: Engram tests
+    name: Engram and portable research tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -41,6 +41,7 @@ jobs:
           cache-dependency-glob: engram/uv.lock
       - run: make setup-engram
       - run: make check-engram
+      - run: make check-research-tasks
 
   lighthouse:
     name: Lighthouse and interoperability

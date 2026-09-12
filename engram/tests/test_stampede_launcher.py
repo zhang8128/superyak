@@ -54,6 +54,12 @@ def _source_tree(root: Path) -> Path:
         "engram/migrations/001_init.sql": "SELECT 1;\n",
         "engram/schemas/lighthouse/example.json": "{}\n",
         "engram/prompts/classify.txt": "synthetic prompt\n",
+        "research_tasks/__init__.py": "",
+        "research_tasks/__main__.py": "def main(): pass\n",
+        "research_tasks/providers.py": "def create_model(): pass\n",
+        "research_tasks/private-task.json": '{"private":true}\n',
+        "research_tasks/runs/response.json": '{"private":true}\n',
+        "research_tasks/runs/private.py": "PRIVATE = True\n",
         ".engram/private-memory.json": '{"patient":"private"}\n',
         "deploy/stampede/.env": "TOKEN=secret\n",
         "deploy/stampede/id_ed25519": "private key\n",
@@ -121,6 +127,10 @@ def test_prepare_bundle_is_deterministic_and_excludes_private_files(tmp_path):
         assert "deploy/stampede/corpus/task.json" in names
         assert "engram/storage.py" in names
         assert "engram/migrations/001_init.sql" in names
+        assert archive.extractfile("research_tasks/__main__.py").read() == b"def main(): pass\n"
+        assert archive.extractfile("research_tasks/providers.py").read() == b"def create_model(): pass\n"
+        assert "research_tasks/private-task.json" not in names
+        assert not any(name.startswith("research_tasks/runs/") for name in names)
         assert "bundle-manifest.json" in names
         assert not any(".engram" in name for name in names)
         assert not any("id_ed25519" in name for name in names)
