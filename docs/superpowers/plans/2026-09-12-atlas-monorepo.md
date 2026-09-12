@@ -62,5 +62,5 @@ Files: root `README.md`, `docs/monorepo-migration.md`, `docs/atlas-research-poc.
 
 - [x] Document exact next interfaces, parallel work, done checks, and research-quality limits.
 - [x] Run full appropriate regression checks and independent review; resolve material findings.
-- [ ] Commit and integrate locally, preserving original dirty work and snapshots.
-- [ ] Update the handoff with completed behavior and next bounded work; no running process is migrated implicitly.
+- [x] Commit and integrate locally, preserving original dirty work and snapshots.
+- [x] Update the handoff with completed behavior and next bounded work; no running process is migrated implicitly.

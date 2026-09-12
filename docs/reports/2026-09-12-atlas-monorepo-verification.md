@@ -90,3 +90,11 @@ Detailed local audit logs, source inventories, reviews, wheels and the prepared
 source archive are retained under
 `.worktrees/atlas-monorepo/.engram/atlas-import/`. The portable evidence for
 contributors is this report, the import manifest, and the executable checks.
+
+## Local integration
+
+`adc686f` was fast-forwarded into local `main`. Atlas setup and the offline demo
+were run from the final checkout, followed by the 35 POC/monorepo tests and the
+Atlas publication parity check; all passed. `HANDOFF.md` retains its existing
+uncommitted desktop restart note and a new local Atlas continuation. The audited
+migration worktree is retained with the logs listed above. Nothing was pushed.
