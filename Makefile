@@ -10,8 +10,10 @@ RUNTIME_ARGS ?=
 STAMPEDE_PYTHON ?= $(CURDIR)/engram/.venv/bin/python
 STAMPEDE_CONFIG ?= $(CURDIR)/.engram/stampede/config.json
 STAMPEDE_ARGS ?=
+RESEARCH_POC_ARGS ?=
+RESEARCH_POC_PYTHON ?= $(CURDIR)/engram/.venv/bin/python
 
-.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede
+.PHONY: help setup setup-engram setup-lighthouse check check-engram check-lighthouse check-integration chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc
 
 help:
 	@echo "make setup              Install both projects from their lockfiles"
@@ -28,6 +30,7 @@ help:
 	@echo "make stampede-deploy    Stage, prepare, and submit the configured campaign"
 	@echo "make stampede-simulate  Rehearse the whole small matrix locally"
 	@echo "make stampede           Run status/fetch/resume using STAMPEDE_ARGS"
+	@echo "make research-poc       Run/resume local Atlas research; RESEARCH_POC_ARGS sets options"
 
 setup: setup-engram setup-lighthouse
 
@@ -81,3 +84,6 @@ stampede-simulate:
 
 stampede:
 	"$(STAMPEDE_PYTHON)" -m deploy.stampede $(STAMPEDE_ARGS)
+
+research-poc:
+	"$(RESEARCH_POC_PYTHON)" -m research_poc $(RESEARCH_POC_ARGS)

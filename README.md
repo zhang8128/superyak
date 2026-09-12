@@ -48,6 +48,12 @@ by default. To run those tests, explicitly supply both
 
 ## Prepare Stampede3
 
+For real public-source research before cluster access, use the separate
+[Atlas research POC](docs/atlas-research-poc.md): `make research-poc` runs two
+logical researchers across individual/shared memory conditions using an existing
+local model and an isolated Atlas snapshot. It produces research drafts and a
+comparison report, and resumes completed work without new model calls.
+
 The [Stampede3 launcher](docs/stampede3-deployment.md) stages an Intel PVC campaign
 with individual/shared memory comparisons and a separate continuing community.
 It starts with bundled synthetic evidence, so patient or participant details are
