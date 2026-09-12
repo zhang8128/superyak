@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "bundle": "workbench/data/cell_fate.json",
+  "views": {
+    "prediction": "workbench/data/lighthouses/prediction.json",
+    "regulation": "workbench/data/lighthouses/regulation.json"
+  }
+}

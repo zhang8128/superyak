@@ -1,0 +1,28 @@
+{
+  "issuer": "urn:atlas:local:regulation",
+  "name": "Atlas local regulation view",
+  "origin": "urn:atlas:research-workbench:cell-fate-pilot",
+  "context": {
+    "id": "research/cell-fate/regulation",
+    "path": [
+      "research",
+      "cell-fate",
+      "regulation"
+    ]
+  },
+  "item_ids": [
+    "q-regulation",
+    "q-fate",
+    "a-grn",
+    "a-perturbation",
+    "a-dynamics",
+    "c-cellrank",
+    "c-markov",
+    "c-beeline",
+    "c-perturbseq",
+    "c-velovi",
+    "e-perturb-regulators"
+  ],
+  "issued_at": "2026-09-07T17:14:07+00:00",
+  "rules": []
+}

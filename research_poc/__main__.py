@@ -22,7 +22,7 @@ from .experiment import CONDITIONS, COMMUNITY, write_report, save, _pin, run_wor
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['prepare', 'run', 'status'], nargs='?', default='run')
-    parser.add_argument('--atlas-source', default=str(Path.home() / 'Projects/atlas-workbench'))
+    parser.add_argument('--atlas-source', default=str(Path(__file__).resolve().parents[1] / 'atlas'))
     parser.add_argument('--output', default='.engram/research-poc/local-pilot')
     parser.add_argument('--model', default='qwen3.8:27b-mlx')
     parser.add_argument('--rounds', type=int, default=2, help='Fixed comparison rounds, 1–20')

@@ -1,0 +1,985 @@
+{
+  "schema_version": 1,
+  "title": "Cell fate & gene regulation",
+  "sources": [
+    {
+      "id": "s-cellrank",
+      "title": "CellRank 2: unified fate mapping in multiview single-cell data.",
+      "url": "https://www.nature.com/articles/s41592-024-02303-9",
+      "year": 2024,
+      "citation": "Weiler P, Lange M, Klein M, Pe'er D, Theis F. (2024). DOI: 10.1038/s41592-024-02303-9."
+    },
+    {
+      "id": "s-lineage",
+      "title": "Lineage tracing on transcriptional landscapes links state to fate during differentiation.",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7608074/",
+      "year": 2020,
+      "citation": "Weinreb C, Rodriguez-Fraticelli A, Camargo FD, Klein AM. (2020). DOI: 10.1126/science.aaw3381."
+    },
+    {
+      "id": "s-beeline",
+      "title": "Benchmarking algorithms for gene regulatory network inference from single-cell transcriptomic data.",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7098173/",
+      "year": 2020,
+      "citation": "Pratapa A, Jalihal AP, Law JN, Bharadwaj A, Murali TM. (2020). DOI: 10.1038/s41592-019-0690-6."
+    },
+    {
+      "id": "s-perturbseq",
+      "title": "Perturb-Seq: Dissecting Molecular Circuits with Scalable Single-Cell RNA Profiling of Pooled Genetic Screens.",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5181115/",
+      "year": 2016,
+      "citation": "Dixit A, Parnas O, Li B, Chen J, Fulco CP, Jerby-Arnon L, Marjanovic ND, Dionne D, Burks T, Raychowdhury R, Adamson B, Norman TM, Lander ES, Weissman JS, Friedman N, Regev A. (2016). DOI: 10.1016/j.cell.2016.11.038."
+    },
+    {
+      "id": "s-wot",
+      "title": "Optimal-Transport Analysis of Single-Cell Gene Expression Identifies Developmental Trajectories in Reprogramming.",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6402800/",
+      "year": 2019,
+      "citation": "Schiebinger G, Shu J, Tabaka M, Cleary B, Subramanian V, Solomon A, Gould J, Liu S, Lin S, Berube P, Lee L, Chen J, Brumbaugh J, Rigollet P, Hochedlinger K, Jaenisch R, Regev A, Lander ES. (2019). DOI: 10.1016/j.cell.2019.01.006."
+    },
+    {
+      "id": "s-velovi",
+      "title": "Deep generative modeling of transcriptional dynamics for RNA velocity analysis in single cells.",
+      "url": "https://www.nature.com/articles/s41592-023-01994-w",
+      "year": 2024,
+      "citation": "Gayoso A, Weiler P, Lotfollahi M, Klein D, Hong J, Streets A, Theis FJ, Yosef N. (2024). DOI: 10.1038/s41592-023-01994-w."
+    }
+  ],
+  "items": [
+    {
+      "id": "q-fate",
+      "kind": "question",
+      "title": "How well can measured cellular state predict cell fate?",
+      "summary": "Compare transcriptomic dynamics, observed clonal outcomes, and time-course couplings. Identify where a prediction needs an independent outcome check.",
+      "status": "proposed",
+      "context": {
+        "scope": "A methods comparison across selected studies; performance does not transfer automatically between biological systems.",
+        "interpretation": "Prediction of a later state is distinct from establishing why a cell takes that fate."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "transcriptomic dynamics",
+          "lineage tracing",
+          "optimal transport"
+        ],
+        "system": [
+          "multiple study systems"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "q-regulation",
+      "kind": "question",
+      "title": "Which gene-regulatory influences help explain fate transitions?",
+      "summary": "Compare expression-based candidate networks with measured responses to genetic perturbations. Ask which observations could support a regulatory explanation.",
+      "status": "proposed",
+      "context": {
+        "scope": "Candidate regulatory influences in specified systems, not a universal gene network.",
+        "interpretation": "Association, a perturbation response, and a direct regulatory mechanism are different claims."
+      },
+      "facets": {
+        "subject": [
+          "gene regulation"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "GRN inference",
+          "genetic perturbation"
+        ],
+        "system": [
+          "multiple study systems"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "a-dynamics",
+      "kind": "approach",
+      "title": "Transcriptomic dynamics and fate mapping",
+      "summary": "Consider CellRank 2 and veloVI as complementary tools for constructing and examining inferred cell-state dynamics.",
+      "status": "proposed",
+      "context": {
+        "interpretation": "Proposed grouping of methods; shared use here does not establish validated integration.",
+        "limitation": "Inspect the model assumptions and compare inferred fates with independent outcomes."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "transcriptomic dynamics"
+        ],
+        "system": [
+          "multiple study systems"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "a-lineage",
+      "kind": "approach",
+      "title": "Lineage-anchored fate assessment",
+      "summary": "Use the LARRY study to examine what clonal outcomes add to a state-based fate prediction.",
+      "status": "proposed",
+      "context": {
+        "interpretation": "Proposed comparison lens for this pilot.",
+        "limitation": "The included study has temporal-resolution and assay-setting boundaries."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "lineage tracing"
+        ],
+        "system": [
+          "mouse hematopoiesis"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "a-transport",
+      "kind": "approach",
+      "title": "Time-course transport",
+      "summary": "Consider Waddington-OT when expression is sampled across time and the question concerns population transitions.",
+      "status": "proposed",
+      "context": {
+        "interpretation": "Proposed alternative view of the fate-prediction question.",
+        "limitation": "Compare inferred couplings with available lineage observations before treating them as ancestry."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "optimal transport"
+        ],
+        "system": [
+          "mouse reprogramming"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "a-grn",
+      "kind": "approach",
+      "title": "Expression-based regulatory network inference",
+      "summary": "Use expression data to nominate candidate links and the BEELINE benchmark to examine the limits of that nomination strategy.",
+      "status": "proposed",
+      "context": {
+        "interpretation": "A candidate-generation approach for this pilot.",
+        "limitation": "Benchmark results are conditional on the evaluated algorithms and reference networks."
+      },
+      "facets": {
+        "subject": [
+          "gene regulation"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "GRN inference"
+        ],
+        "system": [
+          "multiple study systems"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "a-perturbation",
+      "kind": "approach",
+      "title": "Perturbation-based regulator assessment",
+      "summary": "Compare nominated regulatory influences with measured expression responses to tested genetic perturbations.",
+      "status": "proposed",
+      "context": {
+        "interpretation": "Proposed assessment of candidates; expression response alone is not a complete fate mechanism.",
+        "limitation": "Separate response evidence from claims about direct physical binding or long-term fate."
+      },
+      "facets": {
+        "subject": [
+          "gene regulation"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "genetic perturbation"
+        ],
+        "system": [
+          "immune cells and cell lines"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-cellrank",
+      "kind": "claim",
+      "title": "Multiview data can inform inferred fate probabilities",
+      "summary": "CellRank 2 can combine several data views to infer cell-state transitions and fate probabilities.",
+      "status": "source_reported",
+      "context": {
+        "system": "human hematopoiesis, endodermal development and organoid examples",
+        "limitation": "Inferred lineage-correlated genes are not established causal regulators by this claim."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "transcriptomic dynamics"
+        ],
+        "system": [
+          "human hematopoiesis, endodermal development and organoid examples"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-cellrank",
+          "locator": "Abstract; Results: A modular framework for studying state-change trajectories (kernels)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-markov",
+      "kind": "claim",
+      "title": "The CellRank transition model is memoryless",
+      "summary": "Its Markov formulation assumes gradual, memoryless transitions when modeling average cellular behavior.",
+      "status": "source_reported",
+      "context": {
+        "system": "CellRank 2 modeling framework",
+        "limitation": "This assumption concerns modeled average behavior; it does not demonstrate that every cell has memoryless dynamics."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "transcriptomic dynamics"
+        ],
+        "system": [
+          "CellRank 2 modeling framework"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-cellrank",
+          "locator": "Results: A modular framework for studying state-change trajectories (Markov assumption)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-lineage-bias",
+      "kind": "claim",
+      "title": "Clonal outcomes revealed otherwise undetected fate biases",
+      "summary": "In the study’s mouse hematopoiesis experiments, lineage information revealed fate biases not detectable from single-cell RNA measurements alone.",
+      "status": "source_reported",
+      "context": {
+        "system": "mouse hematopoiesis",
+        "limitation": "This result does not establish that all future transcriptomic methods will miss these biases."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "lineage tracing"
+        ],
+        "system": [
+          "mouse hematopoiesis"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-lineage",
+          "locator": "Abstract (sister-cell fate biases)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-larry-limit",
+      "kind": "claim",
+      "title": "LARRY has temporal and assay-setting limits",
+      "summary": "The reported LARRY strategy cannot resolve processes faster than one cell cycle and was restricted to culture/transplantation assays.",
+      "status": "source_reported",
+      "context": {
+        "system": "mouse hematopoiesis culture and transplantation assays",
+        "limitation": "These restrictions apply to the reported strategy, not to all lineage-tracing methods."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "lineage tracing"
+        ],
+        "system": [
+          "mouse hematopoiesis culture and transplantation assays"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-lineage",
+          "locator": "Discussion (LARRY limitations)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-beeline",
+      "kind": "claim",
+      "title": "Evaluated GRN methods had moderate benchmark precision",
+      "summary": "BEELINE found moderate precision-recall and early precision for the evaluated GRN methods, with performance differing across benchmark types.",
+      "status": "source_reported",
+      "context": {
+        "system": "synthetic, Boolean and experimental benchmark networks",
+        "limitation": "This is a 2020 evaluation of selected algorithms and datasets, not an assessment of every current method."
+      },
+      "facets": {
+        "subject": [
+          "gene regulation"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "GRN inference"
+        ],
+        "system": [
+          "synthetic, Boolean and experimental benchmark networks"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-beeline",
+          "locator": "Abstract (precision-recall, early precision and benchmark comparison)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-perturbseq",
+      "kind": "claim",
+      "title": "Perturb-seq measures expression responses to tested perturbations",
+      "summary": "Perturb-seq links pooled genetic perturbations to single-cell expression responses, allowing effects of tested perturbations to be measured.",
+      "status": "source_reported",
+      "context": {
+        "system": "immune cells and cell lines, including dendritic-cell activation",
+        "limitation": "An expression response does not establish every affected gene as a direct physical binding target."
+      },
+      "facets": {
+        "subject": [
+          "gene regulation"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "genetic perturbation"
+        ],
+        "system": [
+          "immune cells and cell lines, including dendritic-cell activation"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-perturbseq",
+          "locator": "Summary; Results (pooled combinatorial CRISPR screens with scRNA-seq readout)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-wot",
+      "kind": "claim",
+      "title": "Time-course data can yield inferred ancestor–descendant couplings",
+      "summary": "Waddington-OT estimates ancestor–descendant couplings from sampled expression time courses, demonstrated in mouse somatic-cell reprogramming.",
+      "status": "source_reported",
+      "context": {
+        "system": "mouse somatic-cell reprogramming",
+        "limitation": "These are inferred couplings between sampled populations, not directly observed ancestry for every cell pair."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "optimal transport"
+        ],
+        "system": [
+          "mouse somatic-cell reprogramming"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-wot",
+          "locator": "Summary; Modeling developmental processes with optimal transport",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "c-velovi",
+      "kind": "claim",
+      "title": "veloVI quantifies uncertainty in inferred RNA velocity",
+      "summary": "veloVI estimates RNA velocity with gene-specific dynamical modeling and quantifies uncertainty in the inferred velocities.",
+      "status": "source_reported",
+      "context": {
+        "system": "single-cell RNA velocity datasets evaluated in the paper",
+        "limitation": "Uncertainty is conditional on the model and data, not independent validation of lineage or causal regulation."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "transcriptomic dynamics"
+        ],
+        "system": [
+          "single-cell RNA velocity datasets evaluated in the paper"
+        ]
+      },
+      "evidence": [
+        {
+          "source_id": "s-velovi",
+          "locator": "Abstract; Results: veloVI identifies insufficiently observed or steady-state dynamics",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "e-heldout-fates",
+      "kind": "experiment",
+      "title": "Compare predictions with held-out clonal outcomes",
+      "summary": "Proposed study question: compare state-based fate predictions with clonal outcomes excluded from model fitting, while matching the system and observation window.",
+      "status": "proposed",
+      "context": {
+        "interpretation": "Study proposal only; no experiment or model comparison has been run.",
+        "result_that_would_change_interpretation": "If clonal outcomes systematically disagree with predicted fate probabilities in the matched setting, narrow the applicability claim and examine missing state information.",
+        "limitation": "Predefine the evaluation split, outcome definitions and temporal resolution before interpreting agreement."
+      },
+      "facets": {
+        "subject": [
+          "cell fate"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "lineage tracing",
+          "transcriptomic dynamics"
+        ],
+        "system": [
+          "a matched lineage dataset, to be selected"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "e-perturb-regulators",
+      "kind": "experiment",
+      "title": "Compare candidate links with matched-state perturbation responses",
+      "summary": "Proposed study question: assess whether candidate regulatory links anticipate expression responses to perturbations in matched cellular states.",
+      "status": "proposed",
+      "context": {
+        "interpretation": "Study proposal only; no perturbations have been performed for this pilot.",
+        "result_that_would_change_interpretation": "If candidate links fail to anticipate responses after suitable controls, weaken the regulatory interpretation; agreement would motivate further mechanism and fate-outcome checks.",
+        "limitation": "State matching, controls and direct-versus-indirect effects need a study-specific design."
+      },
+      "facets": {
+        "subject": [
+          "gene regulation"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "method": [
+          "GRN inference",
+          "genetic perturbation"
+        ],
+        "system": [
+          "a matched perturbation dataset, to be selected"
+        ]
+      },
+      "evidence": [],
+      "provenance": {
+        "curation": "Atlas literature pilot, 2026-09-07; no expert review"
+      },
+      "reviewed_by": "",
+      "reviewed_at": ""
+    }
+  ],
+  "relations": [
+    {
+      "id": "r-a-dynamics-addresses-q-fate",
+      "subject": "a-dynamics",
+      "predicate": "addresses",
+      "object": "q-fate",
+      "status": "proposed",
+      "rationale": "Candidate way to examine the fate-prediction question in an appropriate dataset.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-a-lineage-addresses-q-fate",
+      "subject": "a-lineage",
+      "predicate": "addresses",
+      "object": "q-fate",
+      "status": "proposed",
+      "rationale": "Candidate way to examine the fate-prediction question in an appropriate dataset.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-a-transport-addresses-q-fate",
+      "subject": "a-transport",
+      "predicate": "addresses",
+      "object": "q-fate",
+      "status": "proposed",
+      "rationale": "Candidate way to examine the fate-prediction question in an appropriate dataset.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-a-grn-addresses-q-regulation",
+      "subject": "a-grn",
+      "predicate": "addresses",
+      "object": "q-regulation",
+      "status": "proposed",
+      "rationale": "Candidate way to investigate regulatory influences; inspect what each measurement can establish.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-a-perturbation-addresses-q-regulation",
+      "subject": "a-perturbation",
+      "predicate": "addresses",
+      "object": "q-regulation",
+      "status": "proposed",
+      "rationale": "Candidate way to investigate regulatory influences; inspect what each measurement can establish.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-cellrank-supports-a-dynamics",
+      "subject": "c-cellrank",
+      "predicate": "supports",
+      "object": "a-dynamics",
+      "status": "proposed",
+      "rationale": "A reported capability motivates considering this approach.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-cellrank",
+          "locator": "Abstract; Results: A modular framework for studying state-change trajectories (kernels)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-markov-challenges-a-dynamics",
+      "subject": "c-markov",
+      "predicate": "challenges",
+      "object": "a-dynamics",
+      "status": "proposed",
+      "rationale": "Inspect this modeling assumption before transferring the approach to a new system.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-cellrank",
+          "locator": "Results: A modular framework for studying state-change trajectories (Markov assumption)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-lineage-bias-supports-a-lineage",
+      "subject": "c-lineage-bias",
+      "predicate": "supports",
+      "object": "a-lineage",
+      "status": "proposed",
+      "rationale": "The observed fate biases motivate checking predictions against clonal outcomes.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-lineage",
+          "locator": "Abstract (sister-cell fate biases)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-lineage-bias-challenges-a-dynamics",
+      "subject": "c-lineage-bias",
+      "predicate": "challenges",
+      "object": "a-dynamics",
+      "status": "proposed",
+      "rationale": "The reported gap is a reason to test whether measured state captures the relevant fate information.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-lineage",
+          "locator": "Abstract (sister-cell fate biases)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-larry-limit-challenges-a-lineage",
+      "subject": "c-larry-limit",
+      "predicate": "challenges",
+      "object": "a-lineage",
+      "status": "proposed",
+      "rationale": "An assay boundary may limit which transition times and settings can be assessed.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-lineage",
+          "locator": "Discussion (LARRY limitations)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-beeline-challenges-a-grn",
+      "subject": "c-beeline",
+      "predicate": "challenges",
+      "object": "a-grn",
+      "status": "proposed",
+      "rationale": "The benchmark motivates testing candidate links rather than equating inference with established regulation.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-beeline",
+          "locator": "Abstract (precision-recall, early precision and benchmark comparison)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-perturbseq-supports-a-perturbation",
+      "subject": "c-perturbseq",
+      "predicate": "supports",
+      "object": "a-perturbation",
+      "status": "proposed",
+      "rationale": "Measured responses offer an assessment route for nominated regulatory influences.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-perturbseq",
+          "locator": "Summary; Results (pooled combinatorial CRISPR screens with scRNA-seq readout)",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-wot-supports-a-transport",
+      "subject": "c-wot",
+      "predicate": "supports",
+      "object": "a-transport",
+      "status": "proposed",
+      "rationale": "The reported coupling framework motivates a time-course view of fate prediction.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-wot",
+          "locator": "Summary; Modeling developmental processes with optimal transport",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-c-velovi-supports-a-dynamics",
+      "subject": "c-velovi",
+      "predicate": "supports",
+      "object": "a-dynamics",
+      "status": "proposed",
+      "rationale": "Uncertainty estimates offer something to inspect when assessing inferred dynamics.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [
+        {
+          "source_id": "s-velovi",
+          "locator": "Abstract; Results: veloVI identifies insufficiently observed or steady-state dynamics",
+          "note": "Authors report this result or boundary in the indicated section."
+        }
+      ],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-e-heldout-fates-tests-q-fate",
+      "subject": "e-heldout-fates",
+      "predicate": "tests",
+      "object": "q-fate",
+      "status": "proposed",
+      "rationale": "A proposed comparison could change the scope of the prediction claim.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-e-heldout-fates-tests-a-dynamics",
+      "subject": "e-heldout-fates",
+      "predicate": "tests",
+      "object": "a-dynamics",
+      "status": "proposed",
+      "rationale": "Use independent outcomes to examine the proposed dynamics approach.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-e-heldout-fates-uses_method-a-lineage",
+      "subject": "e-heldout-fates",
+      "predicate": "uses_method",
+      "object": "a-lineage",
+      "status": "proposed",
+      "rationale": "Clonal outcomes are the proposed comparison measurement.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-e-perturb-regulators-tests-q-regulation",
+      "subject": "e-perturb-regulators",
+      "predicate": "tests",
+      "object": "q-regulation",
+      "status": "proposed",
+      "rationale": "A proposed response comparison could weaken or motivate further testing of a regulatory interpretation.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-e-perturb-regulators-tests-a-grn",
+      "subject": "e-perturb-regulators",
+      "predicate": "tests",
+      "object": "a-grn",
+      "status": "proposed",
+      "rationale": "Test whether nominated links anticipate matched-state responses.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    },
+    {
+      "id": "r-e-perturb-regulators-uses_method-a-perturbation",
+      "subject": "e-perturb-regulators",
+      "predicate": "uses_method",
+      "object": "a-perturbation",
+      "status": "proposed",
+      "rationale": "Perturbation responses are the proposed assessment measurement.",
+      "context": {
+        "interpretation": "Atlas editorial link; not expert adjudicated."
+      },
+      "evidence": [],
+      "reviewed_by": "",
+      "reviewed_at": ""
+    }
+  ]
+}

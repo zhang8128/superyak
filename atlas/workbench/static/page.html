@@ -1,0 +1,37 @@
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>{{TITLE}} · Atlas workbench</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<a class="skip-link" href="#workspace">Skip to record browser</a>
+<header class="masthead"><a class="brand" href="#top">ATLAS <span>Research workbench</span></a><span class="offline">Local collection · works offline</span></header>
+<main id="top">
+<div class="page-intro"><div><p class="eyebrow">Local research collection</p><h1>{{TITLE}}</h1></div><p class="collection-counts">{{COUNTS}}<br><span>Collection counts, not rankings.</span></p></div>
+<p class="intro-note">Explore research questions and their recorded connections. Check each record's scope, source evidence and review status; coverage varies across the collection.</p>
+<section class="questions" aria-label="Research questions">{{QUESTIONS}}</section>
+<details class="reading-guide"><summary>How to read status and evidence</summary><div class="legend"><p><span class="badge proposed">proposed</span> A question, interpretation, relation or experiment awaiting assessment.</p><p><span class="badge source_reported">source-reported</span> Attributed to a publication; not independently replicated here.</p><p><span class="badge reviewed">reviewed</span> A named local assessment with a timestamp; the software does not verify credentials or certify truth.</p><p><span class="badge withdrawn">withdrawn</span> Excluded from active dependency traversal; retained for inspection.</p></div><p>Source evidence reports what a publication says. Connecting that finding to a question or approach is our interpretation. A challenge marks a boundary to examine, not blanket disproof. Source links open online; the collection itself needs no connection.</p></details>
+<section id="workspace" aria-label="Record browser" class="workspace">
+<div class="browser">
+<h2>Explore the collection</h2>
+<form id="filters" role="search">
+<div class="control"><label for="search">Search titles & summaries</label><input id="search" type="search" placeholder="e.g. fate, uncertainty, perturbation" autocomplete="off"></div>
+<div class="filter-grid"><div class="control"><label for="kind">Record type</label><select id="kind"><option value="">All types</option><option value="question">Questions</option><option value="approach">Approaches</option><option value="claim">Claims</option><option value="experiment">Experiments</option></select></div><div class="control"><label for="status">Status</label><select id="status"><option value="">All statuses</option><option value="proposed">Proposed</option><option value="source_reported">Source-reported</option><option value="reviewed">Reviewed</option><option value="withdrawn">Withdrawn</option></select></div>{{FILTERS}}</div>
+<div class="filter-footer"><p id="result-count" role="status" aria-live="polite">{{RECORD_COUNT}}</p><button type="reset">Clear filters</button></div>
+</form>
+<p id="no-results" class="empty-state" hidden>No records match these filters. Clear filters or try a broader search.</p>
+<ul id="record-list" class="record-list">{{RECORD_LIST}}</ul>
+</div>
+<div id="detail-pane" class="detail-pane" aria-label="Record details"><p id="selection-note" class="selection-note" hidden>This linked record is outside the current filters. Your filters are preserved.</p><p id="detail-empty">{{DETAIL_EMPTY}}</p>{{DETAILS}}</div>
+</section>
+<section class="collection-footer" aria-label="Collection context"><details><summary>Reviewed prerequisites</summary><p>Only reviewed requires/enables relations with active endpoints are shown. The CLI unlocks command follows these relations to report reachability, not scientific importance.</p>{{DEPENDENCIES}}</details><details><summary>Primary source catalogue</summary><ol class="source-catalogue">{{SOURCES}}</ol></details></section>
+<noscript><p class="empty-state">JavaScript is disabled. The first record and source catalogue remain readable. Enable JavaScript for record navigation and filtering, or use the JSON CLI.</p></noscript>
+</main>
+<footer>Atlas / inspectable research notes <span>Read-only snapshot. Edit and review locally through the CLI, then regenerate.</span></footer>
+<script id="bundle-data" type="application/json">{{DATA}}</script>
+<script>{{JS}}</script>
+</body>
+</html>

@@ -1,0 +1,351 @@
+{
+  "schema_version": 1,
+  "source_manifest_sha256": "28b6a083bb427de8a72ef43aa4abaa7cdd0d0896950e62df29075d0a5e24349b",
+  "layer_facets": {
+    "math": {
+      "discipline": [
+        "mathematics"
+      ]
+    },
+    "physics": {
+      "discipline": [
+        "physics"
+      ]
+    },
+    "chemistry": {
+      "discipline": [
+        "chemistry"
+      ]
+    },
+    "molecular-bio": {
+      "scale": [
+        "molecular"
+      ]
+    },
+    "cellular-bio": {
+      "scale": [
+        "cellular"
+      ]
+    },
+    "systems-bio": {
+      "perspective": [
+        "systems-biology"
+      ]
+    }
+  },
+  "domain_facets": {
+    "aging": {
+      "subject": [
+        "aging"
+      ]
+    },
+    "cell-physiology": {
+      "subject": [
+        "cell-physiology"
+      ]
+    },
+    "cell-signaling": {
+      "subject": [
+        "cell-signaling"
+      ]
+    },
+    "developmental-biology": {
+      "subject": [
+        "development"
+      ]
+    },
+    "epigenomics": {
+      "subject": [
+        "epigenomics"
+      ]
+    },
+    "genomics": {
+      "subject": [
+        "genomics"
+      ]
+    },
+    "kinetics": {
+      "subject": [
+        "reaction-kinetics"
+      ]
+    },
+    "proteomics": {
+      "subject": [
+        "proteomics"
+      ]
+    },
+    "proteostasis": {
+      "subject": [
+        "proteostasis"
+      ]
+    },
+    "rna-biology": {
+      "subject": [
+        "rna-biology"
+      ]
+    },
+    "rna-processing": {
+      "subject": [
+        "rna-processing"
+      ]
+    },
+    "structural-biology": {
+      "subject": [
+        "biomolecular-structure"
+      ]
+    },
+    "thermodynamics": {
+      "subject": [
+        "thermodynamics"
+      ]
+    },
+    "tissue-biology": {
+      "subject": [
+        "tissue-biology"
+      ]
+    },
+    "water": {
+      "subject": [
+        "water"
+      ]
+    },
+    "biocomputing": {
+      "application": [
+        "biocomputing"
+      ]
+    },
+    "drug-discovery": {
+      "application": [
+        "drug-discovery"
+      ]
+    },
+    "enzyme-engineering": {
+      "application": [
+        "enzyme-engineering"
+      ]
+    },
+    "synthetic-biology": {
+      "application": [
+        "synthetic-biology"
+      ]
+    },
+    "translational-biology": {
+      "application": [
+        "translational-biology"
+      ]
+    },
+    "biophysics": {
+      "discipline": [
+        "biophysics"
+      ]
+    },
+    "immunology": {
+      "discipline": [
+        "immunology"
+      ]
+    },
+    "neuroscience": {
+      "discipline": [
+        "neuroscience"
+      ]
+    },
+    "quantum-chemistry": {
+      "discipline": [
+        "quantum-chemistry"
+      ]
+    },
+    "statistical-mechanics": {
+      "discipline": [
+        "statistical-mechanics"
+      ]
+    },
+    "dynamical-systems": {
+      "method": [
+        "dynamical-systems"
+      ]
+    },
+    "graph-theory": {
+      "method": [
+        "graph-theory"
+      ]
+    },
+    "information-theory": {
+      "method": [
+        "information-theory"
+      ]
+    },
+    "ml-forcefields": {
+      "method": [
+        "machine-learned-force-fields"
+      ]
+    },
+    "molecular-dynamics": {
+      "method": [
+        "molecular-dynamics"
+      ]
+    },
+    "multi-scale": {
+      "method": [
+        "multiscale-modeling"
+      ]
+    },
+    "stochastic": {
+      "method": [
+        "stochastic-modeling"
+      ]
+    },
+    "systems-modeling": {
+      "method": [
+        "systems-modeling"
+      ]
+    },
+    "topology": {
+      "method": [
+        "topology"
+      ]
+    }
+  },
+  "merges": [
+    {
+      "canonical": "legacy:cell.syntheticbiology.contextindependent-part-behavior",
+      "aliases": [
+        "legacy:cell.syntheticbiology.contextindependent-part-behavior-t178"
+      ],
+      "title": "Context-independent genetic part behavior",
+      "rationale": "Both notes ask for predictable genetic part behavior across cellular contexts. Preserve the later circuit-level formulation as an attributed variant, not a claim that part insulation suffices for circuit predictability."
+    },
+    {
+      "canonical": "legacy:math.dynamicalsystems.modelselection-number-attractors-highdimensional-generegulat",
+      "aliases": [
+        "legacy:math.dynamicalsystems.model-selection-number-attractors-highdimensional"
+      ],
+      "title": "Model selection for attractor count in gene-regulatory networks",
+      "rationale": "Both formulations ask how to estimate attractor count in high-dimensional gene-regulatory models with limited data; retain the listed selection criteria and noisy longitudinal-data qualification."
+    },
+    {
+      "canonical": "legacy:mole.rnabiology.accurate-longrange-tertiary-contact-prediction",
+      "aliases": [
+        "legacy:mole.rnabiology.accurate-longrange-tertiary-contact-prediction-t75"
+      ],
+      "title": "Accurate long-range RNA tertiary-contact prediction",
+      "rationale": "Both notes concern predicting distal RNA tertiary interactions. Preserve the sequence-only qualifier and examples alongside the broader original formulation."
+    },
+    {
+      "canonical": "legacy:mole.rnabiology.cotranscriptional-folding-dynamics",
+      "aliases": [
+        "legacy:mole.rnabiology.cotranscriptional-folding-dynamics-t75"
+      ],
+      "title": "Co-transcriptional RNA folding dynamics",
+      "rationale": "Both notes model folding of nascent RNA during transcription; preserve their different kinetic, thermodynamic, modification and transient-state details."
+    },
+    {
+      "canonical": "legacy:phys.mlforcefields.uncertainty-quantification-active-learning-loops",
+      "aliases": [
+        "legacy:phys.mlforcefields.uncertainty-quantification-activelearning-loops",
+        "legacy:phys.mlforcefields.integrating-uncertainty-quantification-activelearning-loops"
+      ],
+      "title": "Uncertainty estimation and active learning for molecular force fields",
+      "rationale": "All three formulations use uncertainty in machine-learned force fields to guide on-the-fly quantum-mechanical sampling and training-set expansion. Preserve OOD detection, unreliable-configuration triggers and sampling-efficiency motivations."
+    },
+    {
+      "canonical": "legacy:mole.genomics.integration-prior-knowledge",
+      "aliases": [
+        "legacy:mole.genomics.integration-prior-biological-knowledge"
+      ],
+      "title": "Integrating prior biological knowledge into gene-regulatory network inference",
+      "rationale": "Both notes incorporate transcription-factor motifs, chromatin accessibility and protein interactions as constraints on GRN inference. Preserve epigenomic inputs and the warning about overfitting."
+    }
+  ],
+  "annotations": [
+    {
+      "id": "legacy:cellbio.cellfate.prediction",
+      "facets": {
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "subject": [
+          "cell-fate",
+          "gene-regulation"
+        ]
+      },
+      "rationale": "The saved summary explicitly connects transcriptional state and gene-regulatory switches to cell identity."
+    },
+    {
+      "id": "legacy:molbio.grn.inference",
+      "facets": {
+        "scale": [
+          "molecular",
+          "cellular"
+        ],
+        "subject": [
+          "gene-regulation"
+        ]
+      },
+      "rationale": "The saved summary concerns inference of gene interactions from single-cell measurements."
+    },
+    {
+      "id": "legacy:math.dynamical-systems.integration-of-causal-inference-with-dynamical-modeling",
+      "facets": {
+        "method": [
+          "causal-inference",
+          "dynamical-systems"
+        ]
+      },
+      "rationale": "The saved title and summary combine causal inference and dynamical modeling in a general setting."
+    },
+    {
+      "id": "legacy:syst.aging.integration-dynamical-systems-modeling-causal",
+      "facets": {
+        "method": [
+          "causal-inference",
+          "dynamical-systems"
+        ]
+      },
+      "rationale": "The saved question combines causal inference and dynamical models specifically for aging damage modalities."
+    },
+    {
+      "id": "legacy:cell.systemsmodeling.multiscale-coupling-molecular-attractors-cellular",
+      "facets": {
+        "method": [
+          "multiscale-modeling"
+        ],
+        "scale": [
+          "molecular",
+          "cellular"
+        ]
+      },
+      "rationale": "The saved summary couples molecular attractors to cellular growth, division and signaling."
+    },
+    {
+      "id": "legacy:math.dynamical-systems.multiscale-coupling-of-molecular-attractor-dynamics-to-cellu",
+      "facets": {
+        "method": [
+          "multiscale-modeling"
+        ],
+        "scale": [
+          "molecular",
+          "cellular",
+          "tissue"
+        ]
+      },
+      "rationale": "The saved summary includes differentiation, tissue patterning, communication and spatial structure."
+    }
+  ],
+  "keep_separate": [
+    {
+      "ids": [
+        "legacy:math.dynamical-systems.integration-of-causal-inference-with-dynamical-modeling",
+        "legacy:syst.aging.integration-dynamical-systems-modeling-causal"
+      ],
+      "rationale": "Shared methods, different scope: general causal dynamical modeling versus causal relationships among aging damage modalities."
+    },
+    {
+      "ids": [
+        "legacy:cell.systemsmodeling.multiscale-coupling-molecular-attractors-cellular",
+        "legacy:math.dynamical-systems.multiscale-coupling-of-molecular-attractor-dynamics-to-cellu"
+      ],
+      "rationale": "Shared multiscale methods, different endpoints: cellular phenotypes versus additional tissue patterning, communication and spatial structure."
+    }
+  ]
+}

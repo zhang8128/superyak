@@ -12,15 +12,14 @@ import sys
 import pytest
 
 
-SOURCE = Path(os.environ.get("ATLAS_TEST_SOURCE", "/Users/kairos/Projects/atlas-workbench"))
 ROOT = Path(__file__).resolve().parents[2]
+SOURCE = Path(os.environ.get("ATLAS_TEST_SOURCE", str(ROOT / "atlas")))
 
 
 @pytest.fixture(scope="module")
 def atlas(tmp_path_factory):
     assert (ROOT / "research_poc/atlas_bridge.py").exists(), "Atlas bridge is not implemented"
-    if not (SOURCE / "workbench/automation.py").exists():
-        pytest.skip("Set ATLAS_TEST_SOURCE to an Atlas workbench checkout")
+    assert (SOURCE / "workbench/automation.py").is_file(), f"Missing Atlas source: {SOURCE}"
     bridge = importlib.import_module("research_poc.atlas_bridge")
     root = tmp_path_factory.mktemp("atlas-bridge")
     source = root / "source"

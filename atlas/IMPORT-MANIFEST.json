@@ -1,0 +1,531 @@
+{
+  "base_revision": "3a948a67be3357ed1b1c179a9c405a04450f14d7",
+  "captured_at": "2026-09-12T21:02:10.413734+00:00",
+  "dirty": true,
+  "files": {
+    ".gitignore": {
+      "bytes": 69,
+      "sha256": "47bc66f64784ed1d1aeca6166af9817894946d643e9d4406c9edd973715159c2",
+      "source_status": "tracked"
+    },
+    "AGENTS.md": {
+      "bytes": 2675,
+      "sha256": "db16e190f361597ef34fe9bf45671c3e524c379f741ffc0995206b3fb9fbac30",
+      "source_status": "tracked"
+    },
+    "WORKBENCH.md": {
+      "bytes": 8940,
+      "sha256": "f0ee1031fbf3e247bed2cb6b8bc3c0b1e7970cac7ae01f661dca785dc09069a1",
+      "source_status": "modified"
+    },
+    "docs/dynamic-research-context.md": {
+      "bytes": 7215,
+      "sha256": "7115a7c644a1a87d0b0081c291c894b2a24de98247961f168c64de937fd3b6f1",
+      "source_status": "tracked"
+    },
+    "docs/lighthouse.md": {
+      "bytes": 7910,
+      "sha256": "694c5d078dfd1526d50ce0d42ef2d7f979b71bb8486516786fcc6bbe03d778db",
+      "source_status": "tracked"
+    },
+    "docs/obsidian-research.md": {
+      "bytes": 8344,
+      "sha256": "7e565b3205214777130b19d93c7cd8239422057d7ed7f9f9b00ab856298e05ac",
+      "source_status": "modified"
+    },
+    "docs/ollama-research.md": {
+      "bytes": 10014,
+      "sha256": "308237ec94ce65144890767daaef33bcdea3858a7401bd01248aa989a0dc01fc",
+      "source_status": "modified"
+    },
+    "docs/research-recording.md": {
+      "bytes": 8485,
+      "sha256": "e1edafdd6b8b711db685349013974eb1e0bcc24c8e0e615caf54d072338e626c",
+      "source_status": "modified"
+    },
+    "docs/research-worker-roles.md": {
+      "bytes": 8411,
+      "sha256": "39dbfe4a034ea1f5890ed718aeef09773cb7a6e3d9cdf3dc532f0faa8024adcd",
+      "source_status": "untracked"
+    },
+    "docs/semantic-graph-research.md": {
+      "bytes": 2759,
+      "sha256": "fcc3e5f173352066d1d6794b13d6f0b01e83ceca7fd5d6421e71a9b1379ef89e",
+      "source_status": "tracked"
+    },
+    "docs/source-support-review.md": {
+      "bytes": 5045,
+      "sha256": "5e0a316a2f3ab8047c9c2c1203030fdbf4b9b060f130e219b45ee2c0de47d6ef",
+      "source_status": "untracked"
+    },
+    "docs/superpowers/plans/2026-09-07-lighthouse-views.md": {
+      "bytes": 4188,
+      "sha256": "8b7b3530146c4f032b0ebe2d258ab9d4dc7bd714c167040ad99d78dedd4e1bf7",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/plans/2026-09-07-ollama-research.md": {
+      "bytes": 3451,
+      "sha256": "9448f220422f12310aaab21219671c2ac5a893bcf3a62a185f8d538606f02b9e",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/plans/2026-09-07-research-recording.md": {
+      "bytes": 2055,
+      "sha256": "6dbd9b1cc92540bf507a6fbe5a00b7c09c669e62c789135f026cab8f3eaa0bc4",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/plans/2026-09-07-research-workbench.md": {
+      "bytes": 9479,
+      "sha256": "38733eab61b8a86ade4ab97ef87acf59d82cd0bdeb6f21b49abfeb9098f906cc",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/plans/2026-09-09-answer-relations.md": {
+      "bytes": 6204,
+      "sha256": "150c34573f02041563ed8cf20c66959c448919bdb14e5a00856a917c3d921d78",
+      "source_status": "untracked"
+    },
+    "docs/superpowers/plans/2026-09-09-question-overlap.md": {
+      "bytes": 7974,
+      "sha256": "5d650b0e7e0042783250bbfbe05f089c62f2c1d53fb89e0a62358d577e92dccb",
+      "source_status": "untracked"
+    },
+    "docs/superpowers/specs/2026-09-07-lighthouse-views-design.md": {
+      "bytes": 6215,
+      "sha256": "4a471bb58f9d54d9f9f9d9d97373c23262e763e92e4550d79716de9ded4b0c6e",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/specs/2026-09-07-ollama-research-design.md": {
+      "bytes": 3778,
+      "sha256": "00e23e978f45299f964b2dad6030ebac6f7b446188e214113e4473207774eb1d",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/specs/2026-09-07-research-recording-design.md": {
+      "bytes": 4798,
+      "sha256": "214f0f30ed9f66e9e8204978994837393ee744dcd14d76b8e67ceceee40de62c",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/specs/2026-09-07-research-workbench-design.md": {
+      "bytes": 9085,
+      "sha256": "bd08347b0f751e1ecd7652bc6efa52e45d07d2970ab71a6b71e8d6d7d2a2be84",
+      "source_status": "tracked"
+    },
+    "docs/superpowers/specs/2026-09-09-answer-relations-design.md": {
+      "bytes": 4042,
+      "sha256": "e7010c46d6f8b1d1e16986e7e5f759a94068fb47ed4295dea02b67e298f107dc",
+      "source_status": "untracked"
+    },
+    "docs/superpowers/specs/2026-09-09-question-overlap-design.md": {
+      "bytes": 14565,
+      "sha256": "06ec21a3363e49297321a00b8fd5cada9f413cef746cba3fa83a5d1a58162314",
+      "source_status": "untracked"
+    },
+    "docs/workbench/evaluation.md": {
+      "bytes": 4474,
+      "sha256": "e259579b053774ebf293db95e5384797276e6a071fea6372fbe9fb577af9c61d",
+      "source_status": "tracked"
+    },
+    "docs/workbench/pilot-sources.md": {
+      "bytes": 5492,
+      "sha256": "595adfa00682041a0499b04ac3099698b4d00bd54ed74ef100a445fcc758b1b7",
+      "source_status": "tracked"
+    },
+    "docs/workbench/roadmap.md": {
+      "bytes": 4857,
+      "sha256": "62c13bc0fa92dcde984f92ba4fede0acdc07c0521ba472832a5ea9d45bfccc20",
+      "source_status": "tracked"
+    },
+    "docs/workbench/verification.md": {
+      "bytes": 5580,
+      "sha256": "6b28e0c7b6c35f5b267720e90e5b2c583a66e920b30508aa736270619a282ff4",
+      "source_status": "tracked"
+    },
+    "pyproject.toml": {
+      "bytes": 165,
+      "sha256": "9cb8d49bdd3d884f3966d9b0420490debf02136a4ce86b6660d2be14321bc8f6",
+      "source_status": "tracked"
+    },
+    "scripts/atlas_research.py": {
+      "bytes": 292,
+      "sha256": "a62fc5844aebf220a4e677744d72e4c2983e07f0edd4459202f9bf3d9b738b52",
+      "source_status": "tracked"
+    },
+    "scripts/check_lighthouse_interop.py": {
+      "bytes": 3593,
+      "sha256": "bfc0bc02707287042acebc4f478812adadcfe34348353704e21f39bd7c6eed46",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_answer_relation_integration.py": {
+      "bytes": 7246,
+      "sha256": "9283d89fe7036e938a489db7bb7ea4d27a545c4ad563155d8688ad05715fbbec",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_answer_relations.py": {
+      "bytes": 7660,
+      "sha256": "e7085a2b6790a934220d75ad6bdec0bb099122a557ce3340effb22fed85aea19",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_automation.py": {
+      "bytes": 16477,
+      "sha256": "71132c2513622ad7e7c88d07a3af96f254d543fb8df0f5e0dbbb2f5ef509103c",
+      "source_status": "modified"
+    },
+    "tests/workbench/test_cleanup.py": {
+      "bytes": 7117,
+      "sha256": "7e5ab50537697879d548afdd7d96d10a9f1579069c5d2b3789566ba6de6f5e04",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_cli.py": {
+      "bytes": 5853,
+      "sha256": "802878fee5c2efd00db0024237d6674edd6d108f933b7641efcc7e866360176a",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_legacy.py": {
+      "bytes": 3207,
+      "sha256": "0b29f4a8a25af4b7a2c059ae23ba7028fa725e8eab51ffb2ca81f27aae0b92c0",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_lighthouse.py": {
+      "bytes": 12791,
+      "sha256": "48aaeb56c9cd75adf5684ed082ff4234e76c3635b57bf41b9f217faa9c7428ed",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_lighthouse_wire.py": {
+      "bytes": 18309,
+      "sha256": "b3b90742d5be381f67ee218aa9e07058192d3317dd4be2a9fe4eae0770f50212",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_obsidian_graph.py": {
+      "bytes": 10799,
+      "sha256": "773f5d3d9dbb60520bb3274605b166e2da0578c0ede90d0323fd1cd9ece6772d",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_pilot.py": {
+      "bytes": 3120,
+      "sha256": "f79d0fff2d53139b11c1d464dd3ebf0d20bdbfe531a18be1a31def17f030a9cd",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_render.py": {
+      "bytes": 10373,
+      "sha256": "f94414cc7f8badbd08b8df27c16673308e1a88c8748a78406f2edd6d7f83e1d3",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_research_agenda.py": {
+      "bytes": 9853,
+      "sha256": "523b0bc6bc47af0db75f00986cdab0011865cdce21b013e15b00cbab69047d34",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_agenda_integration.py": {
+      "bytes": 6649,
+      "sha256": "38f76282f7c2eb8d256b6d788209c940c76d3a45c85cb3319275a2f7617cc42d",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_answer_views.py": {
+      "bytes": 8283,
+      "sha256": "662b5bb4355adf027897a9d627c60f49ca251dffa1aa8bd1d88ff4aff364a3de",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_connections.py": {
+      "bytes": 20768,
+      "sha256": "7eadf829638e6470010714218ab2d8e719424cbae0ecefe9df58396a7f41f94f",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_context.py": {
+      "bytes": 8982,
+      "sha256": "67cc84d1fcaf02dd18e241a0e85215bbc796317f1723bd8ee5d1808cf4b931df",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_research_dynamic_integration.py": {
+      "bytes": 9236,
+      "sha256": "e7e5760234d95a30f148d2cfccc2e35b37febd91b254acc56114da78f23b6076",
+      "source_status": "modified"
+    },
+    "tests/workbench/test_research_evidence.py": {
+      "bytes": 5524,
+      "sha256": "1d4fe57f00d6cd7a5bf5ff997cf8aec8e47f94474cafc3175099cc9e8eec5967",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_graph.py": {
+      "bytes": 19120,
+      "sha256": "2130baabbceb80a8785519f6bef0248c55eb106e2f58ca463c856a002d4d2ecd",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_graph_audit.py": {
+      "bytes": 19960,
+      "sha256": "58e1afe59b8251547a07e08c4f6a00954e9bfe6391f5c8a87a666b1e6be72e21",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_graph_model.py": {
+      "bytes": 20619,
+      "sha256": "a9da265ec98de50cf431985ed52b010d2c49237a9be45de965170992698433c1",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_graph_review.py": {
+      "bytes": 9978,
+      "sha256": "82fce78a112bd0259de8ca3345dce3e9a638903973625086589ce04b7dc8bd5b",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_graph_views.py": {
+      "bytes": 10321,
+      "sha256": "e406ee061d45619b638f9f3c1bab945eb4df54ab0cd5c4f4082e722e0b692186",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_graph_workers.py": {
+      "bytes": 16346,
+      "sha256": "5f148e6d210de58c3b6f770113e930fab9b6126a9ff336197406fe570a8b8260",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_model.py": {
+      "bytes": 11804,
+      "sha256": "7b1d6b2f358185aff55e434efb4d368b619f3542c9a07ddc3736066286c7285d",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_research_monitor.py": {
+      "bytes": 6781,
+      "sha256": "8bf3f693f778ce97494a93cb2e0e473235a39057becb0adca2fcc7941a692c2b",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_research_reuse.py": {
+      "bytes": 14955,
+      "sha256": "99df0ea67fe765b71e79ee3e53cc326ae871e8858216d1dc11e3b9a034c365eb",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_review.py": {
+      "bytes": 15171,
+      "sha256": "bc5bd4aa97de95dd2d9a2bea751c179c93900e110549b94ac179dbe4c8781cb7",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_research_runner.py": {
+      "bytes": 9626,
+      "sha256": "acd61851efc324d2f95da2a6566bf8cdfc23e27ad485898024ef58d87e6a9133",
+      "source_status": "modified"
+    },
+    "tests/workbench/test_research_service.py": {
+      "bytes": 10202,
+      "sha256": "e4aeec76e1409ec23153b18e32f48364cb0dd113e11ff1a1465dd3c1c4963227",
+      "source_status": "modified"
+    },
+    "tests/workbench/test_research_sources.py": {
+      "bytes": 14858,
+      "sha256": "30645ef7ad0063a4c4195b316365734dc626e50583c14b8a3955c382bb60711d",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_research_views.py": {
+      "bytes": 13101,
+      "sha256": "6493011b4beaaee67a2ec9bca642ba31262e3b1ea2c0593e96ce2192fd06d5c1",
+      "source_status": "tracked"
+    },
+    "tests/workbench/test_research_workers.py": {
+      "bytes": 6245,
+      "sha256": "29f341ff6b049f18c0b6edc1cf8944f8b9203e1c15d63d947fb87b05f917eada",
+      "source_status": "untracked"
+    },
+    "tests/workbench/test_store.py": {
+      "bytes": 11375,
+      "sha256": "2d344ff3ba31e812d18d5db7f12ae0d24de863a7d8e9300615d91eda91e6050a",
+      "source_status": "tracked"
+    },
+    "workbench/__init__.py": {
+      "bytes": 153,
+      "sha256": "21e895192b0b63029cbd5972f5708a7b46ce331870b6aee7ef43e03906955c70",
+      "source_status": "tracked"
+    },
+    "workbench/__main__.py": {
+      "bytes": 4803,
+      "sha256": "cf355a3917dac6d45222988fa138f524499780297fa334f7d4a7592ebe41c983",
+      "source_status": "tracked"
+    },
+    "workbench/automation.py": {
+      "bytes": 30983,
+      "sha256": "294461a35da6818dcd4fafd9bd6331cb04f99822d0345e45644d0f425b065b21",
+      "source_status": "modified"
+    },
+    "workbench/automation_mcp.py": {
+      "bytes": 7501,
+      "sha256": "27d9b4f6074f50a47590a83e18a387ea9635f2427187c4e39f531e67086cd4dc",
+      "source_status": "modified"
+    },
+    "workbench/cleanup.py": {
+      "bytes": 12948,
+      "sha256": "da43b4a455c3a8f5777ff70192b33a60ec5f1665b165ba4e46ef2ae83d75bdeb",
+      "source_status": "tracked"
+    },
+    "workbench/data/archive_cleanup.json": {
+      "bytes": 9570,
+      "sha256": "04d65ef0a592ff1a582f9df7092e2d199d65462bbfefc63646cd068827293473",
+      "source_status": "tracked"
+    },
+    "workbench/data/cell_fate.json": {
+      "bytes": 33782,
+      "sha256": "2e7b2e9a8cae8bac5061fc4d2c124b2081928aa0910b4a6fe44e73632c2cc834",
+      "source_status": "tracked"
+    },
+    "workbench/data/lighthouse-automation.json": {
+      "bytes": 209,
+      "sha256": "5eec39414e764076a17381025f0ac32ad333aff56954c04ad5bac0bba855c01d",
+      "source_status": "tracked"
+    },
+    "workbench/data/lighthouses/prediction.json": {
+      "bytes": 1308,
+      "sha256": "2fbb73640d3fe1a9ed89aadd3f45dce5548cb75c361694f53ed1b2596bdff876",
+      "source_status": "tracked"
+    },
+    "workbench/data/lighthouses/regulation.json": {
+      "bytes": 566,
+      "sha256": "977d1001da458abc39de3fea9689ffcfd5daef9759974d965fc5fe4235710b47",
+      "source_status": "tracked"
+    },
+    "workbench/legacy.py": {
+      "bytes": 3808,
+      "sha256": "bcbb3ceb9e9c02089cf007b61971b83fd136b7d0ff5ac80af11bf1aa9562ace0",
+      "source_status": "tracked"
+    },
+    "workbench/lighthouse.py": {
+      "bytes": 22273,
+      "sha256": "eaeaae790efb25600709630cee9a6d20e662f56b842dce01cf94435726715747",
+      "source_status": "modified"
+    },
+    "workbench/lighthouse_wire.py": {
+      "bytes": 10732,
+      "sha256": "45309cf942adad5ac31f4ab065787551987e8dbcd795f83ac764724c0cea0685",
+      "source_status": "tracked"
+    },
+    "workbench/render.py": {
+      "bytes": 13120,
+      "sha256": "d972d053fc3e092c2b0077199b408065d2d0ecf892dbbc386874c2cb0760b4e4",
+      "source_status": "modified"
+    },
+    "workbench/research_agenda.py": {
+      "bytes": 11789,
+      "sha256": "b8edc4ca11ba05f784c49f96e46bf97f3892e19aba5467a5126ac7917e8da817",
+      "source_status": "untracked"
+    },
+    "workbench/research_connections.py": {
+      "bytes": 18101,
+      "sha256": "ac1d8086b667759043f41918ac8b81e2945b36d95d565c3af162b9d095204643",
+      "source_status": "untracked"
+    },
+    "workbench/research_context.py": {
+      "bytes": 12684,
+      "sha256": "22c25f467d667a8b1293ec04b27cace29fb77144b597ead788d60f4a67e07b36",
+      "source_status": "modified"
+    },
+    "workbench/research_evidence.py": {
+      "bytes": 4329,
+      "sha256": "cd0f4fddf4ad317efb93889b597fe776744638c7c5737b91c22285fe5deb7ba7",
+      "source_status": "untracked"
+    },
+    "workbench/research_graph.py": {
+      "bytes": 13636,
+      "sha256": "62e7488c229c5a72f9c58564b2f75d547b8d53d3d7f6ee854bce1db8ca36b161",
+      "source_status": "untracked"
+    },
+    "workbench/research_graph_audit.py": {
+      "bytes": 19798,
+      "sha256": "fde4b3a387e07c8c2c42177ec7b7913a879f33b5684610934dfd0a9c77ed1558",
+      "source_status": "untracked"
+    },
+    "workbench/research_graph_model.py": {
+      "bytes": 26162,
+      "sha256": "94c0452711c7528ff910852440b95209bef18eb3a74c19a1cda5e915caf169f5",
+      "source_status": "untracked"
+    },
+    "workbench/research_graph_review.py": {
+      "bytes": 7830,
+      "sha256": "bb27bf857da3e8afa49662067aac9da4a3705ca3d0afafd2088daeda41e8338d",
+      "source_status": "untracked"
+    },
+    "workbench/research_graph_work.py": {
+      "bytes": 12132,
+      "sha256": "0c82260a3f24e3a6949b2f692a5e83b542b987c8db9b9b1e99caba9c580215fa",
+      "source_status": "untracked"
+    },
+    "workbench/research_model.py": {
+      "bytes": 20095,
+      "sha256": "392aa0461510f23e6c431ec693c9ae2830dbbbb6eeb9a7f02bc16d8d07c5536f",
+      "source_status": "modified"
+    },
+    "workbench/research_monitor.py": {
+      "bytes": 9071,
+      "sha256": "881fa97f2fa372e1b024f5b95aabad6b73e7a48e0e9a7a22da96873648d04137",
+      "source_status": "modified"
+    },
+    "workbench/research_obsidian.py": {
+      "bytes": 14885,
+      "sha256": "5cb069b675308324f543f0a3c2e7bc83c2d180d7b610cfdacbfc28d9894b5cdc",
+      "source_status": "untracked"
+    },
+    "workbench/research_overlap.py": {
+      "bytes": 7713,
+      "sha256": "e0d01f47473dd2559669931e04e56aef3caa8cfcff22f66a1c48c4e99d7b0969",
+      "source_status": "untracked"
+    },
+    "workbench/research_questions.py": {
+      "bytes": 7616,
+      "sha256": "b79bbd50b59752a1678d9c0e02252a343dc325d53536c8c132782fec089dd77e",
+      "source_status": "untracked"
+    },
+    "workbench/research_reuse.py": {
+      "bytes": 7704,
+      "sha256": "e5025fae5b2e2a6f80675d37dea6995b95f5b721487894e884473e577de57b2e",
+      "source_status": "untracked"
+    },
+    "workbench/research_review.py": {
+      "bytes": 14766,
+      "sha256": "5082eb8314e461cec569c354f5dfe042cbd983144fd162425828f8c22df2de02",
+      "source_status": "untracked"
+    },
+    "workbench/research_runner.py": {
+      "bytes": 22507,
+      "sha256": "2d5e68afb5343c615d8f1a35362327124bf56905c04c0f308bf0a80df273e71e",
+      "source_status": "modified"
+    },
+    "workbench/research_service.py": {
+      "bytes": 18195,
+      "sha256": "7f42c78f8a4125968dc4ae54f49a36908d74d001c1fc1ffdcf515ae79dbc1fe5",
+      "source_status": "modified"
+    },
+    "workbench/research_sources.py": {
+      "bytes": 14208,
+      "sha256": "0e40644c9836761fd7a896ea898e5ddfef8ed33a37d25f7873bbcc6ab5bc9e3f",
+      "source_status": "tracked"
+    },
+    "workbench/research_views.py": {
+      "bytes": 23892,
+      "sha256": "75e405ee0472ab24b8e80570504c4d8be075504f3feb1c03a7c424032ecd9864",
+      "source_status": "modified"
+    },
+    "workbench/research_workers.py": {
+      "bytes": 4462,
+      "sha256": "1381587725348e611aad0ceff2ff4d8c602f511a638563afbb11e91cb9c44d77",
+      "source_status": "untracked"
+    },
+    "workbench/static/page.html": {
+      "bytes": 4505,
+      "sha256": "685a7d7374ed6b1bb412d0ad18b9a6594f32469d6c31be38861e09055ba6b0a1",
+      "source_status": "tracked"
+    },
+    "workbench/static/workbench.css": {
+      "bytes": 11136,
+      "sha256": "81caff5fb5ae6f6f7843be3fd4b5586adaf7afc649e7ec476cec39ece619ca8c",
+      "source_status": "tracked"
+    },
+    "workbench/static/workbench.js": {
+      "bytes": 3277,
+      "sha256": "c1f7e6cf9b2f97175fb0c4b05b5df803fc034e6ae95cf880aaaddd4a2145ef9e",
+      "source_status": "tracked"
+    },
+    "workbench/store.py": {
+      "bytes": 17082,
+      "sha256": "5c7f345c79e7b590b043c1ac0b44ea9a61fd65c275a11ff8b1580e1ab2616345",
+      "source_status": "tracked"
+    },
+    "workbench/validation.py": {
+      "bytes": 13752,
+      "sha256": "7a683f6c09de68e04a581b8a2db79b365a54c260c7088fb39285275ccb29986b",
+      "source_status": "modified"
+    }
+  },
+  "format": "superyak-atlas-import-v1",
+  "hash_basis": "Exact imported upstream bytes before monorepo integration edits",
+  "scope": "Current workbench, tests, selected reusable documentation and scripts; no legacy engine or live research state",
+  "source_repository": "atlas-workbench"
+}

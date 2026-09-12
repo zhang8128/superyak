@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atlas-research-workbench"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0"]
+mcp = ["mcp>=1.9,<2"]
+
+[project.scripts]
+atlas-research = "workbench.automation:main"
+atlas-workbench = "workbench.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["workbench*"]
+
+[tool.setuptools.package-data]
+workbench = ["data/cell_fate.json", "data/archive_cleanup.json", "data/lighthouse-automation.json", "data/lighthouses/prediction.json", "data/lighthouses/regulation.json", "static/page.html", "static/workbench.css", "static/workbench.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/workbench"]
+pythonpath = ["."]

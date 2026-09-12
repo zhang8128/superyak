@@ -38,6 +38,21 @@ _ALLOWED_EXACT = {
     "deploy/stampede/simulate.py",
     "engram/pyproject.toml",
     "engram/uv.lock",
+    "scripts/atlas.py",
+    "atlas/pyproject.toml",
+    "atlas/uv.lock",
+    "atlas/IMPORT-MANIFEST.json",
+    "atlas/README.md",
+    "atlas/scripts/atlas_research.py",
+    "atlas/scripts/check_lighthouse_interop.py",
+    "atlas/workbench/data/cell_fate.json",
+    "atlas/workbench/data/lighthouse-automation.json",
+    "atlas/workbench/data/lighthouses/prediction.json",
+    "atlas/workbench/data/lighthouses/regulation.json",
+    "atlas/workbench/data/archive_cleanup.json",
+    "atlas/workbench/static/page.html",
+    "atlas/workbench/static/workbench.css",
+    "atlas/workbench/static/workbench.js",
 }
 _CORPUS_SUFFIXES = {".json", ".txt", ".md", ".yaml", ".yml"}
 _ENGRAM_RESOURCE_SUFFIXES = {".sql", ".json", ".txt"}
@@ -106,6 +121,11 @@ def _allowed_source(path: Path, source: Path) -> bool:
     if posix in _ALLOWED_EXACT:
         return True
     top = relative.parts[0] if relative.parts else ""
+    if top == "research_poc":
+        return len(relative.parts) == 2 and path.suffix == ".py"
+    if top == "atlas":
+        return (len(relative.parts) == 3 and relative.parts[1] == "workbench"
+                and path.suffix == ".py")
     if top == "deploy":
         return (
             len(relative.parts) >= 4

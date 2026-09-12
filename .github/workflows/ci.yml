@@ -10,6 +10,23 @@ permissions:
   contents: read
 
 jobs:
+  atlas:
+    name: Atlas workbench tests and offline demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.8.3"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: atlas/uv.lock
+      - run: make setup-atlas
+      - run: make check-atlas
+      - run: make atlas-demo
+      - run: make atlas ATLAS_ARGS='context q-fate'
+
   engram:
     name: Engram tests
     runs-on: ubuntu-latest

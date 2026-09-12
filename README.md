@@ -1,13 +1,15 @@
 # Superyak
 
-Engram and Lighthouse in one repository. Engram provides persistent memory and
-the dynamic context runtime; Lighthouse defines the interchange protocol and
-its TypeScript conformance kit. Their package boundaries and lockfiles remain
-independent, with shared commands and CI at the root.
+Superyak brings persistent agents, research evidence, and scoped interchange
+into one repository. Engram provides individual and shared memory; Atlas manages
+research questions, sources, proposed findings, and readable views; Lighthouse
+defines interchange contracts and its TypeScript conformance kit. Component
+packages and lockfiles remain independent, with shared commands and CI at the root.
 
 | Path | Contents |
 | --- | --- |
-| [`engram/`](engram/README.md) | Python memory system, MCP server, dynamic chat, and Lighthouse publisher/receiver |
+| [`engram/`](engram/) | Python memory system, MCP server, dynamic chat, and Lighthouse publisher/receiver |
+| [`atlas/`](atlas/README.md) | Evidence workbench, literature workers, source review, and browser/Obsidian views |
 | [`lighthouse/`](lighthouse/README.md) | Protocol schemas, TypeScript packages, adapters, bridges, and proofs |
 | [`scripts/check_integration.py`](scripts/check_integration.py) | Schema agreement and Python-to-TypeScript receipt validation |
 
@@ -24,17 +26,21 @@ make setup
 make check
 ```
 
-`make setup` installs `engram/uv.lock` into `engram/.venv` and
+`make setup` installs `engram/uv.lock` into `engram/.venv`,
+`atlas/uv.lock` into `atlas/.venv`, and
 `lighthouse/pnpm-lock.yaml` into the Lighthouse workspace, then builds its
-packages. `make check` runs the Engram suite, Lighthouse build/lint/typecheck/tests
+packages. `make check` runs the Engram and Atlas suites in separate processes,
+Lighthouse build/lint/typecheck/tests
 and proofs, and the interoperability check. Each check is also available
-separately through `make check-engram`, `make check-lighthouse`, and
+separately through `make check-engram`, `make check-atlas`, `make check-lighthouse`, and
 `make check-integration`. Run `make help` for the command list.
 
 The interoperability check uses disposable synthetic stores and a real local
 Unix socket. It checks both shared schemas and validates four Engram receipts
 with Lighthouse's CLI, including denial and withdrawal scenarios. It also
 checks Unicode artifact digests and scoped receipt exports across both languages.
+Atlas's public pilot publications are also validated by the Python and
+TypeScript implementations, including their policy decisions.
 These cross-language regression tests require the built Lighthouse packages in
 `make check-integration`; Python-only test runs skip them when that setup is absent.
 The interoperability check requires no model credentials or configured live
@@ -45,6 +51,24 @@ by default. To run those tests, explicitly supply both
 `ENGRAM_LIVE_CODEX_CONFIG=/absolute/path/to/config.toml` and
 `ENGRAM_LIVE_CODEX_PROJECT=/absolute/path/to/the/bound/engram` when running
 `make check-engram`. An explicitly supplied invalid configuration fails the tests.
+
+## Try Atlas offline
+
+From the repository root:
+
+```sh
+make setup-atlas
+make atlas-demo
+make atlas ATLAS_ARGS='context q-fate'
+```
+
+The demo copies the public cell-fate pilot into `.engram/atlas/project` and
+refreshes its publications, browser, and Obsidian notes. Open the reported browser
+path to inspect the sources and proposed interpretations. It creates no research
+drafts and makes no model or literature requests. Repeat it to refresh the same
+project. Use `ATLAS_PROJECT=/absolute/path/to/project` to select another project.
+The [Atlas guide](atlas/README.md) covers capture and optional local research;
+the [integration plan](docs/atlas-integration.md) defines the next executable slices.
 
 ## Prepare Stampede3
 
@@ -58,6 +82,8 @@ For real public-source research before cluster access, use the separate
 logical researchers across individual/shared memory conditions using an existing
 local model and an isolated Atlas snapshot. It produces research drafts and a
 comparison report, and resumes completed work without new model calls.
+New runs use the bundled `atlas/` source. Resume requires the same pinned POC
+implementation; the guide explains how to inspect preserved historical runs.
 
 The [Stampede3 launcher](docs/stampede3-deployment.md) stages an Intel PVC campaign
 with individual/shared memory comparisons and a separate continuing community.
@@ -68,6 +94,10 @@ then fill in its SSH login and allocation account when access arrives.
 double-click [Start Stampede3.command](scripts/Start%20Stampede3.command).
 `make stampede-simulate` rehearses memory and recovery locally. Intel hardware
 compatibility is verified during the first compute allocation.
+The source archive carries Atlas and the POC, while the launched campaign still
+uses its bounded synthetic workflow. Whole-Stampede3 execution and the agreed
+four Kimi K3 plus four GLM-5.3 lead identities remain planning scope; model
+placement, replica counts, and useful throughput have not been measured.
 
 ## Run Engram
 
@@ -114,6 +144,12 @@ file and provides MCP, hook, publisher, and read-only status commands. See
 [Runtime installation](docs/runtime-installation.md) for the configuration,
 stable wrapper, supervision, health, restart, and rollback procedures.
 
-Both source histories are retained. See the
-[migration record](docs/monorepo-migration.md) for exact source revisions and
-the relationship to the original checkouts.
+Engram and Lighthouse retain their source histories. Atlas is a selective
+snapshot of its current workbench, including uncommitted source, with original
+file hashes in [IMPORT-MANIFEST.json](atlas/IMPORT-MANIFEST.json). See the
+[migration record](docs/monorepo-migration.md) for source revisions, exclusions,
+and the relationship to the preserved original checkouts.
+
+An open-source release is intended. The repository-wide license is still an
+owner decision; this integration preserves existing notices and does not assign
+a new license to the imported code.

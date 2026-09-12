@@ -1,0 +1,4 @@
+include README.md WORKBENCH.md AGENTS.md IMPORT-MANIFEST.json uv.lock
+include scripts/atlas_research.py scripts/check_lighthouse_interop.py
+recursive-include tests/workbench *.py
+recursive-include docs *.md

@@ -1,0 +1,8 @@
+.codex-pair/
+__pycache__/
+.venv/
+build/
+vault/
+.atlas/
+Research/
+.obsidian/

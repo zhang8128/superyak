@@ -8,14 +8,14 @@ and the Weinreb lineage-tracing study. It needs no patient or participant detail
 
 ## Run
 
-After the repository's normal Python setup, with an Atlas workbench checkout and
-an existing compatible model served on loopback port 11434:
+After `make setup-engram`, with an existing compatible model served on loopback
+port 11434:
 
 ```sh
 make research-poc
 ```
 
-Defaults: Atlas at `~/Projects/atlas-workbench`, model `qwen3.8:27b-mlx`, and output
+Defaults: this checkout's bundled `atlas/`, model `qwen3.8:27b-mlx`, and output
 at `.engram/research-poc/local-pilot`. No model is downloaded. Override explicitly:
 
 ```sh
@@ -62,7 +62,9 @@ not a statement about how many agents the hardware can sustain. Use
 ## What is recorded
 
 - Frozen Atlas Python/public JSON data and its three browser assets, file hashes,
-  upstream revision and dirty flag. The active `.atlas` journal is not copied.
+  source repository revision and dirty flag. For bundled Atlas, the revision is
+  Superyak's; [Atlas's import manifest](../atlas/IMPORT-MANIFEST.json) separately
+  records original upstream provenance. The active `.atlas` journal is not copied.
 - Actual Europe PMC metadata, passage coverage and immutable document hashes.
   An abstract-only retrieval stays labelled abstract-only.
 - Every attempt, response, available model-reported usage, elapsed time, exact
@@ -83,7 +85,8 @@ observations, not causal quality scores. Source review uses the same model famil
 
 ## Recovery and iteration
 
-Repeat the same command to reuse completed calls and findings. Each returned call
+Repeat the same command with the same pinned implementation to reuse completed
+calls and findings. Each returned call
 is saved before memory/publication, and stable IDs repair interruption while
 applying results. An unsuccessful or interrupted HTTP request may have completed
 remotely. It stops that cell and records what is known. After inspecting the audit,
@@ -104,16 +107,33 @@ research iteration should add a broader fixed task set and independent outcome
 checks before making claims about research improvement. Intel backend and
 Stampede infrastructure tests can then run against the same research interfaces.
 
+The monorepo import changed the CLI's default Atlas source. The implementation
+pin includes `research_poc/__main__.py`, so this CLI cannot resume execution of a
+historical run pinned to the previous bytes. Preserve its fingerprint. The old
+`.worktrees/atlas-research-poc` implementation and run artifacts remain available
+locally; use that original implementation for compatible execution, or choose a
+new output directory for current code. The new CLI can still inspect old results:
+
+```sh
+make research-poc RESEARCH_POC_ARGS='status --output .worktrees/atlas-research-poc/.engram/research-poc/live-01'
+```
+
+This historical path belongs to the original development checkout and is not
+included in a fresh clone. Existing frozen Atlas snapshots keep their exact code
+even if the selected source checkout changes later. See the
+[integration plan](atlas-integration.md) for the next research interfaces.
+
 ## Verification
 
 ```sh
 cd engram
-ATLAS_TEST_SOURCE=/path/to/atlas-workbench uv run --locked --extra dev python -m pytest tests/test_research_poc.py tests/test_atlas_poc_bridge.py -q
+uv run --locked --extra dev python -m pytest tests/test_research_poc.py tests/test_atlas_poc_bridge.py -q
 ```
 
 Tests use real Engram storage/sharing and actual Atlas validation, immutable drafts,
 browser and Obsidian rendering. Only model/literature HTTP boundaries use controlled
-fixtures. Atlas integration tests skip when its optional checkout is unavailable.
+fixtures. Atlas integration tests use the bundled source and fail if it is
+missing. `ATLAS_TEST_SOURCE` remains an explicit alternative source selector.
 The [live verification report](superpowers/reviews/2026-09-12-atlas-poc-verification.md)
 records 20 completed research turns, 40 real model calls, 12 shared findings, and
 a completed-run replay with zero additional model calls. It also states the

@@ -1,0 +1,62 @@
+{
+  "issuer": "urn:atlas:local:prediction",
+  "name": "Atlas local prediction view",
+  "origin": "urn:atlas:research-workbench:cell-fate-pilot",
+  "context": {
+    "id": "research/cell-fate/prediction",
+    "path": [
+      "research",
+      "cell-fate",
+      "prediction"
+    ]
+  },
+  "item_ids": [
+    "q-fate",
+    "a-dynamics",
+    "a-lineage",
+    "a-transport",
+    "c-cellrank",
+    "c-markov",
+    "c-lineage-bias",
+    "c-larry-limit",
+    "c-wot",
+    "c-velovi",
+    "e-heldout-fates"
+  ],
+  "issued_at": "2026-09-07T17:14:07+00:00",
+  "rules": [
+    {
+      "id": "inspect-local-regulation",
+      "effect": "allow",
+      "publishers": [
+        "urn:atlas:local:regulation"
+      ],
+      "profiles": [
+        "urn:lighthouse:profile:atlas-research"
+      ],
+      "domains": [
+        "research"
+      ],
+      "actions": [
+        "read",
+        "link_overlap"
+      ],
+      "contexts": [
+        "research/cell-fate/regulation"
+      ],
+      "claimMediaTypes": [
+        "application/vnd.atlas.record-claim+json"
+      ],
+      "purposes": [
+        "research"
+      ],
+      "audiences": [
+        "self"
+      ],
+      "validFrom": "2026-09-07T17:14:07+00:00",
+      "validUntil": "2026-10-07T17:14:07+00:00",
+      "requiredEvidence": [],
+      "requiredAttestations": []
+    }
+  ]
+}
