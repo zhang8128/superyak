@@ -214,3 +214,21 @@ reset workflow, production operations or full-cluster throughput is validated.
 Automatic discovery and a central account authority are deliberately absent.
 Final independent review, repository integration, push and remote CI are owned by
 the controller after this task's verified implementation commit.
+
+## Integration closeout
+
+Final scoped review of implementation `7222037a32b3b2fbbbe2823cff549127c15b4c66`
+confirmed I1–I3 and the related dialog/mobile/artifact/error-state fixes addressed,
+with no new Critical/Important findings. The implementation is merged into local
+main. A fresh browser login against the retained demo, now running the inspected
+candidate-9 wheel with its original data, passed; served JavaScript matches the
+reviewed source. No user content was edited and no model generation was repeated.
+Remote synchronization/CI are recorded separately in the controller's local
+integration receipt, avoiding a claim that local checks are remote CI.
+
+One nonblocking UI follow-up remains: contextual delivery cards compare a local
+resource ID with a qualified received-room ID. A received-room reply may lack its
+summary card or match a same-ID local room. Per-message status and author-filtered
+Connections delivery/check/retry remain available; transport and authorization
+are unchanged. Follow-up should match origin/resource kind as well as the ID.
+The inherited peer and Engram warnings remain disclosed above.

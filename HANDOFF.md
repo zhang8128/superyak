@@ -1,5 +1,29 @@
 # Resume here — medical lighthouse / aDNA
 
+**Peer home reviewed and integrated, September 12 (latest):** The reviewed
+implementation through `7222037a32b3b2fbbbe2823cff549127c15b4c66` is merged into local
+`main`. All required final findings are addressed. The existing user demo now
+serves the reviewed candidate-9 wheel at **http://127.0.0.1:7435**; a fresh Chromium
+login and exact served-JavaScript check passed. Its original state and credentials
+remain in `.worktrees/peer-home/.engram/home-demo/`; no demo reset or content edit
+occurred. Refresh an already-open page to load the final interface.
+
+The standalone Apache-2.0 source is the candidate-9 archive described below.
+The parent repository remains private, and its imported history is not relicensed
+or included in that archive. Actual Mac/Pi acceptance passed ten checks for the
+same Python backend/checker; candidate 9's subsequent browser presentation change
+passed all 27 browser tests and fresh package checks. One nonblocking follow-up
+remains: received-room reply summary cards need origin-aware matching; per-message
+status and Connections check/retry work. Inherited dependency warnings remain.
+
+Atlas/MG research is stopped, with supervision disabled; no model generation was
+repeated. Keep the worktree, all verification evidence and user-entered demo data.
+The local [integration receipt](.worktrees/peer-home/.superpowers/sdd/2026-09-12-peer-home/integration-result.json)
+records the final remote commit and CI outcome as synchronization finishes;
+`git status --short --branch` and `gh run list` provide current remote status.
+The [verification report](docs/reports/2026-09-12-peer-home-verification.md) records
+measured behavior, exact artifact hashes and remaining limits.
+
 **Final peer-home review fixes, September 12 (current source pointer):**
 `codex/peer-home` now includes ordinary participant space creation, authoritative
 saved-version file/member previews with membership-conflict protection, truthful
