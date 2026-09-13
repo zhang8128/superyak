@@ -30,8 +30,12 @@ Gemma4 text model; no full-size materialization or Intel backward pass has run.
 A first real dataset and Stampede3 SSH alias/allocation/reservation are still
 needed; saved login/account fields were empty. Do not invent them or submit jobs.
 This package does not yet expose peer training-consent APIs or distribute adapters.
-All 75 tuning tests passed after the import/masking repairs; source and wheel
-builds passed. The existing peer demo and its model are preserved; Atlas remains stopped.
+Final review approved the implementation and interrupted-checkpoint recovery fix.
+All 77 tuning tests and all 29 Chromium browser workflows passed; source and wheel
+builds passed. Final source/wheel artifacts are in the worktree’s ignored
+`.engram/clinical-tuning-release-final/`. Its
+`.engram/clinical-tuning-verification.json` records final hashes and integration/CI
+status as synchronization completes. Preserve these receipts and the worktree. The existing peer demo and its model are preserved; Atlas remains stopped.
 Dated candidate-only statements and “no weights downloaded” below are superseded
 by this update. Retain the worktree and evidence; use Git for integration status.
 
