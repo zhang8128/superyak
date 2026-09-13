@@ -53,7 +53,7 @@ class Federation:
     def collect(self):
         with self.store.transaction() as db:
             seq = db.execute('SELECT seq FROM federation_cursor WHERE id=1').fetchone()[0]
-            events = db.execute('SELECT * FROM events WHERE id>? ORDER BY id LIMIT 100', (seq,)).fetchall()
+            events = db.execute('SELECT * FROM events WHERE id>? ORDER BY id', (seq,)).fetchall()
             for event in events:
                 kind, rid = event['kind'], event['resource_id']
                 contacts = set()
@@ -216,12 +216,47 @@ class Federation:
         return author, correlation
 
     def status(self, actor):
+        # Materialize local events even with background sync disabled. This never
+        # opens a connection, signs an envelope, or changes retry bytes.
+        self.collect()
         with self.store.transaction() as db:
             result = []
             for row in db.execute('SELECT * FROM outbox ORDER BY event_seq,id').fetchall():
                 author, correlation = self._delivery_authority(db, row)
-                if author == actor:
-                    result.append({**{k:row[k] for k in ('id','resource_id','revision','contact_id','action','status','attempts','next_attempt')}, **correlation})
+                if author != actor:
+                    continue
+                contact = require(db.execute('SELECT remote_contacts.*,peers.paired FROM remote_contacts JOIN peers USING(peer_id) WHERE id=?', (row['contact_id'],)).fetchone())
+                action, status = row['action'], row['status']
+                resource = None
+                if action.startswith('layer.'):
+                    resource = db.execute('SELECT * FROM layers WHERE id=?', (row['resource_id'],)).fetchone()
+                    title = json.loads(resource['draft'])['title'] if resource else 'Layer unavailable'
+                    current = resource and resource['resource_version'] == row['revision']
+                    if current:
+                        snapshot = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?', (row['resource_id'],resource['active_revision'])).fetchone()[0]) if resource['active_revision'] else {}
+                        action = 'layer.release' if contact['id'] in snapshot.get('audience_users', []) else 'layer.withdraw'
+                elif action == 'room.reply':
+                    inbox = db.execute("SELECT revision,payload FROM inbox WHERE origin=? AND resource_id=? AND kind='room' AND recipient=?", (contact['peer_id'],row['resource_id'],actor)).fetchone()
+                    title = json.loads(inbox['payload'])['title'] if inbox and inbox['payload'] else 'Received room'
+                    current = inbox and inbox['payload'] and inbox['revision'] == row['revision']
+                else:
+                    resource = db.execute('SELECT * FROM rooms WHERE id=?', (row['resource_id'],)).fetchone()
+                    title = resource['title'] if resource else 'Room unavailable'
+                    current = resource and resource['epoch'] == row['revision']
+                    if current and not db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?', (row['resource_id'],contact['id'])).fetchone():
+                        action = 'room.withdraw'
+                if status in ('pending','failed') and (not current or not contact['paired']):
+                    status = 'withdrawn'
+                # Delivered/failed signed events describe the actual operation;
+                # obsolete rows remain cancellations, never remote acknowledgments.
+                if row['envelope']:
+                    sent_action = parse(row['envelope'])['action']
+                    if status in ('pending','failed') and sent_action != action:
+                        status = 'withdrawn'
+                    action = sent_action
+                result.append({**{k:row[k] for k in ('id','resource_id','revision','contact_id','attempts','next_attempt')},
+                               'action':action, 'status':status, 'resource_title':title,
+                               'contact_name':contact['name'], 'peer_id':contact['peer_id'], **correlation})
             return result
 
     def retry(self, actor, key):

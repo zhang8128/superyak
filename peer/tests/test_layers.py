@@ -157,3 +157,28 @@ def test_public_only_account_sees_no_private_audience_metadata(env):
     assert not app.state.store.can_deliver_layer(key, users[2]['id'], 2)
     patient.post(f'/api/layers/{key}/withdraw', json={})
     assert not app.state.store.can_deliver_layer(key, users[2]['id'], 1)
+
+
+def test_authoritative_preview_files_members_and_membership_conflict(env):
+    app, clients, users, _ = env
+    patient, doctor, organizer, family = clients
+    space = patient.post('/api/spaces', json={'name':'Selected circle', 'kind':'care-circle', 'member_ids':[users[1]['id']]}).json()
+    file = app.state.store.upload_file(users[0]['id'], 'selected.txt', 'text/plain', base64.b64encode(b'chosen').decode())
+    layer = patient.post('/api/layers', json={'attachment_ids':[file['id']], 'audience_spaces':[space['id']]}).json()
+    url = '/api/layers/' + layer['id']
+    response = patient.get(url + '/preview')
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview['files'][0]['name'] == 'selected.txt'
+    assert {m['name'] for m in preview['audience_details'][0]['members']} == {'Patient','Doctor'}
+    assert organizer.get(url + '/preview').status_code == 404
+    patient.post('/api/spaces/' + space['id'] + '/members', json={'user_id':users[3]['id']})
+    assert patient.post(url + '/activate', json={'version':1, 'space_versions':preview['space_versions']}).status_code == 409
+    preview = patient.get(url + '/preview').json()
+    assert patient.post(url + '/activate', json={'version':1, 'space_versions':preview['space_versions']}).status_code == 200
+    patient.delete('/api/spaces/' + space['id'] + '/members/' + users[1]['id'])
+    active = patient.get('/api/shared/layers/' + layer['id']).json()
+    assert {m['name'] for m in active['audience_details'][0]['members']} == {'Patient','Doctor','Family'}
+    assert 'audience_details' not in doctor.get('/api/shared/layers/' + layer['id']).json()
+    patient.put(url, json={'version':1, 'body':'new draft'})
+    assert patient.post(url + '/activate', json={'version':1, 'space_versions':preview['space_versions']}).status_code == 409

@@ -230,10 +230,14 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = actor(request), await body(request)
         return store.save_layer(who, key, data)
 
+    @app.get('/api/layers/{key}/preview')
+    def layer_preview(key: str, request: Request):
+        return store.preview_layer(actor(request), key)
+
     @app.post('/api/layers/{key}/activate')
     async def layer_activate(key: str, request: Request):
         who, data = actor(request), await body(request)
-        return store.activate_layer(who, key, data.get('version'))
+        return store.activate_layer(who, key, data.get('version'), data.get('space_versions'))
 
     @app.post('/api/layers/{key}/withdraw')
     def layer_withdraw(key: str, request: Request):

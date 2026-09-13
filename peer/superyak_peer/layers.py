@@ -56,12 +56,40 @@ class Layers:
             db.execute('UPDATE layers SET draft=?,version=version+1 WHERE id=?', (encode(draft), key))
             return self._layer_json(self._owned_layer(db, actor, key))
 
-    def activate_layer(self, actor, key, version):
+    def _audience_details(self, db, snapshot):
+        details = []
+        for key in snapshot['audience_spaces']:
+            space = require(db.execute('SELECT * FROM spaces WHERE id=?', (key,)).fetchone())
+            frozen = snapshot.get('resolved_space_users', {}).get(key)
+            members = frozen if frozen is not None else [r[0] for r in db.execute('SELECT user_id FROM space_members WHERE space_id=? ORDER BY user_id', (key,))]
+            details.append({'id':key, 'name':space['name'], 'kind':space['kind'], 'version':space['version'],
+                            'members':[dict(require(db.execute('SELECT id,name FROM users WHERE id=?', (member,)).fetchone())) for member in members],
+                            'membership':'current-and-future' if space['kind'] == 'organization' else 'selected'})
+        return details
+
+    def preview_layer(self, actor, key):
+        with self.transaction() as db:
+            row = self._owned_layer(db, actor, key)
+            draft = self._draft(db, actor, json.loads(row['draft']))
+            details = self._audience_details(db, draft)
+            files = [dict(require(db.execute('SELECT id,name,media_type,size,digest FROM files WHERE id=? AND owner_id=?', (fid,actor)).fetchone())) for fid in draft['attachment_ids']]
+            people = []
+            for contact in draft['audience_users']:
+                table = 'remote_contacts' if contact.startswith('remote_') else 'users'
+                people.append(dict(require(db.execute(f'SELECT id,name FROM {table} WHERE id=?', (contact,)).fetchone())))
+            return {**self._layer_json(row), 'files':files, 'people':people, 'audience_details':details,
+                    'space_versions':{space['id']:space['version'] for space in details}}
+
+    def activate_layer(self, actor, key, version, space_versions=None):
         with self.transaction() as db:
             row = self._owned_layer(db, actor, key)
             if type(version) is not int or version != row['version']:
                 raise Problem(409, 'Draft changed; preview this version again')
             snapshot = self._draft(db, actor, json.loads(row['draft']))
+            if space_versions is not None:
+                current = {space['id']:space['version'] for space in self._audience_details(db, snapshot)}
+                if not isinstance(space_versions, dict) or space_versions != current:
+                    raise Problem(409, 'Space membership changed; preview this version again')
             snapshot['resolved_space_users'] = {}
             snapshot['audience_notes'] = []
             for space_id in snapshot['audience_spaces']:
@@ -145,7 +173,7 @@ class Layers:
             return permitted
         if actor != row['owner_id']:
             return {**permitted, 'owner_id': row['owner_id'], 'created': row['created']}
-        return {**snapshot, **permitted, 'owner_id': row['owner_id'], 'draft_version': row['draft_version'], 'created': row['created']}
+        return {**snapshot, **permitted, 'audience_details':self._audience_details(db, snapshot), 'owner_id': row['owner_id'], 'draft_version': row['draft_version'], 'created': row['created']}
 
     def active_layer(self, key, actor=None, *, public=False):
         """Rechecks current release/access. actor is a trusted local ID, never browser input."""

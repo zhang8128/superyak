@@ -355,3 +355,43 @@ def test_duplicate_remote_send_reports_current_delivery_state(two_peers,current_
     assert repeated=={**original,'state':current_status}
     with pytest.raises(Problem):
         b[0].send_message(b[1],remote,'same','Changed body')
+
+
+def test_status_collects_without_delivery_and_correlates_effective_revocation(two_peers):
+    a, b, ca, cb = two_peers
+    layer = a[0].create_layer(a[1], {'title':'Selected update', 'audience_users':[ca['id']]})
+    a[0].activate_layer(a[1], layer['id'], 1)
+    room = a[0].create_room(a[1], 'Selected room', [ca['id']])
+    rows = a[2].status(a[1])
+    assert len(rows) == 2
+    assert {r['resource_title'] for r in rows} == {'Selected update','Selected room'}
+    assert all(r['contact_name'] == 'Bob' and r['status'] == 'pending' for r in rows)
+    assert b[0].shared_layers(b[1]) == []
+    deliver(a,b)
+    a[0].withdraw_layer(a[1], layer['id'])
+    a[0].remove_participant(a[1], room['id'], ca['id'])
+    pending = [r for r in a[2].status(a[1]) if r['status'] == 'pending']
+    assert {r['action'] for r in pending} == {'layer.withdraw','room.withdraw'}
+    assert b[0].shared_layers(b[1]) and b[0].list_rooms(b[1])
+    assert a[2].status(a[0].create_user('other','Other','long-password')['id']) == []
+    deliver(a,b)
+    rows = a[2].status(a[1])
+    assert all(r['status'] == 'delivered' for r in rows if r['action'].endswith('withdraw'))
+    assert b[0].shared_layers(b[1]) == [] and b[0].list_rooms(b[1]) == []
+
+
+def test_normal_sync_get_exposes_pending_without_network(env, tmp_path):
+    from superyak_peer.db import Store
+    from superyak_peer.federation import Federation
+    app, clients, users, _ = env
+    remote = Store(tmp_path / 'status-remote')
+    other = remote.create_user('remote','Remote recipient','long-password')
+    fed = Federation(remote, endpoint='https://localhost:7435')
+    contact = app.state.federation.pair(users[2]['id'], fed.card(other['id']))
+    layer = clients[0].post('/api/layers', json={'title':'API queued', 'audience_users':[contact['id']]}).json()
+    clients[0].post('/api/layers/' + layer['id'] + '/activate', json={'version':1})
+    response = clients[0].get('/api/sync').json()
+    assert response['enabled'] is False
+    assert len(response['deliveries']) == 1
+    assert response['deliveries'][0]['status'] == 'pending'
+    assert clients[2].get('/api/sync').json()['deliveries'] == []

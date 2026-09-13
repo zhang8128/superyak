@@ -21,6 +21,8 @@ const state = {
   selectedChatId: null,
   currentSpaceId: "all",
   preview: false,
+  spaceDialog: false,
+  spaceError: null,
   confirmWithdraw: false,
   chatDialog: null,
   profileDialog: false,
@@ -171,7 +173,7 @@ function layout(content) {
         ${content}
       </main>
     </div>
-    ${profileDialog()}${reauthDialog()}
+    ${spaceDialog()}${profileDialog()}${reauthDialog()}
   </div>`;
 }
 
@@ -231,7 +233,7 @@ function homeView() {
         ${recentChat ? `<a class="card amber" href="#chats/${pathPart(recentChat.id)}"><p class="eyebrow">Recent chat</p><h3>${escapeHtml(recentChat.title)}</h3><p class="meta">${escapeHtml(participantSummary(recentChat))} · ${formatDate(recentChat.last_activity)}</p></a>` : `<div class="card amber"><h3>Your first private chat</h3><p class="meta">A personal room is useful even before you invite anyone.</p><a class="text-button" href="#chats">Open chats</a></div>`}
       </div>
     </section>
-    <section class="section"><div class="section-head"><h2>Your circles and spaces</h2></div>
+    <section class="section"><div class="section-head"><h2>Your circles and spaces</h2><button class="button secondary" data-action="new-space">Create space</button></div>
       ${spaces.length ? `<div class="grid cols-3">${grouped.map((kind) => {
         const matching = spaces.filter((space) => space.kind === kind);
         return `<div class="card compact"><p class="eyebrow">${kindLabel(kind)}</p>${matching.length ? matching.map((space) => `<h3>${escapeHtml(space.name)}</h3><p class="meta">${space.member_ids.length} ${space.member_ids.length === 1 ? "person" : "people"} · ${escapeHtml(space.audience_note)}</p>`).join("") : `<p class="meta">No ${kind === "care-circle" ? "care circles" : kind + "s"} yet.</p>`}</div>`;
@@ -275,13 +277,13 @@ function choiceContact(contact, selected) {
 
 function choiceSpace(space, selected) {
   const note = space.kind === "organization" ? "Current and future members can see an active release" : "People selected when you activate this version";
-  return `<label class="choice"><input type="checkbox" name="audience-space" value="${escapeHtml(space.id)}" ${selected.includes(space.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(space.name)}</strong><small>${escapeHtml(note)}</small></span></label>`;
+  return `<label class="choice"><input type="checkbox" name="audience-space" aria-label="${escapeHtml(space.name)}" aria-describedby="space-choice-${escapeHtml(space.id)}" value="${escapeHtml(space.id)}" ${selected.includes(space.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(space.name)}</strong><small id="space-choice-${escapeHtml(space.id)}">${escapeHtml((space.member_ids || []).map(contactName).join(", "))} · ${escapeHtml(note)}</small></span></label>`;
 }
 
 function effectiveAudience(active) {
   if (!active) return "Nobody can see this draft.";
   const names = (active.audience_users || []).map(contactName);
-  const spaces = (active.audience_spaces || []).map(spaceName);
+  const spaces = (active.audience_details || []).map((space) => `${space.name}: ${space.members.map((member) => member.name).join(", ")} (${space.kind === "organization" ? "current and future members" : "selected at activation"})`);
   const routes = [...names, ...spaces];
   if (active.public) routes.push("Anyone with the public link");
   return routes.length ? routes.join(" · ") : "No active audience routes";
@@ -305,7 +307,7 @@ function editorState(layer, active) {
   if (layer.active_revision && state.activeLayerErrors[layer.id]) {
     return `<span class="badge active">Active release</span>${unsaved}<span class="state-note">Latest sharing details unavailable</span>`;
   }
-  if (!active) return `<span class="badge draft">Private draft</span>${unsaved}<span class="state-note">Sharing is off</span>`;
+  if (!active) return `<span class="badge draft">Private draft</span>${unsaved}<span class="state-note">Sharing is off on this peer</span>`;
   const unpublished = active.draft_version !== layer.version;
   return `<span class="badge active">Active · version ${active.draft_version}</span>${unsaved}${unpublished ? '<span class="badge draft">Unpublished changes</span>' : '<span class="state-note">Draft and active release match</span>'}`;
 }
@@ -319,7 +321,7 @@ function activePanel(layer, active) {
   if (layer.active_revision && state.activeLayerErrors[layer.id]) {
     return `<div class="active-panel unavailable"><h3>Active release details are unavailable</h3><p>The peer still reports an active release. Its current audience and controls could not be loaded, so no change is being claimed.</p></div>`;
   }
-  if (!active) return `<div class="active-panel"><h3>Sharing is off</h3><p>Your saved draft is private. Preview a concrete saved version before turning it on.</p></div>`;
+  if (!active) return `<div class="active-panel"><h3>Sharing is off on this peer</h3><p>Your saved draft is private. Preview a concrete saved version before turning it on.</p></div>`;
   const publicLink = `/public/?layer=${pathPart(layer.id)}`;
   const routeControls = [
     ...(active.audience_users || []).map((id) => `<button class="button ghost" data-action="revoke-route" data-route-kind="person" data-id="${escapeHtml(id)}">Stop sharing directly with ${escapeHtml(contactName(id))}</button>`),
@@ -331,19 +333,29 @@ function activePanel(layer, active) {
   </div>${routeControls ? `<div class="button-row" aria-label="Turn off individual audience routes">${routeControls}</div>` : ""}</div>`;
 }
 
-function previewDialog(layer) {
-  if (!state.preview) return "";
-  const users = (layer.audience_users || []).map(contactName);
-  const spaces = (layer.audience_spaces || []).map((id) => {
-    const space = state.home.spaces.find((item) => item.id === id);
-    return space ? `${space.name}${space.kind === "organization" ? " (current and future members)" : " (people selected at activation)"}` : "Unknown space";
-  });
-  return `<dialog open aria-labelledby="preview-title"><div class="dialog-body"><p class="eyebrow">Audience preview</p><h2 id="preview-title">Preview version ${layer.version}</h2><p>This exact saved version will become active. Later draft edits stay private until you activate again.</p><div class="preview-paper"><h3>${escapeHtml(layer.title)}</h3><p>${escapeHtml(layer.body)}</p></div><h3>Who would see it</h3><p>${[...users, ...spaces, ...(layer.public ? ["Anyone with the public link"] : [])].map(escapeHtml).join(" · ") || "Only you — no audience is selected."}</p>${layer.public ? "<p>Public access cannot exclude an individual.</p>" : ""}<div class="button-row"><button class="button" data-action="activate">Turn on version ${layer.version}</button><button class="button secondary" data-action="close-dialog">Keep it private</button></div></div></dialog>`;
+function previewDialog() {
+  const layer = state.preview;
+  if (!layer) return "";
+  const spaces = layer.audience_details.map((space) => `${space.name}: ${space.members.map((member) => member.name).join(", ")} (${space.kind === "organization" ? "current and future members can see this release" : "these people selected at activation"})`);
+  return `<dialog aria-labelledby="preview-title"><div class="dialog-body"><p class="eyebrow">Audience preview</p><h2 id="preview-title">Preview version ${layer.version}</h2><p>This exact saved version will become active. Later draft edits stay private until you activate again.</p><div class="preview-paper"><h3>${escapeHtml(layer.title)}</h3><p>${escapeHtml(layer.body)}</p></div><h3>Selected attachments</h3>${layer.files.length ? layer.files.map((file) => `<p><a href="/api/files/${pathPart(file.id)}" target="_blank" rel="noopener">Inspect ${escapeHtml(file.name)}</a><small class="meta"> · ${formatBytes(file.size)} · ${escapeHtml(file.media_type)}</small></p><details><summary>File details</summary><p class="fingerprint meta">SHA-256: ${escapeHtml(file.digest)}</p></details>`).join("") : "<p>No attachments selected.</p>"}<h3>Who would see it</h3><p>${[...layer.people.map((person) => person.name), ...spaces, ...(layer.public ? ["Anyone with the public link"] : [])].map(escapeHtml).join(" · ") || "Only you — no audience is selected."}</p>${layer.public ? "<p>Public access cannot exclude an individual.</p>" : ""}<div class="button-row"><button class="button" data-action="activate">Turn on version ${layer.version}</button><button class="button secondary" data-action="close-dialog">Keep it private</button></div></div></dialog>`;
+}
+
+function spaceDialog() {
+  if (!state.spaceDialog) return "";
+  return `<dialog aria-labelledby="space-title"><div class="dialog-body"><h2 id="space-title">Create a space</h2><p>You are included. Select local participants explicitly. Creating a space shares no layers or chat history.</p>${state.spaceError ? `<p role="alert">${escapeHtml(state.spaceError)}</p>` : ""}<form id="space-form"><div class="field"><label for="space-name">Space name</label><input class="input" id="space-name" name="name" maxlength="200" required autofocus></div><div class="field"><label for="space-kind">Space kind</label><select id="space-kind" name="kind"><option value="care-circle">Care circle</option><option value="project">Project</option><option value="organization">Organization</option></select></div><p>Organizations include current and future members in any active release shared with them. Care circles and projects keep the people selected at activation.</p><fieldset><legend>Local participants</legend>${state.contacts.filter((contact) => !contact.remote).map((contact) => `<label class="choice"><input type="checkbox" name="space-member" value="${escapeHtml(contact.id)}"><span>${escapeHtml(contact.name)}</span></label>`).join("")}</fieldset><div class="button-row"><button class="button" type="submit">Create space</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+}
+
+async function createSpace(form) {
+  try {
+    await api("/api/spaces", { method: "POST", json: { name: form.elements.name.value, kind: form.elements.kind.value, member_ids: [...form.querySelectorAll('[name="space-member"]:checked')].map((input) => input.value) } });
+    state.spaceDialog = false;
+    await refresh("Space created. Choose it in a saved layer and preview before sharing.");
+  } catch (error) { state.spaceError = error.message; render(); }
 }
 
 function withdrawDialog() {
   if (!state.confirmWithdraw) return "";
-  return `<dialog open aria-labelledby="withdraw-title"><div class="dialog-body"><h2 id="withdraw-title">Stop every active route?</h2><p>This removes the hosted release from named people, spaces, and the public link. Your private draft and release history remain.</p><div class="button-row"><button class="button danger" data-action="confirm-withdraw">Yes, stop all sharing</button><button class="button secondary" data-action="close-dialog">Keep sharing on</button></div></div></dialog>`;
+  return `<dialog aria-labelledby="withdraw-title"><div class="dialog-body"><h2 id="withdraw-title">Stop every active route?</h2><p>This stops access on this peer for named people, spaces, and the public link. Remote hosts must acknowledge withdrawal before their hosted access stops; offline hosts may still show it. Existing copies cannot be erased. Your private draft and release history remain.</p><div class="button-row"><button class="button danger" data-action="confirm-withdraw">Yes, stop all sharing</button><button class="button secondary" data-action="close-dialog">Keep sharing on</button></div></div></dialog>`;
 }
 
 function layerEditor(layer) {
@@ -362,7 +374,7 @@ function layerEditor(layer) {
     </form>
     ${assistantPanel(layer)}
     ${exportPanel(layer)}
-    ${activePanel(layer, active)}
+    ${activePanel(layer, active)}${resourceDelivery(layer.id)}
     <div class="history"><h3>Release and correction history</h3><p class="meta">Earlier releases keep their words, version, date, and original account attribution. A corrected display name never changes grants.</p>${revisionHistory()}</div>
     ${previewDialog(layer)}${withdrawDialog()}
   </section>`;
@@ -392,7 +404,7 @@ function accessLabel(routes) {
 function sharedView() {
   const selected = state.home.shared_layers.find((layer) => layer.id === state.selectedSharedId);
   const visibleSpaces = state.home.spaces.filter((space) => state.currentSpaceId === "all" || space.id === state.currentSpaceId);
-  return `<header class="page-head"><div><p class="eyebrow">People and places</p><h1>Shared spaces</h1><p class="lede">Read active releases available to you through a named person, a selected space, or a public link.</p></div></header>
+  return `<header class="page-head"><div><p class="eyebrow">People and places</p><h1>Shared spaces</h1><p class="lede">Read active releases available to you through a named person, a selected space, or a public link.</p></div><button class="button" data-action="new-space">Create space</button></header>
     <section class="grid cols-2"><div><div class="section-head"><h2>Active releases</h2></div><div class="item-list">${state.home.shared_layers.map(sharedItem).join("") || empty("Nothing active here", "Private drafts never appear in this view.")}</div></div>
     <div>${selected ? `<article class="card"><p class="eyebrow">Release ${escapeHtml(selected.revision)} · ${escapeHtml(accessLabel(selected.access_routes || []))}</p><h2>${escapeHtml(selected.title)}</h2>${sharedAttribution(selected)}<p class="shared-body">${escapeHtml(selected.body)}</p>${sharedAttachments(selected)}</article>` : `<div class="section-head"><h2>Your visible spaces</h2></div>${visibleSpaces.length ? visibleSpaces.map((space) => `<div class="card compact"><p class="eyebrow">${kindLabel(space.kind)}</p><h3>${escapeHtml(space.name)}</h3><p class="meta">${escapeHtml(space.audience_note)}</p></div>`).join("") : empty("No spaces in this view", "Choose All my spaces or create one when you need it.")}`}</div></section>`;
 }
@@ -417,6 +429,7 @@ function sharedAttachments(layer) {
 }
 
 function contactName(id) {
+  if (id === state.me.id) return state.me.name;
   return state.contacts.find((contact) => contact.id === id)?.name || "Unavailable contact";
 }
 
@@ -478,9 +491,9 @@ function messageMarkup(message) {
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
-    ${canManage ? `<div class="room-management"><p class="meta">Removing someone ends their access to this hosted room and cancels delivery queued for them.</p><div class="button-row"><button class="button ghost" data-action="change-participants">Change participants</button>${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row"><button class="button ghost" data-action="change-participants">Change participants</button>${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
 
@@ -489,7 +502,7 @@ function chatDialog() {
   const room = state.room;
   const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
   const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
-  return `<dialog open aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts empty. Earlier messages stay with their original participants."}</p><form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset><div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts empty. Earlier messages stay with their original participants."}</p><form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset><div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
 
 function chatsView() {
@@ -503,8 +516,31 @@ function connectionGroup(connection) {
   return `<div class="card"><p class="eyebrow">${connection.paired ? "Paired peer" : "Disconnected peer"}</p><h3>${peers.map((item) => escapeHtml(item.name)).join(", ")}</h3><p class="meta">Endpoint: ${escapeHtml(connection.card?.endpoint || "Unavailable")}</p><p class="fingerprint meta">Fingerprint: ${escapeHtml(connection.card?.fingerprint || "Unavailable")}</p>${connection.paired ? `<button class="button danger secondary" data-action="unpair" data-id="${escapeHtml(connection.id)}">Disconnect peer and ${peers.length} ${peers.length === 1 ? "contact" : "contacts"}</button><p class="meta">This disconnects the entire peer and hides received content for ${peers.map((item) => escapeHtml(item.name)).join(", ")}.</p>` : ""}</div>`;
 }
 
+function deliveryDescription(delivery) {
+  const withdrawal = delivery.action.endsWith("withdraw");
+  const person = delivery.contact_name || contactName(delivery.contact_id);
+  if (delivery.status === "withdrawn") return "Canceled obsolete queued content; this is not a remote acknowledgement";
+  if (withdrawal) {
+    if (delivery.status === "delivered") return `Remote withdrawal acknowledged by ${person}'s peer. Existing copies may remain.`;
+    return `Access stopped here; waiting for ${person}'s peer to acknowledge withdrawal${delivery.status === "failed" ? " — delivery failed; remote acknowledgement unknown" : ""}.`;
+  }
+  return `${deliveryText(delivery.status)}${delivery.status === "failed" ? " — remote acknowledgement unknown" : ""}`;
+}
+
+function deliveryOperation(action) {
+  return { "layer.release": "Share update", "layer.withdraw": "Remove update access", "room.roster": "Share chat", "room.message": "Send message", "room.reply": "Send reply", "room.withdraw": "Remove chat access" }[action] || "Peer delivery";
+}
+
 function deliveryCard(delivery) {
-  return `<div class="item"><span class="item-main"><strong>${escapeHtml(delivery.action.replaceAll(".", " "))}</strong><span>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(deliveryText(delivery.status))} · ${escapeHtml(delivery.attempts)} attempts</span></span>${delivery.status === "failed" ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : `<span class="badge ${escapeHtml(delivery.status)}">${escapeHtml(delivery.status)}</span>`}</div>`;
+  return `<div class="item"><div class="item-main"><strong>${escapeHtml(delivery.resource_title || "Shared item")} → ${escapeHtml(delivery.contact_name || contactName(delivery.contact_id))}</strong><span>${escapeHtml(deliveryOperation(delivery.action))} · ${escapeHtml(deliveryDescription(delivery))}</span><details><summary>Connection details</summary><p class="fingerprint meta">Item ${escapeHtml(delivery.resource_id)}<br>Peer ${escapeHtml(delivery.peer_id)}<br>Revision ${escapeHtml(delivery.revision)} · ${escapeHtml(delivery.attempts)} attempts</p></details></div>${delivery.status === "failed" ? `<button class="button secondary" data-action="retry-delivery" data-id="${escapeHtml(delivery.id)}">Retry</button>` : ""}</div>`;
+}
+
+function resourceDelivery(id) {
+  const rows = (state.sync.deliveries || []).filter((row) => row.resource_id === id);
+  if (!rows.length) return "";
+  const latest = new Map();
+  for (const row of rows) latest.set(row.contact_id, row);
+  return `<section class="section"><div class="section-head"><h3>Remote delivery</h3><button class="button secondary" data-action="sync">Check delivery now</button></div>${[...latest.values()].map(deliveryCard).join("")}</section>`;
 }
 
 function accountSupport() {
@@ -526,12 +562,12 @@ function profileDialog() {
   const corrections = state.corrections.length
     ? `<div class="history"><h3>Name correction history</h3>${state.corrections.slice().reverse().map((item) => `<div class="correction"><strong>${escapeHtml(item.old_name)} → ${escapeHtml(item.new_name)}</strong><span>Changed by ${item.actor_id === state.me.id ? `you (${escapeHtml(item.actor_id)})` : escapeHtml(item.actor_id)} · ${formatDate(item.created)}</span></div>`).join("")}</div>`
     : `<p class="meta">No name corrections recorded for this account.</p>`;
-  return `<dialog open aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same private account and sharing permissions. Earlier releases remain attributed to this account.</p>${state.logoutError ? `<div class="notice error" role="alert">Sign-out could not be completed. This account is still signed in on this device.</div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">${state.logoutError ? "Retry sign out" : "Sign out"}</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form>${corrections}</div></dialog>`;
+  return `<dialog aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same private account and sharing permissions. Earlier releases remain attributed to this account.</p>${state.logoutError ? `<div class="notice error" role="alert">Sign-out could not be completed. This account is still signed in on this device.</div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">${state.logoutError ? "Retry sign out" : "Sign out"}</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form>${corrections}</div></dialog>`;
 }
 
 function reauthDialog() {
   if (!state.reauth || !state.me) return "";
-  return `<dialog open aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div><div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div><div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div><div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div><div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
 }
 
 async function renderPublic() {
@@ -546,7 +582,7 @@ async function renderPublic() {
       content = `<article class="public-article"><p class="eyebrow">Shared from a personal Superyak peer · release ${escapeHtml(layer.revision)}</p><h1>${escapeHtml(layer.title)}</h1><div class="public-body">${escapeHtml(layer.body)}</div>${(layer.attachment_ids || []).length ? `<div class="attachments"><h2>Attachments</h2>${layer.attachment_ids.map((id, index) => `<a class="attachment" href="/public/layers/${pathPart(layer.id)}/files/${pathPart(id)}"><span>Download attachment ${index + 1}</span><span aria-hidden="true">↓</span></a>`).join("")}</div>` : ""}</article>`;
       document.title = `${layer.title} · Superyak`;
     } catch (error) {
-      content = `<article class="public-article"><p class="eyebrow">Superyak public view</p><h1>This page is not shared</h1><p>The owner may have turned off the public link or stopped sharing this release.</p></article>`;
+      content = error.status === 404 ? `<article class="public-article"><p class="eyebrow">Superyak public view</p><h1>This page is not shared</h1><p>The owner may have turned off the public link or stopped sharing this release.</p></article>` : `<article class="public-article"><h1>This page is unavailable</h1><p>The peer could not be reached or could not load this page. Try again later; its sharing status is unknown.</p></article>`;
     }
   }
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
@@ -616,11 +652,35 @@ async function loadRoute() {
   if (route === "shared") state.selectedSharedId = id || state.selectedSharedId;
 }
 
+let dialogReturn = null;
+function closeDialogs() {
+  state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false;
+  render();
+}
+
 function render() {
   if (!state.me || !state.home) return;
   const route = routeParts().route;
   const view = { home: homeView, chats: chatsView, layers: layersView, shared: sharedView, connections: connectionsView }[route]();
+  const focused = document.activeElement;
+  const hadDialog = !!app.querySelector("dialog[open]");
+  if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
+  const focusSelector = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action ? `[data-action="${CSS.escape(focused.dataset.action)}"]` : null;
   app.innerHTML = layout(view);
+  const dialogs = app.querySelectorAll("dialog");
+  for (const dialog of dialogs) {
+    dialog.showModal();
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab") return;
+      const controls = [...dialog.querySelectorAll('a[href],button,input,select,textarea,summary,[tabindex]')].filter((node) => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    });
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); closeDialogs(); });
+  }
+  if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
+  else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
   document.title = `${{ home: "Home", chats: "Chats", layers: "My sharing layers", shared: "Shared spaces", connections: "Connections" }[route]} · Superyak`;
 }
 
@@ -795,14 +855,15 @@ async function resolveConflict() {
 }
 
 async function activateLayer() {
-  const layer = selectedLayer();
+  const layer = state.preview;
+  if (!layer) return;
   try {
-    await api(`/api/layers/${pathPart(layer.id)}/activate`, { method: "POST", json: { version: layer.version } });
+    await api(`/api/layers/${pathPart(layer.id)}/activate`, { method: "POST", json: { version: layer.version, space_versions: layer.space_versions } });
     state.preview = false;
     await refresh(`Version ${layer.version} is now active`);
   } catch (error) {
     state.preview = false;
-    setFlash(error.status === 409 ? "The draft changed before activation. Review the saved version again." : error.message, true);
+    setFlash(error.status === 409 ? "The draft or space membership changed before activation. Review the saved version again." : error.message, true);
     render();
   }
 }
@@ -851,7 +912,7 @@ async function confirmWithdraw() {
   try {
     await api(`/api/layers/${pathPart(layer.id)}/withdraw`, { method: "POST", json: {} });
     state.confirmWithdraw = false;
-    await refresh("Sharing is off");
+    await refresh("Sharing is off on this peer. Remote withdrawal requires acknowledgement; check delivery below.");
   } catch (error) {
     setFlash(`${error.message} The current release may still be active.`, true);
     render();
@@ -903,7 +964,7 @@ async function removeParticipant(id) {
   }
   if (state.room?.id === room.id) {
     state.room = { ...state.room, ...updated, messages: state.room.messages || [] };
-    state.transitionNote = `${name} no longer has access to this room`;
+    state.transitionNote = `${name} no longer has access on this peer; remote removal requires acknowledgement`;
     render();
   }
   try {
@@ -912,10 +973,10 @@ async function removeParticipant(id) {
     render();
   } catch (error) {
     if (error.status === 401) {
-      showLogin(`${name} no longer has access to this room. Sign in again to continue.`);
+      showLogin(`${name} no longer has access on this peer; remote removal requires acknowledgement. Sign in again to continue.`);
       return;
     }
-    setFlash(`${name} no longer has access to this room. Latest room status is unavailable.`);
+    setFlash(`${name} no longer has access on this peer; remote removal requires acknowledgement. Latest room status is unavailable.`);
     render();
   }
 }
@@ -1087,6 +1148,7 @@ document.addEventListener("submit", async (event) => {
     return;
   }
   if (form.id === "layer-form") await saveLayer(form);
+  if (form.id === "space-form") await createSpace(form);
   if (form.id === "chat-form") await createChat(form);
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
@@ -1124,7 +1186,10 @@ document.addEventListener("click", async (event) => {
       const status = document.querySelector("#layer-status");
       status.className = "inline-message error";
       status.textContent = "Save this private draft before previewing a version.";
-    } else { state.preview = true; render(); }
+    } else {
+      try { state.preview = await api(`/api/layers/${pathPart(selectedLayer().id)}/preview`); render(); }
+      catch (error) { setFlash(`Preview unavailable. No selection was activated. ${error.message}`, true); render(); }
+    }
   }
   if (action === "ask-assistant") await askAssistant();
   if (action === "apply-suggestion") applySuggestion();
@@ -1140,7 +1205,8 @@ document.addEventListener("click", async (event) => {
   if (action === "resolve-conflict") await resolveConflict();
   if (action === "withdraw") { state.confirmWithdraw = true; render(); }
   if (action === "confirm-withdraw") await confirmWithdraw();
-  if (action === "close-dialog") { state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.profileDialog = false; render(); }
+  if (action === "close-dialog") closeDialogs();
+  if (action === "new-space") { state.spaceDialog = true; state.spaceError = null; render(); }
   if (action === "close-reauth") { state.reauth = false; render(); }
   if (action === "open-shared") { state.selectedSharedId = target.dataset.id; location.hash = `shared/${pathPart(target.dataset.id)}`; render(); }
   if (action === "new-chat") { state.chatDialog = "new"; render(); }
@@ -1156,7 +1222,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "show-card") await showCard();
   if (action === "sync") {
-    try { state.sync = await api("/api/sync", { method: "POST", json: {} }); setFlash("Delivery status refreshed"); }
+    try { await api("/api/sync", { method: "POST", json: {} }); await refresh("Delivery status refreshed"); }
     catch (error) { setFlash(error.message, true); }
     render();
   }

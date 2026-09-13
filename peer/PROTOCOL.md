@@ -149,8 +149,8 @@ pending/failed until accepted and echoed by the origin.
 
 ## Durable dispatch and limits
 
-`Federation.collect()` scans at most 100 metadata-only local events per call into
-`outbox`, preserving resource, revision, recipient, stable event ID and sequence.
+`Federation.collect()` materializes the currently uncollected metadata-only local
+events in its transaction snapshot into `outbox`, preserving resource, revision, recipient, stable event ID and sequence.
 `sync_once(limit=20)` processes at most 20 attempts by default (hard cap 100).
 Final content comes from currently authorized active state. The first attempted
 body/signature is persisted before sending; retries reuse exactly those bytes and
@@ -198,3 +198,10 @@ Only new `peer/` application state is affected. POSIX locking targets macOS/Linu
 SQL writers, operator-edited private files and other implementations are outside
 this coordination boundary. Disk growth is durable and operator-managed; there is
 no automatic retention cleanup or replay-expiry shortcut in this slice.
+
+Browser status collection materializes local events without opening any transport
+connection. Status remains author-filtered, includes resource/destination
+correlation, and reports the effective operation (or the immutable signed action
+once prepared). Canceled obsolete content is not an acknowledgement of remote
+removal. Local withdrawal is immediate; remote hosted access may continue until
+the signed tombstone is acknowledged. No status refresh erases existing copies.

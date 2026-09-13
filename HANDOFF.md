@@ -1,6 +1,32 @@
 # Resume here — medical lighthouse / aDNA
 
-**Personal peer home implemented, September 12 (Task 5 current pointer):** The first
+**Final peer-home review fixes, September 12 (current source pointer):**
+`codex/peer-home` now includes ordinary participant space creation, authoritative
+saved-version file/member previews with membership-conflict protection, truthful
+local/remote withdrawal status, and delivery refresh preserving unsaved work.
+Native modal focus, mobile metrics, isolated screenshot paths, and public network
+error wording are repaired. Covering checks: 74 passed (27 Chromium workflows),
+plus three package tests; inherited warnings remain.
+
+Current archive in the worktree's ignored `.superpowers/sdd/2026-09-12-peer-home/`:
+`superyak-peer-candidate-9.tar.gz`, SHA-256
+`6f693dbe751f98a19d1a81b3be1cc678fb9ad90cd6cd72b98a02a8f4ec466c4a`.
+`release-inspection-9.json` confirms the exact 45-file source manifest, real
+sdist/direct-wheel private-state exclusions and fresh installed startup.
+`final-fix-manifest-audit-9.json` records the five changed runtime/static files
+from candidate 4. Only browser presentation and its tests changed from measured
+candidate 8; all Python backend/checker bytes remain identical. Final browser
+verification passed 27 cases, with technical IDs/hashes behind optional details.
+The controller's fresh exact
+candidate 8 Mac/Pi check passed all ten checks in 7.311 seconds, with both cleanup
+records stopped; read `final-two-host-reviewed/result.json`. Original candidate 4
+measurement and all model evidence remain intact. `final-fix-report.md` records
+fixes, RED/GREEN commands, visual checks and limits. See the
+[public-safe verification report](docs/reports/2026-09-12-peer-home-verification.md).
+The controller owns final integration/CI and the user demo's runtime reload;
+preserve the existing `.engram/home-demo` state and credentials.
+
+**Personal peer home implemented, September 12 (historical Task 5 snapshot):** The first
 standalone participant application is implemented in `peer/`; use
 [its guide](peer/README.md) and the [verification report](docs/reports/2026-09-12-peer-home-verification.md).
 Authenticated homes, private drafts/rooms, active sharing layers, paired signed
@@ -25,12 +51,12 @@ Task evidence and report remain in that worktree's ignored
 `.superpowers/sdd/2026-09-12-peer-home/` directory. `final-two-host-4/result.json`
 records the passing final source run, receipt IDs/hashes and cleanup;
 `release-inspection-7.json` records the revised source/sdist/direct-wheel exclusion
-and startup checks. The current source archive is `superyak-peer-candidate-7.tar.gz`,
+and startup checks. The Task 5 source archive was `superyak-peer-candidate-7.tar.gz`,
 SHA-256 `734cf0f80ac00d6bdbb6363dd24fce65caf6d91eb4ee2adbae79b2611076b677`.
 Review found that standard `uv build` on candidate 4 could include private state,
 even though its custom archive itself was safe. The revised package shares explicit
 source inventory, adds wheel inventory, and clears Hatch's implicit source additions.
-All runtime/static/checker bytes remain identical to the measured candidate 4;
+Candidate 7 runtime/static/checker bytes remain identical to measured candidate 4;
 `task-5-fix1-manifest-audit.json` proves that equality. The unchanged two-host test
 was not repeated; all three focused packaging tests and exact candidate 7 package
 inspection passed. Previous artifacts and evidence remain preserved.

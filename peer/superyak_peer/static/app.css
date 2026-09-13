@@ -239,3 +239,10 @@ dialog::backdrop { background: rgba(14,31,28,.48); backdrop-filter: blur(2px); }
 @media (prefers-reduced-motion: no-preference) {
   button, a { transition: background-color .15s ease, border-color .15s ease, transform .15s ease; }
 }
+
+@media (max-width: 640px) {
+  .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat { padding: 12px; }
+  .stat strong { font-size: 24px; }
+  .stat span { font-size: 12px; }
+}

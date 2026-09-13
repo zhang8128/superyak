@@ -155,8 +155,9 @@ release's `draft_version` with draft `version`).
 |---|---|---|
 | GET/POST `/api/layers` | POST draft fields | Owned drafts / new draft, 201 |
 | GET `/api/layers/{id}` | — | Owner-only draft |
+| GET `/api/layers/{id}/preview` | — | Owner-only saved draft, selected `files`, named `people`, `audience_details`, and `space_versions` |
 | PUT `/api/layers/{id}` | `{version,...changedDraftFields}` | Saved draft; omitted fields preserved |
-| POST `/api/layers/{id}/activate` | `{version}` | Exact current draft activated |
+| POST `/api/layers/{id}/activate` | `{version,space_versions?}` | Exact current draft activated; supplied space versions must still match |
 | POST `/api/layers/{id}/revoke` | `{revision,public:false,user_ids:[],space_ids:[]}` | Narrowed active revision |
 | POST `/api/layers/{id}/withdraw` | none | Draft with no active release |
 | GET `/api/layers/{id}/revisions` | — | Immutable revision array; owner only |
@@ -165,6 +166,16 @@ release's `draft_version` with draft `version`).
 | GET `/public/layers/{id}` | — | Signed-out exact active public snapshot |
 
 Activation requires the current draft `version` and revalidates ownership/audiences.
+The browser fetches preview immediately before showing it and sends its
+`space_versions` map with activation. Membership or space-name changes invalidate
+that preview with 409; the user must preview again. Existing API callers may omit
+this optional map and continue to activate against current membership. Preview
+fails visibly if any selected space, person or file cannot be resolved; missing
+selections are never presented as empty. File metadata includes ID, name, media
+type, byte size and SHA-256; `/api/files/{id}` inspects the owned immutable bytes.
+Owner-only active responses include `audience_details` with frozen care-circle/
+project members and current organization members. Other readers receive no such
+private audience metadata.
 It appends a snapshot with `draft_version`, `revision`, `created`, and original
 `owner_id`. Saving privately does not modify any existing release. Revisions keep
 original text, author ID and timestamps. Corrections are new explicit draft saves
@@ -269,7 +280,7 @@ contacts(actor) -> [{id,name}]
 create_space(actor,name,kind,member_ids=None); list_spaces(actor); get_space(actor,key)
 rename_space(actor,key,name); change_space_member(actor,key,user_id,*,remove=False)
 create_layer(actor,data); get_layer(actor,key); list_layers(actor); save_layer(actor,key,data)
-activate_layer(actor,key,version); withdraw_layer(actor,key)
+preview_layer(actor,key); activate_layer(actor,key,version,space_versions=None); withdraw_layer(actor,key)
 revoke_layer_routes(actor,key,data); layer_revisions(actor,key)
 active_layer(key,actor=None,*,public=False); shared_layers(actor)
 upload_file(actor,name,media_type,content_base64); list_files(actor)
@@ -342,10 +353,17 @@ All origins used by browser/peer traffic must be repeated with `--origin`.
 | POST `/federation/events` | Signed envelope | HTTPS, independent pairing/signature authentication; see PROTOCOL.md |
 
 Delivery metadata is `{id,resource_id,revision,contact_id,action,status,attempts,
-next_attempt}`. Message/reply deliveries additionally include `message_id` and
+next_attempt,resource_title,contact_name,peer_id}`. Message/reply deliveries additionally include `message_id` and
 `client_message_id` for correlating pending/sent state to the author's message;
 these fields contain no body or audience-management lists. Status is `pending`, `delivered`, `withdrawn` (obsolete/canceled)
-or `failed`. `next_attempt` is Unix seconds; after eight attempts explicit retry is
+or `failed`. GET status collects local events without any network operation,
+including when background delivery is disabled. `action` is the effective current
+operation for queued work or the immutable signed operation for sent work.
+Obsolete queued work reports cancellation, never remote acknowledgement. A delivered
+withdrawal means the destination acknowledged it; a pending/failed withdrawal means
+access stopped locally while the other host may still serve its existing copy.
+Explicit browser delivery checks also reload visible home/room/shared snapshots,
+preserving unsaved layer edits and chat composition. `next_attempt` is Unix seconds; after eight attempts explicit retry is
 required. Account administration never grants visibility of another person's
 layer/chat delivery metadata. Layer delivery authority is its local layer owner;
 local-message authority is its actual author (including a nonowner participant);

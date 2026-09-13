@@ -10,7 +10,8 @@ explicit uploads and selected-source interchange; live medical-record providers,
 clinical validation, richer help/recovery, and HPC execution are future work.
 Hosts can read their own plaintext stores. Peer TLS and Ed25519 signatures protect
 transport and authenticate paired hosts; this is not browser-to-browser E2EE.
-Withdrawal stops hosted access and requests removal on paired recipients; it
+Withdrawal stops access on the local peer and queues removal for paired recipients.
+Offline hosts may still show the release until they acknowledge withdrawal; it
 cannot erase someone else's previously saved copy.
 
 ## Install and run
@@ -73,6 +74,31 @@ the named remote participant; it grants no content until a room or release
 explicitly selects that contact. The UI shows failed or pending deliveries while
 local editing continues. The server needs `--sync` for background delivery;
 Connections also provides an explicit sync action.
+
+## Create a space and release deliberately
+
+Home and Shared spaces offer **Create space** to every signed-in participant.
+Choose a name, care circle/project/organization, and explicit local participants.
+Creating or renaming a space shares no layers or chat history. Organizations give
+current and future members access to releases explicitly shared with that space;
+care circles and projects retain the people selected at activation.
+
+In My sharing layers, save the private draft, then choose **Preview audience**.
+The preview lists only selected files with metadata and authenticated inspection
+links, named people, and the current members behind selected spaces. Membership
+changes while the preview is open require a fresh preview. Turn on the saved
+version deliberately. A current release shows its effective frozen/current space
+members separately from the editable draft.
+
+Remote delivery cards identify the item, recipient and operation. They distinguish
+waiting, failed/unknown acknowledgement, acknowledged withdrawal, and canceled
+obsolete work. **Check delivery now** attempts delivery and refreshes visible
+content while retaining unsaved layer/chat text. Pending work is visible even
+with background synchronization off.
+
+Browser tests put screenshots in a unique temporary directory per run. Set
+`SUPERYAK_TEST_ARTIFACTS` to an existing directory to retain each unique run beneath
+it; no screenshots are written into an extracted package's parent directory.
 
 ## Reproduce the two-host acceptance
 
