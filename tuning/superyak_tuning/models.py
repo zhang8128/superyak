@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 
 from .data import bounded_read, canonical, digest, private_write
 
@@ -26,6 +28,106 @@ SELECTED = {
     "modalities_for_training": ["text"],
     "dequantization_note": "Reconstructed weights retain quantization loss; original BF16 precision is not recovered.",
 }
+
+BASE_CONFIG = {
+    "repo_id": "google/gemma-4-26B-A4B-it",
+    "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "filename": "config.json",
+    "sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+    "bytes": 3815,
+}
+
+# Exact text_config from BASE_CONFIG. The selected GGUF metadata
+# matches these values, including heterogeneous local/global attention and MoE.
+_SELECTED_TEXT_CONFIG = {
+    "attention_bias": False,
+    "attention_dropout": 0.0,
+    "attention_k_eq_v": True,
+    "bos_token_id": 2,
+    "dtype": "bfloat16",
+    "enable_moe_block": True,
+    "eos_token_id": 1,
+    "final_logit_softcapping": 30.0,
+    "global_head_dim": 512,
+    "head_dim": 256,
+    "hidden_activation": "gelu_pytorch_tanh",
+    "hidden_size": 2816,
+    "hidden_size_per_layer_input": 0,
+    "initializer_range": 0.02,
+    "intermediate_size": 2112,
+    "layer_types": ["full_attention" if (index + 1) % 6 == 0 else "sliding_attention" for index in range(30)],
+    "max_position_embeddings": 262144,
+    "model_type": "gemma4_text",
+    "moe_intermediate_size": 704,
+    "num_attention_heads": 16,
+    "num_experts": 128,
+    "num_global_key_value_heads": 2,
+    "num_hidden_layers": 30,
+    "num_key_value_heads": 8,
+    "num_kv_shared_layers": 0,
+    "pad_token_id": 0,
+    "rms_norm_eps": 1e-6,
+    "rope_parameters": {
+        "full_attention": {
+            "partial_rotary_factor": 0.25,
+            "rope_theta": 1000000.0,
+            "rope_type": "proportional",
+        },
+        "sliding_attention": {"rope_theta": 10000.0, "rope_type": "default"},
+    },
+    "sliding_window": 1024,
+    "tie_word_embeddings": True,
+    "top_k_experts": 8,
+    "use_bidirectional_attention": "vision",
+    "use_cache": True,
+    "use_double_wide_mlp": False,
+    "vocab_size": 262144,
+    "vocab_size_per_layer_input": 262144,
+}
+
+_GGUF_MAPPING_LOCK = threading.Lock()
+
+
+def _prepared_configuration() -> dict:
+    return {
+        "source": copy.deepcopy(BASE_CONFIG),
+        "text_config_sha256": digest(canonical(_SELECTED_TEXT_CONFIG)),
+    }
+
+
+def _add_gemma4_weight_mappings(mapping: dict[str, str], num_hidden_layers: int) -> dict[str, str]:
+    """Complete Transformers 5.17's legacy map for Gemma 4 MoE tensors."""
+    for index in range(num_hidden_layers):
+        prefix = f"blk.{index}"
+        target = f"model.layers.{index}"
+        mapping[f"{prefix}.ffn_gate_up_exps.weight"] = f"{target}.experts.gate_up_proj"
+        mapping[f"{prefix}.ffn_down_exps.weight"] = f"{target}.experts.down_proj"
+        mapping[f"{prefix}.ffn_gate_inp.scale"] = f"{target}.router.scale"
+        mapping[f"{prefix}.ffn_down_exps.scale"] = f"{target}.router.per_expert_scale"
+        mapping[f"{prefix}.layer_output_scale.weight"] = f"{target}.layer_scalar"
+    return mapping
+
+
+@contextmanager
+def _gemma4_weight_mapping():
+    """Scope the selected Gemma 4 mapping repair to one synchronous load."""
+    from transformers import modeling_gguf_pytorch_utils as gguf_utils
+
+    with _GGUF_MAPPING_LOCK:
+        original = gguf_utils.get_gguf_hf_weights_map
+
+        def mapped(hf_model, processor, model_type=None, num_layers=None, qual_name=""):
+            result = original(hf_model, processor, model_type, num_layers, qual_name)
+            config = getattr(hf_model, "config", None)
+            if not qual_name and getattr(config, "model_type", None) == "gemma4_text":
+                _add_gemma4_weight_mappings(result, config.num_hidden_layers)
+            return result
+
+        gguf_utils.get_gguf_hf_weights_map = mapped
+        try:
+            yield
+        finally:
+            gguf_utils.get_gguf_hf_weights_map = original
 
 
 def selected_model() -> dict:
@@ -81,15 +183,17 @@ def prepare_model(gguf_path: Path, output_dir: Path) -> dict:
         raise ValueError("GGUF preparation has a 160 GiB available-host-RAM floor; use an allocated high-memory compute node")
     import torch
     import transformers
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, Gemma4TextConfig, GemmaTokenizer
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".prepare-", dir=output_dir.parent))
     try:
-        tokenizer = AutoTokenizer.from_pretrained(str(gguf_path.parent), gguf_file=gguf_path.name,
+        config = Gemma4TextConfig(**copy.deepcopy(_SELECTED_TEXT_CONFIG))
+        tokenizer = GemmaTokenizer.from_pretrained(str(gguf_path.parent), gguf_file=gguf_path.name,
             local_files_only=True, trust_remote_code=False)
-        model, info = AutoModelForCausalLM.from_pretrained(str(gguf_path.parent), gguf_file=gguf_path.name,
-            local_files_only=True, trust_remote_code=False, dtype=torch.bfloat16,
-            attn_implementation="eager", output_loading_info=True)
+        with _gemma4_weight_mapping():
+            model, info = AutoModelForCausalLM.from_pretrained(str(gguf_path.parent), gguf_file=gguf_path.name,
+                local_files_only=True, trust_remote_code=False, dtype=torch.bfloat16,
+                attn_implementation="eager", output_loading_info=True, config=config)
         if model.config.model_type != "gemma4_text":
             raise ValueError("selected artifact did not load as Gemma 4 text")
         if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
@@ -99,7 +203,8 @@ def prepare_model(gguf_path: Path, output_dir: Path) -> dict:
         model.save_pretrained(temporary, safe_serialization=True, max_shard_size="4GB")
         tokenizer.save_pretrained(temporary)
         inventory = {p.name: _hash_file(p) for p in temporary.iterdir() if p.is_file()}
-        lineage = {"schema_version": 1, "source": model_source, "format": "dequantized_gguf_text",
+        lineage = {"schema_version": 1, "source": model_source, "configuration": _prepared_configuration(),
+                   "format": "dequantized_gguf_text",
                    "files": inventory, "versions": {"torch": torch.__version__, "transformers": transformers.__version__}}
         lineage["digest"] = digest(canonical(lineage))
         private_write(temporary / "lineage.json", canonical(lineage) + b"\n")
@@ -119,6 +224,8 @@ def verify_prepared(path: Path) -> dict:
         raise ValueError("prepared model lineage integrity failure")
     if lineage.get("source") != selected_model() or lineage.get("format") != "dequantized_gguf_text":
         raise ValueError("prepared model does not match selected derivative lineage")
+    if lineage.get("configuration") != _prepared_configuration():
+        raise ValueError("prepared model configuration lineage does not match the pinned base config")
     inventory = lineage.get("files")
     if not isinstance(inventory, dict) or any(not isinstance(n, str) or Path(n).name != n for n in inventory):
         raise ValueError("invalid prepared model file inventory")

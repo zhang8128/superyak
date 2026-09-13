@@ -22,6 +22,26 @@ def use_tiny_selected_model(monkeypatch):
     return selected
 
 
+def write_prepared_fixture(path):
+    files = {
+        "config.json": b'{"model_type":"gemma4_text"}',
+        "model.safetensors": b"fixture",
+        "tokenizer.json": b"{}",
+    }
+    for name, content in files.items():
+        (path / name).write_bytes(content)
+    manifest = {
+        "schema_version": 1,
+        "source": selected_model(),
+        "configuration": model_tools._prepared_configuration(),
+        "format": "dequantized_gguf_text",
+        "files": {name: digest(data) for name, data in files.items()},
+    }
+    manifest["digest"] = digest(canonical(manifest))
+    (path / "lineage.json").write_bytes(canonical(manifest))
+    return manifest
+
+
 def install_fake_preparation_dependencies(
     monkeypatch,
     *,
@@ -40,6 +60,11 @@ def install_fake_preparation_dependencies(
     torch.__version__ = "2.test"
     transformers = ModuleType("transformers")
     transformers.__version__ = "5.test"
+
+    class FakeConfig:
+        def __init__(self, **kwargs):
+            calls["config"] = kwargs
+            self.__dict__.update(kwargs)
 
     class FakeTokenizer:
         def __init__(self):
@@ -67,16 +92,31 @@ def install_fake_preparation_dependencies(
         @staticmethod
         def from_pretrained(source, **kwargs):
             calls["model_load"] = (source, kwargs)
+            calls["mapping"] = gguf_utils.get_gguf_hf_weights_map(
+                SimpleNamespace(config=SimpleNamespace(model_type="gemma4_text", num_hidden_layers=30)),
+                object(),
+            )
             info = loading_info
             if info is None:
                 info = {"missing_keys": [], "unexpected_keys": [], "mismatched_keys": [], "error_msgs": []}
             return FakeModel(), info
 
-    transformers.AutoTokenizer = FakeTokenizer
+    class BrokenAutoTokenizer:
+        @staticmethod
+        def from_pretrained(*args, **kwargs):
+            raise AssertionError("AutoTokenizer cannot parse the selected heterogeneous GGUF config")
+
+    gguf_utils = ModuleType("transformers.modeling_gguf_pytorch_utils")
+    gguf_utils.get_gguf_hf_weights_map = lambda *args, **kwargs: {}
+    transformers.AutoTokenizer = BrokenAutoTokenizer
     transformers.AutoModelForCausalLM = FakeAutoModel
+    transformers.Gemma4TextConfig = FakeConfig
+    transformers.GemmaTokenizer = FakeTokenizer
+    transformers.modeling_gguf_pytorch_utils = gguf_utils
     monkeypatch.setitem(sys.modules, "psutil", psutil)
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setitem(sys.modules, "transformers.modeling_gguf_pytorch_utils", gguf_utils)
     return calls, bfloat16
 
 
@@ -88,6 +128,14 @@ def test_selected_variant_is_exact_and_does_not_claim_maintainer_origin():
     assert model["base_publisher"] == "Google"
     assert model["derivative_publisher"] == "HauhauCS"
     assert model["eligibility_basis"] == "explicit_user_selection"
+    assert "base_config" not in model
+    assert model_tools.BASE_CONFIG == {
+        "repo_id": "google/gemma-4-26B-A4B-it",
+        "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+        "filename": "config.json",
+        "sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+        "bytes": 3815,
+    }
 
 
 def test_hash_and_size_both_checked(tmp_path):
@@ -101,20 +149,27 @@ def test_hash_and_size_both_checked(tmp_path):
 
 
 def test_prepared_weights_are_pinned_to_selected_derivative(tmp_path):
-    files = {"config.json": b'{"model_type":"gemma4_text"}', "model.safetensors": b"fixture", "tokenizer.json": b"{}"}
-    for name, content in files.items(): (tmp_path / name).write_bytes(content)
-    manifest = {"schema_version": 1, "source": selected_model(), "format": "dequantized_gguf_text",
-        "files": {name: digest(data) for name, data in files.items()}}
-    manifest["digest"] = digest(canonical(manifest))
-    (tmp_path / "lineage.json").write_bytes(canonical(manifest))
+    write_prepared_fixture(tmp_path)
     assert verify_prepared(tmp_path)["source"]["sha256"] == selected_model()["sha256"]
     (tmp_path / "model.safetensors").write_bytes(b"modified")
     with pytest.raises(ValueError, match="hash"):
         verify_prepared(tmp_path)
 
 
+def test_prepared_configuration_is_pinned_even_with_a_valid_manifest_digest(tmp_path):
+    manifest = write_prepared_fixture(tmp_path)
+    manifest["configuration"]["source"]["revision"] = "unpinned"
+    manifest["digest"] = digest(canonical({key: value for key, value in manifest.items() if key != "digest"}))
+    (tmp_path / "lineage.json").write_bytes(canonical(manifest))
+
+    with pytest.raises(ValueError, match="configuration lineage"):
+        verify_prepared(tmp_path)
+
+
 def test_prepared_model_cannot_point_outside_directory(tmp_path):
-    manifest = {"schema_version": 1, "source": selected_model(), "format": "dequantized_gguf_text", "files": {"../outside": "0" * 64}}
+    manifest = {"schema_version": 1, "source": selected_model(),
+        "configuration": model_tools._prepared_configuration(),
+        "format": "dequantized_gguf_text", "files": {"../outside": "0" * 64}}
     manifest["digest"] = digest(canonical(manifest))
     (tmp_path / "lineage.json").write_bytes(canonical(manifest))
     with pytest.raises(ValueError, match="inventory"):
@@ -229,6 +284,8 @@ def test_prepare_uses_safe_local_bf16_loading_and_records_complete_lineage(tmp_p
     gguf = tmp_path / "selected.gguf"
     gguf.write_bytes(TINY_GGUF)
     calls, bfloat16 = install_fake_preparation_dependencies(monkeypatch)
+    gguf_utils = sys.modules["transformers.modeling_gguf_pytorch_utils"]
+    original_mapper = gguf_utils.get_gguf_hf_weights_map
 
     destination = tmp_path / "prepared"
     lineage = model_tools.prepare_model(gguf, destination)
@@ -238,19 +295,45 @@ def test_prepare_uses_safe_local_bf16_loading_and_records_complete_lineage(tmp_p
         source,
         {"gguf_file": gguf.name, "local_files_only": True, "trust_remote_code": False},
     )
-    assert calls["model_load"] == (
-        source,
-        {
-            "gguf_file": gguf.name,
-            "local_files_only": True,
-            "trust_remote_code": False,
-            "dtype": bfloat16,
-            "attn_implementation": "eager",
-            "output_loading_info": True,
-        },
-    )
+    loaded_source, loaded_options = calls["model_load"]
+    assert loaded_source == source
+    assert {key: value for key, value in loaded_options.items() if key != "config"} == {
+        "gguf_file": gguf.name,
+        "local_files_only": True,
+        "trust_remote_code": False,
+        "dtype": bfloat16,
+        "attn_implementation": "eager",
+        "output_loading_info": True,
+    }
+    assert loaded_options["config"].model_type == "gemma4_text"
+    assert calls["config"]["num_key_value_heads"] == 8
+    assert calls["config"]["num_global_key_value_heads"] == 2
+    assert calls["config"]["head_dim"] == 256
+    assert calls["config"]["global_head_dim"] == 512
+    assert calls["config"]["enable_moe_block"] is True
+    assert calls["config"]["num_experts"] == 128
+    assert calls["config"]["top_k_experts"] == 8
+    assert calls["config"]["moe_intermediate_size"] == 704
+    assert calls["config"]["layer_types"] == [
+        "full_attention" if (index + 1) % 6 == 0 else "sliding_attention" for index in range(30)
+    ]
+    assert len(calls["mapping"]) == 150
+    assert calls["mapping"]["blk.0.ffn_gate_up_exps.weight"] == "model.layers.0.experts.gate_up_proj"
+    assert calls["mapping"]["blk.29.ffn_down_exps.scale"] == "model.layers.29.router.per_expert_scale"
+    assert calls["mapping"]["blk.29.layer_output_scale.weight"] == "model.layers.29.layer_scalar"
+    assert gguf_utils.get_gguf_hf_weights_map is original_mapper
     assert calls["model_save"][1] == {"safe_serialization": True, "max_shard_size": "4GB"}
     assert lineage["source"] == selected
+    assert lineage["configuration"] == {
+        "source": {
+            "repo_id": "google/gemma-4-26B-A4B-it",
+            "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+            "filename": "config.json",
+            "sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+            "bytes": 3815,
+        },
+        "text_config_sha256": "60217c028c5b67ecad91b7d882fbdbd636999f2ea774ab6df93ccb06962691b8",
+    }
     assert lineage["versions"] == {"torch": "2.test", "transformers": "5.test"}
     assert set(lineage["files"]) == {"config.json", "model.safetensors", "tokenizer.json"}
     assert verify_prepared(destination) == lineage
