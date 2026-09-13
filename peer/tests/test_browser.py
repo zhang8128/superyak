@@ -141,6 +141,7 @@ def test_local_demo_opens_without_password_switches_accounts_and_renews_session(
             expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Alex Patient')
             page.get_by_role('link', name='My sharing layers').click()
             page.get_by_role('button', name='New layer').click()
+            expect(page.get_by_label('Layer title')).to_have_value('Untitled')
             page.get_by_label('What do you want to share?').fill('Patient unsaved words')
             page.get_by_role('button', name='Account and sign out').click()
             page.get_by_role('button', name='Try doctor', exact=True).click()
@@ -151,12 +152,14 @@ def test_local_demo_opens_without_password_switches_accounts_and_renews_session(
 
             page.get_by_role('link', name='My sharing layers').click()
             page.get_by_role('button', name='New layer').click()
+            expect(page.get_by_label('Layer title')).to_have_value('Untitled')
             page.get_by_label('What do you want to share?').fill('Doctor draft survives session expiry')
             browser_peer['app'].state.store.clock = lambda: time.time() + 86401
             page.get_by_role('button', name='Save private draft').click()
             expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
             expect(page.get_by_label('Password', exact=True)).to_have_count(0)
             page.get_by_role('button', name='Sign in again', exact=True).click()
+            expect(page.locator('#main-content').get_by_text('Signed in again. Your unsaved text is ready to save.', exact=True)).to_be_visible()
             expect(page.get_by_label('What do you want to share?')).to_have_value('Doctor draft survives session expiry')
             page.get_by_role('button', name='Save private draft').click()
             expect(page.locator('#main-content').get_by_text('Private draft saved')).to_be_visible()
