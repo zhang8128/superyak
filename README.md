@@ -123,6 +123,11 @@ Historical examples and launcher defaults have not all been migrated; do not
 launch them unchanged. Whole-machine scope remains accepted, while Gemma task
 compatibility and placement require measurement.
 
+The [model-tuning research plan](docs/reports/2026-09-13-stampede3-model-tuning-plan.md)
+proposes Gemma LoRA experiments on Intel PVC, with exact model metadata,
+parallel comparisons, evaluation gates, training consent, and peer adapter
+distribution. It is a plan; cluster training has not been verified or launched.
+
 Use [portable research tasks](docs/portable-research-tasks.md) to freeze one cached
 MG source and compare an extraction/review turn through local or cluster model
 protocols. `make research-task` shows explicit export/run commands; replay checks

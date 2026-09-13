@@ -1,5 +1,19 @@
 # Resume here — medical lighthouse / aDNA
 
+**Model-tuning research plan, September 13 (latest):** The
+[Stampede3 LoRA plan](docs/reports/2026-09-13-stampede3-model-tuning-plan.md)
+proposes official Gemma 4 12B Unified BF16 LoRA alongside a 26B-A4B BF16
+attention-adapter lane, with 31B as a larger reference and E4B for smaller peers.
+It includes 16 planned screening cells, exact official checkpoint metadata,
+evaluation/data gates, source-training consent, and peer adapter distribution.
+Whole-Stampede3 scope remains the planning premise, with Intel PVC as the
+baseline. The user reports Gemma inference can run there; no retained Stampede3
+training/backward/resume receipt has been established. Current PyTorch and
+bitsandbytes document XPU support, but Gemma MoE expert quantization recipes
+examined here require CUDA. This is a research/design artifact, not an executed
+training campaign. No model weights were downloaded, model generated, remote
+job submitted, or application/research/model/MCP service changed.
+
 **Backend data-source management, September 13 (latest):** The peer now has an
 account-owned source registry at `/api/data-sources`, with versioned names and
 descriptions, pause/resume, item listings, and success/failure import receipts.
