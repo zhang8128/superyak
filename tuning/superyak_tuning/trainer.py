@@ -28,7 +28,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 _SUPPORTED_SETTINGS = frozenset(DEFAULT_SETTINGS)
-_TARGET_SUFFIXES = ("q_proj", "k_proj", "v_proj", "o_proj")
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -206,24 +205,32 @@ def _validate_device(device_name: str) -> tuple[torch.device, torch.dtype]:
 
 
 def _actual_attention_targets(model: nn.Module) -> list[str]:
-    targets = [
-        name
-        for name, module in model.named_modules()
-        if isinstance(module, nn.Linear)
-        and name.startswith("model.layers.")
-        and ".self_attn." in name
-        and name.endswith(_TARGET_SUFFIXES)
-    ]
-    present = {name.rsplit(".", 1)[-1] for name in targets}
-    required = {"q_proj", "k_proj", "o_proj"}
-    if not targets or not required.issubset(present):
-        raise ValueError(
-            "the prepared Gemma 4 text model has no supported attention targets"
-        )
-    if any(
-        "router" in name or "expert" in name or "vision" in name for name in targets
-    ):
-        raise AssertionError("non-text-attention module selected as a LoRA target")
+    layers = getattr(getattr(model, "model", None), "layers", None)
+    if layers is None or len(layers) == 0:
+        raise ValueError("the prepared Gemma 4 text model has no text layers")
+
+    targets: list[str] = []
+    required = ("q_proj", "k_proj", "o_proj")
+    for index, layer in enumerate(layers):
+        attention = getattr(layer, "self_attn", None)
+        if attention is None:
+            raise ValueError(f"text layer {index} has no self_attn block")
+        prefix = f"model.layers.{index}.self_attn"
+        for suffix in required:
+            if not isinstance(getattr(attention, suffix, None), nn.Linear):
+                raise TypeError(
+                    f"text layer {index} has no supported linear {suffix} projection"
+                )
+            targets.append(f"{prefix}.{suffix}")
+
+        value_projection = getattr(attention, "v_proj", None)
+        if value_projection is not None:
+            if not isinstance(value_projection, nn.Linear):
+                raise ValueError(
+                    f"text layer {index} has an unsupported v_proj projection"
+                )
+            targets.append(f"{prefix}.v_proj")
+
     return sorted(targets)
 
 
@@ -292,6 +299,7 @@ def _save_checkpoint(
     data_cursor: int,
     gradient_norms: list[float],
     device_name: str,
+    run_identity: str,
 ) -> Path:
     checkpoints = run_dir / "checkpoints"
     checkpoints.mkdir(mode=0o700, exist_ok=True)
@@ -314,6 +322,7 @@ def _save_checkpoint(
         temporary_checkpoint / "optimizer.pt",
     )
     checkpoint_state = {
+        "run_identity": run_identity,
         "completed_steps": completed_steps,
         "data_cursor": data_cursor,
         "gradient_norms": gradient_norms,
@@ -333,11 +342,11 @@ def _save_checkpoint(
     return checkpoint
 
 
-def _load_checkpoint_state(run_dir: Path) -> tuple[dict, Path]:
+def _load_checkpoint_state(run_dir: Path, run_identity: str) -> tuple[dict, Path]:
     try:
-        state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
-        checkpoint_name = state["checkpoint"]
-        expected_name = f"step-{int(state.get('completed_steps', -1)):08d}"
+        pointer = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        checkpoint_name = pointer["checkpoint"]
+        expected_name = f"step-{int(pointer.get('completed_steps', -1)):08d}"
     except (
         OSError,
         json.JSONDecodeError,
@@ -354,7 +363,37 @@ def _load_checkpoint_state(run_dir: Path) -> tuple[dict, Path]:
     checkpoint = run_dir / "checkpoints" / checkpoint_name
     if not checkpoint.is_dir():
         raise ValueError("the training run's latest checkpoint is missing")
-    return state, checkpoint
+    try:
+        checkpoint_state = json.loads(
+            (checkpoint / "state.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("the checkpoint metadata is missing or invalid") from exc
+    if not isinstance(checkpoint_state, dict):
+        raise TypeError("the checkpoint metadata must be an object")
+    if checkpoint_state.get("run_identity") != run_identity:
+        raise ValueError("checkpoint identity does not match the requested run")
+    if checkpoint_state != pointer:
+        raise ValueError("the published pointer does not match checkpoint metadata")
+    return checkpoint_state, checkpoint
+
+
+def _validate_saved_adapter_targets(
+    adapter_dir: Path, actual_targets: list[str]
+) -> None:
+    try:
+        config = json.loads(
+            (adapter_dir / "adapter_config.json").read_text(encoding="utf-8")
+        )
+        saved_targets = config["target_modules"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError("the saved adapter configuration is invalid") from exc
+    if (
+        not isinstance(saved_targets, list)
+        or any(not isinstance(target, str) for target in saved_targets)
+        or sorted(saved_targets) != actual_targets
+    ):
+        raise ValueError("saved adapter targets do not match the prepared text model")
 
 
 def run_training(
@@ -402,7 +441,7 @@ def run_training(
             raise ValueError("resume training records do not match the existing run")
         if manifest.get("run_identity") != run_identity:
             raise ValueError("resume identity does not match the existing run")
-        state, checkpoint = _load_checkpoint_state(run_dir)
+        state, checkpoint = _load_checkpoint_state(run_dir, run_identity)
         if effective["max_steps"] < state["completed_steps"]:
             raise ValueError("max_steps cannot be lower than the completed step count")
     elif run_dir.exists():
@@ -439,6 +478,7 @@ def run_training(
         assert checkpoint is not None
         if manifest.get("actual_targets") != actual_targets:
             raise ValueError("resume attention targets do not match the existing run")
+        _validate_saved_adapter_targets(checkpoint / "adapter", actual_targets)
         model = PeftModel.from_pretrained(
             model, checkpoint / "adapter", is_trainable=True
         )
@@ -539,6 +579,7 @@ def run_training(
             data_cursor=data_cursor,
             gradient_norms=gradient_norms,
             device_name=effective["device"],
+            run_identity=run_identity,
         )
 
     frozen_after = _sampled_frozen_digest(model)

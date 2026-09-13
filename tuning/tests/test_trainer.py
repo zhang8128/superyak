@@ -208,6 +208,30 @@ def test_attention_target_discovery_allows_gemma4_shared_key_value_projection() 
     assert all(name.startswith("model.layers.") for name in targets)
 
 
+def test_attention_target_discovery_rejects_missing_projection_in_any_layer() -> None:
+    config = Gemma4TextConfig(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=8,
+        max_position_embeddings=32,
+        sliding_window=16,
+        layer_types=["full_attention", "full_attention"],
+        vocab_size_per_layer_input=32,
+        hidden_size_per_layer_input=16,
+        attention_k_eq_v=False,
+    )
+    config.per_layer_config = {}
+    model = Gemma4ForCausalLM(config)
+    model.model.layers[1].self_attn.o_proj = torch.nn.Identity()
+
+    with pytest.raises(TypeError, match=r"layer 1.*o_proj"):
+        _actual_attention_targets(model)
+
+
 def test_real_gemma4_lora_updates_adapter_preserves_base_and_resumes(
     tiny_model_dir: Path, tmp_path: Path
 ) -> None:
@@ -292,6 +316,120 @@ def completed_run(tiny_model_dir: Path, tmp_path: Path) -> Path:
     run_dir = tmp_path / "completed-run"
     run_training(tiny_model_dir, _records(), run_dir, _settings(1), _lineage())
     return run_dir
+
+
+def _latest_checkpoint(run_dir: Path) -> Path:
+    state = json.loads((run_dir / "state.json").read_text())
+    return run_dir / "checkpoints" / state["checkpoint"]
+
+
+def test_resume_rejects_checkpoint_from_a_different_run(
+    tiny_model_dir: Path, completed_run: Path
+) -> None:
+    checkpoint_state_path = _latest_checkpoint(completed_run) / "state.json"
+    checkpoint_state = json.loads(checkpoint_state_path.read_text())
+    checkpoint_state["run_identity"] = "foreign-run-identity"
+    checkpoint_state_path.write_text(json.dumps(checkpoint_state))
+
+    with pytest.raises(ValueError, match="checkpoint.*identity"):
+        run_training(
+            tiny_model_dir,
+            _records(),
+            completed_run,
+            _settings(2),
+            _lineage(),
+            resume=True,
+        )
+
+
+def test_resume_rejects_pointer_metadata_that_differs_from_checkpoint(
+    tiny_model_dir: Path, completed_run: Path
+) -> None:
+    pointer_path = completed_run / "state.json"
+    pointer = json.loads(pointer_path.read_text())
+    pointer["data_cursor"] += 1
+    pointer_path.write_text(json.dumps(pointer))
+
+    with pytest.raises(ValueError, match="pointer.*checkpoint"):
+        run_training(
+            tiny_model_dir,
+            _records(),
+            completed_run,
+            _settings(2),
+            _lineage(),
+            resume=True,
+        )
+
+
+def test_resume_rejects_adapter_with_changed_attention_targets(
+    tiny_model_dir: Path, completed_run: Path
+) -> None:
+    adapter_config_path = (
+        _latest_checkpoint(completed_run) / "adapter" / "adapter_config.json"
+    )
+    adapter_config = json.loads(adapter_config_path.read_text())
+    adapter_config["target_modules"] = ["model.layers.0.self_attn.q_proj"]
+    adapter_config_path.write_text(json.dumps(adapter_config))
+
+    with pytest.raises(ValueError, match="adapter.*targets"):
+        run_training(
+            tiny_model_dir,
+            _records(),
+            completed_run,
+            _settings(2),
+            _lineage(),
+            resume=True,
+        )
+
+
+def test_resumed_training_matches_uninterrupted_training(
+    tiny_model_dir: Path, tmp_path: Path
+) -> None:
+    continuous_dir = tmp_path / "continuous"
+    resumed_dir = tmp_path / "resumed"
+    continuous = run_training(
+        tiny_model_dir, _records(), continuous_dir, _settings(2), _lineage()
+    )
+    run_training(tiny_model_dir, _records(), resumed_dir, _settings(1), _lineage())
+    resumed = run_training(
+        tiny_model_dir,
+        _records(),
+        resumed_dir,
+        _settings(2),
+        _lineage(),
+        resume=True,
+    )
+
+    continuous_adapter = load_file(
+        continuous_dir / "adapter" / "adapter_model.safetensors"
+    )
+    resumed_adapter = load_file(resumed_dir / "adapter" / "adapter_model.safetensors")
+    assert continuous_adapter.keys() == resumed_adapter.keys()
+    assert all(
+        torch.equal(value, resumed_adapter[name])
+        for name, value in continuous_adapter.items()
+    )
+    assert continuous["data_cursor"] == resumed["data_cursor"] == 2
+
+    continuous_state = torch.load(
+        continuous_dir / "optimizer.pt", map_location="cpu", weights_only=True
+    )
+    resumed_state = torch.load(
+        resumed_dir / "optimizer.pt", map_location="cpu", weights_only=True
+    )
+    assert (
+        continuous_state["optimizer"]["param_groups"]
+        == resumed_state["optimizer"]["param_groups"]
+    )
+    assert (
+        continuous_state["optimizer"]["state"].keys()
+        == resumed_state["optimizer"]["state"].keys()
+    )
+    for parameter_id, expected in continuous_state["optimizer"]["state"].items():
+        actual = resumed_state["optimizer"]["state"][parameter_id]
+        assert expected.keys() == actual.keys()
+        assert all(torch.equal(value, actual[name]) for name, value in expected.items())
+    assert torch.equal(continuous_state["rng"]["cpu"], resumed_state["rng"]["cpu"])
 
 
 @pytest.mark.parametrize(
