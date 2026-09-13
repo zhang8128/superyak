@@ -10,7 +10,7 @@ from .spaces import Spaces
 from .layers import Layers
 from .files import Files
 from .chats import Chats
-from .common import encode
+from .common import encode, Problem
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, salt BLOB NOT NULL, password_hash BLOB NOT NULL, is_admin INTEGER NOT NULL, created REAL NOT NULL);
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS layers(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL RE
 CREATE TABLE IF NOT EXISTS layer_revisions(layer_id TEXT NOT NULL REFERENCES layers(id), revision INTEGER NOT NULL, draft_version INTEGER NOT NULL, snapshot TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(layer_id,revision));
 CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, media_type TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL, content BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS rooms(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, epoch INTEGER NOT NULL, linked_room_id TEXT REFERENCES rooms(id));
+CREATE TABLE IF NOT EXISTS room_activity(room_id TEXT PRIMARY KEY REFERENCES rooms(id), created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS room_members(room_id TEXT NOT NULL REFERENCES rooms(id), user_id TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(room_id,user_id));
 CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), author_id TEXT NOT NULL REFERENCES users(id), client_message_id TEXT NOT NULL, body TEXT NOT NULL, epoch INTEGER NOT NULL, created REAL NOT NULL, UNIQUE(room_id,author_id,client_message_id));
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
@@ -61,6 +62,9 @@ class Store(Auth, Spaces, Layers, Files, Chats):
             db.execute('BEGIN IMMEDIATE')
             yield db
             db.commit()
+        except UnicodeError:
+            db.rollback()
+            raise Problem(400, 'Text must be valid UTF-8') from None
         except BaseException:
             db.rollback()
             raise

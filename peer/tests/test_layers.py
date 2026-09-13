@@ -106,3 +106,54 @@ def test_revocation_removes_obsolete_audience_label(env):
     clients[0].post('/api/layers/' + layer['id'] + '/activate', json={'version': 1})
     result = clients[0].post('/api/layers/' + layer['id'] + '/revoke', json={'revision': 1, 'space_ids': [space['id']]}).json()
     assert result['audience_notes'] == []
+
+def test_store_rejects_invalid_unicode_text_and_identifiers_without_persisting(env):
+    import pytest
+    from superyak_peer.common import Problem
+    app, clients, users, _ = env
+    store, owner = app.state.store, users[0]['id']
+    layer = store.create_layer(owner, {'title': 'Valid', 'body': 'original', 'public': True})
+    actions = [lambda: store.create_layer(owner, {'title': '\ud800'}),
+               lambda: store.save_layer(owner, layer['id'], {'version': 1, 'body': '\ud800'}),
+               lambda: store.create_layer(owner, {'audience_users': ['\ud800']}),
+               lambda: store.get_layer(owner, '\ud800')]
+    for action in actions:
+        with pytest.raises(Problem) as error:
+            action()
+        assert error.value.status == 400
+    assert len(store.list_layers(owner)) == 1
+    assert store.get_layer(owner, layer['id'])['version'] == 1
+    assert store.get_layer(owner, layer['id'])['body'] == 'original'
+    store.activate_layer(owner, layer['id'], 1)
+    assert clients[1].get('/api/home').status_code == 200
+    for action in [lambda: store.active_layer(layer['id'], '\ud800'),
+                   lambda: store.download_file(owner, '\ud800', layer_id=layer['id'], public=True)]:
+        with pytest.raises(Problem) as error:
+            action()
+        assert error.value.status == 400
+
+def test_public_only_account_sees_no_private_audience_metadata(env):
+    app, clients, users, _ = env
+    patient, doctor, organizer, family = clients
+    space = patient.post('/api/spaces', json={'name': 'Private care context', 'kind': 'care-circle', 'member_ids': [users[1]['id']]}).json()
+    layer = patient.post('/api/layers', json={'title': 'Public words', 'body': 'Released', 'public': True, 'audience_spaces': [space['id']]}).json()
+    key = layer['id']
+    patient.post(f'/api/layers/{key}/activate', json={'version': 1})
+    public = TestClient(app).get(f'/public/layers/{key}').json()
+    visible = organizer.get(f'/api/shared/layers/{key}').json()
+    assert visible == {**public, 'resource_version': 1, 'access_routes': ['public']}
+    home = organizer.get('/api/home').json()
+    assert home['shared_layers'] == [visible]
+    assert space['id'] not in organizer.get('/api/home').text
+    assert 'Private care context' not in organizer.get('/api/shared/layers').text
+    # Named/space recipients receive attribution and their own effective routes,
+    # but management lists and other audience identities remain owner-only.
+    named = doctor.get(f'/api/shared/layers/{key}').json()
+    assert named['owner_id'] == users[0]['id']
+    assert named['access_routes'] == ['space:' + space['id'], 'public']
+    for field in ('audience_users', 'audience_spaces', 'resolved_space_users', 'audience_notes'):
+        assert field not in named
+    assert app.state.store.can_deliver_layer(key, users[2]['id'], 1)
+    assert not app.state.store.can_deliver_layer(key, users[2]['id'], 2)
+    patient.post(f'/api/layers/{key}/withdraw', json={})
+    assert not app.state.store.can_deliver_layer(key, users[2]['id'], 1)

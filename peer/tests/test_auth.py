@@ -104,3 +104,14 @@ def test_malformed_origin_is_public_safe_denial(env):
     _, clients, _, _ = env
     response = clients[0].post('/api/layers', headers={'origin': 'http://['}, json={'title': 'x'})
     assert response.status_code == 403
+
+def test_invalid_unicode_json_is_rejected_before_mutation(env):
+    import json
+    app, clients, users, _ = env
+    patient, doctor = clients[:2]
+    for payload in [{'title': 'bad\ud800', 'public': True}, {'title': 'valid', 'body': '\udfff'}, {'title': 'valid', 'audience_users': ['\ud800']}, {'title': 'valid', 'unused': {'\ud800': 'value'}}]:
+        response = patient.post('/api/layers', content=json.dumps(payload), headers={'content-type': 'application/json'})
+        assert response.status_code == 400
+    assert app.state.store.list_layers(users[0]['id']) == []
+    assert doctor.get('/api/home').status_code == 200
+    assert doctor.get('/api/shared/layers').json() == []

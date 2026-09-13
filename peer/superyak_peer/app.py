@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from .common import Problem
+from .common import Problem, valid_utf8
 from .db import Store
 
 MAX_REQUEST = 6 * 1024 * 1024
@@ -63,11 +63,14 @@ class BrowserBoundary:
 async def body(request):
     try:
         value = await request.json()
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         raise Problem(400, 'Invalid JSON') from None
     if not isinstance(value, dict):
         raise Problem(400, 'Expected a JSON object')
-    return value
+    try:
+        return valid_utf8(value)
+    except RecursionError:
+        raise Problem(400, 'JSON is too deeply nested') from None
 
 def current_user(request: Request):
     """Shared route dependency; verifies session and CSRF on browser mutations."""

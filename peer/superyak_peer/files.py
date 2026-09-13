@@ -3,7 +3,7 @@ import base64
 import binascii
 import hashlib
 import re
-from .common import Problem, uid, require
+from .common import Problem, uid, require, text
 
 MAX_FILE = 4 * 1024 * 1024
 
@@ -41,6 +41,7 @@ class Files:
             return [dict(r) for r in db.execute('SELECT id,name,media_type,digest,size FROM files WHERE owner_id=? ORDER BY id', (actor,))]
 
     def download_file(self, actor, key, *, layer_id=None, public=False):
+        text(key, 'file ID', 100)
         with self.transaction() as db:
             if layer_id:
                 layer = self._active_layer(db, layer_id, actor, public=public)

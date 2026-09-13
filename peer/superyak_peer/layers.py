@@ -124,16 +124,25 @@ class Layers:
         return routes
 
     def _active_layer(self, db, key, actor=None, *, public=False):
+        text(key, 'layer ID', 100)
+        if actor is not None:
+            text(actor, 'actor ID', 100)
         row = require(db.execute('SELECT layers.id,layers.owner_id,layers.resource_version,layer_revisions.* FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision=layer_revisions.revision WHERE layers.id=?', (key,)).fetchone())
         snapshot = json.loads(row['snapshot'])
+        content = {'id': key, 'revision': row['revision'], 'title': snapshot['title'], 'body': snapshot['body'], 'attachment_ids': snapshot['attachment_ids']}
         if public:
             if not snapshot['public']:
                 raise Problem(404, 'Not found')
-            return {'id': key, 'revision': row['revision'], 'title': snapshot['title'], 'body': snapshot['body'], 'attachment_ids': snapshot['attachment_ids']}
+            return content
         routes = self._access_routes(db, row, snapshot, actor)
         if not routes:
             raise Problem(404, 'Not found')
-        return {**snapshot, 'id': key, 'owner_id': row['owner_id'], 'revision': row['revision'], 'resource_version': row['resource_version'], 'draft_version': row['draft_version'], 'created': row['created'], 'access_routes': routes}
+        permitted = {**content, 'resource_version': row['resource_version'], 'access_routes': routes}
+        if routes == ['public']:
+            return permitted
+        if actor != row['owner_id']:
+            return {**permitted, 'owner_id': row['owner_id'], 'created': row['created']}
+        return {**snapshot, **permitted, 'owner_id': row['owner_id'], 'draft_version': row['draft_version'], 'created': row['created']}
 
     def active_layer(self, key, actor=None, *, public=False):
         """Rechecks current release/access. actor is a trusted local ID, never browser input."""

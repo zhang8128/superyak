@@ -16,8 +16,11 @@ uv run pytest -q
 It refuses to add another owner to an initialized peer. Owners invite participants.
 `demo` writes four fictional accounts and their random passwords into a private
 `demo-credentials.json`; it never prints passwords. Repeating a complete demo
-initialization preserves its accounts and drafts; non-demo/incomplete state is
-refused. The CLI defaults are `.engram/home`, `.engram/home-demo`, and loopback
+initialization validates the existing database, seeded accounts and credentials
+read-only before reporting success; missing or mismatched state is refused without
+replacement. New credentials include stable account IDs. Legacy credential files
+without IDs are checked against usernames/passwords and database foreign keys.
+Accounts and drafts are preserved; non-demo/incomplete state is refused. The CLI defaults are `.engram/home`, `.engram/home-demo`, and loopback
 `127.0.0.1:7435`. `serve --host` outside loopback requires `--tls-cert` and
 `--tls-key`; provide repeated `--origin https://hostname:port` options for actual
 browser and peer addresses. Forwarded proxy headers are disabled. IPv4/localhost
@@ -161,9 +164,15 @@ It appends a snapshot with `draft_version`, `revision`, `created`, and original
 original text, author ID and timestamps. Corrections are new explicit draft saves
 and activations; display-name corrections never replace IDs or grants.
 
-An active authenticated response includes snapshot fields plus
+An owner’s active response includes snapshot fields plus
 `{id,owner_id,revision,resource_version,draft_version,created,access_routes}`,
-`resolved_space_users` and `audience_notes`. Selected care-circle/project members
+`resolved_space_users` and `audience_notes`. Non-owner named/space recipients receive
+only `{id,revision,title,body,attachment_ids,resource_version,access_routes,owner_id,created}`.
+An account authorized only through public receives the public content shape plus
+`resource_version` and `access_routes:["public"]`; it receives no attribution or
+audience metadata beyond the signed-out view. Audience-management lists, frozen
+memberships and space labels remain owner-only. These same shapes apply in Home
+and shared lists; delivery revision checks retain `resource_version`. Selected care-circle/project members
 are frozen into `resolved_space_users` at activation; joining later grants no
 access. Selected organizations use current/future membership, explicitly labeled
 in `audience_notes`. Organization membership alone never reveals unshared content.
@@ -184,6 +193,9 @@ the UI must preview them again before reactivation.
 idempotent while already withdrawn. Historical revisions remain owner-only.
 Public responses contain ONLY `{id,revision,title,body,attachment_ids}`. Public
 JSON has no owner-account, audience, draft, chat, or private citation metadata.
+All incoming JSON keys/values, domain text and audience IDs must encode as valid
+UTF-8; lone surrogates are rejected with 400 before persistence. Identifier encoding
+errors at the SQLite boundary roll back the operation and become a safe 400.
 Body is plain authored text; this API does not resolve/fetch URLs or citations.
 
 ## Files
@@ -215,7 +227,13 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | POST `/api/chats/{id}/participants` | `{member_ids:[]}` | New linked room, 201; owner only |
 | DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
 
-Room: `{id,owner_id,title,epoch,linked_room_id,member_ids}`. Empty members creates a
+Room: `{id,owner_id,title,epoch,linked_room_id,member_ids,created,last_activity}`.
+Creation/activity values are Unix seconds. Home and chat lists sort by
+`last_activity` descending, then stable `id` ascending. Activity is the greater of
+room creation and latest message time; summaries expose no message bodies.
+The additive `room_activity` table preserves existing room records; rooms created
+before timestamp support have `created:0` and use their latest message time for
+activity until a new message arrives. Empty members creates a
 personal room; one additional member a direct room; more members a group.
 Creator is always a member. Account/organization admin status gives no read/send
 permission. The first slice reserves audience changes to the room creator, who

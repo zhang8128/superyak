@@ -5,7 +5,9 @@ class Chats:
     def _room(self, db, actor, key):
         row = require(db.execute('SELECT rooms.* FROM rooms JOIN room_members ON rooms.id=room_members.room_id WHERE rooms.id=? AND user_id=?', (key, actor)).fetchone())
         members = [r[0] for r in db.execute('SELECT user_id FROM room_members WHERE room_id=? ORDER BY user_id', (key,))]
-        return {**dict(row), 'member_ids': members}
+        activity = db.execute('SELECT (SELECT created FROM room_activity WHERE room_id=?) AS created, (SELECT MAX(created) FROM messages WHERE room_id=?) AS latest_message', (key, key)).fetchone()
+        created = activity['created'] or 0.0
+        return {**dict(row), 'member_ids': members, 'created': created, 'last_activity': max(created, activity['latest_message'] or 0.0)}
 
     def _create_room(self, db, actor, title, members, linked_room_id=None):
         text(title, 'title')
@@ -13,6 +15,7 @@ class Chats:
         self._known_users(db, members)
         key = uid()
         db.execute('INSERT INTO rooms VALUES(?,?,?,1,?)', (key, actor, title, linked_room_id))
+        db.execute('INSERT INTO room_activity VALUES(?,?)', (key, self.clock()))
         db.executemany('INSERT INTO room_members VALUES(?,?)', [(key, member) for member in members])
         return self._room(db, actor, key)
 
@@ -22,7 +25,8 @@ class Chats:
 
     def list_rooms(self, actor):
         with self.transaction() as db:
-            return [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=? ORDER BY room_id', (actor,)).fetchall()]
+            rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
+            return sorted(rooms, key=lambda room: (-room['last_activity'], room['id']))
 
     def get_room(self, actor, key):
         with self.transaction() as db:
@@ -53,6 +57,7 @@ class Chats:
             return self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
 
     def remove_participant(self, actor, key, user_id):
+        text(user_id, 'user ID', 100)
         with self.transaction() as db:
             room = self._room(db, actor, key)
             if room['owner_id'] != actor:

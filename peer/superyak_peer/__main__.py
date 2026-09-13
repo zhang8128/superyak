@@ -1,13 +1,15 @@
 """Explicit provisioning and loopback-first server commands."""
 import argparse
 import getpass
+import hmac
 import ipaddress
 import json
 import os
 from pathlib import Path
 import secrets
-import sys
-from .common import Problem
+import sqlite3
+from .auth import password_hash
+from .common import Problem, text
 from .db import Store
 
 
@@ -18,23 +20,54 @@ def private_json(path, value):
         stream.write('\n')
 
 
+def validate_demo(data_dir):
+    """Check completion read-only; never replace or repair retained demo state."""
+    database = data_dir / 'peer.sqlite3'
+    if not database.is_file():
+        raise ValueError('Refusing incomplete demo state')
+    try:
+        marker = json.loads((data_dir / 'demo-marker.json').read_text())
+        credentials = json.loads((data_dir / 'demo-credentials.json').read_text())
+        if marker != {'application': 'superyak-demo', 'version': 1}:
+            raise ValueError('Invalid marker')
+        expected = {'patient', 'family', 'doctor', 'organizer'}
+        if not isinstance(credentials, list) or len(credentials) != 4 or any(not isinstance(c, dict) for c in credentials):
+            raise ValueError('Invalid credentials')
+        if {c.get('username') for c in credentials} != expected:
+            raise ValueError('Missing seeded identities')
+        db = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)
+        db.row_factory = sqlite3.Row
+        try:
+            if db.execute('PRAGMA foreign_key_check').fetchone():
+                raise ValueError('Incomplete identity references')
+            for credential in credentials:
+                row = db.execute('SELECT * FROM users WHERE username=?', (credential['username'],)).fetchone()
+                password = text(credential.get('password'), 'password', 1024)
+                if not row or ('id' in credential and credential['id'] != row['id']):
+                    raise ValueError('Missing seeded identity')
+                if not hmac.compare_digest(password_hash(password, row['salt']), row['password_hash']):
+                    raise ValueError('Credentials do not match')
+        finally:
+            db.close()
+    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, Problem):
+        raise ValueError('Refusing incomplete or mismatched demo state') from None
+
+
 def seed_demo(data_dir):
     data_dir = Path(data_dir)
     marker = data_dir / 'demo-credentials.json'
-    if data_dir.is_symlink() or marker.is_symlink():
+    entries = ['demo-credentials.json', 'demo-marker.json', 'peer.sqlite3', 'peer.sqlite3-wal', 'peer.sqlite3-shm', 'peer.sqlite3-journal']
+    if data_dir.is_symlink() or any((data_dir / name).is_symlink() for name in entries):
         raise ValueError('Symlinked demo state is not allowed')
     if data_dir.exists() and any(data_dir.iterdir()):
-        if marker.is_file() and (data_dir / 'demo-marker.json').is_file():
-            if json.loads((data_dir / 'demo-marker.json').read_text()) == {'application': 'superyak-demo', 'version': 1}:
-                Store(data_dir)
-                return
-        raise ValueError('Refusing to overwrite non-demo or incomplete state')
+        validate_demo(data_dir)
+        return
     store = Store(data_dir)
     credentials, people = [], {}
     for username, name in [('patient', 'Alex Patient'), ('family', 'Sam Family'), ('doctor', 'Dr. Morgan'), ('organizer', 'Taylor Organizer')]:
         password = secrets.token_urlsafe(18)
         people[username] = store.create_user(username, name, password, is_admin=username == 'organizer')
-        credentials.append({'username': username, 'name': name, 'password': password})
+        credentials.append({'id': people[username]['id'], 'username': username, 'name': name, 'password': password})
     patient = people['patient']['id']
     store.create_space(patient, 'Alex’s care circle', 'care-circle', [people['family']['id'], people['doctor']['id']])
     store.create_space(people['organizer']['id'], 'Wilhelm Foundation demo project', 'organization', [patient, people['doctor']['id']])

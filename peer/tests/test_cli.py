@@ -66,3 +66,31 @@ def test_symlink_sidecars_are_refused(tmp_path, name):
     with pytest.raises(ValueError):
         Store(target)
     assert victim.read_text() == 'preserve'
+
+@pytest.mark.parametrize('damage', ['missing_database', 'missing_account', 'replaced_identity', 'wrong_password'])
+def test_demo_refuses_incomplete_or_mismatched_identity_without_repair(tmp_path, damage):
+    import sqlite3
+    target = tmp_path / 'demo'
+    assert run('demo', '--data-dir', target).returncode == 0
+    database = target / 'peer.sqlite3'
+    credentials_path = target / 'demo-credentials.json'
+    credentials = credentials_path.read_bytes()
+    if damage == 'missing_database':
+        database.unlink()
+    elif damage == 'wrong_password':
+        values = json.loads(credentials)
+        values[0]['password'] = 'a-different-password'
+        credentials_path.write_text(json.dumps(values))
+        credentials = credentials_path.read_bytes()
+    else:
+        with sqlite3.connect(database) as db:
+            if damage == 'missing_account':
+                db.execute("DELETE FROM users WHERE username='patient'")
+            else:
+                db.execute("UPDATE users SET id='replacement-person' WHERE username='patient'")
+    before_database = database.read_bytes() if database.exists() else None
+    result = run('demo', '--data-dir', target)
+    assert result.returncode != 0
+    assert 'incomplete' in result.stderr.lower()
+    assert credentials_path.read_bytes() == credentials
+    assert (database.read_bytes() if database.exists() else None) == before_database
