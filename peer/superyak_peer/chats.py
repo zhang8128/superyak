@@ -1,0 +1,72 @@
+"""Member-only rooms, linked new audiences, epoch-rechecked messages."""
+from .common import Problem, text, ids, uid, require
+
+class Chats:
+    def _room(self, db, actor, key):
+        row = require(db.execute('SELECT rooms.* FROM rooms JOIN room_members ON rooms.id=room_members.room_id WHERE rooms.id=? AND user_id=?', (key, actor)).fetchone())
+        members = [r[0] for r in db.execute('SELECT user_id FROM room_members WHERE room_id=? ORDER BY user_id', (key,))]
+        return {**dict(row), 'member_ids': members}
+
+    def _create_room(self, db, actor, title, members, linked_room_id=None):
+        text(title, 'title')
+        members = ids([actor] + members)
+        self._known_users(db, members)
+        key = uid()
+        db.execute('INSERT INTO rooms VALUES(?,?,?,1,?)', (key, actor, title, linked_room_id))
+        db.executemany('INSERT INTO room_members VALUES(?,?)', [(key, member) for member in members])
+        return self._room(db, actor, key)
+
+    def create_room(self, actor, title, member_ids=None):
+        with self.transaction() as db:
+            return self._create_room(db, actor, title, ids(member_ids or []))
+
+    def list_rooms(self, actor):
+        with self.transaction() as db:
+            return [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=? ORDER BY room_id', (actor,)).fetchall()]
+
+    def get_room(self, actor, key):
+        with self.transaction() as db:
+            room = self._room(db, actor, key)
+            room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created,id', (key,))]
+            return room
+
+    def send_message(self, actor, key, client_message_id, body):
+        text(client_message_id, 'client message ID', 100)
+        text(body, 'message', 20000)
+        with self.transaction() as db:
+            room = self._room(db, actor, key)
+            existing = db.execute('SELECT * FROM messages WHERE room_id=? AND author_id=? AND client_message_id=?', (key, actor, client_message_id)).fetchone()
+            if existing:
+                if existing['body'] != body:
+                    raise Problem(409, 'Message ID already used with different text')
+                return dict(existing)
+            message_id = uid()
+            db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)', (message_id, key, actor, client_message_id, body, room['epoch'], self.clock()))
+            self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
+            return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
+
+    def add_participants(self, actor, key, member_ids):
+        with self.transaction() as db:
+            room = self._room(db, actor, key)
+            if room['owner_id'] != actor:
+                raise Problem(403, 'Room owner required')
+            return self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
+
+    def remove_participant(self, actor, key, user_id):
+        with self.transaction() as db:
+            room = self._room(db, actor, key)
+            if room['owner_id'] != actor:
+                raise Problem(403, 'Room owner required')
+            if user_id == actor:
+                raise Problem(400, 'Cannot remove the room owner')
+            if user_id in room['member_ids']:
+                db.execute('DELETE FROM room_members WHERE room_id=? AND user_id=?', (key, user_id))
+                db.execute('UPDATE rooms SET epoch=epoch+1 WHERE id=?', (key,))
+                self.emit(db, 'chat.membership', key, room['epoch'] + 1, {'removed_user_id': user_id})
+            return self._room(db, actor, key)
+
+    def can_deliver_message(self, message_id, recipient_id, epoch):
+        """Trusted transport hook: rejects messages queued under obsolete room epochs."""
+        with self.transaction() as db:
+            row = db.execute('SELECT messages.epoch AS message_epoch,rooms.epoch FROM messages JOIN rooms ON rooms.id=messages.room_id JOIN room_members ON room_members.room_id=rooms.id WHERE messages.id=? AND room_members.user_id=?', (message_id, recipient_id)).fetchone()
+            return bool(row and row['epoch'] == epoch and row['message_epoch'] == epoch)

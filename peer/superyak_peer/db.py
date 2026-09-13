@@ -1,0 +1,80 @@
+"""Private SQLite store. Each operation owns a connection and transaction."""
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import sqlite3
+import time
+from .auth import Auth
+from .spaces import Spaces
+from .layers import Layers
+from .files import Files
+from .chats import Chats
+from .common import encode
+
+SCHEMA = '''
+CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, salt BLOB NOT NULL, password_hash BLOB NOT NULL, is_admin INTEGER NOT NULL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), csrf TEXT NOT NULL, expires REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS invitations(token_hash TEXT PRIMARY KEY, creator_id TEXT NOT NULL REFERENCES users(id), expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS spaces(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, kind TEXT NOT NULL, version INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS space_members(space_id TEXT NOT NULL REFERENCES spaces(id), user_id TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(space_id,user_id));
+CREATE TABLE IF NOT EXISTS layers(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), version INTEGER NOT NULL, resource_version INTEGER NOT NULL DEFAULT 0, draft TEXT NOT NULL, active_revision INTEGER);
+CREATE TABLE IF NOT EXISTS layer_revisions(layer_id TEXT NOT NULL REFERENCES layers(id), revision INTEGER NOT NULL, draft_version INTEGER NOT NULL, snapshot TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY(layer_id,revision));
+CREATE TABLE IF NOT EXISTS files(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, media_type TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL, content BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS rooms(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, epoch INTEGER NOT NULL, linked_room_id TEXT REFERENCES rooms(id));
+CREATE TABLE IF NOT EXISTS room_members(room_id TEXT NOT NULL REFERENCES rooms(id), user_id TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(room_id,user_id));
+CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), author_id TEXT NOT NULL REFERENCES users(id), client_message_id TEXT NOT NULL, body TEXT NOT NULL, epoch INTEGER NOT NULL, created REAL NOT NULL, UNIQUE(room_id,author_id,client_message_id));
+CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
+'''
+
+class Store(Auth, Spaces, Layers, Files, Chats):
+    def __init__(self, data_dir: Path, *, clock=time.time):
+        self.data_dir = Path(data_dir).absolute()
+        self.clock = clock
+        self._check_paths()
+        self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.data_dir, 0o700)
+        self.db_path = self.data_dir / 'peer.sqlite3'
+        fd = os.open(self.db_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        os.close(fd)
+        os.chmod(self.db_path, 0o600)
+        with self.transaction() as db:
+            db.executescript(SCHEMA)
+
+    def _check_paths(self):
+        for path in (self.data_dir, *self.data_dir.parents):
+            # macOS /var is a system alias; reject symlinked task state itself.
+            if path == self.data_dir and path.is_symlink():
+                raise ValueError('Symlinked state is not allowed')
+        for name in ('peer.sqlite3', 'peer.sqlite3-wal', 'peer.sqlite3-shm', 'peer.sqlite3-journal'):
+            if (self.data_dir / name).is_symlink():
+                raise ValueError('Symlinked state is not allowed')
+
+    @contextmanager
+    def transaction(self):
+        self._check_paths()
+        db = sqlite3.connect(self.db_path, timeout=30)
+        db.row_factory = sqlite3.Row
+        db.execute('PRAGMA foreign_keys=ON')
+        try:
+            db.execute('BEGIN IMMEDIATE')
+            yield db
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def emit(self, db, kind, resource_id, resource_version, payload=None):
+        """Append an event inside the caller's resource transaction."""
+        cursor = db.execute('INSERT INTO events(kind,resource_id,resource_version,payload,created) VALUES(?,?,?,?,?)',
+                            (kind, resource_id, resource_version, encode(payload or {}), self.clock()))
+        return cursor.lastrowid
+
+    def events_since(self, after_id=0, limit=100):
+        """Trusted worker API; events are never an unfiltered browser feed."""
+        with self.transaction() as db:
+            rows = db.execute('SELECT * FROM events WHERE id>? ORDER BY id LIMIT ?', (after_id, min(1000, max(1, limit)))).fetchall()
+            return [{**dict(r), 'payload': json.loads(r['payload'])} for r in rows]

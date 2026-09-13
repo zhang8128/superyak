@@ -1,0 +1,25 @@
+import pytest
+from fastapi.testclient import TestClient
+
+@pytest.fixture
+def env(tmp_path):
+    from superyak_peer.app import create_app
+    clock = [1000000.0]
+    app = create_app(tmp_path / 'peer', clock=lambda: clock[0], allowed_origins=['http://testserver'])
+    clients, users = [], []
+    for name in ('patient', 'doctor', 'organizer', 'family'):
+        user = app.state.store.create_user(name, name.title(), 'long-password-' + name, is_admin=name == 'organizer')
+        client = TestClient(app, base_url='http://testserver')
+        client.headers['origin'] = 'http://testserver'
+        response = client.post('/api/login', json={'username': name, 'password': 'long-password-' + name})
+        assert response.status_code == 200
+        client.headers['x-csrf-token'] = response.json()['csrf_token']
+        clients.append(client)
+        users.append(user)
+    yield app, clients, users, clock
+    for client in clients:
+        client.close()
+
+@pytest.fixture
+def peer_clients(env):
+    return env[1][:3]
