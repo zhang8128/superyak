@@ -514,6 +514,7 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             page.get_by_label("Layer title").fill("Remote delivery")
             page.get_by_role("checkbox", name="Casey Remote").check()
             page.get_by_role("button", name="Save private draft").click()
+            expect(page.locator("#main-content").get_by_text("Private draft saved")).to_be_visible()
             page.get_by_role("button", name="Preview audience").click()
             page.get_by_role("button", name="Turn on version 2").click()
             expect(page.get_by_text("Active · version 2")).to_be_visible()
