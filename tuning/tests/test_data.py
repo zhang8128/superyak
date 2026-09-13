@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from superyak_tuning.data import snapshot_dataset, read_snapshot
+from superyak_tuning.data import snapshot_dataset, read_snapshot, canonical, digest
 
 
 def dataset():
@@ -97,3 +97,37 @@ def test_unknown_source_and_empty_assistant_rejected(tmp_path):
     value = dataset(); value["examples"][0]["messages"][-1]["content"] = ""
     with pytest.raises(ValueError, match="content"):
         snapshot_dataset(write(tmp_path, value), tmp_path / "snapshot", "local_training")
+
+
+def test_snapshot_cannot_be_reused_for_a_different_purpose(tmp_path):
+    snapshot_dataset(write(tmp_path, dataset()), tmp_path / "snapshot", "inference")
+    with pytest.raises(ValueError, match="purpose"):
+        read_snapshot(tmp_path / "snapshot", "local_training")
+
+
+def test_untracked_snapshot_files_rejected(tmp_path):
+    snapshot_dataset(write(tmp_path, dataset()), tmp_path / "snapshot", "local_training")
+    (tmp_path / "snapshot" / "extra-private-data.txt").write_text("fictional")
+    with pytest.raises(ValueError, match="inventory"):
+        read_snapshot(tmp_path / "snapshot", "local_training")
+
+
+@pytest.mark.parametrize("mutation", ["schema", "attachment_sha", "attachment_bytes", "splits"])
+def test_manifest_contract_is_validated_beyond_its_digest(tmp_path, mutation):
+    value = dataset(); value["sources"][0]["attachments"] = ["assay.csv"]
+    (tmp_path / "assay.csv").write_text("sample,value\nA,1\n")
+    snapshot_dataset(write(tmp_path, value), tmp_path / "snapshot", "local_training")
+    path = tmp_path / "snapshot" / "manifest.json"
+    manifest = json.loads(path.read_text())
+    if mutation == "schema":
+        manifest["schema_version"] = 2
+    elif mutation == "attachment_sha":
+        manifest["sources"][0]["attachments"][0]["sha256"] = "0" * 64
+    elif mutation == "attachment_bytes":
+        manifest["sources"][0]["attachments"][0]["bytes"] = 999
+    else:
+        manifest["splits"] = {"train": 0, "dev": 1, "test": 0}
+    manifest["digest"] = digest(canonical({k: v for k, v in manifest.items() if k != "digest"}))
+    path.write_bytes(canonical(manifest))
+    with pytest.raises(ValueError):
+        read_snapshot(tmp_path / "snapshot", "local_training")

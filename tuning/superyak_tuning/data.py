@@ -165,12 +165,18 @@ def read_snapshot(path: Path, purpose: str = "local_training") -> tuple[dict, li
     manifest = json.loads(bounded_read(path / "manifest.json"))
     if not isinstance(manifest, dict):
         raise ValueError("snapshot integrity failure")
+    if manifest.get("schema_version") != 1:
+        raise ValueError("snapshot schema_version must be 1")
+    if manifest.get("purpose") != purpose:
+        raise ValueError("snapshot purpose differs from the requested use; create a new snapshot")
     expected = manifest.get("digest")
     if expected != digest(canonical({k: v for k, v in manifest.items() if k != "digest"})):
         raise ValueError("snapshot manifest integrity failure")
     inventory = manifest.get("files", {})
     if not isinstance(inventory, dict) or "examples.jsonl" not in inventory:
         raise ValueError("snapshot file inventory missing")
+    if {p.name for p in path.iterdir()} != set(inventory) | {"manifest.json"}:
+        raise ValueError("snapshot file inventory differs from disk")
     for name, sha in inventory.items():
         if not isinstance(name, str) or Path(name).name != name:
             raise ValueError("invalid snapshot file inventory")
@@ -178,6 +184,25 @@ def read_snapshot(path: Path, purpose: str = "local_training") -> tuple[dict, li
             raise ValueError("snapshot file integrity failure")
     rows = [json.loads(line) for line in bounded_read(path / "examples.jsonl").splitlines() if line]
     validate_dataset({"schema_version": 1, "sources": manifest["sources"], "examples": rows}, purpose)
+    attachment_names = set()
+    for source in manifest["sources"]:
+        attachments = source.get("attachments", [])
+        if not isinstance(attachments, list):
+            raise ValueError("invalid attachment inventory")
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                raise ValueError("invalid attachment inventory")
+            name = attachment.get("file")
+            if not isinstance(name, str) or name == "examples.jsonl" or name not in inventory or name in attachment_names:
+                raise ValueError("invalid attachment inventory reference")
+            if attachment.get("sha256") != inventory[name] or attachment.get("bytes") != (path / name).stat().st_size:
+                raise ValueError("attachment inventory integrity failure")
+            attachment_names.add(name)
+    if attachment_names != set(inventory) - {"examples.jsonl"}:
+        raise ValueError("snapshot attachment inventory is incomplete")
     if len(rows) != manifest.get("example_count"):
         raise ValueError("snapshot count integrity failure")
+    split_counts = {split: sum(row["split"] == split for row in rows) for split in ("train", "dev", "test")}
+    if manifest.get("splits") != split_counts:
+        raise ValueError("snapshot split count integrity failure")
     return manifest, rows
