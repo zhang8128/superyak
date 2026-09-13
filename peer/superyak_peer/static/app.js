@@ -699,7 +699,10 @@ async function saveLayer(form) {
 async function uploadFile(input) {
   const file = input.files?.[0];
   if (!file) return;
-  const draftEdit = rememberLayerForm();
+  const initiatingLayer = selectedLayer();
+  const layerId = initiatingLayer.id;
+  const initiatingIdentity = state.editorIdentity;
+  rememberLayerForm();
   const status = document.querySelector("#upload-status");
   if (file.size > 4 * 1024 * 1024) {
     status.className = "inline-message error";
@@ -715,15 +718,32 @@ async function uploadFile(input) {
       reader.readAsDataURL(file);
     });
     const uploaded = await api("/api/files", { method: "POST", json: { name: file.name, media_type: file.type, content_base64 } });
+    if (state.editorIdentity !== initiatingIdentity) return;
     state.files.push(uploaded);
-    const layer = selectedLayer();
-    const current = state.layerEdits[layer.id] || draftEdit;
-    current.values.attachment_ids = [...new Set([...(current.values.attachment_ids || []), uploaded.id])];
-    current.dirty = true;
-    current.generation += 1;
-    state.layerEdits[layer.id] = current;
-    render();
-    document.querySelector("#upload-status").textContent = `${uploaded.name} uploaded. Save the draft to keep it selected.`;
+    const savedLayer = state.home.layers.find((layer) => layer.id === layerId);
+    if (!savedLayer) return;
+    const current = state.layerEdits[layerId];
+    const latestValues = current?.values || {
+      title: savedLayer.title,
+      body: savedLayer.body,
+      audience_users: savedLayer.audience_users || [],
+      audience_spaces: savedLayer.audience_spaces || [],
+      public: savedLayer.public,
+      attachment_ids: savedLayer.attachment_ids || [],
+    };
+    state.layerEdits[layerId] = {
+      values: {
+        ...latestValues,
+        attachment_ids: [...new Set([...(latestValues.attachment_ids || []), uploaded.id])],
+      },
+      dirty: true,
+      conflict: current?.conflict || false,
+      generation: (current?.generation || 0) + 1,
+    };
+    if (state.selectedLayerId === layerId) {
+      render();
+      document.querySelector("#upload-status").textContent = `${uploaded.name} uploaded. Save the draft to keep it selected.`;
+    }
   } catch (error) {
     status.className = "inline-message error";
     status.textContent = `${error.message} Your draft text is still here.`;
@@ -860,14 +880,29 @@ async function createChat(form) {
 async function removeParticipant(id) {
   const room = state.room;
   const name = participantName(id);
+  let updated;
   try {
-    await api(`/api/chats/${pathPart(room.id)}/participants/${pathPart(id)}`, { method: "DELETE", json: {} });
-    await loadData();
-    state.room = await api(`/api/chats/${pathPart(room.id)}`);
-    state.transitionNote = `${name} no longer has access to this room`;
-    render();
+    updated = await api(`/api/chats/${pathPart(room.id)}/participants/${pathPart(id)}`, { method: "DELETE", json: {} });
   } catch (error) {
     setFlash(`${error.message} Room access was not changed.`, true);
+    render();
+    return;
+  }
+  if (state.room?.id === room.id) {
+    state.room = { ...state.room, ...updated, messages: state.room.messages || [] };
+    state.transitionNote = `${name} no longer has access to this room`;
+    render();
+  }
+  try {
+    await loadData();
+    if (state.room?.id === room.id) state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    render();
+  } catch (error) {
+    if (error.status === 401) {
+      showLogin(`${name} no longer has access to this room. Sign in again to continue.`);
+      return;
+    }
+    setFlash(`${name} no longer has access to this room. Latest room status is unavailable.`);
     render();
   }
 }
@@ -894,7 +929,11 @@ async function sendMessage(form) {
     return;
   }
   const currentDraft = readChatDraft(room.id);
-  if (currentDraft.clientId === draft.clientId && currentDraft.body === body) sessionStorage.removeItem(draftKey(room.id));
+  if (currentDraft.clientId === draft.clientId && currentDraft.body === body) {
+    if (textarea.isConnected && textarea.value === body) textarea.value = "";
+    sessionStorage.removeItem(draftKey(room.id));
+    if (status.isConnected) status.textContent = "Message saved. Refreshing room…";
+  }
   if (state.room?.id === room.id) {
     const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
     if (!duplicate) state.room.messages = [...(state.room.messages || []), accepted];

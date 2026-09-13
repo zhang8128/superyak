@@ -14,6 +14,7 @@ import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
 from superyak_peer.app import create_app
+from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
 from superyak_peer.identity import PeerIdentity
@@ -226,7 +227,7 @@ def test_chat_keeps_unsent_text_and_membership_change_starts_empty_room(browser_
             page.get_by_role("textbox", name="Message", exact=True).fill("Keep this through a connection problem.")
             context.set_offline(True)
             page.get_by_role("button", name="Send message").click()
-            expect(page.get_by_text("Connection lost. Your message is still here.")).to_be_visible()
+            expect(page.locator("#chat-status")).to_have_text("Connection lost. Your message is still here.")
             expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_value(
                 "Keep this through a connection problem."
             )
@@ -669,3 +670,124 @@ def test_durable_name_corrections_shared_attribution_and_complete_revision(brows
             expect(family.get_by_text("Shared by Alex Rivera", exact=False)).to_be_visible()
             expect(family.get_by_text(f"Owner account {patient_id}", exact=True)).to_be_visible()
             expect(family.get_by_text(f"Origin peer {peer_id}", exact=True)).to_be_visible()
+
+
+def test_overlapping_upload_and_save_merges_attachment_into_latest_layer_values(browser_peer):
+    """I1 round 2: upload completion cannot resurrect its captured pre-save text."""
+    store = browser_peer["app"].state.store
+    patient_id = browser_peer["users"]["patient"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="New layer").click()
+            expect(page.get_by_role("heading", name="Edit this layer")).to_be_visible()
+            layer_id = decode_fragment_id(page.url)
+            page.get_by_label("What do you want to share?").fill("Text captured when upload began")
+            page.evaluate("""
+                window.__uploadAccepted = false;
+                window.__releaseUpload = null;
+                const realFetch = window.fetch.bind(window);
+                window.fetch = async (...args) => {
+                  const response = await realFetch(...args);
+                  const path = String(args[0]);
+                  if (path === "/api/files" && (args[1]?.method || "GET") === "POST") {
+                    window.__uploadAccepted = true;
+                    await new Promise((resolve) => { window.__releaseUpload = resolve; });
+                  }
+                  return response;
+                };
+            """)
+            page.locator("#file-upload").set_input_files({
+                "name": "overlap.txt",
+                "mimeType": "text/plain",
+                "buffer": b"real uploaded content",
+            })
+            page.wait_for_function("window.__uploadAccepted === true")
+
+            page.get_by_label("What do you want to share?").fill("Newer text saved while upload waits")
+            page.get_by_role("button", name="Save private draft").click()
+            expect(page.locator("#main-content").get_by_text("Private draft saved")).to_be_visible()
+            assert store.get_layer(patient_id, layer_id)["body"] == "Newer text saved while upload waits"
+
+            page.evaluate("window.__releaseUpload()")
+            expect(page.get_by_text("overlap.txt uploaded")).to_be_visible()
+            expect(page.get_by_label("What do you want to share?")).to_have_value("Newer text saved while upload waits")
+            expect(page.get_by_role("checkbox", name="overlap.txt")).to_be_checked()
+            page.get_by_role("button", name="Save private draft").click()
+            expect(page.locator("#main-content").get_by_text("Private draft saved")).to_be_visible()
+            saved = store.get_layer(patient_id, layer_id)
+            assert saved["body"] == "Newer text saved while upload waits"
+            assert len(saved["attachment_ids"]) == 1
+
+
+def test_repeated_send_during_post_acceptance_refresh_reuses_settled_composer(browser_peer):
+    """I2 round 2: the still-pending refresh cannot resubmit an accepted visible body."""
+    store = browser_peer["app"].state.store
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+    original_get = store.get_room
+    delay_refresh = {"value": False}
+
+    def delayed_get(*args):
+        if delay_refresh["value"]:
+            refresh_started.set()
+            release_refresh.wait(5)
+        return original_get(*args)
+
+    store.get_room = delayed_get
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Chats", exact=True).click()
+            page.get_by_role("button", name="New private chat").click()
+            page.get_by_label("Chat title").fill("One accepted send")
+            page.get_by_role("button", name="Create chat").click()
+            expect(page.get_by_role("heading", name="One accepted send")).to_be_visible()
+            room_id = decode_fragment_id(page.url)
+            delay_refresh["value"] = True
+            page.get_by_role("textbox", name="Message", exact=True).fill("Send this only once")
+            page.get_by_role("button", name="Send message").click()
+            assert refresh_started.wait(5), "post-acceptance refresh did not begin"
+            page.get_by_role("button", name="Send message").click()
+            page.wait_for_timeout(150)
+            release_refresh.set()
+            expect(page.get_by_text("Send this only once", exact=True)).to_have_count(1)
+            messages = store.get_room(browser_peer["users"]["patient"]["id"], room_id)["messages"]
+            assert [message["body"] for message in messages] == ["Send this only once"]
+
+
+def test_accepted_participant_removal_survives_failed_followup_read(browser_peer):
+    """N1: acknowledged DELETE is settled before a failed room refresh is reported."""
+    store = browser_peer["app"].state.store
+    family_id = browser_peer["users"]["family"]["id"]
+    original_remove = store.remove_participant
+    original_get = store.get_room
+    removed = {"value": False}
+
+    def accepted_remove(*args):
+        room = original_remove(*args)
+        removed["value"] = True
+        return room
+
+    def failed_get(*args):
+        if removed["value"]:
+            removed["value"] = False
+            raise Problem(503, "Room refresh unavailable")
+        return original_get(*args)
+
+    store.remove_participant = accepted_remove
+    store.get_room = failed_get
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Chats", exact=True).click()
+            page.get_by_role("button", name="New private chat").click()
+            page.get_by_label("Chat title").fill("Removal boundary")
+            page.get_by_role("checkbox", name="Sam Family").check()
+            page.get_by_role("button", name="Create chat").click()
+            expect(page.get_by_role("heading", name="Removal boundary")).to_be_visible()
+            room_id = decode_fragment_id(page.url)
+            page.get_by_role("button", name="Remove Sam Family from this room").click()
+            expect(page.locator("#main-content").get_by_text("Sam Family no longer has access to this room. Latest room status is unavailable.")).to_be_visible()
+            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_have_count(0)
+            with pytest.raises(Problem) as denied:
+                store.get_room(family_id, room_id)
+            assert denied.value.status == 404
