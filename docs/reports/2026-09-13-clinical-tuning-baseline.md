@@ -47,3 +47,11 @@ The implemented trainer separately passed real CPU optimizer/checkpoint/resume
 checks using a tiny randomly initialized Gemma4 text model. That validates the
 training mechanism only. Full-size GGUF materialization and Intel XPU training
 remain unexecuted pending the Stampede3 connection and allocation details.
+
+The selected GGUF's real tokenizer also passed completion-mask checks over all
+eight authored examples after accounting for its separate thinking-generation
+prefix. The records contain 70–128 tokens, including 16–48 supervised tokens.
+The bounded probe used about 1.82 GB peak RSS and loaded no full model weights.
+Preparation repairs the observed configuration and expert/router/scalar mapping
+gaps in the pinned loader; full dequantization and numerical parity remain
+high-memory execution checks.

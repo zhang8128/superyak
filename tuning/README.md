@@ -65,8 +65,8 @@ Pinned file: `Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced-Q4_K_M.gguf`.
 SHA-256: `f8b1da6dc139e6928159e536bc85602adbc1412018871732a878dedcad7ccafd`.
 Size: 16,796,015,968 bytes. No fallback replaces it with official weights.
 
-The selected repository supplies GGUF weights. Transformers' legacy Gemma 4
-GGUF loader can reconstruct the text backbone for training; the reconstructed
+The selected repository supplies GGUF weights. The preparation command adapts
+Transformers' legacy loader for this Gemma 4 text backbone; the reconstructed
 BF16 tensors retain the source quantization loss. This does not recover original
 BF16 precision. The initial trainer does not train image/audio encoders or MoE
 experts/router. See [Transformers' GGUF guide](https://huggingface.co/docs/transformers/v5.17.0/quantization/gguf).
@@ -114,8 +114,9 @@ tuning/.venv/bin/python -m superyak_tuning snapshot \
 
 Snapshots use private directories and hash-checked inventories. Commands refuse
 to overwrite existing snapshots or silently mix their purposes. Training consumes
-only `train` rows, with loss on the final assistant completion. Re-author the
-source and make a new snapshot when correcting examples or grants.
+only `train` rows, with loss on the final assistant completion. Native continuation
+tokenization handles the selected model's different thinking/generation prefix.
+Re-author the source and make a new snapshot when correcting examples or grants.
 
 ## Run the selected baseline locally
 
@@ -151,10 +152,14 @@ records six strict passes and no detected refusals, with two reviewed mismatches
 
 ## Materialize and train on allocated compute
 
-Current integration finding: the selected GGUF carries per-layer KV-head metadata
-that the stock Transformers 5.17 loader rejects as a list instead of an integer.
-The commands below describe the intended preparation path; that specific
-compatibility fix and full-size execution must be verified before a training job.
+The selected GGUF exposes gaps in stock Transformers 5.17: per-layer KV heads,
+MoE configuration, and expert/router/scalar tensor names. Preparation supplies
+the pinned architecture configuration and scopes the missing tensor-name mappings
+to the load. The architecture metadata comes from Google's pinned
+[base configuration](https://huggingface.co/google/gemma-4-26B-A4B-it/blob/4d7ae4984b7db7de8f8457170b3f1a419ee76d52/config.json);
+all weights come from the selected HauhauCS GGUF. Prepared lineage records both.
+Metadata and tensor-shape audits plus real tokenizer checks passed; full tensor
+materialization still needs its high-memory compute run.
 
 Stage the selected public weights and permitted dataset to the chosen compute
 environment explicitly. The CLI does not transfer private records. Run preparation

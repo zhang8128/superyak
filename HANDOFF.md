@@ -16,9 +16,13 @@ Two misses and clinical-validation limits are retained in the report.
 Implementation worktree `.worktrees/clinical-tuning`, branch
 `codex/clinical-tuning`, contains ignored model/import/baseline evidence in
 `.engram/clinical-tuning-model/` and `.engram/clinical-tuning-baseline-20260913/`.
-Real-tokenizer integration found a Transformers 5.17 loader mismatch with the
-selected GGUF per-layer KV-head list. Resolve it before treating preparation as
-runnable; local Ollama inference itself succeeded.
+Real-artifact integration exposed Transformers 5.17 configuration/tensor-name
+mapping gaps and a thinking-prefix mismatch in training masks. Preparation now
+uses pinned architecture metadata with scoped expert/router/scalar mappings;
+training uses the native continuation boundary. Real selected-tokenizer checks
+passed all eight examples without loading full model weights. Full materialization
+and Intel training remain unexecuted; inspect the final review and verification
+receipts before reporting those as successful.
 Private snapshots, exact model lineage, bounded loopback evaluations, real LoRA
 training/checkpoints/resume, separate Linux CPU/XPU dependency locks, and a
 non-submitting Slurm generator are implemented. CPU checks use a tiny actual
@@ -26,7 +30,8 @@ Gemma4 text model; no full-size materialization or Intel backward pass has run.
 A first real dataset and Stampede3 SSH alias/allocation/reservation are still
 needed; saved login/account fields were empty. Do not invent them or submit jobs.
 This package does not yet expose peer training-consent APIs or distribute adapters.
-The existing peer demo and its model are preserved; Atlas remains stopped.
+All 75 tuning tests passed after the import/masking repairs; source and wheel
+builds passed. The existing peer demo and its model are preserved; Atlas remains stopped.
 Dated candidate-only statements and “no weights downloaded” below are superseded
 by this update. Retain the worktree and evidence; use Git for integration status.
 
