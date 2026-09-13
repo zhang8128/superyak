@@ -1,5 +1,35 @@
 # Resume here — medical lighthouse / aDNA
 
+**Clinical/biotech tuning implementation, September 13 (current):** User approved
+implementation and explicitly selected the HauhauCS uncensored Balanced variant.
+`tuning/` supports identifiable clinical and confidential biotech data with
+separate local/shared training and adapter-publication grants. Read
+[tuning/README.md](tuning/README.md) and the
+[baseline report](docs/reports/2026-09-13-clinical-tuning-baseline.md).
+The selected 16.8 GB Q4_K_M artifact was downloaded and SHA-256 verified, then
+imported into the existing local Ollama as
+`superyak-clinical-gemma4-balanced:q4_k_m`. The import receipt binds the original
+GGUF to Ollama's converted blob; all eight fictional domain cases produced
+answers, six strict term checks passed, and no configured refusal was detected.
+Two misses and clinical-validation limits are retained in the report.
+
+Implementation worktree `.worktrees/clinical-tuning`, branch
+`codex/clinical-tuning`, contains ignored model/import/baseline evidence in
+`.engram/clinical-tuning-model/` and `.engram/clinical-tuning-baseline-20260913/`.
+Real-tokenizer integration found a Transformers 5.17 loader mismatch with the
+selected GGUF per-layer KV-head list. Resolve it before treating preparation as
+runnable; local Ollama inference itself succeeded.
+Private snapshots, exact model lineage, bounded loopback evaluations, real LoRA
+training/checkpoints/resume, separate Linux CPU/XPU dependency locks, and a
+non-submitting Slurm generator are implemented. CPU checks use a tiny actual
+Gemma4 text model; no full-size materialization or Intel backward pass has run.
+A first real dataset and Stampede3 SSH alias/allocation/reservation are still
+needed; saved login/account fields were empty. Do not invent them or submit jobs.
+This package does not yet expose peer training-consent APIs or distribute adapters.
+The existing peer demo and its model are preserved; Atlas remains stopped.
+Dated candidate-only statements and “no weights downloaded” below are superseded
+by this update. Retain the worktree and evidence; use Git for integration status.
+
 **Model-tuning research plan, September 13 (latest):** The
 [Stampede3 LoRA plan](docs/reports/2026-09-13-stampede3-model-tuning-plan.md)
 proposes official Gemma 4 12B Unified BF16 LoRA alongside a 26B-A4B BF16

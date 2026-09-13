@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "clinical-fiction",
+      "domain": "clinical",
+      "sensitivity": "identifiable",
+      "rights": "Authored fictional engineering examples; no real participant or proprietary data. Reuse permitted.",
+      "permissions": {
+        "inference": true,
+        "local_training": true,
+        "shared_training": true,
+        "publish_adapter": true
+      }
+    },
+    {
+      "id": "biotech-fiction",
+      "domain": "biotech",
+      "sensitivity": "confidential",
+      "rights": "Authored fictional engineering examples; no real participant or proprietary data. Reuse permitted.",
+      "permissions": {
+        "inference": true,
+        "local_training": true,
+        "shared_training": true,
+        "publish_adapter": true
+      }
+    }
+  ],
+  "examples": [
+    {
+      "id": "train-clinical-lab",
+      "group_id": "training-fiction-0",
+      "source_ids": [
+        "clinical-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[lab-A] Fictional record for Ada Example: creatinine 1.2 mg/dL, specimen serum, 2026-09-01. Extract analyte, value, unit and evidence ID. Do not infer a diagnosis."
+        },
+        {
+          "role": "assistant",
+          "content": "Creatinine: 1.2 mg/dL, serum. [lab-A]"
+        }
+      ]
+    },
+    {
+      "id": "train-clinical-correction",
+      "group_id": "training-fiction-1",
+      "source_ids": [
+        "clinical-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[note-A] This fictional encounter belongs to patient P-102, not P-101. The earlier draft used P-101 by mistake. [lab-B] Potassium 4.1 mmol/L. Correct the patient label and report the lab result with its evidence ID."
+        },
+        {
+          "role": "assistant",
+          "content": "Patient P-102: potassium 4.1 mmol/L. [lab-B]"
+        }
+      ]
+    },
+    {
+      "id": "train-clinical-timeline",
+      "group_id": "training-fiction-2",
+      "source_ids": [
+        "clinical-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[visit-A] Fictional visit, 2026-08-01: heart rate 88 beats/min. [visit-B] 2026-08-03: heart rate 76 beats/min. Build a two-entry timeline with dates, values, units and evidence IDs."
+        },
+        {
+          "role": "assistant",
+          "content": "2026-08-01: 88 beats/min [visit-A]. 2026-08-03: 76 beats/min [visit-B]."
+        }
+      ]
+    },
+    {
+      "id": "train-clinical-missing",
+      "group_id": "training-fiction-3",
+      "source_ids": [
+        "clinical-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[med-A] Fictional record: medication X, dose 5 mg, route oral. Frequency is absent. Extract the documented fields and explicitly identify the missing frequency. Do not choose a schedule."
+        },
+        {
+          "role": "assistant",
+          "content": "Medication X, 5 mg, oral; frequency is missing. [med-A]"
+        }
+      ]
+    },
+    {
+      "id": "train-biotech-assay",
+      "group_id": "training-fiction-4",
+      "source_ids": [
+        "biotech-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[assay-A] Fictional cell assay: control fluorescence 120 AU, treated fluorescence 84 AU. Report the treated/control ratio, retaining original observations and citation. Do not infer efficacy."
+        },
+        {
+          "role": "assistant",
+          "content": "Control 120 AU; treated 84 AU; treated/control ratio 0.70. [assay-A]"
+        }
+      ]
+    },
+    {
+      "id": "train-biotech-qc",
+      "group_id": "training-fiction-5",
+      "source_ids": [
+        "biotech-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[run-A] Fictional sequencing QC: sample S1 has 240 reads and 180 pass QC; sample S2 has 200 reads and 100 pass QC. Report each pass fraction as a percentage and cite the run."
+        },
+        {
+          "role": "assistant",
+          "content": "S1: 75%; S2: 50%. [run-A]"
+        }
+      ]
+    },
+    {
+      "id": "train-biotech-replicates",
+      "group_id": "training-fiction-6",
+      "source_ids": [
+        "biotech-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[experiment-A] Fictional protein assay has technical replicates 0.20, 0.21 and 0.19 absorbance units from one biological sample. State the number of technical replicates and biological samples."
+        },
+        {
+          "role": "assistant",
+          "content": "Three technical replicates from one biological sample. [experiment-A]"
+        }
+      ]
+    },
+    {
+      "id": "train-biotech-conflict",
+      "group_id": "training-fiction-7",
+      "source_ids": [
+        "biotech-fiction"
+      ],
+      "split": "train",
+      "messages": [
+        {
+          "role": "user",
+          "content": "[study-A] Fictional study A reports increased marker abundance after treatment. [study-B] Fictional study B reports no change under a different sampling protocol. Summarize both and preserve the disagreement; do not claim a consensus."
+        },
+        {
+          "role": "assistant",
+          "content": "Study A reports increased marker abundance [study-A]; study B reports no change [study-B]. The results differ and used different sampling protocols."
+        }
+      ]
+    }
+  ]
+}

@@ -22,11 +22,16 @@ HOME_DATA ?= $(CURDIR)/.engram/home
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
 HOME_ARGS ?=
+TUNING_ARGS ?= --help
+TUNING_EXTRA ?= train
+
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
+	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
+	@echo "make tuning             Dataset, model, train, evaluate and Slurm CLI; TUNING_ARGS sets options"
 	@echo "make setup-peer / check-peer  Install/check the standalone personal home"
 	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -147,3 +152,12 @@ home:
 
 peer-bundle:
 	uv run --locked --project peer python peer/scripts/source_bundle.py --output "$(PEER_BUNDLE)"
+
+setup-tuning:
+	cd tuning && uv sync --locked --extra dev --extra "$(TUNING_EXTRA)" --python "$(PYTHON_VERSION)"
+
+check-tuning:
+	cd tuning && uv run --locked --extra dev --extra "$(TUNING_EXTRA)" python -m pytest -q -ra --tb=short
+
+tuning:
+	cd tuning && uv run --locked --extra "$(TUNING_EXTRA)" python -m superyak_tuning $(TUNING_ARGS)

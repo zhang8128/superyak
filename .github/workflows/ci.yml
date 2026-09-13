@@ -103,3 +103,19 @@ jobs:
       - run: make setup-engram
       - run: uv run --locked --extra dev python -m pytest tests/test_session_bridge.py tests/test_session_cli.py tests/test_session_delivery.py -q -ra --tb=short
         working-directory: engram
+
+  tuning:
+    name: Clinical and biotech data, evaluation, and CPU LoRA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.8.3"
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: tuning/uv.lock
+      - run: make setup-tuning
+      - run: make check-tuning
+      - run: uv build --project tuning --out-dir /tmp/superyak-tuning-dist

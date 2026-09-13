@@ -10,6 +10,10 @@ The [verification report](docs/reports/2026-09-12-peer-home-verification.md) rec
 measured behavior and release boundaries. Richer clinical/HPC integrations remain
 future work.
 
+[`tuning/`](tuning/README.md) now provides clinical/biotech dataset snapshots,
+selected Gemma provenance, local domain evaluations, and recoverable LoRA training.
+The tiny-model CPU trainer is measured; the full-size Stampede3 pilot is pending.
+
 The [backend data-source catalog](peer/API.md#backend-data-sources) manages private
 uploaded files and selected-record collections, with source corrections,
 pause/resume controls and repeatable imports with success/failure receipts.
@@ -24,6 +28,7 @@ packages and lockfiles remain independent, with shared commands and CI at the ro
 
 | Path | Contents |
 | --- | --- |
+| [`tuning/`](tuning/README.md) | Clinical/biotech datasets, local evaluations, and text-attention LoRA training |
 | [`peer/`](peer/README.md) | Standalone personal home, private chats, sharing layers, and paired peer exchange |
 | [`engram/`](engram/) | Python memory system, MCP server, dynamic chat, and Lighthouse publisher/receiver |
 | [`atlas/`](atlas/README.md) | Evidence workbench, literature workers, source review, and browser/Obsidian views |

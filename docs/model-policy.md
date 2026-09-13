@@ -11,6 +11,28 @@ the inference provider, and the physical processing/storage location are separat
 facts. This instruction alone does not establish a US-only hosting requirement
 or authorize a new cloud service or destination for private data.
 
+## Clinical/biotech training selection — September 13
+
+Kairos explicitly selected **HauhauCS/Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced**
+as the starting model and affirmed that clinical and biotech data are intended
+workloads, including permitted identifiable clinical and confidential biotech
+records. This supersedes the prior candidate-only treatment of this derivative.
+Its base publisher is Google; derivative publisher is HauhauCS. Eligibility here
+rests on explicit user selection, not an assertion of the maintainer's nationality.
+
+The [tuning package](../tuning/README.md) pins the Q4_K_M revision, size and SHA-256,
+records GGUF conversion lineage, and refuses silent base substitutions. The
+selected model is installed separately as `superyak-clinical-gemma4-balanced:q4_k_m`.
+[Eight fictional baseline cases](reports/2026-09-13-clinical-tuning-baseline.md)
+produced six exact-check passes and no detected blanket refusals. Clinical
+validation and full-size Intel training remain unestablished.
+
+Clinical and biotech subject matter is not itself a refusal condition. Model
+access, local/shared training, and adapter publication each retain their own
+source-use grants; public visibility never grants all of them. The current CLI
+uses operator-declared local grants, not authenticated participant consent APIs.
+The existing peer demo continues with its previously measured `gemma4:31b`.
+
 ## Measured peer application state
 
 The standalone [peer application](../peer/MODELS_AND_SOURCES.md) now has a
