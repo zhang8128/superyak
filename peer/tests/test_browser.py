@@ -760,7 +760,7 @@ def test_overlapping_upload_and_save_merges_attachment_into_latest_layer_values(
                 "mimeType": "text/plain",
                 "buffer": b"real uploaded content",
             })
-            page.wait_for_function("window.__uploadAccepted === true")
+            page.wait_for_function("() => window.__uploadAccepted === true")
 
             page.get_by_label("What do you want to share?").fill("Newer text saved while upload waits")
             page.get_by_role("button", name="Save private draft").click()
