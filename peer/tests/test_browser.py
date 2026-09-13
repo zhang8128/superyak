@@ -358,6 +358,7 @@ def test_expired_session_relogin_preserves_unsaved_layer(browser_peer):
                 browser_peer["password"]
             )
             page.get_by_role("button", name="Sign in again").click()
+            expect(page.locator("#main-content").get_by_text("Signed in again. Your unsaved text is ready to save.", exact=True)).to_be_visible()
             expect(page.get_by_label("Layer title")).to_have_value("Still in my editor")
             expect(page.get_by_label("What do you want to share?")).to_have_value(
                 "This survives signing in again."
@@ -791,3 +792,126 @@ def test_accepted_participant_removal_survives_failed_followup_read(browser_peer
             with pytest.raises(Problem) as denied:
                 store.get_room(family_id, room_id)
             assert denied.value.status == 404
+
+
+def test_assistant_delayed_suggestion_appends_to_newer_private_typing(browser_peer):
+    """Break caught: delayed generation replaces new typing or changes active words."""
+    from test_models import adapter, NativeEndpoint
+    entered, finish = threading.Event(), threading.Event()
+    endpoint = NativeEndpoint()
+    model, _ = adapter(endpoint)
+    original = model._request
+    def delayed(method, path, payload=None):
+        if method == 'POST':
+            entered.set()
+            assert finish.wait(15)
+        return original(method, path, payload)
+    model._request = delayed
+    browser_peer['app'].state.assistant = model
+    store = browser_peer['app'].state.store
+    who = browser_peer['users']['patient']['id']
+    layer = store.create_layer(who, {'title': 'Fictional letter', 'body': 'Saved original', 'public': True})
+    store.activate_layer(who, layer['id'], 1)
+    try:
+        with sync_playwright() as playwright:
+            with signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+                page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+                expect(page.get_by_label('Assistant request')).to_be_visible()
+                page.get_by_label('Assistant request').fill('Shorten this fictional letter')
+                page.get_by_role('button', name='Ask Gemma privately').click()
+                assert entered.wait(5)
+                page.get_by_label('What do you want to share?').fill('Newer private typing')
+                finish.set()
+                expect(page.get_by_text('Suggestion from saved version 1', exact=True)).to_be_visible()
+                expect(page.get_by_label('What do you want to share?')).to_have_value('Newer private typing')
+                page.get_by_role('button', name='Append suggestion to my private draft').click()
+                expect(page.get_by_label('What do you want to share?')).to_have_value('Newer private typing\n\nA fictional private suggestion.')
+                assert store.get_layer(who, layer['id'])['body'] == 'Saved original'
+                assert store.active_layer(layer['id'], public=True)['body'] == 'Saved original'
+                page.get_by_role('button', name='Save private draft').click()
+                expect(page.locator('#main-content').get_by_text('Private draft saved', exact=True)).to_be_visible()
+                assert store.active_layer(layer['id'], public=True)['body'] == 'Saved original'
+    finally:
+        finish.set()
+
+
+def test_source_browser_export_import_retains_private_attribution(browser_peer, tmp_path):
+    """Break caught: selected export includes a newer draft or import becomes public."""
+    store = browser_peer['app'].state.store
+    who = browser_peer['users']['patient']['id']
+    layer = store.create_layer(who, {'title': 'Fictional source', 'body': 'Active selected words', 'public': True})
+    store.activate_layer(who, layer['id'], 1)
+    store.save_layer(who, layer['id'], {'version': 1, 'body': 'Private new words'})
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+            page.goto(browser_peer['base_url'] + '/#layers/' + layer['id'])
+            with page.expect_download() as download:
+                page.get_by_role('button', name='Export selected active release').click()
+            output = tmp_path / 'selected.json'
+            download.value.save_as(output)
+            document = json.loads(output.read_text())
+            assert document['records'][0]['content']['body'] == 'Active selected words'
+            expect(page.get_by_role('button', name='Ask Gemma privately')).to_be_disabled()
+        with signed_in_browser(playwright, browser_peer, 'doctor') as (page, _):
+            page.get_by_role('link', name='My sharing layers').click()
+            page.locator('#source-import').set_input_files(output)
+            expect(page.locator('#main-content').get_by_text('Imported privately. Recorded audiences did not grant access.', exact=True)).to_be_visible()
+            page.get_by_text('Fictional source', exact=True).click()
+            expect(page.get_by_text('Active selected words', exact=True)).to_be_visible()
+            expect(page.get_by_text('Origin ' + document['records'][0]['origin'], exact=False)).to_be_visible()
+            assert store.list_layers(browser_peer['users']['doctor']['id']) == []
+
+
+def test_assistant_suggestion_stays_with_initiating_layer_and_is_cleared_on_logout(browser_peer):
+    """Break caught: a delayed suggestion crosses layer or account boundaries."""
+    from test_models import adapter, NativeEndpoint
+    entered, finish = threading.Event(), threading.Event()
+    endpoint = NativeEndpoint()
+    model, _ = adapter(endpoint)
+    original = model._request
+    def delayed(method, path, payload=None):
+        if method == 'POST':
+            entered.set()
+            assert finish.wait(15)
+        return original(method, path, payload)
+    model._request = delayed
+    browser_peer['app'].state.assistant = model
+    store = browser_peer['app'].state.store
+    who = browser_peer['users']['patient']['id']
+    first = store.create_layer(who, {'title': 'First fictional draft', 'body': 'First words'})
+    second = store.create_layer(who, {'title': 'Second fictional draft', 'body': 'Second words'})
+    try:
+        with sync_playwright() as playwright:
+            with signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+                page.goto(browser_peer['base_url'] + '/#layers/' + first['id'])
+                page.get_by_label('Assistant request').fill('Help with this fictional note')
+                page.get_by_role('button', name='Ask Gemma privately').click()
+                assert entered.wait(5)
+                page.get_by_role('button', name='Second fictional draft Draft version 1 Private draft').click()
+                expect(page.get_by_label('Layer title')).to_have_value('Second fictional draft')
+                finish.set()
+                page.wait_for_function('() => Object.values(state.assistance).some(entry => entry.result)')
+                expect(page.get_by_role('button', name='Append suggestion to my private draft')).to_have_count(0)
+                expect(page.get_by_label('What do you want to share?')).to_have_value('Second words')
+                page.get_by_role('button', name='First fictional draft Draft version 1 Private draft').click()
+                expect(page.get_by_role('button', name='Append suggestion to my private draft')).to_be_visible()
+                entered.clear()
+                finish.clear()
+                page.get_by_role('button', name='Ask Gemma privately').click()
+                assert entered.wait(5)
+                page.get_by_role('button', name='Account and sign out').click()
+                page.get_by_role('button', name='Sign out', exact=True).click()
+                expect(page.get_by_role('heading', name='Sign in to your home')).to_be_visible()
+                page.get_by_label('Username', exact=True).fill('doctor')
+                page.get_by_label('Password', exact=True).fill(browser_peer['password'])
+                page.get_by_role('button', name='Sign in', exact=True).click()
+                expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+                with page.expect_response(lambda r: r.url.endswith('/api/assistant') and r.request.method == 'POST'):
+                    finish.set()
+                # Wait for the completed real response to be consumed by the app.
+                page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+                assert page.evaluate('Object.keys(state.assistance).length') == 0
+                assert store.get_layer(who, first['id'])['body'] == 'First words'
+                assert store.get_layer(who, second['id'])['body'] == 'Second words'
+    finally:
+        finish.set()

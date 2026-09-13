@@ -106,3 +106,22 @@ def test_card_cli_and_peer_tls_options(tmp_path, capsys):
     main(['card','--data-dir',str(store.data_dir),'--username','owner','--endpoint','https://localhost:7435'])
     card=json.loads(capsys.readouterr().out)
     assert validate_card(card)['participant']['id']==user['id']
+
+
+def test_model_config_is_explicit_and_rejects_unknown_before_serving(tmp_path):
+    from superyak_peer.models import load_config
+    from test_models import APPROVED
+    assert load_config(None) is None
+    config = tmp_path / 'model.json'
+    config.write_text(json.dumps(APPROVED))
+    assert load_config(config) == APPROVED
+    for invalid in ({**APPROVED, 'model': 'unknown'}, {**APPROVED, 'publisher': 'Unknown'}):
+        config.write_text(json.dumps(invalid))
+        result = run('serve', '--data-dir', tmp_path / 'unused', '--model-config', config)
+        assert result.returncode != 0
+        assert 'not approved' in result.stderr
+        assert not (tmp_path / 'unused').exists()
+    config.write_text('[' * 1500 + ']' * 1500)
+    result = run('serve', '--data-dir', tmp_path / 'unused', '--model-config', config)
+    assert result.returncode != 0
+    assert 'Traceback' not in result.stderr

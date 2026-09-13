@@ -428,3 +428,30 @@ keeps existing public signatures. All Store transactions participate in the shar
 POSIX/thread dispatch gate. Exact final-dispatch and in-flight limitations, TLS
 verification, signed field contracts, receipt retention and room availability are
 specified in [PROTOCOL.md](PROTOCOL.md).
+
+## Optional assistant and selected sources
+
+See [configuration, bounds and interchange semantics](MODELS_AND_SOURCES.md).
+Every route below requires the local session; POST routes use the existing
+same-origin and CSRF boundary. Browser actor/model/provider overrides are rejected.
+
+| Method/path | Request | Response/authority |
+|---|---|---|
+| GET `/api/assistant` | — | `{enabled,model,message}`; default disabled; configured status may verify native identity without generation |
+| POST `/api/assistant` | `{text,layer_id?,version?}` | `{suggestion,model,private:true,layer_id,version}`; selected layer must be owned and exact saved version; no persistence or publication |
+| GET `/api/sources` | — | Array of `{id,record}` for the current account's imported private sources |
+| POST `/api/interchange/export` | `{selections?:[{layer_id,kind,version}],source_ids?:[id]}` | `{format:"superyak.selected-sources.v1",records:[...]}`; select 1–20 total exact owned draft/active versions or owned imported-source IDs |
+| POST `/api/interchange/import` | `{format,records}` | `{records:[{id,record}]}`, 201; validates every record before private atomic import; conflicting same source/revision returns 409 |
+| GET `/api/interchange/adna/{layer_id}` | — | Safe Markdown download of one current active owned local layer; no active release or nonowner returns 404 |
+
+For an export selection, `kind:"draft"` uses the layer's saved `version`, while
+`kind:"active"` uses its `active_revision` (the release revision). A changed selected
+version returns 409. The browser downloads only the explicitly clicked selection;
+no attachment content is included. Imported record audiences never become grants.
+
+Factory extension: `create_app(data_dir, *, model_config=None, ...)`. The configured
+adapter is `app.state.assistant`; the private interchange service is
+`app.state.interchange`. `models.LocalGemma.suggest(text, draft_or_none)` is the
+trusted internal guard; the route enforces session ownership/version before it.
+`Interchange.export(actor,data)`, `.import_document(actor,document)`, `.sources(actor)`
+and `.adna(actor,layer_id)` use the existing Store's serialized transactions.

@@ -33,6 +33,9 @@ const state = {
   layerEdits: {},
   editorIdentity: null,
   logoutError: null,
+  assistant: { enabled: false },
+  assistance: {},
+  sources: [],
 };
 
 class ApiError extends Error {
@@ -91,7 +94,7 @@ function identityKey(user) {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) state.layerEdits = {};
+  if (state.editorIdentity !== next) { state.layerEdits = {}; state.assistance = {}; state.sources = []; }
   state.editorIdentity = next;
 }
 
@@ -357,6 +360,8 @@ function layerEditor(layer) {
       <div class="editor-actions"><div class="button-row"><button class="button" type="submit">Save private draft</button><button class="button secondary" type="button" data-action="preview">Preview audience</button></div><span class="state-note">Saved version ${layer.version}</span></div>
       <p id="layer-status" class="inline-message ${edit?.conflict ? "error" : ""}" role="status">${edit?.conflict ? "This draft changed in another tab. Your text is still here." : ""}</p>${edit?.conflict ? '<button class="button secondary" type="button" data-action="resolve-conflict">Save my text onto the latest draft</button>' : ""}
     </form>
+    ${assistantPanel(layer)}
+    ${exportPanel(layer)}
     ${activePanel(layer, active)}
     <div class="history"><h3>Release and correction history</h3><p class="meta">Earlier releases keep their words, version, date, and original account attribution. A corrected display name never changes grants.</p>${revisionHistory()}</div>
     ${previewDialog(layer)}${withdrawDialog()}
@@ -366,7 +371,7 @@ function layerEditor(layer) {
 function layersView() {
   const layer = layerForEditor();
   return `<header class="page-head"><div><p class="eyebrow">Private first</p><h1>My sharing layers</h1><p class="lede">Build your sharing layers at your own pace. Save them privately, see what each audience would see, and turn them on when you're ready.</p></div><button class="button" data-action="new-layer">New layer</button></header>
-    <div class="workspace"><aside class="workspace-list"><div class="item-list">${state.home.layers.map(layerItem).join("") || empty("No layers yet", "Start with a private draft. You do not need to choose an audience.")}</div></aside>${layer ? layerEditor(layer) : `<section>${empty("Choose a layer", "Select a draft from the list or start a new one.")}</section>`}</div>`;
+    <div class="workspace"><aside class="workspace-list"><div class="item-list">${state.home.layers.map(layerItem).join("") || empty("No layers yet", "Start with a private draft. You do not need to choose an audience.")}</div></aside>${layer ? layerEditor(layer) : `<section>${empty("Choose a layer", "Select a draft from the list or start a new one.")}</section>`}</div>${sourcePanel()}`;
 }
 
 function sharedItem(layer) {
@@ -556,6 +561,14 @@ async function loadData() {
   state.files = files;
   state.sync = sync;
   state.corrections = corrections;
+  const optionalIdentity = identityKey(state.me);
+  const [assistant, sources] = await Promise.all([
+    api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
+    api("/api/sources").catch(() => null),
+  ]);
+  if (identityKey(state.me) !== optionalIdentity) return;
+  state.assistant = assistant;
+  state.sources = sources;
   const activePairs = await Promise.all(home.layers.filter((layer) => layer.active_revision).map(async (layer) => {
     try { return { id: layer.id, active: await api(`/api/shared/layers/${pathPart(layer.id)}`) }; }
     catch (error) {
@@ -968,6 +981,8 @@ async function logout() {
     state.logoutError = null;
     clearChatDrafts();
     state.layerEdits = {};
+    state.assistance = {};
+    state.sources = [];
     state.editorIdentity = null;
     state.me = null;
     location.hash = "";
@@ -1111,6 +1126,14 @@ document.addEventListener("click", async (event) => {
       status.textContent = "Save this private draft before previewing a version.";
     } else { state.preview = true; render(); }
   }
+  if (action === "ask-assistant") await askAssistant();
+  if (action === "apply-suggestion") applySuggestion();
+  if (action === "export-draft") await exportSelection("draft");
+  if (action === "export-active") await exportSelection("active");
+  if (action === "export-source") {
+    try { downloadJSON(await api("/api/interchange/export", { method: "POST", json: { source_ids: [target.dataset.id] } })); }
+    catch (error) { setFlash(error.message, true); render(); }
+  }
   if (action === "activate") await activateLayer();
   if (action === "public-off") await publicOff();
   if (action === "revoke-route") await revokeRoute(target.dataset.routeKind, target.dataset.id);
@@ -1155,6 +1178,10 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "assistant-request" && selectedLayer()) {
+    const entry = state.assistance[selectedLayer().id] ||= {};
+    entry.text = event.target.value;
+  }
   if (event.target.closest("#layer-form")) rememberLayerForm();
   if (event.target.id === "message-body" && state.room) {
     const previous = readChatDraft(state.room.id);
@@ -1181,3 +1208,102 @@ window.addEventListener("hashchange", async () => {
 });
 
 bootstrap();
+
+// Assistance and source records use the authenticated API and account-bound memory.
+function assistantPanel(layer) {
+  const entry = state.assistance[layer.id] || {};
+  return `<section class="section"><h3>Private drafting assistance</h3><p class="meta">${escapeHtml(state.assistant.message || "Assistant is disabled.")} The selected input is saved version ${layer.version} of this layer. Unsaved edits and attachments are excluded.</p><label for="assistant-request">Assistant request</label><textarea class="textarea" id="assistant-request" maxlength="8000" ${entry.pending ? "disabled" : ""}>${escapeHtml(entry.text || "")}</textarea><button class="button secondary" data-action="ask-assistant" ${!state.assistant.enabled || entry.pending ? "disabled" : ""}>${entry.pending ? "Waiting for Gemma…" : "Ask Gemma privately"}</button>${entry.error ? `<p role="status">${escapeHtml(entry.error)}</p>` : ""}${entry.result ? `<div class="notice"><p>Suggestion from saved version ${entry.result.version}</p><div class="shared-body">${escapeHtml(entry.result.suggestion)}</div><p class="meta">Appending keeps your current words. Review and save privately before choosing any release.</p><button class="button secondary" data-action="apply-suggestion">Append suggestion to my private draft</button></div>` : ""}</section>`;
+}
+
+async function askAssistant() {
+  const layer = selectedLayer();
+  const identity = identityKey(state.me);
+  const entry = state.assistance[layer.id] ||= {};
+  if (entry.pending) return;
+  entry.text = document.querySelector("#assistant-request").value;
+  entry.pending = true;
+  entry.error = null;
+  entry.result = null;
+  const text = entry.text;
+  render();
+  try {
+    const result = await api("/api/assistant", { method: "POST", json: { text, layer_id: layer.id, version: layer.version } });
+    if (identityKey(state.me) !== identity || state.assistance[layer.id] !== entry) return;
+    entry.result = result;
+  } catch (error) {
+    if (identityKey(state.me) !== identity || state.assistance[layer.id] !== entry) return;
+    entry.error = error.message;
+    // A generation failure may disable the server adapter; this is a read only check.
+    state.assistant = await api("/api/assistant").catch(() => ({ enabled: false }));
+  } finally {
+    if (identityKey(state.me) === identity && state.assistance[layer.id] === entry) {
+      entry.pending = false;
+      render();
+    }
+  }
+}
+
+function applySuggestion() {
+  const layer = selectedLayer();
+  const entry = state.assistance[layer.id];
+  if (!entry?.result) return;
+  const body = document.querySelector("#layer-body");
+  const appended = [body.value, entry.result.suggestion].filter(Boolean).join("\n\n");
+  if (appended.length > 100000) {
+    entry.error = "The combined draft is too long. Copy the parts you want to keep.";
+    render();
+    return;
+  }
+  body.value = appended;
+  rememberLayerForm();
+  entry.result = null;
+  setFlash("Suggestion appended to your unsaved private draft");
+  render();
+}
+
+function exportPanel(layer) {
+  return `<section class="section"><h3>Export a selected source</h3><p class="meta">Downloads contain this saved title, body, audience and attribution. Review before sending the file elsewhere. Unsaved edits and attachments are excluded.</p><div class="button-row"><button class="button secondary" data-action="export-draft">Export saved draft version ${layer.version}</button>${layer.active_revision ? `<button class="button secondary" data-action="export-active">Export selected active release</button><a class="button secondary" href="/api/interchange/adna/${pathPart(layer.id)}" download>Download active source for aDNA</a>` : ""}</div></section>`;
+}
+
+function downloadJSON(document) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2) + "\n"], { type: "application/json" }));
+  const link = window.document.createElement("a");
+  link.href = url;
+  link.download = "selected-sources.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportSelection(kind) {
+  const layer = selectedLayer();
+  try {
+    const document = await api("/api/interchange/export", { method: "POST", json: { selections: [{ layer_id: layer.id, kind, version: kind === "draft" ? layer.version : layer.active_revision }] } });
+    downloadJSON(document);
+  } catch (error) { setFlash(error.message, true); render(); }
+}
+
+function sourcePanel() {
+  return `<section class="section"><h2>Selected source records</h2><p class="meta">Imported records stay private to your account. Their origins, authors and audiences are recorded claims; they do not grant access or establish trust. Source instructions and links are never run.</p><label class="button secondary" for="source-import">Import selected source document</label><input id="source-import" class="sr-only" type="file" accept="application/json,.json"><div class="history">${state.sources === null ? '<p>Source records are temporarily unavailable.</p>' : state.sources.map((source) => `<details><summary>${escapeHtml(source.record.content.title)}</summary><p class="meta">Origin ${escapeHtml(source.record.origin)} · Author ${escapeHtml(source.record.author)}</p><p class="meta">${escapeHtml(source.record.source_locator)} · Revision ${escapeHtml(source.record.revision)}</p><p class="meta">Source hash ${escapeHtml(source.record.source_hash)}</p><p class="meta">Previous ${escapeHtml(source.record.revision_of || "None recorded")} · Corrections ${escapeHtml(source.record.correction_of.join(", ") || "None recorded")}</p><p class="meta">Recorded audience: ${escapeHtml(JSON.stringify(source.record.audience))}. Access here: only you.</p><div class="shared-body">${escapeHtml(source.record.content.body)}</div><button class="button secondary" data-action="export-source" data-id="${escapeHtml(source.id)}">Export this source record</button></details>`).join("")}</div></section>`;
+}
+
+document.addEventListener("change", async (event) => {
+  if (event.target.id !== "source-import") return;
+  const file = event.target.files[0];
+  if (!file) return;
+  const identity = identityKey(state.me);
+  try {
+    if (file.size > 512 * 1024) throw new ApiError("Source document exceeds 512 KiB", 400);
+    const document = JSON.parse(await file.text());
+    if (identityKey(state.me) !== identity) return;
+    await api("/api/interchange/import", { method: "POST", json: document });
+    if (identityKey(state.me) !== identity) return;
+    setFlash("Imported privately. Recorded audiences did not grant access.");
+    const sources = await api("/api/sources").catch(() => null);
+    if (identityKey(state.me) !== identity) return;
+    state.sources = sources;
+  } catch (error) {
+    if (identityKey(state.me) !== identity) return;
+    setFlash(error instanceof SyntaxError ? "Invalid source JSON document" : error.message, true);
+  }
+  if (identityKey(state.me) === identity) render();
+});

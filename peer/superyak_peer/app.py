@@ -89,7 +89,7 @@ def actor(request):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
     from .peer_routes import federation_lifespan, install
     from .federation import Federation
@@ -102,6 +102,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.sync_enabled = sync_enabled
     install(app)
+    from .models import LocalGemma
+    from .source_routes import install as install_sources
+    app.state.assistant = LocalGemma(model_config)
+    install_sources(app)
     app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
     app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
 

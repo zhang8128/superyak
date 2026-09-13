@@ -102,6 +102,7 @@ def main(argv=None):
     serve.add_argument('--peer-tls', action='store_true')
     serve.add_argument('--federation-endpoint')
     serve.add_argument('--sync', action='store_true')
+    serve.add_argument('--model-config', type=Path, help='Operator-owned approved local Gemma JSON configuration')
     args = parser.parse_args(argv)
     try:
         if args.command == 'card':
@@ -150,7 +151,9 @@ def main(argv=None):
             from .app import create_app
             import uvicorn
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
-            app = create_app(args.data_dir, allowed_origins=origins, secure_cookies=tls, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
+            from .models import load_config
+            model_config = load_config(args.model_config)
+            app = create_app(args.data_dir, model_config=model_config, allowed_origins=origins, secure_cookies=tls, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=False)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
