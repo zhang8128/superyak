@@ -1,5 +1,10 @@
 # Portable research tasks
 
+**Current model requirement:** [American models only](model-policy.md), with
+Gemma 4 preferred. Qwen/Kimi/GLM examples below describe historical preparation,
+not approved selections for new calls. A new task must explicitly select an
+eligible model and verify its serving compatibility; preserve prior artifacts.
+
 Freeze one selected Atlas question and one completed paper job, then run an
 extraction and a fresh source-support check against an existing local endpoint.
 The same packet can travel with the Stampede3 source bundle. This measures a

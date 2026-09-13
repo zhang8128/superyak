@@ -1,7 +1,11 @@
 # Probe the research lead models
 
-The agreed starting group is four Kimi K3 and four GLM-5.3 identities. Their
-model-serving replicas and placement depend on actual tests. This command
+The earlier Kimi K3 / GLM-5.3 assignments are superseded by the
+[American-model requirement](model-policy.md), with Gemma 4 preferred. Preserve
+the existing protocol adapters and recorded probes as historical work. Examples
+below naming Qwen, Kimi, or GLM are not authorized choices for new runs.
+
+Model-serving replicas and placement depend on actual tests. This command
 exercises an already-running local model with two fictional text requests:
 an initial observation and a correction to that observation. It checks the
 client protocol and a basic response contract. It does not evaluate biomedical

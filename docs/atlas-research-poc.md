@@ -1,5 +1,10 @@
 # Local Atlas + Superyak research POC
 
+**Current model requirement:** [American models only](model-policy.md), with
+Gemma 4 preferred. The original Qwen defaults and live measurements below are
+historical. Do not start a fresh POC with those defaults; eligible replacements
+need explicit selection and compatibility checks. Preserve old run artifacts.
+
 This executable tests actual public-source research with individual and explicitly
 shared memory on the Mac, independently of Intel, Slurm and Stampede3. It uses
 Atlas's evidence pipeline and Engram's real SQLite and sharing implementation.

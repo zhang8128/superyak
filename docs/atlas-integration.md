@@ -114,10 +114,12 @@ demonstrate mesh access, private-vault access, or completed peer delivery.
 ## Phase 4: Measured execution on Stampede3
 
 The planning premise is the whole Stampede3 machine. Preserve the agreed eight
-lead identities: four Kimi K3 and four GLM-5.3, each with its own history, plus
-the Qwen3.8-27B worker preference. Eight identities do not require eight loaded
-replicas. The existing launcher remains a bounded synthetic preset and its
-default model settings do not implement that preferred population.
+lead identities as an organizational starting point, each with its own history.
+The [American-model requirement](model-policy.md), with Gemma 4 preferred,
+supersedes their Kimi K3 / GLM-5.3 assignments and the Qwen worker preference.
+Eight identities do not require eight loaded replicas. The existing launcher
+remains a bounded synthetic preset; its earlier defaults are not approved for
+new runs under this requirement. Gemma variants and placement require measurement.
 
 First use the same fixed evidence packet to measure provider correctness,
 supported backend/precision, memory use, latency, useful request rate, queueing,

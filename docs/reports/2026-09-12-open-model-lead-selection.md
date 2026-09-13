@@ -1,6 +1,12 @@
 # Open-Weight Model Selection for the Research Community
 
-## Recommendation
+**Superseded selection, later September 12:** Kairos now requires
+[American models only](../model-policy.md), with Gemma 4 preferred. The selections
+below are preserved as a dated comparison; they no longer authorize Qwen, Kimi,
+GLM, or DeepSeek use. Gemma role assignments and project performance remain to
+be measured.
+
+## Historical recommendation
 
 **Kimi K3 and GLM-5.3 are the preferred lead families**, following Kairos's suggestion to use both for several leaders. Kairos accepted the starting arrangement of four persistent K3 leaders and four GLM-5.3 leaders on 12 September 2026. Retain Qwen3.8-27B as the preferred worker baseline, DeepSeek V4.1 Flash as an alternative to evaluate, and Nemotron 3 Ultra as a deployment and performance comparison. See the [whole-cluster plan](2026-09-12-stampede3-whole-cluster-plan.md) for proposed responsibilities and memory separation.
 

@@ -1,8 +1,14 @@
 # Whole-Cluster Stampede3 Research Capacity
 
+**Model-selection correction, later September 12:** Kairos now requires
+[American models only](../model-policy.md), with Gemma 4 preferred. The Qwen,
+Kimi, GLM, and DeepSeek selections and their model-specific placement estimates
+below are superseded historical proposals. Whole-Stampede3 scope remains agreed;
+no Gemma replica count or performance follows from these earlier tables.
+
 The planning scope is the entire Stampede3 reservation for the anticipated allocation week, as explicitly confirmed by Kairos on 12 September 2026. The earlier four-PVC-node example is superseded as a capacity plan. Ordinary shared-queue limits describe the old pilot's environment; they do not establish the size of this reservation. Its actual submission mechanism remains an execution detail to obtain when access arrives.
 
-## Proposed population and placement
+## Earlier proposed population and placement
 
 The working proposal is **10,000 persistent Qwen3.8-27B researchers and eight larger-model lead identities: four Kimi K3 and four GLM-5.3**, served by approximately **1,800 Qwen replicas and a model-dependent lead pool on the 96 H100s**. Kairos accepted four K3 and four GLM-5.3 leaders as the starting group on 12 September 2026. This is an agreed agent count, not measured serving capacity. The Qwen population and placements also remain proposals. Agent identities retain separate histories while sharing inference services. The [current model review](2026-09-12-open-model-lead-selection.md) records the preferred pairing and remaining comparisons; the earlier 24-leader and uniform Nemotron allocation proposals are superseded.
 
@@ -19,7 +25,7 @@ The inventory basis is TACC's current operational guide: 560 SPR, 1,060 SKX, 224
 
 This accounts for all node classes in the published inventory without consuming every CPU node for language inference. The Qwen total is **1,792 replicas**; the population proposal averages about 5.6 persistent researchers per replica. Their actual assignment should reflect measured differences in hardware performance. GPU-node host CPUs also remain available for colocated supporting services where appropriate.
 
-## Larger models
+## Earlier larger-model assignments
 
 **Kimi K3 and GLM-5.3 are the preferred lead families**, following Kairos's latest suggestion. Their successful deployment on Stampede3 remains unverified; in particular, K3's published serving recipe emphasizes GB300 hardware. The [model-selection review](2026-09-12-open-model-lead-selection.md) retains DeepSeek V4.1 Flash as an alternative and Nemotron as a comparison. Serving replicas and GPU placement must follow backend tests and measured research workloads.
 

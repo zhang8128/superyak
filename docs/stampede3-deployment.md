@@ -1,5 +1,10 @@
 # Start a Stampede3 memory campaign
 
+**Current model requirement:** [American models only](model-policy.md), with
+Gemma 4 preferred. The launcher's original Qwen defaults are superseded and must
+not be used for a new deployment. Eligible model/backend selection and validation
+are required before running the launch commands below.
+
 **Whole-cluster scope:** Kairos has confirmed access to the entire Stampede3
 reservation. The [whole-cluster proposal](reports/2026-09-12-stampede3-whole-cluster-plan.md)
 supersedes the four-node example as a capacity plan. This page describes the

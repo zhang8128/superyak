@@ -1,5 +1,13 @@
 # Superyak
 
+The product goal is an **open-source, peer-to-peer system** where people have
+personal homes, private chats, and sharing layers they control across care
+circles, projects, and organizations. The [dashboard and peer design](docs/superpowers/specs/2026-09-12-personal-dashboards-sharing-design.md)
+records that direction and the first two-peer demonstration. The current
+implementation provides the research/memory foundations; the participant
+application, cross-machine private transport, and public source release remain
+work to complete.
+
 Superyak brings persistent agents, research evidence, and scoped interchange
 into one repository. Engram provides individual and shared memory; Atlas manages
 research questions, sources, proposed findings, and readable views; Lighthouse
@@ -72,15 +80,21 @@ the [integration plan](docs/atlas-integration.md) defines the next executable sl
 
 ## Prepare Stampede3
 
+The current [model requirement](docs/model-policy.md) is **American models only**,
+with **Gemma 4** preferred. This supersedes the earlier Qwen/Kimi/GLM choices.
+Historical examples and launcher defaults have not all been migrated; do not
+launch them unchanged. Whole-machine scope remains accepted, while Gemma task
+compatibility and placement require measurement.
+
 Use [portable research tasks](docs/portable-research-tasks.md) to freeze one cached
 MG source and compare an extraction/review turn through local or cluster model
 protocols. `make research-task` shows explicit export/run commands; replay checks
 saved evidence and responses without another model call.
 
-For the agreed Kimi K3 / GLM-5.3 lead pairing, use the bounded
-[model protocol probe](docs/lead-model-probes.md). `make lead-probe` shows how to
-test an existing endpoint with an initial observation and a source correction.
-Model loading and hardware placement remain separate measurements.
+The bounded [model protocol probe](docs/lead-model-probes.md) preserves the earlier
+Kimi K3 / GLM-5.3 preparation as historical protocol work. `make lead-probe` shows
+the existing endpoint probe interface; a new run must use an eligible model and
+a compatible protocol. Model loading and hardware placement remain measurements.
 
 For real public-source research before cluster access, use the separate
 [Atlas research POC](docs/atlas-research-poc.md): `make research-poc` runs two
@@ -100,9 +114,10 @@ double-click [Start Stampede3.command](scripts/Start%20Stampede3.command).
 `make stampede-simulate` rehearses memory and recovery locally. Intel hardware
 compatibility is verified during the first compute allocation.
 The source archive carries Atlas and the POC, while the launched campaign still
-uses its bounded synthetic workflow. Whole-Stampede3 execution and the agreed
-four Kimi K3 plus four GLM-5.3 lead identities remain planning scope; model
-placement, replica counts, and useful throughput have not been measured.
+uses its bounded synthetic workflow. Whole-Stampede3 execution and persistent
+lead identities remain planning scope. Their earlier K3/GLM assignments are
+superseded; eligible model placement, replica counts, and useful throughput
+have not been measured.
 
 ## Run Engram
 

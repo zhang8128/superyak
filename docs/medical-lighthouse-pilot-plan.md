@@ -2,6 +2,18 @@
 
 Created: 2026-09-11. Updated: 2026-09-12. Status: revised for one complex patient case, both uploads and medical-record connections, and peer-to-peer operation using aDNA, with Stanley's Raspberry Pi as his lighthouse and local account/onboarding administration. This is a planning document, not an executable implementation specification.
 
+**Current organization and interaction design:** Kairos clarified on September 12
+that the hackathon context is **Wilhelm Foundation**; the earlier Research to the
+People attribution was a mix-up. This correction does not establish individual
+affiliations. The [personal dashboards, private chats, and sharing proposal](superpowers/specs/2026-09-12-personal-dashboards-sharing-design.md)
+develops the participant display and administration sections below, including
+ordinary correction/recovery support and simple audience controls at each
+organizational level. People can construct their sharing layers and public
+presence over time, save private drafts, preview audiences, and activate selected
+versions when ready. The [American-model requirement](model-policy.md), with
+Gemma 4 preferred, supersedes earlier model selections. Its detailed application
+behavior is proposed, not implemented.
+
 ## Purpose
 
 Give each participating patient, family member, doctor, and specialist a personal agent with persistent context, access to their authorized information, and communication suited to them. Let people talk with their agents, let agents collaborate within explicit delegations, and let participants work with Kairos to commission and direct research tasks. Biological lighthouses supply enduring research perspectives that these personal agents can consult.
