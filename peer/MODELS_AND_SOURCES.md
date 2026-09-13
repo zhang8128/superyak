@@ -111,7 +111,11 @@ Place the downloaded `selected-source.md` under a selected aDNA project's `what/
 directory to make it discoverable by the existing read-only aDNA adapter. JSON
 literals in YAML frontmatter preserve source identity, locator, hash, revision,
 author, audience and correction references; the selected body follows the frontmatter.
-The parent adapter will independently hash the entire Markdown file, as described
+The complete Markdown download, including frontmatter and separators, must fit
+65,536 UTF-8 bytes and contain no literal NUL characters to match the reader.
+Incompatible exports return a clear HTTP 400; selected content is never truncated
+or modified. Multibyte body text and escaped frontmatter consume this same byte
+budget. The parent adapter will independently hash the entire Markdown file, as described
 in [aDNA compatibility](../docs/adna-compatibility.md). Those two hash scopes differ.
 
 This export is a knowledge document, not an executable lattice, a mount of a live

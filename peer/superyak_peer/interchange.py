@@ -10,6 +10,8 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS imported_sources(
  UNIQUE(owner_id,source_id,revision));'''
 FORMAT = 'superyak.selected-sources.v1'
 MAX_BYTES = 512 * 1024
+# Standalone mirror of the aDNA reader document bound (context_adna.MAX_FILE_BYTES).
+ADNA_MAX_BYTES = 65536
 FIELDS = {'id', 'origin', 'source_locator', 'source_hash', 'revision', 'revision_of',
           'correction_of', 'author', 'content', 'audience'}
 
@@ -149,4 +151,9 @@ class Interchange:
         # A single Markdown knowledge document for what/. JSON literals are YAML
         # values, preventing frontmatter injection; no source paths are executed.
         frontmatter = {'type': 'knowledge', **{k: v for k, v in record.items() if k != 'content'}, 'title': record['content']['title']}
-        return '---\n' + '\n'.join(f'{k}: {json.dumps(v, ensure_ascii=True)}' for k, v in frontmatter.items()) + '\n---\n\n' + record['content']['body'] + '\n'
+        markdown = '---\n' + '\n'.join(f'{k}: {json.dumps(v, ensure_ascii=True)}' for k, v in frontmatter.items()) + '\n---\n\n' + record['content']['body'] + '\n'
+        if '\x00' in markdown:
+            raise Problem(400, 'aDNA export cannot contain NUL characters')
+        if len(markdown.encode('utf-8')) > ADNA_MAX_BYTES:
+            raise Problem(400, 'aDNA export exceeds 65,536 UTF-8 bytes including frontmatter')
+        return markdown

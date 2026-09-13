@@ -1,6 +1,7 @@
 """Selected source attribution conveys no access authority."""
 import copy
 import json
+import pytest
 
 def selection(patient, **fields):
     layer = patient.post('/api/layers', json={'title': 'Chosen source', 'body': 'Selected words', **fields}).json()
@@ -109,3 +110,49 @@ def test_active_revision_reference_skips_withdrawal_event(env):
     patient.post(f"/api/layers/{layer['id']}/activate", json={'version': 1})
     record = export(patient, [{'layer_id': layer['id'], 'kind': 'active', 'version': 3}]).json()['records'][0]
     assert record['revision_of'] == record['id'] + '?active=1'
+
+
+def active_adna(patient, title, body):
+    created = patient.post('/api/layers', json={'title': title, 'body': body})
+    assert created.status_code == 201
+    layer = created.json()
+    assert patient.post(f"/api/layers/{layer['id']}/activate", json={'version': 1}).status_code == 200
+    return layer, patient.get(f"/api/interchange/adna/{layer['id']}")
+
+
+@pytest.mark.parametrize('title,character', [('Plain title', 'x'), ('界' * 200, '🙂')], ids=['ascii', 'multibyte-with-large-frontmatter'])
+def test_adna_complete_document_exact_limit_and_one_byte_over(env, title, character):
+    """Break caught: body-only, character-count, or off-by-one export limits."""
+    _, (patient, *_), _, _ = env
+    # Same-size IDs and revision 1 keep metadata size stable across these selected
+    # records. Measure the actual empty-document overhead, then assert the complete
+    # result's independent consumer limit; do not duplicate the serializer.
+    _, empty = active_adna(patient, title, '')
+    assert empty.status_code == 200
+    overhead = len(empty.content)
+    budget = 65536 - overhead
+    repetitions, remainder = divmod(budget, len(character.encode('utf-8')))
+    exact_body = character * repetitions + 'x' * remainder
+    exact_layer, exact = active_adna(patient, title, exact_body)
+    assert exact.status_code == 200
+    assert len(exact.content) == 65536
+    assert exact.text.split('\n---\n\n', 1)[1] == exact_body + '\n'
+    # Even the over-limit body fits by itself; metadata makes it incompatible.
+    assert len((exact_body + 'x').encode('utf-8')) < 65536
+    oversized_layer, oversized = active_adna(patient, title, exact_body + 'x')
+    assert oversized.status_code == 400, oversized.text[:200]
+    assert '65,536' in oversized.json()['error']
+    for layer, expected in [(exact_layer, exact_body), (oversized_layer, exact_body + 'x')]:
+        assert patient.get(f"/api/layers/{layer['id']}").json()['body'] == expected
+        assert patient.get(f"/api/shared/layers/{layer['id']}").json()['body'] == expected
+
+
+def test_adna_rejects_literal_nul_without_changing_selected_content(env):
+    """Break caught: the exported Markdown is silently excluded by the aDNA reader."""
+    _, (patient, *_), _, _ = env
+    body = 'Selected words\x00remain exact'
+    layer, response = active_adna(patient, 'Fictional source', body)
+    assert response.status_code == 400
+    assert 'NUL' in response.json()['error']
+    assert patient.get(f"/api/layers/{layer['id']}").json()['body'] == body
+    assert patient.get(f"/api/shared/layers/{layer['id']}").json()['body'] == body

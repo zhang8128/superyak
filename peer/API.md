@@ -442,7 +442,7 @@ same-origin and CSRF boundary. Browser actor/model/provider overrides are reject
 | GET `/api/sources` | — | Array of `{id,record}` for the current account's imported private sources |
 | POST `/api/interchange/export` | `{selections?:[{layer_id,kind,version}],source_ids?:[id]}` | `{format:"superyak.selected-sources.v1",records:[...]}`; select 1–20 total exact owned draft/active versions or owned imported-source IDs |
 | POST `/api/interchange/import` | `{format,records}` | `{records:[{id,record}]}`, 201; validates every record before private atomic import; conflicting same source/revision returns 409 |
-| GET `/api/interchange/adna/{layer_id}` | — | Safe Markdown download of one current active owned local layer; no active release or nonowner returns 404 |
+| GET `/api/interchange/adna/{layer_id}` | — | Safe Markdown download of one current active owned local layer; no active release or nonowner returns 404; serialized Markdown over 65,536 UTF-8 bytes or containing NUL returns 400 without truncation |
 
 For an export selection, `kind:"draft"` uses the layer's saved `version`, while
 `kind:"active"` uses its `active_revision` (the release revision). A changed selected
