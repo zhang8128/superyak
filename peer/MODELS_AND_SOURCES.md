@@ -66,6 +66,15 @@ clinical-quality claim. Validation did not persist a default-enabled configurati
 
 ## Selected-source document
 
+The [backend data-source catalog](API.md#backend-data-sources) manages manual
+file and selected-record imports independently of model assistance. Accounts own
+their sources, settings, item links and receipts. Pausing stops new imports into
+that source; it does not withdraw already shared layers or erase stored inputs.
+Existing selected records are retained and cataloged without invented historical
+import receipts. No connector, URL fetch, background worker or model request is
+started by registering a source. CSV/JSON uploads are stored as exact file bytes,
+not interpreted as clinical records or executed instructions.
+
 `superyak.selected-sources.v1` is a standalone JSON interchange format. A document
 has exactly `format` and `records`; select 1–20 records, totaling at most 512 KiB.
 Each record contains these fields:

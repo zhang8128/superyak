@@ -5,11 +5,44 @@ from starlette.concurrency import run_in_threadpool
 from .app import actor, body
 from .common import Problem, text
 from .interchange import Interchange
+from .data_sources import DataSources
 
 
 def install(app):
     store = app.state.store
     sources = app.state.interchange = Interchange(store, app.state.federation.identity.peer_id)
+    manager = app.state.data_sources = DataSources(store, sources)
+
+    @app.get('/api/data-sources')
+    def data_source_list(request: Request, limit: int = 50, offset: int = 0):
+        return manager.list(actor(request), limit, offset)
+
+    @app.post('/api/data-sources', status_code=201)
+    async def data_source_create(request: Request):
+        who, data = actor(request), await body(request)
+        return manager.create(who, data)
+
+    @app.get('/api/data-sources/{key}')
+    def data_source_get(key: str, request: Request):
+        return manager.get(actor(request), key)
+
+    @app.patch('/api/data-sources/{key}')
+    async def data_source_update(key: str, request: Request):
+        who, data = actor(request), await body(request)
+        return manager.update(who, key, data)
+
+    @app.get('/api/data-sources/{key}/items')
+    def data_source_items(key: str, request: Request, limit: int = 50, offset: int = 0):
+        return manager.items(actor(request), key, limit, offset)
+
+    @app.get('/api/data-sources/{key}/imports')
+    def data_source_history(key: str, request: Request, limit: int = 50, offset: int = 0):
+        return manager.history(actor(request), key, limit, offset)
+
+    @app.post('/api/data-sources/{key}/imports', status_code=201)
+    async def data_source_import(key: str, request: Request):
+        who, data = actor(request), await body(request)
+        return await run_in_threadpool(manager.import_items, who, key, data)
 
     @app.get('/api/assistant')
     def assistant_status(request: Request):
@@ -44,7 +77,7 @@ def install(app):
     @app.post('/api/interchange/import', status_code=201)
     async def source_import(request: Request):
         who, data = actor(request), await body(request)
-        return sources.import_document(who, data)
+        return await run_in_threadpool(manager.import_default, who, data)
 
     @app.get('/api/interchange/adna/{key}')
     def source_adna(key: str, request: Request):

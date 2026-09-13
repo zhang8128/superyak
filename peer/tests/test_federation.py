@@ -89,15 +89,20 @@ def test_remote_room_reply_and_removal(two_peers):
         b[0].send_message(b[1], remote['id'], 'later', 'bad')
 
 
-def test_attachment_delivery_and_withdrawal(two_peers):
+@pytest.mark.parametrize('name,media_type,content', [
+    ('note.txt', 'text/plain', b'attachment'),
+    ('dataset.csv', 'text/csv', b'name,value\nAlex,3\n'),
+    ('dataset.json', 'application/json', b'{"value": 3}\n'),
+])
+def test_attachment_delivery_and_withdrawal(two_peers, name, media_type, content):
     import base64
     a,b,ca,cb=two_peers
-    file=a[0].upload_file(a[1],'note.txt','text/plain',base64.b64encode(b'attachment').decode())
+    file=a[0].upload_file(a[1],name,media_type,base64.b64encode(content).decode())
     layer=a[0].create_layer(a[1],{'body':'attached','audience_users':[ca['id']], 'attachment_ids':[file['id']]})
     a[0].activate_layer(a[1],layer['id'],1)
     deliver(a,b)
     remote=b[0].shared_layers(b[1])[0]['id']
-    assert b[0].download_file(b[1],file['id'],layer_id=remote)['content']==b'attachment'
+    assert b[0].download_file(b[1],file['id'],layer_id=remote)['content']==content
     with pytest.raises(Problem):
         b[0].download_file(b[1],file['id'])
     with pytest.raises(Problem):

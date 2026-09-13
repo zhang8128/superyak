@@ -10,6 +10,12 @@ The [verification report](docs/reports/2026-09-12-peer-home-verification.md) rec
 measured behavior and release boundaries. Richer clinical/HPC integrations remain
 future work.
 
+The [backend data-source catalog](peer/API.md#backend-data-sources) manages private
+uploaded files and selected-record collections, with source corrections,
+pause/resume controls and repeatable imports with success/failure receipts.
+CSV and JSON datasets retain their original bytes. Registering or enabling a
+source does not publish its contents.
+
 Superyak brings persistent agents, research evidence, and scoped interchange
 into one repository. Engram provides individual and shared memory; Atlas manages
 research questions, sources, proposed findings, and readable views; Lighthouse

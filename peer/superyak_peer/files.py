@@ -1,9 +1,12 @@
 """Bounded immutable attachments; filenames never select a path."""
 import base64
 import binascii
+import csv
 import hashlib
+import io
+import json
 import re
-from .common import Problem, uid, require, text
+from .common import Problem, uid, require, text, valid_utf8
 
 MAX_FILE = 4 * 1024 * 1024
 
@@ -55,11 +58,24 @@ def validate_file(name, media_type, content_base64):
     if not isinstance(media_type, str):
         raise Problem(400, 'Invalid file type')
     signatures = {'application/pdf': b'%PDF-', 'image/png': b'\x89PNG\r\n\x1a\n', 'image/jpeg': b'\xff\xd8\xff', 'image/gif': b'GIF8'}
-    if media_type == 'text/plain':
+    if media_type in ('text/plain', 'text/csv', 'application/json'):
         try:
-            content.decode('utf-8')
+            decoded = content.decode('utf-8')
         except UnicodeDecodeError:
             raise Problem(400, 'Text must be UTF-8') from None
+        if media_type == 'text/csv':
+            try:
+                for _ in csv.reader(io.StringIO(decoded, newline=''), strict=True):
+                    pass
+            except csv.Error:
+                raise Problem(400, 'Invalid CSV or field exceeds the supported size') from None
+        elif media_type == 'application/json':
+            def invalid_constant(value):
+                raise ValueError('Non-finite JSON number')
+            try:
+                valid_utf8(json.loads(decoded, parse_constant=invalid_constant))
+            except (ValueError, RecursionError):
+                raise Problem(400, 'Invalid JSON dataset') from None
     elif media_type not in signatures or not content.startswith(signatures[media_type]):
         raise Problem(400, 'Unsupported file type or invalid signature')
     return {'content':content, 'digest':hashlib.sha256(content).hexdigest(), 'size':len(content)}

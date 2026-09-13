@@ -1,5 +1,33 @@
 # Resume here — medical lighthouse / aDNA
 
+**Backend data-source management, September 13 (latest):** The peer now has an
+account-owned source registry at `/api/data-sources`, with versioned names and
+descriptions, pause/resume, item listings, and success/failure import receipts.
+Sources register owned uploaded files or selected-source documents. Successful
+request IDs replay their receipt; conflicting input fails, and failed batches
+roll back content. CSV/JSON files preserve exact bytes. Pausing a source affects
+new imports, not existing data or sharing permissions. These are backend APIs;
+the dashboard keeps its existing selected-record import/export interface.
+See [the API examples](peer/API.md#backend-data-sources) and
+[implementation plan](docs/superpowers/plans/2026-09-13-data-source-management.md).
+
+The existing password-free demo at **http://127.0.0.1:7435** serves the installed
+package in `.worktrees/peer-home/.engram/data-sources-20260913/`, PID `44387` at
+verification. Its `runtime.json` holds the exact launch command and unchanged
+hashes of all 22 existing content tables and credentials; `verification.json`
+records a fresh browser/API check. The new source tables are additive, and legacy
+imports are cataloged without altering records or inventing old import dates.
+The standalone source archive `superyak-peer-data-sources.tar.gz` has SHA-256
+`9cfe6159ebf35a6b8d5db785b7a328142df25eb4de07346bc06e1d124f5afdaf`.
+
+All 162 peer tests passed, including browser/package checks and CSV/JSON attachment
+transfer/withdrawal between two test peers. Independent review approved without
+findings and exercised additional synthetic API/integrity cases. The ignored
+`integration.json` in that evidence directory records the final pushed commit
+and CI result when integration finishes. Preserve the original demo state and
+all prior evidence. Only the peer demo was reloaded; no external source fetch,
+model generation, research-worker restart, or MCP-server restart occurred.
+
 **Password-free local demo, September 13 (latest):** `make home-demo` now uses
 `serve --local-demo`: fresh visits open the patient home, the account menu switches
 between the four seeded dashboards, and expired demo sessions renew without a

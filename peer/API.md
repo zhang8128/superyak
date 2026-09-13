@@ -238,7 +238,10 @@ Body is plain authored text; this API does not resolve/fetch URLs or citations.
 Metadata is `{id,name,media_type,digest,size}`; digest is immutable SHA-256 hex.
 Limit: 4 MiB decoded bytes, 6 MiB whole HTTP request. Names allow plain ASCII
 letters/digits/spaces/dot/underscore/hyphen, no directories or `..`. Types:
-UTF-8 `text/plain`, `application/pdf`, `image/png`, `image/jpeg`, `image/gif`.
+UTF-8 `text/plain`, `text/csv`, `application/json`, `application/pdf`, `image/png`,
+`image/jpeg`, `image/gif`. CSV uses strict standard-library parsing (including its
+field-size bound); JSON must parse without nonstandard NaN/Infinity constants or
+invalid Unicode. The original bytes are stored, never normalized or executed.
 Binary magic prefixes are checked; this is not a malware scanner. Downloads use
 `application/octet-stream`, `Content-Disposition: attachment` and `nosniff`.
 No raw global public-file route exists. Only explicit active owned-layer selection
@@ -483,3 +486,89 @@ adapter is `app.state.assistant`; the private interchange service is
 trusted internal guard; the route enforces session ownership/version before it.
 `Interchange.export(actor,data)`, `.import_document(actor,document)`, `.sources(actor)`
 and `.adna(actor,layer_id)` use the existing Store's serialized transactions.
+
+## Backend data sources
+
+A data source is an account-owned collection of inputs. Its `enabled` switch
+controls new imports into that source. Existing files, records, and previously
+shared versions keep their existing access rules when the source is paused.
+These APIs perform manual imports; registration starts no network connection,
+model request, scheduled job, or peer transfer.
+
+All routes require a session; POST/PATCH also require same-origin and CSRF headers.
+Only the source owner can view or change it, including its metadata and receipts.
+Organization administrators have no additional access. Unknown/foreign IDs return
+404. Source corrections use optimistic versions; an old version returns 409.
+
+| Method/path | Request | Response |
+|---|---|---|
+| POST `/api/data-sources` | `{name,kind,description?}`; kind `file` or `selected-records` | Source metadata, 201; enabled initially |
+| GET `/api/data-sources` | `limit=50&offset=0` | `{sources,limit,offset}` |
+| GET `/api/data-sources/{id}` | — | Source metadata |
+| PATCH `/api/data-sources/{id}` | `{version,name?,description?,enabled?}` | Updated source; changed settings increment version |
+| POST `/api/data-sources/{id}/imports` | `{request_id,version,file_ids}` or `{request_id,version,document}` according to source kind | Import receipt, 201 |
+| GET `/api/data-sources/{id}/imports` | `limit=50&offset=0` | `{imports,limit,offset}`, newest receipts first |
+| GET `/api/data-sources/{id}/items` | `limit=50&offset=0` | `{items,limit,offset}`; file metadata or selected source records |
+
+Source metadata is `{id,name,kind,description,enabled,version,created_at,updated_at,item_count}`.
+Names are 1–200 characters, descriptions up to 2,000. Each source keeps a stable ID
+through name corrections. Kinds cannot be changed. List limits are 1–100, offsets
+0–1,000,000. Catalog creation time is when this peer registered the source; it is
+not an assertion of the original data's creation or import date.
+
+For example, register a file source:
+
+```json
+{"name":"My uploaded reports","kind":"file","description":"Files I select manually"}
+```
+
+Upload a file with the existing `/api/files` endpoint, then associate the returned
+owned file ID with the source:
+
+```json
+{"request_id":"report-import-1","version":1,"file_ids":["returned-file-id"]}
+```
+
+A file import selects 1–20 existing owned file IDs. Repeated IDs count once;
+the registry points to the immutable file and does not copy its bytes. Uploads
+remain independent private files even if subsequent source registration fails.
+For a `selected-records` source, replace `file_ids` with `document` containing the
+existing `{format:"superyak.selected-sources.v1",records:[...]}` document.
+The existing 20-record/512-KiB bounds and exact source/revision checks still apply.
+
+Receipts contain `{id,source_id,request_id,status,added_count,items,error,created_at}`.
+`items` contains only `{kind,id}` references; item bodies are available through the
+source items endpoint. `added_count` counts new links into this source. `status`
+is `succeeded` or `failed`; failed receipts contain no submitted document or file
+IDs. A successful import and all of its links/content commit together. Failure
+rolls back that batch and records the public-safe error for the owned source.
+Malformed HTTP/JSON, unauthenticated requests, foreign sources, and missing/invalid
+request IDs fail before a receipt is recorded.
+
+`request_id` is a caller-chosen string of 1–100 characters. Repeating a successful
+ID with the same input returns the exact previous receipt, including after a
+pause or a settings correction. Reusing it with different input returns 409.
+Source `version` is a precondition for new imports, not part of input identity.
+Failed attempts may be corrected and retried; they do not reserve the request ID.
+
+To pause a source whose version is still 1:
+
+```json
+{"version":1,"enabled":false}
+```
+
+This returns version 2. New imports return 409 until a corresponding versioned
+update enables it. Existing content and successful retry receipts remain readable.
+Sharing is always controlled by the existing layer preview/activation flow.
+
+Older selected imports are linked to a default `Selected source documents`
+source on startup. Their record IDs, contents, and attribution remain unchanged;
+no historical receipts or import dates are invented. The existing
+`POST /api/interchange/import` uses this default source and retains its original
+response shape; pausing that source also pauses those imports. Records explicitly
+managed by another source are not reassigned during restart.
+
+The trusted service is `app.state.data_sources` (`DataSources`); its record imports
+share a transaction with `Interchange._import_document`. Internal Python callers
+of `Interchange.import_document` retain the original low-level import behavior;
+browser source-management controls apply through the HTTP routes above.

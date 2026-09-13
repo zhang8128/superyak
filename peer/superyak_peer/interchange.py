@@ -126,17 +126,21 @@ class Interchange:
 
     def import_document(self, actor, value):
         validate_document(value)
-        result = []
         with self.store.transaction() as db:
-            for record in value['records']:
-                serialized = encode(record)
-                row = db.execute('SELECT * FROM imported_sources WHERE owner_id=? AND source_id=? AND revision=?', (actor, record['id'], record['revision'])).fetchone()
-                if row and row['record'] != serialized:
-                    raise Problem(409, 'This source revision already has different content or attribution')
-                key = row['id'] if row else uid()
-                if not row:
-                    db.execute('INSERT INTO imported_sources VALUES(?,?,?,?,?)', (key, actor, record['id'], record['revision'], serialized))
-                result.append({'id': key, 'record': record})
+            return self._import_document(db, actor, value)
+
+    def _import_document(self, db, actor, value):
+        """Import an already validated document inside the caller's transaction."""
+        result = []
+        for record in value['records']:
+            serialized = encode(record)
+            row = db.execute('SELECT * FROM imported_sources WHERE owner_id=? AND source_id=? AND revision=?', (actor, record['id'], record['revision'])).fetchone()
+            if row and row['record'] != serialized:
+                raise Problem(409, 'This source revision already has different content or attribution')
+            key = row['id'] if row else uid()
+            if not row:
+                db.execute('INSERT INTO imported_sources VALUES(?,?,?,?,?)', (key, actor, record['id'], record['revision'], serialized))
+            result.append({'id': key, 'record': record})
         return {'records': result}
 
     def sources(self, actor):

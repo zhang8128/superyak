@@ -101,6 +101,9 @@ actor and origin. Files are explicit selected owned attachments only, each
 `{id,name,media_type,digest,size,content_base64}`. All file bytes together must be
 ≤4 MiB; selecting a larger remote draft/release is rejected before activation.
 Receiver revalidates upload type/magic, filename, decoded size and SHA-256 digest.
+Current upload types include UTF-8 CSV and JSON datasets; receivers predating
+that support reject those file types. Both peers need compatible type support
+before exchanging those attachments. Dataset bytes are preserved exactly.
 Files are stored inside the received resource, never in its local owned-file table.
 Download requires that exact still-active received layer and current recipient.
 No received-file or received-layer forwarding API exists. Corrections are higher

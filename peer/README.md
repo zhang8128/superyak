@@ -36,6 +36,15 @@ activating releases exactly that saved version to the displayed audience.
 The demo command validates repeated runs and refuses unrelated/incomplete state.
 Keep the terminal running while using the application; Ctrl-C stops that server.
 
+The backend also provides a private data-source catalog: register uploaded files
+or selected-record collections, correct source names, pause/resume imports, and
+inspect success/failure receipts. CSV and JSON datasets are accepted alongside
+the existing supported file types, with original bytes preserved. Repeated import
+requests return their existing successful receipts. No source is shared merely
+because it is registered or enabled. See the [data-source API examples](API.md#backend-data-sources).
+These management controls are currently API endpoints; the dashboard retains its
+existing selected-record import/export interface.
+
 To provision an ordinary peer instead:
 
 ```sh
