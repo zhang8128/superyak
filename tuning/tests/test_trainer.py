@@ -23,6 +23,8 @@ from transformers import (
 )
 
 CHAT_TEMPLATE = """{% for message in messages %}{{ message['role'] + ' ' + message['content'] + ' ' + eos_token + ' ' }}{% endfor %}{% if add_generation_prompt %}{{ 'assistant ' }}{% endif %}"""
+THINKING_CHAT_TEMPLATE = """{% for message in messages %}{% if message['role'] == 'assistant' %}{{ 'assistant authored ' + message['content'] + ' ' + eos_token + ' ' }}{% else %}{{ message['role'] + ' ' + message['content'] + ' ' + eos_token + ' ' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ 'assistant thought channel ' }}{% endif %}"""
+INCOMPATIBLE_CHAT_TEMPLATE = """{% for message in messages %}{% if message['role'] == 'assistant' %}{% if 'CONTINUE_FINAL_MESSAGE_TAG' in message['content'] %}{{ 'assistant wrong ' + message['content'] }}{% else %}{{ 'assistant authored ' + message['content'] + ' ' + eos_token }}{% endif %}{% else %}{{ message['role'] + ' ' + message['content'] + ' ' + eos_token + ' ' }}{% endif %}{% endfor %}"""
 
 
 @pytest.fixture(scope="module")
@@ -83,6 +85,9 @@ def tiny_model_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "before": 27,
         "interpreting": 28,
         "results": 29,
+        "authored": 30,
+        "thought": 31,
+        "channel": 32,
     }
     tokenizer_impl = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
     tokenizer_impl.pre_tokenizer = Whitespace()
@@ -165,8 +170,13 @@ def test_completion_encoding_masks_prompt_and_keeps_native_answer_tokens(
         tiny_model_dir, local_files_only=True
     )
     messages = _records()[0]["messages"]
+    empty_completion = copy.deepcopy(messages)
+    empty_completion[-1]["content"] = ""
     prefix = tokenizer.apply_chat_template(
-        messages[:-1], tokenize=True, add_generation_prompt=True
+        empty_completion,
+        tokenize=True,
+        add_generation_prompt=False,
+        continue_final_message=True,
     )["input_ids"]
     full = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=False
@@ -177,6 +187,55 @@ def test_completion_encoding_masks_prompt_and_keeps_native_answer_tokens(
     assert encoded["input_ids"].tolist() == full
     assert encoded["labels"][: len(prefix)].tolist() == [-100] * len(prefix)
     assert encoded["labels"][len(prefix) :].tolist() == full[len(prefix) :]
+
+
+def test_completion_encoding_uses_authored_header_instead_of_thinking_prompt(
+    tiny_model_dir: Path,
+) -> None:
+    tokenizer = PreTrainedTokenizerFast.from_pretrained(
+        tiny_model_dir, local_files_only=True
+    )
+    tokenizer.chat_template = THINKING_CHAT_TEMPLATE
+    messages = _records()[0]["messages"]
+    generation_prefix = tokenizer.apply_chat_template(
+        messages[:-1], tokenize=True, add_generation_prompt=True
+    )["input_ids"]
+    full = tokenizer.apply_chat_template(
+        messages, tokenize=True, add_generation_prompt=False
+    )["input_ids"]
+    empty_completion = copy.deepcopy(messages)
+    empty_completion[-1]["content"] = ""
+    authored_prefix = tokenizer.apply_chat_template(
+        empty_completion,
+        tokenize=True,
+        add_generation_prompt=False,
+        continue_final_message=True,
+    )["input_ids"]
+    assert generation_prefix != full[: len(generation_prefix)]
+    assert authored_prefix == full[: len(authored_prefix)]
+
+    encoded = _encode_completion(tokenizer, messages, sequence_length=64)
+
+    assert encoded["input_ids"].tolist() == full
+    assert encoded["labels"][: len(authored_prefix)].tolist() == [-100] * len(
+        authored_prefix
+    )
+    assert (
+        encoded["labels"][len(authored_prefix) :].tolist()
+        == full[len(authored_prefix) :]
+    )
+
+
+def test_completion_encoding_rejects_incompatible_continuation_prefix(
+    tiny_model_dir: Path,
+) -> None:
+    tokenizer = PreTrainedTokenizerFast.from_pretrained(
+        tiny_model_dir, local_files_only=True
+    )
+    tokenizer.chat_template = INCOMPATIBLE_CHAT_TEMPLATE
+
+    with pytest.raises(ValueError, match="native assistant prefix"):
+        _encode_completion(tokenizer, _records()[0]["messages"], sequence_length=64)
 
 
 def test_attention_target_discovery_allows_gemma4_shared_key_value_projection() -> None:
@@ -516,8 +575,13 @@ def test_answer_truncated_entirely_away_is_rejected(tiny_model_dir: Path) -> Non
         tiny_model_dir, local_files_only=True
     )
     messages = _records()[0]["messages"]
+    empty_completion = copy.deepcopy(messages)
+    empty_completion[-1]["content"] = ""
     prefix = tokenizer.apply_chat_template(
-        messages[:-1], tokenize=True, add_generation_prompt=True
+        empty_completion,
+        tokenize=True,
+        add_generation_prompt=False,
+        continue_final_message=True,
     )["input_ids"]
 
     with pytest.raises(ValueError, match="truncated away"):

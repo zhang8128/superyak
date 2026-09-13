@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -156,9 +157,14 @@ def _encode_completion(
         raise ValueError("the final assistant completion must be non-empty")
 
     try:
+        empty_completion = copy.deepcopy(messages)
+        empty_completion[-1]["content"] = ""
         prefix_ids = _as_token_ids(
             tokenizer.apply_chat_template(
-                messages[:-1], tokenize=True, add_generation_prompt=True
+                empty_completion,
+                tokenize=True,
+                add_generation_prompt=False,
+                continue_final_message=True,
             )
         )
         full_ids = _as_token_ids(
