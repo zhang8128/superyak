@@ -51,6 +51,7 @@ def validate_demo(data_dir):
             db.close()
     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error, Problem):
         raise ValueError('Refusing incomplete or mismatched demo state') from None
+    return credentials
 
 
 def seed_demo(data_dir):
@@ -96,6 +97,7 @@ def main(argv=None):
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
     serve.add_argument('--port', type=int, default=7435)
+    serve.add_argument('--local-demo', action='store_true', help='Open seeded test accounts without passwords, on loopback only')
     serve.add_argument('--tls-cert', type=Path)
     serve.add_argument('--tls-key', type=Path)
     serve.add_argument('--origin', action='append', default=[])
@@ -133,6 +135,8 @@ def main(argv=None):
                 loopback = ipaddress.ip_address(args.host).is_loopback
             except ValueError:
                 loopback = args.host == 'localhost'
+            if args.local_demo and not loopback:
+                raise ValueError('Local demo requires a loopback bind')
             if args.peer_tls:
                 from .identity import PeerIdentity
                 from urllib.parse import urlsplit
@@ -153,7 +157,7 @@ def main(argv=None):
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
-            app = create_app(args.data_dir, model_config=model_config, allowed_origins=origins, secure_cookies=tls, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
+            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=False)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')

@@ -1,7 +1,9 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
 import hmac
+import ipaddress
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -89,8 +91,20 @@ def actor(request):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
+    demo_credentials = []
+    if local_demo:
+        from .__main__ import validate_demo
+        for origin in allowed_origins:
+            parsed = urlsplit(origin)
+            try:
+                loopback = parsed.hostname == 'localhost' or ipaddress.ip_address(parsed.hostname).is_loopback
+            except ValueError:
+                loopback = False
+            if not loopback or parsed.scheme not in ('http', 'https'):
+                raise ValueError('Local demo requires loopback origins')
+        demo_credentials = validate_demo(Path(data_dir))
     from .peer_routes import federation_lifespan, install
     from .federation import Federation
     if federation_endpoint and federation_endpoint not in allowed_origins:
@@ -129,14 +143,44 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def browser_public():
         return FileResponse(STATIC_DIR / 'index.html')
 
-    @app.post('/api/login')
-    async def login(request: Request):
-        data = await body(request)
-        result = store.login(data.get('username'), data.get('password'), request.client.host if request.client else 'unknown')
+    def login_response(request, username, password):
+        result = store.login(username, password, request.client.host if request.client else 'unknown')
         token = result.pop('token')
         response = JSONResponse(result)
         response.set_cookie(COOKIE, token, httponly=True, samesite='strict', secure=secure_cookies or request.url.scheme == 'https', max_age=86400)
         return response
+
+    @app.post('/api/login')
+    async def login(request: Request):
+        data = await body(request)
+        return login_response(request, data.get('username'), data.get('password'))
+
+    if local_demo:
+        def require_local_client(request):
+            try:
+                loopback = request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
+            except ValueError:
+                loopback = False
+            if not loopback:
+                raise Problem(403, 'Local demo requires a loopback connection')
+
+        @app.get('/api/local-demo')
+        def demo_accounts(request: Request):
+            require_local_client(request)
+            with store.transaction() as db:
+                accounts = [dict(db.execute('SELECT username,name FROM users WHERE username=?', (c['username'],)).fetchone()) for c in demo_credentials]
+            return {'accounts': accounts}
+
+        @app.post('/api/local-demo/login')
+        async def demo_login(request: Request):
+            require_local_client(request)
+            data = await body(request)
+            credential = next((c for c in demo_credentials if c['username'] == data.get('username')), None)
+            if credential is None:
+                raise Problem(400, 'Choose one of the demo accounts')
+            response = login_response(request, credential['username'], credential['password'])
+            store.logout(request.cookies.get(COOKIE))
+            return response
 
     @app.get('/api/me')
     def me(request: Request):

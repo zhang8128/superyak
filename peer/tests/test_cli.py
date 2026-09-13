@@ -28,6 +28,13 @@ def test_remote_plaintext_serve_refused(tmp_path):
     assert result.returncode != 0
     assert 'TLS' in result.stderr
 
+def test_local_demo_refuses_remote_bind_even_with_tls(tmp_path):
+    target = tmp_path / 'peer'
+    result = run('serve', '--local-demo', '--data-dir', target, '--host', '0.0.0.0', '--peer-tls')
+    assert result.returncode != 0
+    assert 'loopback' in result.stderr
+    assert not target.exists()
+
 def test_symlink_state_refused(tmp_path):
     from superyak_peer.db import Store
     victim = tmp_path / 'victim'

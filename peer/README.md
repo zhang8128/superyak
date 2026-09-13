@@ -22,13 +22,16 @@ installable, including after extracting the standalone source archive:
 ```sh
 uv sync --locked
 uv run --locked python -m superyak_peer demo
-uv run --locked python -m superyak_peer serve --data-dir .engram/home-demo
+uv run --locked python -m superyak_peer serve --local-demo --data-dir .engram/home-demo
 ```
 
-Open **http://127.0.0.1:7435**. Read the four fictional accounts from
-`.engram/home-demo/demo-credentials.json`, a private mode-0600 file. Passwords are
-random and never printed. The seeded users are `patient`, `family`, `doctor`, and
-`organizer`. Personal notes begin as private drafts. Saving changes a draft;
+Open **http://127.0.0.1:7435** to enter the patient dashboard without a password.
+The account menu offers one-click switches to `family`, `doctor`, and `organizer`.
+Save work before switching accounts. `--local-demo` only accepts seeded demo state,
+loopback binds, origins, and client connections. Omit it to require normal sign-in;
+do not proxy or forward the password-free demo for others to access.
+Fictional credentials stay in `.engram/home-demo/demo-credentials.json`, a private
+mode-0600 file; they are never sent to the browser. Personal notes begin as private drafts. Saving changes a draft;
 activating releases exactly that saved version to the displayed audience.
 The demo command validates repeated runs and refuses unrelated/incomplete state.
 Keep the terminal running while using the application; Ctrl-C stops that server.

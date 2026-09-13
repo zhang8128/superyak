@@ -8,7 +8,7 @@ from the repository root. Paths are relative to the command's working directory.
 uv sync --locked
 uv run python -m superyak_peer init --data-dir /private/path/home --username owner --name 'Peer owner'
 uv run python -m superyak_peer demo --data-dir /private/path/home-demo
-uv run python -m superyak_peer serve --data-dir /private/path/home-demo
+uv run python -m superyak_peer serve --local-demo --data-dir /private/path/home-demo
 uv run pytest -q
 ```
 
@@ -25,6 +25,16 @@ Accounts and drafts are preserved; non-demo/incomplete state is refused. The CLI
 `--tls-key`; provide repeated `--origin https://hostname:port` options for actual
 browser and peer addresses. Forwarded proxy headers are disabled. IPv4/localhost
 are the documented local launch route.
+
+`serve --local-demo` (factory option `local_demo=True`) enables password-free
+entry for the four seeded fictional accounts. It requires validated demo state,
+loopback origins and a loopback CLI bind. Only loopback clients can read
+`GET /api/local-demo` (`accounts` with `username` and current `name`) or send
+`POST /api/local-demo/login` with `{"username":"patient"}`. Login requires the
+same-origin header and creates an ordinary session cookie, revoking the prior
+cookie's session. Credentials never leave the server. All content APIs still
+check sessions, permissions and CSRF. These two routes return 404 without the
+explicit option. Do not expose this test mode through a proxy or port forward.
 
 ## Factory and extension boundary
 

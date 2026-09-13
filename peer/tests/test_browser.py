@@ -28,15 +28,19 @@ ARTIFACTS = Path(tempfile.mkdtemp(prefix="superyak-browser-", dir=os.environ.get
 
 
 @pytest.fixture
-def browser_peer(tmp_path):
+def browser_peer(tmp_path, request):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     base_url = f"http://127.0.0.1:{port}"
-    app = create_app(tmp_path / "browser-peer", allowed_origins=[base_url])
+    local_demo = getattr(request, "param", False)
+    if local_demo:
+        from superyak_peer.__main__ import seed_demo
+        seed_demo(tmp_path / "browser-peer")
+    app = create_app(tmp_path / "browser-peer", allowed_origins=[base_url], local_demo=local_demo)
     store = app.state.store
     password = "long-browser-password"
-    users = {
+    users = {} if local_demo else {
         username: store.create_user(
             username, name, password, is_admin=username == "organizer"
         )
@@ -47,6 +51,9 @@ def browser_peer(tmp_path):
             ("organizer", "Taylor Organizer"),
         )
     }
+    if local_demo:
+        with store.transaction() as db:
+            users = {row['username']: dict(row) for row in db.execute('SELECT id,username,name FROM users')}
     store.create_space(
         users["patient"]["id"],
         "Alex’s care circle",
@@ -88,6 +95,7 @@ def browser_peer(tmp_path):
         "users": users,
         "app": app,
         "remote_card": remote_card,
+        "local_demo": local_demo,
     }
     server.should_exit = True
     thread.join(timeout=10)
@@ -122,6 +130,45 @@ def signed_out_browser(playwright, *, viewport=None):
     finally:
         context.close()
         browser.close()
+
+
+@pytest.mark.parametrize('browser_peer', [True], indirect=True)
+def test_local_demo_opens_without_password_switches_accounts_and_renews_session(browser_peer):
+    with sync_playwright() as playwright:
+        with signed_out_browser(playwright) as page:
+            page.goto(browser_peer['base_url'] + '/')
+            expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+            expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Alex Patient')
+            page.get_by_role('link', name='My sharing layers').click()
+            page.get_by_role('button', name='New layer').click()
+            page.get_by_label('What do you want to share?').fill('Patient unsaved words')
+            page.get_by_role('button', name='Account and sign out').click()
+            page.get_by_role('button', name='Try doctor', exact=True).click()
+            expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+            expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Dr. Morgan')
+            assert 'Patient unsaved words' not in page.content()
+            assert page.request.get(browser_peer['base_url'] + '/api/me').json()['username'] == 'doctor'
+
+            page.get_by_role('link', name='My sharing layers').click()
+            page.get_by_role('button', name='New layer').click()
+            page.get_by_label('What do you want to share?').fill('Doctor draft survives session expiry')
+            browser_peer['app'].state.store.clock = lambda: time.time() + 86401
+            page.get_by_role('button', name='Save private draft').click()
+            expect(page.get_by_role('heading', name='Sign in again to keep working')).to_be_visible()
+            expect(page.get_by_label('Password', exact=True)).to_have_count(0)
+            page.get_by_role('button', name='Sign in again', exact=True).click()
+            expect(page.get_by_label('What do you want to share?')).to_have_value('Doctor draft survives session expiry')
+            page.get_by_role('button', name='Save private draft').click()
+            expect(page.locator('#main-content').get_by_text('Private draft saved')).to_be_visible()
+            page.get_by_role('button', name='Account and sign out').click()
+            page.get_by_role('button', name='Sign out', exact=True).click()
+            expect(page.get_by_role('button', name='Try family', exact=True)).to_be_visible()
+            page.get_by_role('button', name='Try family', exact=True).click()
+            expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Sam Family')
+        with signed_out_browser(playwright) as public:
+            public.goto(browser_peer['base_url'] + '/public/')
+            expect(public.get_by_role('heading', name='Public view')).to_be_visible()
+            assert public.request.get(browser_peer['base_url'] + '/api/me').status == 401
 
 
 def test_private_draft_exact_release_public_route_and_withdrawal(browser_peer):
@@ -414,6 +461,7 @@ def decode_fragment_id(url):
     return unquote(urlsplit(url).fragment.split("/", 1)[1])
 
 
+@pytest.mark.parametrize('browser_peer', [False, True], indirect=True)
 def test_invited_participant_chooses_local_account_details(browser_peer):
     """Break caught: an issued invitation cannot be redeemed from the signed-out home."""
     store = browser_peer["app"].state.store
@@ -421,6 +469,9 @@ def test_invited_participant_chooses_local_account_details(browser_peer):
     with sync_playwright() as playwright:
         with signed_out_browser(playwright) as page:
             page.goto(browser_peer["base_url"] + "/")
+            if browser_peer['local_demo']:
+                page.get_by_role('button', name='Account and sign out').click()
+                page.get_by_role('button', name='Sign out', exact=True).click()
             page.get_by_text("Use an invitation", exact=True).click()
             page.get_by_label("Invitation token").fill(invitation["token"])
             page.get_by_label("New username").fill("newperson")
@@ -428,6 +479,9 @@ def test_invited_participant_chooses_local_account_details(browser_peer):
             page.get_by_label("New password").fill("another-long-password")
             page.get_by_role("button", name="Create my account").click()
             expect(page.get_by_text("Account created. Sign in to open your home.")).to_be_visible()
+            if browser_peer['local_demo']:
+                expect(page.get_by_text('Sign in with another account', exact=True)).to_be_visible()
+                page.get_by_text('Sign in with another account', exact=True).click()
             page.get_by_label("Username", exact=True).fill("newperson")
             page.get_by_label("Password", exact=True).fill("another-long-password")
             page.get_by_role("button", name="Sign in").click()

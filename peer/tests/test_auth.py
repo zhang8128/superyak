@@ -1,5 +1,58 @@
 from concurrent.futures import ThreadPoolExecutor
 from fastapi.testclient import TestClient
+import pytest
+
+def test_local_demo_uses_normal_sessions_without_exposing_credentials(tmp_path):
+    from superyak_peer.__main__ import seed_demo
+    from superyak_peer.app import create_app
+    from superyak_peer.common import Problem
+    target = tmp_path / 'demo'
+    seed_demo(target)
+    credentials = (target / 'demo-credentials.json').read_bytes()
+    app = create_app(target, local_demo=True)
+    client = TestClient(app, base_url='http://127.0.0.1:7435', client=('127.0.0.1', 1234), headers={'origin': 'http://127.0.0.1:7435'})
+    accounts = client.get('/api/local-demo').json()['accounts']
+    assert {a['username'] for a in accounts} == {'patient', 'family', 'doctor', 'organizer'}
+    assert all(set(a) == {'username', 'name'} for a in accounts)
+    assert client.get('/api/home').status_code == 401
+    assert client.post('/api/local-demo/login', json={'username': 'patient'}, headers={'origin': 'https://evil.test'}).status_code == 403
+    assert client.post('/api/local-demo/login', json={'username': 'unknown'}).status_code == 400
+    result = client.post('/api/local-demo/login', json={'username': 'patient'})
+    assert result.status_code == 200
+    assert 'HttpOnly' in result.headers['set-cookie']
+    assert 'password' not in result.text
+    me = client.get('/api/me').json()
+    assert me['username'] == 'patient'
+    assert client.post('/api/layers', json={'title': 'secret'}).status_code == 403
+    layer = client.post('/api/layers', json={'title': 'secret'}, headers={'x-csrf-token': me['csrf_token']}).json()
+    previous_token = client.cookies.get('superyak_session')
+    assert client.post('/api/local-demo/login', json={'username': 'doctor'}).status_code == 200
+    assert client.get('/api/me').json()['username'] == 'doctor'
+    assert layer['id'] not in client.get('/api/home').text
+    assert client.get('/api/layers/' + layer['id']).status_code == 404
+    with pytest.raises(Problem) as expired:
+        app.state.store.session(previous_token)
+    assert expired.value.status == 401
+    assert (target / 'demo-credentials.json').read_bytes() == credentials
+    remote = TestClient(app, base_url='http://127.0.0.1:7435', client=('192.0.2.5', 1234), headers={'origin': 'http://127.0.0.1:7435'})
+    assert remote.get('/api/local-demo').status_code == 403
+    assert remote.post('/api/local-demo/login', json={'username': 'organizer'}).status_code == 403
+
+def test_local_demo_is_explicit_and_rejects_ordinary_state_or_remote_origins(tmp_path):
+    from superyak_peer.__main__ import seed_demo
+    from superyak_peer.app import create_app
+    target = tmp_path / 'demo'
+    seed_demo(target)
+    ordinary = TestClient(create_app(target), base_url='http://127.0.0.1:7435', headers={'origin': 'http://127.0.0.1:7435'})
+    assert ordinary.get('/api/local-demo').status_code == 404
+    assert ordinary.post('/api/local-demo/login', json={'username': 'patient'}).status_code == 404
+    assert ordinary.get('/api/home').status_code == 401
+    with pytest.raises(ValueError, match='loopback'):
+        create_app(target, local_demo=True, allowed_origins=['https://demo.example'])
+    unseeded = tmp_path / 'ordinary'
+    with pytest.raises(ValueError, match='demo state'):
+        create_app(unseeded, local_demo=True)
+    assert not unseeded.exists()
 
 def test_application_factory_exists():
     import importlib.util

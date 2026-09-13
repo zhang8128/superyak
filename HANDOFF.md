@@ -1,5 +1,31 @@
 # Resume here — medical lighthouse / aDNA
 
+**Password-free local demo, September 13 (latest):** `make home-demo` now uses
+`serve --local-demo`: fresh visits open the patient home, the account menu switches
+between the four seeded dashboards, and expired demo sessions renew without a
+password. An optional password form remains available for invited accounts.
+Ordinary serving still requires authentication. The option requires validated
+seeded state and loopback binding/origins/connections.
+
+The retained demo at **http://127.0.0.1:7435** now runs installed source from
+`.worktrees/peer-home/.engram/local-demo-20260913/`, PID `30323` at verification.
+Its `runtime.json` records the exact command and preserved content/credential
+hashes; `verification.json` records fresh browser entry and account switching.
+Saved content and credential hashes were unchanged through the restart. Source
+archive `superyak-peer-local-demo.tar.gz` has SHA-256
+`2e1cd44b6bb462835f6a7bd2f3b4207fbd89c6d0a7fe43f1fa3cc52730c034fb`.
+Review approved after fixing invitation sign-in; 58 auth/CLI/browser checks passed
+before that final disclosure fix, then all three affected browser cases passed.
+Preserve the runtime, original `.engram/home-demo`, and older review evidence.
+Only the peer demo was reloaded; no research or model service was restarted.
+
+The user also relayed Stanley's recommendation of
+[HauhauCS Gemma4-26B-A4B Balanced](https://huggingface.co/HauhauCS/Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced).
+Its card identifies Google's Gemma 4 as the base and community modifications;
+the maintainer's U.S. provenance is unverified. This is a candidate, not an
+installed or measured replacement. The demo still uses the existing pinned
+`gemma4:31b`; ask/read current user steering before treating the variant as chosen.
+
 **Peer home reviewed and integrated, September 12 (latest):** The reviewed
 implementation through `7222037a32b3b2fbbbe2823cff549127c15b4c66` is merged into local
 `main`. All required final findings are addressed. The existing user demo now

@@ -5,6 +5,7 @@ const announcer = document.querySelector("#announcer");
 
 const state = {
   me: null,
+  demoAccounts: [],
   home: null,
   contacts: [],
   files: [],
@@ -164,7 +165,7 @@ function layout(content) {
           </select>
         </div>
         <button class="account-button" data-action="profile" aria-label="Account and sign out">
-          <span class="account-meta"><strong>${name}</strong><span>${escapeHtml(currentSpace)}</span></span>
+          <span class="account-meta"><strong>${name}</strong><span>${state.demoAccounts.length ? `Local demo · ${escapeHtml(state.me.username)}` : escapeHtml(currentSpace)}</span></span>
           <span class="avatar" aria-hidden="true">${escapeHtml(state.me.name.trim().charAt(0).toUpperCase() || "S")}</span>
         </button>
       </header>
@@ -175,6 +176,11 @@ function layout(content) {
     </div>
     ${spaceDialog()}${profileDialog()}${reauthDialog()}
   </div>`;
+}
+
+function demoChoices() {
+  if (!state.demoAccounts.length) return "";
+  return `<section class="section"><h3>Try another dashboard</h3><p>Local demo. No password needed. Save any work you want to keep before switching accounts.</p><div class="button-row">${state.demoAccounts.map((account) => `<button class="button secondary" type="button" data-action="demo-login" data-username="${escapeHtml(account.username)}" ${account.username === state.me?.username ? "disabled" : ""}>Try ${escapeHtml(account.username)}</button>`).join("")}</div></section>`;
 }
 
 function showLogin(message = "") {
@@ -191,11 +197,14 @@ function showLogin(message = "") {
         <h2 id="login-title">Sign in to your home</h2>
         <p>Your account belongs to this peer.</p>
         ${message ? `<div class="notice error" role="alert">${escapeHtml(message)}</div>` : ""}
+        ${demoChoices()}
+        ${state.demoAccounts.length ? '<details><summary>Sign in with another account</summary>' : ''}
         <form id="login-form">
           <div class="field"><label for="username">Username</label><input class="input" id="username" name="username" autocomplete="username" required></div>
           <div class="field"><label for="password">Password</label><input class="input" id="password" name="password" type="password" autocomplete="current-password" required></div>
           <button class="button" type="submit">Sign in</button>
         </form>
+        ${state.demoAccounts.length ? '</details>' : ''}
         <details class="invitation-redeem"><summary>Use an invitation</summary><p>An account owner gives you a one-use token. You choose your own local username, name, and password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
       </section>
     </div>
@@ -562,12 +571,12 @@ function profileDialog() {
   const corrections = state.corrections.length
     ? `<div class="history"><h3>Name correction history</h3>${state.corrections.slice().reverse().map((item) => `<div class="correction"><strong>${escapeHtml(item.old_name)} → ${escapeHtml(item.new_name)}</strong><span>Changed by ${item.actor_id === state.me.id ? `you (${escapeHtml(item.actor_id)})` : escapeHtml(item.actor_id)} · ${formatDate(item.created)}</span></div>`).join("")}</div>`
     : `<p class="meta">No name corrections recorded for this account.</p>`;
-  return `<dialog aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same private account and sharing permissions. Earlier releases remain attributed to this account.</p>${state.logoutError ? `<div class="notice error" role="alert">Sign-out could not be completed. This account is still signed in on this device.</div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">${state.logoutError ? "Retry sign out" : "Sign out"}</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form>${corrections}</div></dialog>`;
+  return `<dialog aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same private account and sharing permissions. Earlier releases remain attributed to this account.</p>${state.logoutError ? `<div class="notice error" role="alert">Sign-out could not be completed. This account is still signed in on this device.</div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">${state.logoutError ? "Retry sign out" : "Sign out"}</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form>${demoChoices()}${corrections}</div></dialog>`;
 }
 
 function reauthDialog() {
   if (!state.reauth || !state.me) return "";
-  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div><div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div><div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="reauth-title"><div class="dialog-body"><p class="eyebrow">Session ended</p><h2 id="reauth-title">Sign in again to keep working</h2><p>Your unsaved layer text is still in this editor. Sign in to save it to your peer.</p>${state.reauthError ? `<div class="notice error" role="alert">${escapeHtml(state.reauthError)}</div>` : ""}<form id="reauth-form"><div class="field"><label for="reauth-username">Username</label><input class="input" id="reauth-username" name="username" value="${escapeHtml(state.me.username)}" readonly></div>${isDemoAccount(state.me.username) ? `<p>Continue with this local demo account. No password needed.</p>` : `<div class="field"><label for="reauth-password">Password</label><input class="input" id="reauth-password" name="password" type="password" autocomplete="current-password" required></div>`}<div class="button-row"><button class="button" type="submit">Sign in again</button><button class="button secondary" type="button" data-action="close-reauth">Keep editing offline</button></div></form></div></dialog>`;
 }
 
 async function renderPublic() {
@@ -1084,13 +1093,32 @@ async function previewPair(form) {
   render();
 }
 
+function isDemoAccount(username) {
+  return state.demoAccounts.some((account) => account.username === username);
+}
+
+async function demoLogin(username) {
+  await api("/api/local-demo/login", { method: "POST", json: { username } });
+  return api("/api/me");
+}
+
 async function bootstrap() {
   if (location.pathname === "/public/" || location.pathname.startsWith("/public/view")) {
     await renderPublic();
     return;
   }
   try {
-    state.me = await api("/api/me");
+    try {
+      state.demoAccounts = (await api("/api/local-demo")).accounts;
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+    try {
+      state.me = await api("/api/me");
+    } catch (error) {
+      if (error.status !== 401 || !isDemoAccount("patient")) throw error;
+      state.me = await demoLogin("patient");
+    }
     bindEditorIdentity(state.me);
     await refresh();
   } catch (error) {
@@ -1130,8 +1158,13 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "reauth-form") {
     const expectedId = state.me.id;
     try {
-      await api("/api/login", { method: "POST", json: { username: state.me.username, password: form.elements.password.value } });
-      const signedIn = await api("/api/me");
+      let signedIn;
+      if (isDemoAccount(state.me.username)) {
+        signedIn = await demoLogin(state.me.username);
+      } else {
+        await api("/api/login", { method: "POST", json: { username: state.me.username, password: form.elements.password.value } });
+        signedIn = await api("/api/me");
+      }
       if (signedIn.id !== expectedId) throw new ApiError("Sign in with the account that owns this draft", 403);
       bindEditorIdentity(signedIn);
       state.me = signedIn;
@@ -1173,6 +1206,21 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
+  if (action === "demo-login") {
+    target.disabled = true;
+    if (state.me) {
+      await logout();
+      if (state.me) return;
+    }
+    try {
+      await demoLogin(target.dataset.username);
+      // A new document clears all previous account views and pending callbacks.
+      location.replace("/");
+    } catch (error) {
+      showLogin(error.message);
+    }
+    return;
+  }
   if (action === "new-layer") {
     try {
       const layer = await api("/api/layers", { method: "POST", json: {} });

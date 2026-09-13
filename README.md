@@ -72,9 +72,12 @@ make setup-peer
 make home-demo
 ```
 
-Open the reported loopback URL (default `http://127.0.0.1:7435`). Fictional account
-credentials are stored privately at `.engram/home-demo/demo-credentials.json`;
-they are never printed. `HOME_DEMO_DATA` selects a different demo directory,
+Open the reported loopback URL (default `http://127.0.0.1:7435`). The local demo
+opens the patient dashboard without a password. Open the account menu to try
+family, doctor, or organizer; save your work before switching. This uses the
+explicit loopback-only `--local-demo` option. Ordinary peers still require sign-in.
+Fictional credentials remain private in `.engram/home-demo/demo-credentials.json`.
+`HOME_DEMO_DATA` selects a different demo directory,
 `HOME_PORT` changes the port, and `HOME_ARGS` adds explicit server options.
 `make home` serves ordinary state at `.engram/home` (`HOME_DATA` overrides it);
 provision its first owner with the [peer CLI](peer/README.md) before signing in.
