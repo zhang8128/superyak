@@ -31,9 +31,19 @@ Clinical and biotech subject matter is not itself a refusal condition. Model
 access, local/shared training, and adapter publication each retain their own
 source-use grants; public visibility never grants all of them. The current CLI
 uses operator-declared local grants, not authenticated participant consent APIs.
-The existing peer demo continues with its previously measured `gemma4:31b`.
+Kairos subsequently selected this same variant for the local peer demo. The peer
+guard now pins `superyak-clinical-gemma4-balanced:q4_k_m` and its measured Ollama
+manifest digest `964dccf2e808c93bda5236b30231b1e72cadd9f12336fb505471f49add9810c4`.
+The September 12 `gemma4:31b` measurement below remains a historical result.
 
 ## Measured peer application state
+
+On September 13, the explicitly selected HauhauCS variant replaced the local
+demo's model pin. A fresh browser entry and one fictional source-grounded drafting
+request returned HTTP 200 in 5.21 seconds. All 25 existing content tables and the
+credentials were unchanged through reload and verification. This verifies one
+private suggestion through the peer; it does not establish clinical accuracy or
+an adapter-training improvement.
 
 The standalone [peer application](../peer/MODELS_AND_SOURCES.md) now has a
 component-scoped server-owned eligibility guard, disabled until explicitly

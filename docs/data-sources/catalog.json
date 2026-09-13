@@ -1,0 +1,430 @@
+{
+  "schema": "superyak.research-source-catalog.v1",
+  "kind": "planning_catalog_not_server_configuration",
+  "verified_on": "2026-09-13",
+  "objective": "source-grounded medical and biotech research and evidence review",
+  "priority_meaning": {
+    "1": "first import and supervision preparation",
+    "2": "next enrichment or evaluation lane",
+    "3": "later question-driven integration"
+  },
+  "defaults": {
+    "automatic_fetch": false,
+    "automatic_training": false,
+    "public_sharing": false
+  },
+  "sources": [
+    {
+      "id": "pubmed",
+      "name": "PubMed",
+      "priority": 1,
+      "purpose": [
+        "biomedical discovery",
+        "bibliographic updates",
+        "corrections"
+      ],
+      "access": [
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/",
+        "https://ftp.ncbi.nlm.nih.gov/pubmed/"
+      ],
+      "identity": [
+        "PMID",
+        "source update date",
+        "raw XML hash"
+      ],
+      "reuse_basis": "Metadata access does not clear publisher copyright in abstracts. Resolve text rights per record.",
+      "documentation": [
+        "https://pubmed.ncbi.nlm.nih.gov/download/",
+        "https://www.ncbi.nlm.nih.gov/books/NBK25497/"
+      ],
+      "status": "researched_not_staged",
+      "sync_notes": "Annual baseline then ordered daily updates at scale; bounded ESearch/EFetch first. No API key: 3 requests/second maximum; shared-IP budgets must be coordinated."
+    },
+    {
+      "id": "pmc",
+      "name": "PMC article datasets",
+      "priority": 1,
+      "purpose": [
+        "JATS full text",
+        "license evidence",
+        "version and retraction provenance"
+      ],
+      "access": [
+        "https://pmc-oa-opendata.s3.amazonaws.com/"
+      ],
+      "identity": [
+        "PMCID",
+        "version",
+        "object hash",
+        "retrieval time"
+      ],
+      "reuse_basis": "Per-article license. First staged article texts verified CC-BY-4.0 in JATS and metadata; third-party exceptions remain. TDM manuscripts and other licenses require separate decisions.",
+      "documentation": [
+        "https://pmc.ncbi.nlm.nih.gov/tools/pmcaws/",
+        "https://pmc.ncbi.nlm.nih.gov/tools/textmining/",
+        "https://pmc-oa-opendata.s3.amazonaws.com/README.txt"
+      ],
+      "status": "three_versioned_articles_staged",
+      "sync_notes": "Legacy FTP packages and OA discovery service retired August 2026. Discover available versions through new inventory/listing; higher suffix alone does not establish preferred version. Preserve changed hashes within a version."
+    },
+    {
+      "id": "europe_pmc",
+      "name": "Europe PMC",
+      "priority": 1,
+      "purpose": [
+        "discovery",
+        "identifier mapping",
+        "article and preprint enrichment"
+      ],
+      "access": [
+        "https://www.ebi.ac.uk/europepmc/webservices/rest/"
+      ],
+      "identity": [
+        "source",
+        "id",
+        "PMID",
+        "PMCID",
+        "DOI"
+      ],
+      "reuse_basis": "API access is separate from article-specific copyright. OPEN_ACCESS:Y does not imply CC BY.",
+      "documentation": [
+        "https://europepmc.org/RestfulWebService",
+        "https://europepmc.org/copyright",
+        "https://europepmc.org/downloads"
+      ],
+      "status": "search_and_three_full_text_endpoints_probed",
+      "sync_notes": "Use core responses and cursorMark; no verified numeric rate ceiling. Retained Europe PMC XML differs byte-for-byte from canonical PMC JATS; do not interchange their hashes."
+    },
+    {
+      "id": "clinicaltrials",
+      "name": "ClinicalTrials.gov",
+      "priority": 2,
+      "purpose": [
+        "registered study design",
+        "prespecified outcomes",
+        "posted results",
+        "registry-publication comparison"
+      ],
+      "access": [
+        "https://clinicaltrials.gov/api/v2/"
+      ],
+      "identity": [
+        "NCT ID",
+        "last processed date",
+        "record snapshot hash"
+      ],
+      "reuse_basis": "Free access with attribution, freshness/processed-date and modification notices; preserve third-party terms for documents.",
+      "documentation": [
+        "https://clinicaltrials.gov/data-api/about-api",
+        "https://clinicaltrials.gov/about-site/terms-conditions"
+      ],
+      "status": "researched_not_staged"
+    },
+    {
+      "id": "crossref",
+      "name": "Crossref",
+      "priority": 2,
+      "purpose": [
+        "DOI normalization",
+        "publication relationships",
+        "correction and retraction enrichment"
+      ],
+      "access": [
+        "https://api.crossref.org/works"
+      ],
+      "identity": [
+        "DOI",
+        "index date",
+        "raw response hash"
+      ],
+      "reuse_basis": "Bibliographic metadata broadly reusable; abstract and linked full-text copyright remains separate.",
+      "documentation": [
+        "https://www.crossref.org/documentation/retrieve-metadata/",
+        "https://community.crossref.org/t/refining-rest-api-limits-for-improved-stability-and-reliability/16137"
+      ],
+      "status": "researched_not_staged",
+      "sync_notes": "July 2026 public/polite list request ceilings 1/3 per second; singleton 5/10. Read response limits; no invented contact email."
+    },
+    {
+      "id": "preprints",
+      "name": "bioRxiv and medRxiv",
+      "priority": 2,
+      "purpose": [
+        "emerging research",
+        "version-to-publication links"
+      ],
+      "access": [
+        "https://api.biorxiv.org/",
+        "https://api.medrxiv.org/"
+      ],
+      "identity": [
+        "DOI",
+        "preprint version",
+        "posting date",
+        "published DOI"
+      ],
+      "reuse_basis": "Author-selected license per article. Server TDM terms do not independently authorize redistribution; bulk requester-pays access needs explicit setup.",
+      "documentation": [
+        "https://api.biorxiv.org/",
+        "https://api.medrxiv.org/",
+        "https://www.biorxiv.org/tdm",
+        "https://www.medrxiv.org/tdm",
+        "https://connect.medrxiv.org/news/2025/11/18/preprint_dois"
+      ],
+      "status": "researched_not_staged",
+      "sync_notes": "Handle current 10.64898 and historical 10.1101 DOI prefixes; follow response count/cursor instead of fixed page size. Preprints retain their review status."
+    },
+    {
+      "id": "openalex",
+      "name": "OpenAlex",
+      "priority": 3,
+      "purpose": [
+        "citation graph",
+        "entity linking"
+      ],
+      "access": [
+        "https://api.openalex.org/",
+        "https://openalex.s3.amazonaws.com/"
+      ],
+      "identity": [
+        "OpenAlex ID",
+        "DOI",
+        "snapshot release"
+      ],
+      "reuse_basis": "Metadata CC0; retrieved PDFs keep original licenses.",
+      "documentation": [
+        "https://help.openalex.org/api/authentication/",
+        "https://help.openalex.org/access/sync/",
+        "https://help.openalex.org/access/fulltext/"
+      ],
+      "status": "researched_not_staged",
+      "sync_notes": "Current free snapshot cadence quarterly; access limits/plans changed during 2026, verify before scaling."
+    },
+    {
+      "id": "evidence_inference",
+      "name": "Evidence Inference 2.0",
+      "priority": 1,
+      "purpose": [
+        "supervision candidate: intervention-comparator-outcome effects",
+        "evidence spans"
+      ],
+      "access": [
+        "https://github.com/jayded/evidence-inference",
+        "https://evidence-inference.ebm-nlp.com/v2.0.tar.gz"
+      ],
+      "identity": [
+        "prompt ID",
+        "PMCID",
+        "article split",
+        "annotation version"
+      ],
+      "reuse_basis": "MIT repository does not establish rights for every externally hosted trial text; match each article license.",
+      "documentation": [
+        "https://aclanthology.org/2020.bionlp-1.13/",
+        "https://github.com/jayded/evidence-inference/blob/master/LICENSE"
+      ],
+      "status": "researched_not_staged",
+      "repository_revision": "a661e8c14f973398380c8865cf2f27a535aaaf6d",
+      "split_unit": "article and linked trial family",
+      "target_role": "rights-resolved supervision; no corpus admitted yet"
+    },
+    {
+      "id": "bioasq",
+      "name": "BioASQ task b",
+      "priority": 2,
+      "purpose": [
+        "grounded biomedical question answering",
+        "snippet-to-answer supervision"
+      ],
+      "access": [
+        "https://participants-area.bioasq.org/datasets/"
+      ],
+      "identity": [
+        "release",
+        "question ID",
+        "linked PMID"
+      ],
+      "reuse_basis": "CC BY 2.5 dataset grant; registration required; external full texts need separate rights.",
+      "documentation": [
+        "https://participants-area.bioasq.org/datasets/"
+      ],
+      "status": "researched_not_staged",
+      "split_unit": "question plus overlapping paper/trial family",
+      "target_role": "second supervision candidate after access and release pinning"
+    },
+    {
+      "id": "pubmedqa",
+      "name": "PubMedQA",
+      "priority": 2,
+      "purpose": [
+        "bounded question-answering evaluation"
+      ],
+      "access": [
+        "https://github.com/pubmedqa/pubmedqa"
+      ],
+      "identity": [
+        "PMID",
+        "official split/fold",
+        "repository revision"
+      ],
+      "reuse_basis": "MIT repository; underlying abstracts retain source-rights considerations. PQA-A is artificial, PQA-U unlabeled.",
+      "documentation": [
+        "https://pubmedqa.github.io/",
+        "https://aclanthology.org/D19-1259/",
+        "https://github.com/pubmedqa/pubmedqa/blob/master/LICENSE"
+      ],
+      "status": "researched_not_staged",
+      "repository_revision": "1cbae8e92f72f20c8d3747cbb3bf5bc53554d997",
+      "split_unit": "PMID and official held-out split",
+      "target_role": "reserve held-out evaluation before training or synthetic generation"
+    },
+    {
+      "id": "scifact",
+      "name": "SciFact",
+      "priority": 2,
+      "purpose": [
+        "claim support/refutation",
+        "sentence rationale evaluation"
+      ],
+      "access": [
+        "https://github.com/allenai/scifact"
+      ],
+      "identity": [
+        "claim ID",
+        "evidence document ID",
+        "release"
+      ],
+      "reuse_basis": "Claims/evidence CC BY 4.0; S2ORC abstracts ODC-By 1.0; code Apache-2.0. Preserve component distinctions and original text rights.",
+      "documentation": [
+        "https://aclanthology.org/2020.emnlp-main.609/",
+        "https://github.com/allenai/scifact/blob/master/LICENSE.md"
+      ],
+      "status": "researched_not_staged",
+      "repository_revision": "68b98a56d93e0f9da0d2aab4e6c3294699a0f72e",
+      "split_unit": "related claims and evidence studies",
+      "target_role": "diagnostic evaluation, separately reported from novel held-out study reviews"
+    },
+    {
+      "id": "ebm_nlp",
+      "name": "EBM-NLP",
+      "priority": 3,
+      "purpose": [
+        "optional PICO span supervision"
+      ],
+      "access": [
+        "https://github.com/bepnye/EBM-NLP"
+      ],
+      "identity": [
+        "PMID",
+        "span offsets",
+        "annotator/release"
+      ],
+      "reuse_basis": "Corpus license unresolved in inspected original release; model subdirectory license is not a dataset license.",
+      "documentation": [
+        "https://github.com/bepnye/EBM-NLP"
+      ],
+      "status": "researched_not_staged",
+      "repository_revision": "43a4a1ea3f0a21cfb8820c040b843dfaf66192d0",
+      "split_unit": "PMID and expert test set",
+      "target_role": "optional after corpus rights clarification"
+    },
+    {
+      "id": "clinvar",
+      "name": "ClinVar",
+      "priority": 3,
+      "purpose": [
+        "variant evidence and disagreement",
+        "clinical evidence linking"
+      ],
+      "access": [
+        "https://www.ncbi.nlm.nih.gov/clinvar/",
+        "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/"
+      ],
+      "identity": [
+        "VCV/RCV/SCV accession.version",
+        "assembly",
+        "release date"
+      ],
+      "reuse_basis": "NCBI places no molecular-data restrictions of its own but cannot transfer submitter rights.",
+      "documentation": [
+        "https://www.ncbi.nlm.nih.gov/clinvar/docs/access/",
+        "https://www.ncbi.nlm.nih.gov/clinvar/docs/review_status/",
+        "https://www.ncbi.nlm.nih.gov/home/about/policies/"
+      ],
+      "status": "researched_not_staged",
+      "sync_notes": "Current public releases weekly; retain conflicts, submitter, assertion dates and review status."
+    },
+    {
+      "id": "ncbi_gene",
+      "name": "NCBI Gene / Datasets",
+      "priority": 3,
+      "purpose": [
+        "entity normalization",
+        "gene-to-protein linking"
+      ],
+      "access": [
+        "https://www.ncbi.nlm.nih.gov/datasets/"
+      ],
+      "identity": [
+        "Gene ID",
+        "taxon",
+        "accession versions"
+      ],
+      "reuse_basis": "NCBI molecular-data policy; retain source notices.",
+      "documentation": [
+        "https://www.ncbi.nlm.nih.gov/datasets/docs/v2/command-line-tools/using-dataformat/gene-data-reports/",
+        "https://www.ncbi.nlm.nih.gov/home/about/policies/"
+      ],
+      "status": "researched_not_staged"
+    },
+    {
+      "id": "uniprot",
+      "name": "UniProt",
+      "priority": 3,
+      "purpose": [
+        "protein function evidence",
+        "biotech entity linking"
+      ],
+      "access": [
+        "https://rest.uniprot.org/"
+      ],
+      "identity": [
+        "accession",
+        "organism",
+        "entry/sequence version",
+        "release"
+      ],
+      "reuse_basis": "CC BY 4.0 copyrightable database components; possible other rights remain.",
+      "documentation": [
+        "https://www.uniprot.org/help/license/",
+        "https://www.uniprot.org/help/api"
+      ],
+      "status": "researched_not_staged"
+    },
+    {
+      "id": "geo",
+      "name": "NCBI GEO",
+      "priority": 3,
+      "purpose": [
+        "question-driven experiment provenance"
+      ],
+      "access": [
+        "https://www.ncbi.nlm.nih.gov/geo/",
+        "https://ftp.ncbi.nlm.nih.gov/geo/"
+      ],
+      "identity": [
+        "GSE",
+        "GSM",
+        "GPL",
+        "study/cohort"
+      ],
+      "reuse_basis": "NCBI places no restrictions of its own; submitter rights may remain. Raw data requires a separate analytical workflow.",
+      "documentation": [
+        "https://www.ncbi.nlm.nih.gov/geo/info/geo_paccess.html",
+        "https://www.ncbi.nlm.nih.gov/geo/info/disclaimer.html"
+      ],
+      "status": "researched_not_staged",
+      "split_unit": "study/cohort and donor when known"
+    }
+  ]
+}

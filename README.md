@@ -20,6 +20,12 @@ pause/resume controls and repeatable imports with success/failure receipts.
 CSV and JSON datasets retain their original bytes. Registering or enabling a
 source does not publish its contents.
 
+The [standard medical research source comparison](docs/reports/2026-09-13-standard-medical-research-sources.md)
+prioritizes publication feeds and source-grounded evidence review. A
+[three-paper import package](docs/data-sources/README.md) is prepared and checked
+against the existing backend; automatic external feed connectors remain follow-up
+work.
+
 Superyak brings persistent agents, research evidence, and scoped interchange
 into one repository. Engram provides individual and shared memory; Atlas manages
 research questions, sources, proposed findings, and readable views; Lighthouse

@@ -1,0 +1,54 @@
+{
+  "schema": "superyak.research-import-profile.v1",
+  "kind": "prepared_import_recipe_not_runtime_configuration",
+  "name": "mg-public-literature-pilot",
+  "purpose": "source-grounded research and evidence-review preparation",
+  "source_order": [
+    "pubmed",
+    "europe_pmc",
+    "pmc"
+  ],
+  "data_source_create": {
+    "name": "MG public literature pilot",
+    "kind": "selected-records",
+    "description": "Three attributed CC-BY-4.0 article extracts; research evidence, not a clinical validation set."
+  },
+  "import_request_id": "mg-ccby-pilot-20260913",
+  "local_artifact_directory": ".worktrees/research-sources/.engram/research-import-20260913",
+  "document": "peer-import.json",
+  "document_sha256": "561c3a479a54a86cb029b4d0274513ca898d8eef167564dac6af8977b0814e7c",
+  "record_count": 3,
+  "evidence_blocks": 129,
+  "sample_ids": [
+    "PMC12682587",
+    "PMC12620256",
+    "PMC12817423"
+  ],
+  "input_scope": "abstract/body prose plus separately identified figure/table captions; scientific superscript/subscript notation preserved; table cells and formula markup stay in raw XML",
+  "namespace": "adna:research-import:pmc/PMCID denotes local transformation, not upstream signed peer identity",
+  "latest_version_discovery_performed": false,
+  "training_ready": false,
+  "annotation_queue": "annotation-queue.jsonl",
+  "required_before_training": [
+    "review evidence spans and authored answers",
+    "freeze study/trial-family-disjoint splits",
+    "record local-training source grants separately from public sharing"
+  ],
+  "verified_checks": [
+    "schema/hash validation",
+    "authenticated source registration",
+    "atomic import of three records",
+    "exact provenance/content round trip",
+    "idempotent receipt replay",
+    "pause blocks new imports",
+    "pause permits completed receipt replay",
+    "other account denied"
+  ],
+  "operational_state": {
+    "live_demo_imported": false,
+    "background_fetch_started": false,
+    "training_started": false,
+    "stampede_access": "details_expected_later"
+  },
+  "extraction_checks_passed": 4
+}

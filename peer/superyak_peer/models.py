@@ -6,10 +6,12 @@ import threading
 import time
 from .common import Problem, text, encode
 
-# Google publisher preflight: docs/model-policy.md, 2026-09-12. This exact local
-# artifact was selected by the operator; arbitrary endpoint names are not trust.
-APPROVED = {'model': 'gemma4:31b', 'publisher': 'Google',
-            'digest': '6316f0629137b426c9d9b853ffc4c8209589f30ee39aebede6285096c0ff47e7',
+# Explicitly selected Google-base/HauhauCS derivative, docs/model-policy.md.
+# Digest binds the measured Ollama import, not the original GGUF file hash.
+APPROVED = {'model': 'superyak-clinical-gemma4-balanced:q4_k_m',
+            'publisher': 'HauhauCS', 'base_publisher': 'Google',
+            'eligibility_basis': 'explicit_user_selection',
+            'digest': '964dccf2e808c93bda5236b30231b1e72cadd9f12336fb505471f49add9810c4',
             'endpoint': 'http://127.0.0.1:11434'}
 MAX_RESPONSE = 128 * 1024
 GENERATION_TIMEOUT_SECONDS = 120

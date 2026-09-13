@@ -3,7 +3,10 @@ import json
 import pytest
 from superyak_peer.common import Problem
 
-APPROVED = {'model': 'gemma4:31b', 'publisher': 'Google', 'digest': '6316f0629137b426c9d9b853ffc4c8209589f30ee39aebede6285096c0ff47e7', 'endpoint': 'http://127.0.0.1:11434'}
+APPROVED = {'model': 'superyak-clinical-gemma4-balanced:q4_k_m', 'publisher': 'HauhauCS',
+            'base_publisher': 'Google', 'eligibility_basis': 'explicit_user_selection',
+            'digest': '964dccf2e808c93bda5236b30231b1e72cadd9f12336fb505471f49add9810c4',
+            'endpoint': 'http://127.0.0.1:11434'}
 
 class NativeEndpoint:
     def __init__(self, digest=APPROVED['digest'], reply=None, failure=None):
@@ -11,10 +14,10 @@ class NativeEndpoint:
     def __call__(self, method, path, payload=None):
         self.calls.append((method, path, payload))
         if method == 'GET':
-            return {'models': [{'name': 'gemma4:31b', 'digest': self.digest}]}
+            return {'models': [{'name': APPROVED['model'], 'digest': self.digest}]}
         if self.failure:
             raise self.failure
-        return self.reply or {'model': 'gemma4:31b', 'done': True, 'response': 'A fictional private suggestion.'}
+        return self.reply or {'model': APPROVED['model'], 'done': True, 'response': 'A fictional private suggestion.'}
 
 def adapter(endpoint=None, config=None):
     from superyak_peer.models import LocalGemma
@@ -29,7 +32,7 @@ def test_disabled_default_manual_work(env):
     assert patient.post('/api/assistant', json={'text': 'hello'}).status_code == 409
     assert patient.post('/api/layers', json={'body': 'manual draft'}).status_code == 201
 
-@pytest.mark.parametrize('change', [{'model': 'qwen:latest'}, {'model': 'unknown'}, {'publisher': 'Unknown'}, {'digest': '0' * 64}, {'endpoint': 'https://third-party.example'}, {'fallback': 'gemma4:31b'}])
+@pytest.mark.parametrize('change', [{'model': 'gemma4:31b'}, {'model': 'qwen:latest'}, {'model': 'unknown'}, {'publisher': 'Unknown'}, {'digest': '0' * 64}, {'endpoint': 'https://third-party.example'}, {'fallback': 'gemma4:31b'}])
 def test_unapproved_config_zero_dispatch(change):
     model, endpoint = adapter(config={**APPROVED, **change})
     with pytest.raises(Problem):
@@ -42,7 +45,7 @@ def test_mismatched_artifact_no_generation():
         model.suggest('fictional request', None)
     assert [call[0] for call in endpoint.calls] == ['GET']
 
-@pytest.mark.parametrize('endpoint', [NativeEndpoint(failure=TimeoutError()), NativeEndpoint(reply={'model': 'other', 'done': True, 'response': 'wrong'}), NativeEndpoint(reply={'model': 'gemma4:31b', 'done': False, 'response': 'partial'}), NativeEndpoint(reply={'model': 'gemma4:31b', 'done': True, 'response': 'x' * 17000})])
+@pytest.mark.parametrize('endpoint', [NativeEndpoint(failure=TimeoutError()), NativeEndpoint(reply={'model': 'other', 'done': True, 'response': 'wrong'}), NativeEndpoint(reply={'model': APPROVED['model'], 'done': False, 'response': 'partial'}), NativeEndpoint(reply={'model': APPROVED['model'], 'done': True, 'response': 'x' * 17000})])
 def test_unknown_outcome_disables_without_retry(endpoint):
     model, endpoint = adapter(endpoint)
     with pytest.raises(Problem):
@@ -86,7 +89,7 @@ def test_input_bounds_before_dispatch():
 
 
 def test_truncated_completion_is_not_claimed_as_success():
-    model, endpoint = adapter(NativeEndpoint(reply={'model': 'gemma4:31b', 'done': True, 'done_reason': 'length', 'response': 'cut off'}))
+    model, endpoint = adapter(NativeEndpoint(reply={'model': APPROVED['model'], 'done': True, 'done_reason': 'length', 'response': 'cut off'}))
     with pytest.raises(Problem):
         model.suggest('fictional request', None)
     assert sum(call[0] == 'POST' for call in endpoint.calls) == 1

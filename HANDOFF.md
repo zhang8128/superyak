@@ -1,5 +1,34 @@
 # Resume here — medical lighthouse / aDNA
 
+**Local demo model and research sources, September 13 (current):** Kairos chose
+Stanley's HauhauCS Gemma4 Uncensored Balanced variant for the live demo, external
+research feeds/publications as the first source lane, and source-grounded research
+and evidence review as the first adapter objective. Stampede3 access details are
+expected later; do not repeat the login/account question or invent those values.
+
+The password-free demo remains **http://127.0.0.1:7435**, now PID `98414` at
+verification, serving the reviewed wheel in
+`.worktrees/research-sources/.engram/demo-stanley-20260913/`. `runtime.json` there
+records the exact installed interpreter, command, log, model config and state
+hashes. Original state remains `.worktrees/peer-home/.engram/home-demo/`.
+The model is `superyak-clinical-gemma4-balanced:q4_k_m`, pinned to Ollama manifest
+`964dccf2e808c93bda5236b30231b1e72cadd9f12336fb505471f49add9810c4`.
+A fresh Chromium entry and one fictional evidence-review request passed in
+5.21 seconds; all 25 content tables and credentials were preserved. Retain the
+runtime, prior runtime evidence, and user content. Atlas remains stopped.
+
+Read the [standard-source research report](docs/reports/2026-09-13-standard-medical-research-sources.md)
+and [import guide](docs/data-sources/README.md). The 16-source catalog is planning
+metadata, not an automatic-fetch configuration. Three public CC-BY-4.0 articles
+are staged in `.worktrees/research-sources/.engram/research-import-20260913/`, with
+raw canonical PMC JATS, upstream MD5/local SHA-256 checks, license evidence,
+129 extracted paragraph blocks, ready selected-source import JSON and an
+unannotated review queue. Eight backend import/replay/privacy checks passed in
+disposable state. No live-account import, automatic feed, model calls on those
+papers, gold-label creation or training occurred. Full supervision still needs
+reviewed answers and source-use grants. PMC's August 2026 dataset migration is
+material: use current AWS article objects, not the retired OA package service.
+
 **Clinical/biotech tuning implementation, September 13 (current):** User approved
 implementation and explicitly selected the HauhauCS uncensored Balanced variant.
 `tuning/` supports identifiable clinical and confidential biotech data with

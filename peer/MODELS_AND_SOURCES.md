@@ -9,9 +9,11 @@ To opt in, create an operator-owned JSON file with exactly these values:
 
 ```json
 {
-  "model": "gemma4:31b",
-  "publisher": "Google",
-  "digest": "6316f0629137b426c9d9b853ffc4c8209589f30ee39aebede6285096c0ff47e7",
+  "model": "superyak-clinical-gemma4-balanced:q4_k_m",
+  "publisher": "HauhauCS",
+  "base_publisher": "Google",
+  "eligibility_basis": "explicit_user_selection",
+  "digest": "964dccf2e808c93bda5236b30231b1e72cadd9f12336fb505471f49add9810c4",
   "endpoint": "http://127.0.0.1:11434"
 }
 ```
@@ -27,8 +29,15 @@ the CLI before serving. The app factory accepts the same optional `model_config`
 dictionary; an unapproved factory configuration leaves the assistant disabled.
 This command does not install, pull, start, or restart a model service.
 
-Eligibility follows the operator-approved Google publisher and this exact artifact,
-under this application’s American-model requirement. The native Ollama
+This is the explicitly selected HauhauCS Gemma4-26B-A4B Uncensored Balanced
+Q4_K_M derivative of Google's Gemma 4. The base publisher and community publisher
+are recorded separately; the maintainer's nationality is not established.
+The [selected model repository](https://huggingface.co/HauhauCS/Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced)
+is pinned at revision `96c11c22b1128c3c8c655b21557b409f307c557f`; the Q4_K_M source
+file has SHA-256 `f8b1da6dc139e6928159e536bc85602adbc1412018871732a878dedcad7ccafd`.
+This configuration pins the resulting Ollama manifest digest, which differs
+from the original file hash. Eligibility follows explicit operator selection.
+The native Ollama
 `/api/tags` entry must match the exact model name and digest before generation.
 Status may perform that read-only check; every generation repeats it. Local service
 and tag integrity are trust assumptions: this is not a cryptographic attestation
