@@ -1,0 +1,323 @@
+"""Durable paired exchange; all outbound bodies derive from final authorized state."""
+import base64
+import hashlib
+import json
+import re
+import threading
+from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse
+from .common import Problem, require, uid, encode, text
+
+class Obsolete(Exception):
+    pass
+
+class Federation:
+    def __init__(self, store, *, endpoint, identity=None):
+        self.store, self.endpoint = store, endpoint
+        self.identity = identity or PeerIdentity.load_or_create(store.data_dir)
+        self._sync_lock = threading.Lock()
+
+    def card(self, actor):
+        with self.store.transaction() as db:
+            user = require(db.execute('SELECT id,name FROM users WHERE id=?', (actor,)).fetchone())
+            return self.identity.card(self.endpoint, dict(user))
+
+    def pair(self, actor, card):
+        card = validate_card(card)
+        if card['peer_id'] == self.identity.peer_id:
+            raise Problem(400, 'Cannot pair this peer with itself')
+        with self.store.transaction() as db:
+            self.store._admin(db, actor)
+            previous = db.execute('SELECT card FROM peers WHERE peer_id=?', (card['peer_id'],)).fetchone()
+            if previous:
+                prior = json.loads(previous['card'])
+                if any(prior[k] != card[k] for k in ('signing_key','certificate','fingerprint','endpoint')):
+                    raise Problem(409, 'Known peer trust material cannot be replaced')
+            db.execute('INSERT INTO peers VALUES(?,?,1) ON CONFLICT(peer_id) DO UPDATE SET paired=1', (card['peer_id'], encode(card)))
+            db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?) ON CONFLICT(peer_id,user_id) DO UPDATE SET name=excluded.name', ('remote_'+uid(), card['peer_id'],card['participant']['id'],card['participant']['name']))
+            return dict(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (card['peer_id'],card['participant']['id'])).fetchone())
+
+    def unpair(self, actor, contact_id):
+        with self.store.transaction() as db:
+            self.store._admin(db, actor)
+            row = require(db.execute('SELECT peer_id FROM remote_contacts WHERE id=?', (contact_id,)).fetchone())
+            db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (row['peer_id'],))
+            db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN (SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (row['peer_id'],))
+            db.execute('UPDATE inbox SET payload=NULL WHERE origin=?', (row['peer_id'],))
+        return {'ok':True}
+
+    def connections(self, actor):
+        with self.store.transaction() as db:
+            self.store._admin(db, actor)
+            return [{**dict(r), 'card':{**json.loads(r['card']), 'participant':{'id':r['user_id'],'name':r['name']}}} for r in db.execute('SELECT remote_contacts.*,peers.card,peers.paired FROM remote_contacts JOIN peers USING(peer_id)')]
+
+    def collect(self):
+        with self.store.transaction() as db:
+            seq = db.execute('SELECT seq FROM federation_cursor WHERE id=1').fetchone()[0]
+            events = db.execute('SELECT * FROM events WHERE id>? ORDER BY id LIMIT 100', (seq,)).fetchall()
+            for event in events:
+                kind, rid = event['kind'], event['resource_id']
+                contacts = set()
+                if kind.startswith('layer.'):
+                    layer = db.execute('SELECT * FROM layers WHERE id=?', (rid,)).fetchone()
+                    if layer and layer['active_revision']:
+                        snapshot = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?', (rid,layer['active_revision'])).fetchone()[0])
+                        contacts.update(u for u in snapshot['audience_users'] if u.startswith('remote_'))
+                    contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action LIKE 'layer.%'", (rid,)))
+                    action = 'layer.withdraw' if kind == 'layer.withdrawn' else 'layer.release'
+                elif kind in ('chat.message', 'chat.membership'):
+                    contacts.update(r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (rid,)))
+                    contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action LIKE 'room.%'", (rid,)))
+                    action = 'room.message' if kind == 'chat.message' else 'room.roster'
+                else:
+                    continue
+                for contact in contacts:
+                    db.execute('INSERT OR IGNORE INTO outbox(id,event_seq,contact_id,resource_id,revision,action,metadata,status) VALUES(?,?,?,?,?,?,?,?)', (uid(),event['id'],contact,rid,event['resource_version'],action,event['payload'],'pending'))
+            if events:
+                db.execute('UPDATE federation_cursor SET seq=? WHERE id=1', (events[-1]['id'],))
+
+    def _room_snapshot(self, db, room):
+        origin = self.identity.peer_id
+        members = [{'peer':origin, 'id':r[0]} for r in db.execute('SELECT user_id FROM room_members WHERE room_id=?', (room['id'],))]
+        members += [{'peer':r['peer_id'], 'id':r['user_id']} for r in db.execute('SELECT remote_contacts.* FROM remote_contacts JOIN remote_room_members ON contact_id=remote_contacts.id WHERE room_id=?', (room['id'],))]
+        activity = db.execute('SELECT created FROM room_activity WHERE room_id=?', (room['id'],)).fetchone()
+        return {'title':room['title'], 'owner_id':origin+':'+room['owner_id'], 'member_ids':[m['peer']+':'+m['id'] for m in members], 'members':members, 'linked_room_id':origin+':'+room['linked_room_id'] if room['linked_room_id'] else None, 'created':activity[0] if activity else 0, 'last_activity':self.store.clock()}
+
+    def _prepare(self, key):
+        with self.store.transaction() as db:
+            row = require(db.execute('SELECT * FROM outbox WHERE id=?', (key,)).fetchone())
+            contact = db.execute('SELECT remote_contacts.*,peers.paired FROM remote_contacts JOIN peers USING(peer_id) WHERE id=?', (row['contact_id'],)).fetchone()
+            if not contact or not contact['paired']:
+                raise Obsolete()
+            action, revision, rid = row['action'], row['revision'], row['resource_id']
+            meta = json.loads(row['metadata'])
+            if action.startswith('layer.'):
+                layer = require(db.execute('SELECT * FROM layers WHERE id=?', (rid,)).fetchone())
+                if layer['resource_version'] != revision:
+                    raise Obsolete()
+                actor = layer['owner_id']
+                payload = {}
+                if layer['active_revision']:
+                    snap = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=? AND revision=?', (rid,revision)).fetchone()[0])
+                    if contact['id'] in snap['audience_users']:
+                        action = 'layer.release'
+                        payload = {k:snap[k] for k in ('title','body','attachment_ids')}
+                        payload['files'] = [{**{k:f[k] for k in ('id','name','media_type','digest','size')}, 'content_base64':base64.b64encode(f['content']).decode()} for fid in snap['attachment_ids'] for f in [require(db.execute('SELECT * FROM files WHERE id=? AND owner_id=?', (fid,actor)).fetchone())]]
+                    else:
+                        action = 'layer.withdraw'
+                else:
+                    action = 'layer.withdraw'
+            elif action == 'room.reply':
+                inbox, room = self.store._remote_inbox(db, meta['actor'], contact['peer_id']+':'+rid, 'room')
+                if inbox['revision'] != revision:
+                    raise Obsolete()
+                actor = meta['actor']
+                payload = {k:meta[k] for k in ('body','client_message_id')}
+            else:
+                room = require(db.execute('SELECT * FROM rooms WHERE id=?', (rid,)).fetchone())
+                if room['epoch'] != revision:
+                    raise Obsolete()
+                actor = room['owner_id']
+                member = db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?', (rid,contact['id'])).fetchone()
+                if not member:
+                    action, payload = 'room.withdraw', {}
+                else:
+                    payload = self._room_snapshot(db, room)
+                    if action == 'room.message':
+                        message = db.execute('SELECT * FROM messages WHERE id=?', (meta.get('message_id'),)).fetchone()
+                        remote = False
+                        if message is None:
+                            message = db.execute('SELECT * FROM peer_messages WHERE id=?', (meta.get('message_id'),)).fetchone()
+                            remote = True
+                        if not message or message['epoch'] != revision:
+                            raise Obsolete()
+                        payload['message'] = {**dict(message), 'author_id':message['author_id'] if remote else self.identity.peer_id+':'+message['author_id']}
+            if row['envelope']:
+                envelope = parse(row['envelope'])
+                # A retry preserves the exact signed event. Current checks above
+                # must still pass and action must still be authorized.
+                if envelope['action'] != action:
+                    raise Obsolete()
+            else:
+                envelope = self.identity.envelope(destination=contact['peer_id'],actor=actor,resource_id=rid,revision=revision,action=action,recipients=[contact['user_id']],payload=payload,event_id=key)
+                if len(canonical(envelope)) > 6 * 1024 * 1024:
+                    raise Problem(413, 'Remote release is too large')
+                db.execute('UPDATE outbox SET envelope=? WHERE id=?', (canonical(envelope).decode(),key))
+            return canonical(envelope)
+
+    def sync_once(self, *, send=None, limit=20):
+        from .transport import send_pinned
+        result = {'delivered':0, 'withdrawn':0, 'failed':0, 'pending':0}
+        if not self._sync_lock.acquire(blocking=False):
+            return {**result, 'busy':True}
+        try:
+            self.collect()
+            with self.store.transaction() as db:
+                work = [dict(r) for r in db.execute("SELECT outbox.*,peers.card FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id JOIN peers USING(peer_id) WHERE status IN ('pending','failed') AND attempts<8 AND next_attempt<=? ORDER BY event_seq,id LIMIT ?", (self.store.clock(),min(100,max(1,limit))))]
+            for row in work:
+                try:
+                    card = json.loads(row['card'])
+                    if send:
+                        send(card, lambda:self._prepare(row['id']))
+                    else:
+                        send_pinned(card, lambda:self._prepare(row['id']), gate=self.store.dispatch_gate)
+                    status = 'delivered'
+                except Obsolete:
+                    status = 'withdrawn'
+                except (OSError, ValueError, Problem):
+                    status = 'failed'
+                with self.store.transaction() as db:
+                    db.execute('UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=?', (status,self.store.clock()+min(300,2**(row['attempts']+1)),row['id']))
+                result[status] += 1
+            with self.store.transaction() as db:
+                result['pending'] = db.execute("SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed')").fetchone()[0]
+            return result
+        finally:
+            self._sync_lock.release()
+
+    def status(self, actor):
+        with self.store.transaction() as db:
+            # Filter delivery metadata to the local author, never whole-peer admin.
+            rows = db.execute('SELECT outbox.* FROM outbox').fetchall()
+            result = []
+            for row in rows:
+                owner = db.execute('SELECT owner_id FROM layers WHERE id=? UNION SELECT owner_id FROM rooms WHERE id=?', (row['resource_id'],row['resource_id'])).fetchone()
+                if (owner and owner[0] == actor) or json.loads(row['metadata']).get('actor') == actor:
+                    result.append({k:row[k] for k in ('id','resource_id','revision','contact_id','action','status','attempts','next_attempt')})
+            return result
+
+    def retry(self, actor, key):
+        if not any(r['id'] == key for r in self.status(actor)):
+            raise Problem(404, 'Not found')
+        with self.store.transaction() as db:
+            db.execute("UPDATE outbox SET status='pending',attempts=0,next_attempt=0 WHERE id=? AND status='failed'", (key,))
+        return {'ok':True}
+
+    def receive(self, raw):
+        value = parse(raw)
+        if not isinstance(value.get('origin'),str) or not re.fullmatch(r'[0-9a-f]{64}',value['origin']):
+            raise Problem(403, 'Unknown or unpaired peer')
+        with self.store.transaction() as db:
+            peer = db.execute('SELECT card FROM peers WHERE peer_id=? AND paired=1', (value.get('origin'),)).fetchone()
+            if not peer:
+                raise Problem(403, 'Unknown or unpaired peer')
+            value = verify_envelope(value, json.loads(peer['card']), self.identity.peer_id)
+            actor, origin = value['actor']['id'], value['origin']
+            if not db.execute('SELECT 1 FROM remote_contacts WHERE peer_id=? AND user_id=?', (origin,actor)).fetchone():
+                raise Problem(403, 'Unknown remote participant')
+            for recipient in value['recipients']:
+                if not db.execute('SELECT 1 FROM users WHERE id=?', (recipient,)).fetchone():
+                    raise Problem(403, 'Unknown recipient')
+            digest = hashlib.sha256(canonical(value)).hexdigest()
+            old = db.execute('SELECT digest FROM receipts WHERE origin=? AND event_id=?', (origin,value['event_id'])).fetchone()
+            if old:
+                if old[0] != digest:
+                    raise Problem(409, 'Event ID already used')
+                return {'ok':True, 'duplicate':True}
+            try:
+                self._apply(db, value)
+            except (TypeError, KeyError, AttributeError, ValueError):
+                raise Problem(400, 'Invalid event payload') from None
+            db.execute('INSERT INTO receipts VALUES(?,?,?,?)', (origin,value['event_id'],digest,self.store.clock()))
+            return {'ok':True, 'duplicate':False}
+
+    def _apply(self, db, e):
+        action, p, origin, rid, revision = e['action'], e['payload'], e['origin'], e['resource_id'], e['revision']
+        if action == 'room.reply':
+            return self._reply(db, e)
+        if action not in ('layer.release','layer.withdraw','room.roster','room.message','room.withdraw'):
+            raise Problem(400, 'Unknown peer action')
+        kind = 'layer' if action.startswith('layer.') else 'room'
+        if action == 'layer.release':
+            self._validate_layer(p)
+        if action in ('room.roster','room.message'):
+            text(p.get('title'), 'room title')
+            members = p.get('members')
+            if not isinstance(members, list) or len(members)>100 or any(not isinstance(m,dict) or set(m)!= {'peer','id'} for m in members):
+                raise Problem(400, 'Invalid roster')
+            for member in members:
+                if not isinstance(member['peer'],str) or not re.fullmatch(r'[0-9a-f]{64}',member['peer']):
+                    raise Problem(400, 'Invalid roster peer')
+                if not isinstance(member['id'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',member['id']):
+                    raise Problem(400, 'Invalid roster participant')
+            expected = [m['peer']+':'+m['id'] for m in members]
+            if len(set(expected)) != len(expected):
+                raise Problem(400, 'Duplicate roster participant')
+            for field in ('created','last_activity'):
+                if type(p.get(field)) not in (int,float) or not 0 <= p[field] <= 2**53:
+                    raise Problem(400, 'Invalid room timestamp')
+            if p.get('member_ids') != expected or p.get('owner_id') != origin+':'+e['actor']['id'] or p['owner_id'] not in expected:
+                raise Problem(403, 'Invalid room authority')
+            if any({'peer':self.identity.peer_id,'id':r} not in members for r in e['recipients']):
+                raise Problem(403, 'Recipient absent from roster')
+            if action == 'room.message':
+                m = p.get('message', {})
+                text(m.get('id'), 'message ID', 100)
+                text(m.get('body'), 'message', 20000)
+                text(m.get('client_message_id'), 'client message ID', 100)
+                if type(m.get('created')) not in (int,float) or not 0 <= m['created'] <= 2**53:
+                    raise Problem(400, 'Invalid message timestamp')
+                if m.get('epoch') != revision or m.get('author_id') not in expected or m.get('room_id') != rid:
+                    raise Problem(403, 'Invalid message author or epoch')
+        for recipient in e['recipients']:
+            old = db.execute('SELECT * FROM inbox WHERE origin=? AND resource_id=? AND kind=? AND recipient=?', (origin,rid,kind,recipient)).fetchone()
+            if old and old['actor'] != e['actor']['id']:
+                raise Problem(403, 'Resource owner cannot change')
+            if old and (old['revision'] > revision or (old['revision'] == revision and old['payload'] is None)):
+                continue
+            if kind == 'room' and old and old['payload'] and not action.endswith('withdraw'):
+                prior_members = set(json.loads(old['payload'])['member_ids'])
+                new_members = set(p['member_ids'])
+                if not new_members <= prior_members or (revision == old['revision'] and new_members != prior_members):
+                    raise Problem(409, 'New participants require a new linked room')
+            payload = None if action.endswith('withdraw') else dict(p)
+            if kind == 'layer' and old and old['revision'] == revision and old['payload'] is not None and encode(payload) != old['payload']:
+                raise Problem(409, 'Revision already used')
+            if kind == 'room' and payload is not None:
+                history = json.loads(old['payload']).get('messages',[]) if old and old['payload'] else []
+                message = payload.pop('message', None)
+                if message:
+                    found = next((m for m in history if m['id']==message['id']),None)
+                    if found and found != message:
+                        raise Problem(409, 'Message ID already used')
+                    if not found:
+                        history.append(message)
+                payload['messages'] = history
+            db.execute('INSERT INTO inbox VALUES(?,?,?,?,?,?,?) ON CONFLICT(origin,resource_id,kind,recipient) DO UPDATE SET revision=excluded.revision,payload=excluded.payload', (origin,rid,kind,recipient,revision,e['actor']['id'],encode(payload) if payload is not None else None))
+
+    def _validate_layer(self, p):
+        if set(p) - {'title','body','attachment_ids','files'}:
+            raise Problem(400, 'Unexpected release metadata')
+        text(p.get('title'),'title')
+        text(p.get('body'),'body',100000,empty=True)
+        files = p.get('files',[])
+        if not isinstance(files,list) or len(files)>100 or p.get('attachment_ids') != [f.get('id') for f in files]:
+            raise Problem(400, 'Invalid attachments')
+        total = 0
+        for f in files:
+            from .files import validate_file
+            # Reuse the owned-upload validator without inserting remote files into
+            # the local ownership table.
+            row = validate_file(f.get('name'),f.get('media_type'),f.get('content_base64'))
+            total += row['size']
+            if row['size'] != f.get('size') or row['digest'] != f.get('digest') or total>4*1024*1024:
+                raise Problem(400, 'Invalid attachment digest or size')
+
+    def _reply(self, db, e):
+        rid, actor, origin, p = e['resource_id'],e['actor']['id'],e['origin'],e['payload']
+        room = require(db.execute('SELECT * FROM rooms WHERE id=?', (rid,)).fetchone())
+        if e['recipients'] != [room['owner_id']] or room['epoch'] != e['revision']:
+            raise Problem(403, 'Room recipient or epoch changed')
+        contact = db.execute('SELECT id FROM remote_contacts WHERE peer_id=? AND user_id=?', (origin,actor)).fetchone()
+        if not contact or not db.execute('SELECT 1 FROM remote_room_members WHERE room_id=? AND contact_id=?', (rid,contact[0])).fetchone():
+            raise Problem(403, 'Room membership required')
+        text(p.get('body'),'message',20000)
+        text(p.get('client_message_id'),'client message ID',100)
+        author = origin+':'+actor
+        old = db.execute('SELECT * FROM peer_messages WHERE room_id=? AND author_id=? AND client_message_id=?', (rid,author,p['client_message_id'])).fetchone()
+        if old:
+            if old['body'] != p['body']:
+                raise Problem(409, 'Message ID already used')
+            return
+        key = uid()
+        db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)', (key,rid,author,p['client_message_id'],p['body'],room['epoch'],self.store.clock()))
+        self.store.emit(db,'chat.message',rid,room['epoch'],{'message_id':key,'author_id':author})

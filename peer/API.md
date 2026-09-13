@@ -297,3 +297,112 @@ revocation, and persist a retry/outbox record. This task provides current-state
 checks and ordered events, but no network, outbox, retry or delivery status UI.
 A changed room epoch invalidates queued messages from the previous epoch even for
 remaining members; never relabel an old queued send to bypass this check.
+
+## Authenticated peers (Task 2)
+
+The factory now also accepts `federation_endpoint=None, sync_enabled=False`.
+A configured endpoint must be an HTTPS origin explicitly present in
+`allowed_origins`; configuration never expands origins implicitly. The app exposes
+`app.state.federation` and `app.state.sync_enabled`. With no endpoint, local work
+and connection listing still run; browser card export returns 409 until configured.
+Federation ingress requires HTTPS and independent paired signatures.
+
+Provision an account, export its public card, then serve its generated certificate:
+
+```sh
+uv run python -m superyak_peer card --data-dir /private/path/home --username owner --endpoint https://localhost:7435 > owner-card.json
+uv run python -m superyak_peer serve --data-dir /private/path/home --host 127.0.0.1 --port 7435 --peer-tls --origin https://localhost:7435 --federation-endpoint https://localhost:7435 --sync
+```
+
+For a remote hostname, use it in the **first** card export (or first `--peer-tls`
+serve) so its SAN is generated. Cards contain only public material. Browser setup
+must trust the generated certificate explicitly; peer transport uses imported exact
+pins and never disables certificate verification. `--federation-endpoint` serving
+requires `--peer-tls` so the certificate matches the exported identity. Do not mix
+`--peer-tls` with explicit TLS files. `--sync` enables the optional lifespan worker.
+All origins used by browser/peer traffic must be repeated with `--origin`.
+
+| Method/path | Request | Response/authority |
+|---|---|---|
+| GET `/api/connections` | — | Array of `{id,peer_id,user_id,name,card,paired}`; local owner only |
+| GET `/api/connections/card` | — | Current signed-in participant's public card |
+| POST `/api/connections/preview` | `{card}` | Validated public card; local owner only; no pairing or network |
+| POST `/api/connections/pair` | `{card,fingerprint}` | Remote contact `{id,peer_id,user_id,name}`, 201; local owner; fingerprint must equal reviewed card |
+| DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content |
+| GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only |
+| POST `/api/sync` | none | Runs one bounded pass, returns same author-filtered status |
+| POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; delivery author only; resets failed attempt budget, preserves event ID |
+| POST `/federation/events` | Signed envelope | HTTPS, independent pairing/signature authentication; see PROTOCOL.md |
+
+Delivery metadata is `{id,resource_id,revision,contact_id,action,status,attempts,
+next_attempt}`. Status is `pending`, `delivered`, `withdrawn` (obsolete/canceled)
+or `failed`. `next_attempt` is Unix seconds; after eight attempts explicit retry is
+required. Account administration never grants visibility of another person's
+layer/chat delivery metadata. Sync may send all already-authorized pending work,
+but its browser result is filtered. Wire attempts have a three-second deadline;
+a default pass attempts at most 20 records. Background interval is five seconds.
+
+Contacts now include explicit paired remote contacts as
+`{id,name,peer_id,user_id,remote:true}`. Local contacts retain `{id,name}`. A remote
+contact ID is `remote_<random opaque ID>`; it is never inserted into `users`, never
+usable for local login, and never treated as an account because of a matching name
+or ID. Remote contacts may be selected in `audience_users` and room `member_ids`.
+Spaces continue accepting only local account IDs. Pairing alone shares nothing.
+For layers naming any remote contact, selected attachment bytes total at most
+4 MiB; creating/saving/activating an oversized selection returns 400 before changing
+the release. The same file type, digest and download restrictions apply remotely.
+
+Existing `/api/shared/layers`, `/api/shared/layers/{id}`, `/api/chats`,
+`/api/chats/{id}`, room send routes, attachment downloads, and Home include
+received resources through the same Store APIs. A received resource has stable
+`id="<origin peer ID>:<origin-local resource ID>"` and an explicit `origin`.
+Local resource IDs retain their existing spelling. URL-encode IDs/path segments.
+Received layers expose only selected title/body/attachment IDs, qualified
+`owner_id`, revision/resource_version and `access_routes:["person"]`; no private
+audience-management metadata. Remote active files use
+`/api/shared/layers/{qualified_layer_id}/files/{origin_local_file_id}`. There is no
+received-file entry in `/api/files`, no public remote-resource route and no
+received-content ownership/republish capability.
+
+Locally hosted room summaries retain local/remote-contact `member_ids`. Received
+room summaries have qualified `owner_id`, qualified `member_ids`, plus a `members`
+array of `{peer,id}` that can be matched to contact `peer_id,user_id`; no local
+account is inferred from an origin-local ID. Their epoch/linked-room references
+remain origin-controlled. Messages received in remote rooms have qualified
+`author_id`; remote replies in locally hosted rooms also preserve qualified
+`author_id`. Locally authored messages in locally hosted rooms retain the local ID.
+The UI can distinguish self by local ID or by own card's `peer_id:participant.id`.
+Only a local room owner can change its roster. Adding people creates a new linked
+room; remote-origin rooms cannot be managed from a receiving host.
+
+Sending in a received room saves a local outbox reply and returns a Message with
+`state:"pending"`. Subsequent room reads include that author's pending/failed
+replies, even offline, and replace them with the origin-confirmed message on echo
+without duplicate text. The origin assigns its authoritative message ID; identify
+an optimistic reply by author+client_message_id when reconciling. A successful
+reply delivery can precede the origin's echo, so pending local views may briefly
+show `state:"delivered"`. Received rooms disappear on withdrawal/unpair; stale
+revisions cannot restore hosted bodies. No claim is made to erase copied plaintext.
+
+Worker interface:
+
+```python
+from superyak_peer.federation import Federation
+from superyak_peer.identity import PeerIdentity
+
+identity = PeerIdentity.load_or_create(store.data_dir)
+fed = Federation(store, endpoint='https://peer.example:7435', identity=identity)
+fed.card(local_user_id)
+fed.pair(local_owner_id, validated_card)
+fed.unpair(local_owner_id, contact_id)
+fed.collect()                  # bounded metadata-only event → outbox scan
+fed.sync_once()                # {delivered,withdrawn,failed,pending}, optional busy:true
+fed.status(local_user_id)      # author-filtered delivery metadata
+fed.retry(local_user_id, delivery_id)
+```
+
+Store adds focused `PeerStore` helpers for remote layers/files/rooms/replies and
+keeps existing public signatures. All Store transactions participate in the shared
+POSIX/thread dispatch gate. Exact final-dispatch and in-flight limitations, TLS
+verification, signed field contracts, receipt retention and room availability are
+specified in [PROTOCOL.md](PROTOCOL.md).

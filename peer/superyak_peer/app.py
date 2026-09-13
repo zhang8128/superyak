@@ -87,10 +87,19 @@ def actor(request):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
-    app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None)
+    from .peer_routes import federation_lifespan, install
+    from .federation import Federation
+    if federation_endpoint and federation_endpoint not in allowed_origins:
+        raise ValueError('Federation endpoint must be an explicitly allowed HTTPS origin')
+    if federation_endpoint and not federation_endpoint.startswith('https://'):
+        raise ValueError('Federation requires HTTPS')
+    app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
     store = app.state.store = Store(data_dir, clock=clock)
+    app.state.federation = Federation(store, endpoint=federation_endpoint)
+    app.state.sync_enabled = sync_enabled
+    install(app)
     app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
 
     @app.exception_handler(Problem)

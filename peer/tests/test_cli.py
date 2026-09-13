@@ -94,3 +94,15 @@ def test_demo_refuses_incomplete_or_mismatched_identity_without_repair(tmp_path,
     assert 'incomplete' in result.stderr.lower()
     assert credentials_path.read_bytes() == credentials
     assert (database.read_bytes() if database.exists() else None) == before_database
+
+
+def test_card_cli_and_peer_tls_options(tmp_path, capsys):
+    from superyak_peer.__main__ import main
+    from superyak_peer.db import Store
+    from superyak_peer.identity import validate_card
+    import json
+    store=Store(tmp_path/'state')
+    user=store.create_user('owner','Owner','long-password',is_admin=True)
+    main(['card','--data-dir',str(store.data_dir),'--username','owner','--endpoint','https://localhost:7435'])
+    card=json.loads(capsys.readouterr().out)
+    assert validate_card(card)['participant']['id']==user['id']

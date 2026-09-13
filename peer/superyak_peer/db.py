@@ -11,6 +11,8 @@ from .layers import Layers
 from .files import Files
 from .chats import Chats
 from .common import encode, Problem
+from .peer_store import PeerStore, PEER_SCHEMA
+from .dispatch import DispatchGate
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, salt BLOB NOT NULL, password_hash BLOB NOT NULL, is_admin INTEGER NOT NULL, created REAL NOT NULL);
@@ -29,7 +31,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(Auth, Spaces, Layers, Files, Chats):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats):
     def __init__(self, data_dir: Path, *, clock=time.time):
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
@@ -37,11 +39,12 @@ class Store(Auth, Spaces, Layers, Files, Chats):
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.data_dir, 0o700)
         self.db_path = self.data_dir / 'peer.sqlite3'
+        self.dispatch_gate = DispatchGate(self.data_dir / 'dispatch.lock')
         fd = os.open(self.db_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         os.close(fd)
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA)
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):
@@ -54,6 +57,12 @@ class Store(Auth, Spaces, Layers, Files, Chats):
 
     @contextmanager
     def transaction(self):
+        with self.dispatch_gate:
+            with self._transaction() as db:
+                yield db
+
+    @contextmanager
+    def _transaction(self):
         self._check_paths()
         db = sqlite3.connect(self.db_path, timeout=30)
         db.row_factory = sqlite3.Row

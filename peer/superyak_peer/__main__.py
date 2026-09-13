@@ -88,6 +88,10 @@ def main(argv=None):
     init.add_argument('--password-file', type=Path)
     demo = commands.add_parser('demo')
     demo.add_argument('--data-dir', type=Path, default=Path('.engram/home-demo'))
+    card = commands.add_parser('card')
+    card.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    card.add_argument('--username', required=True)
+    card.add_argument('--endpoint', required=True)
     serve = commands.add_parser('serve')
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
@@ -95,9 +99,24 @@ def main(argv=None):
     serve.add_argument('--tls-cert', type=Path)
     serve.add_argument('--tls-key', type=Path)
     serve.add_argument('--origin', action='append', default=[])
+    serve.add_argument('--peer-tls', action='store_true')
+    serve.add_argument('--federation-endpoint')
+    serve.add_argument('--sync', action='store_true')
     args = parser.parse_args(argv)
     try:
-        if args.command == 'demo':
+        if args.command == 'card':
+            from .identity import PeerIdentity
+            from .federation import Federation
+            from urllib.parse import urlsplit
+            store = Store(args.data_dir)
+            with store.transaction() as db:
+                user = db.execute('SELECT id FROM users WHERE username=?', (args.username,)).fetchone()
+                if not user:
+                    raise ValueError('Unknown local account')
+            host = urlsplit(args.endpoint).hostname
+            identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
+            print(json.dumps(Federation(store, endpoint=args.endpoint, identity=identity).card(user[0]), indent=2))
+        elif args.command == 'demo':
             seed_demo(args.data_dir)
             print(f'Demo ready. Private credentials: {args.data_dir / "demo-credentials.json"}')
         elif args.command == 'init':
@@ -113,6 +132,16 @@ def main(argv=None):
                 loopback = ipaddress.ip_address(args.host).is_loopback
             except ValueError:
                 loopback = args.host == 'localhost'
+            if args.peer_tls:
+                from .identity import PeerIdentity
+                from urllib.parse import urlsplit
+                if args.tls_cert or args.tls_key:
+                    raise ValueError('Choose generated peer TLS or explicit TLS files')
+                host = urlsplit(args.federation_endpoint).hostname if args.federation_endpoint else args.host
+                identity = PeerIdentity.load_or_create(args.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
+                args.tls_cert, args.tls_key = identity.cert_path, identity.key_path
+            if args.federation_endpoint and not args.peer_tls:
+                raise ValueError('Federation serving requires --peer-tls to match its exported certificate')
             tls = bool(args.tls_cert and args.tls_key)
             if not loopback and not tls:
                 raise ValueError('Remote binds require TLS certificate and key')
@@ -121,7 +150,7 @@ def main(argv=None):
             from .app import create_app
             import uvicorn
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
-            app = create_app(args.data_dir, allowed_origins=origins, secure_cookies=tls)
+            app = create_app(args.data_dir, allowed_origins=origins, secure_cookies=tls, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=False)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')

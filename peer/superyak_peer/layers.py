@@ -16,11 +16,14 @@ class Layers:
             raise Problem(400, 'Invalid public selection')
         for field in ('audience_users', 'audience_spaces', 'attachment_ids'):
             draft[field] = ids(draft[field])
-        self._known_users(db, draft['audience_users'])
+        self._known_contacts(db, draft['audience_users'])
         for key in draft['audience_spaces']:
             self._space(db, key, actor)
+        attachment_size = 0
         for key in draft['attachment_ids']:
-            require(db.execute('SELECT id FROM files WHERE id=? AND owner_id=?', (key, actor)).fetchone())
+            attachment_size += require(db.execute('SELECT size FROM files WHERE id=? AND owner_id=?', (key, actor)).fetchone())[0]
+        if any(u.startswith('remote_') for u in draft['audience_users']) and attachment_size > 4 * 1024 * 1024:
+            raise Problem(400, 'Remote release attachments exceed 4 MiB')
         return draft
 
     def _owned_layer(self, db, actor, key):
@@ -146,6 +149,10 @@ class Layers:
 
     def active_layer(self, key, actor=None, *, public=False):
         """Rechecks current release/access. actor is a trusted local ID, never browser input."""
+        if ":" in key:
+            if public or actor is None:
+                raise Problem(404, "Not found")
+            return self.remote_layer(actor, key)
         with self.transaction() as db:
             return self._active_layer(db, key, actor, public=public)
 
@@ -158,7 +165,7 @@ class Layers:
                 except Problem as exc:
                     if exc.status != 404:
                         raise
-            return result
+        return result + self.remote_layers(actor)
 
     def layer_revisions(self, actor, key):
         with self.transaction() as db:
