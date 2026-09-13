@@ -146,10 +146,18 @@ Linux CI uses `playwright install --with-deps chromium`. Tests use temporary sto
 local ephemeral servers and controlled model doubles; no installed model is called.
 Packaging tests build real archives, extract them, install an isolated wheel, and
 verify the live page and static assets. Browser screenshots are test artifacts.
-The source bundler has an explicit reviewed file allowlist, refuses output reuse
-and source symlinks, and includes per-file SHA-256 values in `CHECKSUMS.json`.
-It does not archive environment files, keys, databases, dot directories, parent
-history or handoffs. SHA-256 detects changed bytes; it does not certify authorship.
+`pyproject.toml` lists every reviewed source-distribution file and every wheel
+runtime/static file explicitly. A small build hook removes Hatch’s implicit
+source additions, including ignore files found in parent directories. Standard `uv build` and direct `uv build --wheel`
+therefore exclude unlisted files even after running the demo in this directory.
+The custom source bundler reads that same sdist inventory, refuses output reuse
+and source symlinks, and adds per-file SHA-256 values in `CHECKSUMS.json`.
+The real-build regression creates synthetic demo credentials and injects environment,
+key/database files and an unlisted Python module before inspecting sdist and wheel.
+These artifacts exclude private state, unlisted source, parent history and handoffs.
+Changing either inventory is an explicit release review decision; do not replace
+individual entries with directories or globs. SHA-256 detects changed bytes;
+it does not certify authorship.
 
 Newly authored code in this standalone directory is Apache-2.0; see [LICENSE](LICENSE)
 and [NOTICE](NOTICE). Dependencies retain their own licenses. This release does

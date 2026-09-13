@@ -10,7 +10,9 @@ capacity result. The richer product design remains a proposal beyond this scope.
 
 ## Measured two-host acceptance
 
-The same allowlisted source archive ran on a macOS ARM64 host and a Linux aarch64
+Candidate 4 (SHA-256
+`0de0a19d830a5dd86d7a60b92b91a187a13c3e30e0aeb5b5a6e523898b42b627`)
+ran on a macOS ARM64 host and a Linux aarch64
 Raspberry Pi, with independent SQLite stores, accounts, Ed25519 identities and TLS
 certificates. The remote runtime was Python 3.11.2. Both application servers bound
 only to loopback. Two SSH forwards supplied routing; pinned application HTTPS and
@@ -49,30 +51,42 @@ retained in private verification evidence rather than the standalone source.
 
 ## Source artifact and installation
 
-The reviewed candidate `superyak-peer-candidate-4.tar.gz` contains 45 regular files:
-explicitly allowlisted source, tests, lockfile, static assets, API/protocol/source
-schema documentation, standalone README, Apache-2.0 LICENSE/NOTICE, scripts, and
-per-file `CHECKSUMS.json`. SHA-256:
+The revised release candidate `superyak-peer-candidate-7.tar.gz` contains 46 regular
+files: explicitly allowlisted source, tests, lockfile, static assets,
+API/protocol/source-schema documentation, standalone README, Apache-2.0
+LICENSE/NOTICE, scripts, a build hook, and per-file `CHECKSUMS.json`. SHA-256:
 
 ```text
-0de0a19d830a5dd86d7a60b92b91a187a13c3e30e0aeb5b5a6e523898b42b627
+734cf0f80ac00d6bdbb6363dd24fce65caf6d91eb4ee2adbae79b2611076b677
 ```
 
-Inspection rejected dot-directory entries and found no private host/login/key-path
-markers. Packaging regressions inject unlisted environment files, keys, database,
-operational notes, and even an unlisted Python module; none enters the archive.
-Output reuse and allowlisted source symlinks are refused without overwriting them.
+The original candidate 4 archive was safe, but review found that a later ordinary
+`uv build` could include private demo state in an sdist and unlisted source in a
+wheel. The packaging fix shares one explicit sdist inventory between Hatch and the
+custom bundler, adds an explicit wheel inventory, and removes Hatch's implicit
+source additions (including parent ignore files) through a small build hook.
+Output reuse and allowlisted source symlinks remain refused by the custom bundler.
 
-This exact candidate was extracted into a new directory, installed from its own
-lock, and used to build both sdist and wheel. Both include all three browser assets;
-the wheel includes the license. A separate fresh environment installed that wheel
-and served the page, JavaScript and CSS successfully from outside the source and
-parent repository. Its temporary server was stopped afterwards.
+A real-build regression now creates synthetic demo credentials and injects `.env`,
+`.gitignore`, private keys/database/identity files, and unlisted package source
+before `uv build` and direct `uv build --wheel`. Both build paths exclude those
+files and retain all browser assets and LICENSE/NOTICE.
 
-The wheel SHA-256 is
-`e99380db511556e2d2f39094d8b49759ddf858751799d0b83cd61636cb6d4b6e`;
+This exact revised candidate was freshly extracted, installed from its own lock,
+and subjected to the same private-state injection and sdist/direct-wheel inspection.
+A separate fresh environment installed its wheel and served the page, JavaScript
+and CSS from outside the source and parent repository. Its temporary server was
+stopped. The wheel SHA-256 is
+`7f9c01754d67dee7e02fa7d0fb4299aed451eb34146332f6af473fb7ae837c98`;
 the sdist SHA-256 is
-`781cd59871ff5b326c5373a707947b465b5689b9f1f65eef496cae570877b417`.
+`bbc6bb313b449beb462660303afbf0902ac435d34e98c7c63963bd452dc8e221`.
+
+Every application/runtime/static file and `scripts/two_peer_check.py` is byte-for-byte
+identical between candidates 4 and 7. The revised artifact changes only packaging
+metadata/build code, packaging tests and README. Candidate 4 retains the exact
+measured two-host evidence above; candidate 7 carries that unchanged runtime/checker
+evidence plus new package verification. No two-host or model run was repeated for
+this packaging-only fix. Earlier source artifacts and evidence remain preserved.
 
 Only newly authored `peer/` code is Apache-2.0. Dependencies keep their licenses;
 imported Engram/Atlas/Lighthouse history is neither bundled nor relicensed. The
@@ -81,7 +95,8 @@ or authorize disclosure of historical operational notes.
 
 ## Automated checks
 
-The final integrated `make check` ran once and exited successfully:
+Before the packaging review fix, the integrated `make check` ran once and exited
+successfully:
 
 | Suite | Result |
 | --- | --- |
@@ -95,7 +110,10 @@ The final integrated `make check` ran once and exited successfully:
 The peer suite completed in 40.67 seconds. Existing deprecation warnings remain;
 there were no failing checks. JavaScript syntax, lock consistency and whitespace
 checks also passed. Tests used isolated fixtures and made no live model generation
-requests. The final archive's manifest matches the committed allowlisted source.
+requests. The packaging-only review fix subsequently passed all three focused packaging
+tests in 3.02 seconds, with the same inherited warning. The broad suite was not
+repeated for unchanged application code. The revised archive's manifest matches
+its committed allowlisted source.
 
 ## Demo and model boundary
 

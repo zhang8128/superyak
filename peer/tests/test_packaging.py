@@ -115,3 +115,35 @@ def test_fresh_extraction_builds_static_wheel_and_starts_without_parent_repo(arc
     finally:
         process.terminate()
         process.communicate(timeout=10)
+
+
+def test_standard_build_excludes_private_state_and_unlisted_package_source(archive, tmp_path):
+    extract = runpy.run_path(str(ROOT / 'scripts/two_peer_check.py'))['extract']
+    root = extract(archive, tmp_path / 'standalone')
+    state = root / '.engram/home-demo'
+    command(sys.executable, '-m', 'superyak_peer', 'demo', '--data-dir', state, cwd=root)
+    credentials = json.loads((state / 'demo-credentials.json').read_text())
+    sentinel = os.urandom(24).hex()
+    injected = ['.env', '.gitignore', '.engram/home/peer.sqlite3', '.engram/home/peer-key.pem', '.engram/home/identity.json', '.engram/home/demo-credentials.json', 'unlisted.txt', 'superyak_peer/unlisted.py', 'superyak_peer/static/unlisted.txt']
+    for name in injected:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(sentinel)
+    builds = tmp_path / 'standard-build'
+    command('uv', 'build', '--out-dir', builds, cwd=root)
+    direct_builds = tmp_path / 'direct-wheel'
+    command('uv', 'build', '--wheel', '--out-dir', direct_builds, cwd=root)
+    with tarfile.open(next(builds.glob('*.tar.gz'))) as source:
+        sdist = {str(Path(m.name).relative_to(Path(m.name).parts[0])): source.extractfile(m).read() for m in source.getmembers() if m.isfile()}
+    with zipfile.ZipFile(next(builds.glob('*.whl'))) as wheel:
+        wheel_files = {name: wheel.read(name) for name in wheel.namelist()}
+    with zipfile.ZipFile(next(direct_builds.glob('*.whl'))) as wheel:
+        direct_wheel_files = {name: wheel.read(name) for name in wheel.namelist()}
+    for files in (sdist, wheel_files, direct_wheel_files):
+        assert {'superyak_peer/static/index.html', 'superyak_peer/static/app.js', 'superyak_peer/static/app.css'} <= files.keys()
+        assert any(name == 'LICENSE' or name.endswith('/LICENSE') for name in files)
+        assert any(name == 'NOTICE' or name.endswith('/NOTICE') for name in files)
+    assert {'scripts/source_bundle.py', 'scripts/two_peer_check.py', 'uv.lock', 'tests/test_packaging.py'} <= sdist.keys()
+    forbidden = [sentinel.encode(), *(c['password'].encode() for c in credentials)]
+    leaks = {kind: [name for name, content in files.items() if any(part.startswith('.') for part in Path(name).parts) or any(marker in content for marker in forbidden) or name in injected] for kind, files in [('sdist', sdist), ('wheel', wheel_files), ('direct_wheel', direct_wheel_files)]}
+    assert leaks == {'sdist': [], 'wheel': [], 'direct_wheel': []}, leaks

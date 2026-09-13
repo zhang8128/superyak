@@ -83,7 +83,10 @@ Neither command starts a research worker or changes existing component stores.
 `make peer-bundle PEER_BUNDLE=/new/path/superyak-peer.tar.gz` creates an explicit
 allowlisted standalone source archive and refuses output reuse. The archive
 includes its own license, lock, docs, tests, source, static assets and checksums.
-Review it separately before public distribution; it contains no parent history.
+Standard `uv build` in `peer/` also uses explicit sdist/wheel file inventories,
+so demo credentials and other unlisted local files stay out of those packages.
+Review the resulting artifact separately before public distribution; it contains
+no parent history.
 
 ## Try Atlas offline
 

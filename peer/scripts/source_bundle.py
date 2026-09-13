@@ -5,15 +5,19 @@ import io
 import json
 from pathlib import Path
 import tarfile
+import tomllib
 
-# Updating this manifest is a release review decision. Never glob private state.
-FILES = ('API.md', 'LICENSE', 'MODELS_AND_SOURCES.md', 'NOTICE', 'PROTOCOL.md', 'README.md', 'pyproject.toml', 'scripts/source_bundle.py', 'scripts/two_peer_check.py', 'superyak_peer/__init__.py', 'superyak_peer/__main__.py', 'superyak_peer/app.py', 'superyak_peer/auth.py', 'superyak_peer/chats.py', 'superyak_peer/common.py', 'superyak_peer/db.py', 'superyak_peer/dispatch.py', 'superyak_peer/federation.py', 'superyak_peer/files.py', 'superyak_peer/identity.py', 'superyak_peer/interchange.py', 'superyak_peer/layers.py', 'superyak_peer/models.py', 'superyak_peer/peer_routes.py', 'superyak_peer/peer_store.py', 'superyak_peer/source_routes.py', 'superyak_peer/spaces.py', 'superyak_peer/static/app.css', 'superyak_peer/static/app.js', 'superyak_peer/static/index.html', 'superyak_peer/transport.py', 'tests/conftest.py', 'tests/test_auth.py', 'tests/test_browser.py', 'tests/test_chats.py', 'tests/test_cli.py', 'tests/test_federation.py', 'tests/test_identity.py', 'tests/test_interchange.py', 'tests/test_layers.py', 'tests/test_models.py', 'tests/test_packaging.py', 'tests/test_transport.py', 'uv.lock')
+# The standard sdist builder and this archive share one reviewed inventory.
+# Wheel selection is an explicit runtime subset in the same pyproject file.
+def release_files(root):
+    config = tomllib.loads((root / 'pyproject.toml').read_text())
+    return config['tool']['hatch']['build']['targets']['sdist']['only-include']
 
 
 def build(root, output):
     root, output = Path(root).resolve(), Path(output)
     contents = {}
-    for name in FILES:
+    for name in release_files(root):
         path = root / name
         if any((root / Path(*Path(name).parts[:i])).is_symlink() for i in range(1, len(Path(name).parts) + 1)):
             raise ValueError('Refusing symlink in release source: ' + name)

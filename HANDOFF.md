@@ -24,9 +24,16 @@ in `demo-launch.json` before starting it; do not restart other services.
 Task evidence and report remain in that worktree's ignored
 `.superpowers/sdd/2026-09-12-peer-home/` directory. `final-two-host-4/result.json`
 records the passing final source run, receipt IDs/hashes and cleanup;
-`release-inspection-4.json` records fresh source/sdist/wheel installation and startup.
-The source archive is `superyak-peer-candidate-4.tar.gz`, SHA-256
-`0de0a19d830a5dd86d7a60b92b91a187a13c3e30e0aeb5b5a6e523898b42b627`.
+`release-inspection-7.json` records the revised source/sdist/direct-wheel exclusion
+and startup checks. The current source archive is `superyak-peer-candidate-7.tar.gz`,
+SHA-256 `734cf0f80ac00d6bdbb6363dd24fce65caf6d91eb4ee2adbae79b2611076b677`.
+Review found that standard `uv build` on candidate 4 could include private state,
+even though its custom archive itself was safe. The revised package shares explicit
+source inventory, adds wheel inventory, and clears Hatch's implicit source additions.
+All runtime/static/checker bytes remain identical to the measured candidate 4;
+`task-5-fix1-manifest-audit.json` proves that equality. The unchanged two-host test
+was not repeated; all three focused packaging tests and exact candidate 7 package
+inspection passed. Previous artifacts and evidence remain preserved.
 The checker uses generic configurable SSH/host/path inputs; personal operational
 details stay in ignored evidence. Newly authored `peer/` code is Apache-2.0;
 imported history retains its licenses and the parent repository remains private.
