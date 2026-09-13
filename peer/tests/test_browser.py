@@ -225,6 +225,7 @@ def test_private_draft_exact_release_public_route_and_withdrawal(browser_peer):
 
                 patient.get_by_role("checkbox", name="Anyone with the public link").check()
                 patient.get_by_role("button", name="Save private draft").click()
+                expect(patient.get_by_text("Saved version 4", exact=True)).to_be_visible()
                 patient.get_by_role("button", name="Preview audience").click()
                 patient.get_by_role("button", name="Turn on version 4").click()
                 visitor_href = patient.get_by_role("link", name="View as a visitor").get_attribute(
@@ -346,6 +347,7 @@ def test_attachment_stays_selected_through_upload_and_public_release(browser_pee
             )
             expect(page.get_by_role("checkbox", name="care-note.txt")).to_be_checked()
             page.get_by_role("button", name="Save private draft").click()
+            expect(page.get_by_text("Saved version 2", exact=True)).to_be_visible()
             page.get_by_role("button", name="Preview audience").click()
             page.get_by_role("button", name="Turn on version 2").click()
             visitor_href = page.get_by_role("link", name="View as a visitor").get_attribute(
@@ -368,6 +370,7 @@ def test_active_route_controls_preserve_overlapping_access(browser_peer):
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("checkbox", name="Alex’s care circle").check()
             page.get_by_role("button", name="Save private draft").click()
+            expect(page.get_by_text("Saved version 2", exact=True)).to_be_visible()
             page.get_by_role("button", name="Preview audience").click()
             page.get_by_role("button", name="Turn on version 2").click()
 
@@ -514,7 +517,7 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             page.get_by_label("Layer title").fill("Remote delivery")
             page.get_by_role("checkbox", name="Casey Remote").check()
             page.get_by_role("button", name="Save private draft").click()
-            expect(page.locator("#main-content").get_by_text("Private draft saved")).to_be_visible()
+            expect(page.get_by_text("Saved version 2", exact=True)).to_be_visible()
             page.get_by_role("button", name="Preview audience").click()
             page.get_by_role("button", name="Turn on version 2").click()
             expect(page.get_by_text("Active · version 2")).to_be_visible()
