@@ -18,11 +18,19 @@ LEAD_PROBE_ARGS ?= --help
 ATLAS_PYTHON ?= $(CURDIR)/atlas/.venv/bin/python
 ATLAS_PROJECT ?= $(CURDIR)/.engram/atlas/project
 ATLAS_ARGS ?= --help
+HOME_DATA ?= $(CURDIR)/.engram/home
+HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
+HOME_PORT ?= 7435
+HOME_ARGS ?=
+PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
-	@echo "make setup              Install all three components from their lockfiles"
+	@echo "make setup-peer / check-peer  Install/check the standalone personal home"
+	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
+	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
+	@echo "make setup              Install all four components from their lockfiles"
 	@echo "make check              Run all suites and interoperability checks"
 	@echo "make check-engram       Run the Python suite"
 	@echo "make check-lighthouse   Build, lint, typecheck, test, and run protocol proofs"
@@ -44,7 +52,7 @@ help:
 	@echo "make atlas-demo         Render the public research pilot offline"
 	@echo "make atlas              Atlas project CLI; ATLAS_ARGS defaults to --help"
 
-setup: setup-engram setup-lighthouse setup-atlas
+setup: setup-engram setup-lighthouse setup-atlas setup-peer
 
 setup-engram:
 	cd engram && uv sync --locked --extra dev --python "$(PYTHON_VERSION)"
@@ -56,7 +64,7 @@ setup-lighthouse:
 	cd lighthouse && pnpm install --frozen-lockfile
 	cd lighthouse && pnpm build
 
-check: check-engram check-lighthouse check-atlas check-integration check-research-tasks
+check: check-engram check-lighthouse check-atlas check-integration check-research-tasks check-peer
 
 check-engram:
 	cd engram && LIGHTHOUSE_REPO="$(CURDIR)/lighthouse" uv run --locked --extra dev python -m pytest -q -ra --tb=short
@@ -121,3 +129,21 @@ research-task:
 
 lead-probe:
 	"$(STAMPEDE_PYTHON)" -m deploy.stampede.probe $(LEAD_PROBE_ARGS)
+
+setup-peer:
+	cd peer && uv sync --locked --python "$(PYTHON_VERSION)"
+
+check-peer:
+	cd peer && uv run --locked python -m pytest -q -ra --tb=short
+
+home-demo:
+	uv run --locked --project peer python -m superyak_peer demo --data-dir "$(HOME_DEMO_DATA)"
+	@echo "Superyak demo: http://127.0.0.1:$(HOME_PORT)"
+	uv run --locked --project peer python -m superyak_peer serve --data-dir "$(HOME_DEMO_DATA)" --port "$(HOME_PORT)" $(HOME_ARGS)
+
+home:
+	@echo "Superyak: http://127.0.0.1:$(HOME_PORT)"
+	uv run --locked --project peer python -m superyak_peer serve --data-dir "$(HOME_DATA)" --port "$(HOME_PORT)" $(HOME_ARGS)
+
+peer-bundle:
+	uv run --locked --project peer python peer/scripts/source_bundle.py --output "$(PEER_BUNDLE)"

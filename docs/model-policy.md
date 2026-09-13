@@ -11,6 +11,22 @@ the inference provider, and the physical processing/storage location are separat
 facts. This instruction alone does not establish a US-only hosting requirement
 or authorize a new cloud service or destination for private data.
 
+## Measured peer application state
+
+The standalone [peer application](../peer/MODELS_AND_SOURCES.md) now has a
+component-scoped server-owned eligibility guard, disabled until explicitly
+configured. One authenticated fictional drafting request using the exact
+`gemma4:31b` artifact and native local endpoint returned HTTP 200 in 22.562 seconds
+on September 12 local time. Its saved draft stayed unchanged and no active release
+was created. Later hardening was verified with controlled tests; generation was
+not repeated during packaging. The [peer verification report](reports/2026-09-12-peer-home-verification.md)
+records scope and limits.
+
+This establishes one successful peer drafting integration. It does not validate
+research extraction/review, universal runtime enforcement, cluster capacity, or
+a migration of the stopped MG worker. Historical launch defaults remain as below;
+Atlas/MG research supervision remains disabled.
+
 ## Preferred next family
 
 Google identifies Gemma 4 as a Google DeepMind open-weight family, including a
@@ -19,8 +35,9 @@ checked September 12. Kairos's preference makes it the next family to use; its
 quality and serving performance for this project's tasks still need measurement.
 
 The existing local endpoint's model listing includes `gemma4:31b`, described as
-GGUF Q4_K_M, approximately 19.9 GB on disk. A listing is not evidence of successful
-loading, native-API compatibility, structured source extraction, or source review.
+GGUF Q4_K_M, approximately 19.9 GB on disk. The peer measurement above establishes bounded native-API compatibility for one
+drafting request. A listing alone establishes neither successful generation nor
+structured source extraction or source review.
 No replacement worker should be described as verified from this listing alone.
 
 The whole-Stampede3 planning scope remains accepted. The earlier eight persistent

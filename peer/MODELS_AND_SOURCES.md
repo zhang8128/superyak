@@ -19,7 +19,7 @@ To opt in, create an operator-owned JSON file with exactly these values:
 Pass its path when starting your own peer:
 
 ```sh
-superyak-peer serve --data-dir .engram/home --model-config /path/to/model.json
+uv run --locked python -m superyak_peer serve --data-dir .engram/home --model-config /path/to/model.json
 ```
 
 The file is bounded to 4 KiB. Unknown fields or different values are rejected by
@@ -28,7 +28,7 @@ dictionary; an unapproved factory configuration leaves the assistant disabled.
 This command does not install, pull, start, or restart a model service.
 
 Eligibility follows the operator-approved Google publisher and this exact artifact,
-as recorded in [the model policy](../docs/model-policy.md). The native Ollama
+under this application’s American-model requirement. The native Ollama
 `/api/tags` entry must match the exact model name and digest before generation.
 Status may perform that read-only check; every generation repeats it. Local service
 and tag integrity are trust assumptions: this is not a cryptographic attestation

@@ -1,9 +1,11 @@
 # Personal dashboards, private chats, and forgiving sharing
 
-Date: 2026-09-12. Status: proposed product design for discussion; no application
-implementation or deployment is claimed. Kairos confirmed **a personal home across
+Date: 2026-09-12. Current state: the first standalone participant application is
+implemented in [peer/](../../../peer/README.md); see the [verification report](../../reports/2026-09-12-peer-home-verification.md).
+The richer clinical/HPC/help experience in this design remains future scope. Kairos confirmed **a personal home across
 chats, care circles, projects, and organizations** as the main entry point.
-This navigation choice is accepted; other detailed behaviors remain proposed.
+This navigation choice is implemented; the report distinguishes the verified first
+slice from the remaining proposal.
 This document develops the existing
 [medical pilot plan](../../medical-lighthouse-pilot-plan.md).
 
@@ -46,19 +48,18 @@ relay connection alone provides private application messaging.
 
 ### Present state and release boundary
 
-The repository currently has reusable memory, evidence, scoped local sharing,
-and aDNA projection code. Its local Unix-socket exchange is not a completed
-cross-machine private chat service. Dashboards, participant authentication, and
-sharing layers in this document remain proposed application work.
+The independently installable peer application implements participant authentication,
+private rooms, saved drafts and exact active releases, explicit peer pairing,
+signed HTTPS exchange, selected-source export/import and optional guarded Gemma
+assistance. The verification report is the current evidence pointer; this broader
+design is not a claim of completed clinical ingestion, clinical suitability,
+measured HPC capacity, universal model enforcement or end-user E2EE.
 
-On this inspection, GitHub `zhang8128/superyak` is private and has no root license.
-A public source release still needs a license decision, preservation of imported
-notices, and review of what enters the public source and history. The current
-tracked handoffs and historical reports include personal operational context;
-do not make the entire existing repository public without reviewing that material.
-Private `.engram/` archives and participant data remain excluded. Prepare a
-reviewable source release without deleting or rewriting the preserved private
-research history. This design does not change repository visibility or licensing.
+Newly authored `peer/` source is Apache-2.0 with its own license/notice. Its reviewed
+allowlisted archive excludes parent history, private state and operational notes.
+The historical parent repository remains private with imported licenses unchanged.
+Publishing the exact source artifact is separate from changing repository visibility;
+no history is deleted or rewritten to prepare it.
 
 ## Corrected context and intended experience
 

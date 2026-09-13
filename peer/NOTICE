@@ -1,0 +1,7 @@
+Superyak Peer
+Copyright 2026 Superyak contributors
+
+The Apache License 2.0 applies only to the newly authored files in this
+standalone peer package. No parent repository history or imported Engram,
+Atlas, or Lighthouse code is included or relicensed. Dependencies retain
+their own licenses and notices; consult installed distribution metadata.

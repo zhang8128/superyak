@@ -3,10 +3,12 @@
 The product goal is an **open-source, peer-to-peer system** where people have
 personal homes, private chats, and sharing layers they control across care
 circles, projects, and organizations. The [dashboard and peer design](docs/superpowers/specs/2026-09-12-personal-dashboards-sharing-design.md)
-records that direction and the first two-peer demonstration. The current
-implementation provides the research/memory foundations; the participant
-application, cross-machine private transport, and public source release remain
-work to complete.
+records that direction and the first two-peer demonstration. The first participant application now lives in independently installable
+[`peer/`](peer/README.md): authenticated homes, private rooms, versioned sharing,
+explicit paired HTTPS delivery, and optional guarded local Gemma drafting.
+The [verification report](docs/reports/2026-09-12-peer-home-verification.md) records
+measured behavior and release boundaries. Richer clinical/HPC integrations remain
+future work.
 
 Superyak brings persistent agents, research evidence, and scoped interchange
 into one repository. Engram provides individual and shared memory; Atlas manages
@@ -16,6 +18,7 @@ packages and lockfiles remain independent, with shared commands and CI at the ro
 
 | Path | Contents |
 | --- | --- |
+| [`peer/`](peer/README.md) | Standalone personal home, private chats, sharing layers, and paired peer exchange |
 | [`engram/`](engram/) | Python memory system, MCP server, dynamic chat, and Lighthouse publisher/receiver |
 | [`atlas/`](atlas/README.md) | Evidence workbench, literature workers, source review, and browser/Obsidian views |
 | [`lighthouse/`](lighthouse/README.md) | Protocol schemas, TypeScript packages, adapters, bridges, and proofs |
@@ -37,10 +40,12 @@ make check
 `make setup` installs `engram/uv.lock` into `engram/.venv`,
 `atlas/uv.lock` into `atlas/.venv`, and
 `lighthouse/pnpm-lock.yaml` into the Lighthouse workspace, then builds its
-packages. `make check` runs the Engram and Atlas suites in separate processes,
+packages. It also installs `peer/uv.lock` independently. For browser checks, run
+`uv run --locked --project peer playwright install chromium` (Linux CI adds
+`--with-deps`). `make check` runs the Engram and Atlas suites in separate processes,
 Lighthouse build/lint/typecheck/tests
-and proofs, and the interoperability check. Each check is also available
-separately through `make check-engram`, `make check-atlas`, `make check-lighthouse`, and
+and proofs, the interoperability check, and the peer/browser/package suite. Each check is also available
+separately through `make check-peer`, `make check-engram`, `make check-atlas`, `make check-lighthouse`, and
 `make check-integration`. Run `make help` for the command list.
 
 The interoperability check uses disposable synthetic stores and a real local
@@ -59,6 +64,26 @@ by default. To run those tests, explicitly supply both
 `ENGRAM_LIVE_CODEX_CONFIG=/absolute/path/to/config.toml` and
 `ENGRAM_LIVE_CODEX_PROJECT=/absolute/path/to/the/bound/engram` when running
 `make check-engram`. An explicitly supplied invalid configuration fails the tests.
+
+## Open your personal home
+
+```sh
+make setup-peer
+make home-demo
+```
+
+Open the reported loopback URL (default `http://127.0.0.1:7435`). Fictional account
+credentials are stored privately at `.engram/home-demo/demo-credentials.json`;
+they are never printed. `HOME_DEMO_DATA` selects a different demo directory,
+`HOME_PORT` changes the port, and `HOME_ARGS` adds explicit server options.
+`make home` serves ordinary state at `.engram/home` (`HOME_DATA` overrides it);
+provision its first owner with the [peer CLI](peer/README.md) before signing in.
+Neither command starts a research worker or changes existing component stores.
+
+`make peer-bundle PEER_BUNDLE=/new/path/superyak-peer.tar.gz` creates an explicit
+allowlisted standalone source archive and refuses output reuse. The archive
+includes its own license, lock, docs, tests, source, static assets and checksums.
+Review it separately before public distribution; it contains no parent history.
 
 ## Try Atlas offline
 
@@ -170,6 +195,7 @@ file hashes in [IMPORT-MANIFEST.json](atlas/IMPORT-MANIFEST.json). See the
 [migration record](docs/monorepo-migration.md) for source revisions, exclusions,
 and the relationship to the preserved original checkouts.
 
-An open-source release is intended. The repository-wide license is still an
-owner decision; this integration preserves existing notices and does not assign
-a new license to the imported code.
+The newly authored standalone `peer/` application is Apache-2.0. Imported code
+retains its existing notices and is not relicensed. The historical parent
+repository remains private; the allowlisted peer source archive is the reviewable
+public-release candidate. Preparing it does not publish it or change visibility.

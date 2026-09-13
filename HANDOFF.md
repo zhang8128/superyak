@@ -1,5 +1,45 @@
 # Resume here — medical lighthouse / aDNA
 
+**Personal peer home implemented, September 12 (Task 5 current pointer):** The first
+standalone participant application is implemented in `peer/`; use
+[its guide](peer/README.md) and the [verification report](docs/reports/2026-09-12-peer-home-verification.md).
+Authenticated homes, private drafts/rooms, active sharing layers, paired signed
+HTTPS transport, and selected-source/aDNA interchange now exist. The richer
+clinical/HPC/help design remains future scope. The same allowlisted source passed
+a real Mac/Pi check with independent identities/stores, bidirectional chat,
+selected share/correction/withdrawal, invalid-peer denial, offline editing and
+restart/retry recovery. Only temporary synthetic services/tunnels were started;
+all are stopped after verification. Earlier dated “not implemented” statements
+below are historical snapshots.
+
+The isolated local demo is running at **http://127.0.0.1:7435** from
+`/Users/kairos/Projects/superyak/.worktrees/peer-home`. Its private credentials are
+`.engram/home-demo/demo-credentials.json` within that worktree; do not print or
+replace them. It was launched with `make home-demo` and an explicit private model
+configuration in `.superpowers/sdd/2026-09-12-peer-home/demo-model.json`.
+Browser login/readiness and read-only Gemma identity status passed. Preserve any
+new user work in this state. If it has stopped, inspect the saved launch command
+in `demo-launch.json` before starting it; do not restart other services.
+
+Task evidence and report remain in that worktree's ignored
+`.superpowers/sdd/2026-09-12-peer-home/` directory. `final-two-host-4/result.json`
+records the passing final source run, receipt IDs/hashes and cleanup;
+`release-inspection-4.json` records fresh source/sdist/wheel installation and startup.
+The source archive is `superyak-peer-candidate-4.tar.gz`, SHA-256
+`0de0a19d830a5dd86d7a60b92b91a187a13c3e30e0aeb5b5a6e523898b42b627`.
+The checker uses generic configurable SSH/host/path inputs; personal operational
+details stay in ignored evidence. Newly authored `peer/` code is Apache-2.0;
+imported history retains its licenses and the parent repository remains private.
+The exact artifact is ready for review, not publicly published by Task 5.
+
+The prior Task 4 Gemma evidence remains the only measured generation: HTTP 200,
+22.562 seconds, one explicit fictional request, unchanged draft and no publication.
+Task 5 performed no further generation. The demo's opt-in guard is component-scoped;
+Atlas/MG research remains stopped with supervision disabled. No migration or
+universal eligibility/capacity claim follows. Controller owns final review,
+integration/push and remote CI after Task 5; see `task-5-report.md` for the exact
+verified commit and check results when resuming.
+
 **Open-source and peer-to-peer reaffirmed, September 12:** Kairos asked for current progress and reaffirmed that the system must be **open-source and peer-to-peer**. Treat this as an architectural requirement for the personal home, private chats, and sharing layers: independently hosted peers, locally governed data/access, explicitly shared publications, and no mandatory central application owner. The [design](docs/superpowers/specs/2026-09-12-personal-dashboards-sharing-design.md) now makes the next measurable milestone a private message and a selected share/correction/withdrawal between two machines with separate stores. Existing memory/research/aDNA components are implemented; the new dashboard and authenticated cross-machine participant application are not. GitHub was rechecked private with no root license. Public release requires a license decision and review of source/history because tracked handoffs include private operational context; no visibility or license change was made. The recent design/model-policy edits remain local and uncommitted after the earlier push at `407c39c`. MG research remains stopped pending Gemma validation; no MCP or model service was restarted.
 
 **Dashboard entry point confirmed, September 12:** Kairos selected **a personal home across chats, care circles, projects, and organizations** as the first dashboard's main entry point. The Wilhelm Foundation hackathon hub is one accessible organization/project space. This resolves the navigation preference in the [dashboard design](docs/superpowers/specs/2026-09-12-personal-dashboards-sharing-design.md); it does not by itself approve every other proposed behavior or authorize deployment.
