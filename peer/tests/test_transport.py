@@ -235,3 +235,15 @@ def test_exact_pin_rejects_different_leaf_signed_by_trusted_certificate(tmp_path
         sock.close()
         thread.join(2)
     assert not thread.is_alive()
+
+
+def test_authenticated_me_exposes_own_peer_id_without_endpoint(env):
+    from fastapi.testclient import TestClient
+    app,clients,users,_=env
+    assert app.state.federation.endpoint is None
+    response=clients[0].get('/api/me')
+    assert response.status_code==200
+    assert response.json()['peer_id']==app.state.federation.identity.peer_id
+    assert clients[0].get('/api/connections/card').status_code==409
+    with TestClient(app,base_url='http://testserver') as signed_out:
+        assert signed_out.get('/api/me').status_code==401

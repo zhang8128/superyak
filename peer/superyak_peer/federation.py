@@ -66,7 +66,7 @@ class Federation:
                     action = 'layer.withdraw' if kind == 'layer.withdrawn' else 'layer.release'
                 elif kind in ('chat.message', 'chat.membership'):
                     contacts.update(r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (rid,)))
-                    contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action LIKE 'room.%'", (rid,)))
+                    contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action IN ('room.roster','room.message','room.withdraw')", (rid,)))
                     action = 'room.message' if kind == 'chat.message' else 'room.roster'
                 else:
                     continue
@@ -85,6 +85,8 @@ class Federation:
     def _prepare(self, key):
         with self.store.transaction() as db:
             row = require(db.execute('SELECT * FROM outbox WHERE id=?', (key,)).fetchone())
+            if row['status'] not in ('pending','failed'):
+                raise Obsolete()
             contact = db.execute('SELECT remote_contacts.*,peers.paired FROM remote_contacts JOIN peers USING(peer_id) WHERE id=?', (row['contact_id'],)).fetchone()
             if not contact or not contact['paired']:
                 raise Obsolete()
@@ -107,7 +109,12 @@ class Federation:
                 else:
                     action = 'layer.withdraw'
             elif action == 'room.reply':
-                inbox, room = self.store._remote_inbox(db, meta['actor'], contact['peer_id']+':'+rid, 'room')
+                try:
+                    inbox, room = self.store._remote_inbox(db, meta['actor'], contact['peer_id']+':'+rid, 'room')
+                except Problem as exc:
+                    if exc.status == 404:
+                        raise Obsolete() from None
+                    raise
                 if inbox['revision'] != revision:
                     raise Obsolete()
                 actor = meta['actor']
@@ -166,7 +173,8 @@ class Federation:
                 except (OSError, ValueError, Problem):
                     status = 'failed'
                 with self.store.transaction() as db:
-                    db.execute('UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=?', (status,self.store.clock()+min(300,2**(row['attempts']+1)),row['id']))
+                    db.execute("UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=? AND status IN ('pending','failed')", (status,self.store.clock()+min(300,2**(row['attempts']+1)),row['id']))
+                    status = db.execute('SELECT status FROM outbox WHERE id=?', (row['id'],)).fetchone()[0]
                 result[status] += 1
             with self.store.transaction() as db:
                 result['pending'] = db.execute("SELECT COUNT(*) FROM outbox WHERE status IN ('pending','failed')").fetchone()[0]
@@ -174,23 +182,64 @@ class Federation:
         finally:
             self._sync_lock.release()
 
+    def _delivery_authority(self, db, row):
+        """Resolve local controller and message correlation within action namespace."""
+        action, rid = row['action'], row['resource_id']
+        meta = json.loads(row['metadata'])
+        message = None
+        if action == 'room.reply':
+            # rid belongs to the destination peer. Never query local resources.
+            author = meta.get('actor')
+            message = meta.get('message')
+        elif action in ('layer.release','layer.withdraw'):
+            resource = db.execute('SELECT owner_id FROM layers WHERE id=?', (rid,)).fetchone()
+            author = resource['owner_id'] if resource else None
+        elif action in ('room.roster','room.withdraw','room.message'):
+            resource = db.execute('SELECT owner_id FROM rooms WHERE id=?', (rid,)).fetchone()
+            author = resource['owner_id'] if resource else None
+            if action == 'room.message':
+                original_author = meta.get('author_id', '')
+                if ':' in original_author:
+                    # Remote author is preserved; the local origin owner controls
+                    # distribution of the verified reply, not an ID suffix match.
+                    message = db.execute('SELECT * FROM peer_messages WHERE id=? AND room_id=? AND author_id=?', (meta.get('message_id'),rid,original_author)).fetchone()
+                else:
+                    message = db.execute('SELECT * FROM messages WHERE id=? AND room_id=? AND author_id=?', (meta.get('message_id'),rid,original_author)).fetchone()
+                    author = message['author_id'] if message else None
+                if message is None:
+                    author = None
+        else:
+            author = None
+        if not db.execute('SELECT 1 FROM users WHERE id=?', (author,)).fetchone():
+            return None, {}
+        correlation = {'message_id':message['id'], 'client_message_id':message['client_message_id']} if message else {}
+        return author, correlation
+
     def status(self, actor):
         with self.store.transaction() as db:
-            # Filter delivery metadata to the local author, never whole-peer admin.
-            rows = db.execute('SELECT outbox.* FROM outbox').fetchall()
             result = []
-            for row in rows:
-                owner = db.execute('SELECT owner_id FROM layers WHERE id=? UNION SELECT owner_id FROM rooms WHERE id=?', (row['resource_id'],row['resource_id'])).fetchone()
-                if (owner and owner[0] == actor) or json.loads(row['metadata']).get('actor') == actor:
-                    result.append({k:row[k] for k in ('id','resource_id','revision','contact_id','action','status','attempts','next_attempt')})
+            for row in db.execute('SELECT * FROM outbox ORDER BY event_seq,id').fetchall():
+                author, correlation = self._delivery_authority(db, row)
+                if author == actor:
+                    result.append({**{k:row[k] for k in ('id','resource_id','revision','contact_id','action','status','attempts','next_attempt')}, **correlation})
             return result
 
     def retry(self, actor, key):
-        if not any(r['id'] == key for r in self.status(actor)):
-            raise Problem(404, 'Not found')
         with self.store.transaction() as db:
-            db.execute("UPDATE outbox SET status='pending',attempts=0,next_attempt=0 WHERE id=? AND status='failed'", (key,))
+            row = require(db.execute('SELECT * FROM outbox WHERE id=?', (key,)).fetchone())
+            if self._delivery_authority(db, row)[0] != actor:
+                raise Problem(404, 'Not found')
+            if row['status'] != 'failed':
+                raise Problem(409, 'Only failed deliveries can be retried')
+            db.execute("UPDATE outbox SET status='pending',attempts=0,next_attempt=0 WHERE id=?", (key,))
         return {'ok':True}
+
+    def _cancel_replies(self, db, origin, rid, recipient, revision):
+        """Apply recipient-specific cancellation in the tombstone transaction."""
+        rows = db.execute("SELECT outbox.* FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE peer_id=? AND resource_id=? AND action='room.reply' AND revision<=? AND status IN ('pending','failed')", (origin,rid,revision)).fetchall()
+        for row in rows:
+            if self._delivery_authority(db, row)[0] == recipient:
+                db.execute("UPDATE outbox SET status='withdrawn',next_attempt=0 WHERE id=?", (row['id'],))
 
     def receive(self, raw):
         value = parse(raw)
@@ -283,6 +332,8 @@ class Federation:
                         history.append(message)
                 payload['messages'] = history
             db.execute('INSERT INTO inbox VALUES(?,?,?,?,?,?,?) ON CONFLICT(origin,resource_id,kind,recipient) DO UPDATE SET revision=excluded.revision,payload=excluded.payload', (origin,rid,kind,recipient,revision,e['actor']['id'],encode(payload) if payload is not None else None))
+            if action == 'room.withdraw':
+                self._cancel_replies(db, origin, rid, recipient, revision)
 
     def _validate_layer(self, p):
         if set(p) - {'title','body','attachment_ids','files'}:

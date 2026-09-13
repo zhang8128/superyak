@@ -125,7 +125,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/me')
     def me(request: Request):
-        return current_user(request)
+        return {**current_user(request), 'peer_id':app.state.federation.identity.peer_id}
 
     @app.patch('/api/me')
     async def rename_me(request: Request):

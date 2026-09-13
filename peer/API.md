@@ -92,7 +92,7 @@ accounts. All these accounts are known local contacts for this first slice.
 | Method/path | Request JSON | Response |
 |---|---|---|
 | POST `/api/login` | `{username,password}` | `{user,csrf_token}`, session cookie |
-| GET `/api/me` | — | User fields plus `csrf_token` |
+| GET `/api/me` | — | User fields plus `csrf_token` and public key-derived `peer_id` |
 | PATCH `/api/me` | `{name}` | Corrected user, same ID and grants |
 | POST `/api/logout` | none | `{ok:true}`, revoked/deleted cookie |
 | GET `/api/accounts` | — | User array, owner only |
@@ -331,14 +331,22 @@ All origins used by browser/peer traffic must be repeated with `--origin`.
 | DELETE `/api/connections/{contact_id}` | — | `{ok:true}`; local owner; unpairs entire peer and hides its received content |
 | GET `/api/sync` | — | `{enabled,deliveries:[...]}` for current author only |
 | POST `/api/sync` | none | Runs one bounded pass, returns same author-filtered status |
-| POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; delivery author only; resets failed attempt budget, preserves event ID |
+| POST `/api/sync/{delivery_id}/retry` | none | `{ok:true}`; authorized local delivery controller; resets failed attempt budget, preserves event ID; nonfailed returns 409 |
 | POST `/federation/events` | Signed envelope | HTTPS, independent pairing/signature authentication; see PROTOCOL.md |
 
 Delivery metadata is `{id,resource_id,revision,contact_id,action,status,attempts,
-next_attempt}`. Status is `pending`, `delivered`, `withdrawn` (obsolete/canceled)
+next_attempt}`. Message/reply deliveries additionally include `message_id` and
+`client_message_id` for correlating pending/sent state to the author's message;
+these fields contain no body or audience-management lists. Status is `pending`, `delivered`, `withdrawn` (obsolete/canceled)
 or `failed`. `next_attempt` is Unix seconds; after eight attempts explicit retry is
 required. Account administration never grants visibility of another person's
-layer/chat delivery metadata. Sync may send all already-authorized pending work,
+layer/chat delivery metadata. Layer delivery authority is its local layer owner;
+local-message authority is its actual author (including a nonowner participant);
+roster authority is its local room owner. When the room origin distributes an
+already-verified remote-authored reply, the local room owner controls that relay.
+An outbound reply to a remote-origin room belongs solely to its recorded local
+author; matching unqualified local object IDs confer no status/retry authority.
+The same action-specific rule protects both status and retry. Sync may send all already-authorized pending work,
 but its browser result is filtered. Wire attempts have a three-second deadline;
 a default pass attempts at most 20 records. Background interval is five seconds.
 
@@ -371,7 +379,10 @@ account is inferred from an origin-local ID. Their epoch/linked-room references
 remain origin-controlled. Messages received in remote rooms have qualified
 `author_id`; remote replies in locally hosted rooms also preserve qualified
 `author_id`. Locally authored messages in locally hosted rooms retain the local ID.
-The UI can distinguish self by local ID or by own card's `peer_id:participant.id`.
+The UI can distinguish self by local ID or by `/api/me`'s `peer_id:id`. The
+authenticated `/api/me` response includes the public key-derived `peer_id` even
+without a configured federation endpoint; it exposes no private key or certificate
+configuration. Do not infer self from an origin-local ID suffix.
 Only a local room owner can change its roster. Adding people creates a new linked
 room; remote-origin rooms cannot be managed from a receiving host.
 
@@ -382,7 +393,11 @@ without duplicate text. The origin assigns its authoritative message ID; identif
 an optimistic reply by author+client_message_id when reconciling. A successful
 reply delivery can precede the origin's echo, so pending local views may briefly
 show `state:"delivered"`. Received rooms disappear on withdrawal/unpair; stale
-revisions cannot restore hosted bodies. No claim is made to erase copied plaintext.
+revisions cannot restore hosted bodies. Applying a room tombstone atomically marks
+that recipient's pending/failed replies to that peer/room as `withdrawn`; canceled
+work cannot be retried or restored by a late acknowledgement. Repeating an
+idempotent send returns the original message ID/body with the current delivery
+state, rather than its originally saved pending state. No claim is made to erase copied plaintext.
 
 Worker interface:
 

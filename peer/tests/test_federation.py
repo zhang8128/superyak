@@ -235,3 +235,123 @@ def test_remote_attachment_aggregate_limit_does_not_change_draft(two_peers):
         a[0].save_layer(a[1],layer['id'],{'version':1,'audience_users':[ca['id']]})
     assert a[0].get_layer(a[1],layer['id'])['audience_users']==[]
     assert a[0].get_layer(a[1],layer['id'])['version']==1
+
+
+@pytest.mark.parametrize('local_kind',['layer','room'])
+def test_remote_reply_status_and_retry_ignore_colliding_local_layer(two_peers,local_kind):
+    a,b,ca,cb=two_peers
+    carol=b[0].create_user('carol','Carol','long-password')['id']
+    layer=b[0].create_layer(carol,{'body':'unrelated local layer'}) if local_kind=='layer' else b[0].create_room(carol,'Unrelated local room')
+    # The remote room owns its origin namespace, even if its ID matches a local layer.
+    roster={'title':'Bob only','owner_id':a[2].identity.peer_id+':'+a[1],
+            'members':[{'peer':a[2].identity.peer_id,'id':a[1]}, {'peer':b[2].identity.peer_id,'id':b[1]}],
+            'linked_room_id':None,'created':1,'last_activity':1}
+    roster['member_ids']=[m['peer']+':'+m['id'] for m in roster['members']]
+    b[2].receive(a[2].identity.envelope(destination=b[2].identity.peer_id,actor=a[1],resource_id=layer['id'],revision=1,action='room.roster',recipients=[b[1]],payload=roster))
+    b[0].send_message(b[1],a[2].identity.peer_id+':'+layer['id'],'reply','Bob private reply')
+    b[2].collect()
+    with b[0].transaction() as db:
+        assert [r[0] for r in db.execute('SELECT action FROM outbox')]==['room.reply']
+    key=b[2].status(b[1])[0]['id']
+    with b[0].transaction() as db:
+        db.execute("UPDATE outbox SET status='failed' WHERE id=?",(key,))
+    assert b[2].status(carol)==[]
+    with pytest.raises(Problem) as denied:
+        b[2].retry(carol,key)
+    assert denied.value.status==404
+    assert b[2].status(b[1])[0]['status']=='failed'
+    b[2].retry(b[1],key)
+    assert b[2].status(b[1])[0]['status']=='pending'
+
+
+def test_local_nonowner_message_author_controls_own_delivery(two_peers):
+    a,b,ca,cb=two_peers
+    carol=a[0].create_user('carol','Carol','long-password')['id']
+    room=a[0].create_room(a[1],'Shared room',[carol,ca['id']])
+    message=a[0].send_message(carol,room['id'],'carol-message','Carol authored this')
+    a[2].collect()
+    authored=a[2].status(carol)
+    assert len(authored)==1 and authored[0]['action']=='room.message'
+    assert authored[0]['message_id']==message['id']
+    assert authored[0]['client_message_id']=='carol-message'
+    assert 'body' not in authored[0]
+    assert [r['action'] for r in a[2].status(a[1])]==['room.roster']
+    with a[0].transaction() as db:
+        db.execute("UPDATE outbox SET status='failed' WHERE id=?",(authored[0]['id'],))
+    with pytest.raises(Problem):
+        a[2].retry(a[1],authored[0]['id'])
+    a[2].retry(carol,authored[0]['id'])
+    assert a[2].status(carol)[0]['status']=='pending'
+    deliver(a,b)
+    remote=b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1],remote,'remote-reply','Remote original author')
+    deliver(b,a)
+    a[2].collect()
+    # Origin distribution of a remote-authored reply is controlled by local room owner.
+    owner_actions=[r['action'] for r in a[2].status(a[1])]
+    assert owner_actions==['room.roster','room.message']
+    assert len(a[2].status(carol))==1
+
+
+@pytest.mark.parametrize('prior_status',['pending','failed'])
+def test_received_room_withdrawal_cancels_reply_atomically(two_peers,prior_status):
+    a,b,ca,cb=two_peers
+    room=a[0].create_room(a[1],'Revoked reply',[ca['id']])
+    deliver(a,b)
+    remote=b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1],remote,'queued','Never send after removal')
+    key=b[2].status(b[1])[0]['id']
+    with b[0].transaction() as db:
+        db.execute('UPDATE outbox SET status=? WHERE id=?',(prior_status,key))
+    a[0].remove_participant(a[1],room['id'],ca['id'])
+    deliver(a,b)
+    assert b[2].status(b[1])[0]['status']=='withdrawn'
+    with pytest.raises(Problem) as denied:
+        b[2].retry(b[1],key)
+    assert denied.value.status==409
+    def must_not_send(card,prepare):
+        pytest.fail('Canceled reply reached delivery')
+    assert b[2].sync_once(send=must_not_send)['pending']==0
+    from superyak_peer.federation import Federation,Obsolete
+    from superyak_peer.db import Store
+    restarted=Federation(Store(b[0].data_dir),endpoint=b[2].endpoint)
+    assert restarted.status(b[1])[0]['status']=='withdrawn'
+    assert restarted.sync_once(send=must_not_send)['pending']==0
+    with pytest.raises(Obsolete):
+        restarted._prepare(key)
+    assert not a[0].get_room(a[1],room['id'])['messages']
+
+
+def test_withdrawal_during_reply_ack_cannot_restore_canceled_status(two_peers):
+    a,b,ca,cb=two_peers
+    room=a[0].create_room(a[1],'In flight reply',[ca['id']])
+    deliver(a,b)
+    remote=b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1],remote,'in-flight','Already transmitted')
+    def acknowledge_after_removal(card,prepare):
+        acknowledged=a[2].receive(prepare())
+        a[0].remove_participant(a[1],room['id'],ca['id'])
+        deliver(a,b)
+        return acknowledged
+    result=b[2].sync_once(send=acknowledge_after_removal)
+    assert result['withdrawn']==1 and result['pending']==0
+    assert b[2].status(b[1])[0]['status']=='withdrawn'
+
+
+@pytest.mark.parametrize('current_status',['failed','delivered'])
+def test_duplicate_remote_send_reports_current_delivery_state(two_peers,current_status):
+    a,b,ca,cb=two_peers
+    room=a[0].create_room(a[1],'Idempotent send',[ca['id']])
+    deliver(a,b)
+    remote=b[0].list_rooms(b[1])[0]['id']
+    original=b[0].send_message(b[1],remote,'same','Same body')
+    delivery=b[2].status(b[1])[0]
+    assert delivery['message_id']==original['id'] and delivery['client_message_id']=='same'
+    assert 'body' not in delivery
+    key=delivery['id']
+    with b[0].transaction() as db:
+        db.execute('UPDATE outbox SET status=? WHERE id=?',(current_status,key))
+    repeated=b[0].send_message(b[1],remote,'same','Same body')
+    assert repeated=={**original,'state':current_status}
+    with pytest.raises(Problem):
+        b[0].send_message(b[1],remote,'same','Changed body')

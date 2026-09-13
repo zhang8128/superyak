@@ -131,7 +131,11 @@ content fail. Old message bodies already received remain for remaining members.
 Old queued messages are never relabeled with a newer epoch.
 
 `room.withdraw`: empty payload. Removes that recipient's hosted room/messages;
-stale/equal events cannot reintroduce them.
+stale/equal events cannot reintroduce them. The same receipt transaction marks
+that recipient's pending/failed replies to this origin and resource through the
+withdrawal revision as `withdrawn`. A missing/revoked room at final preparation is
+also obsolete, not a transient failure. Late acknowledgements cannot replace a
+concurrently committed cancellation with delivered/failed state.
 
 `room.reply`: payload `{body,client_message_id}`. Signed by a paired, imported remote
 participant in their own namespace; destination is the room origin, resource ID is
@@ -176,9 +180,17 @@ has at most roughly 60 seconds of wire waiting, plus local database work/content
 Failures retry after 2,4,8,16,32,64,128,256 seconds (backoff formula capped at 300),
 stop after eight automatic attempts, and stay visibly failed. Explicit author retry
 resets the attempt budget while retaining ID/envelope and final authorization.
+Only failed deliveries can be retried; pending/delivered/withdrawn return 409.
 Optional application lifespan worker performs a bounded pass every five seconds
-and waits for its current pass on shutdown. Status is filtered to each local author;
-account administrators cannot inspect unrelated private delivery metadata. It is
+and waits for its current pass on shutdown. Status and retry resolve the same
+action-specific local controller: local layer owner for layer events, actual local
+message author for locally authored messages, and local room owner for roster
+events or origin distribution of a verified remote-authored reply. Outbound
+`room.reply` authority is solely its recorded local author, never a local resource
+lookup using the destination's room ID. Origin room event collection likewise
+excludes remote-origin reply records from its historical destinations. Account
+administration confers no delivery authority. Status exposes message_id and
+client_message_id only for authorized message/reply records, with no message body. It is
 not a distributed availability guarantee or an audit export of others' content.
 
 Only new `peer/` application state is affected. POSIX locking targets macOS/Linux

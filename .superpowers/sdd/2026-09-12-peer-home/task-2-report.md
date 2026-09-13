@@ -192,3 +192,101 @@ uv run --project peer python -m compileall -q peer/superyak_peer
 
 The complete 67-test peer suite includes all 36 reviewed Task 1 tests and 31 Task 2
 checks. The single warning is the existing third-party AnyIO alias deprecation.
+
+## Scoped review fixes after ac15550
+
+Read `task-2-review.md` in full and applied the receiving-code-review/TDD workflow.
+All three Important findings and the stale duplicate-send state finding reproduced
+before implementation. The existing upstream AnyIO warning alone remains deferred.
+Parent-requested UI identity/correlation details were included without UI changes.
+
+### Failing regressions
+
+From the worktree root:
+
+```
+uv run --project peer pytest peer/tests/test_federation.py -q -k 'colliding_local_layer or nonowner_message_author or cancels_reply_atomically or during_reply_ack or current_delivery_state'
+7 failed, 16 deselected, 1 warning in 2.01s
+```
+
+Observed failures: Carol saw Bob's remote reply through a colliding local layer;
+a nonowner local message author had no status; both pending and failed replies
+remained uncanceled after a room tombstone; a late acknowledgement restored
+`delivered`; duplicate sends returned stale pending state for both failed and
+delivered outbox records.
+
+The namespace regression was then parameterized for local layers and local rooms,
+and harmless authenticated own-peer identity was specified before implementation:
+
+```
+uv run --project peer pytest peer/tests/test_transport.py::test_authenticated_me_exposes_own_peer_id_without_endpoint peer/tests/test_federation.py::test_remote_reply_status_and_retry_ignore_colliding_local_layer -q
+3 failed, 1 warning in 1.59s
+```
+
+`/api/me` lacked peer_id. The local-room collision also exposed a related event
+collection bug: collecting its local roster reused destinations from the unrelated
+remote-origin reply and queued an unwanted roster. This is the same action/resource
+namespace issue, now covered along with status and retry denial.
+
+### Changes and policy
+
+`Federation._delivery_authority` is the shared status/retry authority boundary:
+
+- Remote `room.reply`: only the recorded local author, with no lookup of its
+  destination-owned resource ID in local rooms/layers.
+- Local layer actions: local layer owner, looked up only in layers.
+- Locally authored `room.message`: actual `messages.author_id`, matching room ID,
+  message ID and event author. Nonowner participants can inspect/retry their own
+  delivery; owning the room does not confer access to others' local-message status.
+- Roster actions: local room owner. For origin distribution of an already-verified
+  remote-authored reply, the original qualified author is matched against
+  `peer_messages`, and the local room owner controls the relay. There is no local
+  user-ID suffix inference.
+
+Retry resolves that same authority and changes state in one transaction. Only
+`failed` records can reset to pending; canceled/delivered/pending records return
+409, while unauthorized records remain 404. Status includes safe `message_id` and
+`client_message_id` for authorized message/reply records, derived from existing
+message/outbox records; no body, additional audience metadata or schema migration
+was added. Local-origin room collection excludes `room.reply` from historical
+recipient discovery so remote resource IDs cannot create local roster delivery.
+
+Applying a valid room tombstone now atomically cancels that recipient's pending or
+failed replies scoped to origin peer, resource ID, action and revision. Final
+preparation rejects canceled status and treats a missing/revoked remote room as
+`Obsolete`. Completion writes only pending/failed records, so a tombstone committed
+during an in-flight acknowledgement remains withdrawn. Tests verify cancellation
+before another sync, retry denial, zero later sends, restart persistence, no
+message reaching the originating room, and late-acknowledgement dominance.
+
+Idempotent remote send keeps the original ID/body/timestamp while returning the
+current outbox state. Changed bodies still fail. Authenticated `/api/me` now adds
+only public key-derived `peer_id`, including when federation_endpoint is None;
+card export still requires a configured endpoint, and signed-out `/api/me` stays
+401. This supports exact self comparison as peer_id + ':' + local account ID.
+
+API.md and PROTOCOL.md now document this authority policy, correlation fields,
+nonfailed retry conflict, cancellation behavior and endpoint-independent own-peer
+identity. No UI, models, live services or other tasks changed; no subagents ran.
+
+### Covering verification and self-review
+
+```
+uv run --project peer pytest peer/tests/test_federation.py peer/tests/test_transport.py peer/tests/test_chats.py -q
+35 passed, 1 warning in 11.19s
+
+uv run --project peer pytest peer/tests/test_auth.py peer/tests/test_federation.py peer/tests/test_transport.py peer/tests/test_chats.py -q
+48 passed, 1 warning in 7.16s
+
+git diff --check
+# exit 0, no output
+```
+
+The second run adds authentication regressions because `/api/me` changed. Real TLS,
+restart/replay, strict pin and deadline tests remain in the covering transport run.
+Self-review checked action namespaces at both status/retry and historical contact
+collection, exact local versus qualified remote message-author matching, atomic
+cancellation scope, rejection at final dispatch and no cancellation overwrite on
+late acknowledgements. Wire payload/signature contracts and ownership tables are
+unchanged. The original in-flight plaintext/remote availability limitations still
+apply; the remaining warning is only the previously documented dependency alias.
