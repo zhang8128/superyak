@@ -4,13 +4,15 @@ import time
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from .common import Problem, valid_utf8
 from .db import Store
 
 MAX_REQUEST = 6 * 1024 * 1024
 COOKIE = 'superyak_session'
 DEFAULT_ORIGINS = ('http://127.0.0.1:7435', 'http://localhost:7435')
+STATIC_DIR = Path(__file__).with_name('static')
 
 class BrowserBoundary:
     """Bound input before JSON parsing; check origins for browser writes."""
@@ -100,6 +102,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.sync_enabled = sync_enabled
     install(app)
+    app.mount('/assets', StaticFiles(directory=STATIC_DIR), name='assets')
     app.add_middleware(BrowserBoundary, allowed_origins=allowed_origins)
 
     @app.exception_handler(Problem)
@@ -113,6 +116,14 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.exception_handler(Exception)
     async def unexpected(request, exc):
         return JSONResponse({'error': 'Request could not be completed'}, status_code=500)
+
+    @app.get('/', include_in_schema=False)
+    def browser_home():
+        return FileResponse(STATIC_DIR / 'index.html')
+
+    @app.get('/public/', include_in_schema=False)
+    def browser_public():
+        return FileResponse(STATIC_DIR / 'index.html')
 
     @app.post('/api/login')
     async def login(request: Request):
