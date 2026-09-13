@@ -296,6 +296,15 @@ def _restore_rng_state(state: dict[str, Any], device_name: str) -> None:
         torch.mps.set_rng_state(state["mps"])
 
 
+def _publish_checkpoint_exports(run_dir: Path, checkpoint: Path) -> None:
+    """Refresh the mutable convenience exports from an immutable checkpoint."""
+    shutil.copy2(checkpoint / "optimizer.pt", run_dir / "optimizer.pt")
+    final_adapter = run_dir / "adapter"
+    if final_adapter.exists():
+        shutil.rmtree(final_adapter)
+    shutil.copytree(checkpoint / "adapter", final_adapter)
+
+
 def _save_checkpoint(
     run_dir: Path,
     model: PeftModel,
@@ -336,15 +345,10 @@ def _save_checkpoint(
     }
     _write_json(temporary_checkpoint / "state.json", checkpoint_state)
     os.replace(temporary_checkpoint, checkpoint)
-    adapter = checkpoint / "adapter"
 
     # Publish the pointer last, after the new immutable checkpoint is complete.
     _write_json(run_dir / "state.json", checkpoint_state)
-    shutil.copy2(checkpoint / "optimizer.pt", run_dir / "optimizer.pt")
-    final_adapter = run_dir / "adapter"
-    if final_adapter.exists():
-        shutil.rmtree(final_adapter)
-    shutil.copytree(adapter, final_adapter)
+    _publish_checkpoint_exports(run_dir, checkpoint)
     return checkpoint
 
 
@@ -533,6 +537,10 @@ def run_training(
             gradient_norms = [float(value) for value in state["gradient_norms"]]
         except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
             raise ValueError("the recoverable optimizer checkpoint is invalid") from exc
+        # The pointer and immutable checkpoint may have become durable just
+        # before an interrupted convenience export. Repair both exports even
+        # when this resume has no new optimization steps to execute.
+        _publish_checkpoint_exports(run_dir, checkpoint)
 
     if not resume:
         run_dir.mkdir(parents=True, mode=0o700)

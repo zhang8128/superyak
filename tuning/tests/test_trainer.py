@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 from safetensors.torch import load_file
+import superyak_tuning.trainer as trainer_module
 from superyak_tuning.trainer import (
     _actual_attention_targets,
     _encode_completion,
@@ -380,6 +381,85 @@ def completed_run(tiny_model_dir: Path, tmp_path: Path) -> Path:
 def _latest_checkpoint(run_dir: Path) -> Path:
     state = json.loads((run_dir / "state.json").read_text())
     return run_dir / "checkpoints" / state["checkpoint"]
+
+
+def _assert_exports_match_checkpoint(run_dir: Path, checkpoint: Path) -> None:
+    exported_adapter = run_dir / "adapter"
+    checkpoint_adapter = checkpoint / "adapter"
+    assert exported_adapter.is_dir()
+    assert sorted(
+        path.relative_to(exported_adapter) for path in exported_adapter.rglob("*")
+    ) == sorted(
+        path.relative_to(checkpoint_adapter) for path in checkpoint_adapter.rglob("*")
+    )
+    for source in checkpoint_adapter.rglob("*"):
+        if source.is_file():
+            exported = exported_adapter / source.relative_to(checkpoint_adapter)
+            assert exported.read_bytes() == source.read_bytes()
+    assert (run_dir / "optimizer.pt").read_bytes() == (
+        checkpoint / "optimizer.pt"
+    ).read_bytes()
+
+
+def test_zero_step_resume_repairs_exports_after_interrupted_publication(
+    tiny_model_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "interrupted-export"
+    copytree = trainer_module.shutil.copytree
+
+    def interrupt_adapter_export(source: Path, destination: Path, *args, **kwargs):
+        if Path(destination) == run_dir / "adapter":
+            raise OSError("simulated interruption after checkpoint publication")
+        return copytree(source, destination, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(trainer_module.shutil, "copytree", interrupt_adapter_export)
+        with pytest.raises(OSError, match="simulated interruption"):
+            run_training(
+                tiny_model_dir, _records(), run_dir, _settings(1), _lineage()
+            )
+
+    checkpoint = _latest_checkpoint(run_dir)
+    assert (checkpoint / "adapter" / "adapter_model.safetensors").is_file()
+    assert not (run_dir / "adapter").exists()
+
+    receipt = run_training(
+        tiny_model_dir,
+        _records(),
+        run_dir,
+        _settings(1),
+        _lineage(),
+        resume=True,
+    )
+
+    assert receipt["completed_steps"] == 1
+    assert receipt["resumed"] is True
+    assert Path(receipt["checkpoint"]) == checkpoint
+    assert Path(receipt["adapter_dir"]) == run_dir / "adapter"
+    _assert_exports_match_checkpoint(run_dir, checkpoint)
+
+
+def test_zero_step_resume_replaces_stale_adapter_and_optimizer_exports(
+    tiny_model_dir: Path, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "stale-export"
+    run_training(tiny_model_dir, _records(), run_dir, _settings(1), _lineage())
+    checkpoint = _latest_checkpoint(run_dir)
+    (run_dir / "adapter" / "adapter_model.safetensors").write_bytes(b"stale")
+    (run_dir / "optimizer.pt").write_bytes(b"stale")
+
+    receipt = run_training(
+        tiny_model_dir,
+        _records(),
+        run_dir,
+        _settings(1),
+        _lineage(),
+        resume=True,
+    )
+
+    assert receipt["completed_steps"] == 1
+    assert receipt["resumed"] is True
+    _assert_exports_match_checkpoint(run_dir, checkpoint)
 
 
 def test_resume_rejects_checkpoint_from_a_different_run(
