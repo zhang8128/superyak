@@ -94,6 +94,7 @@ accounts. All these accounts are known local contacts for this first slice.
 | POST `/api/login` | `{username,password}` | `{user,csrf_token}`, session cookie |
 | GET `/api/me` | — | User fields plus `csrf_token` and public key-derived `peer_id` |
 | PATCH `/api/me` | `{name}` | Corrected user, same ID and grants |
+| GET `/api/me/corrections` | — | Signed-in account's ordered `{id,user_id,old_name,new_name,actor_id,created}` name corrections |
 | POST `/api/logout` | none | `{ok:true}`, revoked/deleted cookie |
 | GET `/api/accounts` | — | User array, owner only |
 | POST `/api/invitations` | `{expires_in:86400}` optional; 60–604800 seconds | `{id,token,expires}`; owner only |
@@ -114,6 +115,11 @@ No public registration or password reset route exists. Passwords use scrypt with
 random salts (`n=16384,r=8,p=1,dklen=32`). Failed logins share a generic response and
 are limited to eight per username / forty per source per five minutes; success
 clears the username failure counter. One-use invitation redemption is atomic.
+Name corrections append their actual old/new values, acting account ID and time.
+The self-only history begins with the first correction recorded by this schema;
+existing account names do not create fabricated earlier entries. No administrative
+route exposes another account's correction history, and corrections change no ID,
+membership, layer audience or chat grant.
 
 Home arrays/counts contain only items accessible to the current account. `chats`
 contains room summaries, not message bodies. `layers` contains only owned drafts;
@@ -255,6 +261,7 @@ Browser route methods mirror their resource domain and take trusted `actor` firs
 ```text
 create_user(username, name, password, *, is_admin=False) -> user [trusted CLI only]
 rename_user(actor, name) -> user
+account_corrections(actor) -> ordered actual self-correction records
 login(username, password, source) -> {user,csrf_token,token}
 session(token) -> user+csrf_token; logout(token) -> None
 accounts(actor); invite(actor, expires_in=86400); redeem(token,username,name,password)

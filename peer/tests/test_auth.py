@@ -100,6 +100,31 @@ def test_name_correction_keeps_identity_and_grants(env):
     assert doctor.get('/api/shared/layers/' + layer['id']).json()['access_routes'] == ['person']
     assert patient.get('/api/layers/' + layer['id']).json()['audience_users'] == [users[1]['id']]
 
+def test_name_correction_records_actual_self_history_without_fabricating_past_entries(env):
+    _, clients, users, clock = env
+    doctor = clients[1]
+    assert doctor.get('/api/me/corrections').json() == []
+
+    clock[0] += 30
+    assert doctor.patch('/api/me', json={'name': 'Morgan Reed'}).status_code == 200
+    history = doctor.get('/api/me/corrections')
+    assert history.status_code == 200
+    assert history.json() == [{
+        'id': 1,
+        'user_id': users[1]['id'],
+        'old_name': 'Doctor',
+        'new_name': 'Morgan Reed',
+        'actor_id': users[1]['id'],
+        'created': clock[0],
+    }]
+
+    # A no-op name save is not a correction and does not invent another event.
+    doctor.patch('/api/me', json={'name': 'Morgan Reed'})
+    assert doctor.get('/api/me/corrections').json() == history.json()
+
+    # The owner/account-support role has no route for another person's history.
+    assert clients[2].get('/api/me/corrections').json() == []
+
 def test_malformed_origin_is_public_safe_denial(env):
     _, clients, _, _ = env
     response = clients[0].post('/api/layers', headers={'origin': 'http://['}, json={'title': 'x'})

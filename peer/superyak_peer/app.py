@@ -143,6 +143,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = actor(request), await body(request)
         return store.rename_user(who, data.get('name'))
 
+    @app.get('/api/me/corrections')
+    def my_corrections(request: Request):
+        return store.account_corrections(actor(request))
+
     @app.post('/api/logout')
     def logout(request: Request):
         actor(request)

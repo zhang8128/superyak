@@ -10,8 +10,10 @@ const state = {
   files: [],
   sync: { enabled: false, deliveries: [] },
   accounts: [],
+  corrections: [],
   connections: [],
   activeLayers: {},
+  activeLayerErrors: {},
   revisions: [],
   room: null,
   selectedLayerId: null,
@@ -25,12 +27,12 @@ const state = {
   pairPreview: null,
   invitation: null,
   flash: null,
-  dirtyLayer: false,
   transitionNote: null,
   reauth: false,
   reauthError: null,
-  unsavedLayer: null,
-  conflict: false,
+  layerEdits: {},
+  editorIdentity: null,
+  logoutError: null,
 };
 
 class ApiError extends Error {
@@ -81,6 +83,16 @@ function announce(message) {
 function setFlash(message, error = false) {
   state.flash = { message, error };
   announce(message);
+}
+
+function identityKey(user) {
+  return user ? `${user.peer_id}:${user.id}` : null;
+}
+
+function bindEditorIdentity(user) {
+  const next = identityKey(user);
+  if (state.editorIdentity !== next) state.layerEdits = {};
+  state.editorIdentity = next;
 }
 
 async function api(path, options = {}) {
@@ -229,6 +241,7 @@ function homeView() {
 
 function layerStatus(layer) {
   const active = state.activeLayers[layer.id];
+  if (layer.active_revision && state.activeLayerErrors[layer.id]) return `<span class="badge active">Active · details unavailable</span>`;
   if (!active) return `<span class="badge draft">Private draft</span>`;
   return `<span class="badge active">Active</span>`;
 }
@@ -243,8 +256,13 @@ function selectedLayer() {
 
 function layerForEditor() {
   const layer = selectedLayer();
-  if (!layer || state.unsavedLayer?.id !== layer.id) return layer;
-  return { ...layer, ...state.unsavedLayer.values };
+  const edit = layer && state.layerEdits[layer.id];
+  return edit ? { ...layer, ...edit.values } : layer;
+}
+
+function currentLayerEdit() {
+  const layer = selectedLayer();
+  return layer ? state.layerEdits[layer.id] : null;
 }
 
 function choiceContact(contact, selected) {
@@ -280,17 +298,24 @@ function formatBytes(value) {
 }
 
 function editorState(layer, active) {
-  if (!active) return `<span class="badge draft">Private draft</span><span class="state-note">Sharing is off</span>`;
+  const unsaved = currentLayerEdit()?.dirty ? '<span class="badge draft">Unsaved changes</span>' : "";
+  if (layer.active_revision && state.activeLayerErrors[layer.id]) {
+    return `<span class="badge active">Active release</span>${unsaved}<span class="state-note">Latest sharing details unavailable</span>`;
+  }
+  if (!active) return `<span class="badge draft">Private draft</span>${unsaved}<span class="state-note">Sharing is off</span>`;
   const unpublished = active.draft_version !== layer.version;
-  return `<span class="badge active">Active · version ${active.draft_version}</span>${unpublished ? '<span class="badge draft">Unpublished changes</span>' : '<span class="state-note">Draft and active release match</span>'}`;
+  return `<span class="badge active">Active · version ${active.draft_version}</span>${unsaved}${unpublished ? '<span class="badge draft">Unpublished changes</span>' : '<span class="state-note">Draft and active release match</span>'}`;
 }
 
 function revisionHistory() {
   if (!state.revisions.length) return `<p class="meta">No releases yet. Activated versions will appear here without replacing earlier ones.</p>`;
-  return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Attributed to you · ${formatDate(revision.created)}</p><p>${escapeHtml(revision.title)}</p><p class="meta">${escapeHtml(revision.body.slice(0, 180))}${revision.body.length > 180 ? "…" : ""}</p></details>`).join("");
+  return state.revisions.slice().reverse().map((revision) => `<details><summary>Release ${revision.revision} · draft version ${revision.draft_version}</summary><p class="meta">Owner account ${escapeHtml(revision.owner_id)}</p><p class="meta">Origin peer ${escapeHtml(state.me.peer_id)} · ${formatDate(revision.created)}</p><h4>${escapeHtml(revision.title)}</h4><div class="shared-body">${escapeHtml(revision.body)}</div></details>`).join("");
 }
 
 function activePanel(layer, active) {
+  if (layer.active_revision && state.activeLayerErrors[layer.id]) {
+    return `<div class="active-panel unavailable"><h3>Active release details are unavailable</h3><p>The peer still reports an active release. Its current audience and controls could not be loaded, so no change is being claimed.</p></div>`;
+  }
   if (!active) return `<div class="active-panel"><h3>Sharing is off</h3><p>Your saved draft is private. Preview a concrete saved version before turning it on.</p></div>`;
   const publicLink = `/public/?layer=${pathPart(layer.id)}`;
   const routeControls = [
@@ -320,6 +345,7 @@ function withdrawDialog() {
 
 function layerEditor(layer) {
   const active = state.activeLayers[layer.id];
+  const edit = currentLayerEdit();
   return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your private workspace</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
     <form id="layer-form">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
@@ -329,7 +355,7 @@ function layerEditor(layer) {
       <fieldset class="field"><legend>Public access</legend><label class="choice public-choice"><input type="checkbox" name="public" ${layer.public ? "checked" : ""}><span class="choice-copy"><strong>Anyone with the public link</strong><small>Only the activated version and its chosen attachments are public.</small></span></label></fieldset>
       <fieldset class="field"><legend>Attachments</legend>${attachmentChoices(layer)}<label class="button secondary" for="file-upload">Upload a file</label><input class="sr-only" id="file-upload" type="file" accept="text/plain,application/pdf,image/png,image/jpeg,image/gif"><p id="upload-status" class="inline-message" role="status"></p></fieldset>
       <div class="editor-actions"><div class="button-row"><button class="button" type="submit">Save private draft</button><button class="button secondary" type="button" data-action="preview">Preview audience</button></div><span class="state-note">Saved version ${layer.version}</span></div>
-      <p id="layer-status" class="inline-message ${state.conflict ? "error" : ""}" role="status">${state.conflict ? "This draft changed in another tab. Your text is still here." : ""}</p>${state.conflict ? '<button class="button secondary" type="button" data-action="resolve-conflict">Save my text onto the latest draft</button>' : ""}
+      <p id="layer-status" class="inline-message ${edit?.conflict ? "error" : ""}" role="status">${edit?.conflict ? "This draft changed in another tab. Your text is still here." : ""}</p>${edit?.conflict ? '<button class="button secondary" type="button" data-action="resolve-conflict">Save my text onto the latest draft</button>' : ""}
     </form>
     ${activePanel(layer, active)}
     <div class="history"><h3>Release and correction history</h3><p class="meta">Earlier releases keep their words, version, date, and original account attribution. A corrected display name never changes grants.</p>${revisionHistory()}</div>
@@ -363,7 +389,21 @@ function sharedView() {
   const visibleSpaces = state.home.spaces.filter((space) => state.currentSpaceId === "all" || space.id === state.currentSpaceId);
   return `<header class="page-head"><div><p class="eyebrow">People and places</p><h1>Shared spaces</h1><p class="lede">Read active releases available to you through a named person, a selected space, or a public link.</p></div></header>
     <section class="grid cols-2"><div><div class="section-head"><h2>Active releases</h2></div><div class="item-list">${state.home.shared_layers.map(sharedItem).join("") || empty("Nothing active here", "Private drafts never appear in this view.")}</div></div>
-    <div>${selected ? `<article class="card"><p class="eyebrow">Release ${escapeHtml(selected.revision)} · ${escapeHtml(accessLabel(selected.access_routes || []))}</p><h2>${escapeHtml(selected.title)}</h2><p class="shared-body">${escapeHtml(selected.body)}</p>${sharedAttachments(selected)}</article>` : `<div class="section-head"><h2>Your visible spaces</h2></div>${visibleSpaces.length ? visibleSpaces.map((space) => `<div class="card compact"><p class="eyebrow">${kindLabel(space.kind)}</p><h3>${escapeHtml(space.name)}</h3><p class="meta">${escapeHtml(space.audience_note)}</p></div>`).join("") : empty("No spaces in this view", "Choose All my spaces or create one when you need it.")}`}</div></section>`;
+    <div>${selected ? `<article class="card"><p class="eyebrow">Release ${escapeHtml(selected.revision)} · ${escapeHtml(accessLabel(selected.access_routes || []))}</p><h2>${escapeHtml(selected.title)}</h2>${sharedAttribution(selected)}<p class="shared-body">${escapeHtml(selected.body)}</p>${sharedAttachments(selected)}</article>` : `<div class="section-head"><h2>Your visible spaces</h2></div>${visibleSpaces.length ? visibleSpaces.map((space) => `<div class="card compact"><p class="eyebrow">${kindLabel(space.kind)}</p><h3>${escapeHtml(space.name)}</h3><p class="meta">${escapeHtml(space.audience_note)}</p></div>`).join("") : empty("No spaces in this view", "Choose All my spaces or create one when you need it.")}`}</div></section>`;
+}
+
+function sharedOwnerName(layer) {
+  if (isSelf(layer.owner_id)) return state.me.name;
+  const local = state.contacts.find((contact) => contact.id === layer.owner_id);
+  if (local) return local.name;
+  const remote = state.contacts.find((contact) => contact.remote && `${contact.peer_id}:${contact.user_id}` === layer.owner_id);
+  return remote?.name || "Account on this peer";
+}
+
+function sharedAttribution(layer) {
+  if (!layer.owner_id) return `<p class="meta">This release is available through its public route; account attribution is not included.</p>`;
+  const origin = layer.origin || (String(layer.owner_id).includes(":") ? String(layer.owner_id).split(":", 1)[0] : state.me.peer_id);
+  return `<div class="attribution"><strong>Shared by ${escapeHtml(sharedOwnerName(layer))}</strong><span>Owner account ${escapeHtml(layer.owner_id)}</span><span>Origin peer ${escapeHtml(origin)}</span></div>`;
 }
 
 function sharedAttachments(layer) {
@@ -435,14 +475,14 @@ function roomDetail(room) {
   const canManage = room.owner_id === state.me.id && !room.origin;
   return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
-    ${canManage ? `<div class="button-row"><button class="button ghost" data-action="change-participants">Change participants</button></div>` : ""}
+    ${canManage ? `<div class="room-management"><p class="meta">Removing someone ends their access to this hosted room and cancels delivery queued for them.</p><div class="button-row"><button class="button ghost" data-action="change-participants">Change participants</button>${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
 }
 
 function chatDialog() {
   if (!state.chatDialog) return "";
   const room = state.room;
-  const existing = new Set(room?.member_ids || []);
+  const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
   const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
   return `<dialog open aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts empty. Earlier messages stay with their original participants."}</p><form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset><div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
@@ -478,7 +518,10 @@ function connectionsView() {
 
 function profileDialog() {
   if (!state.profileDialog || !state.me) return "";
-  return `<dialog open aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same private account and sharing permissions. Earlier releases remain attributed to this account.</p><form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">Sign out</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form></div></dialog>`;
+  const corrections = state.corrections.length
+    ? `<div class="history"><h3>Name correction history</h3>${state.corrections.slice().reverse().map((item) => `<div class="correction"><strong>${escapeHtml(item.old_name)} → ${escapeHtml(item.new_name)}</strong><span>Changed by ${item.actor_id === state.me.id ? `you (${escapeHtml(item.actor_id)})` : escapeHtml(item.actor_id)} · ${formatDate(item.created)}</span></div>`).join("")}</div>`
+    : `<p class="meta">No name corrections recorded for this account.</p>`;
+  return `<dialog open aria-labelledby="account-title"><div class="dialog-body"><p class="eyebrow">Local account</p><h2 id="account-title">Your account</h2><p>A name correction keeps the same private account and sharing permissions. Earlier releases remain attributed to this account.</p>${state.logoutError ? `<div class="notice error" role="alert">Sign-out could not be completed. This account is still signed in on this device.</div>` : ""}<form id="profile-form"><div class="field"><label for="display-name">Display name</label><input class="input" id="display-name" name="name" maxlength="200" value="${escapeHtml(state.me.name)}" required></div><div class="button-row"><button class="button" type="submit">Save name correction</button><button class="button secondary" type="button" data-action="logout">${state.logoutError ? "Retry sign out" : "Sign out"}</button><button class="button ghost" type="button" data-action="close-dialog">Close</button></div></form>${corrections}</div></dialog>`;
 }
 
 function reauthDialog() {
@@ -505,18 +548,27 @@ async function renderPublic() {
 }
 
 async function loadData() {
-  const [home, contacts, files, sync] = await Promise.all([
-    api("/api/home"), api("/api/contacts"), api("/api/files"), api("/api/sync")
+  const [home, contacts, files, sync, corrections] = await Promise.all([
+    api("/api/home"), api("/api/contacts"), api("/api/files"), api("/api/sync"), api("/api/me/corrections")
   ]);
   state.home = home;
   state.contacts = contacts;
   state.files = files;
   state.sync = sync;
+  state.corrections = corrections;
   const activePairs = await Promise.all(home.layers.filter((layer) => layer.active_revision).map(async (layer) => {
-    try { return [layer.id, await api(`/api/shared/layers/${pathPart(layer.id)}`)]; }
-    catch (_) { return [layer.id, null]; }
+    try { return { id: layer.id, active: await api(`/api/shared/layers/${pathPart(layer.id)}`) }; }
+    catch (error) {
+      if (error.status === 401) throw error;
+      return { id: layer.id, error };
+    }
   }));
-  state.activeLayers = Object.fromEntries(activePairs.filter(([, active]) => active));
+  const previousActive = state.activeLayers;
+  state.activeLayers = Object.fromEntries(activePairs.flatMap((result) => {
+    const active = result.active || previousActive[result.id];
+    return active ? [[result.id, active]] : [];
+  }));
+  state.activeLayerErrors = Object.fromEntries(activePairs.flatMap((result) => result.error ? [[result.id, result.error.message]] : []));
   if (state.me.is_admin) {
     [state.accounts, state.connections] = await Promise.all([api("/api/accounts"), api("/api/connections")]);
   } else {
@@ -574,8 +626,7 @@ async function refresh(message = null) {
   }
 }
 
-function layerFormData() {
-  const form = document.querySelector("#layer-form");
+function layerFormData(form = document.querySelector("#layer-form")) {
   return {
     title: form.elements.title.value,
     body: form.elements.body.value,
@@ -586,6 +637,20 @@ function layerFormData() {
   };
 }
 
+function rememberLayerForm(form = document.querySelector("#layer-form")) {
+  const layer = selectedLayer();
+  if (!layer || !form) return null;
+  const previous = state.layerEdits[layer.id];
+  const edit = {
+    values: layerFormData(form),
+    dirty: true,
+    conflict: previous?.conflict || false,
+    generation: (previous?.generation || 0) + 1,
+  };
+  state.layerEdits[layer.id] = edit;
+  return edit;
+}
+
 function updateLayer(layer) {
   const index = state.home.layers.findIndex((item) => item.id === layer.id);
   if (index >= 0) state.home.layers[index] = layer;
@@ -593,29 +658,34 @@ function updateLayer(layer) {
 
 async function saveLayer(form) {
   const layer = selectedLayer();
-  const values = layerFormData();
+  const submitted = rememberLayerForm(form);
+  const values = submitted.values;
   const status = form.querySelector("#layer-status");
   status.classList.remove("error");
   status.textContent = "Saving…";
   try {
     const saved = await api(`/api/layers/${pathPart(layer.id)}`, { method: "PUT", json: { version: layer.version, ...values } });
     updateLayer(saved);
-    state.dirtyLayer = false;
-    state.unsavedLayer = null;
-    state.conflict = false;
-    setFlash("Private draft saved");
+    const current = state.layerEdits[layer.id];
+    const newerEdits = current && current.generation !== submitted.generation;
+    if (!newerEdits) delete state.layerEdits[layer.id];
+    else current.conflict = false;
+    setFlash(newerEdits ? "Submitted draft saved. Newer edits still need saving." : "Private draft saved");
     render();
   } catch (error) {
     if (error.status === 401) {
-      state.unsavedLayer = { id: layer.id, values };
+      const current = state.layerEdits[layer.id] || submitted;
+      current.conflict = false;
+      state.layerEdits[layer.id] = current;
       state.reauth = true;
       state.reauthError = null;
       render();
       return;
     }
     if (error.status === 409) {
-      state.unsavedLayer = { id: layer.id, values };
-      state.conflict = true;
+      const current = state.layerEdits[layer.id] || submitted;
+      current.conflict = true;
+      state.layerEdits[layer.id] = current;
       render();
       announce("This draft changed in another tab. Your text is still here.");
       return;
@@ -629,7 +699,7 @@ async function saveLayer(form) {
 async function uploadFile(input) {
   const file = input.files?.[0];
   if (!file) return;
-  const draftValues = layerFormData();
+  const draftEdit = rememberLayerForm();
   const status = document.querySelector("#upload-status");
   if (file.size > 4 * 1024 * 1024) {
     status.className = "inline-message error";
@@ -647,8 +717,11 @@ async function uploadFile(input) {
     const uploaded = await api("/api/files", { method: "POST", json: { name: file.name, media_type: file.type, content_base64 } });
     state.files.push(uploaded);
     const layer = selectedLayer();
-    Object.assign(layer, draftValues);
-    layer.attachment_ids = [...new Set([...(draftValues.attachment_ids || []), uploaded.id])];
+    const current = state.layerEdits[layer.id] || draftEdit;
+    current.values.attachment_ids = [...new Set([...(current.values.attachment_ids || []), uploaded.id])];
+    current.dirty = true;
+    current.generation += 1;
+    state.layerEdits[layer.id] = current;
     render();
     document.querySelector("#upload-status").textContent = `${uploaded.name} uploaded. Save the draft to keep it selected.`;
   } catch (error) {
@@ -658,10 +731,6 @@ async function uploadFile(input) {
 }
 
 async function openLayer(id) {
-  if (state.selectedLayerId !== id) {
-    state.unsavedLayer = null;
-    state.conflict = false;
-  }
   state.selectedLayerId = id;
   location.hash = `layers/${pathPart(id)}`;
   state.revisions = await api(`/api/layers/${pathPart(id)}/revisions`);
@@ -670,18 +739,20 @@ async function openLayer(id) {
 }
 
 async function resolveConflict() {
-  const pending = state.unsavedLayer;
-  if (!pending) return;
+  const layer = selectedLayer();
+  const initial = rememberLayerForm();
+  if (!layer || !initial) return;
   try {
-    const latest = await api(`/api/layers/${pathPart(pending.id)}`);
-    const saved = await api(`/api/layers/${pathPart(pending.id)}`, {
+    const latest = await api(`/api/layers/${pathPart(layer.id)}`);
+    const submitted = state.layerEdits[layer.id];
+    const saved = await api(`/api/layers/${pathPart(layer.id)}`, {
       method: "PUT",
-      json: { version: latest.version, ...pending.values },
+      json: { version: latest.version, ...submitted.values },
     });
     updateLayer(saved);
-    state.unsavedLayer = null;
-    state.conflict = false;
-    state.dirtyLayer = false;
+    const current = state.layerEdits[layer.id];
+    if (current?.generation === submitted.generation) delete state.layerEdits[layer.id];
+    else if (current) current.conflict = false;
     setFlash("Private draft saved");
     render();
   } catch (error) {
@@ -707,8 +778,9 @@ async function publicOff() {
   const layer = selectedLayer();
   const active = state.activeLayers[layer.id];
   try {
-    await api(`/api/layers/${pathPart(layer.id)}/revoke`, { method: "POST", json: { revision: active.revision, public: true } });
-    await refresh("Named sharing is still on");
+    const narrowed = await api(`/api/layers/${pathPart(layer.id)}/revoke`, { method: "POST", json: { revision: active.revision, public: true } });
+    const namedRoutes = [...(narrowed.audience_users || []), ...(narrowed.audience_spaces || [])];
+    await refresh(namedRoutes.length ? "Named sharing is still on" : "No active audience routes remain");
   } catch (error) {
     setFlash(error.status === 409 ? "The active release changed. It has been refreshed; review it before trying again." : error.message, true);
     await refresh();
@@ -785,6 +857,21 @@ async function createChat(form) {
   }
 }
 
+async function removeParticipant(id) {
+  const room = state.room;
+  const name = participantName(id);
+  try {
+    await api(`/api/chats/${pathPart(room.id)}/participants/${pathPart(id)}`, { method: "DELETE", json: {} });
+    await loadData();
+    state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    state.transitionNote = `${name} no longer has access to this room`;
+    render();
+  } catch (error) {
+    setFlash(`${error.message} Room access was not changed.`, true);
+    render();
+  }
+}
+
 async function sendMessage(form) {
   const room = state.room;
   const textarea = form.elements.body;
@@ -797,17 +884,34 @@ async function sendMessage(form) {
   const status = form.querySelector("#chat-status");
   status.className = "inline-message";
   status.textContent = "Sending…";
+  let accepted;
   try {
-    await api(`/api/chats/${pathPart(room.id)}/messages`, { method: "POST", json: { client_message_id: draft.clientId, body } });
-    sessionStorage.removeItem(draftKey(room.id));
-    state.room = await api(`/api/chats/${pathPart(room.id)}`);
-    state.sync = await api("/api/sync");
-    render();
-    document.querySelector("#chat-status").textContent = "Message saved";
+    accepted = await api(`/api/chats/${pathPart(room.id)}/messages`, { method: "POST", json: { client_message_id: draft.clientId, body } });
   } catch (error) {
     status.className = "inline-message error";
     status.textContent = error.status === 0 ? "Connection lost. Your message is still here." : `${error.message} Your message is still here.`;
     announce(status.textContent);
+    return;
+  }
+  const currentDraft = readChatDraft(room.id);
+  if (currentDraft.clientId === draft.clientId && currentDraft.body === body) sessionStorage.removeItem(draftKey(room.id));
+  if (state.room?.id === room.id) {
+    const duplicate = (state.room.messages || []).some((message) => message.id === accepted.id || (message.author_id === accepted.author_id && message.client_message_id === accepted.client_message_id));
+    if (!duplicate) state.room.messages = [...(state.room.messages || []), accepted];
+  }
+  try {
+    const [latestRoom, latestSync] = await Promise.all([
+      api(`/api/chats/${pathPart(room.id)}`),
+      api("/api/sync"),
+    ]);
+    if (state.room?.id === room.id) state.room = latestRoom;
+    state.sync = latestSync;
+    render();
+    const refreshedStatus = document.querySelector("#chat-status");
+    if (refreshedStatus && state.room?.id === room.id) refreshedStatus.textContent = "Message saved";
+  } catch (error) {
+    setFlash("Message saved. Latest room status is unavailable.");
+    render();
   }
 }
 
@@ -821,13 +925,26 @@ function clearChatDrafts() {
 }
 
 async function logout() {
-  try {
-    await api("/api/logout", { method: "POST", json: {} });
-  } finally {
+  const complete = () => {
+    state.logoutError = null;
     clearChatDrafts();
+    state.layerEdits = {};
+    state.editorIdentity = null;
     state.me = null;
     location.hash = "";
     showLogin();
+  };
+  try {
+    await api("/api/logout", { method: "POST", json: {} });
+    complete();
+  } catch (error) {
+    if (error.status === 401) {
+      complete();
+      return;
+    }
+    state.logoutError = "Sign-out could not be completed";
+    state.profileDialog = true;
+    render();
   }
 }
 
@@ -859,6 +976,7 @@ async function bootstrap() {
   }
   try {
     state.me = await api("/api/me");
+    bindEditorIdentity(state.me);
     await refresh();
   } catch (error) {
     showLogin(error.status === 401 ? "" : error.message);
@@ -873,7 +991,10 @@ document.addEventListener("submit", async (event) => {
     button.disabled = true;
     try {
       await api("/api/login", { method: "POST", json: { username: form.elements.username.value, password: form.elements.password.value } });
-      state.me = await api("/api/me");
+      const signedIn = await api("/api/me");
+      bindEditorIdentity(signedIn);
+      state.me = signedIn;
+      state.logoutError = null;
       await refresh();
     } catch (error) {
       showLogin(error.message);
@@ -897,6 +1018,7 @@ document.addEventListener("submit", async (event) => {
       await api("/api/login", { method: "POST", json: { username: state.me.username, password: form.elements.password.value } });
       const signedIn = await api("/api/me");
       if (signedIn.id !== expectedId) throw new ApiError("Sign in with the account that owns this draft", 403);
+      bindEditorIdentity(signedIn);
       state.me = signedIn;
       state.reauth = false;
       state.reauthError = null;
@@ -919,6 +1041,7 @@ document.addEventListener("submit", async (event) => {
     try {
       await api("/api/me", { method: "PATCH", json: { name: form.elements.name.value } });
       state.me = await api("/api/me");
+      bindEditorIdentity(state.me);
       state.profileDialog = false;
       setFlash(`Name corrected from ${oldName} to ${state.me.name}. Your account and sharing permissions did not change.`);
       await loadData();
@@ -943,7 +1066,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "open-layer") await openLayer(target.dataset.id);
   if (action === "preview") {
-    if (state.dirtyLayer) {
+    if (currentLayerEdit()?.dirty) {
       const status = document.querySelector("#layer-status");
       status.className = "inline-message error";
       status.textContent = "Save this private draft before previewing a version.";
@@ -961,6 +1084,7 @@ document.addEventListener("click", async (event) => {
   if (action === "new-chat") { state.chatDialog = "new"; render(); }
   if (action === "open-chat") await openChat(target.dataset.id);
   if (action === "change-participants") { state.chatDialog = "linked"; render(); }
+  if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {
@@ -992,7 +1116,7 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (event.target.closest("#layer-form")) state.dirtyLayer = true;
+  if (event.target.closest("#layer-form")) rememberLayerForm();
   if (event.target.id === "message-body" && state.room) {
     const previous = readChatDraft(state.room.id);
     const next = { body: event.target.value, clientId: previous.body === event.target.value ? previous.clientId : null };
@@ -1001,6 +1125,7 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", async (event) => {
+  if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
   if (event.target.id === "space-context") {
     state.currentSpaceId = event.target.value;
     render();

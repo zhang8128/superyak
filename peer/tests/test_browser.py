@@ -468,3 +468,204 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             page.get_by_role("button", name="Disconnect peer and 1 contact").click()
             expect(page.get_by_text("Canceled")).to_be_visible()
             expect(page.get_by_role("button", name="Retry")).to_have_count(0)
+
+
+def test_dirty_layer_survives_renders_conflicts_and_an_accepted_save(browser_peer):
+    """I1: every edit stays current through rerenders, conflicts, and in-flight saves."""
+    store = browser_peer["app"].state.store
+    patient_id = browser_peer["users"]["patient"]["id"]
+    accepted = threading.Event()
+    release = threading.Event()
+    original_save = store.save_layer
+
+    def delayed_save(actor, key, data):
+        saved = original_save(actor, key, data)
+        accepted.set()
+        release.wait(5)
+        return saved
+
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="New layer").click()
+            page.get_by_label("Layer title").fill("Kept through a dialog")
+            page.get_by_label("What do you want to share?").fill("First current text")
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Close").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Kept through a dialog")
+            expect(page.get_by_label("What do you want to share?")).to_have_value("First current text")
+
+            layer_id = decode_fragment_id(page.url)
+            store.save_layer(patient_id, layer_id, {"version": 1, "body": "Other tab"})
+            page.get_by_role("button", name="Save private draft").click()
+            expect(page.locator("#layer-status")).to_contain_text("This draft changed in another tab")
+            page.get_by_label("What do you want to share?").fill("Edited after conflict")
+            page.get_by_role("button", name="Save my text onto the latest draft").click()
+            expect(page.locator("#main-content").get_by_text("Private draft saved")).to_be_visible()
+            assert store.get_layer(patient_id, layer_id)["body"] == "Edited after conflict"
+
+            page.get_by_label("What do you want to share?").fill("Accepted snapshot")
+            store.save_layer = delayed_save
+            page.get_by_role("button", name="Save private draft").click()
+            assert accepted.wait(5), "server did not accept the delayed layer save"
+            page.get_by_label("What do you want to share?").fill("Typed while saving")
+            release.set()
+            expect(page.locator("#main-content").get_by_text("Submitted draft saved. Newer edits still need saving.")).to_be_visible()
+            expect(page.get_by_label("What do you want to share?")).to_have_value("Typed while saving")
+            expect(page.get_by_text("Unsaved changes", exact=True)).to_be_visible()
+            page.get_by_role("button", name="Preview audience").click()
+            expect(page.locator("#layer-status")).to_have_text("Save this private draft before previewing a version.")
+            assert store.get_layer(patient_id, layer_id)["body"] == "Accepted snapshot"
+
+
+def test_accepted_message_refresh_failure_keeps_new_composer_without_duplicate(browser_peer):
+    """I2: an accepted idempotent POST is complete even when subsequent reads fail."""
+    store = browser_peer["app"].state.store
+    accepted = threading.Event()
+    release = threading.Event()
+    original_send = store.send_message
+    original_get = store.get_room
+    fail_refresh = {"value": False}
+
+    def accepted_send(*args):
+        message = original_send(*args)
+        fail_refresh["value"] = True
+        accepted.set()
+        return message
+
+    def delayed_failed_get(*args):
+        if fail_refresh["value"]:
+            release.wait(5)
+            fail_refresh["value"] = False
+            from superyak_peer.common import Problem
+            raise Problem(503, "Room refresh unavailable")
+        return original_get(*args)
+
+    store.send_message = accepted_send
+    store.get_room = delayed_failed_get
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Chats", exact=True).click()
+            page.get_by_role("button", name="New private chat").click()
+            page.get_by_label("Chat title").fill("Reliable send")
+            page.get_by_role("button", name="Create chat").click()
+            expect(page.get_by_role("heading", name="Reliable send")).to_be_visible()
+            room_id = decode_fragment_id(page.url)
+            page.get_by_role("textbox", name="Message", exact=True).fill("Accepted once")
+            page.get_by_role("button", name="Send message").click()
+            assert accepted.wait(5), "server did not accept the message"
+            page.get_by_role("textbox", name="Message", exact=True).fill("New text typed during refresh")
+            release.set()
+            expect(page.locator("#main-content").get_by_text("Message saved. Latest room status is unavailable.")).to_be_visible()
+            expect(page.get_by_role("textbox", name="Message", exact=True)).to_have_value("New text typed during refresh")
+            page.reload()
+            expect(page.get_by_text("Accepted once", exact=True)).to_have_count(1)
+            assert [m["body"] for m in store.get_room(browser_peer["users"]["patient"]["id"], room_id)["messages"]] == ["Accepted once"]
+
+
+def test_failed_logout_stays_authenticated_until_server_acknowledges(browser_peer):
+    """I3: offline sign-out never claims that the HttpOnly session was revoked."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, context):
+            page.get_by_role("button", name="Account and sign out").click()
+            context.set_offline(True)
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_text("Sign-out could not be completed")).to_be_visible()
+            expect(page.get_by_role("heading", name="Your account")).to_be_visible()
+            expect(page.get_by_role("button", name="Retry sign out")).to_be_visible()
+            context.set_offline(False)
+            page.get_by_role("button", name="Retry sign out").click()
+            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+
+
+def test_active_release_read_failure_is_unknown_and_public_off_uses_returned_routes(browser_peer):
+    """I4: failed release reads remain explicit and route confirmations use server truth."""
+    store = browser_peer["app"].state.store
+    patient_id = browser_peer["users"]["patient"]["id"]
+    layer = store.create_layer(patient_id, {"title": "Availability", "public": True})
+    store.activate_layer(patient_id, layer["id"], layer["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route(
+                f"**/api/shared/layers/{layer['id']}",
+                lambda route: route.fulfill(status=503, content_type="application/json", body='{"error":"Temporarily unavailable"}'),
+            )
+            page.reload()
+            page.get_by_role("link", name="My sharing layers").click()
+            page.locator(f'[data-action="open-layer"][data-id="{layer["id"]}"]').click()
+            expect(page.get_by_text("Active release details are unavailable")).to_be_visible()
+            expect(page.get_by_text("Sharing is off", exact=True)).to_have_count(0)
+            page.unroute(f"**/api/shared/layers/{layer['id']}")
+            page.reload()
+            page.locator(f'[data-action="open-layer"][data-id="{layer["id"]}"]').click()
+            page.get_by_role("button", name="Turn off public link").click()
+            expect(page.locator("#main-content").get_by_text("No active audience routes remain")).to_be_visible()
+
+
+def test_room_owner_can_remove_participant_and_new_chat_selection_is_independent(browser_peer):
+    """I5/I6: removal revokes hosted access; a new room starts with clean choices."""
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Chats", exact=True).click()
+            page.get_by_role("button", name="New private chat").click()
+            page.get_by_label("Chat title").fill("First audience")
+            page.get_by_role("checkbox", name="Sam Family").check()
+            page.get_by_role("checkbox", name="Dr. Morgan").check()
+            page.get_by_role("button", name="Create chat").click()
+            expect(page.get_by_role("heading", name="First audience")).to_be_visible()
+            room_id = decode_fragment_id(page.url)
+
+            page.get_by_role("button", name="New private chat").click()
+            expect(page.get_by_role("checkbox", name="Sam Family")).not_to_be_checked()
+            expect(page.get_by_role("checkbox", name="Sam Family")).to_be_enabled()
+            page.get_by_label("Chat title").fill("Second direct room")
+            page.get_by_role("checkbox", name="Sam Family").check()
+            page.get_by_role("button", name="Create chat").click()
+            expect(page.get_by_role("heading", name="Second direct room")).to_be_visible()
+
+            page.goto(browser_peer["base_url"] + f"/#chats/{room_id}")
+            expect(page.get_by_role("heading", name="First audience")).to_be_visible()
+            expect(page.get_by_text("Removing someone ends their access to this hosted room")).to_be_visible()
+            page.get_by_role("button", name="Remove Sam Family from this room").click()
+            expect(page.get_by_text("Sam Family no longer has access to this room")).to_be_visible()
+
+            with signed_in_browser(playwright, browser_peer, "family") as (family, _):
+                family.goto(browser_peer["base_url"] + f"/#chats/{room_id}")
+                expect(family.get_by_role("heading", name="First audience")).to_have_count(0)
+
+
+def test_durable_name_corrections_shared_attribution_and_complete_revision(browser_peer):
+    """I7: durable actual names and stable source attribution remain navigable."""
+    store = browser_peer["app"].state.store
+    patient_id = browser_peer["users"]["patient"]["id"]
+    family_id = browser_peer["users"]["family"]["id"]
+    full_body = "Complete release text " + ("kept in history. " * 20)
+    layer = store.create_layer(patient_id, {
+        "title": "Attributed update",
+        "body": full_body,
+        "audience_users": [family_id],
+    })
+    store.activate_layer(patient_id, layer["id"], layer["version"])
+    peer_id = browser_peer["app"].state.federation.identity.peer_id
+
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_label("Display name").fill("Alex Rivera")
+            page.get_by_role("button", name="Save name correction").click()
+            page.get_by_role("link", name="My sharing layers").click()
+            page.locator(f'[data-action="open-layer"][data-id="{layer["id"]}"]').click()
+            page.get_by_text("Release 1 · draft version 1").click()
+            expect(page.locator("details").get_by_text(full_body, exact=True)).to_be_visible()
+            expect(page.get_by_text(f"Owner account {patient_id}", exact=True)).to_be_visible()
+            page.reload()
+            page.get_by_role("button", name="Account and sign out").click()
+            expect(page.get_by_text("Alex Patient → Alex Rivera", exact=True)).to_be_visible()
+            expect(page.get_by_text(f"Changed by you ({patient_id})", exact=False)).to_be_visible()
+
+        with signed_in_browser(playwright, browser_peer, "family") as (family, _):
+            family.get_by_role("link", name="Shared spaces", exact=True).click()
+            family.get_by_text("Attributed update", exact=True).click()
+            expect(family.get_by_text("Shared by Alex Rivera", exact=False)).to_be_visible()
+            expect(family.get_by_text(f"Owner account {patient_id}", exact=True)).to_be_visible()
+            expect(family.get_by_text(f"Origin peer {peer_id}", exact=True)).to_be_visible()

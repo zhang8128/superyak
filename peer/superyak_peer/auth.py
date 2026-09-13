@@ -39,9 +39,24 @@ class Auth:
     def rename_user(self, actor, name):
         text(name, 'name')
         with self.transaction() as db:
-            require(db.execute('SELECT id FROM users WHERE id=?', (actor,)).fetchone())
+            current = require(db.execute('SELECT * FROM users WHERE id=?', (actor,)).fetchone())
+            if current['name'] == name:
+                return public_user(current)
             db.execute('UPDATE users SET name=? WHERE id=?', (name, actor))
+            db.execute(
+                'INSERT INTO account_corrections(user_id,old_name,new_name,actor_id,created) VALUES(?,?,?,?,?)',
+                (actor, current['name'], name, actor, self.clock()),
+            )
             return public_user(db.execute('SELECT * FROM users WHERE id=?', (actor,)).fetchone())
+
+    def account_corrections(self, actor):
+        """Return only the signed-in account's real, append-only name changes."""
+        with self.transaction() as db:
+            require(db.execute('SELECT id FROM users WHERE id=?', (actor,)).fetchone())
+            return [dict(row) for row in db.execute(
+                'SELECT id,user_id,old_name,new_name,actor_id,created FROM account_corrections WHERE user_id=? ORDER BY id',
+                (actor,),
+            )]
 
     def login(self, username, password, source):
         text(username, 'username', 64)
