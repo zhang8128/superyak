@@ -80,7 +80,7 @@ def parser():
     p.add_argument("--model-dir", required=True)
     p.add_argument("--snapshot", required=True)
     p.add_argument("--run-dir", required=True)
-    p.add_argument("--python", default="python")
+    p.add_argument("--python", required=True)
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--resume", action="store_true")
     return root
@@ -91,6 +91,17 @@ def slurm_script(args):
         value = getattr(args, name)
         if value is not None and not re.fullmatch(r"[a-zA-Z0-9_-]+", value):
             raise ValueError(f"invalid Slurm {name}")
+    paths = {}
+    for name in ("python", "model_dir", "snapshot", "run_dir"):
+        value = getattr(args, name)
+        if any(ord(character) < 32 for character in value):
+            raise ValueError(f"invalid {name.replace('_', '-')} path")
+        path = Path(value)
+        if not path.is_absolute():
+            raise ValueError(f"{name.replace('_', '-')} must be an absolute path")
+        if ".." in path.parts:
+            raise ValueError(f"invalid {name.replace('_', '-')} path")
+        paths[name] = str(path)
     lines = [
         "#!/bin/bash",
         "#SBATCH --job-name=superyak-clinical-lora",
@@ -103,16 +114,16 @@ def slurm_script(args):
     if args.reservation:
         lines.append(f"#SBATCH --reservation={args.reservation}")
     command = [
-        args.python,
+        paths["python"],
         "-m",
         "superyak_tuning",
         "train",
         "--model-dir",
-        args.model_dir,
+        paths["model_dir"],
         "--snapshot",
-        args.snapshot,
+        paths["snapshot"],
         "--output",
-        args.run_dir,
+        paths["run_dir"],
         "--device",
         "xpu",
     ]
@@ -124,6 +135,10 @@ def slurm_script(args):
         "export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1",
         shlex.join(command),
     ]
+    output_parent = args.output.parent
+    if not output_parent.exists():
+        output_parent.mkdir(parents=True, mode=0o700)
+        os.chmod(output_parent, 0o700)
     private_write(args.output, ("\n".join(lines) + "\n").encode())
     return {"status": "script_written_not_submitted", "script": str(args.output)}
 

@@ -35,7 +35,7 @@ help:
 	@echo "make setup-peer / check-peer  Install/check the standalone personal home"
 	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
-	@echo "make setup              Install all four components from their lockfiles"
+	@echo "make setup              Install all five components from their lockfiles"
 	@echo "make check              Run all suites and interoperability checks"
 	@echo "make check-engram       Run the Python suite"
 	@echo "make check-lighthouse   Build, lint, typecheck, test, and run protocol proofs"
@@ -57,7 +57,7 @@ help:
 	@echo "make atlas-demo         Render the public research pilot offline"
 	@echo "make atlas              Atlas project CLI; ATLAS_ARGS defaults to --help"
 
-setup: setup-engram setup-lighthouse setup-atlas setup-peer
+setup: setup-engram setup-lighthouse setup-atlas setup-peer setup-tuning
 
 setup-engram:
 	cd engram && uv sync --locked --extra dev --python "$(PYTHON_VERSION)"
@@ -69,7 +69,7 @@ setup-lighthouse:
 	cd lighthouse && pnpm install --frozen-lockfile
 	cd lighthouse && pnpm build
 
-check: check-engram check-lighthouse check-atlas check-integration check-research-tasks check-peer
+check: check-engram check-lighthouse check-atlas check-integration check-research-tasks check-peer check-tuning
 
 check-engram:
 	cd engram && LIGHTHOUSE_REPO="$(CURDIR)/lighthouse" uv run --locked --extra dev python -m pytest -q -ra --tb=short

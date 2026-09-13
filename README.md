@@ -51,13 +51,15 @@ make check
 `make setup` installs `engram/uv.lock` into `engram/.venv`,
 `atlas/uv.lock` into `atlas/.venv`, and
 `lighthouse/pnpm-lock.yaml` into the Lighthouse workspace, then builds its
-packages. It also installs `peer/uv.lock` independently. For browser checks, run
+packages. It also installs `peer/uv.lock` independently and installs the
+`tuning/uv.lock` CPU training and development environment. For browser checks, run
 `uv run --locked --project peer playwright install chromium` (Linux CI adds
-`--with-deps`). `make check` runs the Engram and Atlas suites in separate processes,
-Lighthouse build/lint/typecheck/tests
-and proofs, the interoperability check, and the peer/browser/package suite. Each check is also available
-separately through `make check-peer`, `make check-engram`, `make check-atlas`, `make check-lighthouse`, and
-`make check-integration`. Run `make help` for the command list.
+`--with-deps`). `make check` runs the Engram, Atlas, peer, and clinical/biotech
+tuning suites in separate processes, Lighthouse build/lint/typecheck/tests and
+proofs, and the interoperability checks. Each check is also available separately
+through `make check-peer`, `make check-tuning`, `make check-engram`,
+`make check-atlas`, `make check-lighthouse`, and `make check-integration`. Run
+`make help` for the command list.
 
 The interoperability check uses disposable synthetic stores and a real local
 Unix socket. It checks both shared schemas and validates four Engram receipts

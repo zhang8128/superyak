@@ -20,6 +20,9 @@ make check-tuning
 make tuning TUNING_ARGS='--help'
 ```
 
+The root `make setup` and `make check` targets include this component with the
+CPU `train` extra. The focused commands above install or check only `tuning/`.
+
 Python 3.11+ is supported; the measured Mac environment used Python 3.12.11.
 The default `train` extra pins Torch 2.14.0, Transformers 5.17.0, and PEFT 0.20.0.
 Linux uses PyTorch's CPU wheel index for this extra. The tests build a tiny local
@@ -205,9 +208,11 @@ tuning/.venv/bin/python -m superyak_tuning slurm \
 ```
 
 Omit `--reservation` when none applies. The script requests one PVC node for
-30 minutes and does not submit itself. XPU training refuses execution without
-`SLURM_JOB_ID` and an available XPU. A generated script proves neither allocation
-access nor a completed training run.
+30 minutes and does not submit itself. `--python`, `--model-dir`, `--snapshot`,
+and `--run-dir` are required absolute paths for the compute environment; the
+output parent is created privately when missing. XPU training refuses execution
+without `SLURM_JOB_ID` and an available XPU. A generated script proves neither
+allocation access nor a completed training run.
 
 ## Next measurements
 
