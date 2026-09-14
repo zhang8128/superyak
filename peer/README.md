@@ -42,8 +42,13 @@ inspect success/failure receipts. CSV and JSON datasets are accepted alongside
 the existing supported file types, with original bytes preserved. Repeated import
 requests return their existing successful receipts. No source is shared merely
 because it is registered or enabled. See the [data-source API examples](API.md#backend-data-sources).
-These management controls are currently API endpoints; the dashboard retains its
-existing selected-record import/export interface.
+Open **Research & data** to create a source, preview selected files or record
+documents, import privately, inspect source text and provenance, correct details,
+pause/resume imports, and read import receipts. A failed acknowledgement can be
+retried with the same request identity. **Start evidence review** creates a private
+layer with a source citation, an excerpt (up to 12,000 characters), and review
+prompts; it does not run a model or create a validated evidence assessment.
+Automatic external feed syncing remains future work.
 
 To provision an ordinary peer instead:
 
@@ -86,6 +91,36 @@ the named remote participant; it grants no content until a room or release
 explicitly selects that contact. The UI shows failed or pending deliveries while
 local editing continues. The server needs `--sync` for background delivery;
 Connections also provides an explicit sync action.
+
+## Use the hackathon dashboard
+
+Home offers private starting drafts for care questions, evidence reviews, and
+selected updates, alongside chat creation, unfinished work, accessible spaces,
+source counts, sharing status, and peer delivery attention. These starting points
+are optional; selecting one does not assign a role, invite anyone, or share data.
+The American-model guard and selected local Gemma configuration remain in force.
+
+Search covers the currently loaded account's own draft/source text, file names,
+chat titles, space names and accessible releases. It does not search other
+participants' private records or fetch external research. Queries stay in the
+page's memory and are not placed in URLs or sent to a model. Source matches lead
+to the source library for inspection.
+
+**Circles & projects** opens space pages, including organizations. Members see
+releases currently available through that space. The owner can correct its name
+and preview an explicit person before adding/removing membership. Organizations
+use current membership for active releases; care circles and projects retain the
+people selected when a version was activated. Removing membership from one of
+those fixed-audience spaces does not revoke earlier releases; use the layer's
+sharing controls. Other access routes can still apply.
+
+**Display & help** offers larger text and a quieter view, stored as display
+preferences in this browser. Draft/source-name corrections survive navigation and
+in-flight saves within the open tab, including words typed after a save starts.
+Save work before closing the tab or switching accounts. Opening a space or shared
+release rechecks the server's currently accessible releases; a disconnected peer
+cannot claim current access status. Uploaded files may also be available through
+active sharing layers, even though source settings and import receipts are private.
 
 ## Create a space and release deliberately
 

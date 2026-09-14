@@ -18,7 +18,10 @@ The [backend data-source catalog](peer/API.md#backend-data-sources) manages priv
 uploaded files and selected-record collections, with source corrections,
 pause/resume controls and repeatable imports with success/failure receipts.
 CSV and JSON datasets retain their original bytes. Registering or enabling a
-source does not publish its contents.
+source does not publish its contents. The dashboard’s **Research & data** view now
+exposes these controls, source provenance, and private evidence-review drafts.
+Home also provides private starting templates, personal search, space membership
+pages, a sharing overview, and larger-text/quiet-view preferences.
 
 The [standard medical research source comparison](docs/reports/2026-09-13-standard-medical-research-sources.md)
 prioritizes publication feeds and source-grounded evidence review. A

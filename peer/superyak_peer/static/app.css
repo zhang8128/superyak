@@ -246,3 +246,75 @@ dialog::backdrop { background: rgba(14,31,28,.48); backdrop-filter: blur(2px); }
   .stat strong { font-size: 24px; }
   .stat span { font-size: 12px; }
 }
+
+/* Personal home and research workspaces share the existing accessible controls. */
+.content { width: min(100%, 1500px); padding: clamp(24px, 3.5vw, 52px); }
+.home-search { display: flex; flex: 1; max-width: 460px; gap: 8px; min-width: 180px; }
+.home-search .input { min-width: 0; }
+.topbar { padding-inline: clamp(20px, 3vw, 48px); }
+.space-picker select { max-width: 220px; }
+.home-head { margin-bottom: 26px; }
+.home-start { display: grid; grid-template-columns: 1.2fr 1fr; gap: 36px; align-items: center; padding: 30px; }
+.home-start h2 { margin: 0 0 12px; font-size: 32px; }
+.home-start p { margin-bottom: 0; }
+.starter-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.starter-actions .button { min-height: 66px; text-align: left; }
+.home-columns { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.home-columns > * { min-width: 0; }
+.sharing-counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0 16px; }
+.sharing-counts strong, .sharing-counts span { display: block; }
+.sharing-counts strong { font: 600 30px/1.2 Georgia, serif; }
+.sharing-counts span { margin-top: 5px; font-size: 13px; color: var(--muted); }
+.sharing-row { display: flex; flex-wrap: wrap; gap: 8px 14px; justify-content: space-between; border-top: 1px solid var(--line); padding: 14px 0; text-decoration: none; font-size: 13px; }
+.sharing-row strong { flex-basis: 100%; font-size: 15px; }
+.space-card h3 a { text-decoration-thickness: 1px; text-underline-offset: 4px; }
+.space-card { border-top: 3px solid var(--sage); }
+.member-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; border-bottom: 1px solid var(--line); padding: 12px 0; }
+.member-row small { display: block; }
+.research-workspace { margin-top: 30px; grid-template-columns: minmax(210px, .7fr) minmax(0, 1.65fr); }
+.research-workspace .section-head { flex-wrap: wrap; }
+.source-settings form { margin-top: 20px; }
+.textarea.short { min-height: 96px; }
+.evidence-card { display: grid; gap: 12px; }
+.evidence-card .shared-body { max-height: 480px; overflow: auto; }
+.evidence-card details { min-width: 0; }
+.history-entry { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.item.selected { border-color: var(--teal); background: var(--teal-soft); }
+summary { cursor: pointer; min-height: 36px; padding-block: 6px; }
+.disabled { opacity: .55; cursor: not-allowed; }
+a.button { display: inline-block; text-decoration: none; }
+.large-text { font-size: 19px; }
+.large-text .meta, .large-text .item-main span, .large-text .sharing-row, .large-text .sharing-counts span { font-size: 16px; }
+.quiet-view .card, .quiet-view .item { box-shadow: none; background: var(--surface); }
+.quiet-view *, .quiet-view *::before, .quiet-view *::after { animation: none !important; transition: none !important; }
+.quiet-view .item:hover { transform: none; }
+@media (max-width: 1150px) {
+  .topbar { flex-wrap: wrap; }
+  .home-search { order: 3; flex-basis: 100%; max-width: none; }
+  .home-columns { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; }
+  .home-start { grid-template-columns: 1fr; gap: 22px; }
+  .home-columns .grid.cols-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 800px) {
+  .home-columns, .research-workspace { grid-template-columns: 1fr; }
+  .research-workspace .workspace-list { position: static; }
+  .home-columns .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-search { min-width: 0; }
+  .home-head { align-items: flex-start; }
+}
+@media (max-width: 520px) {
+  .home-columns .grid.cols-2, .starter-actions { grid-template-columns: 1fr; }
+  .home-start { padding: 22px; }
+  .starter-actions .button { min-height: 48px; }
+  .space-picker select { max-width: 170px; }
+  .sharing-counts { gap: 8px; }
+  .home-search .button { padding-inline: 12px; }
+}
+
+@media (max-width: 760px) {
+  .sidebar { height: calc(124px + env(safe-area-inset-bottom)); }
+  .nav { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+  .nav a { font-size: 11px; min-height: 52px; }
+  .shell { padding-bottom: calc(132px + env(safe-area-inset-bottom)); }
+  .editor-actions, .composer { bottom: calc(134px + env(safe-area-inset-bottom)); }
+}

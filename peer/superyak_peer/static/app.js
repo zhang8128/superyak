@@ -97,7 +97,7 @@ function identityKey(user) {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.layerEdits = {}; state.assistance = {}; state.sources = []; }
+  if (state.editorIdentity !== next) { state.layerEdits = {}; state.assistance = {}; state.sources = []; Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -127,7 +127,7 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "layers", "shared", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "layers", "shared", "spaces", "research", "search", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
 }
 
 function navLink(route, label, icon) {
@@ -151,6 +151,8 @@ function layout(content) {
         ${navLink("chats", "Chats", "◌")}
         ${navLink("layers", "My sharing layers", "▤")}
         ${navLink("shared", "Shared spaces", "◇")}
+        ${navLink("spaces", "Circles & projects", "◎")}
+        ${navLink("research", "Research & data", "⌕")}
         ${navLink("connections", "Connections", "↔")}
       </nav>
       <div class="sidebar-foot">Private work stays on this peer until you choose an audience.</div>
@@ -164,6 +166,7 @@ function layout(content) {
             ${spaces.map((space) => `<option value="${escapeHtml(space.id)}" ${space.id === state.currentSpaceId ? "selected" : ""}>${escapeHtml(space.name)}</option>`).join("")}
           </select>
         </div>
+        ${Dashboard.searchForm()}
         <button class="account-button" data-action="profile" aria-label="Account and sign out">
           <span class="account-meta"><strong>${name}</strong><span>${state.demoAccounts.length ? `Local demo · ${escapeHtml(state.me.username)}` : escapeHtml(currentSpace)}</span></span>
           <span class="avatar" aria-hidden="true">${escapeHtml(state.me.name.trim().charAt(0).toUpperCase() || "S")}</span>
@@ -174,7 +177,7 @@ function layout(content) {
         ${content}
       </main>
     </div>
-    ${spaceDialog()}${profileDialog()}${reauthDialog()}
+    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}
   </div>`;
 }
 
@@ -184,7 +187,9 @@ function demoChoices() {
 }
 
 function showLogin(message = "") {
+  dataLoadSequence++;
   state.me = null;
+  state.home = null;
   app.innerHTML = `<main class="login-page" id="main-content">
     <div class="login-wrap">
       <section class="login-story">
@@ -224,34 +229,7 @@ function kindLabel(kind) {
   return { "care-circle": "Care circle", project: "Project", organization: "Organization" }[kind] || "Space";
 }
 
-function homeView() {
-  const { counts, layers, chats, shared_layers: shared, spaces } = state.home;
-  const recentLayer = layers[0];
-  const recentChat = chats[0];
-  const grouped = ["care-circle", "project", "organization"];
-  return `<header class="page-head"><div><p class="eyebrow">Welcome, ${escapeHtml(state.me.name)}</p><h1>Your home</h1><p class="lede">Pick up a private thought, return to a conversation, or see what others have shared with you.</p></div></header>
-    <section class="grid cols-4" aria-label="Your home at a glance">
-      <div class="card stat"><strong>${counts.chats}</strong><span>Private chats</span></div>
-      <div class="card stat"><strong>${counts.layers}</strong><span>Your sharing layers</span></div>
-      <div class="card stat"><strong>${counts.shared_layers}</strong><span>Active items you can read</span></div>
-      <div class="card stat"><strong>${counts.spaces}</strong><span>Care circles and spaces</span></div>
-    </section>
-    <section class="section"><div class="section-head"><h2>Continue where you left off</h2></div>
-      <div class="grid cols-2">
-        ${recentLayer ? `<a class="card tint" href="#layers/${pathPart(recentLayer.id)}"><p class="eyebrow">Private writing</p><h3>${escapeHtml(recentLayer.title)}</h3><p class="meta">${recentLayer.active_revision ? "A release is active; your draft remains editable." : "Private draft · sharing is off"}</p></a>` : `<div class="card tint"><h3>Start a sharing layer</h3><p class="meta">Draft privately for as long as you need.</p><a class="text-button" href="#layers">Open sharing layers</a></div>`}
-        ${recentChat ? `<a class="card amber" href="#chats/${pathPart(recentChat.id)}"><p class="eyebrow">Recent chat</p><h3>${escapeHtml(recentChat.title)}</h3><p class="meta">${escapeHtml(participantSummary(recentChat))} · ${formatDate(recentChat.last_activity)}</p></a>` : `<div class="card amber"><h3>Your first private chat</h3><p class="meta">A personal room is useful even before you invite anyone.</p><a class="text-button" href="#chats">Open chats</a></div>`}
-      </div>
-    </section>
-    <section class="section"><div class="section-head"><h2>Your circles and spaces</h2><button class="button secondary" data-action="new-space">Create space</button></div>
-      ${spaces.length ? `<div class="grid cols-3">${grouped.map((kind) => {
-        const matching = spaces.filter((space) => space.kind === kind);
-        return `<div class="card compact"><p class="eyebrow">${kindLabel(kind)}</p>${matching.length ? matching.map((space) => `<h3>${escapeHtml(space.name)}</h3><p class="meta">${space.member_ids.length} ${space.member_ids.length === 1 ? "person" : "people"} · ${escapeHtml(space.audience_note)}</p>`).join("") : `<p class="meta">No ${kind === "care-circle" ? "care circles" : kind + "s"} yet.</p>`}</div>`;
-      }).join("")}</div>` : empty("No spaces yet", "Create care circles, projects, or organizations when they become useful.")}
-    </section>
-    <section class="section"><div class="section-head"><h2>Shared with you</h2><a class="text-button" href="#shared">See all shared spaces</a></div>
-      ${shared.length ? `<div class="item-list">${shared.slice(0, 3).map(sharedItem).join("")}</div>` : empty("Nothing shared yet", "Your private writing and chats are ready whenever you are.")}
-    </section>`;
-}
+function homeView() { return Dashboard.home(); }
 
 function layerStatus(layer) {
   const active = state.activeLayers[layer.id];
@@ -377,7 +355,7 @@ function layerEditor(layer) {
       <fieldset class="field"><legend>Named people</legend><small>People only see an activated version. Selecting someone here does not reveal the private draft.</small><div class="choices">${state.contacts.map((contact) => choiceContact(contact, layer.audience_users || [])).join("") || `<p class="meta">No contacts are available yet.</p>`}</div></fieldset>
       <fieldset class="field"><legend>Care circles and spaces</legend><div class="choices">${state.home.spaces.map((space) => choiceSpace(space, layer.audience_spaces || [])).join("") || `<p class="meta">No spaces are available yet.</p>`}</div></fieldset>
       <fieldset class="field"><legend>Public access</legend><label class="choice public-choice"><input type="checkbox" name="public" ${layer.public ? "checked" : ""}><span class="choice-copy"><strong>Anyone with the public link</strong><small>Only the activated version and its chosen attachments are public.</small></span></label></fieldset>
-      <fieldset class="field"><legend>Attachments</legend>${attachmentChoices(layer)}<label class="button secondary" for="file-upload">Upload a file</label><input class="sr-only" id="file-upload" type="file" accept="text/plain,application/pdf,image/png,image/jpeg,image/gif"><p id="upload-status" class="inline-message" role="status"></p></fieldset>
+      <fieldset class="field"><legend>Attachments</legend>${attachmentChoices(layer)}<label class="button secondary" for="file-upload">Upload a file</label><input class="sr-only" id="file-upload" type="file" accept="text/plain,text/csv,application/json,application/pdf,image/png,image/jpeg,image/gif,.csv,.json"><p id="upload-status" class="inline-message" role="status"></p></fieldset>
       <div class="editor-actions"><div class="button-row"><button class="button" type="submit">Save private draft</button><button class="button secondary" type="button" data-action="preview">Preview audience</button></div><span class="state-note">Saved version ${layer.version}</span></div>
       <p id="layer-status" class="inline-message ${edit?.conflict ? "error" : ""}" role="status">${edit?.conflict ? "This draft changed in another tab. Your text is still here." : ""}</p>${edit?.conflict ? '<button class="button secondary" type="button" data-action="resolve-conflict">Save my text onto the latest draft</button>' : ""}
     </form>
@@ -597,42 +575,37 @@ async function renderPublic() {
   app.innerHTML = `<main class="public-page" id="main-content"><div class="public-wrap"><header class="public-header">${brand()}<a class="text-button" href="/">Sign in</a></header>${content}</div></main>`;
 }
 
+let dataLoadSequence = 0;
 async function loadData() {
-  const [home, contacts, files, sync, corrections] = await Promise.all([
-    api("/api/home"), api("/api/contacts"), api("/api/files"), api("/api/sync"), api("/api/me/corrections")
-  ]);
-  state.home = home;
-  state.contacts = contacts;
-  state.files = files;
-  state.sync = sync;
-  state.corrections = corrections;
-  const optionalIdentity = identityKey(state.me);
-  const [assistant, sources] = await Promise.all([
-    api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
-    api("/api/sources").catch(() => null),
-  ]);
-  if (identityKey(state.me) !== optionalIdentity) return;
-  state.assistant = assistant;
-  state.sources = sources;
-  const activePairs = await Promise.all(home.layers.filter((layer) => layer.active_revision).map(async (layer) => {
-    try { return { id: layer.id, active: await api(`/api/shared/layers/${pathPart(layer.id)}`) }; }
-    catch (error) {
-      if (error.status === 401) throw error;
-      return { id: layer.id, error };
-    }
-  }));
-  const previousActive = state.activeLayers;
-  state.activeLayers = Object.fromEntries(activePairs.flatMap((result) => {
-    const active = result.active || previousActive[result.id];
-    return active ? [[result.id, active]] : [];
-  }));
-  state.activeLayerErrors = Object.fromEntries(activePairs.flatMap((result) => result.error ? [[result.id, result.error.message]] : []));
-  if (state.me.is_admin) {
-    [state.accounts, state.connections] = await Promise.all([api("/api/accounts"), api("/api/connections")]);
-  } else {
-    state.accounts = [];
-    state.connections = [];
-  }
+  const user = state.me, identity = identityKey(user), sequence = ++dataLoadSequence;
+  const valid = () => !!user && identityKey(state.me) === identity && sequence === dataLoadSequence;
+  if (!user) return false;
+  try {
+    const [home, contacts, files, sync, corrections] = await Promise.all([
+      api("/api/home"), api("/api/contacts"), api("/api/files"), api("/api/sync"), api("/api/me/corrections")
+    ]);
+    if (!valid()) return false;
+    if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
+    const [assistant, sources, activePairs, accounts, connections] = await Promise.all([
+      api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
+      api("/api/sources").catch(() => null),
+      Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
+        try { return { id: layer.id, active: await api(`/api/shared/layers/${pathPart(layer.id)}`) }; }
+        catch (error) { if (error.status === 401) throw error; return { id: layer.id, error }; }
+      })),
+      user.is_admin ? api("/api/accounts") : [],
+      user.is_admin ? api("/api/connections") : [],
+    ]);
+    if (!valid()) return false;
+    const previousActive = state.activeLayers;
+    const activeLayers = Object.fromEntries(activePairs.flatMap(result => {
+      const active = result.active || previousActive[result.id];
+      return active ? [[result.id, active]] : [];
+    }));
+    const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
+    Object.assign(state, { home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, connections });
+    return true;
+  } catch (error) { if (!valid()) return false; throw error; }
 }
 
 async function loadRoute() {
@@ -658,19 +631,30 @@ async function loadRoute() {
       state.room = null;
     }
   }
-  if (route === "shared") state.selectedSharedId = id || state.selectedSharedId;
+  if (route === "shared") {
+    const identity = identityKey(state.me), hash = location.hash;
+    state.selectedSharedId = id || state.selectedSharedId;
+    // A fresh navigation rechecks access rather than displaying a cached release.
+    const releases = await api("/api/shared/layers");
+    if (identityKey(state.me) !== identity || location.hash !== hash) return;
+    state.home.shared_layers = releases;
+    if (!releases.some(layer => layer.id === state.selectedSharedId)) state.selectedSharedId = null;
+  }
+  if (route === "research") await Research.load(id);
+  if (route === "spaces") await Dashboard.loadSpace(id);
+  if (routeParts().route === route && routeParts().id === id) state.currentSpaceId = route === "spaces" && id ? id : "all";
 }
 
 let dialogReturn = null;
 function closeDialogs() {
-  state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false;
+  state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false; Research.close(); Dashboard.close();
   render();
 }
 
 function render() {
   if (!state.me || !state.home) return;
   const route = routeParts().route;
-  const view = { home: homeView, chats: chatsView, layers: layersView, shared: sharedView, connections: connectionsView }[route]();
+  const view = { home: homeView, chats: chatsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView }[route]();
   const focused = document.activeElement;
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
@@ -690,12 +674,12 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
-  document.title = `${{ home: "Home", chats: "Chats", layers: "My sharing layers", shared: "Shared spaces", connections: "Connections" }[route]} · Superyak`;
+  document.title = `${{ home: "Home", chats: "Chats", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections" }[route]} · Superyak`;
 }
 
 async function refresh(message = null) {
   try {
-    await loadData();
+    if (!await loadData()) return;
     await loadRoute();
     if (message) setFlash(message);
     render();
@@ -1053,6 +1037,7 @@ async function logout() {
     state.layerEdits = {};
     state.assistance = {};
     state.sources = [];
+    Research.reset(); Dashboard.reset();
     state.editorIdentity = null;
     state.me = null;
     location.hash = "";
@@ -1180,6 +1165,8 @@ document.addEventListener("submit", async (event) => {
     }
     return;
   }
+  await Research.submit(form);
+  await Dashboard.submit(form);
   if (form.id === "layer-form") await saveLayer(form);
   if (form.id === "space-form") await createSpace(form);
   if (form.id === "chat-form") await createChat(form);
@@ -1206,6 +1193,8 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
+  if (action.startsWith("research-")) { await Research.action(target); return; }
+  if (action.startsWith("dashboard-")) { await Dashboard.action(target); return; }
   if (action === "demo-login") {
     target.disabled = true;
     if (state.me) {
@@ -1292,6 +1281,7 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  Research.remember(event.target); Dashboard.input(event.target);
   if (event.target.id === "assistant-request" && selectedLayer()) {
     const entry = state.assistance[selectedLayer().id] ||= {};
     entry.text = event.target.value;
@@ -1305,9 +1295,12 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", async (event) => {
+  Research.remember(event.target); Dashboard.change(event.target);
+  if (event.target.id === "research-upload") { await Research.choose(event.target); return; }
   if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
   if (event.target.id === "space-context") {
     state.currentSpaceId = event.target.value;
+    location.hash = state.currentSpaceId === "all" ? "home" : `spaces/${pathPart(state.currentSpaceId)}`;
     render();
   }
   if (event.target.id === "file-upload") await uploadFile(event.target);
@@ -1321,6 +1314,7 @@ window.addEventListener("hashchange", async () => {
   catch (error) { setFlash(error.message, true); render(); }
 });
 
+Dashboard.applyDisplay();
 bootstrap();
 
 // Assistance and source records use the authenticated API and account-bound memory.

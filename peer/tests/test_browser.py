@@ -132,6 +132,299 @@ def signed_out_browser(playwright, *, viewport=None):
         browser.close()
 
 
+def test_source_library_import_pause_and_private_review(browser_peer):
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    original = store.create_layer(actor, {'title': 'Fictional study', 'body': 'Observation with important limitations.'})
+    from superyak_peer.interchange import Interchange
+    document = Interchange(store, 'fixture-peer').export(actor, {
+        'selections': [{'layer_id': original['id'], 'kind': 'draft', 'version': 1}]})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_role('link', name='Research & data', exact=True).click()
+        page.get_by_role('button', name='New source', exact=True).click()
+        page.get_by_label('Source name', exact=True).fill('Evidence for our project')
+        page.get_by_label('Source type', exact=True).select_option('selected-records')
+        page.get_by_role('button', name='Create source', exact=True).click()
+        expect(page.get_by_role('heading', name='Evidence for our project', exact=True)).to_be_visible()
+        page.get_by_label('Select source document', exact=True).set_input_files({
+            'name': 'evidence.json', 'mimeType': 'application/json', 'buffer': json.dumps(document).encode()})
+        expect(page.get_by_role('heading', name='Review this import')).to_be_visible()
+        assert browser_peer['app'].state.data_sources.list(actor)['sources'][0]['item_count'] == 0
+        page.get_by_role('button', name='Import privately', exact=True).click()
+        expect(page.get_by_role('heading', name='Fictional study', exact=True)).to_be_visible()
+        page.get_by_role('button', name='Pause imports', exact=True).click()
+        expect(page.get_by_role('button', name='Resume imports', exact=True)).to_be_visible()
+        expect(page.get_by_role('heading', name='Fictional study', exact=True)).to_be_visible()
+        page.get_by_role('button', name='Start evidence review', exact=True).click()
+        expect(page.get_by_label('Layer title')).to_have_value('Review: Fictional study')
+        expect(page.get_by_label('What do you want to share?')).to_contain_text('Observation with important limitations.')
+        layer = next(x for x in store.list_layers(actor) if x['title'] == 'Review: Fictional study')
+        assert not layer['public'] and not layer['audience_users'] and not layer['audience_spaces'] and not layer['active_revision']
+        assert store.shared_layers(browser_peer['users']['doctor']['id']) == []
+
+
+def test_source_library_conflict_keeps_correction_and_does_not_overwrite(browser_peer):
+    service = browser_peer['app'].state.data_sources
+    actor = browser_peer['users']['patient']['id']
+    source = service.create(actor, {'name': 'Original source', 'kind': 'file'})
+    other = service.create(actor, {'name': 'Another source', 'kind': 'file'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#research/' + source['id'])
+        page.get_by_text('Edit source details', exact=True).click()
+        page.get_by_label('Source name', exact=True).fill('My correction')
+        service.update(actor, source['id'], {'version': 1, 'name': 'Correction from another tab'})
+        page.get_by_role('link', name='Another source', exact=False).click()
+        expect(page.get_by_role('heading', name='Another source', exact=True)).to_be_visible()
+        page.goto(browser_peer['base_url'] + '/#research/' + source['id'])
+        expect(page.get_by_role('heading', name='Correction from another tab', exact=True)).to_be_visible()
+        page.get_by_role('button', name='Save source details', exact=True).click()
+        expect(page.get_by_role('status').filter(has_text='changed')).to_be_visible()
+        expect(page.get_by_label('Source name', exact=True)).to_have_value('My correction')
+        assert service.get(actor, source['id'])['name'] == 'Correction from another tab'
+        page.get_by_role('button', name='Load latest source settings', exact=True).click()
+        expect(page.get_by_role('heading', name='Correction from another tab', exact=True)).to_be_visible()
+        expect(page.get_by_label('Source name', exact=True)).to_have_value('My correction')
+        page.get_by_role('button', name='Save source details', exact=True).click()
+        expect(page.get_by_role('heading', name='My correction', exact=True)).to_be_visible()
+        assert service.get(actor, source['id'])['name'] == 'My correction'
+        page.get_by_role('button', name='New source', exact=True).click()
+        dialog = page.get_by_role('dialog')
+        dialog.get_by_label('Source name', exact=True).fill('New collection from this page')
+        dialog.get_by_label('Description', exact=True).fill('Separate source settings')
+        dialog.get_by_role('button', name='Create source', exact=True).click()
+        expect(page.get_by_role('heading', name='New collection from this page', exact=True)).to_be_visible()
+
+
+def test_space_page_requires_member_preview_and_keeps_private_drafts_out(browser_peer):
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    family = browser_peer['users']['family']['id']
+    space = store.create_space(actor, 'Wilhelm hackathon', 'organization')
+    private = store.create_layer(actor, {'title': 'Not an organization update', 'body': 'private'})
+    release = store.create_layer(actor, {'title': 'Project introduction', 'body': 'Shared project', 'audience_spaces': [space['id']]})
+    store.activate_layer(actor, release['id'], 1)
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_role('link', name='Wilhelm hackathon', exact=True).click()
+        expect(page.get_by_role('heading', name='Wilhelm hackathon', exact=True, level=1)).to_be_visible()
+        expect(page.get_by_role('button', name='Project introduction', exact=False)).to_be_visible()
+        assert private['title'] not in page.locator('#main-content').inner_text()
+        page.get_by_label('Person to add', exact=True).select_option(family)
+        page.get_by_role('button', name='Review adding person', exact=True).click()
+        expect(page.get_by_role('dialog')).to_contain_text('Sam Family')
+        expect(page.get_by_role('dialog')).to_contain_text('active releases')
+        assert family not in store.get_space(actor, space['id'])['member_ids']
+        page.route('**/api/spaces/*/members', lambda route: route.abort('failed'))
+        page.get_by_role('button', name='Add this person', exact=True).click()
+        expect(page.get_by_role('dialog')).to_contain_text('Connection lost')
+        assert family not in store.get_space(actor, space['id'])['member_ids']
+        page.unroute('**/api/spaces/*/members')
+        page.get_by_role('button', name='Add this person', exact=True).click()
+        expect(page.get_by_role('button', name='Remove Sam Family', exact=True)).to_be_visible()
+        assert family in store.get_space(actor, space['id'])['member_ids']
+        assert [x['title'] for x in store.shared_layers(family)] == ['Project introduction']
+
+
+def test_home_search_and_private_starters_preserve_account_boundaries(browser_peer):
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    store.create_layer(actor, {'title': 'My zebra questions', 'body': 'Selected private notes'})
+    store.create_layer(browser_peer['users']['doctor']['id'], {'title': 'Secret zebra case', 'body': 'Hidden'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.get_by_label('Search your home', exact=True).fill('zebra')
+        page.get_by_role('button', name='Search', exact=True).click()
+        expect(page.get_by_role('link', name='My zebra questions', exact=False)).to_be_visible()
+        assert 'Secret zebra case' not in page.content()
+        page.get_by_role('link', name='Home', exact=True).click()
+        page.get_by_role('button', name='Prepare care questions', exact=True).click()
+        expect(page.get_by_label('Layer title')).to_have_value('Questions for my care team')
+        draft = next(x for x in store.list_layers(actor) if x['title'] == 'Questions for my care team')
+        assert not draft['active_revision'] and not draft['audience_spaces'] and not draft['public']
+        page.get_by_label('What do you want to share?').fill('Keep these words while I browse')
+        page.get_by_role('link', name='Home', exact=True).click()
+        page.get_by_role('link', name='Questions for my care team', exact=False).first.click()
+        expect(page.get_by_label('What do you want to share?')).to_have_value('Keep these words while I browse')
+
+
+def test_source_library_file_retry_replays_accepted_import(browser_peer):
+    service = browser_peer['app'].state.data_sources
+    actor = browser_peer['users']['patient']['id']
+    source = service.create(actor, {'name': 'Clinical files', 'kind': 'file'})
+    csv = b'participant,value\nfictional-1,3.5\n'
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#research/' + source['id'])
+        page.get_by_label('Select files', exact=True).set_input_files({'name': 'fictional.csv', 'mimeType': 'text/csv', 'buffer': csv})
+        expect(page.get_by_role('heading', name='Review this import')).to_be_visible()
+        attempts = []
+        def lose_first_ack(route):
+            if route.request.method == 'POST' and not attempts:
+                response = route.fetch()
+                assert response.status == 201
+                attempts.append(True)
+                route.abort('failed')
+            else:
+                route.continue_()
+        page.route('**/api/data-sources/*/imports', lose_first_ack)
+        page.get_by_role('button', name='Import privately', exact=True).click()
+        expect(page.get_by_role('dialog')).to_contain_text('Connection lost')
+        first = service.history(actor, source['id'])['imports']
+        assert len(first) == 1 and first[0]['status'] == 'succeeded'
+        page.get_by_role('button', name='Import privately', exact=True).click()
+        expect(page.get_by_role('heading', name='fictional.csv', exact=True)).to_be_visible()
+        assert service.history(actor, source['id'])['imports'] == first
+        file = service.items(actor, source['id'])['items'][0]['file']
+        assert browser_peer['app'].state.store.download_file(actor, file['id'])['content'] == csv
+
+
+def test_space_context_and_display_preferences_work_on_mobile(browser_peer):
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient', viewport={'width': 390, 'height': 844}) as (page, _):
+        page.get_by_role('button', name='Display & help', exact=True).click()
+        page.get_by_label('Larger text', exact=True).check()
+        page.get_by_label('Quieter view', exact=True).check()
+        page.get_by_role('button', name='Back to my home', exact=True).click()
+        page.reload()
+        expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+        assert page.evaluate("document.documentElement.classList.contains('large-text')")
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        assert page.locator('nav[aria-label="Main navigation"] a').evaluate_all("nodes => nodes.every(node => node.getBoundingClientRect().bottom <= innerHeight)")
+        circle = browser_peer['app'].state.store.list_spaces(browser_peer['users']['patient']['id'])[0]
+        page.get_by_label('Current space').select_option(circle['id'])
+        expect(page.get_by_role('heading', name=circle['name'], level=1)).to_be_visible()
+        assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def delay_next_patch_response(page):
+    page.evaluate("""() => {
+      const original = window.fetch;
+      window.fetch = async (url, options = {}) => {
+        const response = await original(url, options);
+        if (options.method === 'PATCH' && !window.__patchHeld) {
+          window.__patchHeld = true;
+          await new Promise(resolve => { window.__releasePatch = resolve; });
+        }
+        return response;
+      };
+    }""")
+
+
+def test_source_save_keeps_newer_typing_and_does_not_replace_another_source(browser_peer):
+    service = browser_peer['app'].state.data_sources
+    actor = browser_peer['users']['patient']['id']
+    first = service.create(actor, {'name': 'First collection', 'kind': 'file'})
+    second = service.create(actor, {'name': 'Second collection', 'kind': 'file'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#research/' + first['id'])
+        page.get_by_text('Edit source details', exact=True).click()
+        page.get_by_label('Source name', exact=True).fill('Submitted correction')
+        delay_next_patch_response(page)
+        page.get_by_role('button', name='Save source details', exact=True).click()
+        page.wait_for_function('() => window.__patchHeld === true')
+        page.get_by_label('Source name', exact=True).fill('Newer unsaved words')
+        page.get_by_role('link', name='Second collection', exact=False).click()
+        expect(page.get_by_role('heading', name='Second collection', exact=True)).to_be_visible()
+        page.evaluate('() => window.__releasePatch()')
+        expect(page.get_by_role('button', name='Pause imports', exact=True)).to_be_enabled()
+        expect(page.get_by_role('heading', name='Second collection', exact=True)).to_be_visible()
+        page.goto(browser_peer['base_url'] + '/#research/' + first['id'])
+        expect(page.get_by_role('heading', name='Submitted correction', exact=True)).to_be_visible()
+        expect(page.get_by_label('Source name', exact=True)).to_have_value('Newer unsaved words')
+        assert service.get(actor, first['id'])['name'] == 'Submitted correction'
+
+
+def test_space_name_save_preserves_words_typed_while_saving(browser_peer):
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    space = store.create_space(actor, 'Original project', 'project')
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.goto(browser_peer['base_url'] + '/#spaces/' + space['id'])
+        page.get_by_text("Correct this space's name", exact=True).click()
+        page.get_by_label('Space name', exact=True).fill('Submitted project name')
+        delay_next_patch_response(page)
+        page.get_by_role('button', name='Save name correction', exact=True).click()
+        page.wait_for_function('() => window.__patchHeld === true')
+        page.get_by_label('Space name', exact=True).fill('More accurate unsaved name')
+        page.evaluate('() => window.__releasePatch()')
+        expect(page.get_by_role('heading', name='Submitted project name', level=1)).to_be_visible()
+        expect(page.get_by_label('Space name', exact=True)).to_have_value('More accurate unsaved name')
+
+
+def test_late_home_refresh_cannot_replace_the_next_accounts_data(browser_peer):
+    store = browser_peer['app'].state.store
+    store.create_layer(browser_peer['users']['patient']['id'], {'title': 'Patient-only private title'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        page.evaluate("""() => {
+          const original = window.fetch;
+          window.fetch = async (url, options) => {
+            const response = await original(url, options);
+            if (url === '/api/home' && !window.__homeHeld) {
+              window.__homeHeld = true;
+              await new Promise(resolve => { window.__releaseHome = resolve; });
+            }
+            return response;
+          };
+          window.__oldRefresh = loadData();
+        }""")
+        page.wait_for_function('() => window.__homeHeld === true')
+        page.get_by_role('button', name='Account and sign out').click()
+        page.get_by_role('button', name='Sign out', exact=True).click()
+        expect(page.get_by_role('heading', name='Sign in to your home')).to_be_visible()
+        page.get_by_label('Username', exact=True).fill('doctor')
+        page.get_by_label('Password', exact=True).fill(browser_peer['password'])
+        page.get_by_role('button', name='Sign in', exact=True).click()
+        expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+        page.evaluate('async () => { window.__releaseHome(); await window.__oldRefresh; render(); }')
+        expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Dr. Morgan')
+        assert 'Patient-only private title' not in page.content()
+
+
+def test_opening_space_and_release_rechecks_withdrawal(browser_peer):
+    store = browser_peer['app'].state.store
+    actor = browser_peer['users']['patient']['id']
+    family = browser_peer['users']['family']['id']
+    space = store.create_space(actor, 'Research team', 'organization', [family])
+    layer = store.create_layer(actor, {'title': 'Withdrawn evidence', 'body': 'Earlier shared words', 'audience_spaces': [space['id']]})
+    store.activate_layer(actor, layer['id'], 1)
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'family') as (page, _):
+        store.withdraw_layer(actor, layer['id'])
+        page.get_by_role('link', name='Research team', exact=True).click()
+        expect(page.get_by_role('heading', name='Research team', exact=True, level=1)).to_be_visible()
+        assert 'Withdrawn evidence' not in page.locator('#main-content').inner_text()
+        page.goto(browser_peer['base_url'] + '/#shared/' + layer['id'])
+        expect(page.get_by_role('heading', name='Shared spaces', exact=True, level=1)).to_be_visible()
+        assert 'Earlier shared words' not in page.locator('#main-content').inner_text()
+
+
+def test_typing_during_source_navigation_stays_with_its_original_form(browser_peer):
+    service = browser_peer['app'].state.data_sources
+    actor = browser_peer['users']['patient']['id']
+    first = service.create(actor, {'name': 'First source', 'kind': 'file'})
+    second = service.create(actor, {'name': 'Second source', 'kind': 'file'})
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'patient') as (page, _):
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(browser_peer['base_url'] + '/#research/' + first['id'])
+        page.get_by_text('Edit source details', exact=True).click()
+        page.evaluate("""id => {
+          const original = window.fetch;
+          window.fetch = async (url, options) => {
+            const response = await original(url, options);
+            if (url === '/api/data-sources/' + id && !window.__sourceHeld) {
+              window.__sourceHeld = true;
+              await new Promise(resolve => { window.__releaseSource = resolve; });
+            }
+            return response;
+          };
+        }""", second['id'])
+        page.get_by_role('link', name='Second source', exact=False).click()
+        page.wait_for_function('() => window.__sourceHeld === true')
+        page.get_by_label('Source name', exact=True).fill('Words for the first source')
+        page.evaluate('() => window.__releaseSource()')
+        expect(page.get_by_role('heading', name='Second source', exact=True)).to_be_visible()
+        page.goto(browser_peer['base_url'] + '/#research/' + first['id'])
+        expect(page.get_by_role('heading', name='First source', exact=True)).to_be_visible()
+        expect(page.get_by_label('Source name', exact=True)).to_have_value('Words for the first source')
+        assert errors == []
+
+
 @pytest.mark.parametrize('browser_peer', [True], indirect=True)
 def test_local_demo_opens_without_password_switches_accounts_and_renews_session(browser_peer):
     with sync_playwright() as playwright:
@@ -313,7 +606,7 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             page.evaluate("scrollTo(0, 0)")
             page.wait_for_timeout(100)
             page.screenshot(path=str(ARTIFACTS / "home-mobile.png"))
-            page.get_by_role("link", name="Connections").click()
+            page.get_by_role("link", name="Connections", exact=True).click()
             expect(page.get_by_role("heading", name="Account support")).to_be_visible()
             expect(page.get_by_text("Account support does not open private chats or drafts.")).to_be_visible()
             page.get_by_role("button", name="Create invitation").click()
@@ -498,7 +791,7 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
     """Break caught: pairing shares implicitly or canceled delivery looks retryable."""
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
-            page.get_by_role("link", name="Connections").click()
+            page.get_by_role("link", name="Connections", exact=True).click()
             page.get_by_label("Peer card").fill(json.dumps(browser_peer["remote_card"]))
             page.get_by_role("button", name="Preview peer card").click()
             expect(page.get_by_role("heading", name="Casey Remote")).to_be_visible()
@@ -524,7 +817,7 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             page.get_by_role("button", name="Preview audience").click()
             page.get_by_role("button", name="Turn on version 2").click()
             expect(page.get_by_text("Active · version 2")).to_be_visible()
-            page.get_by_role("link", name="Connections").click()
+            page.get_by_role("link", name="Connections", exact=True).click()
             expect(page.get_by_text("Pending delivery")).to_be_visible()
 
             page.get_by_role("button", name="Disconnect peer and 1 contact").click()

@@ -62,6 +62,8 @@ only-include = [
     "superyak_peer/spaces.py",
     "superyak_peer/static/app.css",
     "superyak_peer/static/app.js",
+    "superyak_peer/static/research.js",
+    "superyak_peer/static/dashboard.js",
     "superyak_peer/static/index.html",
     "superyak_peer/transport.py",
     "tests/conftest.py",
@@ -103,6 +105,8 @@ only-include = [
     "superyak_peer/spaces.py",
     "superyak_peer/static/app.css",
     "superyak_peer/static/app.js",
+    "superyak_peer/static/research.js",
+    "superyak_peer/static/dashboard.js",
     "superyak_peer/static/index.html",
     "superyak_peer/transport.py",
 ]

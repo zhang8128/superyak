@@ -1,5 +1,36 @@
 # Resume here — medical lighthouse / aDNA
 
+**Hackathon dashboard expanded, September 13 (current):** The live password-free
+home remains **http://127.0.0.1:7435**, now PID `10555` at verification. It serves
+an installed reviewed wheel from
+`.worktrees/hackathon-dashboard/.engram/hackathon-dashboard/`; `runtime.json`
+records the exact interpreter, command, model config, and retained state hashes.
+Original user data remains `.worktrees/peer-home/.engram/home-demo/`. All 25 content
+tables and the credentials were unchanged through reload and fresh browser checks.
+The selected HauhauCS Gemma model/configuration is unchanged. No model generation
+or live-account data import occurred. Atlas remains stopped; Stampede3 access is
+still pending the user's details.
+
+Home now includes private care/evidence/update starters, resumable drafts/chats,
+sharing and delivery summaries, accessible personal search, and display/help
+preferences. **Research & data** exposes the existing private source registry,
+previewed record/file imports, settings corrections with version-conflict recovery,
+pause/resume, provenance, paged items/history, and private cited evidence-review
+drafts. **Circles & projects** opens care-circle/project/organization pages with
+current releases and owner membership/name controls. Adding or removing someone
+has an explicit named-person preview; fixed release audiences and dynamic
+organization membership retain their existing semantics.
+
+All 174 peer tests passed, including 40 Chromium workflows and installed-package
+checks; source and wheel builds passed. Independent review approved after browser
+regressions for delayed saves/navigation, account-switch isolation, withdrawn
+release reads, import replay, and accessible recovery. A three-public-paper UI
+import passed only in the isolated preview state; its screenshots and receipt are
+retained alongside the live verification. Runtime/static inventories now include
+`dashboard.js` and `research.js`. Root-only source prep and data remain excluded
+from the standalone artifact. The local `progress.json` records the final commit
+and CI result as integration completes. Preserve this worktree and all evidence.
+
 **Local demo model and research sources, September 13 (current):** Kairos chose
 Stanley's HauhauCS Gemma4 Uncensored Balanced variant for the live demo, external
 research feeds/publications as the first source lane, and source-grounded research

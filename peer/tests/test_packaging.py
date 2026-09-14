@@ -84,7 +84,7 @@ def test_fresh_extraction_builds_static_wheel_and_starts_without_parent_repo(arc
     command('uv', 'build', '--out-dir', builds, cwd=root)
     wheel = next(builds.glob('*.whl'))
     with zipfile.ZipFile(wheel) as package:
-        assert {'superyak_peer/static/index.html', 'superyak_peer/static/app.js', 'superyak_peer/static/app.css'} <= set(package.namelist())
+        assert {'superyak_peer/static/index.html', 'superyak_peer/static/app.js', 'superyak_peer/static/app.css', 'superyak_peer/static/research.js', 'superyak_peer/static/dashboard.js'} <= set(package.namelist())
         assert any(name.endswith('/LICENSE') for name in package.namelist())
     installed = tmp_path / 'wheel-venv'
     command('uv', 'venv', installed, '--python', sys.executable, cwd=tmp_path)
@@ -110,8 +110,9 @@ def test_fresh_extraction_builds_static_wheel_and_starts_without_parent_repo(arc
                 if time.monotonic() > deadline:
                     pytest.fail('Fresh wheel did not become ready')
                 time.sleep(.05)
-        with urlopen(f'http://127.0.0.1:{port}/assets/app.js') as reply:
-            assert reply.status == 200 and len(reply.read()) > 1000
+        for asset in ('app.js', 'research.js', 'dashboard.js'):
+            with urlopen(f'http://127.0.0.1:{port}/assets/{asset}') as reply:
+                assert reply.status == 200 and len(reply.read()) > 1000
     finally:
         process.terminate()
         process.communicate(timeout=10)
@@ -140,7 +141,7 @@ def test_standard_build_excludes_private_state_and_unlisted_package_source(archi
     with zipfile.ZipFile(next(direct_builds.glob('*.whl'))) as wheel:
         direct_wheel_files = {name: wheel.read(name) for name in wheel.namelist()}
     for files in (sdist, wheel_files, direct_wheel_files):
-        assert {'superyak_peer/static/index.html', 'superyak_peer/static/app.js', 'superyak_peer/static/app.css'} <= files.keys()
+        assert {'superyak_peer/static/index.html', 'superyak_peer/static/app.js', 'superyak_peer/static/app.css', 'superyak_peer/static/research.js', 'superyak_peer/static/dashboard.js'} <= files.keys()
         assert any(name == 'LICENSE' or name.endswith('/LICENSE') for name in files)
         assert any(name == 'NOTICE' or name.endswith('/NOTICE') for name in files)
     assert {'scripts/source_bundle.py', 'scripts/two_peer_check.py', 'uv.lock', 'tests/test_packaging.py'} <= sdist.keys()
