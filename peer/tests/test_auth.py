@@ -2,6 +2,171 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi.testclient import TestClient
 import pytest
 
+
+def activate_super_admin(app, tmp_path, username='science.stanley@example.org'):
+    import json
+    activation = tmp_path / 'activation.json'
+    user = app.state.store.bootstrap_super_admin(username, 'Stanley', activation)
+    record = json.loads(activation.read_text())
+    client = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    response = client.post('/api/invitations/redeem', json={
+        'token': record['token'], 'username': username, 'name': 'Stanley', 'password': 'stanley-chosen-password',
+    })
+    assert response.status_code == 201, response.text
+    response = client.post('/api/login', json={'username': username, 'password': 'stanley-chosen-password'})
+    assert response.status_code == 200, response.text
+    client.headers['x-csrf-token'] = response.json()['csrf_token']
+    return client, user, record
+
+
+def test_super_admin_delegates_roles_without_private_content_access(env, tmp_path):
+    app, clients, users, _ = env
+    stanley, _, _ = activate_super_admin(app, tmp_path)
+    target = users[1]
+    layer = clients[0].post('/api/layers', json={'title': 'Private', 'body': 'patient-only'}).json()
+    route = '/api/accounts/' + target['id'] + '/role'
+    change = {'role': 'admin', 'expected_version': 1}
+    assert clients[0].patch(route, json=change).status_code == 403
+    assert clients[2].patch(route, json=change).status_code == 403
+    assert stanley.patch(route, json=change, headers={'x-csrf-token': ''}).status_code == 403
+    result = stanley.patch(route, json=change)
+    assert result.status_code == 200, result.text
+    assert result.json()['is_admin'] == 1 and result.json()['is_super_admin'] == 0
+    assert clients[1].get('/api/me').json()['is_admin'] == 1
+    assert clients[1].post('/api/invitations', json={}).status_code == 200
+    assert clients[1].patch('/api/accounts/' + users[0]['id'] + '/role', json=change).status_code == 403
+    assert stanley.get('/api/layers/' + layer['id']).status_code == 404
+    assert clients[1].get('/api/layers/' + layer['id']).status_code == 404
+    assert 'patient-only' not in stanley.get('/api/accounts').text
+
+
+def test_role_changes_are_versioned_audited_and_preserve_last_super_admin(env, tmp_path):
+    app, clients, users, _ = env
+    stanley, owner, _ = activate_super_admin(app, tmp_path)
+    route = '/api/accounts/' + owner['id'] + '/role'
+    assert stanley.patch(route, json={'role': 'participant', 'expected_version': 1}).status_code == 409
+    other = '/api/accounts/' + users[1]['id'] + '/role'
+    result = stanley.patch(other, json={'role': 'super_admin', 'expected_version': 1})
+    assert result.status_code == 200
+    assert clients[1].get('/api/me').json()['is_super_admin'] == 1
+    assert stanley.patch(other, json={'role': 'participant', 'expected_version': 1}).status_code == 409
+    assert stanley.patch(other, json={'role': 'root', 'expected_version': 2}).status_code == 400
+    assert stanley.patch(other, json={'role': 'participant', 'expected_version': True}).status_code == 400
+    assert stanley.patch(other, json={'role': 'participant', 'expected_version': 2, 'actor': users[1]['id']}).status_code == 400
+    assert stanley.patch(other, json={'role': 'participant', 'expected_version': 2}).status_code == 200
+    assert clients[1].get('/api/me').json()['is_super_admin'] == 0
+    assert clients[1].get('/api/accounts').status_code == 403
+    history = stanley.get('/api/account-role-changes')
+    assert history.status_code == 200
+    changes = sorted((r for r in history.json() if r['user_id'] == users[1]['id']), key=lambda row: row['id'])
+    assert [(r['old_role'], r['new_role']) for r in changes] == [('participant', 'super_admin'), ('super_admin', 'participant')]
+    assert all(r['actor_id'] == owner['id'] for r in changes)
+    assert clients[2].get('/api/account-role-changes').status_code == 403
+
+
+def test_demoted_admin_cannot_redeem_outstanding_invitations(env, tmp_path):
+    app, clients, users, _ = env
+    stanley, _, _ = activate_super_admin(app, tmp_path)
+    invite = clients[2].post('/api/invitations', json={}).json()
+    assert stanley.patch('/api/accounts/' + users[2]['id'] + '/role', json={'role': 'participant', 'expected_version': 1}).status_code == 200
+    response = TestClient(app, headers={'origin': 'http://testserver'}).post('/api/invitations/redeem', json={
+        'token': invite['token'], 'username': 'new-person', 'name': 'New', 'password': 'long-new-password',
+    })
+    assert response.status_code == 400
+    assert clients[2].post('/api/invitations', json={}).status_code == 403
+
+
+def test_first_super_admin_activation_is_private_bound_one_use_and_not_demo_login(env, tmp_path):
+    import json
+    from superyak_peer.common import Problem
+    app, clients, users, _ = env
+    path = tmp_path / 'activation.json'
+    user = app.state.store.bootstrap_super_admin('science.stanley@example.org', 'Stanley', path)
+    assert user['is_super_admin'] == 1 and user['activation_pending'] == 1
+    assert path.stat().st_mode & 0o777 == 0o600
+    record = json.loads(path.read_text())
+    assert 'password' not in record
+    with pytest.raises(Problem):
+        app.state.store.bootstrap_super_admin('another@example.org', 'Another', tmp_path / 'second.json')
+    assert not (tmp_path / 'second.json').exists()
+    data = {'token': record['token'], 'username': 'impostor', 'name': 'Wrong', 'password': 'a-long-new-password'}
+    client = TestClient(app, headers={'origin': 'http://testserver'})
+    assert client.post('/api/invitations/redeem', json=data).status_code == 400
+    data.update(username=record['username'], name=record['name'])
+    assert client.post('/api/invitations/redeem', json=data).status_code == 201
+    assert client.post('/api/invitations/redeem', json=data).status_code == 400
+    assert client.post('/api/login', json={'username': record['username'], 'password': data['password']}).status_code == 200
+    assert client.get('/api/me').json()['activation_pending'] == 0
+    assert len(clients[2].get('/api/accounts').json()) == len(users) + 1
+
+
+def test_activation_file_conflict_and_expiry_preserve_accounts(env, tmp_path):
+    import json
+    app, clients, users, clock = env
+    path = tmp_path / 'activation.json'
+    path.write_text('keep existing file')
+    with pytest.raises(FileExistsError):
+        app.state.store.bootstrap_super_admin('science.stanley@example.org', 'Stanley', path)
+    assert len(clients[2].get('/api/accounts').json()) == len(users)
+    assert path.read_text() == 'keep existing file'
+    path = tmp_path / 'new.json'
+    app.state.store.bootstrap_super_admin('science.stanley@example.org', 'Stanley', path)
+    data = json.loads(path.read_text())
+    clock[0] = data['expires'] + 1
+    assert TestClient(app, headers={'origin': 'http://testserver'}).post('/api/invitations/redeem', json={
+        'token': data['token'], 'username': data['username'], 'name': 'Stanley', 'password': 'a-long-new-password',
+    }).status_code == 400
+
+
+def test_simultaneous_super_admin_demotions_keep_one_active(env, tmp_path):
+    app, clients, users, _ = env
+    stanley, owner, _ = activate_super_admin(app, tmp_path)
+    assert stanley.patch('/api/accounts/' + users[1]['id'] + '/role', json={'role': 'super_admin', 'expected_version': 1}).status_code == 200
+    jobs = [(stanley, owner['id'], 1), (clients[1], users[1]['id'], 2)]
+    def demote(job):
+        client, user_id, version = job
+        return client.patch('/api/accounts/' + user_id + '/role', json={'role': 'participant', 'expected_version': version}).status_code
+    with ThreadPoolExecutor(2) as pool:
+        assert sorted(pool.map(demote, jobs)) == [200, 409]
+    with app.state.store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM users WHERE is_super_admin=1 AND activation_pending=0').fetchone()[0] == 1
+
+
+def test_passwordless_demo_cannot_claim_or_receive_super_admin(tmp_path):
+    import json
+    from superyak_peer.__main__ import seed_demo
+    from superyak_peer.app import create_app
+    from superyak_peer.common import Problem
+    target = tmp_path / 'demo'
+    seed_demo(target)
+    app = create_app(target, local_demo=True)
+    path = tmp_path / 'activation.json'
+    user = app.state.store.bootstrap_super_admin('science.stanley@example.org', 'Stanley', path)
+    record = json.loads(path.read_text())
+    app.state.store.redeem(record['token'], record['username'], record['name'], 'long-stanley-password')
+    with app.state.store.transaction() as db:
+        organizer = dict(db.execute("SELECT * FROM users WHERE username='organizer'").fetchone())
+    with pytest.raises(Problem) as denial:
+        app.state.store.change_account_role(user['id'], organizer['id'], 'super_admin', 1)
+    assert denial.value.status == 400
+    client = TestClient(app, base_url='http://127.0.0.1:7435', client=('127.0.0.1', 1234), headers={'origin': 'http://127.0.0.1:7435'})
+    assert client.post('/api/local-demo/login', json={'username': record['username']}).status_code == 400
+
+
+def test_activation_can_only_be_claimed_once_under_concurrency(env, tmp_path):
+    import json
+    app, _, _, _ = env
+    path = tmp_path / 'activation.json'
+    app.state.store.bootstrap_super_admin('science.stanley@example.org', 'Stanley', path)
+    data = json.loads(path.read_text())
+    payload = {k: data[k] for k in ['token', 'username', 'name']}
+    payload['password'] = 'long-stanley-password'
+    def claim(_):
+        with TestClient(app, headers={'origin': 'http://testserver'}) as client:
+            return client.post('/api/invitations/redeem', json=payload).status_code
+    with ThreadPoolExecutor(2) as pool:
+        assert sorted(pool.map(claim, range(2))) == [201, 400]
+
 def test_local_demo_uses_normal_sessions_without_exposing_credentials(tmp_path):
     from superyak_peer.__main__ import seed_demo
     from superyak_peer.app import create_app

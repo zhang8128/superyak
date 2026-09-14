@@ -61,13 +61,61 @@ The owner password is prompted privately. Default ordinary state is
 `.engram/home`. The local owner can issue expiring one-use invitations; account
 administration grants no access to another person's private content. Back up the
 entire state directory securely while the server is stopped, including identity
-keys and the database. Tested automated migration, key recovery/rotation, password
+keys and the database. General automated migration, key recovery/rotation, password
 reset, and unattended service installation are outside this release.
 
 In the parent repository, equivalent entry points are `make setup-peer`,
 `make check-peer`, `make home-demo`, `make home`, and `make peer-bundle`.
 `HOME_DATA`, `HOME_DEMO_DATA`, `HOME_PORT`, and `HOME_ARGS` select isolated state,
 port, and optional serve arguments. These commands never start research workers.
+
+## Set up the first super admin
+
+Stop the peer before upgrading its installed package; retain a backup of its whole
+state directory. Startup adds role columns and activation/audit tables, preserving
+existing IDs, passwords, drafts, and permissions. Existing owners remain admins;
+they are not automatically promoted to super admins.
+
+Run the trusted local command once, using the same data directory as your server:
+
+```sh
+uv run --locked python -m superyak_peer bootstrap-super-admin \
+  --data-dir /private/path/home --username admin@example.org --name 'First admin' \
+  --activation-file /private/path/first-admin-activation.json
+```
+
+This reserves an account and writes a mode-0600 file with a one-use token, exact
+username/name, and seven-day expiry. It creates no usable initial password, sends
+no email, and refuses an existing output file or a second bootstrap. The recipient
+opens **Use an invitation**, enters the supplied fields, and chooses their own
+password before signing in. Email addresses can be usernames; this does not verify
+mailbox ownership. Deliver the activation token through a trusted channel.
+
+If the first activation expires or is lost, repeat the command with the same
+username and name, a new output file, and `--renew-activation`. This keeps the
+pending identity and invalidates all previous activation tokens. It refuses to
+replace an already activated super admin or renew a different identity.
+
+Activation links use `/#activate?token=TOKEN&username=USERNAME&name=NAME`, with each
+value URL-encoded. The browser removes the fragment from its address immediately
+and opens the activation form, including on a local demo. Use the real peer's
+reachable HTTPS address when handing links to remote participants. The loopback
+demo is only usable on its host; do not expose password-free demo mode remotely.
+
+In **Connections → Account rights**, a super admin selects a person's role,
+reviews the named account and rights, and confirms the change:
+
+| Role | Administrative rights |
+| --- | --- |
+| Participant | Own work and explicitly granted sharing access |
+| Admin | Invite participants, list account metadata, and manage peer pairing |
+| Super admin | Admin rights plus granting/revoking admin and super-admin roles |
+
+Role changes record who changed whom, old/new roles, version, and time. Changes
+take effect in existing sessions; demotion to participant also revokes their unused
+invitations. The last active super admin cannot be demoted. Fictional password-free
+demo accounts cannot receive super-admin rights. No role grants access to other
+people's private content or authority over another independently operated peer.
 
 ## Pair two peers
 

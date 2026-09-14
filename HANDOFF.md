@@ -1,5 +1,47 @@
 # Resume here — medical lighthouse / aDNA
 
+**Stanley first super admin, September 14 (current):** Kairos requested
+`[address removed]` as the first super admin, able to grant rights
+to others. The current loopback peer at **http://127.0.0.1:7435** now serves the
+reviewed installed wheel from `.worktrees/stanley-admin/.engram/stanley-admin/`,
+PID `71905` at verification. Its `runtime.json` records the command, unchanged
+Gemma configuration, package hash, and preservation evidence. The original state
+remains `.worktrees/peer-home/.engram/home-demo/`. All 25 existing content tables
+(original columns/rows), credentials, and identity files were preserved. A full
+pre-upgrade state backup is retained in the new evidence directory.
+
+Stanley's account exists with `is_admin=1`, `is_super_admin=1`, and
+`activation_pending=1`. No usable initial password was issued. The private
+`activate-stanley.html` and `stanley-activation.json` in that evidence directory
+hold the one-use, seven-day activation. Do not print or commit the token or redeem
+it during verification; Stanley chooses his password. The link currently opens
+the peer on this Mac; remote access needs an ordinary authenticated HTTPS peer
+address. No email was sent. Lost/expired pending activation can be renewed for
+the same identity with the trusted CLI's `--renew-activation` option.
+
+**Connections → Account rights** lets a super admin preview named-person role
+changes and grant/revoke participant, admin, and super-admin roles. Admins invite
+participants and manage peer pairing; only super admins delegate admin roles.
+Changes are versioned and audited, immediately rechecked in existing sessions,
+and cannot remove the last active super admin. Demotion to participant revokes
+unused invitations. These permissions grant no private content access or authority
+over other peers. Password-free fictional demo accounts cannot be super admins.
+
+All **186 peer tests**, including **41 Chromium workflows**, passed. Source/wheel
+builds passed; independent review approved after activation renewal and same-tab
+account/invitation isolation checks. Fresh live browser entry and the unconsumed
+Stanley activation form passed; served assets match reviewed source and Gemma
+status is enabled. No model generation or research-service restart occurred.
+Read [the administration guide](peer/README.md#set-up-the-first-super-admin).
+`verification.json` / `live-verification.json` retain results; preserve the worktree.
+
+Kairos also supplied a Google document, **Target Inventory for Myasthenia Gravis**:
+`https://docs.google.com/document/d/1eUybPa7_ie20-HljhLGaMiNQMnT7V8xvgvao5kjl7cc/edit?tab=t.0`.
+Its accessible text export is retained privately as `mg-target-inventory.txt`
+(115,432 bytes, SHA-256 `3c3f87694f75e4d9c935c9cbca3beb92f9ab69eac50b6f7d0e6d821a18ca08b5`)
+with `document-receipt.json`. It is a source snapshot, not validated research,
+a patient case record, an automatic live import, or a training grant.
+
 **Hackathon dashboard expanded, September 13 (current):** The live password-free
 home remains **http://127.0.0.1:7435**, now PID `10555` at verification. It serves
 an installed reviewed wheel from

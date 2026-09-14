@@ -94,9 +94,11 @@ All IDs are opaque strings, scoped to this peer. They are not usernames or displ
 names. A future transport must carry origin peer identity alongside these IDs and
 must not merge remote/local IDs by spelling or name. No global owner exists.
 
-A user is `{id, username, name, is_admin, created}`. `created` is Unix seconds;
-`is_admin` is 0 or 1 and only permits local invitation/account setup. It conveys no
-private-content permission. Contacts expose only `{id,name}` for provisioned local
+A user is `{id, username, name, is_admin, is_super_admin, role_version,
+activation_pending, created}`. `created` is Unix seconds. Role/pending flags are
+0 or 1; `role_version` starts at 1. `is_admin` permits local invitations and peer
+pairing. `is_super_admin` additionally permits administrative role delegation.
+Neither conveys private-content permission. Contacts expose only `{id,name}` for provisioned local
 accounts. All these accounts are known local contacts for this first slice.
 
 | Method/path | Request JSON | Response |
@@ -107,6 +109,8 @@ accounts. All these accounts are known local contacts for this first slice.
 | GET `/api/me/corrections` | — | Signed-in account's ordered `{id,user_id,old_name,new_name,actor_id,created}` name corrections |
 | POST `/api/logout` | none | `{ok:true}`, revoked/deleted cookie |
 | GET `/api/accounts` | — | User array, owner only |
+| PATCH `/api/accounts/{id}/role` | `{role,expected_version}`; role is `participant`, `admin`, or `super_admin` | Updated user; active super admin only |
+| GET `/api/account-role-changes` | — | Latest 100 role changes, newest first; active super admin only |
 | POST `/api/invitations` | `{expires_in:86400}` optional; 60–604800 seconds | `{id,token,expires}`; owner only |
 | POST `/api/invitations/redeem` | `{token,username,name,password}` | User, 201; no session until login |
 | GET `/api/contacts` | — | Contact array |
@@ -572,3 +576,25 @@ The trusted service is `app.state.data_sources` (`DataSources`); its record impo
 share a transaction with `Interchange._import_document`. Internal Python callers
 of `Interchange.import_document` retain the original low-level import behavior;
 browser source-management controls apply through the HTTP routes above.
+
+## Administrative role delegation and first activation
+
+The trusted `bootstrap-super-admin` CLI is documented in [README.md](README.md#set-up-the-first-super-admin).
+It reserves the first super-admin account without a usable password; the private
+activation file binds a hashed one-use token to the account's exact username and
+name. `/api/invitations/redeem` also accepts these activation tokens and sets the
+chosen password atomically. Expired, consumed, or mismatched activations fail with
+400. Pending accounts cannot log in or exercise administrative permissions. The
+activation route creates no session; normal login follows. Ordinary invitations
+continue to create participants only, ignoring no role elevation from the caller.
+
+Role changes require an authenticated super admin, CSRF, and exactly the two
+request fields. Stale versions and attempts to remove the last active super admin
+return 409. Invalid roles/versions or promotion of fictional demo accounts to
+super admin return 400. Pending accounts must finish activation first. Each actual
+change increments `role_version` and appends `{id,user_id,actor_id,old_role,new_role,
+role_version,created}` to `account_role_changes`; bootstrap uses null `old_role`.
+A same-role request with the current version is a no-op. Role checks read current
+account state inside the transaction, so cached session claims cannot retain
+revoked rights. Role delegation is local to this peer and changes no content,
+space membership, or remote-peer grants.

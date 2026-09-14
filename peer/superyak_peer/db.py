@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS account_corrections(id INTEGER PRIMARY KEY AUTOINCREM
 CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), csrf TEXT NOT NULL, expires REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS invitations(token_hash TEXT PRIMARY KEY, creator_id TEXT NOT NULL REFERENCES users(id), expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS account_activations(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires REAL NOT NULL, used INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS account_role_changes(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES users(id), actor_id TEXT NOT NULL REFERENCES users(id), old_role TEXT, new_role TEXT NOT NULL, role_version INTEGER NOT NULL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS spaces(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, kind TEXT NOT NULL, version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS space_members(space_id TEXT NOT NULL REFERENCES spaces(id), user_id TEXT NOT NULL REFERENCES users(id), PRIMARY KEY(space_id,user_id));
 CREATE TABLE IF NOT EXISTS layers(id TEXT PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES users(id), version INTEGER NOT NULL, resource_version INTEGER NOT NULL DEFAULT 0, draft TEXT NOT NULL, active_revision INTEGER);
@@ -46,6 +48,12 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats):
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
             db.executescript(SCHEMA + PEER_SCHEMA)
+        # Additive migration preserves every existing identity and credential.
+        with self.transaction() as db:
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(users)')}
+            for name, default in [('is_super_admin', 0), ('role_version', 1), ('activation_pending', 0)]:
+                if name not in columns:
+                    db.execute(f'ALTER TABLE users ADD COLUMN {name} INTEGER NOT NULL DEFAULT {default}')
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):

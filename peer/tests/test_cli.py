@@ -7,6 +7,41 @@ import pytest
 def run(*args):
     return subprocess.run([sys.executable, '-m', 'superyak_peer', *map(str, args)], capture_output=True, text=True)
 
+
+def test_bootstrap_first_super_admin_preserves_demo_and_writes_private_activation(tmp_path):
+    from superyak_peer.db import Store
+    target = tmp_path / 'demo'
+    assert run('demo', '--data-dir', target).returncode == 0
+    credentials = (target / 'demo-credentials.json').read_bytes()
+    activation = tmp_path / 'activation.json'
+    result = run('bootstrap-super-admin', '--data-dir', target, '--username', 'science.stanley@example.org', '--name', 'Stanley', '--activation-file', activation)
+    assert result.returncode == 0, result.stderr
+    record = json.loads(activation.read_text())
+    assert record['token'] not in result.stdout + result.stderr
+    assert record['username'] == 'science.stanley@example.org'
+    assert activation.stat().st_mode & 0o777 == 0o600
+    assert run('demo', '--data-dir', target).returncode == 0
+    assert (target / 'demo-credentials.json').read_bytes() == credentials
+    store = Store(target)
+    with store.transaction() as db:
+        supers = db.execute('SELECT username,activation_pending FROM users WHERE is_super_admin=1').fetchall()
+    assert [tuple(r) for r in supers] == [('science.stanley@example.org', 1)]
+
+
+def test_legacy_account_migration_keeps_existing_credentials_and_identity(tmp_path):
+    import sqlite3
+    from superyak_peer.auth import password_hash
+    from superyak_peer.db import Store
+    target = tmp_path / 'legacy'; target.mkdir()
+    with sqlite3.connect(target / 'peer.sqlite3') as db:
+        db.execute('CREATE TABLE users(id TEXT PRIMARY KEY,username TEXT UNIQUE NOT NULL,name TEXT NOT NULL,salt BLOB NOT NULL,password_hash BLOB NOT NULL,is_admin INTEGER NOT NULL,created REAL NOT NULL)')
+        db.execute('INSERT INTO users VALUES(?,?,?,?,?,?,?)', ('retained-id', 'owner', 'Owner', b'old-salt', password_hash('retained-password', b'old-salt'), 1, 100))
+    store = Store(target)
+    user = store.login('owner', 'retained-password', 'test')['user']
+    assert user['id'] == 'retained-id' and user['is_admin'] == 1
+    assert user['is_super_admin'] == 0 and user['role_version'] == 1
+    assert Store(target).login('owner', 'retained-password', 'test')['user'] == user
+
 def test_demo_is_private_idempotent_and_refuses_unrelated_state(tmp_path):
     target = tmp_path / 'demo'
     result = run('demo', '--data-dir', target)
@@ -132,3 +167,26 @@ def test_model_config_is_explicit_and_rejects_unknown_before_serving(tmp_path):
     result = run('serve', '--data-dir', tmp_path / 'unused', '--model-config', config)
     assert result.returncode != 0
     assert 'Traceback' not in result.stderr
+
+
+def test_pending_super_admin_activation_can_be_renewed_without_replacing_identity(tmp_path):
+    from superyak_peer.common import Problem
+    from superyak_peer.db import Store
+    target = tmp_path / 'peer'
+    first = tmp_path / 'first.json'
+    args = ['bootstrap-super-admin', '--data-dir', target, '--username', 'science.stanley@example.org', '--name', 'Stanley']
+    assert run(*args, '--activation-file', first).returncode == 0
+    original = json.loads(first.read_text())
+    second = tmp_path / 'second.json'
+    renewed = run(*args, '--activation-file', second, '--renew-activation')
+    assert renewed.returncode == 0, renewed.stderr
+    current = json.loads(second.read_text())
+    assert current['user_id'] == original['user_id'] and current['token'] != original['token']
+    store = Store(target)
+    with pytest.raises(Problem):
+        store.redeem(original['token'], original['username'], original['name'], 'long-user-password')
+    assert store.redeem(current['token'], current['username'], current['name'], 'long-user-password')['id'] == original['user_id']
+    third = tmp_path / 'third.json'
+    assert run(*args, '--activation-file', third, '--renew-activation').returncode != 0
+    assert not third.exists()
+    assert store.login(current['username'], 'long-user-password', 'test')['user']['is_super_admin'] == 1

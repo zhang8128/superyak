@@ -87,6 +87,12 @@ def main(argv=None):
     init.add_argument('--username', required=True)
     init.add_argument('--name', required=True)
     init.add_argument('--password-file', type=Path)
+    bootstrap = commands.add_parser('bootstrap-super-admin', help='Reserve the first super admin with a private one-use activation')
+    bootstrap.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    bootstrap.add_argument('--username', required=True)
+    bootstrap.add_argument('--name', required=True)
+    bootstrap.add_argument('--activation-file', type=Path, required=True)
+    bootstrap.add_argument('--renew-activation', action='store_true', help='Replace a lost or expired activation for the same pending first super admin')
     demo = commands.add_parser('demo')
     demo.add_argument('--data-dir', type=Path, default=Path('.engram/home-demo'))
     card = commands.add_parser('card')
@@ -107,7 +113,10 @@ def main(argv=None):
     serve.add_argument('--model-config', type=Path, help='Operator-owned approved local Gemma JSON configuration')
     args = parser.parse_args(argv)
     try:
-        if args.command == 'card':
+        if args.command == 'bootstrap-super-admin':
+            user = Store(args.data_dir).bootstrap_super_admin(args.username, args.name, args.activation_file, renew_activation=args.renew_activation)
+            print(f'Super admin reserved for {user["username"]}. Private activation: {args.activation_file}')
+        elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
             from urllib.parse import urlsplit

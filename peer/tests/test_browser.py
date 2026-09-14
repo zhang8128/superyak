@@ -1443,3 +1443,53 @@ def test_preview_rechecks_members_and_conflicts_after_review(browser_peer):
             store.change_space_member(owner, circle['id'], doctor, remove=True)
             page.reload()
             expect(page.locator('.active-panel').get_by_text('Dr. Morgan', exact=False)).to_be_visible()
+
+
+def test_super_admin_activation_and_named_role_preview_in_browser(browser_peer, tmp_path):
+    from urllib.parse import urlencode
+    store = browser_peer['app'].state.store
+    path = tmp_path / 'activation.json'
+    store.bootstrap_super_admin('science.stanley@example.org', 'Stanley', path)
+    record = json.loads(path.read_text())
+    fragment = '#activate?' + urlencode({k: record[k] for k in ['token', 'username', 'name']})
+    with sync_playwright() as playwright, signed_out_browser(playwright) as page:
+        page.goto(browser_peer['base_url'] + '/' + fragment)
+        expect(page.get_by_label('New username', exact=True)).to_have_value('science.stanley@example.org')
+        expect(page.get_by_label('Your display name', exact=True)).to_have_value('Stanley')
+        assert record['token'] not in page.url
+        page.get_by_label('New password', exact=True).fill(browser_peer['password'])
+        page.get_by_role('button', name='Create my account', exact=True).click()
+        expect(page.get_by_text('Account created. Sign in to open your home.', exact=True)).to_be_visible()
+        page.get_by_label('Username', exact=True).fill(record['username'])
+        page.get_by_label('Password', exact=True).fill(browser_peer['password'])
+        page.get_by_role('button', name='Sign in', exact=True).click()
+        expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
+        page.get_by_role('link', name='Connections', exact=True).click()
+        role = page.get_by_label('Role for Dr. Morgan', exact=True)
+        role.select_option('admin')
+        page.get_by_role('button', name='Review rights for Dr. Morgan', exact=True).click()
+        dialog = page.get_by_role('dialog', name='Review account rights')
+        expect(dialog).to_contain_text('Dr. Morgan')
+        expect(dialog).to_contain_text('Admin')
+        with store.transaction() as db:
+            assert db.execute("SELECT is_admin FROM users WHERE username='doctor'").fetchone()[0] == 0
+        dialog.get_by_role('button', name='Grant these rights', exact=True).click()
+        expect(page.get_by_role('status')).to_contain_text('Account rights updated')
+        page.get_by_role('button', name='Create invitation', exact=True).click()
+        expect(page.get_by_text('One-use invitation', exact=True)).to_be_visible()
+        page.get_by_label('Role for Stanley', exact=True).select_option('participant')
+        page.get_by_role('button', name='Review rights for Stanley', exact=True).click()
+        page.get_by_role('dialog').get_by_role('button', name='Grant these rights', exact=True).click()
+        expect(page.get_by_role('status')).to_contain_text('Keep at least one active super admin')
+        page.get_by_role('button', name='Account and sign out', exact=True).click()
+        page.get_by_role('button', name='Sign out', exact=True).click()
+        page.get_by_label('Username', exact=True).fill('doctor')
+        page.get_by_label('Password', exact=True).fill(browser_peer['password'])
+        page.get_by_role('button', name='Sign in', exact=True).click()
+        expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
+        page.get_by_role('link', name='Connections', exact=True).click()
+        expect(page.get_by_text('One-use invitation', exact=True)).to_have_count(0)
+    with sync_playwright() as playwright, signed_in_browser(playwright, browser_peer, 'doctor') as (page, _):
+        page.get_by_role('link', name='Connections', exact=True).click()
+        expect(page.get_by_role('button', name='Create invitation', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='Review rights for Dr. Morgan', exact=True)).to_have_count(0)

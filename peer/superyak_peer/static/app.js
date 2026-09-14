@@ -11,6 +11,9 @@ const state = {
   files: [],
   sync: { enabled: false, deliveries: [] },
   accounts: [],
+  roleChanges: [],
+  accountRolePreview: null,
+  activation: null,
   corrections: [],
   connections: [],
   activeLayers: {},
@@ -95,9 +98,14 @@ function identityKey(user) {
   return user ? `${user.peer_id}:${user.id}` : null;
 }
 
+function clearAccountAdministration() {
+  state.accounts = []; state.roleChanges = []; state.invitation = null;
+  state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null;
+}
+
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.layerEdits = {}; state.assistance = {}; state.sources = []; Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -177,7 +185,7 @@ function layout(content) {
         ${content}
       </main>
     </div>
-    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}
+    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}${accountRoleDialog()}
   </div>`;
 }
 
@@ -210,7 +218,7 @@ function showLogin(message = "") {
           <button class="button" type="submit">Sign in</button>
         </form>
         ${state.demoAccounts.length ? '</details>' : ''}
-        <details class="invitation-redeem"><summary>Use an invitation</summary><p>An account owner gives you a one-use token. You choose your own local username, name, and password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
+        <details class="invitation-redeem"><summary>Use an invitation</summary><p>An admin gives you a one-use token. Use the supplied username and name for a reserved account, or choose your own for a new invitation. You choose your password.</p><form id="redeem-form"><div class="field"><label for="invitation-token">Invitation token</label><input class="input" id="invitation-token" name="token" autocomplete="off" required></div><div class="field"><label for="new-username">New username</label><input class="input" id="new-username" name="username" autocomplete="username" required></div><div class="field"><label for="new-name">Your display name</label><input class="input" id="new-name" name="name" required></div><div class="field"><label for="new-password">New password</label><input class="input" id="new-password" name="password" type="password" minlength="12" autocomplete="new-password" required></div><button class="button secondary" type="submit">Create my account</button></form></details>
       </section>
     </div>
   </main>`;
@@ -532,7 +540,27 @@ function resourceDelivery(id) {
 
 function accountSupport() {
   if (!state.me.is_admin) return "";
-  return `<section class="section"><div class="section-head"><div><h2>Account support</h2><p class="meta">Account support does not open private chats or drafts.</p></div><button class="button secondary" data-action="invite">Create invitation</button></div>${state.invitation ? `<div class="notice"><strong>One-use invitation</strong><p>Share this token through a channel you trust. It expires ${formatDate(state.invitation.expires)}.</p><div class="code-box">${escapeHtml(state.invitation.token)}</div></div>` : ""}<div class="item-list">${state.accounts.map((account) => `<div class="item"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>@${escapeHtml(account.username)} · joined ${formatDate(account.created)}</span></span><span class="badge">${account.is_admin ? "Account owner" : "Participant"}</span></div>`).join("")}</div></section>`;
+  return `<section class="section"><div class="section-head"><div><h2>Account support</h2><p class="meta">Account support does not open private chats or drafts.</p></div><button class="button secondary" data-action="invite">Create invitation</button></div>${state.invitation ? `<div class="notice"><strong>One-use invitation</strong><p>Share this token through a channel you trust. It expires ${formatDate(state.invitation.expires)}.</p><div class="code-box">${escapeHtml(state.invitation.token)}</div></div>` : ""}<div class="item-list">${state.accounts.map((account) => `<div class="item"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>@${escapeHtml(account.username)} · joined ${formatDate(account.created)}</span></span><span class="badge">${roleLabel(roleOf(account))}</span></div>`).join("")}</div></section>`;
+}
+
+function roleLabel(role) {
+  return { participant: 'Participant', admin: 'Admin', super_admin: 'Super admin' }[role] || 'Not assigned';
+}
+
+function roleOf(account) {
+  return account.is_super_admin ? 'super_admin' : account.is_admin ? 'admin' : 'participant';
+}
+
+function accountRights() {
+  if (!state.me.is_super_admin) return '';
+  const names = new Map(state.accounts.map(account => [account.id, account.name]));
+  return `<section class="section card"><h2>Account rights</h2><p>Participants manage their own work. Admins invite people and pair peers. Super admins also grant and revoke administrative roles. These roles do not open private chats, drafts, or records.</p>${state.accounts.map(account => `<form class="item account-role-form" data-id="${escapeHtml(account.id)}"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>${escapeHtml(account.username)} · ${roleLabel(roleOf(account))}${account.activation_pending ? ' · Awaiting activation' : ''}</span></span><div class="field"><label for="role-${escapeHtml(account.id)}">Role for ${escapeHtml(account.name)}</label><select id="role-${escapeHtml(account.id)}" name="role" ${account.activation_pending ? 'disabled' : ''}>${['participant', 'admin', 'super_admin'].map(role => `<option value="${role}" ${role === roleOf(account) ? 'selected' : ''}>${roleLabel(role)}</option>`).join('')}</select></div><button class="button secondary" type="submit" ${account.activation_pending ? 'disabled' : ''}>Review rights for ${escapeHtml(account.name)}</button></form>`).join('')}<details><summary>Recent rights changes</summary><ul>${state.roleChanges.map(change => `<li>${escapeHtml(names.get(change.actor_id) || 'Account')} changed ${escapeHtml(names.get(change.user_id) || 'Account')} from ${roleLabel(change.old_role)} to ${roleLabel(change.new_role)} · ${formatDate(change.created)}</li>`).join('') || '<li>No rights changes recorded.</li>'}</ul></details></section>`;
+}
+
+function accountRoleDialog() {
+  const preview = state.accountRolePreview;
+  if (!preview) return '';
+  return `<dialog aria-labelledby="account-rights-title"><div class="dialog-content"><h2 id="account-rights-title">Review account rights</h2><p><strong>${escapeHtml(preview.name)}</strong> · ${escapeHtml(preview.username)}</p><p>${roleLabel(preview.oldRole)} → <strong>${roleLabel(preview.role)}</strong></p><p>${preview.role === 'super_admin' ? 'This person will be able to grant and revoke admin and super-admin rights, invite people, and pair peers.' : preview.role === 'admin' ? 'This person will be able to invite people and pair peers.' : 'This person will lose administrative rights. Unused invitations they created will be revoked.'}</p><p>Private chats, drafts, and records keep their existing sharing permissions.</p><div class="button-row"><button class="button" data-action="confirm-account-role">Grant these rights</button><button class="button secondary" data-action="close-dialog">Cancel</button></div></div></dialog>`;
 }
 
 function connectionsView() {
@@ -541,7 +569,7 @@ function connectionsView() {
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and compare its fingerprint before connecting.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
     ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card, preview it, and compare the fingerprint outside Superyak before confirming.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><button class="button" data-action="confirm-pair">Fingerprint matches — pair this peer</button></div>` : ""}</section>` : ""}
-    ${accountSupport()}`;
+    ${accountSupport()}${accountRights()}`;
 }
 
 function profileDialog() {
@@ -586,15 +614,16 @@ async function loadData() {
     ]);
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections] = await Promise.all([
+    const [assistant, sources, activePairs, accounts, connections, roleChanges] = await Promise.all([
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
         try { return { id: layer.id, active: await api(`/api/shared/layers/${pathPart(layer.id)}`) }; }
         catch (error) { if (error.status === 401) throw error; return { id: layer.id, error }; }
       })),
-      user.is_admin ? api("/api/accounts") : [],
-      user.is_admin ? api("/api/connections") : [],
+      home.user.is_admin ? api("/api/accounts") : [],
+      home.user.is_admin ? api("/api/connections") : [],
+      home.user.is_super_admin ? api("/api/account-role-changes") : [],
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -603,7 +632,7 @@ async function loadData() {
       return active ? [[result.id, active]] : [];
     }));
     const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
-    Object.assign(state, { home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, connections });
+    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, connections, roleChanges });
     return true;
   } catch (error) { if (!valid()) return false; throw error; }
 }
@@ -647,6 +676,7 @@ async function loadRoute() {
 
 let dialogReturn = null;
 function closeDialogs() {
+  state.accountRolePreview = null;
   state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false; Research.close(); Dashboard.close();
   render();
 }
@@ -1033,6 +1063,7 @@ function clearChatDrafts() {
 async function logout() {
   const complete = () => {
     state.logoutError = null;
+    clearAccountAdministration();
     clearChatDrafts();
     state.layerEdits = {};
     state.assistance = {};
@@ -1088,6 +1119,16 @@ async function demoLogin(username) {
 }
 
 async function bootstrap() {
+  if (location.hash.startsWith('#activate?')) {
+    const fields = new URLSearchParams(location.hash.slice('#activate?'.length));
+    state.activation = Object.fromEntries(['token', 'username', 'name'].map(key => [key, fields.get(key) || '']));
+    history.replaceState(null, '', location.pathname + location.search);
+    showLogin();
+    const form = document.querySelector('#redeem-form');
+    for (const key of ['token', 'username', 'name']) form.elements[key].value = state.activation[key];
+    document.querySelector('.invitation-redeem').open = true;
+    return;
+  }
   if (location.pathname === "/public/" || location.pathname.startsWith("/public/view")) {
     await renderPublic();
     return;
@@ -1114,6 +1155,13 @@ async function bootstrap() {
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
+  if (form.matches('.account-role-form')) {
+    const account = state.accounts.find(row => row.id === form.dataset.id);
+    if (!state.me?.is_super_admin || !account) return;
+    state.accountRolePreview = { id: account.id, name: account.name, username: account.username, oldRole: roleOf(account), role: form.elements.role.value, expected_version: account.role_version };
+    render();
+    return;
+  }
   if (form.id === "login-form") {
     const button = form.querySelector("button");
     button.disabled = true;
@@ -1132,11 +1180,13 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "redeem-form") {
     try {
       await api("/api/invitations/redeem", { method: "POST", json: { token: form.elements.token.value, username: form.elements.username.value, name: form.elements.name.value, password: form.elements.password.value } });
+      state.activation = null;
       showLogin("Account created. Sign in to open your home.");
     } catch (error) {
       showLogin(error.message);
       const details = document.querySelector(".invitation-redeem");
       if (details) details.open = true;
+      if (state.activation) for (const key of ['token', 'username', 'name']) document.querySelector('#redeem-form').elements[key].value = state.activation[key];
     }
     return;
   }
@@ -1253,9 +1303,32 @@ document.addEventListener("click", async (event) => {
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {
-    try { state.invitation = await api("/api/invitations", { method: "POST", json: {} }); state.flash = null; }
-    catch (error) { setFlash(error.message, true); }
+    const identity = identityKey(state.me);
+    try {
+      const invitation = await api("/api/invitations", { method: "POST", json: {} });
+      if (identityKey(state.me) !== identity) return;
+      state.invitation = invitation; state.flash = null;
+    }
+    catch (error) { if (identityKey(state.me) !== identity) return; setFlash(error.message, true); }
     render();
+  }
+  if (action === 'confirm-account-role') {
+    const preview = state.accountRolePreview;
+    if (!preview || target.disabled) return;
+    const identity = identityKey(state.me);
+    target.disabled = true;
+    try {
+      await api(`/api/accounts/${pathPart(preview.id)}/role`, { method: 'PATCH', json: { role: preview.role, expected_version: preview.expected_version } });
+      if (identityKey(state.me) !== identity) return;
+      state.accountRolePreview = null;
+      await refresh('Account rights updated');
+    } catch (error) {
+      if (identityKey(state.me) !== identity) return;
+      state.accountRolePreview = null;
+      await refresh();
+      setFlash(error.message, true);
+      render();
+    }
   }
   if (action === "show-card") await showCard();
   if (action === "sync") {

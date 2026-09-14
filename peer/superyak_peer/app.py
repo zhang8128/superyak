@@ -207,6 +207,18 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def accounts(request: Request):
         return store.accounts(actor(request))
 
+    @app.patch('/api/accounts/{user_id}/role')
+    async def account_role(request: Request, user_id: str):
+        who = actor(request)
+        data = await body(request)
+        if set(data) != {'role', 'expected_version'}:
+            raise Problem(400, 'Provide only the role and saved version')
+        return store.change_account_role(who, user_id, data['role'], data['expected_version'])
+
+    @app.get('/api/account-role-changes')
+    def role_changes(request: Request):
+        return store.account_role_changes(actor(request))
+
     @app.post('/api/invitations')
     async def invite(request: Request):
         who = actor(request)
