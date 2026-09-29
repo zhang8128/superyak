@@ -44,7 +44,21 @@ before any of that happens.
    store's schema has. `passages` follows each reading session's start, then
    passage position. `--json` gives machine-readable output.
 
-3. Upgrade only a separate working copy, as a new instance directory with no
+3. Calibrate before anything else opens it:
+
+   ```sh
+   engram-calibrate pristine/graph.db --out calibration-1
+   ```
+
+   This snapshots the store through a read-only connection (immutable when
+   no WAL pages are pending, so nothing is created beside it), migrates only
+   `calibration-1/working.db`, and writes `report.md`/`report.json`: how many
+   episodes decay would move to `cold.db` if the store were opened now, sheaf
+   cohesion energies, persistence distributions and hub classes. It refuses
+   to report success if the source's bytes changed. `--no-migrate` analyses
+   the copy at its own schema.
+
+4. Upgrade only a separate working copy, as a new instance directory with no
    `genome/graph.db` or `signals.db` beside it, and keep maintenance off
    until decay and pruning are deliberately chosen.
 

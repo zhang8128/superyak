@@ -34,11 +34,13 @@ engram-lighthouse-label = "lighthouse_label:main"
 superyak-sessions = "session_cli:main"
 superyak-adna = "adna_cli:main"
 engram-read-store = "store_reader:main"
+engram-calibrate = "calibrate:main"
 
 [tool.setuptools]
 py-modules = [
     "ask",
     "adna_cli",
+    "calibrate",
     "categories",
     "category_compile",
     "category_context",

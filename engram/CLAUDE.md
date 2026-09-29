@@ -232,6 +232,8 @@ payloads down to the same metadata-only representation.
 | `hooks/wake.py` | SessionStart hook — loads instincts into context on boot |
 | `hooks/sleep.py` | Stop hook — dream residue distillation; marks this session's recalls `used: auto: cited` when a later act cited a result (positive evidence only) |
 | `scoring.py` | Recall score shared by `recall()`, its counterfactual, and the margins replay script |
+| `store_reader.py` | Read-only survey and chronological reading of a store or reader.db, no migration |
+| `calibrate.py` | Snapshot a store read-only, migrate only a working copy, report first-open decay/prune, cohesion and persistence |
 
 ## Testing
 
