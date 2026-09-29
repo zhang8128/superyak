@@ -68,6 +68,8 @@ def test_calibration_leaves_source_untouched_and_reports(tmp_path):
     assert "error" not in a["cohesion"], a["cohesion"]
     assert "error" not in a["persistence"], a["persistence"]
     assert a["cohesion"]["measured"] == 1
+    assert "error" not in a["paths"], a["paths"]
+    assert a["paths"]["sessions_with_paths"] == 2 and a["paths"]["changes"] == 0
     assert a["cohesion"]["hottest"][0]["energy"] > 0.5
     out = tmp_path / "out"
     assert json.loads((out / "report.json").read_text())["source_unchanged"] is True

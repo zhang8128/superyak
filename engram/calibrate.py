@@ -13,7 +13,7 @@
 4. analyses ``working.db`` read-only: the decay and prune that a first normal
    open would apply now, sheaf cohesion energies, persistence distributions,
    hub classification, the retroactive conjunct audit, the two-key prune
-   preview and redundant cores;
+   preview, redundant cores, and session path signatures (Layer 5);
 5. re-hashes the source, refusing to report success if anything changed.
 
 Results go to ``report.json`` and ``report.md`` in NEW_DIR. Each analysis is
@@ -264,6 +264,8 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
         store = _ReadOnlyStore(ro, scores)
         _run(report, "cohesion", cohesion_report, store)
         _run(report, "persistence", persistence_preview, store)
+        import paths
+        _run(report, "paths", paths.report, conn)
     finally:
         ro.close()
 
@@ -334,6 +336,13 @@ def render_markdown(report: dict) -> str:
             lines.append(f"  - {h['classification']:>11}  n={h['n']}  band={h['band']}  {h['content'][:60]}")
         lines.append(f"- Conjunct audit entries: {len(pe['conjunct_audit'])}; "
                      f"redundant cores flagged: {len(pe['redundant_cores'])}")
+    pa = a.get("paths", {})
+    if section("Session paths (Layer 5)", pa):
+        lines.append(f"- Sessions with paths: {pa['sessions_with_paths']} of {pa['sessions_total']}; "
+                     f"basis {pa['basis']}")
+        lines.append(f"- Tortuosity: {pa['tortuosity']}")
+        for r in pa["different_routes"][:5]:
+            lines.append(f"  - different route: {r}")
     return "\n".join(lines) + "\n"
 
 
