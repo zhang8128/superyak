@@ -113,6 +113,19 @@ content distilled via Ollama, else queued). Gated by `[cohesion] enabled`
 /path/to/copy-of-graph.db`. Observe via `reflect(focus="cohesion")`.
 Spec: docs/superpowers/specs/2026-06-13-sheaf-cohesion-design.md.
 
+**Lighthouse sheaf:** The same Layer 3 question across independently
+governed stores. For one topic (a stored memory's vector), each store's
+top-k hits (default `work` lane) are a section; restriction = projection
+into a shared PCA topic basis (equal mass per store); the sheaf is the
+complete graph of covered stores with identity maps and edge weight =
+product (or min) of topic-scoped trust. Energy in [0,1], ranked edge
+residuals (who disagrees with whom), trust-weighted consensus (H^0) and
+each store's deviation. Uncovered (no hit above threshold) is reported,
+never dissent; trust moves the consensus but never hides disagreement.
+Observational, read-only (`Storage.open_read_only`): `python
+lighthouse_sheaf.py --store a=/p/a.db --store b=/p/b.db --semantic a:ID`.
+Spec: docs/superpowers/specs/2026-09-29-lighthouse-sheaf-design.md.
+
 **Persistence (Layer 4):** Single-linkage filtrations (exact, via MST) give
 each episode a redundancy (nearest-neighbor coverage) and uniqueness
 (survival across merge scales); resonance history adds generativity
@@ -233,6 +246,7 @@ payloads down to the same metadata-only representation.
 | `dreaming.py` | Dream residue — lossy emotional compression and surfacing |
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
+| `lighthouse_sheaf.py` | Cross-store sheaf cohesion — per-topic disagreement between lighthouses, scoped trust, read-only CLI |
 | `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
 | `paths.py` | Layer 5 — path signatures of sessions and semantic journeys, different-route detection (observational) |
 | `maintenance.py` | Pain channel — per-step sleep-maintenance report, surfaced via `status()` and wake |

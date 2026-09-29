@@ -86,6 +86,7 @@ py-modules = [
     "lighthouse_protocol",
     "lighthouse_receipts",
     "lighthouse_receiver_config",
+    "lighthouse_sheaf",
     "lighthouse_validation",
     "local_agent",
     "logging_config",
