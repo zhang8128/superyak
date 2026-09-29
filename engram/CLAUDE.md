@@ -129,6 +129,19 @@ flags for review. Recall's uninvited slot occasionally daydreams a random
 persistence.py /path/to/copy-of-graph.db`.
 Spec: docs/superpowers/specs/2026-06-13-persistence-design.md.
 
+**Path signatures (Layer 5):** A session is a path, not a bag. Its truncated
+signature (levels 1–3, exact for piecewise-linear paths via Chen's identity)
+is order-aware: level 1 = net displacement, level 2's antisymmetric part =
+Lévy area (which way it turned), level 3 = finer shape. Episodes in
+(created_at, id) order are L2-normalized, projected into one shared centered
+PCA basis (d=6; separately fitted bases are not comparable), and
+time-augmented by step index so a detour that came back is not erased.
+`semantic_journey` gives a semantic the route to its conclusion, not just the
+conclusion. `different_routes` flags same-endpoints/different-route pairs;
+tortuosity = length / displacement. Observational only: gates nothing.
+Read-only: `python paths.py /path/to/copy-of-graph.db [--json]`.
+Spec: docs/superpowers/specs/2026-09-29-path-signatures-design.md.
+
 **Tropical margins:** Recall scores every layer on one soft sum and returns the
 argmax, which always produces a winner — even when the top two differ by 0.001.
 The margin `gamma = top - runner_up` says whether that ranking was decided or a
@@ -221,6 +234,7 @@ payloads down to the same metadata-only representation.
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
 | `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
+| `paths.py` | Layer 5 — path signatures of sessions and semantic journeys, different-route detection (observational) |
 | `maintenance.py` | Pain channel — per-step sleep-maintenance report, surfaced via `status()` and wake |
 | `margins.py` | Tropical margins — recall ranking separation, bias-stability counterfactual |
 | `dedup.py` | LLM-based duplicate detection |

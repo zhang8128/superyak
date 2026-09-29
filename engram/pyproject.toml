@@ -95,6 +95,7 @@ py-modules = [
     "neighbors",
     "notepad",
     "operation_audit",
+    "paths",
     "persistence",
     "policy_gen",
     "reflection",
