@@ -28,6 +28,30 @@ def vec0_distance_to_similarity(distance: float) -> float:
     return max(0.0, min(1.0, 1.0 - (distance * distance) / 2.0))
 
 
+_ADD_COLUMN = re.compile(
+    r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)[^;]*;", re.IGNORECASE)
+
+
+def _skip_existing_columns(conn, sql: str) -> str:
+    """Drop ``ALTER TABLE t ADD COLUMN c`` statements whose column exists.
+
+    A migration's columns can land without its version being recorded (e.g.
+    a branch applied it under another number), and SQLite has no
+    ``ADD COLUMN IF NOT EXISTS``, so re-running it would fail every open.
+    Only statements for columns already present are skipped; everything else
+    in the migration still runs.
+    """
+    def keep_or_skip(m: re.Match) -> str:
+        table, column = m.group(1), m.group(2)
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column in cols:
+            logger.warning("Migration adopts existing column %s.%s", table, column)
+            return f"-- skipped: {table}.{column} already exists"
+        return m.group(0)
+
+    return _ADD_COLUMN.sub(keep_or_skip, sql)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -199,7 +223,7 @@ class Storage:
         # open; any other store predates whichever migrations are pending.
         created_now = not applied
         for ver, path in sorted(migrations):
-            sql = path.read_text()
+            sql = _skip_existing_columns(self.conn, path.read_text())
             try:
                 self.conn.executescript("BEGIN IMMEDIATE;\n" + sql)
                 if ver == 28:
