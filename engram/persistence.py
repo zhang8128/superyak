@@ -272,14 +272,17 @@ def evaluate_prune(storage, cfg, threshold: float = 0.05) -> dict:
     scores = storage.get_persistence_scores()
     anchored = _anchored_episode_ids(storage.conn)
     rows = storage.conn.execute(
-        "SELECT id FROM episodes WHERE decay_strength < ?"
+        "SELECT id, source FROM episodes WHERE decay_strength < ?"
         " AND compressed = 1 AND core = 0 AND dormant = 0",
         (threshold,)).fetchall()
+    exempt = set(cfg.never_prune_sources)
     evict, protected = [], []
     for r in rows:
         eid = r["id"]
         s = scores.get(eid)
         reasons = []
+        if r["source"] in exempt:
+            reasons.append(f"source:{r['source']}")
         if s is None:
             # No score row = no vector = no evidence; such episodes can never be evicted by this gate — deliberate (forgetting requires evidence).
             reasons.append("no-vector-no-evidence")

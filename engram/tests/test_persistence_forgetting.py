@@ -184,3 +184,43 @@ class TestDecayModulation:
         tmp_db.add_episode(id="e1", session_id="s", content="x")
         n = tmp_db.apply_decay(min_interval_minutes=0)
         assert isinstance(n, int)   # smoke: signature unchanged for old callers
+
+
+class TestNeverPruneSources:
+    """Sources listed in never_prune_sources are never moved to cold.
+
+    Reading memories are a curriculum, not episodic noise: on the laptop the
+    plain prune moved 21 of 43 source='reading' episodes to cold.db, and the
+    guarded prune would evict one more on first open here.
+    """
+
+    def _seed(self, tmp_db, source):
+        # same shape as the eviction test above: redundancy needs an isolate
+        for i in range(5):
+            _decayed_episode(tmp_db, f"dup-{i}", _emb(0, 0.01, i))
+        _decayed_episode(tmp_db, "iso", _emb(5, 0.0, 99))
+        tmp_db.conn.execute("UPDATE episodes SET source = ?", (source,))
+        tmp_db.conn.commit()
+
+    def _remaining(self, tmp_db):
+        return {r[0] for r in tmp_db.conn.execute("SELECT id FROM episodes")}
+
+    def test_guarded_prune_protects_listed_source(self, tmp_db):
+        self._seed(tmp_db, "reading")
+        cfg = PersistenceConfig(enabled=True, never_prune_sources=["reading"])
+        v = persistence.evaluate_prune(tmp_db, cfg)
+        assert v["evict"] == []
+        assert all("source:reading" in p["reasons"] for p in v["protected"])
+        persistence.guarded_prune(tmp_db, cfg)
+        assert self._remaining(tmp_db) == {f"dup-{i}" for i in range(5)} | {"iso"}
+
+    def test_guarded_prune_still_evicts_unlisted_source(self, tmp_db):
+        self._seed(tmp_db, "auto")
+        cfg = PersistenceConfig(enabled=True, never_prune_sources=["reading"])
+        assert persistence.guarded_prune(tmp_db, cfg) >= 1
+
+    def test_plain_prune_honours_exempt_sources(self, tmp_db):
+        self._seed(tmp_db, "reading")
+        assert tmp_db.prune_decayed(threshold=0.05, exempt_sources=["reading"]) == 0
+        assert self._remaining(tmp_db) == {f"dup-{i}" for i in range(5)} | {"iso"}
+        assert tmp_db.prune_decayed(threshold=0.05) == 6   # default unchanged

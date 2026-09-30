@@ -136,6 +136,9 @@ class PersistenceConfig:
     protect_threshold: float = 0.6
     generativity_threshold: float = 0.0  # 0 disables until calibrated
     cold_uninvited_p: float = 0.05
+    # Episode sources that forgetting never moves to cold (e.g. ["reading"]).
+    # Decay is still computed for them, so strength keeps its meaning.
+    never_prune_sources: list[str] = field(default_factory=list)
 
 
 @dataclass

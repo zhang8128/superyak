@@ -1177,7 +1177,9 @@ def _run_sleep_maintenance(guarded: bool = False) -> None:
                 from persistence import guarded_prune
                 pruned = guarded_prune(_storage, _config.persistence)
             else:
-                pruned = _storage.prune_decayed(threshold=0.05)
+                pruned = _storage.prune_decayed(
+                    threshold=0.05,
+                    exempt_sources=_config.persistence.never_prune_sources)
             if pruned:
                 logger.info("Pruned %d decayed episodes", pruned)
                 _maint.note("prune", pruned=pruned)

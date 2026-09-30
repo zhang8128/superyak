@@ -767,16 +767,23 @@ class Storage:
         logger.info("Moved %d episodes to cold storage", len(ids))
         return len(ids)
 
-    def prune_decayed(self, threshold: float = 0.05) -> int:
+    def prune_decayed(self, threshold: float = 0.05,
+                      exempt_sources: list[str] | None = None) -> int:
         """Move decayed episodes to cold storage.
 
         Compressed episodes below threshold get moved to a sibling cold.db:
         text and metadata preserved, vectors stripped. The main db stays lean.
+        Episodes whose source is in ``exempt_sources`` are never moved.
         """
+        exempt = list(exempt_sources or [])
+        not_exempt = (
+            f" AND coalesce(source, '') NOT IN ({', '.join('?' * len(exempt))})"
+            if exempt else "")
         rows = self.conn.execute(
             "SELECT id FROM episodes "
-            "WHERE decay_strength < ? AND compressed = 1 AND core = 0 AND dormant = 0",
-            (threshold,),
+            "WHERE decay_strength < ? AND compressed = 1 AND core = 0 AND dormant = 0"
+            + not_exempt,
+            (threshold, *exempt),
         ).fetchall()
         ids = [r["id"] for r in rows]
         if ids:
