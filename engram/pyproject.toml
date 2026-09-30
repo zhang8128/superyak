@@ -110,6 +110,7 @@ py-modules = [
     "sharing",
     "sheaf",
     "storage",
+    "store_identity",
     "store_reader",
     "transitions",
     "watcher",

@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import store_identity
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -122,12 +124,21 @@ class InstanceRegistry:
         tmp.write_text(json.dumps(self._data, indent=2))
         tmp.rename(self.path)
 
-    def register(self, name: str, db_path: Path, forked_from: str) -> None:
-        self._data[name] = {
+    def register(self, name: str, db_path: Path, forked_from: str,
+                 instance_id: str | None = None,
+                 forked_from_instance_id: str | None = None) -> None:
+        entry = {
             "path": str(db_path),
             "forked_from": forked_from,
             "forked_at": _now_iso(),
         }
+        # The store's own meta.instance_id is authoritative; these are a
+        # convenience for listing, recorded when fork stamped them.
+        if instance_id is not None:
+            entry["instance_id"] = instance_id
+        if forked_from_instance_id is not None:
+            entry["forked_from_instance_id"] = forked_from_instance_id
+        self._data[name] = entry
         self._save()
 
     def remove(self, name: str) -> None:
@@ -144,6 +155,12 @@ class InstanceRegistry:
 def sync_genome(genome_path: str, instance_storage) -> int:
     """Pull genome-core episodes not yet present in instance. Returns count synced.
 
+    Each synced episode gets a new local id but keeps its provenance:
+    ``origin_instance_id`` (the genome's store identity), ``origin_id`` and
+    ``origin_created_at``. Episodes synced before provenance existed are
+    matched by content hash and have it filled in; nothing else about them
+    changes. The genome is only read.
+
     Note: Synced episodes are inserted without embeddings. The existing
     backfill_vectors step in server.py _init() runs after sync_genome and
     will embed any orphaned episodes (those without vectors).
@@ -151,18 +168,29 @@ def sync_genome(genome_path: str, instance_storage) -> int:
     genome_conn = sqlite3.connect(genome_path)
     genome_conn.row_factory = sqlite3.Row
 
-    genome_rows = genome_conn.execute(
-        "SELECT id, content, content_hash, source, created_at "
-        "FROM episodes WHERE core >= 2"
-    ).fetchall()
+    try:
+        genome_instance_id = store_identity.effective_id(genome_conn)
+        genome_rows = genome_conn.execute(
+            "SELECT id, content, content_hash, source, created_at "
+            "FROM episodes WHERE core >= 2"
+        ).fetchall()
+    finally:
+        genome_conn.close()
 
     synced = 0
     for row in genome_rows:
+        origin = {
+            "origin_instance_id": genome_instance_id,
+            "origin_id": row["id"],
+            "origin_created_at": row["created_at"],
+        }
         existing = instance_storage.conn.execute(
-            "SELECT 1 FROM episodes WHERE content_hash = ?",
+            "SELECT id, episode_type, origin_id FROM episodes WHERE content_hash = ?",
             (row["content_hash"],)
         ).fetchone()
         if existing:
+            if existing["episode_type"] == "genome_sync" and existing["origin_id"] is None:
+                instance_storage.set_episode_origin(existing["id"], **origin)
             continue
 
         local_id = str(uuid.uuid4())
@@ -173,10 +201,10 @@ def sync_genome(genome_path: str, instance_storage) -> int:
         instance_storage.mark_core(local_id, tier=2)
         if row["source"]:
             instance_storage.set_episode_source(local_id, row["source"])
+        instance_storage.set_episode_origin(local_id, **origin)
         synced += 1
 
     instance_storage.conn.commit()
-    genome_conn.close()
     return synced
 
 

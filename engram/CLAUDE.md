@@ -204,6 +204,21 @@ reranking. engram creates the four Kuzu full-text indices Graphiti's search
 queries (graphiti-core 0.28.2's Kuzu driver never does; without them every
 feed fails on `node_name_and_summary`). Separate from identity layers.
 
+**Store identity:** Every store carries `meta.instance_id` and
+`instance_id_origin` (migration 028, assigned by the migration runner inside
+028's transaction; never replaced once set). `creation`: random, for a store
+created by this open. `retroactive`: a store that predates identity gets
+`uuid5(namespace, "<earliest episode id>\x1f<its created_at>")`, earliest by
+`(created_at, id)`, so a snapshot and a working copy agree independently
+(`instance_id_basis_episode` keeps the inputs); an empty old store gets a
+random id (`instance_id_basis = random`). `fork`: `cli.py fork` stamps a new
+random id plus `forked_from_instance_id`. Genome sync records
+`origin_instance_id`, `origin_id`, `origin_created_at` on each synced episode
+(carried through cold storage). Read-only paths (`store_reader`, calibrate's
+SOURCE and snapshot) report the stored id or the one migration would assign,
+and never write it. Logic in `store_identity.py`.
+Spec: docs/superpowers/specs/2026-09-29-inheritance-reading-design.md.
+
 **Operation attribution:** Mutation audit rows retain approved metadata only,
 never submitted content. Migration 026 scrubs historical `operation_log.details`
 payloads down to the same metadata-only representation.
@@ -261,7 +276,8 @@ payloads down to the same metadata-only representation.
 | `hooks/sleep.py` | Stop hook — dream residue distillation; marks this session's recalls `used: auto: cited` when a later act cited a result (positive evidence only) |
 | `scoring.py` | Recall score shared by `recall()`, its counterfactual, and the margins replay script |
 | `store_reader.py` | Read-only survey and chronological reading of a store or reader.db, no migration |
-| `calibrate.py` | Snapshot a store read-only, migrate only a working copy, report first-open decay/prune, cohesion and persistence |
+| `store_identity.py` | Store identity (`meta.instance_id`): creation, retroactive derivation, fork stamping; read-only describe/plan |
+| `calibrate.py` | Snapshot a store read-only, migrate only a working copy, report store identity, first-open decay/prune, cohesion and persistence |
 
 ## Testing
 

@@ -14,7 +14,10 @@
    open would apply now, sheaf cohesion energies, persistence distributions,
    hub classification, the retroactive conjunct audit, the two-key prune
    preview, redundant cores, and session path signatures (Layer 5);
-5. re-hashes the source, refusing to report success if anything changed.
+5. reports the store identity: the source's, read from the snapshot (for a
+   store that predates identity, the id its migration would derive; it is
+   never written there), beside the one migration gave ``working.db``;
+6. re-hashes the source, refusing to report success if anything changed.
 
 Results go to ``report.json`` and ``report.md`` in NEW_DIR. Each analysis is
 isolated: one that cannot run on this schema records its error and the rest
@@ -209,6 +212,27 @@ def persistence_preview(store) -> dict:
     }
 
 
+def identity_report(snapshot_survey: dict, working_conn) -> dict:
+    """The source's identity (read from the snapshot, never assigned there)
+    beside the working copy's after migration.
+
+    For a store that predates identity, ``source.would_assign`` is what its
+    own migration will derive; ``agrees`` says the working copy got the same
+    id. ``None`` when either side is random and so cannot be compared.
+    """
+    import store_identity
+
+    source = snapshot_survey.get("identity", {})
+    working = store_identity.describe(working_conn)
+    source_id = source.get("instance_id") or source.get("would_assign", {}).get("instance_id")
+    working_id = working.get("instance_id")
+    return {
+        "source": source,
+        "working": working,
+        "agrees": (source_id == working_id) if source_id and working_id else None,
+    }
+
+
 def _run(report: dict, name: str, fn, *args) -> None:
     try:
         report["analyses"][name] = fn(*args)
@@ -255,6 +279,10 @@ def calibrate(source: str | Path, out: str | Path, migrate: bool = True,
     ro = Storage.open_read_only(working)
     try:
         conn = ro.conn
+        try:
+            report["identity"] = identity_report(report["snapshot"], conn)
+        except Exception as e:  # reported, like any analysis that cannot run
+            report["identity"] = {"error": f"{type(e).__name__}: {e}"}
         _run(report, "first_open", first_open_preview, conn, now)
         scores: dict = {}
         try:
@@ -301,6 +329,25 @@ def render_markdown(report: dict) -> str:
         e = snap["episodes"]
         lines.append(f"- Episodes {snap['row_counts'].get('episodes')} from {e['first']} "
                      f"to {e['last']}, {e['sessions']} sessions")
+    ident = report.get("identity", {})
+    if "error" in ident:
+        lines += ["", "## Store identity", f"- Not determined: {ident['error']}"]
+    elif ident:
+        src_id, wk = ident.get("source", {}), ident.get("working", {})
+        lines += ["", "## Store identity"]
+        if src_id.get("status") == "present":
+            lines.append(f"- Source: `{src_id['instance_id']}` "
+                         f"({src_id.get('instance_id_origin')})")
+        else:
+            plan = src_id.get("would_assign", {})
+            lines.append(f"- Source: none stored; migration would assign "
+                         f"`{plan.get('instance_id') or 'a random id'}` "
+                         f"({plan.get('instance_id_origin')}, basis {plan.get('instance_id_basis')})")
+        if wk.get("status") == "present":
+            lines.append(f"- Working copy: `{wk['instance_id']}` ({wk.get('instance_id_origin')})")
+        else:
+            lines.append("- Working copy: none (not migrated)")
+        lines.append(f"- Agrees: {ident.get('agrees')}")
     mig = report.get("migration", {})
     lines += ["", "## Working copy migration", f"- Applied: {mig.get('applied')}"]
     if mig.get("applied"):

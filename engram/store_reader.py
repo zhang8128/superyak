@@ -14,6 +14,10 @@ so a store with a non-empty ``-wal`` should instead be read without it.
 
 Reading is chronological and paged (``read``, ``passages``) rather than
 retrieval by relevance: a store is read one entry at a time, in order.
+
+``survey`` reports the store's identity (``meta.instance_id``) or, for a store
+that predates identity, the id its migration would derive. It never assigns
+one: identity is written only when a store is opened normally.
 """
 
 from __future__ import annotations
@@ -26,11 +30,14 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import store_identity
+
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 _MIGRATION = re.compile(r"^(\d+)_.*\.sql$")
 _EPISODE_FIELDS = (
     "id", "session_id", "created_at", "episode_type", "source", "lane",
-    "core", "dormant", "content_hash", "context", "content",
+    "core", "dormant", "content_hash", "origin_instance_id", "origin_id",
+    "origin_created_at", "context", "content",
 )
 
 
@@ -113,6 +120,8 @@ def survey_graph(conn: sqlite3.Connection) -> dict:
         "schema": _schema(conn, tables),
         "row_counts": counts,
         "virtual_tables": sorted(n for n, v in tables.items() if v),
+        # Stored identity, or what migration 028 would assign; never written.
+        "identity": store_identity.describe(conn),
     }
     if "episodes" in tables:
         cols = _columns(conn, "episodes")
