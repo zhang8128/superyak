@@ -116,3 +116,28 @@ def test_legacy_accepts_prefix_kwarg(legacy_provider):
     result = legacy_provider.embed(["hello world"], prefix="clustering")
     assert len(result) == 1
     assert len(result[0]) == 384
+
+
+# --- Length-bounded batching ---
+
+def test_length_bounded_batches_respect_budget():
+    from embeddings import _BATCH_CHAR_BUDGET, _length_bounded_batches
+
+    texts = ["x" * 800] * 78 + ["y" * 12_054] + ["z" * 2_000] * 5
+    batches = _length_bounded_batches(texts)
+    assert sorted(i for batch in batches for i in batch) == list(range(len(texts)))
+    for batch in batches:
+        longest = max(len(texts[i]) for i in batch)
+        assert len(batch) == 1 or len(batch) * longest * longest <= _BATCH_CHAR_BUDGET
+
+
+def test_nomic_bounded_batches_match_single_batch(nomic_provider):
+    import numpy as np
+
+    texts = ["short", "a much longer sentence " * 120, "medium length text " * 10, "tiny"]
+    bounded = nomic_provider.embed(texts, prefix="clustering")
+    prefixed = [f"clustering: {t}" for t in texts]
+    single = list(nomic_provider._model.embed(prefixed, batch_size=len(prefixed)))
+    for got, raw in zip(bounded, single):
+        expected = np.array(raw) / np.linalg.norm(raw)
+        assert np.allclose(got, expected, atol=1e-4)

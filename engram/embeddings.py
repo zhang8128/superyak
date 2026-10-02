@@ -11,6 +11,39 @@ from typing import Protocol
 
 _CACHE_DIR = str(Path.home() / ".kairos" / "models" / "fastembed")
 
+# Attention memory grows with batch_size * padded_length**2, and every text in a
+# batch is padded to the longest one. One 159-text batch whose longest member
+# was ~12k chars drove the server past 200 GB. Batches are therefore built in
+# ascending length order and capped at this many chars**2 (~250 MB of
+# activations); a single over-budget text still runs alone. Padding is masked,
+# so the vectors are the same as one big batch.
+_BATCH_CHAR_BUDGET = 16_000_000
+
+
+def _length_bounded_batches(texts: list[str]) -> list[list[int]]:
+    """Group text indices into batches whose len(batch) * longest**2 fits the budget."""
+    batches: list[list[int]] = []
+    current: list[int] = []
+    for index in sorted(range(len(texts)), key=lambda i: len(texts[i])):
+        longest = max(len(texts[index]), 1)
+        if current and (len(current) + 1) * longest * longest > _BATCH_CHAR_BUDGET:
+            batches.append(current)
+            current = []
+        current.append(index)
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _embed_bounded(model, texts: list[str]) -> list:
+    """Run model.embed over length-bounded batches, returning vectors in input order."""
+    results: list = [None] * len(texts)
+    for batch in _length_bounded_batches(texts):
+        vectors = model.embed([texts[i] for i in batch], batch_size=len(batch))
+        for index, vector in zip(batch, vectors):
+            results[index] = vector
+    return results
+
 
 class EmbeddingProvider(Protocol):
     """Protocol for embedding providers."""
@@ -52,7 +85,7 @@ class NomicEmbedProvider:
         import numpy as np
 
         prefixed = [f"{prefix}: {t}" for t in texts]
-        embeddings = list(self._model.embed(prefixed))
+        embeddings = _embed_bounded(self._model, prefixed)
         # Normalize to unit vectors for consistent cosine similarity via L2 distance
         results = []
         for e in embeddings:
@@ -82,5 +115,5 @@ class FastEmbedProvider:
         return self.DIMENSION
 
     def embed(self, texts: list[str], **_kwargs) -> list[list[float]]:
-        embeddings = list(self._model.embed(texts))
+        embeddings = _embed_bounded(self._model, texts)
         return [e.tolist() for e in embeddings]
