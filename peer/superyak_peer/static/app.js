@@ -11,6 +11,7 @@ const state = {
   files: [],
   sync: { enabled: false, deliveries: [] },
   accounts: [],
+  accessRequests: [],
   roleChanges: [],
   accountRolePreview: null,
   activation: null,
@@ -99,7 +100,7 @@ function identityKey(user) {
 }
 
 function clearAccountAdministration() {
-  state.accounts = []; state.roleChanges = []; state.invitation = null;
+  state.accounts = []; state.accessRequests = []; state.roleChanges = []; state.invitation = null;
   state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null;
 }
 
@@ -543,6 +544,13 @@ function accountSupport() {
   return `<section class="section"><div class="section-head"><div><h2>Account support</h2><p class="meta">Account support does not open private chats or drafts.</p></div><button class="button secondary" data-action="invite">Create invitation</button></div>${state.invitation ? `<div class="notice"><strong>One-use invitation</strong><p>Share this token through a channel you trust. It expires ${formatDate(state.invitation.expires)}.</p><div class="code-box">${escapeHtml(state.invitation.token)}</div></div>` : ""}<div class="item-list">${state.accounts.map((account) => `<div class="item"><span class="item-main"><strong>${escapeHtml(account.name)}</strong><span>@${escapeHtml(account.username)} · joined ${formatDate(account.created)}</span></span><span class="badge">${roleLabel(roleOf(account))}</span></div>`).join("")}</div></section>`;
 }
 
+function accessRequests() {
+  if (!state.me.is_admin) return "";
+  const pending = state.accessRequests.filter(request => request.status === "pending");
+  const body = pending.length ? pending.map(request => `<div class="item"><span class="item-main"><strong>${escapeHtml(request.name)}</strong><span>${escapeHtml(request.contact)} · asked ${formatDate(request.created)}</span>${request.note ? `<span>${escapeHtml(request.note)}</span>` : ""}</span><div class="button-row"><button class="button" data-action="approve-access" data-id="${escapeHtml(request.id)}">Approve</button><button class="button secondary" data-action="deny-access" data-id="${escapeHtml(request.id)}">Deny</button></div></div>`).join("") : `<p class="meta">No one is waiting for access.</p>`;
+  return `<section class="section"><div class="section-head"><div><h2>Access requests</h2><p class="meta">Approving creates a one-use invitation that only the requester can collect. They become a participant.</p></div></div><div class="item-list">${body}</div></section>`;
+}
+
 function roleLabel(role) {
   return { participant: 'Participant', admin: 'Admin', super_admin: 'Super admin' }[role] || 'Not assigned';
 }
@@ -569,7 +577,7 @@ function connectionsView() {
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and compare its fingerprint before connecting.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
     ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card, preview it, and compare the fingerprint outside Superyak before confirming.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><button class="button" data-action="confirm-pair">Fingerprint matches — pair this peer</button></div>` : ""}</section>` : ""}
-    ${accountSupport()}${accountRights()}`;
+    ${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
 function profileDialog() {
@@ -614,7 +622,7 @@ async function loadData() {
     ]);
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections, roleChanges] = await Promise.all([
+    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList] = await Promise.all([
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
@@ -624,6 +632,7 @@ async function loadData() {
       home.user.is_admin ? api("/api/accounts") : [],
       home.user.is_admin ? api("/api/connections") : [],
       home.user.is_super_admin ? api("/api/account-role-changes") : [],
+      home.user.is_admin ? api("/api/access-requests") : [],
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -632,7 +641,7 @@ async function loadData() {
       return active ? [[result.id, active]] : [];
     }));
     const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
-    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, connections, roleChanges });
+    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges });
     return true;
   } catch (error) { if (!valid()) return false; throw error; }
 }
@@ -1310,6 +1319,21 @@ document.addEventListener("click", async (event) => {
       state.invitation = invitation; state.flash = null;
     }
     catch (error) { if (identityKey(state.me) !== identity) return; setFlash(error.message, true); }
+    render();
+  }
+  if (action === "approve-access" || action === "deny-access") {
+    if (target.disabled) return;
+    const identity = identityKey(state.me);
+    target.disabled = true;
+    try {
+      await api(`/api/access-requests/${pathPart(target.dataset.id)}/${action === "approve-access" ? "approve" : "deny"}`, { method: "POST", json: {} });
+      if (identityKey(state.me) !== identity) return;
+      await refresh(action === "approve-access" ? "Access approved. Their invitation is ready for them to collect." : "Access request denied");
+    } catch (error) {
+      if (identityKey(state.me) !== identity) return;
+      await refresh();
+      setFlash(error.message, true);
+    }
     render();
   }
   if (action === 'confirm-account-role') {
