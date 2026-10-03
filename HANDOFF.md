@@ -1,5 +1,32 @@
 # Resume here — medical lighthouse / aDNA
 
+**Engram memory stability, October 2 (current):** PR #5 merged `engram-store-reader`
+into `main` (store reader, calibration, store identity, path signatures, lighthouse
+sheaf, shared embedder, test memory fix). Three out-of-memory crashes on Oct 1–2
+came from Engram's startup embedding (16 GB), parallel Lanternhaven Godot runs, and
+a test suite that leaked a Kuzu graph per server start (5.4 GB) with temp files on
+RAM-backed `/tmp`. All three are fixed or bounded. The machine has 19 GB of RAM and
+also runs Steam and other sessions, so run at most ~3 heavy jobs at once and cap
+each with `systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`.
+
+- The shared embedder runs as the user service `superyak-embedder` (capped at 3 GB,
+  no swap) on `/run/user/1000/superyak/embedder.sock`. Engram is registered at user
+  scope as `superyak-runtime mcp`. Each session's server holds ~330 MB instead of
+  loading its own model. Restart older sessions to pick up the bounded Kuzu pool.
+- Engram tests: run with `TMPDIR=/var/tmp` and the memory cap above (see
+  `engram/CLAUDE.md` → Testing). The runner peaks at 1.6 GB.
+- Known pre-existing failure, not yet fixed:
+  `test_stampede_experiment.py::test_deadline_bounded_concurrency_and_call_budget`
+  fails after `test_stampede_cluster.py`. Store setup exceeds its 0.25 s cell
+  budget, so no request is made.
+- Kairos said on Oct 2 that TACC, MIT, Anthropic, Stanley, CZI and the Wilhelm
+  Foundation will run this on a supercomputer (600 nodes, 4 GPUs each; name
+  uncertain, "Florent?"), with collaborators in their own Claude Code sessions.
+  The Stampede3 details above are still pending; don't invent them.
+- Left untouched: untracked `.claude/` and two spec drafts in
+  `engram/docs/superpowers/specs/` (2026-09-29 inheritance reading, 2026-09-30
+  reading decay).
+
 **Stanley first super admin, September 14 (current):** Kairos requested
 `[address removed]` as the first super admin, able to grant rights
 to others. The current loopback peer at **http://127.0.0.1:7435** now serves the
