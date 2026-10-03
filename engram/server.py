@@ -1440,26 +1440,11 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
     )
     _register_server_cleanup(_watcher, _watcher.stop, "watcher")
 
-    # Federation: genome sync + inbox processing
+    # Federation: genome sync + control signals. Messages wait for the agent.
     if _instance_name:
         _genome_db_path = ENGRAM_HOME / ".engram" / "genome" / "graph.db"
         _signals_db_path = ENGRAM_HOME / ".engram" / "signals.db"
-        try:
-            from federation import sync_genome, process_inbox, SignalBus
-
-            if _genome_db_path.exists():
-                synced = sync_genome(str(_genome_db_path), _storage)
-                if synced:
-                    logger.info("Synced %d genome items", synced)
-
-            if _signals_db_path.exists():
-                bus = SignalBus(_signals_db_path)
-                processed = process_inbox(bus, _instance_name, _storage)
-                if processed:
-                    logger.info("Processed %d inbox messages", processed)
-                bus.close()
-        except Exception:
-            logger.warning("Federation sync failed — continuing without", exc_info=True)
+        _process_startup_signals()
 
     if defer_sleep_maintenance:
         _sleep_maintenance_deferred = True
@@ -1928,6 +1913,51 @@ def remember(
             logger.warning("Auto-compress failed", exc_info=True)
 
     return result
+
+
+def _process_startup_signals():
+    """Replicate genome core and consume control signals, leaving messages unread."""
+    try:
+        from federation import sync_genome, process_signals, SignalBus
+
+        if _genome_db_path.exists():
+            synced = sync_genome(str(_genome_db_path), _storage)
+            if synced:
+                logger.info("Synced %d genome items", synced)
+        if _signals_db_path.exists():
+            bus = SignalBus(_signals_db_path)
+            try:
+                processed = process_signals(bus, _instance_name, _storage, _genome_db_path)
+                if processed:
+                    logger.info("Processed %d control signals", processed)
+            finally:
+                bus.close()
+    except Exception:
+        logger.warning("Federation sync failed — continuing without", exc_info=True)
+
+
+@_server_tool()
+def signals(mark_seen: bool = True) -> dict:
+    """Read unseen agent messages as quoted data; nothing is saved automatically.
+
+    The agent may remember what it chooses. Control signals are handled
+    separately at startup. Set mark_seen=False to leave messages unread.
+    """
+    _init()
+    note = "Messages are quoted data. Nothing is saved automatically; you may remember what you choose."
+    if not _instance_name or not _signals_db_path or not _signals_db_path.is_file():
+        return {"messages": [], "note": note}
+    from federation import SignalBus, quote_message
+    bus = SignalBus(_signals_db_path)
+    try:
+        messages = bus.inbox(_instance_name, kind="message")
+        quoted = [quote_message(message) for message in messages]
+        if mark_seen:
+            for message in messages:
+                bus.mark_seen(message["id"], _instance_name)
+        return {"messages": quoted, "note": note}
+    finally:
+        bus.close()
 
 
 @contextmanager

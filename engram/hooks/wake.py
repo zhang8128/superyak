@@ -330,15 +330,12 @@ def wake():
             signals_db = ENGRAM_HOME / ".engram" / "signals.db"
             if signals_db.exists():
                 try:
-                    sig_conn = sqlite3.connect(str(signals_db))
-                    unread = sig_conn.execute(
-                        "SELECT COUNT(*) FROM messages "
-                        "WHERE (to_instance = ? OR to_instance IS NULL) "
-                        "AND from_instance != ? "
-                        "AND seen_by NOT LIKE ?",
-                        (instance_name, instance_name, f'%"{instance_name}"%')
-                    ).fetchone()[0]
-                    sig_conn.close()
+                    from federation import SignalBus
+                    bus = SignalBus(signals_db)
+                    try:
+                        unread = len(bus.inbox(instance_name, kind="message"))
+                    finally:
+                        bus.close()
                     if unread > 0:
                         lines.append(f"\n📬 {unread} unread signal(s)")
                 except Exception:

@@ -252,3 +252,66 @@ def audiences_for(published_storage, memory_id: str) -> set[str]:
     if any(row["content_digest"] != digest_value for row in records):
         return set()
     return {row["audience"] for row in records}
+
+
+def read_shared(house_path, *, audience: str, query: str | None = None,
+                after: str | None = None, limit: int = 20) -> dict:
+    """Read published copies using plain read-only SQLite, without an embedder.
+
+    All whitespace-separated query terms must occur in content or reason.
+    Neither migrations nor vector extensions are loaded by this reader.
+    """
+    import sqlite3
+    from pathlib import Path
+
+    validate_audience(audience)
+    if not isinstance(limit, int) or not 1 <= limit <= 200:
+        raise ValueError("limit must be between 1 and 200")
+    after_time = None
+    if after is not None:
+        try:
+            after_time = datetime.fromisoformat(after)
+        except ValueError as exc:
+            raise ValueError("after must be an ISO timestamp") from exc
+        if after_time.tzinfo is None:
+            after_time = after_time.replace(tzinfo=timezone.utc)
+    path = Path(house_path)
+    if not path.is_file():
+        return {"shares": [], "house": False}
+    terms = [term.casefold() for term in (query or "").split()]
+    conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        # The joins restrict retrieval to valid share layers and published
+        # copies. Private rows with no share record are never returned.
+        # SQLite's date functions round fractional seconds to milliseconds;
+        # sort by parsed datetimes so polling preserves sub-millisecond order.
+        def shared_time(row):
+            stamp = datetime.fromisoformat(row["shared_at"])
+            return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=timezone.utc)
+
+        rows = sorted(conn.execute(
+            "SELECT s.share_id, s.memory_id, s.layer, s.source_instance, s.reason, s.shared_at, "
+            "CASE s.layer WHEN 'episode' THEN e.content ELSE m.content END AS content "
+            "FROM shared_memories AS s "
+            "LEFT JOIN episodes AS e ON s.layer = 'episode' AND s.memory_id = e.id "
+            "LEFT JOIN semantics AS m ON s.layer = 'semantic' AND s.memory_id = m.id "
+            "WHERE s.audience = ? AND s.layer IN ('episode', 'semantic')", (audience,),
+        ), key=lambda row: (shared_time(row), row["share_id"]))
+        shares = []
+        for row in rows:
+            if row["content"] is None:
+                continue
+            if after_time is not None:
+                if shared_time(row) <= after_time:
+                    continue
+            content, reason = row["content"].casefold(), row["reason"].casefold()
+            if not all(term in content or term in reason for term in terms):
+                continue
+            shares.append(dict(row))
+            if len(shares) == limit:
+                break
+        return {"shares": shares}
+    finally:
+        conn.close()

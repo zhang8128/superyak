@@ -254,19 +254,13 @@ class TestWake:
         Storage(str(db_dir / "graph.db"), migrations_dir=MIGRATIONS_DIR)
 
         # Create signals.db with an unread message for this instance
-        import sqlite3 as _sqlite3
-        sig_conn = _sqlite3.connect(str(db_dir / "signals.db"))
-        sig_conn.execute(
-            "CREATE TABLE messages ("
-            "id TEXT PRIMARY KEY, from_instance TEXT, to_instance TEXT, "
-            "payload TEXT, seen_by TEXT DEFAULT '[]')"
-        )
-        sig_conn.execute(
-            "INSERT INTO messages (id, from_instance, to_instance, payload, seen_by) "
-            "VALUES ('msg1', 'other', 'agi', '{}', '[]')"
-        )
-        sig_conn.commit()
-        sig_conn.close()
+        from federation import SignalBus
+        bus = SignalBus(db_dir / "signals.db")
+        bus.send("other", "agi", "message", "an unread message")
+        already_read = bus.send("other", "agi", "message", "a read message")
+        bus.mark_seen(already_read, "agi")
+        bus.send("other", "agi", "update", "a control signal")
+        bus.close()
 
         # Config in project root
         project_root = tmp_path / "project"

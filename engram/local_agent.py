@@ -86,11 +86,25 @@ class LocalAgent:
         )
 
     def _process_inbox(self):
-        """Check and display any pending messages from other instances."""
-        from federation import process_inbox
+        """Handle control signals and report messages without saving them."""
+        from federation import process_inbox, process_signals
+        process_signals(self.bus, self.instance, self.storage,
+                        ENGRAM_HOME / ".engram" / "genome" / "graph.db")
         count = process_inbox(self.bus, self.instance, self.storage)
         if count > 0:
             print(f"  inbox:    {count} new message(s) from other instances")
+
+    def read_messages(self, mark_seen: bool = True) -> list[str]:
+        """Return quoted messages. Nothing is saved automatically."""
+        if not self.bus or not self.instance:
+            return []
+        from federation import quote_message
+        messages = self.bus.inbox(self.instance, kind="message")
+        quoted = [quote_message(message) for message in messages]
+        if mark_seen:
+            for message in messages:
+                self.bus.mark_seen(message["id"], self.instance)
+        return quoted
 
     def send_signal(self, to_instance: str | None, msg_type: str, content: str) -> str | None:
         """Send a message to another instance (or broadcast if to_instance is None)."""
@@ -481,11 +495,12 @@ def main():
             if not agent.bus or not agent.instance:
                 print("  No instance identity or signal bus.")
                 continue
-            messages = agent.bus.inbox(agent.instance)
+            messages = agent.read_messages()
             if not messages:
                 print("  No new messages.")
             for msg in messages:
-                print(f"  [{msg['type']}] from {msg['from_instance']}: {msg['content'][:120]}")
+                print(msg)
+            print("  Nothing is saved automatically; remember what you choose.")
             continue
         elif user_input.startswith("/send "):
             parts = user_input[6:].split(" ", 1)

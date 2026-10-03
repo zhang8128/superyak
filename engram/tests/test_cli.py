@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 
@@ -128,8 +127,8 @@ class TestDropInstance:
             drop_instance("nonexistent", engram_dir=tmp_path)
         assert exc_info.value.code == 1
 
-    def test_drop_cleans_seen_by_in_signals(self, tmp_path):
-        """Drop should remove instance from seen_by in signals.db."""
+    def test_drop_cleans_reader_receipts_in_signals(self, tmp_path):
+        """Drop should remove the instance's exact reader receipts."""
         from federation import SignalBus
 
         _make_genome_db(tmp_path)
@@ -142,24 +141,22 @@ class TestDropInstance:
         bus.mark_seen(msg_id, "alpha")
         bus.close()
 
-        # Verify alpha is in seen_by before drop
+        # Verify alpha has read the message before drop
         bus2 = SignalBus(signals_db)
         row = bus2.conn.execute(
-            "SELECT seen_by FROM messages WHERE id = ?", (msg_id,)
+            "SELECT instance FROM reads WHERE message_id = ? AND instance = 'alpha'", (msg_id,)
         ).fetchone()
-        seen = json.loads(row[0])
-        assert "alpha" in seen
+        assert row[0] == "alpha"
         bus2.close()
 
         drop_instance("alpha", engram_dir=tmp_path)
 
-        # Verify alpha removed from seen_by
+        # Verify alpha's receipt is removed
         bus3 = SignalBus(signals_db)
         row = bus3.conn.execute(
-            "SELECT seen_by FROM messages WHERE id = ?", (msg_id,)
+            "SELECT instance FROM reads WHERE message_id = ? AND instance = 'alpha'", (msg_id,)
         ).fetchone()
-        seen = json.loads(row[0])
-        assert "alpha" not in seen
+        assert row is None
         bus3.close()
 
 

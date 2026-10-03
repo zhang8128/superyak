@@ -329,13 +329,11 @@ def test_process_inbox(tmp_path):
     rows = inst.conn.execute(
         "SELECT content, source FROM episodes WHERE source LIKE 'signal/%'"
     ).fetchall()
-    assert len(rows) == 2
-    sources = {r["source"] for r in rows}
-    assert "signal/agi" in sources
-    assert "signal/why" in sources
+    assert len(rows) == 0
+    assert inst.conn.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 0
 
-    # Inbox should now be empty
-    assert len(bus.inbox("blocks")) == 0
+    # Messages wait for the receiver's explicit choice to read or remember.
+    assert len(bus.inbox("blocks")) == 2
 
     bus.close()
     inst.close()
@@ -392,12 +390,12 @@ def test_full_federation_lifecycle(tmp_path):
     processed = process_inbox(bus, "blocks", blocks)
     assert processed == 1
 
-    # 7. Blocks should have the signal as a local episode
+    # 7. Blocks leaves the message unread and never saves it automatically.
     signal_eps = blocks.conn.execute(
         "SELECT content, source FROM episodes WHERE source LIKE 'signal/%'"
     ).fetchall()
-    assert len(signal_eps) == 1
-    assert signal_eps[0]["source"] == "signal/agi"
+    assert len(signal_eps) == 0
+    assert len(bus.inbox("blocks")) == 1
 
     # 8. Agi's local episode should NOT be in blocks
     agi_only = blocks.conn.execute(
