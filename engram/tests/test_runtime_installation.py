@@ -42,6 +42,7 @@ def _synthetic_source(tmp_path: Path) -> tuple[Path, Path]:
         "engram/hooks/nudge.py",
         "engram/hooks/sleep.py",
         "engram/lighthouse_daemon.py",
+        "engram/embedder_service.py",
     ):
         _write(source / relative, "# synthetic target\n")
     interpreter = source / "engram" / ".venv" / "bin" / "python"
@@ -57,6 +58,7 @@ def _synthetic_source(tmp_path: Path) -> tuple[Path, Path]:
         "  'harness': os.environ.get('ENGRAM_HARNESS'),\n"
         "  'run_key': os.environ.get('ENGRAM_RUN_KEY'),\n"
         "  'sentinel': os.environ.get('PRESERVE_SENTINEL'),\n"
+        "  'embedder_socket': os.environ.get('ENGRAM_EMBEDDER_SOCKET'),\n"
         "}))\n",
         executable=True,
     )
@@ -722,7 +724,10 @@ def _module_probe(module_dir: Path, label: str, names: tuple[str, ...]) -> None:
                 "    def close(self): pass\n"
             )
         else:
-            body = "class NomicEmbedProvider: pass\n"
+            body = (
+                "class NomicEmbedProvider: pass\n"
+                "def create_embedding_provider(): return NomicEmbedProvider()\n"
+            )
         _write(module_dir / f"{name}.py", body)
 
 
@@ -809,3 +814,65 @@ def test_wake_imports_deep_pass_from_installation_and_uses_instance_database(tmp
 
     assert result.returncode == 0, result.stderr
     assert module_log.read_text(encoding="utf-8") == f"source:{database}"
+
+
+def test_embedder_socket_is_passed_to_engram_processes_and_runs_the_embedder(tmp_path):
+    source, launcher = _synthetic_source(tmp_path)
+    memory_home = tmp_path / "memory"
+    memory_home.mkdir()
+    _write(memory_home / ".engram" / "instances" / "engram" / "graph.db", "")
+    sock = tmp_path / "run" / "embedder.sock"
+    config = tmp_path / "runtime.json"
+    config.write_text(json.dumps({
+        "memory_home": str(memory_home),
+        "default_instance": "engram",
+        "embedder_socket": str(sock),
+    }), encoding="utf-8")
+    record = tmp_path / "exec.json"
+    env = {**os.environ, "RECORD_EXEC": str(record)}
+    env.pop("ENGRAM_EMBEDDER_SOCKET", None)
+
+    for arguments in (("mcp",), ("hook", "nudge")):
+        result = _run_launcher(launcher, config, *arguments, env=env)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(record.read_text(encoding="utf-8"))["embedder_socket"] == str(sock)
+
+    result = _run_launcher(launcher, config, "embedder", env=env)
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(record.read_text(encoding="utf-8"))
+    assert observed["argv"] == [str(source / "engram" / "embedder_service.py"), "--socket", str(sock)]
+
+
+def test_without_embedder_socket_processes_load_their_own_model(tmp_path):
+    _, launcher = _synthetic_source(tmp_path)
+    memory_home = tmp_path / "memory"
+    memory_home.mkdir()
+    _write(memory_home / ".engram" / "instances" / "engram" / "graph.db", "")
+    config = _runtime_config(tmp_path / "runtime.json", memory_home)
+    record = tmp_path / "exec.json"
+    env = {**os.environ, "RECORD_EXEC": str(record)}
+    env.pop("ENGRAM_EMBEDDER_SOCKET", None)
+
+    result = _run_launcher(launcher, config, "mcp", env=env)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(record.read_text(encoding="utf-8"))["embedder_socket"] is None
+
+    result = _run_launcher(launcher, config, "embedder", env=env)
+    assert result.returncode == 2
+    assert "embedder_socket" in result.stderr
+
+
+def test_embedder_socket_must_be_absolute(tmp_path):
+    _, launcher = _synthetic_source(tmp_path)
+    memory_home = tmp_path / "memory"
+    memory_home.mkdir()
+    config = tmp_path / "runtime.json"
+    config.write_text(json.dumps({
+        "memory_home": str(memory_home),
+        "default_instance": "engram",
+        "embedder_socket": "relative.sock",
+    }), encoding="utf-8")
+
+    result = _run_launcher(launcher, config, "embedder")
+    assert result.returncode == 2
+    assert "absolute" in result.stderr

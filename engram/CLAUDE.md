@@ -36,6 +36,16 @@ Three layers, each more compressed than the last:
 
 **Embeddings:** nomic-embed-text-v1.5 (768-dim) via FastEmbed. Instruction
 prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (compress).
+Processes get their provider from `embeddings.create_embedding_provider()`: with
+`ENGRAM_EMBEDDER_SOCKET` set it is `RemoteEmbedProvider`, a client of the shared
+`embedder_service.py` (one model per machine, one batch at a time, refuses a
+different model, fails loudly rather than loading a local copy); otherwise the
+in-process model. `superyak-runtime` sets the variable from `embedder_socket` in
+`runtime.json`; `scripts/superyak-embedder.service` runs the service. Measured
+2026-10-02: an Engram server peaks ~320 MB with it, versus ~1.8 GB loading its
+own model. Local inference batches by a padded-token budget, truncates at 2048
+tokens and disables the ONNX arena; fastembed's default (256 texts padded to
+the longest) OOM-killed startup maintenance at 16 GB on 2026-10-01.
 
 **Dedup:** LLM-based pragmatic equivalence via Ollama (default: `gemma4:31b`).
 Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.
@@ -257,7 +267,8 @@ payloads down to the same metadata-only representation.
 | `storage.py` | SQLite + vec0 storage layer |
 | `compress.py` | Episode clustering, semantic promotion, instinct formation |
 | `reflection.py` | Self-analysis (reflect, introspect) |
-| `embeddings.py` | FastEmbed wrapper with instruction prefixes |
+| `embeddings.py` | FastEmbed wrapper with instruction prefixes; shared-embedder client |
+| `embedder_service.py` | Shared embedding service over a Unix socket (one model for all processes) |
 | `dreaming.py` | Dream residue — lossy emotional compression and surfacing |
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |

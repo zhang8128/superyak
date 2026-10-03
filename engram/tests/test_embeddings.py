@@ -116,3 +116,22 @@ def test_legacy_accepts_prefix_kwarg(legacy_provider):
     result = legacy_provider.embed(["hello world"], prefix="clustering")
     assert len(result) == 1
     assert len(result[0]) == 384
+
+
+def test_token_budget_batches_cover_each_index_once():
+    from embeddings import _token_budget_batches, _BATCH_TOKEN_BUDGET, _MAX_TOKENS
+    texts = ["x" * n for n in (5, 40000, 300, 12, 9000, 300, 2, 600)]
+    batches = _token_budget_batches(texts)
+    assert sorted(i for b in batches for i in b) == list(range(len(texts)))
+    for b in batches:
+        padded = max(min(len(texts[i]) // 3 + 8, _MAX_TOKENS) for i in b)
+        assert len(b) == 1 or len(b) * padded <= _BATCH_TOKEN_BUDGET
+
+
+def test_nomic_mixed_lengths_keep_input_order(nomic_provider):
+    """Length-sorted batching must return vectors in the caller's order."""
+    texts = ["chocolate cake " * 400, "python function", "a", "python method " * 30]
+    together = nomic_provider.embed(texts)
+    for text, emb in zip(texts, together):
+        alone = nomic_provider.embed([text])[0]
+        assert _cosine_similarity(alone, emb) > 0.999
