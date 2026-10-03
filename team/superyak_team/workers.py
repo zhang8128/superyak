@@ -82,7 +82,7 @@ def mcp_env(team_id, worker):
     # No secrets here: config/argv are visible via ps. The MCP server (outside the sandbox)
     # fetches this worker's token from the token store itself.
     env = {"SUPERYAK_TEAM_ID": team_id, "SUPERYAK_TEAM_ROLE": worker,
-           "SUPERYAK_TEAM_HOME": str(teamlib.teams_root())}
+           "SUPERYAK_TEAM_HOME": str(teamlib.team_home())}
     if os.environ.get("SUPERYAK_TEAM_TOKEN_STORE"):
         env["SUPERYAK_TEAM_TOKEN_STORE"] = os.environ["SUPERYAK_TEAM_TOKEN_STORE"]
     return env

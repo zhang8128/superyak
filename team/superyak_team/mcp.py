@@ -118,7 +118,8 @@ def team_start(args):
     return {"team": team_id, "repo": repo, "lead": lead_kind(), "preset": preset or "(defaults)",
             "default_mode": cfg.get("default_mode", "build"), "default_kind": cfg.get("default_kind", "codex"),
             "max_workers": cfg["max_workers"], "other_active_teams": active[:-1],
-            "slack": "configured" if cfg.get("slack_channel") else "off (local transcript only)"}
+            "slack": ("mirrored to Slack" if cfg.get("slack_channel") and teamlib.slack_allowed_for_repo(repo)
+                      else "off (local transcript only; add this repo to slack_repos to mirror)")}
 
 
 def team_list(args):

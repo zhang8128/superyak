@@ -723,3 +723,22 @@ def test_slack_mirroring_is_opt_in_per_repo(env, tmp_path, monkeypatch):
     assert teamlib.slack_allowed_for_repo(env["repo"]) is False
     with pytest.raises(teamlib.RejectedMessage):
         teamlib.team_config(None, {"slack_repos": [str(env["repo"])]})   # never a team override
+
+
+
+def test_worker_env_resolves_the_same_team_home_as_the_daemon(env, monkeypatch):
+    # Regression: workers were given the teams dir as SUPERYAK_TEAM_HOME and looked for their
+    # daemon and token under <home>/teams/teams ("daemon is not running").
+    wenv = workers.mcp_env("t1", "w1")
+    assert wenv["SUPERYAK_TEAM_HOME"] == str(teamlib.team_home())
+    run = lambda *a, extra=None: subprocess.run([sys.executable, str(RUN_TEAM)] + list(a),
+                                                cwd=env["repo"], capture_output=True, text=True,
+                                                env=dict(os.environ, **(extra or {})), timeout=30)
+    assert run("start", "goal=g", "name=t-env").returncode == 0
+    try:
+        assert run("spawn", "task=x", "kind=codex").returncode == 0
+        as_worker = run("status", extra=workers.mcp_env("t-env", "w1"))     # the worker's real env
+        assert as_worker.returncode == 0, as_worker.stderr
+        assert json.loads(as_worker.stdout)["you"] == "w1"
+    finally:
+        run("end", "summary=x")
