@@ -683,3 +683,43 @@ def test_engram_tool_prefix_is_configurable_and_validated(env):
     assert "mcp__memory__recall" in allow and not any("plugin_engram" in a for a in allow)
     with pytest.raises(teamlib.RejectedMessage):
         teamlib.team_config(None, {"engram_tool_prefix": "Bash"})
+
+
+
+def test_engram_seed_never_follows_worker_planted_symlink(env, tmp_path):
+    (env["repo"] / ".engram").mkdir()
+    (env["repo"] / ".engram" / "config.toml").write_text('instance = "repo-x"\n')
+    team = make_team(env)
+    victim = tmp_path / "victim.txt"
+    room = tmp_path / "room"
+    room.mkdir()
+    os.symlink(tmp_path, room / ".engram")                 # directory symlink
+    with pytest.raises(teamlib.RejectedMessage, match="refusing"):
+        team._seed_engram_config(room)
+    room2 = tmp_path / "room2"
+    (room2 / ".engram").mkdir(parents=True)
+    os.symlink(victim, room2 / ".engram" / "config.toml")  # dangling file symlink
+    team._seed_engram_config(room2)
+    assert not victim.exists()                              # nothing written through the link
+    team.spawn("t", "codex")
+    w = team.state["workers"]["w1"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    (Path(w["path"]) / ".engram" / "config.toml").unlink()
+    os.symlink(victim, Path(w["path"]) / ".engram" / "config.toml")
+    team.deliver("w1", "next turn", "lead")                 # later turns never re-seed
+    assert not victim.exists()
+
+
+def test_slack_mirroring_is_opt_in_per_repo(env, tmp_path, monkeypatch):
+    cfg_file = tmp_path / "cfg.json"
+    cfg_file.write_text(json.dumps({"slack_channel": "C0123ABCD"}))
+    assert teamlib.slack_allowed_for_repo(env["repo"]) is False          # default: off
+    cfg_file.write_text(json.dumps({"slack_channel": "C0123ABCD", "slack_repos": [str(env["repo"])]}))
+    assert teamlib.slack_allowed_for_repo(env["repo"]) is True
+    assert teamlib.slack_allowed_for_repo(tmp_path) is False             # parent not covered
+    (env["repo"] / teamlib.LOCAL_ONLY_MARKER).write_text("")
+    assert teamlib.slack_allowed_for_repo(env["repo"]) is False          # marker always wins
+    cfg_file.write_text(json.dumps({"slack_repos": ["relative/path"]}))
+    assert teamlib.slack_allowed_for_repo(env["repo"]) is False
+    with pytest.raises(teamlib.RejectedMessage):
+        teamlib.team_config(None, {"slack_repos": [str(env["repo"])]})   # never a team override

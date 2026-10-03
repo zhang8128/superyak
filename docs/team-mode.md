@@ -41,8 +41,12 @@ Presets `build`, `research`, `review`, `mixed`, plus custom ones in
 Create the app from `team/superyak_team/slack-manifest.yml` (Superyak Team), invite
 `@superyak-team` to the channel, and store its bot token:
 `security add-generic-password -U -a "$USER" -s superyak-team-slack-bot -w`.
-`~/.superyak/team/config.json` holds `slack_channel` and `allowed_user_ids` (only those users'
-replies reach agents). Kickoff message per team; one thread per task; plans as canvases.
+`~/.superyak/team/config.json` holds `slack_channel`, `allowed_user_ids` (only those users'
+replies reach agents) and `slack_repos`: the repos whose teams may mirror to Slack. Mirroring is
+fail-closed: workers can read their repo and Slack is a third-party destination, so a repo must be
+listed there (config file only, never a per-team override), and a `.superyak-team-local-only`
+file in a repo blocks it permanently. Other teams keep a local transcript only. Kickoff message
+per team; one thread per task; plans as canvases.
 
 ### Memory
 Each worker's engram project root is its own folder (the repo's `.engram/config.toml` is copied

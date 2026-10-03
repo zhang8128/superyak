@@ -97,6 +97,26 @@ def load_presets():
     return presets
 
 
+LOCAL_ONLY_MARKER = ".superyak-team-local-only"
+
+
+def slack_allowed_for_repo(repo):
+    """Slack is a third-party destination for whatever workers write, and workers can read the
+    repo. Mirroring is therefore fail-closed: only repos listed in the user's config file under
+    `slack_repos` (never a per-team override) may post, and a repo can opt out for good with a
+    `.superyak-team-local-only` marker. Everything else keeps a local transcript only."""
+    repo = Path(repo).resolve()
+    if (repo / LOCAL_ONLY_MARKER).exists():
+        return False
+    for entry in load_config().get("slack_repos") or []:
+        if not isinstance(entry, str) or not os.path.isabs(os.path.expanduser(entry)):
+            continue
+        allowed = Path(os.path.expanduser(entry)).resolve()
+        if repo == allowed or allowed in repo.parents:
+            return True
+    return False
+
+
 def team_config(preset=None, overrides=None):
     """Resolve one team's settings; unknown keys or presets are rejected, not ignored."""
     cfg = load_config()

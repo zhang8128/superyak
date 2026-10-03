@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import signal
+import stat
 import socketserver
 import sys
 import threading
@@ -102,6 +103,7 @@ class Team:
             teamlib.issue_token(self.team_id, wid)
             if mode == "build":
                 wt = workers.create_worktree(self.repo, self.team_id, wid)
+                self._seed_engram_config(wt["path"])
             else:   # read-only collaborator: works from the main checkout, never writes or commits
                 # Runs from a private scratch room, not the repo: the (unsandboxed) engram MCP
                 # server sets itself up in the agent's cwd and would write .engram/ into the repo.
@@ -110,6 +112,7 @@ class Team:
                 room = teamlib.rooms_root() / self.team_id / wid
                 room.mkdir(parents=True, exist_ok=True)
                 wt = {"branch": None, "path": str(room), "base": None}
+                self._seed_engram_config(room)
             w = {"kind": kind, "mode": mode, "task": task, "context": context, "state": "queued",
                  "ident": None, "pid": None, "inbox": [], "turns": 0,
                  "started_at": None, "commit": None, "summary": None, "last_message": "",
@@ -151,15 +154,34 @@ class Team:
                              for k, v in self.state["workers"].items() if k != wid) or "(none yet)",
                    w["task"], w["context"] or "(none)"))
 
-    def _engram_env(self, w):
+    def _seed_engram_config(self, folder):
         """Engram creates .engram/config.toml in its project root when missing, so the root is
-        the worker's own folder (worktree or room), never the repo. Copying the repo's config
-        there first keeps the worker on the repo's memory instance."""
+        the worker's own folder (worktree or room), never the repo; copying the repo's config
+        keeps the worker on the repo's memory instance.
+        Runs once at spawn, before any agent has touched the folder, and never follows
+        symlinks: teamd is unsandboxed, so a worker-planted link must not redirect this write."""
         src = Path(self.repo) / ".engram" / "config.toml"
-        dst = Path(w["path"]) / ".engram" / "config.toml"
-        if src.exists() and not dst.exists() and Path(w["path"]) != Path(self.repo):
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text(src.read_text())
+        folder = Path(folder)
+        if not src.is_file() or folder == Path(self.repo):
+            return
+        cfg_dir = folder / ".engram"
+        try:
+            os.mkdir(cfg_dir, 0o700)
+        except FileExistsError:
+            pass
+        st = os.lstat(cfg_dir)
+        if not stat.S_ISDIR(st.st_mode):       # a symlink or file: refuse
+            raise teamlib.RejectedMessage("refusing to seed engram config through %s" % cfg_dir)
+        data = src.read_bytes()[:65536]
+        try:
+            fd = os.open(str(cfg_dir / "config.toml"),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            return                               # already seeded (e.g. a tracked config)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+
+    def _engram_env(self, w):
         return {"ENGRAM_PROJECT_ROOT": w["path"]}
 
     def _start_turn(self, wid, prompt):
@@ -568,7 +590,7 @@ def main(argv=None):
         cfg = teamlib.team_config(args.preset or None, json.loads(args.config_json))
     slack = None
     token = teamlib.keychain_secret(cfg["keychain_service"])
-    if token and cfg.get("slack_channel"):
+    if token and cfg.get("slack_channel") and teamlib.slack_allowed_for_repo(args.repo):
         slack = Slack(token, cfg["slack_channel"])
     team = Team(args.team, args.repo, args.goal, cfg, slack, args.lead_kind)
     (team.dir / "teamd.pid").write_text(str(os.getpid()))
