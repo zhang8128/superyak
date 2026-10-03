@@ -22,6 +22,16 @@
       "env": {
         "READER_HOME": "/Users/kairos/Projects/reader"
       }
+    },
+    "team": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "exec \"$HOME/.local/bin/superyak-runtime\" team"
+      ],
+      "env": {
+        "SUPERYAK_TEAM_LEAD_KIND": "claude"
+      }
     }
   }
 }

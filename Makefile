@@ -27,10 +27,11 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
+	@echo "make setup-team / check-team      Install/check team mode (lead + Codex/Claude workers)"
 	@echo "make tuning             Dataset, model, train, evaluate and Slurm CLI; TUNING_ARGS sets options"
 	@echo "make setup-peer / check-peer  Install/check the standalone personal home"
 	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
@@ -57,7 +58,7 @@ help:
 	@echo "make atlas-demo         Render the public research pilot offline"
 	@echo "make atlas              Atlas project CLI; ATLAS_ARGS defaults to --help"
 
-setup: setup-engram setup-lighthouse setup-atlas setup-peer setup-tuning
+setup: setup-engram setup-lighthouse setup-atlas setup-peer setup-tuning setup-team
 
 setup-engram:
 	cd engram && uv sync --locked --extra dev --python "$(PYTHON_VERSION)"
@@ -69,7 +70,7 @@ setup-lighthouse:
 	cd lighthouse && pnpm install --frozen-lockfile
 	cd lighthouse && pnpm build
 
-check: check-engram check-lighthouse check-atlas check-integration check-research-tasks check-peer check-tuning
+check: check-engram check-lighthouse check-atlas check-integration check-research-tasks check-peer check-tuning check-team
 
 check-engram:
 	cd engram && LIGHTHOUSE_REPO="$(CURDIR)/lighthouse" uv run --locked --extra dev python -m pytest -q -ra --tb=short
@@ -134,6 +135,12 @@ research-task:
 
 lead-probe:
 	"$(STAMPEDE_PYTHON)" -m deploy.stampede.probe $(LEAD_PROBE_ARGS)
+
+setup-team:
+	cd team && uv sync --locked --extra dev --python "$(PYTHON_VERSION)"
+
+check-team:
+	cd team && uv run --locked --extra dev python -m pytest -q -ra --tb=short
 
 setup-peer:
 	cd peer && uv sync --locked --python "$(PYTHON_VERSION)"

@@ -38,6 +38,7 @@ packages and lockfiles remain independent, with shared commands and CI at the ro
 | Path | Contents |
 | --- | --- |
 | [`tuning/`](tuning/README.md) | Clinical/biotech datasets, local evaluations, and text-attention LoRA training |
+| [`team/`](team/README.md) | Team mode: a Claude Code or Codex lead with Codex and Claude Code builders/collaborators, Slack threads, plan canvases, shared engram memory ([guide](docs/team-mode.md)) |
 | [`peer/`](peer/README.md) | Standalone personal home, private chats, sharing layers, and paired peer exchange |
 | [`engram/`](engram/) | Python memory system, MCP server, dynamic chat, and Lighthouse publisher/receiver |
 | [`atlas/`](atlas/README.md) | Evidence workbench, literature workers, source review, and browser/Obsidian views |

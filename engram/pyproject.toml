@@ -124,6 +124,7 @@ py-modules = [
 "share/engram/schemas/lighthouse" = ["schemas/lighthouse/*.json"]
 "share/engram/hooks" = ["hooks/*.py", "hooks/hooks.json"]
 "share/engram/skills/engram" = ["skills/engram/skill.md"]
+"share/engram/skills/team" = ["skills/team/skill.md"]
 
 [tool.pytest.ini_options]
 pythonpath = [".", ".."]

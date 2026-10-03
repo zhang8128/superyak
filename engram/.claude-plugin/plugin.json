@@ -1,7 +1,7 @@
 {
   "name": "engram",
-  "version": "0.3.0",
-  "description": "Layered memory — episodes, semantics, and instincts that evolve across sessions",
+  "version": "0.4.0",
+  "description": "Layered memory \u2014 episodes, semantics, and instincts that evolve across sessions \u2014 plus team mode (a lead with Codex and Claude Code workers)",
   "author": {
     "name": "kairos"
   },

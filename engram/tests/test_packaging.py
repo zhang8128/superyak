@@ -69,6 +69,27 @@ def test_claude_plugin_routes_mcp_and_hooks_through_shared_runtime(tmp_path):
     assert all(item["home"] is None and item["default"] is None for item in records)
 
 
+def test_claude_plugin_routes_team_mode_through_shared_runtime(tmp_path):
+    mcp_config = json.loads((PROJECT_ROOT / ".mcp.json").read_text())
+    wrapper = tmp_path / ".local" / "bin" / "superyak-runtime"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['RUNTIME_RECORD']).write_text(json.dumps({'argv': sys.argv[1:], "
+        "'lead': os.environ.get('SUPERYAK_TEAM_LEAD_KIND')}))\n"
+    )
+    wrapper.chmod(0o755)
+    record = tmp_path / "record.json"
+    team = mcp_config["mcpServers"]["team"]
+    env = {**os.environ, "HOME": str(tmp_path), "RUNTIME_RECORD": str(record), **team["env"]}
+    subprocess.run([team["command"], *team["args"]], cwd=tmp_path, env=env, check=True)
+    observed = json.loads(record.read_text())
+    assert observed == {"argv": ["team"], "lead": "claude"}
+    assert (PROJECT_ROOT / "commands" / "team.md").is_file()
+    assert (PROJECT_ROOT / "skills" / "team" / "skill.md").read_text().startswith("---\nname: team\n")
+
+
 def _build_wheel(tmp_path: Path) -> Path:
     source_copy = tmp_path / "source-copy"
     wheelhouse = tmp_path / "wheelhouse"

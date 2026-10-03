@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Mock codex for team tests. Logs argv; emits codex --json events; edits a file in cwd.
+echo "$*" >> "${MOCK_TEAM_LOG:-/dev/null}"
+if [ "$1" = "queue" ]; then exit "${MOCK_QUEUE_EXIT:-0}"; fi
+dir="$PWD"; prev=""
+for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done
+tid="${MOCK_THREAD_ID:-0199aaaa-0000-7000-8000-000000000001}"
+echo "{\"type\":\"thread.started\",\"thread_id\":\"$tid\"}"
+sleep "${MOCK_TURN_SECONDS:-0}"
+echo "mock change $(date +%s%N)" >> "$dir/mock_output.txt"
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"mock codex finished a turn"}}'
+exit "${MOCK_EXIT:-0}"

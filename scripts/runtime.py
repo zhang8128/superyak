@@ -23,6 +23,8 @@ NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 SOURCE_ROOT = Path(__file__).resolve().parent.parent
 ENGRAM_ROOT = SOURCE_ROOT / "engram"
 INTERPRETER = ENGRAM_ROOT / ".venv" / "bin" / "python"
+# Team mode is stdlib-only, so it runs on the same pinned interpreter through one launcher file.
+TEAM_LAUNCHER = SOURCE_ROOT / "team" / "run_team.py"
 
 
 class RuntimeConfigurationError(ValueError):
@@ -500,6 +502,7 @@ def _status(
         ENGRAM_ROOT / "hooks" / "nudge.py",
         ENGRAM_ROOT / "hooks" / "sleep.py",
         ENGRAM_ROOT / "lighthouse_daemon.py",
+        TEAM_LAUNCHER,
     ]
     missing_scripts = [str(path) for path in required_scripts if not path.is_file()]
     if missing_scripts:
@@ -580,6 +583,8 @@ def _command_argv(
                 "runtime configuration needs embedder_socket to run the embedder"
             )
         return [str(ENGRAM_ROOT / "embedder_service.py"), "--socket", str(embedder_socket)]
+    if command == "team":
+        return [str(TEAM_LAUNCHER)]
     raise RuntimeConfigurationError(f"unsupported command: {command}")
 
 
@@ -601,6 +606,10 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("publisher")
     commands.add_parser("embedder")
     commands.add_parser("status")
+    team = commands.add_parser(
+        "team", help="team mode: MCP over stdio with no arguments, otherwise a CLI op"
+    )
+    team.add_argument("team_args", nargs=argparse.REMAINDER)
     return parser
 
 
@@ -632,6 +641,9 @@ def main(argv: list[str] | None = None) -> int:
         command = _command_argv(
             args.command, getattr(args, "hook", None), memory_home, embedder_socket
         )
+        if args.command == "team":
+            # Team state lives under ~/.superyak/team, not the memory store: no database gate.
+            command += list(args.team_args)
         target = Path(command[0])
         if not target.is_file():
             raise RuntimeConfigurationError(f"configured source script is unavailable: {target}")

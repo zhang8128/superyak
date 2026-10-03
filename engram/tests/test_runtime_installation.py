@@ -43,6 +43,7 @@ def _synthetic_source(tmp_path: Path) -> tuple[Path, Path]:
         "engram/hooks/sleep.py",
         "engram/lighthouse_daemon.py",
         "engram/embedder_service.py",
+        "team/run_team.py",
     ):
         _write(source / relative, "# synthetic target\n")
     interpreter = source / "engram" / ".venv" / "bin" / "python"
@@ -876,3 +877,48 @@ def test_embedder_socket_must_be_absolute(tmp_path):
     result = _run_launcher(launcher, config, "embedder")
     assert result.returncode == 2
     assert "absolute" in result.stderr
+
+def test_team_runs_the_team_launcher_without_a_memory_database(tmp_path):
+    source, launcher = _synthetic_source(tmp_path)
+    memory_home = tmp_path / "memory"          # no graph.db: team mode must not need one
+    memory_home.mkdir()
+    config = _runtime_config(tmp_path / "runtime.json", memory_home)
+    record = tmp_path / "exec.json"
+    env = {**os.environ, "RECORD_EXEC": str(record)}
+
+    result = _run_launcher(launcher, config, "team", cwd=tmp_path, env=env)
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(record.read_text(encoding="utf-8"))
+    assert observed["argv"] == [str(source / "team" / "run_team.py")]
+    assert not (memory_home / ".engram").exists()   # launcher creates no state
+
+
+def test_team_passes_cli_arguments_through(tmp_path):
+    source, launcher = _synthetic_source(tmp_path)
+    memory_home = tmp_path / "memory"
+    memory_home.mkdir()
+    config = _runtime_config(tmp_path / "runtime.json", memory_home)
+    record = tmp_path / "exec.json"
+    env = {**os.environ, "RECORD_EXEC": str(record)}
+
+    result = _run_launcher(launcher, config, "team", "status", "team=t-res", cwd=tmp_path, env=env)
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(record.read_text(encoding="utf-8"))
+    assert observed["argv"] == [str(source / "team" / "run_team.py"), "status", "team=t-res"]
+
+
+def test_team_launcher_missing_fails_before_exec(tmp_path):
+    source, launcher = _synthetic_source(tmp_path)
+    (source / "team" / "run_team.py").unlink()
+    memory_home = tmp_path / "memory"
+    memory_home.mkdir()
+    config = _runtime_config(tmp_path / "runtime.json", memory_home)
+    record = tmp_path / "exec.json"
+    env = {**os.environ, "RECORD_EXEC": str(record)}
+
+    result = _run_launcher(launcher, config, "team", cwd=tmp_path, env=env)
+
+    assert result.returncode == 2 and "source script is unavailable" in result.stderr
+    assert not record.exists()

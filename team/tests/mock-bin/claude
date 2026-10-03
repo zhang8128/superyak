@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Mock claude -p for team tests.
+echo "$*" >> "${MOCK_TEAM_LOG:-/dev/null}"
+echo '{"type":"system","subtype":"init","session_id":"11111111-2222-3333-4444-555555555555"}'
+sleep "${MOCK_TURN_SECONDS:-0}"
+echo "claude mock $(date +%s%N)" >> "$PWD/claude_output.txt"
+echo '{"type":"result","subtype":"success","result":"mock claude finished a turn","session_id":"11111111-2222-3333-4444-555555555555"}'

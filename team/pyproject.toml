@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "superyak-team"
+version = "1.0.0"
+description = "Team mode: a Claude Code or Codex lead with Codex and Claude Code workers, Slack coordination and shared engram memory"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+superyak-team = "superyak_team.mcp:main"
+
+[tool.hatch.build]
+ignore-vcs = true
+
+# Reviewed release inventory: list individual files, never source directories.
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "superyak_team/__init__.py",
+    "superyak_team/mcp.py",
+    "superyak_team/slack.py",
+    "superyak_team/teamd.py",
+    "superyak_team/teamlib.py",
+    "superyak_team/workers.py",
+    "superyak_team/slack-manifest.yml",
+    "superyak_team/roles/lead.md",
+    "superyak_team/roles/worker.md",
+    "superyak_team/roles/collaborator.md",
+    "superyak_team/codex-skill/SKILL.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
