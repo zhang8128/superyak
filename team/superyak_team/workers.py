@@ -30,10 +30,14 @@ def git(cwd, *args, check=True):
 # anything the worker can write: the worktree's `.git` pointer file is ignored in favour of the
 # git dir recorded at spawn, and hooks / fsmonitor / untracked-cache helpers are switched off.
 HARDENED_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-                "-c", "core.untrackedCache=false", "-c", "protocol.file.allow=never"]
+                "-c", "core.untrackedCache=false", "-c", "protocol.file.allow=never",
+                "-c", "commit.gpgsign=false", "-c", "core.sshCommand=false"]
 
 
-_DRIVER_KEY = re.compile(r"^(filter|diff|merge)\.[^.\s]+\.(clean|smudge|process|textconv|command|driver)$")
+# Subsection names may contain dots, spaces and quotes (filter."a.b c".clean), and section/key
+# names are case-insensitive, so match the whole middle and ignore case.
+_DRIVER_KEY = re.compile(r"^(filter|diff|merge)\..+\.(clean|smudge|process|textconv|command|driver)$",
+                         re.IGNORECASE | re.DOTALL)
 
 
 def _isolated_git_env():
@@ -46,10 +50,10 @@ def _isolated_git_env():
 
 def _driver_overrides(gitdir):
     """Blank every driver command the repo's own config defines, so attributes have nothing to run."""
-    out = subprocess.run(["git", "--git-dir", str(gitdir), "config", "--name-only", "--list"],
+    out = subprocess.run(["git", "--git-dir", str(gitdir), "config", "-z", "--name-only", "--list"],
                          env=_isolated_git_env(), capture_output=True, text=True)
     flags = []
-    for key in sorted(set(out.stdout.split())):
+    for key in sorted({k for k in out.stdout.split("\0") if k}):   # NUL-separated: names may hold spaces
         if _DRIVER_KEY.match(key):
             flags += ["-c", key + "="]
             if key.startswith("filter."):

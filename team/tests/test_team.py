@@ -806,3 +806,24 @@ def test_prompts_cannot_become_cli_options():
     assert cmd[-1].startswith("(message) ") and "--dangerously-bypass-approvals-and-sandbox" not in cmd[:-1]
     cmd = workers.claude_command(cfg, "t1", "w1", "/r", "--dangerously-skip-permissions", repo="/r")
     assert cmd[2].startswith("(message) ")
+
+
+
+def test_driver_blanking_handles_dotted_spaced_and_cased_names(env, tmp_path):
+    pwned = tmp_path / "pwned"
+    evil = tmp_path / "evil.sh"
+    evil.write_text("#!/bin/sh\ntouch %s\ncat\n" % pwned)
+    evil.chmod(0o755)
+    for key in ('filter.a.b.clean', 'filter.sp ace.clean', 'Filter.Upper.Clean', 'diff.x.y.textconv'):
+        subprocess.run(["git", "-C", str(env["repo"]), "config", key, str(evil)], check=True)
+    team = make_team(env)
+    team.spawn("t", "claude")
+    w = team.state["workers"]["w1"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    (Path(w["path"]) / ".gitattributes").write_text(
+        "*.a filter=a.b\n*.s filter=sp\\ ace\n*.u filter=Upper\n*.d diff=x.y\n")
+    for name in ("f.a", "f.s", "f.u", "f.d"):
+        (Path(w["path"]) / name).write_text("x\n")
+    assert team.worker_done("w1", "work", "ok")["commit"]
+    team.collect("w1")
+    assert not pwned.exists()
