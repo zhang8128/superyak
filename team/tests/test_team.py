@@ -1480,3 +1480,26 @@ def test_every_roster_is_complete_and_names_never_collide():
         assert r["ship"] and len(r["shuttles"]) == 2 and r["crew"]
         assert set(r["personas"]) >= set(r["crew"]) | {r["lead"]}
     assert teamlib.team_config(None, {"roster": "tng"})["roster"] == "tng"
+
+
+def test_your_own_crew_from_rosters_json_and_member_renames(env):
+    (teamlib.team_home()).mkdir(parents=True, exist_ok=True)
+    teamlib.rosters_path().write_text(json.dumps({"curtin": {
+        "lead": "athena", "ship": "argo", "shuttles": ["iris", "hermes"],
+        "crew": ["hypatia", "curie"], "personas": {"hypatia": "a patient teacher of geometry"}}}))
+    team = make_team(env, roster="curtin")
+    assert team.lead_name() == "athena"
+    team.spawn("study", "claude", mode="collab")
+    assert team.state["workers"]["w1"]["agent"] == "hypatia"
+    assert "patient teacher" in team._initial_prompt("w1")
+    from superyak_team import mcp
+    assert mcp.next_ship(team.cfg) == "argo"
+    teamlib.rosters_path().write_text(json.dumps({"bad": {"lead": "x", "ship": "y", "shuttles": ["z"],
+                                                          "crew": ["a"]}}))
+    with pytest.raises(teamlib.RejectedMessage, match="two shuttles"):
+        teamlib.team_config(None, {"roster": "bad"})
+    code = channels.add_member("curtin-lead", "lead", ["embassy"])
+    channels.rename_member("curtin-lead", "athena")
+    assert channels.member_for(code)["name"] == "athena"                   # same code, new name
+    with pytest.raises(teamlib.RejectedMessage):
+        channels.rename_member("athena", "kairos")                         # can't take the owner's name

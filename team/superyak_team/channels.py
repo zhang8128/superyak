@@ -195,6 +195,22 @@ def revoke_member(name):
     return gone is not None
 
 
+def rename_member(old, new):
+    """Same code, new name: how the member appears from now on (past posts keep the old one)."""
+    if not NAME_RE.match(new or ""):
+        raise teamlib.RejectedMessage("member names are lowercase letters, digits and '-'")
+    with teamlib.locked(members_path()) as f:
+        data = _members(f)
+        if old not in data:
+            raise teamlib.RejectedMessage("no member %r" % old)
+        if new in data or new == human_name():
+            raise teamlib.RejectedMessage("%r is taken" % new)
+        data[new] = data.pop(old)
+        f.seek(0)
+        f.truncate()
+        f.write(json.dumps(data, indent=1))
+
+
 def list_members():
     with teamlib.locked(members_path()) as f:
         return {k: {kk: vv for kk, vv in v.items() if kk != "token_sha256"} for k, v in _members(f).items()}
@@ -405,6 +421,7 @@ Sharing with other people (on the machine that hosts the channel):
 superyak-runtime team channels members                         who else may use this server
 superyak-runtime team channels members add <name> --role human|lead --channels embassy[,..]
     prints their access code once (only a hash is kept)
+superyak-runtime team channels members rename <old> <new>   same code, new name
 superyak-runtime team channels members revoke <name>
 
 On the other person's machine (their lead reaches the host's channel):
@@ -447,6 +464,10 @@ def cli(argv, repo):
             code = add_member(a.name, a.role, [c.strip() for c in a.channels.split(",") if c.strip()])
             print("Added %s (%s) to %s.\nTheir access code (shown once; send it privately):\n%s"
                   % (a.name, a.role, a.channels, code))
+            return 0
+        if argv[1] == "rename" and len(argv) == 4:
+            rename_member(argv[2], argv[3])
+            print("%s is now %s (same access code)" % (argv[2], argv[3]))
             return 0
         if argv[1] == "revoke" and len(argv) == 3:
             print("revoked" if revoke_member(argv[2]) else "no such member")

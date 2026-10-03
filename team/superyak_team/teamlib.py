@@ -116,6 +116,42 @@ class RejectedMessage(ValueError):
     pass
 
 
+def rosters_path():
+    return team_home() / "rosters.json"
+
+
+def all_rosters():
+    """Built-in crews plus your own from ~/.superyak/team/rosters.json (same shape as ROSTERS;
+    yours win on a name clash). Rename everyone without touching code."""
+    out = dict(ROSTERS)
+    p = rosters_path()
+    if p.exists():
+        try:
+            custom = json.loads(p.read_text())
+        except json.JSONDecodeError as e:
+            raise RejectedMessage("%s is not valid JSON: %s" % (p, e))
+        if not isinstance(custom, dict):
+            raise RejectedMessage("%s must map roster names to crews" % p)
+        out.update(custom)
+    return out
+
+
+ROSTER_NAME = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
+
+
+def roster(name):
+    r = all_rosters().get(name)
+    if r is None:
+        raise RejectedMessage("roster must be one of: %s" % ", ".join(sorted(all_rosters())))
+    names = [r.get("lead"), r.get("ship")] + list(r.get("shuttles") or []) + list(r.get("crew") or [])
+    if (not r.get("crew") or len(r.get("shuttles") or []) != 2
+            or not all(isinstance(n, str) and ROSTER_NAME.match(n) for n in names)
+            or len(set(names)) != len(names)):
+        raise RejectedMessage("roster %r needs a lead, a ship, two shuttles and a crew: distinct "
+                              "lowercase names (letters, digits, '-')" % name)
+    return r
+
+
 # Team configurations. A team = defaults (+ ~/.superyak/team/config.json) + a preset + per-team
 # overrides passed to team_start. Only these keys can vary per team.
 TEAM_KEYS = {"max_workers", "worker_timeout_s", "codex_model", "codex_effort", "claude_model",
@@ -217,8 +253,7 @@ def team_config(preset=None, overrides=None):
         raise RejectedMessage("agent_seed must be 'empty' or 'genome-core'")
     if not re.fullmatch(r"group:[a-z][a-z0-9-]{0,63}", str(cfg.get("share_group", "group:agent-team"))):
         raise RejectedMessage("share_group must look like group:<name>")
-    if cfg.get("roster", "voyager") not in ROSTERS:
-        raise RejectedMessage("roster must be one of: %s" % ", ".join(sorted(ROSTERS)))
+    roster(cfg.get("roster", "voyager"))       # raises if unknown or malformed
     cfg["preset"] = preset or ""
     return cfg
 

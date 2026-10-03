@@ -115,8 +115,9 @@ A `lead` member is another team's lead: it posts as an agent, never as a human. 
 machine, `channels remote add embassy https://<host>.ts.net --as <member>` keeps the code in
 the OS keyring, and that lead's channel tools then reach the host. For **bridge channels**
 (`bridge_channels`, default `["embassy"]`), only leads post and workers read, and a post that
-names a lead goes to that lead's inbox only. Each side needs a different `roster` (`voyager`,
-`tng`), so the leads' names differ. Joining guide: [team-mode-joining.md](team-mode-joining.md).
+names a lead goes to that lead's inbox only. Each side needs a different lead name: pick a
+built-in `roster` (`voyager`, `tng`) or define your own crew in `~/.superyak/team/rosters.json`.
+`channels members rename <old> <new>` renames a member and keeps their code. Joining guide: [team-mode-joining.md](team-mode-joining.md).
 
 ### Memory: agents of their own
 Every worker is a **persistent named agent** (`sol-1`, `claude-2`, or `team_spawn(agent="ada")`)

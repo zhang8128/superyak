@@ -78,7 +78,7 @@ def next_ship(cfg):
     shuttles, so at most three unnamed teams at once (this machine's RAM agrees). A vessel is
     free when it has never flown or its last mission ended; that mission's state is archived.
     One that crashed mid-mission is not free: team_start(name=...) restarts it."""
-    roster = teamlib.ROSTERS[cfg.get("roster", "voyager")]
+    roster = teamlib.roster(cfg.get("roster", "voyager"))
     fleet = [roster["ship"]] + roster["shuttles"]
     for name in fleet:
         d = teamlib.team_dir(name)
@@ -176,7 +176,7 @@ def lead_channel_post(args):
     repo = git_root()
     ch = args.get("channel") or channels.team_channel(active_team(repo))
     cfg = teamlib.load_config()
-    me = teamlib.ROSTERS[cfg.get("roster", "voyager")]["lead"]
+    me = teamlib.roster(cfg.get("roster", "voyager"))["lead"]
     rec = channels.post_any(repo, ch, me, teamlib.sanitize(args.get("text", "")))
     return {"channel": ch, "id": rec["id"]}
 

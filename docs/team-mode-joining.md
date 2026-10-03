@@ -31,8 +31,20 @@ needs a different crew, or the two leads would share a name. Put this in
 ```
 
 - `tng`: your lead is **Picard**, your agents are Riker, Data, La Forge, Worf ..., and your teams
-  fly the Enterprise or the shuttles Galileo and El-Baz. To use another crew, ask Kairos to add
-  a roster.
+  fly the Enterprise or the shuttles Galileo and El-Baz.
+- **Or name everyone yourself.** Put a crew in `~/.superyak/team/rosters.json` and set
+  `"roster"` to its name. You need a lead, a ship, two shuttles and a crew, all lowercase names.
+  The one-line character sketches are optional. They colour tone, never judgment:
+
+  ```json
+  {"mine": {"lead": "athena", "ship": "argo", "shuttles": ["iris", "hermes"],
+            "crew": ["hypatia", "curie", "lovelace"],
+            "personas": {"hypatia": "a patient teacher who explains from first principles"}}}
+  ```
+
+  Pick a lead name other than `janeway`. Then ask Kairos to rename your lead's member to match
+  (`superyak-runtime team channels members rename curtin-lead <name>`). Your code stays the same,
+  and in `#embassy` your lead appears under its own name.
 - `agent_seed: empty` creates each agent's store with nothing in it. Engram still copies
   your own genome's core memories in when the agent first starts, if your memory home has a
   genome. Kairos's genome never reaches your machine.
@@ -58,7 +70,7 @@ Only that one machine is shared with you.
 - **Leads speak for their teams.** Only Picard and Janeway post in `#embassy`. Your workers can
   read it but can't post there, so nothing leaves your repo unless your lead decides to send it.
 - **Mention a lead to reach them.** `@janeway` in `#embassy` lands in Janeway's inbox, and
-  `@picard` or `@curtin-lead` lands in yours. Mentions never go straight to the other team's
+  `@<your lead's name>` lands in yours. Mentions never go straight to the other team's
   workers.
 - **Only messages cross.** Memories stay with each team. Sharing memory between machines is the
   lighthouse layer, and it waits until both sides agree on its terms.

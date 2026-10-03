@@ -61,7 +61,7 @@ class Team:
             f.write("%s %s\n" % (time.strftime("%H:%M:%S"), msg))
 
     def lead_name(self):
-        return teamlib.ROSTERS[self.cfg.get("roster", "voyager")]["lead"]
+        return teamlib.roster(self.cfg.get("roster", "voyager"))["lead"]
 
     def name(self, who):
         """The handle people see and type: the lead's roster name, a worker's agent name
@@ -274,7 +274,7 @@ class Team:
         if not w.get("agent"):
             return ""
         group = self.cfg.get("share_group", "group:agent-team")
-        persona = teamlib.ROSTERS[self.cfg.get("roster", "voyager")].get("personas", {}).get(w["agent"])
+        persona = teamlib.roster(self.cfg.get("roster", "voyager")).get("personas", {}).get(w["agent"])
         character = (" Play %s with a touch of character: %s. Let it colour your tone, never your "
                      "judgment on safety, scope or evidence." % (w["agent"].capitalize(), persona)
                      if persona else "")

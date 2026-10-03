@@ -59,7 +59,7 @@ def claim(name, kind, team_id, wid, seed="empty", live=lambda team_id: False, ro
     name=None picks the roster's next unused crew name (then `<sol|claude>-<n>`). An agent
     keeps its kind: its memory belongs to one model's line. live(team_id) says whether
     another team's seat still holds."""
-    crew = teamlib.ROSTERS[roster]
+    crew = teamlib.roster(roster)
     with teamlib.locked(registry_path()) as f:
         data = _load(f)
         if not name:                       # a new agent: next crew name, then <sol|claude>-<n>
@@ -70,7 +70,7 @@ def claim(name, kind, team_id, wid, seed="empty", live=lambda team_id: False, ro
                 name = candidate if candidate not in data else None
                 n += 1
         name = name.lower()
-        if name in ("lead", "all", "teamd") or any(name == r["lead"] for r in teamlib.ROSTERS.values()):
+        if name in ("lead", "all", "teamd") or any(name == r.get("lead") for r in teamlib.all_rosters().values()):
             raise teamlib.RejectedMessage("%r is reserved (the lead or a channel keyword)" % name)
         if not NAME_RE.match(name):
             raise teamlib.RejectedMessage("agent names are lowercase letters, digits and '-', "
