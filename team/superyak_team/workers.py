@@ -14,6 +14,7 @@ import json
 import re
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -215,7 +216,7 @@ def configured_codex_plugins(config_path=None):
 CODEX_WORKER_MCP = {"team", "engram"}
 
 
-def codex_command(cfg, team_id, worker, cwd, prompt, thread_id=None, mode="build"):
+def codex_command(cfg, team_id, worker, cwd, prompt, thread_id=None, mode="build", engram_root=None):
     """mode "build": workspace-write in the worker's worktree. mode "collab": read-only sandbox
     (repo for context); collaborators produce messages and documents.
     Codex's sandbox cannot restrict reads, so Codex workers get no egress at all: web search
@@ -230,14 +231,21 @@ def codex_command(cfg, team_id, worker, cwd, prompt, thread_id=None, mode="build
              "-c", "mcp_servers.team.args=%s" % json.dumps([mcp])]
     for k, v in mcp_env(team_id, worker).items():
         flags += ["-c", "mcp_servers.team.env.%s=%s" % (k, json.dumps(v))]
-    for tool in ("team_post", "team_read", "team_ask_lead", "team_done", "team_status",
-                 "team_message", "team_plan"):
+    for tool in TEAM_TOOLS:
         flags += ["-c", 'mcp_servers.team.tools.%s.approval_mode="approve"' % tool]
     defined = configured_codex_mcp()
     # approval_policy="never" auto-rejects MCP tools that aren't pre-approved; the worker brief
     # relies on these engram tools (seen live 2026-10-02: "Engram recall was rejected").
-    if "engram" in defined:
-        for tool in ("recall", "remember", "share", "shares"):
+    if engram_root and "engram" not in defined:
+        # The agent's own store (agents.py), never Kairos's: the runtime binds the instance
+        # from the seeded config under ENGRAM_PROJECT_ROOT and refuses a missing store.
+        flags += ["-c", "mcp_servers.engram.command=%s" % json.dumps(
+                      shutil.which("superyak-runtime") or "superyak-runtime"),
+                  "-c", 'mcp_servers.engram.args=["mcp"]']
+    if engram_root:
+        flags += ["-c", "mcp_servers.engram.env.ENGRAM_PROJECT_ROOT=%s" % json.dumps(str(engram_root))]
+    if "engram" in defined or engram_root:
+        for tool in ENGRAM_TOOLS:
             flags += ["-c", 'mcp_servers.engram.tools.%s.approval_mode="approve"' % tool]
     # Only servers defined as [mcp_servers.X] can be overridden (plugin servers break config).
     for name in sorted(defined - CODEX_WORKER_MCP):
@@ -264,8 +272,9 @@ def safe_prompt(prompt):
 TOOL_READ_PATHS = ("~/.gitconfig", "~/.config/git", "~/.local/bin", "~/.local/share/fnm",
                    "~/.local/share/uv", "~/.cache/uv", "~/.bun")
 TEAM_TOOLS = ("team_post", "team_read", "team_ask_lead", "team_done", "team_status",
-              "team_message", "team_plan")
-ENGRAM_TOOLS = ("recall", "remember", "share", "shares")
+              "team_message", "team_plan", "team_channels", "team_channel_read", "team_channel_post",
+              "team_shared_recall")
+ENGRAM_TOOLS = ("recall", "remember", "share", "shares", "signals")
 
 
 ENGRAM_PLUGIN_PREFIX = "mcp__plugin_engram_engram__"

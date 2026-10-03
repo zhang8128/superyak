@@ -59,6 +59,35 @@ DEFAULT_CONFIG = {
     # Claude Code names plugin MCP tools mcp__plugin_<plugin>_<server>__<tool>; engram ships as
     # plugin "engram" with server "engram". Change this if the plugin or server is renamed.
     "engram_tool_prefix": "auto",   # Claude workers' engram tool names; auto = plugin or user MCP server
+    "agent_memory": True,            # each agent has its own engram store (see agents.py)
+    "agent_seed": "empty",           # a new agent's store: empty, or genome-core (Kairos's core memories)
+    "share_group": "group:agent-team",   # where teammates share and read each other's memories
+    "roster": "voyager",             # names for the lead and new agents (ROSTERS)
+}
+
+# Fictional crews that name the lead and new agents. Names are handles: lowercase, unique.
+ROSTERS = {
+    "voyager": {"lead": "janeway",
+                "ship": "voyager", "shuttles": ["delta-flyer", "cochrane"],
+                "crew": ["chakotay", "tuvok", "torres", "paris", "kim", "seven", "doctor",
+                         "neelix", "kes", "icheb", "carey", "ayala", "vorik"],
+                # A touch of character: it colours tone, never judgment on safety, scope or evidence.
+                "personas": {
+                    "janeway": "a decisive, science-minded captain who protects her crew and runs on coffee",
+                    "chakotay": "a calm first officer who seeks common ground and speaks for the crew",
+                    "tuvok": "a Vulcan: precise, dry, sceptical of anything unverified",
+                    "torres": "a blunt, brilliant engineer who would rather fix it than discuss it",
+                    "paris": "a quick, irreverent pilot who takes calculated risks and owns them",
+                    "kim": "an eager, diligent ensign who checks the procedure twice",
+                    "seven": "an ex-Borg who prizes efficiency and says plainly what is irrelevant",
+                    "doctor": "a holographic physician: thorough diagnostician, a little vain about it",
+                    "neelix": "a warm, resourceful morale officer who keeps everyone talking",
+                    "kes": "a perceptive, empathetic listener who notices what others miss",
+                    "icheb": "a studious young analyst who wants to understand the whole system",
+                    "carey": "a steady engineer who keeps things running without fuss",
+                    "ayala": "a quiet, dependable security officer",
+                    "vorik": "a formal, earnest Vulcan engineer",
+                }},
 }
 
 
@@ -71,7 +100,7 @@ class RejectedMessage(ValueError):
 TEAM_KEYS = {"max_workers", "worker_timeout_s", "codex_model", "codex_effort", "claude_model",
              "collab_max_turns", "peer_limit_build", "peer_limit_collab", "default_mode",
              "default_kind", "slack_channel", "description", "collab_web_search",
-             "engram_tool_prefix"}
+             "engram_tool_prefix", "agent_memory", "agent_seed", "share_group", "roster"}
 BUILTIN_PRESETS = {
     "build":    {"description": "Implementation: builders in worktrees, peer messages pull-only.",
                  "default_mode": "build", "default_kind": "codex", "max_workers": 3},
@@ -161,6 +190,14 @@ def team_config(preset=None, overrides=None):
         raise RejectedMessage("engram_tool_prefix must be 'auto' or look like mcp__<name>__")
     if not isinstance(cfg.get("collab_web_search", True), bool):
         raise RejectedMessage("collab_web_search must be true or false")
+    if not isinstance(cfg.get("agent_memory", True), bool):
+        raise RejectedMessage("agent_memory must be true or false")
+    if cfg.get("agent_seed", "empty") not in ("empty", "genome-core"):
+        raise RejectedMessage("agent_seed must be 'empty' or 'genome-core'")
+    if not re.fullmatch(r"group:[a-z][a-z0-9-]{0,63}", str(cfg.get("share_group", "group:agent-team"))):
+        raise RejectedMessage("share_group must look like group:<name>")
+    if cfg.get("roster", "voyager") not in ROSTERS:
+        raise RejectedMessage("roster must be one of: %s" % ", ".join(sorted(ROSTERS)))
     cfg["preset"] = preset or ""
     return cfg
 
@@ -351,6 +388,17 @@ def keychain_secret(service):
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
+
+
+def daemon_alive(team_id):
+    pid_file = team_dir(team_id) / "teamd.pid"
+    if not (pid_file.exists() and sock_path(team_id).exists()):
+        return False
+    try:
+        os.kill(int(pid_file.read_text()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def private_sock_dir():

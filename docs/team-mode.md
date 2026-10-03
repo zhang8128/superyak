@@ -4,7 +4,8 @@ A lead (Claude Code or Codex) runs a small team of agents on a goal. Team mode i
 **developer-agent orchestrator**: it drives the Codex and Claude Code CLIs on git worktrees and
 private rooms. It is not the medical pilot's bounded research-agent pool
 ([pilot plan](medical-lighthouse-pilot-plan.md)) or Atlas's `WorkerRotation`, and it must never
-carry patient or participant data. Slack is off unless configured.
+carry patient or participant data. Teams talk in local [channels](#channels); Slack is off
+unless configured.
 
 ## Using it
 
@@ -51,6 +52,26 @@ listed there (config file only, never a per-team override), and a `.superyak-tea
 file in a repo blocks it permanently. Other teams keep a local transcript only. Kickoff message
 per team; one thread per task; plans as canvases.
 
+### Channels
+Persistent, repo-scoped conversation that needs no Slack. Each channel is an append-only log under
+`~/.superyak/team/channels/<repo-key>/`; channels outlive teams.
+- Every team writes to `team-<id>`: kickoff, assignments, posts, peer messages and **plans in
+  full**. `general` always exists; posting to a new name creates it.
+- Agents use `team_channels`, `team_channel_read(channel, after)` and `team_channel_post`. Workers
+  go through teamd, so the sandbox stays closed. Bodies come back fenced as quoted data. Reading
+  is pull: posts wake nobody.
+- The human posts from the CLI or the web page. In a team channel, `@w2`, `@lead` or `@all` routes
+  the post to that agent, like a Slack thread reply. A post without a mention goes to the lead.
+  Agent posts are never routed, so agents cannot steer each other through a channel.
+- CLI: `superyak-runtime team channels [list | read <ch> [n] | post <ch> <text> | serve]`.
+- Web page: `superyak-runtime team channels serve` serves on 127.0.0.1:8787, and `--phone` binds
+  your Tailscale address. It prints a link whose `#t=` part is the login, a bearer token in
+  `~/.superyak/team/channels/web-token` (0600). Plain HTTP is refused on any other network unless
+  `--allow-lan` is passed.
+- Trust: sandboxed workers cannot write channel files, so a `human` record came from the CLI or
+  the web page. The lead runs as you and is trusted the same way it already is. `human_name`
+  in `config.json` sets the display name (default `kairos`).
+
 ### Platforms
 | Computer | Master key store | Notes |
 |---|---|---|
@@ -78,10 +99,38 @@ for Claude Code by hand, use a name other than `team` (e.g.
 in Claude workers, and one named `team` would expose lead-identity tools under the exact names
 workers are allowed to call.
 
-### Memory
-Each worker's engram project root is its own folder (the repo's `.engram/config.toml` is copied
-in), so nothing is written to the repo. Durable learnings are shared with
-`share(..., audience="group:agent-team")` and recalled with `lighthouse_context`.
+### Names: a Voyager crew
+The `roster` setting names everyone (default `voyager`). The lead is **Janeway**. New agents take
+the next free crew name (Chakotay, Tuvok, Torres, Paris, Kim, Seven, ...), and seats `w1`, `w2`
+stay internal. Names work wherever an agent is addressed: `team_message`, `@tuvok` in a channel,
+`collect` and `stop`. A new team flies **Voyager** if it's free, otherwise a shuttle (**Delta
+Flyer**, **Cochrane**), so at most three unnamed teams run at once. A vessel is reused after its
+mission ends, and the old mission's state goes to `teams/archive/`. Each vessel's channel
+(`#voyager`, ...) keeps its log across missions. `team_start(name=...)` still works.
+
+### Memory: agents of their own
+Every worker is a **persistent named agent** (`sol-1`, `claude-2`, or `team_spawn(agent="ada")`)
+with its own engram store `agent-<name>`, carried from team to team. The registry is
+`~/.superyak/team/agents.json` (`team_agents` lists it). An agent keeps its kind, and it sits in
+at most one live team.
+- **Own memory.** teamd creates the store (`engram/cli.py agent-create`) before the worker's
+  folder exists, then seeds the folder's `.engram/config.toml` with `instance = "agent-<name>"`.
+  If the store can't be made, the worker is not spawned. It never falls back to Kairos's store.
+  Codex workers get the engram MCP server bound to that folder; Claude workers use the user
+  server with `ENGRAM_PROJECT_ROOT` set to it.
+- **Share some, withhold some.** `share(memory_id, audience="group:agent-team", reason)` copies
+  one memory into the local published house. Nothing else leaves the agent's store.
+- **The group is where agents collaborate.** Workers read it with `team_shared_recall(query)`
+  through teamd, because sandboxes can't open the house. A new share is noted in the team
+  channel. Live collaborators also get a nudge, since research is conversational. Builders
+  don't: they're heads down and pull.
+- Config: `agent_memory` (default true), `agent_seed` (`empty`, or `genome-core` to start with
+  Kairos's core genome memories) and `share_group`.
+- **Signals.** Engram's SignalBus carries control signals (`genome_updated`) and messages, and
+  writes nothing into memory by itself. An agent reads messages with `signals` and remembers
+  what it chooses. Conversation belongs in channels.
+- **Lighthouses** stay at levels of openness set by auth and policy per publisher, receiver and
+  context. Team mode publishes nothing beyond this machine.
 
 ## Security model (verified live: macOS 2026-10-02, Linux 2026-10-03)
 - **Caller auth:** token = HMAC(master key in the OS secret store, per-caller secret file).

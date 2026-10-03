@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import teamlib, workers
+from . import agents, channels, teamlib, workers
 from .slack import Slack, SlackError
 
 ACTIVE = ("running",)
@@ -34,6 +34,7 @@ class Team:
         self.procs = {}
         self.prepare_procs = {}
         self.stopping = threading.Event()
+        self.chan = channels.team_channel(team_id)
         if not teamlib.get_token(team_id, "lead"):
             teamlib.issue_token(team_id, "lead")
         state_file = self.dir / "state.json"
@@ -44,6 +45,9 @@ class Team:
                           "created": time.time(), "kickoff_ts": None, "workers": {},
                           "lead_inbox": [], "lead_cursor": 0, "slack_seen": {},
                           "lead_kind": lead_kind, "config": cfg}
+        if "chan_seen" not in self.state:     # route only human posts made after the team started
+            last = channels.read(self.repo, self.chan, limit=1)
+            self.state["chan_seen"] = last[0]["id"] if last else 0
         self.save()
 
     # ---------- persistence / messaging ----------
@@ -56,18 +60,50 @@ class Team:
         with open(self.dir / "teamd.log", "a") as f:
             f.write("%s %s\n" % (time.strftime("%H:%M:%S"), msg))
 
-    def display_name(self, who):
-        if who == "lead":
-            return "Lead · %s" % ("Codex" if self.state.get("lead_kind") == "codex" else "Claude")
-        w = self.state["workers"].get(who, {})
-        return "%s · %s" % (who.upper(), "Codex Sol" if w.get("kind") == "codex" else "Claude")
+    def lead_name(self):
+        return teamlib.ROSTERS[self.cfg.get("roster", "voyager")]["lead"]
 
-    def say(self, who, text, thread_ts=None):
-        """Record locally, then post to Slack (best effort). Returns Slack ts or None.
-        Everything outbound is redacted: agent output and stderr are not sanitized at the source."""
+    def name(self, who):
+        """The handle people see and type: the lead's roster name, a worker's agent name
+        (its seat id w1, w2 ... when agent memory is off), or a system sender as is."""
+        if who == "lead":
+            return self.lead_name()
+        w = self.state["workers"].get(who)
+        return (w.get("agent") or who) if w else who
+
+    def resolve(self, ref):
+        """A seat id for a handle: 'lead', the lead's name, a worker id, or an agent name."""
+        ref = str(ref or "").strip().lower().lstrip("@")
+        if ref in ("lead", self.lead_name()):
+            return "lead"
+        if ref in self.state["workers"]:
+            return ref
+        for wid, w in self.state["workers"].items():
+            if w.get("agent") == ref:
+                return wid
+        return None
+
+    def _worker(self, ref):
+        wid = self.resolve(ref)
+        if wid in (None, "lead"):
+            raise teamlib.RejectedMessage("no teammate %r (team_status lists the crew)" % ref)
+        return wid
+
+    def display_name(self, who):
+        kind = (self.state.get("lead_kind") if who == "lead"
+                else self.state["workers"].get(who, {}).get("kind"))
+        return "%s · %s" % (self.name(who).capitalize(),
+                            "Codex Sol" if kind == "codex" else "Claude")
+
+    def say(self, who, text, thread_ts=None, mirror=True):
+        """Record locally and in the team channel, then post to Slack (best effort). Returns
+        Slack ts or None. Everything outbound is redacted: agent output and stderr are not
+        sanitized at the source."""
         text = teamlib.redact(text)
         teamlib.append_record(self.team_id, {"from": who, "type": "post", "message": text,
                                              "thread_ts": thread_ts})
+        if mirror:
+            self.to_channel(who, text)
         if not self.slack:
             return None
         kind = ("lead" if who == "lead" else self.state["workers"].get(who, {}).get("kind", "codex"))
@@ -77,12 +113,25 @@ class Team:
             self.log("slack post failed: %s" % e)
             return None
 
+    def to_channel(self, who, text, kind="agent", **extra):
+        try:
+            channels.post(self.repo, self.chan, self.name(who), text, kind, team=self.team_id, **extra)
+        except (OSError, teamlib.RejectedMessage) as e:
+            self.log("channel post failed: %s" % e)
+
     def kickoff(self):
+        if not self.state.get("chan_kickoff"):
+            self.state["chan_kickoff"] = True
+            self.to_channel("teamd", "Team %s started; %s leads.\nGoal: %s\nWrite @%s, @<agent> or @all "
+                                     "here to reach someone; other posts are for reading."
+                            % (self.team_id, self.lead_name().capitalize(), self.state["goal"],
+                               self.lead_name()), kind="system")
+            self.save()
         if self.state["kickoff_ts"] or not self.slack:
             return
         ts = self.say("lead", ":rocket: *Team `%s` started*\n*Goal:* %s\nRepo: `%s`\n"
                               "Reply in a task's thread to talk to that agent; reply here to talk to the lead."
-                      % (self.team_id, self.state["goal"], Path(self.repo).name))
+                      % (self.team_id, self.state["goal"], Path(self.repo).name), mirror=False)
         if ts:
             self.state["kickoff_ts"] = ts
             self.state["slack_seen"][ts] = ts
@@ -95,7 +144,7 @@ class Team:
             n += 1
         return "w%d" % n
 
-    def spawn(self, task, kind="codex", context="", mode="build", base=None, prepare=None):
+    def spawn(self, task, kind="codex", context="", mode="build", base=None, prepare=None, agent=None):
         if prepare and prepare not in workers.PREPARE_COMMANDS:
             raise teamlib.RejectedMessage("prepare must be one of: %s" % ", ".join(sorted(workers.PREPARE_COMMANDS)))
         if prepare and mode != "build":
@@ -106,9 +155,11 @@ class Team:
             raise teamlib.RejectedMessage("mode must be 'build' or 'collab'")
         with self.lock:
             wid = self._new_worker_id()
+            seat = self._seat_agent(agent, kind, wid)       # before any folder: fails closed
+            instance = seat["instance"] if seat else None
             if mode == "build":
                 wt = workers.create_worktree(self.repo, self.team_id, wid, base)
-                self._seed_engram_config(wt["path"])
+                self._seed_engram_config(wt["path"], instance)
             else:   # read-only collaborator: works from the main checkout, never writes or commits
                 # Runs from a private scratch room, not the repo: the (unsandboxed) engram MCP
                 # server sets itself up in the agent's cwd and would write .engram/ into the repo.
@@ -117,17 +168,19 @@ class Team:
                 room = teamlib.rooms_root() / self.team_id / wid
                 room.mkdir(parents=True, exist_ok=True)
                 wt = {"branch": None, "path": str(room), "base": None}
-                self._seed_engram_config(room)
+                self._seed_engram_config(room, instance)
             teamlib.issue_token(self.team_id, wid)    # only once the worktree/room exists
             w = {"kind": kind, "mode": mode, "task": task, "context": context, "state": "queued",
                  "ident": None, "pid": None, "inbox": [], "turns": 0,
                  "started_at": None, "commit": None, "summary": None, "last_message": "",
-                 "thread_ts": None, **wt}
+                 "thread_ts": None, "agent": seat["name"] if seat else None,
+                 "instance": instance, **wt}
             self.state["workers"][wid] = w
             self.save()
-            ts = self.say("lead", "%s *%s* (%s, %s) assigned:\n%s"
+            ts = self.say("lead", "%s *%s*%s (%s, %s) assigned:\n%s"
                           % (":hammer_and_wrench:" if mode == "build" else ":thought_balloon:",
-                             wid.upper(), "Codex Sol" if kind == "codex" else "Claude",
+                             self.name(wid).capitalize(), " (%s)" % wid if seat else "",
+                             "Codex Sol" if kind == "codex" else "Claude",
                              "builder" if mode == "build" else "collaborator", task))
             if ts:
                 w["thread_ts"] = ts
@@ -139,7 +192,7 @@ class Team:
                 threading.Thread(target=self._prepare, args=(wid, prepare), daemon=True).start()
             else:
                 self._fill_slots()
-            return {"worker": wid, "mode": mode, "state": w["state"], "branch": w["branch"],
+            return {"worker": wid, "agent": w["agent"], "mode": mode, "state": w["state"], "branch": w["branch"],
                     "worktree": w["path"] if mode == "build" else None}
 
     PREPARE_TIMEOUT_S = 1800
@@ -207,24 +260,61 @@ class Team:
         w = self.state["workers"][wid]
         brief_name = "collaborator.md" if w.get("mode") == "collab" else "worker.md"
         brief = (teamlib.package_dir() / "roles" / brief_name).read_text()
-        return ("%s\n\n---\nTeam: %s\nYou are: %s\nTeam goal: %s\nYour worktree (cwd): %s\n"
+        return ("%s\n\n---\nTeam: %s\nYou are: %s\nLead: %s\nTeam goal: %s\nYour worktree (cwd): %s\n"
                 "Your branch: %s\nRepository (read for context): %s\nTeammates: %s\n\nYOUR TASK:\n%s\n\n"
-                "Context from the lead:\n%s\n"
-                % (brief, self.team_id, wid, self.state["goal"], w["path"],
+                "Context from the lead:\n%s\n%s"
+                % (brief, self.team_id, "%s (seat %s)" % (self.name(wid).capitalize(), wid) if w.get("agent") else wid,
+                   self.lead_name().capitalize(), self.state["goal"], w["path"],
                    w["branch"] or "(none: read-only collaborator)", self.repo,
-                   ", ".join("%s (%s, %s)" % (k, v["kind"], v.get("mode", "build"))
+                   ", ".join("%s (%s, %s)" % (self.name(k), v["kind"], v.get("mode", "build"))
                              for k, v in self.state["workers"].items() if k != wid) or "(none yet)",
-                   w["task"], w["context"] or "(none)"))
+                   w["task"], w["context"] or "(none)", self._memory_note(w)))
 
-    def _seed_engram_config(self, folder):
+    def _memory_note(self, w):
+        if not w.get("agent"):
+            return ""
+        group = self.cfg.get("share_group", "group:agent-team")
+        persona = teamlib.ROSTERS[self.cfg.get("roster", "voyager")].get("personas", {}).get(w["agent"])
+        character = (" Play %s with a touch of character: %s. Let it colour your tone, never your "
+                     "judgment on safety, scope or evidence." % (w["agent"].capitalize(), persona)
+                     if persona else "")
+        return ("\nYou are `%s`.%s Address teammates by name (team_message to=<name>). Your engram memory is your own and comes with you to "
+                "future teams: recall it, remember what you learn. Withhold what is yours; "
+                "share(memory_id, audience=\"%s\", reason=...) what teammates should have. "
+                "Read the group with team_shared_recall.\n" % (w["agent"], character, group))
+
+    def _seat_agent(self, name, kind, wid):
+        """Seat a persistent agent (agents.py) and make sure its own engram store exists, so the
+        worker never falls back to Kairos's store. None when agent memory is off."""
+        if not self.cfg.get("agent_memory", True):
+            if name:
+                raise teamlib.RejectedMessage("agent memory is off for this team (agent_memory=false)")
+            return None
+        seat = agents.claim(name, kind, self.team_id, wid, self.cfg.get("agent_seed", "empty"),
+                            live=lambda t: t != self.team_id and teamlib.daemon_alive(t),
+                            roster=self.cfg.get("roster", "voyager"))
+        try:
+            made = agents.ensure_store(seat, seat["seed"])
+            if not Path(made.get("path", "")).is_file():
+                raise teamlib.RejectedMessage("engram did not create %s" % seat["instance"])
+            if not self.state.get("house_ready"):
+                agents.engram_cli(["house-init"])
+                self.state["house_ready"] = True
+        except teamlib.RejectedMessage:
+            agents.release(seat["name"], self.team_id)
+            raise
+        return seat
+
+    def _seed_engram_config(self, folder, instance=None):
         """Engram creates .engram/config.toml in its project root when missing, so the root is
-        the worker's own folder (worktree or room), never the repo; copying the repo's config
-        keeps the worker on the repo's memory instance.
+        the worker's own folder (worktree or room), never the repo. With agent memory the
+        config binds the agent's own instance; otherwise it copies the repo's config, keeping
+        the worker on the repo's memory instance.
         Runs once at spawn, before any agent has touched the folder, and never follows
         symlinks: teamd is unsandboxed, so a worker-planted link must not redirect this write."""
         src = Path(self.repo) / ".engram" / "config.toml"
         folder = Path(folder)
-        if not src.is_file() or folder == Path(self.repo):
+        if folder == Path(self.repo) or (not src.is_file() and not instance):
             return
         cfg_dir = folder / ".engram"
         try:
@@ -234,10 +324,15 @@ class Team:
         st = os.lstat(cfg_dir)
         if not stat.S_ISDIR(st.st_mode):       # a symlink or file: refuse
             raise teamlib.RejectedMessage("refusing to seed engram config through %s" % cfg_dir)
-        data = src.read_bytes()[:65536]
+        data = src.read_bytes()[:65536] if src.is_file() else b""
+        flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW
+        if instance:
+            data = agents.seeded_config(data, instance)
+            flags |= os.O_TRUNC                  # a tracked repo config must not win over the agent's
+        else:
+            flags |= os.O_EXCL
         try:
-            fd = os.open(str(cfg_dir / "config.toml"),
-                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            fd = os.open(str(cfg_dir / "config.toml"), flags, 0o600)
         except FileExistsError:
             return                               # already seeded (e.g. a tracked config)
         with os.fdopen(fd, "wb") as f:
@@ -251,7 +346,8 @@ class Team:
         wdir = self.dir / "workers" / wid
         if w["kind"] == "codex":
             cmd = workers.codex_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
-                                        w.get("mode", "build"))
+                                        w.get("mode", "build"),
+                                        engram_root=w["path"] if w.get("instance") else None)
             env = self._engram_env(w)
         else:
             cmd = workers.claude_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
@@ -264,7 +360,7 @@ class Team:
         self.save()
         self.log("%s turn %d started pid=%s" % (wid, w["turns"], w["pid"]))
 
-    def deliver(self, wid, text, sender, push=True):
+    def deliver(self, wid, text, sender, push=True, peer=False):
         """Queue a message for a worker. push=True (lead, Kairos) also delivers it into a running
         turn or resumes an idle worker. push=False (another worker) is pull-only: it waits for
         the recipient's team_read and never starts or steers a turn (lateral-injection guard)."""
@@ -273,7 +369,7 @@ class Team:
             if not w:
                 raise teamlib.RejectedMessage("no worker %r" % wid)
             item = {"from": sender, "message": text, "ts": time.time(), "pushed": False,
-                    "read": False, "pull_only": not push}
+                    "read": False, "pull_only": not push, "peer": peer}
             w["inbox"].append(item)
             teamlib.append_record(self.team_id, {"from": sender, "to": wid, "type": "message",
                                                  "message": text, "pull_only": not push})
@@ -294,7 +390,8 @@ class Team:
         pending = [m for m in w["inbox"] if not m.get("read") and not m.get("pull_only")]
         if not pending:
             return False
-        peer_only = all(m["from"] in self.state["workers"] for m in pending)
+        # "peer" is set by worker_message; a sender's name says nothing about who sent it
+        peer_only = all(m.get("peer") or m["from"] in self.state["workers"] for m in pending)
         budget = int(self.cfg.get("collab_max_turns", 12))
         if peer_only and w["turns"] >= budget:
             # Teammates can't keep a collaborator talking forever; the lead or Kairos can.
@@ -348,8 +445,8 @@ class Team:
 
     def _to_lead(self, sender, label, text):
         """Worker-originated text reaches the lead (also an LLM) only as fenced, quoted data."""
-        body = teamlib.fence_external(sender, text, 1500)
-        self.state["lead_inbox"].append({"from": sender, "message": "%s %s" % (label, body),
+        body = teamlib.fence_external(self.name(sender), text, 1500)
+        self.state["lead_inbox"].append({"from": self.name(sender), "message": "%s %s" % (label, body),
                                          "ts": time.time()})
 
     PEER_WINDOW = 1800.0
@@ -406,7 +503,8 @@ class Team:
             thread = self.state["kickoff_ts"] if who == "lead" else self.state["workers"][who]["thread_ts"]
             self.say(who, ":memo: *Plan %s:* %s%s" % ("updated" if updated else "published", title,
                                                       "\n%s" % entry["link"] if entry["link"] else ""),
-                     thread)
+                     thread, mirror=False)
+            self.to_channel(who, markdown, kind="plan", title=title, updated=updated)
             if who != "lead":
                 self._to_lead(who, "PLAN:", "%s %s" % (title, entry["link"] or local))
             self.save()
@@ -414,6 +512,8 @@ class Team:
 
     def worker_message(self, sender, to, text):
         """A worker messages the lead or another worker; shown in the recipient's thread."""
+        if to != "all":
+            to = self.resolve(to) or to
         if to == sender:
             raise teamlib.RejectedMessage("cannot message yourself")
         if to == "lead":
@@ -435,11 +535,12 @@ class Team:
         if to not in self.state["workers"]:
             raise teamlib.RejectedMessage("no teammate %r (use team_status to see the team)" % to)
         self._peer_guard(sender, to)
-        self.say(sender, ":speech_balloon: *→ %s:* %s" % (to.upper(), text),
+        self.say(sender, ":speech_balloon: *→ %s:* %s" % (self.name(to).capitalize(), text),
                  self.state["workers"][to]["thread_ts"])
         # Live delivery only to read-only collaborators: a steered collaborator can only say
         # things. Builders (who can write code) keep peer messages pull-only.
-        return self.deliver(to, text, sender, push=self.state["workers"][to].get("mode") == "collab")
+        return self.deliver(to, text, self.name(sender),
+                            push=self.state["workers"][to].get("mode") == "collab", peer=True)
 
     # ---------- worker-initiated ----------
     def worker_done(self, wid, summary, tests):
@@ -458,6 +559,80 @@ class Team:
             self._to_lead(wid, "DONE:", summary)
             self.save()
             return {"commit": sha}
+
+    # ---------- channel polling ----------
+    def poll_channels_once(self):
+        """Route the human's posts in the team channel: @w2 / @all to workers (like a Slack
+        reply in their thread), everything else to the lead. Agent posts are never routed."""
+        recs = channels.read(self.repo, self.chan, self.state.get("chan_seen", 0), limit=100)
+        if not recs:
+            return
+        with self.lock:
+            for r in recs:
+                self.state["chan_seen"] = r["id"]
+                if r.get("kind") != "human":
+                    continue
+                sender = "%s (channel)" % r["from"]
+                said = channels.mentions(r["text"])
+                if "all" in said:
+                    targets = ["lead"] + [k for k, v in self.state["workers"].items() if v["state"] in LIVE]
+                else:
+                    targets = [self.resolve(m) or "?" + m for m in said] or ["lead"]
+                for t in dict.fromkeys(targets):
+                    if t == "lead":
+                        self.state["lead_inbox"].append({"from": sender, "message": r["text"],
+                                                         "ts": time.time()})
+                        teamlib.append_record(self.team_id, {"from": sender, "to": "lead",
+                                                             "type": "message", "message": r["text"]})
+                    elif t in self.state["workers"]:
+                        self.deliver(t, r["text"], sender)
+                    else:
+                        self.to_channel("teamd", "No one called @%s in team %s; nothing was delivered."
+                                        % (t.lstrip("?"), self.team_id), kind="system")
+            self.save()
+
+    # ---------- the group's shared memories ----------
+    def shared_recall(self, query, limit=20):
+        group = self.cfg.get("share_group", "group:agent-team")
+        shares = agents.shared(group, query, limit=max(1, min(limit, 100)))
+        return {"group": group, "shares": [
+            {"from": self._agent_label(s.get("source_instance", "")), "shared_at": s.get("shared_at"),
+             "reason": s.get("reason", ""), "memory_id": s.get("memory_id"),
+             "memory": teamlib.fence_external(self._agent_label(s.get("source_instance", "")),
+                                              s.get("content", ""), teamlib.PLAN_MAX_BYTES)}
+            for s in shares]}
+
+    def _agent_label(self, instance):
+        name = instance[len("agent-"):] if instance.startswith("agent-") else instance
+        return name.capitalize() if name else "?"
+
+    def poll_shares_once(self):
+        """Announce new shares to the group: a note in the team channel, and a nudge to live
+        collaborators (they converse). Builders stay heads down and pull with
+        team_shared_recall."""
+        if not any(w.get("agent") for w in self.state["workers"].values()):
+            return
+        after = self.state.setdefault("shares_after", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        try:
+            new = agents.shared(self.cfg.get("share_group", "group:agent-team"), after=after, limit=50)
+        except teamlib.RejectedMessage as e:
+            self.log("share poll failed: %s" % e)
+            return
+        if not new:
+            return
+        with self.lock:
+            for s in new:
+                self.state["shares_after"] = s.get("shared_at") or after
+                who = self._agent_label(s.get("source_instance", ""))
+                note = "%s shared a memory with %s: %s" % (who, self.cfg.get("share_group"),
+                                                           (s.get("reason") or "")[:300])
+                self.to_channel("teamd", note, kind="system")
+                for wid, w in self.state["workers"].items():
+                    if (w.get("mode") == "collab" and w["state"] in LIVE
+                            and agents.instance_name(w.get("agent") or "") != s.get("source_instance")):
+                        self.deliver(wid, note + " (team_shared_recall to read it)", "teamd",
+                                     peer=True)     # a teammate's act: counts toward the turn budget
+            self.save()
 
     # ---------- Slack polling ----------
     def poll_slack_once(self):
@@ -510,7 +685,7 @@ class Team:
         expected = teamlib.get_token(self.team_id, caller)
         if not teamlib.tokens_match(req.get("token"), expected):
             raise teamlib.RejectedMessage("authentication failed for caller %r" % caller)
-        if op in ("post", "ask_lead", "message", "plan"):
+        if op in ("post", "ask_lead", "message", "plan", "chan_post"):
             limit = teamlib.PLAN_MAX_BYTES if op == "plan" else teamlib.MAX_BYTES
             text = teamlib.sanitize(a.get("markdown" if op == "plan" else "text", ""), limit)
             reason = teamlib.check_rate(self.team_id, caller)
@@ -518,21 +693,24 @@ class Team:
                 raise teamlib.RejectedMessage(reason)
         if op == "plan":
             return self.publish_plan(caller, a.get("title") or "Plan", text)
+        if op == "shared_recall":
+            return self.shared_recall(str(a.get("query") or ""), int(a.get("limit") or 20))
         if is_lead:
             if op == "spawn":
                 return self.spawn(a.get("task", ""), a.get("kind") or self.cfg.get("default_kind", "codex"),
                                   a.get("context", ""), a.get("mode") or self.cfg.get("default_mode", "build"),
-                                  a.get("base") or None, a.get("prepare") or None)
+                                  a.get("base") or None, a.get("prepare") or None,
+                                  a.get("agent") or None)
             if op == "message":
-                return self.deliver(a["worker"], text, "lead")
+                return self.deliver(self._worker(a["worker"]), text, self.lead_name())
             if op == "post":
                 return {"ts": self.say("lead", text, self.state["kickoff_ts"])}
             if op == "status":
                 return self.status()
             if op == "collect":
-                return self.collect(a["worker"])
+                return self.collect(self._worker(a["worker"]))
             if op == "stop":
-                return self.stop_worker(a["worker"])
+                return self.stop_worker(self._worker(a["worker"]))
             if op == "end":
                 return self.end(a.get("summary", ""), bool(a.get("keep_worktrees")))
         else:
@@ -555,9 +733,21 @@ class Team:
                                      for m in items]}
             if op == "done":
                 return self.worker_done(caller, a.get("summary", ""), a.get("tests", ""))
+            if op == "chan_list":
+                return {"team_channel": self.chan, "channels": channels.list_channels(self.repo)}
+            if op == "chan_read":
+                ch = a.get("channel") or self.chan
+                return {"channel": ch, "messages": channels.fenced(
+                    channels.read(self.repo, ch, int(a.get("after") or 0), int(a.get("limit") or 30)))}
+            if op == "chan_post":
+                rec = channels.post(self.repo, a.get("channel") or self.chan, self.name(caller), text,
+                                    team=self.team_id)
+                return {"channel": a.get("channel") or self.chan, "id": rec["id"]}
             if op == "status":
                 return {"you": caller, "task": w["task"], "branch": w["branch"], "goal": self.state["goal"],
-                        "teammates": {k: {"kind": v["kind"], "state": v["state"], "task": v["task"][:120]}
+                        "you_are": self.name(caller), "lead": self.lead_name(),
+                        "teammates": {self.name(k): {"seat": k, "kind": v["kind"], "state": v["state"],
+                                                     "task": v["task"][:120]}
                                       for k, v in self.state["workers"].items() if k != caller}}
         raise teamlib.RejectedMessage("op %r not allowed for %s" % (op, caller))
 
@@ -567,9 +757,11 @@ class Team:
             self.state["lead_cursor"] = len(self.state["lead_inbox"])
             self.save()
             return {"team": self.team_id, "goal": self.state["goal"], "slack": bool(self.slack),
+                    "channel": self.chan,
                     "preset": self.cfg.get("preset", ""),
                     "config": {k: self.cfg.get(k) for k in sorted(teamlib.TEAM_KEYS) if k in self.cfg},
-                    "workers": {k: {"kind": v["kind"], "mode": v.get("mode", "build"),
+                    "lead": self.lead_name(),
+                    "workers": {k: {"agent": v.get("agent"), "kind": v["kind"], "mode": v.get("mode", "build"),
                                     "state": v["state"], "turns": v["turns"],
                                     "branch": v["branch"], "commit": v["commit"],
                                     "last_message": v["last_message"][-300:], "task": v["task"][:160]}
@@ -617,6 +809,11 @@ class Team:
         self.say("lead", ":checkered_flag: *Team ended.* %s" % summary, self.state["kickoff_ts"])
         for caller in ["lead"] + list(self.state["workers"]):
             teamlib.revoke_token(self.team_id, caller)
+        for w in self.state["workers"].values():
+            if w.get("agent"):
+                agents.release(w["agent"], self.team_id)
+        self.state["ended"] = time.time()
+        self.save()
         self.stopping.set()
         return {"ended": True, "branches_kept": [w["branch"] for w in self.state["workers"].values()
                                                  if w.get("branch")]}
@@ -668,10 +865,14 @@ def main(argv=None):
     team.log("teamd up (slack=%s)" % bool(slack))
     team.kickoff()
     server = serve(team)
-    last_poll = 0.0
+    last_poll = last_shares = 0.0
     while not team.stopping.is_set():
         try:
             team.monitor_once()
+            team.poll_channels_once()
+            if time.time() - last_shares >= 30:
+                last_shares = time.time()
+                team.poll_shares_once()
             if time.time() - last_poll >= int(cfg["poll_interval_s"]):
                 last_poll = time.time()
                 team.poll_slack_once()
