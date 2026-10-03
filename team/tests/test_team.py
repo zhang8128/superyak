@@ -936,8 +936,8 @@ def test_redaction_covers_npm_tokens_and_url_credentials():
 
 
 
-def test_uv_sync_refuses_a_preexisting_venv(tmp_path):
-    (tmp_path / ".venv" / "bin").mkdir(parents=True)
-    with pytest.raises(ValueError):
-        workers.start_prepare("uv-sync", tmp_path, tmp_path / "log")
-    assert "--ignore-pnpmfile" in workers.PREPARE_COMMANDS["pnpm-install"]
+
+def test_prepare_commands_never_run_repo_code():
+    assert set(workers.PREPARE_COMMANDS) == {"npm-ci", "pnpm-install"}
+    assert "--ignore-scripts" in workers.PREPARE_COMMANDS["npm-ci"]
+    assert {"--ignore-scripts", "--ignore-pnpmfile"} <= set(workers.PREPARE_COMMANDS["pnpm-install"])
