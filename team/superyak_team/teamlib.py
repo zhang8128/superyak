@@ -58,7 +58,7 @@ DEFAULT_CONFIG = {
     "collab_web_search": True,
     # Claude Code names plugin MCP tools mcp__plugin_<plugin>_<server>__<tool>; engram ships as
     # plugin "engram" with server "engram". Change this if the plugin or server is renamed.
-    "engram_tool_prefix": "mcp__plugin_engram_engram__",       # Claude collaborators only (Codex can't restrict reads)
+    "engram_tool_prefix": "auto",   # Claude workers' engram tool names; auto = plugin or user MCP server
 }
 
 
@@ -156,8 +156,9 @@ def team_config(preset=None, overrides=None):
                         ("peer_limit_build", 0, 200), ("peer_limit_collab", 0, 500)):
         if not lo <= int(cfg.get(key, lo)) <= hi:
             raise RejectedMessage("%s must be between %d and %d" % (key, lo, hi))
-    if not re.fullmatch(r"mcp__[A-Za-z0-9_-]{1,80}__", str(cfg.get("engram_tool_prefix", ""))):
-        raise RejectedMessage("engram_tool_prefix must look like mcp__<name>__")
+    prefix = str(cfg.get("engram_tool_prefix", ""))
+    if prefix != "auto" and not re.fullmatch(r"mcp__[A-Za-z0-9_-]{1,80}__", prefix):
+        raise RejectedMessage("engram_tool_prefix must be 'auto' or look like mcp__<name>__")
     if not isinstance(cfg.get("collab_web_search", True), bool):
         raise RejectedMessage("collab_web_search must be true or false")
     cfg["preset"] = preset or ""
@@ -310,10 +311,33 @@ def _secret_tool_env():
     """Codex starts MCP servers with a minimal environment (HOME, PATH, USER, ...; seen
     2026-10-03), without the D-Bus address secret-tool needs; use the standard per-user bus."""
     env = dict(os.environ)
-    bus = "/run/user/%d/bus" % os.getuid()
-    if not env.get("DBUS_SESSION_BUS_ADDRESS") and os.path.exists(bus):
-        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + bus
+    if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        bus = os.path.join(env.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid(), "bus")
+        if os.path.exists(bus):
+            env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + bus
     return env
+
+
+SECRET_SERVICE_HELP = "see 'Linux setup' in docs/team-mode.md"
+
+
+def _secret_service_problem(store_stderr=""):
+    """Why the Secret Service master key is unavailable, in terms a person can act on."""
+    try:
+        subprocess.run(["secret-tool", "--version"], capture_output=True, timeout=10)
+    except FileNotFoundError:
+        return ("secret-tool is not installed (Debian/Ubuntu: libsecret-tools; Fedora/Arch: "
+                "libsecret); " + SECRET_SERVICE_HELP)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    if not _secret_tool_env().get("DBUS_SESSION_BUS_ADDRESS"):
+        return ("no D-Bus session bus (headless, SSH or WSL without a desktop session): run from "
+                "a desktop login, or start a session bus and a keyring daemon; " + SECRET_SERVICE_HELP)
+    if "does not exist" in store_stderr or "No such secret collection" in store_stderr:
+        return "there is no default keyring; create one (" + SECRET_SERVICE_HELP + ")"
+    detail = " (%s)" % store_stderr.strip()[:200] if store_stderr.strip() else ""
+    return ("the default keyring is locked, or no Secret Service provider (GNOME Keyring, "
+            "KWallet, KeePassXC) is running%s; %s" % (detail, SECRET_SERVICE_HELP))
 
 
 def keychain_secret(service):
@@ -415,6 +439,7 @@ def _keychain_master():
 
 
 def _secret_service_master():
+    """Returns (key, problem): the key, or "" and why it is unavailable."""
     attrs = ["service", TOKEN_SERVICE, "account", MASTER_ACCOUNT]
 
     def lookup():
@@ -425,26 +450,31 @@ def _secret_service_master():
             return ""
         return r.stdout.strip() if r.returncode == 0 else ""
     key = lookup()
-    if not key:
-        # Into the default keyring; secret-tool reads the secret from stdin, never argv.
-        try:
-            subprocess.run(["secret-tool", "store", "--label=Superyak team master key"] + attrs,
-                           input=secrets.token_hex(32), capture_output=True, text=True, timeout=60,
-                           env=_secret_tool_env())
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        key = lookup()   # re-read: a concurrent creator may have won
-    return key
+    if key:
+        return key, ""
+    # Into the default keyring; secret-tool reads the secret from stdin, never argv.
+    stderr = ""
+    try:
+        stderr = subprocess.run(["secret-tool", "store", "--label=Superyak team master key"] + attrs,
+                                input=secrets.token_hex(32), capture_output=True, text=True,
+                                timeout=60, env=_secret_tool_env()).stderr or ""
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    key = lookup()   # re-read: a concurrent creator may have won
+    return key, "" if key else _secret_service_problem(stderr)
 
 
 def _master_key():
     store = _token_store()
-    if store in ("keychain", "secret-service"):
-        key = _keychain_master() if store == "keychain" else _secret_service_master()
+    if store == "keychain":
+        key = _keychain_master()
         if not key:
-            raise RejectedMessage("team master key unavailable in the %s" % (
-                "Keychain" if store == "keychain" else
-                "Secret Service (is a default keyring set up and unlocked? needs secret-tool)"))
+            raise RejectedMessage("team master key unavailable in the Keychain")
+        return key
+    if store == "secret-service":
+        key, problem = _secret_service_master()
+        if not key:
+            raise RejectedMessage("team master key unavailable from the Secret Service: " + problem)
         return key
     path = teams_root() / ".master"
     if not path.exists():

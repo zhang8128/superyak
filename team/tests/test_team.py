@@ -453,7 +453,7 @@ def test_secret_service_master_key_never_in_argv(monkeypatch):
     def fake_run(argv, input=None, **kw):
         calls.append((list(argv), input))
         class R:
-            returncode, stdout = 1, ""
+            returncode, stdout, stderr = 1, "", ""
         r = R()
         if argv[:2] == ["secret-tool", "lookup"] and "master" in store:
             r.returncode, r.stdout = 0, store["master"] + "\n"
@@ -476,9 +476,10 @@ def test_secret_tool_finds_the_session_bus_without_env(monkeypatch, tmp_path):
     def fake_run(argv, env=None, **kw):
         seen.append(env)
         class R:
-            returncode, stdout = 0, "k" * 64
+            returncode, stdout, stderr = 0, "k" * 64, ""
         return R()
     monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)   # as under Codex
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     monkeypatch.setattr(teamlib.os.path, "exists", lambda p: p == "/run/user/%d/bus" % os.getuid())
     monkeypatch.setattr(teamlib.os, "uname", lambda: type("U", (), {"sysname": "Linux"}))
     monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "secret-service")
@@ -493,8 +494,58 @@ def test_secret_service_unavailable_fails_closed(monkeypatch):
         raise FileNotFoundError(argv[0])
     monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "secret-service")
     monkeypatch.setattr(teamlib.subprocess, "run", no_secret_tool)
-    with pytest.raises(teamlib.RejectedMessage, match="Secret Service"):
+    with pytest.raises(teamlib.RejectedMessage, match="secret-tool is not installed"):
         teamlib._master_key()
+
+
+@pytest.mark.parametrize("bus, stderr, expected", [
+    (False, "", "no D-Bus session bus"),
+    (True, "secret-tool: Object does not exist at path “/org/freedesktop/secrets/collection/login”",
+     "no default keyring"),
+    (True, "secret-tool: Cannot create an item in a locked collection", "locked"),
+])
+def test_secret_service_problems_are_actionable(monkeypatch, bus, stderr, expected):
+    def fake_run(argv, **kw):
+        class R:
+            returncode, stdout = 1, ""
+        r = R()
+        r.stderr = stderr if argv[:2] == ["secret-tool", "store"] else ""
+        return r
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/nonexistent-runtime-dir")
+    if bus:
+        monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1/bus")
+    monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "secret-service")
+    monkeypatch.setattr(teamlib.subprocess, "run", fake_run)
+    with pytest.raises(teamlib.RejectedMessage, match=expected):
+        teamlib._master_key()
+
+
+def test_engram_prefix_auto_detects_plugin_or_user_server(monkeypatch, tmp_path):
+    monkeypatch.setattr(workers.Path, "home", lambda: tmp_path)
+    claude_json = tmp_path / ".claude.json"
+    assert workers.engram_tool_prefix("auto") == "mcp__plugin_engram_engram__"   # nothing installed
+    claude_json.write_text(json.dumps({"mcpServers": {"engram": {"command": "x"}}}))
+    assert workers.engram_tool_prefix("auto") == "mcp__engram__"                 # user server only
+    plugins = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+    plugins.parent.mkdir(parents=True)
+    plugins.write_text(json.dumps({"plugins": {"engram@superyak": [{}]}}))
+    assert workers.engram_tool_prefix("auto") == "mcp__plugin_engram_engram__"   # plugin wins
+    assert workers.engram_tool_prefix("mcp__memory__") == "mcp__memory__"        # explicit wins
+    assert teamlib.team_config(None, {})["engram_tool_prefix"] == "auto"
+
+
+def test_brief_prints_lead_brief_from_any_checkout(capsys):
+    from superyak_team import mcp
+    assert mcp.cli(["brief"]) == 0
+    assert "Role: tech lead of a Superyak team" in capsys.readouterr().out
+
+
+def test_windows_gets_a_clear_message_not_a_traceback(monkeypatch):
+    import runpy
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(SystemExit, match="WSL"):
+        runpy.run_path(str(RUN_TEAM), run_name="not_main")
 
 
 def test_peer_messages_are_pull_only_never_wake_or_steer(env, monkeypatch):

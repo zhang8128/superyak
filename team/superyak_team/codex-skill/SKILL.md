@@ -5,8 +5,8 @@ description: Lead a Superyak team of Codex (gpt-6.1-sol) and Claude Code workers
 
 # Superyak team (Codex as lead)
 
-Read and follow the lead brief: `superyak_team/roles/lead.md` in the Superyak repo
-(`~/Projects/superyak/team/superyak_team/roles/lead.md`).
+Read and follow the lead brief: run `superyak-runtime team brief` (it prints
+`team/superyak_team/roles/lead.md` from wherever the Superyak repo is checked out).
 
 Use the `team` MCP tools: `team_start(goal, preset, config)`, `team_list`, `team_plan`,
 `team_spawn(task, kind, mode, context)`, `team_status`, `team_message`, `team_collect`,

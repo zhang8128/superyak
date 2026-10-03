@@ -268,12 +268,35 @@ TEAM_TOOLS = ("team_post", "team_read", "team_ask_lead", "team_done", "team_stat
 ENGRAM_TOOLS = ("recall", "remember", "share", "shares")
 
 
+ENGRAM_PLUGIN_PREFIX = "mcp__plugin_engram_engram__"
+
+
+def engram_tool_prefix(configured="auto", claude_json=None):
+    """Claude Code names engram's tools after how it is installed: the Engram plugin
+    (mcp__plugin_engram_engram__) or a user-level MCP server called engram (mcp__engram__).
+    "auto" prefers the plugin and falls back to the user server when only that exists."""
+    if configured != "auto":
+        return configured
+    p = Path(claude_json or (Path.home() / ".claude.json"))
+    try:
+        servers = json.loads(p.read_text()).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError):
+        return ENGRAM_PLUGIN_PREFIX
+    plugins = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+    try:
+        has_plugin = any(k.startswith("engram@") for k in
+                         (json.loads(plugins.read_text()).get("plugins") or {}))
+    except (OSError, ValueError, AttributeError):
+        has_plugin = False
+    return "mcp__engram__" if "engram" in servers and not has_plugin else ENGRAM_PLUGIN_PREFIX
+
+
 def _home(p):
     return p.replace("~", str(Path.home()), 1)
 
 
 def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
-                            engram_prefix="mcp__plugin_engram_engram__"):
+                            engram_prefix=ENGRAM_PLUGIN_PREFIX):
     """Allowlist, not denylist, for Claude workers (all verified live 2026-10-02):
     - permissions run in dontAsk mode: any tool call not explicitly allowed is refused, which
       also shuts out the user's other plugins/MCP servers (Slack, browser, ...) as egress paths;
@@ -328,7 +351,7 @@ def claude_command(cfg, team_id, worker, cwd, prompt, session_id=None, mode="bui
         "env": mcp_env(team_id, worker)}}}))
     web = mode == "collab" and bool(cfg.get("collab_web_search", True))
     settings.write_text(json.dumps(claude_sandbox_settings(
-        cwd, mode, web, repo, cfg.get("engram_tool_prefix", "mcp__plugin_engram_engram__"))))
+        cwd, mode, web, repo, engram_tool_prefix(cfg.get("engram_tool_prefix", "auto")))))
     # The permission mode is set here too: a CLI --permission-mode overrides the settings file.
     cmd = ["claude", "-p", safe_prompt(prompt), "--output-format", "stream-json", "--verbose",
            "--model", cfg["claude_model"], "--permission-mode", "dontAsk",

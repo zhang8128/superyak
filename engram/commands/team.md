@@ -7,8 +7,8 @@ You are the tech lead of a Superyak team for this goal:
 
 $ARGUMENTS
 
-Follow the lead brief at `~/Projects/superyak/team/superyak_team/roles/lead.md` (also shipped as
-the `team` skill). Use the `team` MCP tools (`team_start`, `team_list`, `team_plan`, `team_spawn`,
+Follow the lead brief: the `team` skill, or the output of `superyak-runtime team brief` (works
+wherever the Superyak repo is checked out). Use the `team` MCP tools (`team_start`, `team_list`, `team_plan`, `team_spawn`,
 `team_message`, `team_status`, `team_collect`, `team_stop`, `team_post`, `team_end`). Without the
 tools, the same operations exist as `superyak-runtime team <op> key=value ...`.
 

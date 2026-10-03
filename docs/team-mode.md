@@ -35,7 +35,7 @@ Presets `build`, `research`, `review`, `mixed`, plus custom ones in
 `~/.superyak/team/presets.json`. Per-team overrides (validated, see `teamlib.TEAM_KEYS`):
 `max_workers`, `default_mode`, `default_kind`, `codex_model`, `codex_effort`, `claude_model`,
 `collab_max_turns`, `peer_limit_build`, `peer_limit_collab`, `collab_web_search`,
-`slack_channel`, `engram_tool_prefix`.
+`slack_channel`, `engram_tool_prefix` (default `auto`).
 
 ### Slack
 Create the app from `team/superyak_team/slack-manifest.yml` (Superyak Team), invite
@@ -51,19 +51,32 @@ listed there (config file only, never a per-team override), and a `.superyak-tea
 file in a repo blocks it permanently. Other teams keep a local transcript only. Kickoff message
 per team; one thread per task; plans as canvases.
 
-### Linux setup
-Team mode keeps its master key in the default Secret Service keyring (GNOME Keyring) via
-`secret-tool`, so a persistent default keyring must exist and be unlocked; a session-only
-keyring would lose the key at logout. If `secret-tool store` fails with "Object does not exist
-at path .../collection/login", create one (GNOME shows a password prompt; the login password
-makes it unlock at sign-in):
-`python3 -c 'import secretstorage as s; s.create_collection(s.dbus_init(), "Login", alias="default")'`.
-When Engram is a user MCP server named `engram` rather than the plugin, set
-`"engram_tool_prefix": "mcp__engram__"` in `~/.superyak/team/config.json`. Register the lead
-server for Claude Code under a name other than `team` (e.g.
-`claude mcp add -s user superyak-team -- superyak-runtime team`): a user-scoped server also
-loads in Claude workers, and one named `team` would expose lead-identity tools under the exact
-names workers are allowed to call.
+### Platforms
+| Computer | Master key store | Notes |
+|---|---|---|
+| macOS | Keychain (`security`) | nothing to set up |
+| Linux desktop (GNOME, KDE, …) | default Secret Service keyring (`secret-tool`) | needs a persistent, unlocked default keyring; see below |
+| Linux headless / SSH / WSL 2 | Secret Service | needs a D-Bus session bus and a keyring daemon; without them team mode refuses to start and says why |
+| Windows (native) | — | unsupported (Unix sockets, flock, the agent sandboxes): use WSL 2 |
+
+There is no silent fallback to a file: Codex workers can read files under `$HOME`, so a file
+key would let them forge tokens (`SUPERYAK_TEAM_TOKEN_STORE=file` exists for tests only).
+
+**Linux setup.** Install `secret-tool` (Debian/Ubuntu `libsecret-tools`; Fedora/Arch `libsecret`).
+If storing fails with "Object does not exist at path .../collection/login", there is no default
+keyring; create one (GNOME shows a password prompt; using the login password makes it unlock at
+sign-in): `python3 -c 'import secretstorage as s; s.create_collection(s.dbus_init(), "Login", alias="default")'`.
+Codex starts MCP servers without `DBUS_SESSION_BUS_ADDRESS`; team mode falls back to
+`$XDG_RUNTIME_DIR/bus` (or `/run/user/<uid>/bus`). Claude workers on Linux also need Claude
+Code's sandbox dependencies (bubblewrap, socat); a worker fails rather than run unsandboxed.
+
+**Any computer.** The repo can live anywhere: `superyak-runtime team brief` prints the lead
+brief. `engram_tool_prefix` defaults to `auto` (the Engram plugin's tool names, or
+`mcp__engram__` when Engram is only a user-level MCP server). When registering the lead server
+for Claude Code by hand, use a name other than `team` (e.g.
+`claude mcp add -s user superyak-team -- superyak-runtime team`): a user-scoped server also loads
+in Claude workers, and one named `team` would expose lead-identity tools under the exact names
+workers are allowed to call.
 
 ### Memory
 Each worker's engram project root is its own folder (the repo's `.engram/config.toml` is copied

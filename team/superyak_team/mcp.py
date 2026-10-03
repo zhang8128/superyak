@@ -275,7 +275,11 @@ def serve_stdio():
 
 
 def cli(argv):
-    """superyak-runtime team <tool-without-team_-prefix> [key=value ...]  e.g. spawn task="..." kind=codex"""
+    """superyak-runtime team <tool-without-team_-prefix> [key=value ...]  e.g. spawn task="..." kind=codex
+    `superyak-runtime team brief` prints the lead brief, wherever the repo is checked out."""
+    if argv[0] == "brief":
+        print((teamlib.package_dir() / "roles" / "lead.md").read_text())
+        return 0
     name = argv[0] if argv[0].startswith("team_") else "team_" + argv[0]
     fn = IMPL.get(name)
     if fn is None:
