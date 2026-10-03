@@ -634,6 +634,38 @@ class Team:
                                      peer=True)     # a teammate's act: counts toward the turn budget
             self.save()
 
+    # ---------- bridges: channels shared with other people's teams ----------
+    def poll_bridges_once(self):
+        """Posts in a bridge channel (e.g. #embassy) that name this team's lead, or @all, reach
+        the lead's inbox as quoted data. Never a worker's: the lead decides what to pass on."""
+        seen = self.state.setdefault("bridge_seen", {})
+        me = {self.lead_name()}
+        for ch in self.cfg.get("bridge_channels") or []:
+            cfg = channels.remote_cfg(ch) or {}
+            if cfg.get("as"):
+                me.add(cfg["as"])
+            try:
+                if ch not in seen:                       # start from now, not the backlog
+                    last = channels.read_any(self.repo, ch, limit=1)
+                    seen[ch] = last[-1]["id"] if last else 0
+                    continue
+                recs = channels.read_any(self.repo, ch, after=seen[ch], limit=100)
+            except teamlib.RejectedMessage as e:
+                self.log("bridge %s: %s" % (ch, e))
+                continue
+            with self.lock:
+                for r in recs:
+                    seen[ch] = r["id"]
+                    if r.get("from") in me:
+                        continue
+                    said = channels.mentions(r.get("text", ""))
+                    if "all" in said or me & set(said):
+                        self.state["lead_inbox"].append({
+                            "from": "%s (#%s)" % (r.get("from"), ch), "ts": time.time(),
+                            "message": "BRIDGE: " + teamlib.fence_external(
+                                "%s in #%s" % (r.get("from"), ch), r.get("text", ""), 4000)})
+        self.save()
+
     # ---------- Slack polling ----------
     def poll_slack_once(self):
         if not self.slack:
@@ -734,15 +766,19 @@ class Team:
             if op == "done":
                 return self.worker_done(caller, a.get("summary", ""), a.get("tests", ""))
             if op == "chan_list":
-                return {"team_channel": self.chan, "channels": channels.list_channels(self.repo)}
+                return {"team_channel": self.chan, "channels": channels.list_any(self.repo)}
             if op == "chan_read":
                 ch = a.get("channel") or self.chan
                 return {"channel": ch, "messages": channels.fenced(
-                    channels.read(self.repo, ch, int(a.get("after") or 0), int(a.get("limit") or 30)))}
+                    channels.read_any(self.repo, ch, int(a.get("after") or 0), int(a.get("limit") or 30)))}
             if op == "chan_post":
-                rec = channels.post(self.repo, a.get("channel") or self.chan, self.name(caller), text,
-                                    team=self.team_id)
-                return {"channel": a.get("channel") or self.chan, "id": rec["id"]}
+                ch = a.get("channel") or self.chan
+                if ch in (self.cfg.get("bridge_channels") or []) or channels.remote_cfg(ch):
+                    raise teamlib.RejectedMessage(
+                        "#%s is shared with another person's team; only the lead (%s) speaks for the "
+                        "team there. Ask %s to pass it on." % (ch, self.lead_name(), self.lead_name()))
+                rec = channels.post(self.repo, ch, self.name(caller), text, team=self.team_id)
+                return {"channel": ch, "id": rec["id"]}
             if op == "status":
                 return {"you": caller, "task": w["task"], "branch": w["branch"], "goal": self.state["goal"],
                         "you_are": self.name(caller), "lead": self.lead_name(),
@@ -873,6 +909,7 @@ def main(argv=None):
             if time.time() - last_shares >= 30:
                 last_shares = time.time()
                 team.poll_shares_once()
+                team.poll_bridges_once()
             if time.time() - last_poll >= int(cfg["poll_interval_s"]):
                 last_poll = time.time()
                 team.poll_slack_once()

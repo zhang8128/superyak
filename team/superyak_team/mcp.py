@@ -169,13 +169,15 @@ def lead_channel_read(args):
     repo = git_root()
     ch = args.get("channel") or channels.team_channel(active_team(repo))
     return {"channel": ch, "messages": channels.fenced(
-        channels.read(repo, ch, int(args.get("after") or 0), int(args.get("limit") or 30)))}
+        channels.read_any(repo, ch, int(args.get("after") or 0), int(args.get("limit") or 30)))}
 
 
 def lead_channel_post(args):
     repo = git_root()
     ch = args.get("channel") or channels.team_channel(active_team(repo))
-    rec = channels.post(repo, ch, "lead", teamlib.sanitize(args.get("text", "")))
+    cfg = teamlib.load_config()
+    me = teamlib.ROSTERS[cfg.get("roster", "voyager")]["lead"]
+    rec = channels.post_any(repo, ch, me, teamlib.sanitize(args.get("text", "")))
     return {"channel": ch, "id": rec["id"]}
 
 
@@ -235,7 +237,7 @@ LEAD_TOOLS = [
      {"summary": {"type": "string"}, "keep_worktrees": {"type": "boolean"}, "team": {"type": "string"}},
      [], team_end),
     ("team_channels", "List this repo's channels (persistent, no Slack needed) with message counts.",
-     {}, [], lambda a: {"channels": channels.list_channels(git_root())}),
+     {}, [], lambda a: {"channels": channels.list_any(git_root())}),
     ("team_shared_recall", SHARED_DESC, SHARED_PROPS, [], lambda a: call("shared_recall", a)),
     ("team_agents", "Persistent named agents: kind, teams worked in, current seat. Spawn one by "
                     "name with team_spawn(agent=...) to bring its memory along.",

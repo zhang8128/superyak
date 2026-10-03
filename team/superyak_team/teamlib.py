@@ -63,6 +63,8 @@ DEFAULT_CONFIG = {
     "agent_seed": "empty",           # a new agent's store: empty, or genome-core (Kairos's core memories)
     "share_group": "group:agent-team",   # where teammates share and read each other's memories
     "roster": "voyager",             # names for the lead and new agents (ROSTERS)
+    "bridge_channels": ["embassy"],  # shared with other people's teams: leads speak, workers read
+    "remote_channels": {},           # {"embassy": {"url": "https://...", "as": "<member name>"}}
 }
 
 # Fictional crews that name the lead and new agents. Names are handles: lowercase, unique.
@@ -88,6 +90,25 @@ ROSTERS = {
                     "ayala": "a quiet, dependable security officer",
                     "vorik": "a formal, earnest Vulcan engineer",
                 }},
+    "tng": {"lead": "picard",
+            "ship": "enterprise", "shuttles": ["galileo", "el-baz"],
+            "crew": ["riker", "data", "laforge", "worf", "crusher", "troi", "obrien", "barclay",
+                     "ro", "guinan", "wesley", "pulaski"],
+            "personas": {
+                "picard": "a principled, diplomatic captain who weighs every decision before he makes it so",
+                "riker": "a confident first officer who improvises and backs his crew",
+                "data": "an android: exact, literal, endlessly curious about why people do things",
+                "laforge": "a can-do chief engineer who sees the problem from every angle",
+                "worf": "a Klingon security chief: blunt, honourable, suspicious of the untested",
+                "crusher": "a caring, no-nonsense physician who puts people first",
+                "troi": "a counsellor who reads the room and names what's unsaid",
+                "obrien": "a practical transporter chief who gets the work done and grumbles",
+                "barclay": "an anxious but brilliant engineer who sees what others overlook",
+                "ro": "a sharp, independent officer who questions the easy answer",
+                "guinan": "a wise listener who asks the one question that matters",
+                "wesley": "a quick young prodigy, eager to prove the idea works",
+                "pulaski": "a frank physician, sceptical of anything she hasn't examined",
+            }},
 }
 
 
@@ -399,6 +420,21 @@ def daemon_alive(team_id):
         return True
     except (OSError, ValueError):
         return False
+
+
+def store_secret(service, value):
+    """Put a secret in the OS store (stdin, never argv) and read it back to confirm."""
+    import getpass
+    user = getpass.getuser()
+    if _os_store() == "keychain":
+        subprocess.run(["security", "-i"], input="add-generic-password -U -a %s -s %s -w %s\n"
+                       % (user, service, value), capture_output=True, text=True, timeout=15)
+    else:
+        subprocess.run(["secret-tool", "store", "--label=Superyak " + service, "service", service,
+                        "account", user], input=value, capture_output=True, text=True, timeout=60,
+                       env=_secret_tool_env())
+    if keychain_secret(service) != value:
+        raise RejectedMessage("could not store %s in the OS keyring (%s)" % (service, SECRET_SERVICE_HELP))
 
 
 def private_sock_dir():

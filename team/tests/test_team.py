@@ -1390,3 +1390,93 @@ def test_crew_have_a_touch_of_character_that_never_overrides_judgment(env):
     brief = team._initial_prompt("w1")
     assert "Vulcan" in brief and "never your judgment on safety, scope or evidence" in brief
     assert "touch of character" not in team._initial_prompt("w2")      # names off the roster: none
+
+
+# ---------- sharing channels with other people's teams ----------
+
+def _serve(env, monkeypatch):
+    import threading
+    monkeypatch.setattr(channels.time, "sleep", lambda s: None)
+    server = channels.make_server(env["repo"], "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, "http://127.0.0.1:%d" % server.server_address[1]
+
+
+def test_members_see_only_their_channels_and_post_as_themselves(env, monkeypatch):
+    server, base = _serve(env, monkeypatch)
+    try:
+        channels.post(env["repo"], "general", "janeway", "private to kairos")
+        code = channels.add_member("curtin", "human", ["embassy"])
+        lead = channels.add_member("curtin-lead", "lead", ["embassy"])
+        assert code not in channels.members_path().read_text()          # only a hash is kept
+        names = [c["channel"] for c in json.loads(_http(base + "/api/channels", code)[1])["channels"]]
+        assert names == ["embassy"]
+        assert _http(base + "/api/read?channel=general", code)[0] == 403
+        assert _http(base + "/api/post", code, {"channel": "general", "text": "x"})[0] == 403
+        rec = json.loads(_http(base + "/api/post", code, {"channel": "embassy", "text": "hi"})[1])["message"]
+        assert (rec["from"], rec["kind"]) == ("curtin", "human")
+        rec = json.loads(_http(base + "/api/post", lead, {"channel": "embassy", "text": "@janeway hello"})[1])["message"]
+        assert (rec["from"], rec["kind"], rec["via"]) == ("curtin-lead", "agent", "remote")  # never "human"
+        owner = [c["channel"] for c in json.loads(_http(base + "/api/channels", channels.web_token())[1])["channels"]]
+        assert {"general", "embassy"} <= set(owner)
+        assert channels.revoke_member("curtin")
+        assert _http(base + "/api/channels", code)[0] == 401
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_a_remote_channel_reads_and_posts_through_the_hosts_server(env, monkeypatch):
+    server, base = _serve(env, monkeypatch)
+    try:
+        lead = channels.add_member("curtin-lead", "lead", ["embassy"])
+        (env["tmp"] / "cfg.json").write_text(json.dumps(
+            {"remote_channels": {"embassy": {"url": base, "as": "curtin-lead"}}}))
+        monkeypatch.setattr(teamlib, "keychain_secret",
+                            lambda svc: lead if svc == "superyak-channel-embassy" else None)
+        rec = channels.post_any(env["repo"], "embassy", "ignored", "from the far team")
+        assert rec["from"] == "curtin-lead"                                # the host decides who we are
+        assert [r["text"] for r in channels.read_any(env["repo"], "embassy")] == ["from the far team"]
+        assert any(c.get("remote") == base for c in channels.list_any(env["repo"]))
+        (env["tmp"] / "cfg.json").write_text(json.dumps(
+            {"remote_channels": {"embassy": {"url": "http://example.com"}}}))
+        with pytest.raises(teamlib.RejectedMessage, match="https"):
+            channels.read_any(env["repo"], "embassy")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_bridge_posts_reach_only_the_lead_and_only_the_lead_speaks_there(env):
+    team = make_team(env)
+    team.spawn("api", "codex")
+    team.poll_bridges_once()                                           # start from now
+    channels.post(env["repo"], "embassy", "curtin", "@janeway can your crew review our plan?")
+    channels.post(env["repo"], "embassy", "curtin", "unrelated chatter")
+    channels.post(env["repo"], "embassy", "curtin", "@chakotay do this instead")   # not via workers
+    team.poll_bridges_once()
+    got = [m for m in team.state["lead_inbox"] if m["message"].startswith("BRIDGE:")]
+    assert len(got) == 1 and "review our plan" in got[0]["message"] and "quoted message" in got[0]["message"]
+    assert not any("do this instead" in m["message"] for m in team.state["workers"]["w1"]["inbox"])
+    assert _req(team, "chan_read", "w1", {"channel": "embassy"})["messages"]        # workers may read
+    with pytest.raises(teamlib.RejectedMessage, match="only the lead"):
+        _req(team, "chan_post", "w1", {"channel": "embassy", "text": "leak"})
+
+
+def test_remote_codes_go_to_the_keyring_on_stdin_never_argv(monkeypatch):
+    calls = []
+    monkeypatch.setattr(teamlib, "_os_store", lambda: "secret-service")
+    monkeypatch.setattr(teamlib.subprocess, "run", lambda argv, **kw: calls.append((argv, kw.get("input"))))
+    monkeypatch.setattr(teamlib, "keychain_secret", lambda svc: "s3cret-code")
+    teamlib.store_secret("superyak-channel-embassy", "s3cret-code")
+    argv, stdin = calls[0]
+    assert "s3cret-code" not in " ".join(argv) and stdin == "s3cret-code"
+
+
+def test_every_roster_is_complete_and_names_never_collide():
+    leads = [r["lead"] for r in teamlib.ROSTERS.values()]
+    assert len(leads) == len(set(leads))                      # two people's leads never share a name
+    for name, r in teamlib.ROSTERS.items():
+        assert r["ship"] and len(r["shuttles"]) == 2 and r["crew"]
+        assert set(r["personas"]) >= set(r["crew"]) | {r["lead"]}
+    assert teamlib.team_config(None, {"roster": "tng"})["roster"] == "tng"

@@ -13,10 +13,12 @@ Who writes what:
     cannot pose as the human. The lead runs as the user and could, as it can already message
     workers directly.
 """
+import hashlib
 import json
 import os
 import re
 import secrets
+import sys
 import time
 from pathlib import Path
 
@@ -137,6 +139,140 @@ def web_token():
     return p.read_text().strip()
 
 
+# ---------- members: who else may use this server ----------
+# The owner's web-token sees every channel. Everyone else is a member with their own code,
+# stored only as a hash, and a list of channels (e.g. ["embassy"]). A member is a person
+# (role "human": posts as a human) or another team's lead (role "lead": posts as an agent).
+# Revoking a member stops their code at once; what they already read stays read.
+ROLES = ("human", "lead")
+
+
+def members_path():
+    return teamlib.team_home() / "channels" / "members.json"
+
+
+def _digest(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _members(f):
+    f.seek(0)
+    raw = f.read()
+    try:
+        return json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def add_member(name, role, chans):
+    """Add (or re-key) a member; returns their new code, shown once and never stored."""
+    if not NAME_RE.match(name or ""):
+        raise teamlib.RejectedMessage("member names are lowercase letters, digits and '-'")
+    if role not in ROLES:
+        raise teamlib.RejectedMessage("role must be one of: %s" % ", ".join(ROLES))
+    for ch in chans:
+        _path(".", ch)                       # validates the name
+    if not chans:
+        raise teamlib.RejectedMessage("give the member at least one channel")
+    token = secrets.token_urlsafe(24)
+    with teamlib.locked(members_path()) as f:
+        data = _members(f)
+        data[name] = {"role": role, "channels": sorted(set(chans)), "token_sha256": _digest(token),
+                      "added": time.time()}
+        f.seek(0)
+        f.truncate()
+        f.write(json.dumps(data, indent=1))
+    return token
+
+
+def revoke_member(name):
+    with teamlib.locked(members_path()) as f:
+        data = _members(f)
+        gone = data.pop(name, None)
+        f.seek(0)
+        f.truncate()
+        f.write(json.dumps(data, indent=1))
+    return gone is not None
+
+
+def list_members():
+    with teamlib.locked(members_path()) as f:
+        return {k: {kk: vv for kk, vv in v.items() if kk != "token_sha256"} for k, v in _members(f).items()}
+
+
+def member_for(token):
+    """Who a bearer token belongs to, or None. The owner sees everything."""
+    if not token:
+        return None
+    if teamlib.tokens_match(token, web_token()):
+        return {"name": human_name(), "role": "owner", "channels": "*"}
+    digest = _digest(token)
+    with teamlib.locked(members_path()) as f:
+        for name, m in _members(f).items():
+            if teamlib.tokens_match(digest, m.get("token_sha256")):
+                return {"name": name, "role": m["role"], "channels": m["channels"]}
+    return None
+
+
+def may_use(member, channel):
+    return member["channels"] == "*" or channel in member["channels"]
+
+
+# ---------- remote channels: a channel hosted on someone else's server ----------
+# config.json: "remote_channels": {"embassy": {"url": "https://host.ts.net"}}. The code for
+# it lives in the OS keyring (service superyak-channel-<name>), never in a file workers can
+# read. The remote server decides who we are from that code, so `sender` is not sent.
+
+def remote_cfg(channel):
+    return (teamlib.load_config().get("remote_channels") or {}).get(channel)
+
+
+def _remote(channel, method, path, body=None):
+    import urllib.error
+    import urllib.request
+    cfg = remote_cfg(channel)
+    token = teamlib.keychain_secret("superyak-channel-" + channel)
+    if not token:
+        raise teamlib.RejectedMessage("no access code for remote channel %s in the keyring "
+                                      "(superyak-runtime team channels remote add)" % channel)
+    url = cfg["url"].rstrip("/")
+    if not url.startswith("https://") and not url.startswith("http://127.0.0.1"):
+        raise teamlib.RejectedMessage("remote channels need https:// (got %s)" % url)
+    req = urllib.request.Request(url + path, method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": "Bearer " + token,
+                                          "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raise teamlib.RejectedMessage("remote channel %s: HTTP %d" % (channel, e.code))
+    except (OSError, ValueError) as e:
+        raise teamlib.RejectedMessage("remote channel %s unreachable: %s" % (channel, e))
+
+
+def read_any(repo, channel, after=0, limit=50):
+    if remote_cfg(channel):
+        import urllib.parse
+        q = urllib.parse.urlencode({"channel": channel, "after": int(after), "limit": int(limit)})
+        return _remote(channel, "GET", "/api/read?" + q).get("messages", [])
+    return read(repo, channel, after, limit)
+
+
+def post_any(repo, channel, sender, text, kind="agent", **extra):
+    if remote_cfg(channel):
+        return _remote(channel, "POST", "/api/post", {"channel": channel, "text": text})["message"]
+    return post(repo, channel, sender, text, kind, **extra)
+
+
+def list_any(repo):
+    out = list_channels(repo)
+    for name, cfg in (teamlib.load_config().get("remote_channels") or {}).items():
+        out.append({"channel": name, "remote": cfg.get("url"), "messages": None,
+                    "last_ts": None, "last_from": None})
+    return out
+
+
 def tailscale_ip():
     import subprocess
     try:
@@ -166,7 +302,7 @@ def make_server(repo, host="127.0.0.1", port=8787, allow_lan=False):
         raise teamlib.RejectedMessage(
             "refusing to serve channels on %s over plain HTTP; use 127.0.0.1, your Tailscale "
             "address (--phone), or pass --allow-lan if this network is yours alone" % host)
-    token = web_token()
+    web_token()                                 # the owner's code exists before anyone connects
     page = (teamlib.package_dir() / "channels.html").read_bytes()
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -192,11 +328,17 @@ def make_server(repo, host="127.0.0.1", port=8787, allow_lan=False):
 
         def _authorized(self):
             got = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
-            if teamlib.tokens_match(got, token):
-                return True
+            member = member_for(got)
+            if member:
+                return member
             time.sleep(0.5)                     # slow down guessing
             self._send(401, {"error": "unauthorized"})
-            return False
+            return None
+
+        def _channel(self, member, channel):
+            if not may_use(member, channel):
+                raise PermissionError(channel)
+            return channel
 
         def do_GET(self):
             url = urllib.parse.urlparse(self.path)
@@ -204,16 +346,23 @@ def make_server(repo, host="127.0.0.1", port=8787, allow_lan=False):
                 return self._send(200, page, "text/html; charset=utf-8")
             if not url.path.startswith("/api/"):
                 return self._send(404, {"error": "not found"})
-            if not self._authorized():
+            member = self._authorized()
+            if not member:
                 return None
-            q =dict(urllib.parse.parse_qsl(url.query))
+            q = dict(urllib.parse.parse_qsl(url.query))
             try:
                 if url.path == "/api/channels":
-                    return self._send(200, {"channels": list_channels(repo), "me": human_name()})
+                    mine = [c for c in list_channels(repo) if may_use(member, c["channel"])]
+                    if member["channels"] != "*":    # a member's channels exist even before a post
+                        mine += [{"channel": ch, "messages": 0, "last_ts": None, "last_from": None}
+                                 for ch in member["channels"] if ch not in {c["channel"] for c in mine}]
+                    return self._send(200, {"channels": mine, "me": member["name"]})
                 if url.path == "/api/read":
-                    return self._send(200, {"messages": read(repo, q.get("channel", ""),
-                                                             int(q.get("after", 0) or 0),
+                    ch = self._channel(member, q.get("channel", ""))
+                    return self._send(200, {"messages": read(repo, ch, int(q.get("after", 0) or 0),
                                                              int(q.get("limit", 100) or 100))})
+            except PermissionError:
+                return self._send(403, {"error": "not your channel"})
             except (teamlib.RejectedMessage, ValueError) as e:
                 return self._send(400, {"error": str(e)})
             return self._send(404, {"error": "not found"})
@@ -221,14 +370,22 @@ def make_server(repo, host="127.0.0.1", port=8787, allow_lan=False):
         def do_POST(self):
             if self.path != "/api/post":
                 return self._send(404, {"error": "not found"})
-            if not self._authorized():
+            member = self._authorized()
+            if not member:
                 return None
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 if n > HUMAN_MAX_BYTES * 2:
                     raise teamlib.RejectedMessage("message too large")
                 body = json.loads(self.rfile.read(n) or b"{}")
-                rec = human_post(repo, body.get("channel", ""), body.get("text", ""))
+                ch = self._channel(member, body.get("channel", ""))
+                if member["role"] == "lead":     # another team's lead: an agent, never "human"
+                    rec = post(repo, ch, member["name"], teamlib.sanitize(body.get("text", "")),
+                               "agent", via="remote")
+                else:
+                    rec = human_post(repo, ch, body.get("text", ""), name=member["name"])
+            except PermissionError:
+                return self._send(403, {"error": "not your channel"})
             except (teamlib.RejectedMessage, ValueError) as e:
                 return self._send(400, {"error": str(e)})
             return self._send(200, {"message": rec})
@@ -242,7 +399,17 @@ USAGE = """superyak-runtime team channels                     list channels
 superyak-runtime team channels read <channel> [n]    show the last n messages (default 20)
 superyak-runtime team channels post <channel> <text> post as the human
 superyak-runtime team channels serve [--phone] [--host H] [--port P] [--allow-lan]
-    web page for browser and phone; --phone binds your Tailscale address"""
+    web page for browser and phone; --phone binds your Tailscale address
+
+Sharing with other people (on the machine that hosts the channel):
+superyak-runtime team channels members                         who else may use this server
+superyak-runtime team channels members add <name> --role human|lead --channels embassy[,..]
+    prints their access code once (only a hash is kept)
+superyak-runtime team channels members revoke <name>
+
+On the other person's machine (their lead reaches the host's channel):
+superyak-runtime team channels remote add <channel> <https-url> [--as <member name>]
+    reads the access code from stdin and keeps it in the OS keyring"""
 
 
 def _fmt(r):
@@ -265,6 +432,48 @@ def cli(argv, repo):
     if sub == "post" and len(argv) >= 3:
         rec = human_post(repo, argv[1], " ".join(argv[2:]))
         print("posted #%d to %s" % (rec["id"], argv[1]))
+        return 0
+    if sub == "members":
+        import argparse
+        if len(argv) == 1:
+            print(json.dumps(list_members(), indent=1))
+            return 0
+        if argv[1] == "add" and len(argv) >= 3:
+            ap = argparse.ArgumentParser(prog="superyak-runtime team channels members add")
+            ap.add_argument("name")
+            ap.add_argument("--role", required=True, choices=ROLES)
+            ap.add_argument("--channels", required=True)
+            a = ap.parse_args(argv[2:])
+            code = add_member(a.name, a.role, [c.strip() for c in a.channels.split(",") if c.strip()])
+            print("Added %s (%s) to %s.\nTheir access code (shown once; send it privately):\n%s"
+                  % (a.name, a.role, a.channels, code))
+            return 0
+        if argv[1] == "revoke" and len(argv) == 3:
+            print("revoked" if revoke_member(argv[2]) else "no such member")
+            return 0
+    if sub == "remote" and len(argv) >= 4 and argv[1] == "add":
+        import argparse
+        import getpass
+        ap = argparse.ArgumentParser(prog="superyak-runtime team channels remote add")
+        ap.add_argument("channel")
+        ap.add_argument("url")
+        ap.add_argument("--as", dest="as_name", default="")
+        a = ap.parse_args(argv[2:])
+        _path(".", a.channel)
+        if not a.url.startswith("https://"):
+            raise teamlib.RejectedMessage("use the https:// address of the host's channels page")
+        code = (getpass.getpass("Access code: ") if sys.stdin.isatty() else sys.stdin.readline()).strip()
+        if not code:
+            raise teamlib.RejectedMessage("no access code given")
+        teamlib.store_secret("superyak-channel-" + a.channel, code)
+        cfg_path = teamlib.config_path()
+        raw = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        raw.setdefault("remote_channels", {})[a.channel] = dict(
+            {"url": a.url.rstrip("/")}, **({"as": a.as_name} if a.as_name else {}))
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(json.dumps(raw, indent=1))
+        n = len(read_any(".", a.channel, limit=5))
+        print("Connected to #%s at %s (%d recent message(s) visible)." % (a.channel, a.url, n))
         return 0
     if sub == "serve":
         import argparse
