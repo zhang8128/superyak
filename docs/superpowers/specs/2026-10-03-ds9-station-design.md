@@ -18,7 +18,7 @@ only step is tapping Approve. Every agent gets the read-only aDNA tools.
 | Agents | Join rooms as named ship accounts, one per machine, through `superyak-agent` on that machine |
 | Wake-up | A mention wakes the ship; open Claude Code sessions also see new messages at their next turn |
 | Powers | Mentioned by the ship's owner → builder (worktree branch, commit, never push); anyone else → read-only |
-| Jenn's access | Public request door via Funnel; approval also creates a Tailscale share of only the Pi |
+| Jenn's access | Public request door via Funnel; approval also releases a reusable Tailscale share link for only the Pi |
 | aDNA | Read-only aDNA tools for every agent. No Nebula firewall, mesh access or vault writes this round |
 | Theme | Deep Space Nine, names and roles only; the web app's look is unchanged |
 | Builder | Claude Code on the Pi builds and verifies this; the Pi may also dock a builder ship owned by Andy |
@@ -53,7 +53,9 @@ random bytes, stored as its SHA-256, and returned once to the docking script. Re
 | GET `/api/mentions?after=` | new mentions of this ship: message id, room key, author `{id, username, kind, owner_id}`, created |
 | DELETE `/api/ships/me/key` | revoke the presented key (used by `undock`) |
 
-Every other route returns 403 for a bearer key. Ships cannot create rooms or add members.
+Every other route returns 403 for a bearer key. Ships cannot create rooms or add members. Ship
+clients send the station's `Origin` like any API client; the existing same-origin check for
+writes is unchanged.
 
 **Docking.** Table `dockings(id, code_hash, secret_hash, ship_name, status, owner_id, ship_id, key,
 created, expires)`. The 8-character code is single-use and expires after 10 minutes.
@@ -61,7 +63,7 @@ created, expires)`. The 8-character code is single-use and expires after 10 minu
 | Method/path | Who | Behavior |
 | --- | --- | --- |
 | POST `/api/dockings` | any tailnet client | `{ship_name, machine}` → `{id, code, secret, confirm_url, expires}`; 20 per hour |
-| GET `/dock?code=` | signed-in person | page showing ship name and machine with Confirm |
+| GET `/api/dockings/code/{code}` | signed-in person | ship name, machine and expiry for the web app's `/#dock?code=` confirm view |
 | POST `/api/dockings/{id}/confirm` | signed-in person (CSRF) | creates the ship owned by that person, or re-keys their existing ship of that name |
 | GET `/api/dockings/{id}?secret=` | docking script | `{status}`; once confirmed, includes the key exactly once, then clears it |
 
@@ -83,12 +85,23 @@ serves no UI; everything else is 404. Funnel publishes it:
 Existing request limits apply (20 per hour station-wide, 50 pending, size caps, 7-day expiry).
 `tailscale funnel --https=8443 off` closes the door.
 
-**Tailscale share on approval.** Approving a request also creates a single-use Tailscale device
-invite for `smart` only (no exit node) through the Tailscale API, using an OAuth client stored in
-`~/.config/superyak/tailscale-oauth.json` (mode 0600), read only on approval. The invite URL is
-kept with the request until the requester's status check returns it once, alongside the
-invitation link, then cleared. If the API call fails, approval still succeeds, the status reports
-`share: pending`, and Odo posts the failure in Ops so Andy can share by hand.
+**Tailscale share on approval.** Tailscale's API cannot create device invites with an OAuth
+client ("the shared device is scoped to a user"), and a personal API key would put full tailnet
+admin power on the Pi. Andy chose instead (2026-10-03) one **reusable share link** for `smart`
+only: `multiUse: true`, `allowExitNode: false`, created once with
+`POST https://api.tailscale.com/api/v2/device/{deviceId}/device-invites` and a short-lived API
+key that Andy deletes afterwards. `make station-share-link` does this from a terminal and writes
+the returned `inviteUrl` to `~/.config/superyak/tailscale-share-url` (mode 0600). Approving a
+request copies that URL onto the request; the requester's status check returns it once,
+alongside the invitation link, then clears it. If the file is missing, approval still succeeds,
+the status reports `share: missing`, and Odo posts in Ops so Andy can share by hand. A leaked
+link lets someone reach the Pi's HTTPS port but not sign in; Andy can revoke it in the admin
+console and run `make station-share-link` again.
+
+**Room members.** `GET /api/chats/{key}` also returns `members`: `id`, `username`, `name`, `kind`
+and `owner_id` for each local member, so ships can name authors and the web app can show the
+ship banner. Adding people or ships keeps today's rule: only the room owner adds members, which
+creates a linked room for the new audience.
 
 **Tailnet access policy (Andy, once).** Shared users reach only HTTPS on the Pi:
 `{"action": "accept", "src": ["autogroup:shared"], "dst": ["smart:443"]}` (exact form confirmed
@@ -118,7 +131,8 @@ station -- …`), with Codex in `~/.codex/config.toml` `[mcp_servers.station]` w
 installed, adds the hook to `~/.claude/settings.json` after asking, and installs the watcher as a
 systemd user unit (Linux, linger enabled) or a launchd agent (macOS). It sets up the aDNA MCP when
 Node.js is present (clone `aDNA-Network/aDNA.aDNA` to `~/aDNA/aDNA.aDNA`, build `mcp/`, register
-`adna`); without Node it offers to install it or skip. It then posts "<Ship> docked." in Promenade.
+`adna`); without Node it offers to install it or skip. Odo announces each newly docked ship in Ops
+("Rio Grande (Jenn) docked."), since a new ship belongs to no rooms until a room owner adds it.
 
 **Watcher.** Every 30 seconds it fetches new mentions and handles one at a time:
 
@@ -144,8 +158,9 @@ On Linux each run is wrapped in `systemd-run --user --scope -p MemoryMax=2G -p M
 
 **Odo** is `superyak-agent watch --resident` on the Pi, replacing `superyak-responder.service`
 and `peer/superyak_peer/responder.py`. Besides mentions, it answers every message in rooms where
-it is the only ship and exactly one person is present, and announces pending access requests in
-Ops (read through the trusted local `access-requests --pending` CLI, as today).
+it is the only ship and exactly one person is present. It announces pending access requests,
+newly docked ships and missing share links in Ops, read through the trusted local CLI
+`superyak-peer station-notices --data-dir …` (which replaces `access-requests --pending`).
 
 ### 3. Onboarding
 
@@ -192,15 +207,16 @@ Claude Code on the Pi builds this (Linux aarch64, Python 3.11, Node 24, Claude C
   Odo replaces Mal; dock a test ship on the Pi, mention it from Andy (builder) and from a test
   person (read-only); loop guard; revoke.
 - Not verifiable from the Pi: the launchd agent (unit generation is unit-tested), the public door
-  from outside the tailnet, and the Tailscale invite against the real API. Those are confirmed when
-  Andy creates the OAuth client and docks Serenity and Defiant, and when Jenn comes aboard.
+  from outside the tailnet, and accepting the share link from another Tailscale account. Those are
+  confirmed when Andy runs `make station-share-link`, docks Serenity and Defiant, and when Jenn
+  comes aboard.
 
 ## Testing
 
 - Peer: ship accounts cannot sign in or become admins; docking code expiry and single use; key
   returned once; bearer allowlist (every other route 403); post rate limit; mentions recorded only
   for room members; Ships section and revoke; door serves only its two routes and ignores cookies;
-  approval with a fake Tailscale client stores and releases the share URL once; API failure path.
+  approval releases the configured share link once; missing share-link file path.
 - Agent: against a temporary peer over `TestClient`-style HTTP with a fake `claude`: owner mention
   → builder (worktree, commit by file list, no push), other mention → read-only tool flags;
   idempotent replies across restart; three failures → fallback; loop guard; hook output fencing
@@ -214,7 +230,7 @@ theme, Codex-driven wake runs (Codex sessions get the station tools), push notif
 
 ## To confirm during the build
 
-- The exact Tailscale device-invite endpoint and the narrowest OAuth scope that allows it. If it
-  needs broad device write rights, stop and tell Andy before storing the credential.
+- Resolved 2026-10-03: device invites need a user API key, not an OAuth client; Andy chose the
+  reusable share link above.
 - Codex's current MCP config format on the docking machine.
 - That `claude -p` with sandbox settings runs under a systemd user unit (and launchd on the Mac).
