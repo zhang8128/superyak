@@ -7,15 +7,18 @@ in a shared channel leaves it.
 
 **Never put patient or research-participant data into agents, channels or agent memory.**
 
+**Easiest way:** open Claude Code in your clone of this repo and say *"I'm new, help me join"*
+(or type `/join-superyak`). It walks you through every step below and checks each one.
+
 ## Join (about 15 minutes, once)
 You need: access to this repo, a Mac or Linux computer, Claude Code (signed in), and two
 things from the person hosting the channel: a **share invite** for Tailscale and an
 **access code**.
 
 1. **Network:** install [Tailscale](https://tailscale.com/download) and accept the share invite.
-2. **Superyak:** clone the repo and run `make setup`, then follow
-   [runtime installation](runtime-installation.md). You get your own memory home; it's never
-   shared.
+2. **Superyak:** clone the repo, then run `python3 scripts/onboard.py run`. It installs
+   dependencies and creates your own memory home, which is never shared. It only creates
+   what's missing; `python3 scripts/onboard.py check` shows where you are.
 3. **Join:**
 
    ```sh

@@ -329,3 +329,14 @@ def test_shared_limit_defaults_maximum_and_filters_before_limit(tmp_path, publis
                                   ("--audience", "commons", "--after", "invalid"), ()])
 def test_shared_invalid_parameters_fail_with_json(tmp_path, args):
     run_cli(tmp_path, "shared", *args, success=False)
+
+
+def test_instance_create_makes_a_persons_first_store_once(tmp_path):
+    import cli
+    home = tmp_path / ".engram"
+    made = cli.instance_create("main", engram_dir=home)
+    assert made["created"] and Path(made["path"]).is_file()
+    assert cli.instance_create("main", engram_dir=home)["created"] is False
+    for bad in ("lighthouse", "genome", "-x", "a b"):
+        with pytest.raises(ValueError):
+            cli.instance_create(bad, engram_dir=home)

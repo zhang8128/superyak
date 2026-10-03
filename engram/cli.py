@@ -15,6 +15,8 @@ from federation import InstanceRegistry, SignalBus, sync_genome
 
 ENGRAM_DIR = Path(os.environ.get("ENGRAM_HOME", Path.home())) / ".engram"
 AGENT_NAME_RE = re.compile(r"agent-[a-z][a-z0-9-]{0,62}\Z")
+INSTANCE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")   # as scripts/runtime.py NAME
+RESERVED_INSTANCES = ("lighthouse", "genome")
 
 
 def fork_instance(name: str, engram_dir: Path | None = None, from_source: str = "genome"):
@@ -163,6 +165,21 @@ def agent_create(name: str, seed: str = "empty", engram_dir: Path | None = None)
     return result
 
 
+def instance_create(name: str, engram_dir: Path | None = None) -> dict:
+    """Create a person's own empty store (e.g. their first one, `main`). Idempotent."""
+    if not INSTANCE_NAME_RE.fullmatch(name) or name in RESERVED_INSTANCES:
+        raise ValueError("instance names are letters, digits, '_' or '-' (not lighthouse/genome)")
+    root = engram_dir if engram_dir is not None else ENGRAM_DIR
+    path = root / "instances" / name / "graph.db"
+    if path.exists():
+        return {"instance": name, "path": str(path), "created": False}
+    instance_id = _create_store(path)
+    if instance_id is not None:
+        InstanceRegistry(root / "instances.json").register(name, path, forked_from="empty",
+                                                           instance_id=instance_id)
+    return {"instance": name, "path": str(path), "created": instance_id is not None}
+
+
 def house_init(engram_dir: Path | None = None) -> dict:
     """Initialize the local published house; do not change policy or serve it."""
     root = engram_dir if engram_dir is not None else ENGRAM_DIR
@@ -193,6 +210,8 @@ def main():
     create_p = sub.add_parser("agent-create", help="Create an independent agent memory store")
     create_p.add_argument("name")
     create_p.add_argument("--seed", choices=("empty", "genome-core"), default="empty")
+    inst_p = sub.add_parser("instance-create", help="Create a person's own empty memory store")
+    inst_p.add_argument("name")
     sub.add_parser("house-init", help="Initialize the local published house")
     shared_p = sub.add_parser("shared", help="Read published shares without modifying the house")
     shared_p.add_argument("--audience", required=True)
@@ -218,6 +237,8 @@ def main():
                     raise ValueError(captured_error.getvalue().strip() or "command failed") from exc
         elif args.command == "agent-create":
             result = agent_create(args.name, args.seed)
+        elif args.command == "instance-create":
+            result = instance_create(args.name)
         elif args.command == "house-init":
             result = house_init()
         elif args.command == "shared":
