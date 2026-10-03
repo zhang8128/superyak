@@ -230,6 +230,27 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         data = await body(request)
         return store.redeem(data.get('token'), data.get('username'), data.get('name'), data.get('password'))
 
+    @app.post('/api/access-requests', status_code=201)
+    async def request_access(request: Request):
+        data = await body(request)
+        return store.request_access(data.get('name'), data.get('contact'), data.get('note', ''))
+
+    @app.get('/api/access-requests')
+    def access_requests(request: Request):
+        return store.access_requests(actor(request))
+
+    @app.get('/api/access-requests/{key}')
+    def access_request_status(key: str, secret: str = ''):
+        return store.access_request_status(key, secret)
+
+    @app.post('/api/access-requests/{key}/approve')
+    def approve_access(request: Request, key: str):
+        return store.decide_access_request(actor(request), key, True)
+
+    @app.post('/api/access-requests/{key}/deny')
+    def deny_access(request: Request, key: str):
+        return store.decide_access_request(actor(request), key, False)
+
     @app.get('/api/contacts')
     def contacts(request: Request):
         return store.contacts(actor(request))

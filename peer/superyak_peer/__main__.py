@@ -99,6 +99,9 @@ def main(argv=None):
     card.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     card.add_argument('--username', required=True)
     card.add_argument('--endpoint', required=True)
+    requests = commands.add_parser('access-requests', help='Trusted local listing of pending access requests')
+    requests.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    requests.add_argument('--pending', action='store_true', required=True)
     serve = commands.add_parser('serve')
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
@@ -110,12 +113,15 @@ def main(argv=None):
     serve.add_argument('--peer-tls', action='store_true')
     serve.add_argument('--federation-endpoint')
     serve.add_argument('--sync', action='store_true')
+    serve.add_argument('--proxy-headers', action='store_true', help='Trust X-Forwarded-Proto/For from a loopback reverse proxy such as tailscale serve')
     serve.add_argument('--model-config', type=Path, help='Operator-owned approved local Gemma JSON configuration')
     args = parser.parse_args(argv)
     try:
         if args.command == 'bootstrap-super-admin':
             user = Store(args.data_dir).bootstrap_super_admin(args.username, args.name, args.activation_file, renew_activation=args.renew_activation)
             print(f'Super admin reserved for {user["username"]}. Private activation: {args.activation_file}')
+        elif args.command == 'access-requests':
+            print(json.dumps(Store(args.data_dir).pending_access_requests(), indent=2))
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
@@ -146,6 +152,8 @@ def main(argv=None):
                 loopback = args.host == 'localhost'
             if args.local_demo and not loopback:
                 raise ValueError('Local demo requires a loopback bind')
+            if args.proxy_headers and (not loopback or args.local_demo or not args.origin or any(not o.startswith('https://') for o in args.origin)):
+                raise ValueError('Proxy headers require a loopback bind, explicit HTTPS origins, and no local demo')
             if args.peer_tls:
                 from .identity import PeerIdentity
                 from urllib.parse import urlsplit
@@ -166,8 +174,8 @@ def main(argv=None):
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
-            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
-            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=False)
+            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
+            uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=args.proxy_headers, forwarded_allow_ips='127.0.0.1' if args.proxy_headers else None)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
 
