@@ -40,6 +40,10 @@ class UrllibHttp:
 
     def request(self, method, path, json_body=None):
         headers = {'content-type': 'application/json', 'origin': self.origin, 'x-csrf-token': self.csrf}
+        if self.origin != self.base:
+            # Loopback client of a server behind `serve --proxy-headers`: present as the proxy would.
+            scheme, _, host = self.origin.partition('://')
+            headers.update({'host': host, 'x-forwarded-proto': scheme})
         if self.cookie:
             headers['cookie'] = self.cookie
         data = None if json_body is None else json.dumps(json_body).encode()
