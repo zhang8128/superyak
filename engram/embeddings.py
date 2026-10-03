@@ -39,6 +39,16 @@ def _token_budget_batches(texts: list[str]) -> list[list[int]]:
     return batches
 
 
+def _embed_bounded(model, texts: list[str]) -> list:
+    """Run model.embed over token-budget batches, returning vectors in input order."""
+    results: list = [None] * len(texts)
+    for batch in _token_budget_batches(texts):
+        vectors = model.embed([texts[i] for i in batch], batch_size=len(batch))
+        for index, vector in zip(batch, vectors):
+            results[index] = vector
+    return results
+
+
 class EmbeddingProvider(Protocol):
     """Protocol for embedding providers."""
 
@@ -86,16 +96,15 @@ class NomicEmbedProvider:
         import numpy as np
 
         prefixed = [f"{prefix}: {t}" for t in texts]
-        results: list[list[float]] = [[] for _ in prefixed]
-        for batch in _token_budget_batches(prefixed):
-            embeddings = self._model.embed([prefixed[i] for i in batch], batch_size=len(batch))
-            for i, e in zip(batch, embeddings):
-                # Normalize to unit vectors for consistent cosine similarity via L2 distance
-                arr = np.array(e)
-                norm = np.linalg.norm(arr)
-                if norm > 0:
-                    arr = arr / norm
-                results[i] = arr.tolist()
+        embeddings = _embed_bounded(self._model, prefixed)
+        # Normalize to unit vectors for consistent cosine similarity via L2 distance
+        results = []
+        for e in embeddings:
+            arr = np.array(e)
+            norm = np.linalg.norm(arr)
+            if norm > 0:
+                arr = arr / norm
+            results.append(arr.tolist())
         return results
 
 
@@ -117,7 +126,7 @@ class FastEmbedProvider:
         return self.DIMENSION
 
     def embed(self, texts: list[str], **_kwargs) -> list[list[float]]:
-        embeddings = list(self._model.embed(texts))
+        embeddings = _embed_bounded(self._model, texts)
         return [e.tolist() for e in embeddings]
 
 

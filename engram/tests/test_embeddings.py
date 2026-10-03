@@ -135,3 +135,15 @@ def test_nomic_mixed_lengths_keep_input_order(nomic_provider):
     for text, emb in zip(texts, together):
         alone = nomic_provider.embed([text])[0]
         assert _cosine_similarity(alone, emb) > 0.999
+
+
+def test_nomic_bounded_batches_match_single_batch(nomic_provider):
+    import numpy as np
+
+    texts = ["short", "a much longer sentence " * 120, "medium length text " * 10, "tiny"]
+    bounded = nomic_provider.embed(texts, prefix="clustering")
+    prefixed = [f"clustering: {t}" for t in texts]
+    single = list(nomic_provider._model.embed(prefixed, batch_size=len(prefixed)))
+    for got, raw in zip(bounded, single):
+        expected = np.array(raw) / np.linalg.norm(raw)
+        assert np.allclose(got, expected, atol=1e-4)
