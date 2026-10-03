@@ -775,3 +775,34 @@ def test_claude_builder_cannot_write_git_metadata():
     st = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
     assert st["sandbox"]["filesystem"]["denyWrite"] == ["/r/wt/.git"]
     assert "Write(//r/wt/.git)" in st["permissions"]["deny"] and "Edit(//r/wt/.git/**)" in st["permissions"]["deny"]
+
+
+
+def test_daemon_git_runs_no_attribute_drivers(env, tmp_path, monkeypatch):
+    # .gitattributes is worker-controlled; drivers it names must not exist for teamd's git,
+    # whether defined in global config (e.g. git-lfs) or the repo's own config.
+    pwned = tmp_path / "pwned"
+    evil = tmp_path / "evil.sh"
+    evil.write_text("#!/bin/sh\ntouch %s\ncat\n" % pwned)
+    evil.chmod(0o755)
+    gconf = tmp_path / "gitconfig"
+    gconf.write_text("[filter \"evil\"]\n\tclean = %s\n\tsmudge = %s\n\trequired = true\n" % (evil, evil))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gconf))                    # user's global config
+    subprocess.run(["git", "-C", str(env["repo"]), "config", "filter.local.clean", str(evil)], check=True)
+    team = make_team(env)
+    team.spawn("t", "claude")
+    w = team.state["workers"]["w1"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    (Path(w["path"]) / ".gitattributes").write_text("*.txt filter=evil\n*.md filter=local\n")
+    (Path(w["path"]) / "note.md").write_text("x\n")
+    assert team.worker_done("w1", "work", "ok")["commit"]
+    team.collect("w1")
+    assert not pwned.exists()
+
+
+def test_prompts_cannot_become_cli_options():
+    cfg = dict(teamlib.DEFAULT_CONFIG)
+    cmd = workers.codex_command(cfg, "t1", "w1", "/r", "--dangerously-bypass-approvals-and-sandbox")
+    assert cmd[-1].startswith("(message) ") and "--dangerously-bypass-approvals-and-sandbox" not in cmd[:-1]
+    cmd = workers.claude_command(cfg, "t1", "w1", "/r", "--dangerously-skip-permissions", repo="/r")
+    assert cmd[2].startswith("(message) ")

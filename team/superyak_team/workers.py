@@ -11,6 +11,7 @@ Design notes (verified 2026-10-02 against codex 0.160 in a scratch repo):
   persistent thread.
 """
 import json
+import re
 import os
 import shlex
 import subprocess
@@ -32,10 +33,34 @@ HARDENED_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
                 "-c", "core.untrackedCache=false", "-c", "protocol.file.allow=never"]
 
 
-def worker_git(path, gitdir, *args, check=True):
+_DRIVER_KEY = re.compile(r"^(filter|diff|merge)\.[^.\s]+\.(clean|smudge|process|textconv|command|driver)$")
+
+
+def _isolated_git_env():
+    """No user/system git config: a worker's .gitattributes can name filter/diff/merge drivers,
+    and the drivers' commands live in config (e.g. a global git-lfs filter)."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
+    return env
+
+
+def _driver_overrides(gitdir):
+    """Blank every driver command the repo's own config defines, so attributes have nothing to run."""
+    out = subprocess.run(["git", "--git-dir", str(gitdir), "config", "--name-only", "--list"],
+                         env=_isolated_git_env(), capture_output=True, text=True)
+    flags = []
+    for key in sorted(set(out.stdout.split())):
+        if _DRIVER_KEY.match(key):
+            flags += ["-c", key + "="]
+            if key.startswith("filter."):
+                flags += ["-c", key.rsplit(".", 1)[0] + ".required=false"]
+    return flags
+
+
+def worker_git(path, gitdir, *args, check=True):
     return subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
-                          + HARDENED_GIT + list(args), cwd=str(path), env=env,
+                          + HARDENED_GIT + _driver_overrides(gitdir) + list(args),
+                          cwd=str(path), env=_isolated_git_env(),
                           capture_output=True, text=True, check=check)
 
 
@@ -169,10 +194,18 @@ def codex_command(cfg, team_id, worker, cwd, prompt, thread_id=None, mode="build
     for plugin in configured_codex_plugins():
         flags += ["-c", 'plugins."%s".enabled=false' % plugin]
     head = ["codex"]
+    prompt = safe_prompt(prompt)
     if thread_id:
         return head + ["exec", "resume"] + flags + ["--skip-git-repo-check", thread_id, prompt]
     extra = ["--skip-git-repo-check"] if mode == "collab" else []   # collab rooms aren't repos
     return head + ["exec"] + flags + extra + ["-C", str(cwd), prompt]
+
+
+def safe_prompt(prompt):
+    """Prompts are the last argv element; text from the lead, Slack or a teammate must never be
+    parsed as an option (e.g. a message starting with --dangerously-...)."""
+    prompt = str(prompt)
+    return prompt if not prompt.lstrip().startswith("-") else "(message) " + prompt
 
 
 # Read-only paths a sandboxed shell needs for ordinary dev tools (git, uv, node via fnm, bun).
@@ -246,7 +279,7 @@ def claude_command(cfg, team_id, worker, cwd, prompt, session_id=None, mode="bui
     settings.write_text(json.dumps(claude_sandbox_settings(
         cwd, mode, web, repo, cfg.get("engram_tool_prefix", "mcp__plugin_engram_engram__"))))
     # The permission mode is set here too: a CLI --permission-mode overrides the settings file.
-    cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+    cmd = ["claude", "-p", safe_prompt(prompt), "--output-format", "stream-json", "--verbose",
            "--model", cfg["claude_model"], "--permission-mode", "dontAsk",
            "--settings", str(settings), "--mcp-config", str(mcp_cfg)]
     if session_id:
