@@ -388,7 +388,7 @@ class Team:
                 w.update(state="done", commit=None, summary=summary, tests=tests)
                 msg = ":white_check_mark: *done* — %s%s" % (summary, "\nEvidence: %s" % tests if tests else "")
             else:
-                sha = workers.commit_for_worker(w["path"], wid, w["kind"], summary)
+                sha = workers.commit_for_worker(w["path"], wid, w["kind"], summary, w["gitdir"])
                 w.update(state="done", commit=sha, summary=summary, tests=tests)
                 msg = ":white_check_mark: *done* — %s\nCommit: `%s`\nTests: %s" % (
                     summary, (sha or "no changes")[:10], tests or "(not reported)")
@@ -516,7 +516,8 @@ class Team:
         return {"worker": wid, "state": w["state"], "branch": w["branch"], "base": w["base"],
                 "commit": w["commit"], "summary": w["summary"], "tests": w.get("tests"),
                 "mode": w.get("mode", "build"),
-                "diff_stat": workers.diff_stat(w["path"], w["base"]) if w.get("base") else None,
+                "diff_stat": (workers.diff_stat(w["path"], w["base"], w["gitdir"])
+                              if w.get("base") and w.get("gitdir") else None),
                 "worktree": w["path"] if w.get("branch") else None,
                 "last_message": w["last_message"][-2000:]}
 

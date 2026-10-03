@@ -57,6 +57,9 @@ in), so nothing is written to the repo. Durable learnings are shared with
 - **Caller auth:** token = HMAC(master key in the Keychain, per-caller secret file). Codex's
   sandbox reads files but not the Keychain; Claude workers reach the Keychain but cannot read the
   team home. No worker can forge the lead's or a teammate's token.
+- **Sockets:** no worker sandbox can connect to a Unix socket, so only the team MCP servers
+  (identity fixed by teamd) can reach the daemon.
+- **Daemon git:** commits for workers use the recorded git dir with hooks/fsmonitor off.
 - **Codex workers:** `web_search="disabled"` (Codex searches by default), every
   `[mcp_servers.X]` except team/engram and every enabled Codex plugin switched off; workers
   cannot commit (Codex protects `.git`), the daemon commits for them.

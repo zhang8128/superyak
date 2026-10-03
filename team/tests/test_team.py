@@ -742,3 +742,36 @@ def test_worker_env_resolves_the_same_team_home_as_the_daemon(env, monkeypatch):
         assert json.loads(as_worker.stdout)["you"] == "w1"
     finally:
         run("end", "summary=x")
+
+
+
+def test_daemon_git_ignores_worker_redirected_gitdir_and_hooks(env, tmp_path):
+    # A builder can write anything in its worktree, including the `.git` pointer file. The
+    # (unsandboxed) daemon must not follow it to an attacker git dir with hooks/fsmonitor.
+    team = make_team(env)
+    team.spawn("t", "claude")
+    w = team.state["workers"]["w1"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    pwned = tmp_path / "pwned"
+    evil_repo = tmp_path / "evil"                                          # non-bare: exploitable
+    subprocess.run(["git", "init", "-q", str(evil_repo)], check=True)
+    evil = evil_repo / ".git"
+    hook = "#!/bin/sh\ntouch %s\n" % pwned
+    for name in ("pre-commit", "post-commit", "commit-msg", "post-index-change"):
+        (evil / "hooks" / name).write_text(hook)
+        (evil / "hooks" / name).chmod(0o755)
+    (evil / "fsmon.sh").write_text(hook)
+    (evil / "fsmon.sh").chmod(0o755)
+    subprocess.run(["git", "--git-dir", str(evil), "config", "core.fsmonitor", str(evil / "fsmon.sh")], check=True)
+    (Path(w["path"]) / ".git").write_text("gitdir: %s\n" % evil)          # redirect attempt
+    sha = team.worker_done("w1", "work", "ok")["commit"]
+    assert sha and not pwned.exists()
+    real = subprocess.run(["git", "--git-dir", w["gitdir"], "log", "-1", "--format=%H"],
+                          capture_output=True, text=True).stdout.strip()
+    assert real == sha                                                     # landed in the real repo
+
+
+def test_claude_builder_cannot_write_git_metadata():
+    st = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    assert st["sandbox"]["filesystem"]["denyWrite"] == ["/r/wt/.git"]
+    assert "Write(//r/wt/.git)" in st["permissions"]["deny"] and "Edit(//r/wt/.git/**)" in st["permissions"]["deny"]

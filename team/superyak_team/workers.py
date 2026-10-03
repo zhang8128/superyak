@@ -25,6 +25,20 @@ def git(cwd, *args, check=True):
                           text=True, check=check)
 
 
+# teamd is unsandboxed, so git it runs inside a worker's folder must not take direction from
+# anything the worker can write: the worktree's `.git` pointer file is ignored in favour of the
+# git dir recorded at spawn, and hooks / fsmonitor / untracked-cache helpers are switched off.
+HARDENED_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+                "-c", "core.untrackedCache=false", "-c", "protocol.file.allow=never"]
+
+
+def worker_git(path, gitdir, *args, check=True):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
+                          + HARDENED_GIT + list(args), cwd=str(path), env=env,
+                          capture_output=True, text=True, check=check)
+
+
 def repo_root(path):
     return Path(git(path, "rev-parse", "--show-toplevel").stdout.strip())
 
@@ -37,7 +51,9 @@ def create_worktree(root, team_id, worker):
     path = root.parent / (root.name + "-worktrees") / team_id / worker
     path.parent.mkdir(parents=True, exist_ok=True)
     git(root, "worktree", "add", "-q", "-b", branch, str(path), base)
-    return {"branch": branch, "path": str(path), "base": base}
+    # Recorded now, before any agent runs; every later git call uses this, not path/.git.
+    gitdir = git(path, "rev-parse", "--absolute-git-dir").stdout.strip()
+    return {"branch": branch, "path": str(path), "base": base, "gitdir": gitdir}
 
 
 def remove_worktree(root, path, branch, keep_branch=True):
@@ -57,25 +73,25 @@ def commit_subject(worker, summary, limit=72):
     return subject if len(subject) <= limit else subject[:limit - 1].rstrip() + "…"
 
 
-def commit_for_worker(path, worker, kind, summary):
+def commit_for_worker(path, worker, kind, summary, gitdir):
     """Commit what the worker changed (minus tool state). Returns the new SHA or None if clean."""
     excludes = []
     for e in COMMIT_EXCLUDES:   # the entry itself and everything under it, at any depth
         excludes += [":(exclude,glob)%s" % e, ":(exclude,glob)%s/**" % e,
                      ":(exclude,glob)**/%s" % e, ":(exclude,glob)**/%s/**" % e]
-    git(path, "add", "-A", "--", ".", *excludes)
-    if not git(path, "diff", "--cached", "--name-only").stdout.strip():
+    worker_git(path, gitdir, "add", "-A", "--", ".", *excludes)
+    if not worker_git(path, gitdir, "diff", "--cached", "--name-only").stdout.strip():
         return None
     name = "%s (%s)" % (worker, kind)
-    git(path, "-c", "user.name=" + name, "-c", "user.email=agent-team@noreply.local",
-        "commit", "-q", "-m", commit_subject(worker, summary),
-        "-m", (summary or "").strip() or "(no summary)",
-        "-m", "Committed by the Superyak team daemon on behalf of %s." % name)
-    return git(path, "rev-parse", "HEAD").stdout.strip()
+    worker_git(path, gitdir, "-c", "user.name=" + name, "-c", "user.email=agent-team@noreply.local",
+               "commit", "-q", "--no-verify", "-m", commit_subject(worker, summary),
+               "-m", (summary or "").strip() or "(no summary)",
+               "-m", "Committed by the Superyak team daemon on behalf of %s." % name)
+    return worker_git(path, gitdir, "rev-parse", "HEAD").stdout.strip()
 
 
-def diff_stat(path, base):
-    return git(path, "diff", "--stat", base, check=False).stdout.strip()
+def diff_stat(path, base, gitdir):
+    return worker_git(path, gitdir, "diff", "--stat", base, check=False).stdout.strip()
 
 
 def mcp_env(team_id, worker):
@@ -204,13 +220,15 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
             deny.append("WebSearch")
     else:
         allow += ["Edit(/%s/**)" % cwd, "Write(/%s/**)" % cwd]
-        deny.append("WebSearch")
+        deny += ["WebSearch", "Edit(/%s/.git)" % cwd, "Write(/%s/.git)" % cwd,
+                 "Edit(/%s/.git/**)" % cwd, "Write(/%s/.git/**)" % cwd]
         allow_write = [cwd]
     return {
         "permissions": {"defaultMode": "dontAsk", "allow": allow, "deny": deny},
         "sandbox": {"enabled": True, "failIfUnavailable": True,
                     "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
                     "filesystem": {"allowWrite": allow_write,
+                                   "denyWrite": [os.path.join(cwd, ".git")] if allow_write else [],
                                    "denyRead": [home, "**/.env", "**/.env.*"],
                                    "allowRead": scopes + [_home(p) for p in TOOL_READ_PATHS]}},
     }
