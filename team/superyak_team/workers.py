@@ -67,8 +67,11 @@ def _driver_overrides(gitdir):
 # come from someone else's branch) nor dependencies'. A package that truly needs its install
 # script is rebuilt deliberately by the lead; uv installs wheels only (never builds sdists).
 PREPARE_COMMANDS = {
-    "npm-ci": ["npm", "ci", "--no-audit", "--no-fund", "--ignore-scripts"],
-    "pnpm-install": ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"],
+    # --git/--script-shell on the command line beat a repo .npmrc that points them at its own program.
+    "npm-ci": ["npm", "ci", "--no-audit", "--no-fund", "--ignore-scripts",
+               "--git=/usr/bin/git", "--script-shell=/bin/sh"],
+    "pnpm-install": ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts",
+                     "--config.git=/usr/bin/git", "--config.script-shell=/bin/sh"],
     "uv-sync": ["uv", "sync", "--locked", "--no-install-project", "--no-install-workspace", "--no-build"],
 }
 
