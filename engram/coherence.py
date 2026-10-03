@@ -10,7 +10,7 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from embeddings import NomicEmbedProvider
+from embeddings import EmbeddingProvider, create_embedding_provider
 from storage import vec0_distance_to_similarity
 
 if TYPE_CHECKING:
@@ -22,13 +22,14 @@ logger = logging.getLogger("engram.coherence")
 class CoherenceChecker:
     """Measures and reports on memory system health."""
 
-    def __init__(self, storage: Storage):
+    def __init__(self, storage: Storage, embeddings: EmbeddingProvider | None = None):
         self._storage = storage
-        self._embeddings: NomicEmbedProvider | None = None
+        # Pass the caller's provider: building another one loads a second model.
+        self._embeddings = embeddings
 
-    def _get_embeddings(self) -> NomicEmbedProvider:
+    def _get_embeddings(self) -> EmbeddingProvider:
         if self._embeddings is None:
-            self._embeddings = NomicEmbedProvider()
+            self._embeddings = create_embedding_provider()
         return self._embeddings
 
     def check_identity_anchors(self) -> list[dict]:

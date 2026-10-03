@@ -34,9 +34,11 @@ def capture(tmp_path, monkeypatch):
 
     class Embeddings:
         def __init__(self, **kwargs):
-            pass
+            tokenizer = SimpleNamespace(enable_truncation=lambda **_: None)
+            self.model = SimpleNamespace(tokenizer=tokenizer)
 
-        def embed(self, texts):
+        def embed(self, texts, **kwargs):
+            texts = list(texts)
             embedded.extend(texts)
             return [VECTOR for _ in texts]
 

@@ -176,7 +176,7 @@ class TestIdentityAnchors:
             baseline_score=0.9,
         )
 
-        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+        with patch("coherence.create_embedding_provider") as MockEmbed:
             mock_provider = MockEmbed.return_value
             mock_provider.embed.return_value = [_fake_emb(seed=1)]
             checker = CoherenceChecker(store)
@@ -215,7 +215,7 @@ class TestIdentityAnchors:
             baseline_score=0.95,
         )
 
-        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+        with patch("coherence.create_embedding_provider") as MockEmbed:
             mock_provider = MockEmbed.return_value
             mock_provider.embed.return_value = [_fake_emb(seed=1)]
             checker = CoherenceChecker(store)
@@ -543,7 +543,7 @@ class TestEdgeCases:
             baseline_score=0.9,
         )
 
-        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+        with patch("coherence.create_embedding_provider") as MockEmbed:
             mock_provider = MockEmbed.return_value
             mock_provider.embed.return_value = [emb]
             checker = CoherenceChecker(store)
@@ -567,7 +567,7 @@ class TestEdgeCases:
             baseline_score=0.0,
         )
 
-        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+        with patch("coherence.create_embedding_provider") as MockEmbed:
             mock_provider = MockEmbed.return_value
             mock_provider.embed.return_value = [emb]
             checker = CoherenceChecker(store)
@@ -588,7 +588,7 @@ class TestEdgeCases:
             baseline_score=0.9,
         )
 
-        with patch("coherence.NomicEmbedProvider") as MockEmbed:
+        with patch("coherence.create_embedding_provider") as MockEmbed:
             MockEmbed.return_value.embed.side_effect = RuntimeError("model not found")
             checker = CoherenceChecker(store)
             report = checker.run_full_check(session_id="error-test")

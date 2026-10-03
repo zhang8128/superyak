@@ -54,6 +54,17 @@ def engram_server_env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr("embeddings.NomicEmbedProvider", FakeEmbeddingProvider)
 
+    # These tests never query the knowledge graph, and each Kuzu store it opens
+    # keeps ~35 MB of native memory after close.
+    real_load_config = server.load_config
+
+    def load_config_without_graph(root):
+        config = real_load_config(root)
+        config.graph.enabled = False
+        return config
+
+    monkeypatch.setattr(server, "load_config", load_config_without_graph)
+
     monkeypatch.setattr(server, "_initialized", False)
     monkeypatch.setattr(server, "_storage", None)
     monkeypatch.setattr(server, "_embeddings", None)

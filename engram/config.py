@@ -114,6 +114,8 @@ class GraphConfig:
     model: str = "qwen3.8:27b-mlx"
     ollama_url: str = "http://localhost:11434"
     db_path: str = ""  # set at runtime based on ENGRAM_HOME
+    # Kuzu's default buffer pool is 80% of system RAM, per process.
+    buffer_pool_mb: int = 256
 
 
 @dataclass
@@ -136,6 +138,9 @@ class PersistenceConfig:
     protect_threshold: float = 0.6
     generativity_threshold: float = 0.0  # 0 disables until calibrated
     cold_uninvited_p: float = 0.05
+    # Episode sources that forgetting never moves to cold (e.g. ["reading"]).
+    # Decay is still computed for them, so strength keeps its meaning.
+    never_prune_sources: list[str] = field(default_factory=list)
 
 
 @dataclass

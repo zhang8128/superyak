@@ -10,6 +10,7 @@ import sqlite3
 import struct
 from contextlib import contextmanager
 from session_bindings import valid_codex_run_key
+import store_identity
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -25,6 +26,30 @@ def vec0_distance_to_similarity(distance: float) -> float:
     For unit vectors: L2^2 = 2(1 - cos_sim), so cos_sim = 1 - L2^2/2.
     """
     return max(0.0, min(1.0, 1.0 - (distance * distance) / 2.0))
+
+
+_ADD_COLUMN = re.compile(
+    r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)[^;]*;", re.IGNORECASE)
+
+
+def _skip_existing_columns(conn, sql: str) -> str:
+    """Drop ``ALTER TABLE t ADD COLUMN c`` statements whose column exists.
+
+    A migration's columns can land without its version being recorded (e.g.
+    a branch applied it under another number), and SQLite has no
+    ``ADD COLUMN IF NOT EXISTS``, so re-running it would fail every open.
+    Only statements for columns already present are skipped; everything else
+    in the migration still runs.
+    """
+    def keep_or_skip(m: re.Match) -> str:
+        table, column = m.group(1), m.group(2)
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column in cols:
+            logger.warning("Migration adopts existing column %s.%s", table, column)
+            return f"-- skipped: {table}.{column} already exists"
+        return m.group(0)
+
+    return _ADD_COLUMN.sub(keep_or_skip, sql)
 
 
 def _now_iso() -> str:
@@ -194,10 +219,15 @@ class Storage:
                 if ver not in applied:
                     migrations.append((ver, f))
 
+        # A store none of whose migrations had run is being created by this
+        # open; any other store predates whichever migrations are pending.
+        created_now = not applied
         for ver, path in sorted(migrations):
-            sql = path.read_text()
+            sql = _skip_existing_columns(self.conn, path.read_text())
             try:
                 self.conn.executescript("BEGIN IMMEDIATE;\n" + sql)
+                if ver == 28:
+                    self._assign_instance_id(created_now)
                 self.conn.execute(
                     "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                     (ver, _now_iso()),
@@ -212,6 +242,24 @@ class Storage:
             logger.info("Migration %d applied: %s", ver, path.name)
             if ver == 7:
                 self._backfill_content_hashes()
+
+    def _assign_instance_id(self, created_now: bool) -> None:
+        """Give the store its identity inside migration 028's transaction.
+
+        Random for a store created by this open; otherwise derived from the
+        earliest episode (random if there is none). Never replaces an
+        existing ``meta.instance_id``, e.g. one ``cli.py fork`` stamped.
+        """
+        fresh = created_now and store_identity.earliest_episode(self.conn) is None
+        identity = store_identity.assign(self.conn, fresh=fresh)
+        logger.info(
+            "Store identity %s (%s)",
+            identity.get("instance_id"), identity.get("instance_id_origin"),
+        )
+
+    def instance_identity(self) -> dict:
+        """The identity keys in ``meta`` (``instance_id``, origin, basis, fork)."""
+        return store_identity.read(self.conn)
 
     def _backfill_content_hashes(self) -> None:
         """One-time backfill of content_hash for pre-federation rows."""
@@ -691,14 +739,16 @@ class Storage:
                 "INSERT OR REPLACE INTO episodes "
                 "(id, session_id, content, episode_type, created_at, context, "
                 " accessed_count, last_accessed, compressed, decay_strength, "
-                " core, source, content_hash, dormant, lane) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                " core, source, content_hash, dormant, lane, "
+                " origin_instance_id, origin_id, origin_created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
                 (ep["id"], ep.get("session_id"), ep["content"],
                  ep.get("episode_type"), ep["created_at"], ep.get("context"),
                  ep.get("accessed_count", 0), ep.get("last_accessed"),
                  ep.get("compressed", 0), ep.get("decay_strength", 0),
                  ep.get("core", 0), ep.get("source"), ep.get("content_hash"),
-                 ep.get("lane", "personal")),
+                 ep.get("lane", "personal"), ep.get("origin_instance_id"),
+                 ep.get("origin_id"), ep.get("origin_created_at")),
             )
         cold.commit()
 
@@ -717,16 +767,23 @@ class Storage:
         logger.info("Moved %d episodes to cold storage", len(ids))
         return len(ids)
 
-    def prune_decayed(self, threshold: float = 0.05) -> int:
+    def prune_decayed(self, threshold: float = 0.05,
+                      exempt_sources: list[str] | None = None) -> int:
         """Move decayed episodes to cold storage.
 
         Compressed episodes below threshold get moved to a sibling cold.db:
         text and metadata preserved, vectors stripped. The main db stays lean.
+        Episodes whose source is in ``exempt_sources`` are never moved.
         """
+        exempt = list(exempt_sources or [])
+        not_exempt = (
+            f" AND coalesce(source, '') NOT IN ({', '.join('?' * len(exempt))})"
+            if exempt else "")
         rows = self.conn.execute(
             "SELECT id FROM episodes "
-            "WHERE decay_strength < ? AND compressed = 1 AND core = 0 AND dormant = 0",
-            (threshold,),
+            "WHERE decay_strength < ? AND compressed = 1 AND core = 0 AND dormant = 0"
+            + not_exempt,
+            (threshold, *exempt),
         ).fetchall()
         ids = [r["id"] for r in rows]
         if ids:
@@ -758,10 +815,14 @@ class Storage:
                     source TEXT,
                     content_hash TEXT,
                     dormant INTEGER NOT NULL DEFAULT 1,
-                    lane TEXT NOT NULL DEFAULT 'personal'
+                    lane TEXT NOT NULL DEFAULT 'personal',
+                    origin_instance_id TEXT,
+                    origin_id TEXT,
+                    origin_created_at TEXT
                 )
             """)
-            # Migrate existing cold.db files that pre-date the lane column.
+            # Migrate existing cold.db files that pre-date the lane column
+            # or the provenance columns (migration 028).
             cold_cols = {
                 row[1]
                 for row in self._cold_conn.execute("PRAGMA table_info(episodes)").fetchall()
@@ -770,6 +831,9 @@ class Storage:
                 self._cold_conn.execute(
                     "ALTER TABLE episodes ADD COLUMN lane TEXT NOT NULL DEFAULT 'personal'"
                 )
+            for col in ("origin_instance_id", "origin_id", "origin_created_at"):
+                if col not in cold_cols:
+                    self._cold_conn.execute(f"ALTER TABLE episodes ADD COLUMN {col} TEXT")
             self._cold_conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS cold_fts USING fts5(
                     content, content=episodes, content_rowid=rowid
@@ -844,13 +908,16 @@ class Storage:
                 "INSERT INTO episodes "
                 "(id, session_id, content, episode_type, context, created_at, "
                 " content_hash, decay_strength, compressed, accessed_count, "
-                " dormant, core, source, lane) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                " dormant, core, source, lane, "
+                " origin_instance_id, origin_id, origin_created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)",
                 (ep["id"], ep.get("session_id"), ep["content"],
                  ep.get("episode_type"), ep.get("context"),  # already JSON
                  ep["created_at"], content_hash,
                  strength, ep.get("compressed", 0), ep.get("accessed_count", 0),
-                 ep.get("core", 0), ep.get("source"), ep.get("lane", "personal")),
+                 ep.get("core", 0), ep.get("source"), ep.get("lane", "personal"),
+                 ep.get("origin_instance_id"), ep.get("origin_id"),
+                 ep.get("origin_created_at")),
             )
             self.conn.execute(
                 "INSERT INTO episode_vectors (id, embedding) VALUES (?, ?)",
@@ -974,6 +1041,21 @@ class Storage:
         self.conn.execute(
             "UPDATE episodes SET source = ? WHERE id = ?",
             (source, episode_id),
+        )
+        self._commit()
+
+    def set_episode_origin(
+        self,
+        episode_id: str,
+        origin_instance_id: str | None,
+        origin_id: str | None,
+        origin_created_at: str | None,
+    ) -> None:
+        """Record where a copied episode came from: store, original id, time."""
+        self.conn.execute(
+            "UPDATE episodes SET origin_instance_id = ?, origin_id = ?, "
+            "origin_created_at = ? WHERE id = ?",
+            (origin_instance_id, origin_id, origin_created_at, episode_id),
         )
         self._commit()
 

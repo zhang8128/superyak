@@ -36,6 +36,16 @@ Three layers, each more compressed than the last:
 
 **Embeddings:** nomic-embed-text-v1.5 (768-dim) via FastEmbed. Instruction
 prefixes: `search_document:` (store), `search_query:` (recall), `clustering:` (compress).
+Processes get their provider from `embeddings.create_embedding_provider()`: with
+`ENGRAM_EMBEDDER_SOCKET` set it is `RemoteEmbedProvider`, a client of the shared
+`embedder_service.py` (one model per machine, one batch at a time, refuses a
+different model, fails loudly rather than loading a local copy); otherwise the
+in-process model. `superyak-runtime` sets the variable from `embedder_socket` in
+`runtime.json`; `scripts/superyak-embedder.service` runs the service. Measured
+2026-10-02: an Engram server peaks ~320 MB with it, versus ~1.8 GB loading its
+own model. Local inference batches by a padded-token budget, truncates at 2048
+tokens and disables the ONNX arena; fastembed's default (256 texts padded to
+the longest) OOM-killed startup maintenance at 16 GB on 2026-10-01.
 
 **Dedup:** LLM-based pragmatic equivalence via Ollama (default: `gemma4:31b`).
 Falls back to embedding similarity if unavailable. `ENGRAM_DEDUP_MODEL` env var.
@@ -113,6 +123,19 @@ content distilled via Ollama, else queued). Gated by `[cohesion] enabled`
 /path/to/copy-of-graph.db`. Observe via `reflect(focus="cohesion")`.
 Spec: docs/superpowers/specs/2026-06-13-sheaf-cohesion-design.md.
 
+**Lighthouse sheaf:** The same Layer 3 question across independently
+governed stores. For one topic (a stored memory's vector), each store's
+top-k hits (default `work` lane) are a section; restriction = projection
+into a shared PCA topic basis (equal mass per store); the sheaf is the
+complete graph of covered stores with identity maps and edge weight =
+product (or min) of topic-scoped trust. Energy in [0,1], ranked edge
+residuals (who disagrees with whom), trust-weighted consensus (H^0) and
+each store's deviation. Uncovered (no hit above threshold) is reported,
+never dissent; trust moves the consensus but never hides disagreement.
+Observational, read-only (`Storage.open_read_only`): `python
+lighthouse_sheaf.py --store a=/p/a.db --store b=/p/b.db --semantic a:ID`.
+Spec: docs/superpowers/specs/2026-09-29-lighthouse-sheaf-design.md.
+
 **Persistence (Layer 4):** Single-linkage filtrations (exact, via MST) give
 each episode a redundancy (nearest-neighbor coverage) and uniqueness
 (survival across merge scales); resonance history adds generativity
@@ -128,6 +151,19 @@ flags for review. Recall's uninvited slot occasionally daydreams a random
 `reflect(focus="persistence")`; calibrate read-only via `python
 persistence.py /path/to/copy-of-graph.db`.
 Spec: docs/superpowers/specs/2026-06-13-persistence-design.md.
+
+**Path signatures (Layer 5):** A session is a path, not a bag. Its truncated
+signature (levels 1–3, exact for piecewise-linear paths via Chen's identity)
+is order-aware: level 1 = net displacement, level 2's antisymmetric part =
+Lévy area (which way it turned), level 3 = finer shape. Episodes in
+(created_at, id) order are L2-normalized, projected into one shared centered
+PCA basis (d=6; separately fitted bases are not comparable), and
+time-augmented by step index so a detour that came back is not erased.
+`semantic_journey` gives a semantic the route to its conclusion, not just the
+conclusion. `different_routes` flags same-endpoints/different-route pairs;
+tortuosity = length / displacement. Observational only: gates nothing.
+Read-only: `python paths.py /path/to/copy-of-graph.db [--json]`.
+Spec: docs/superpowers/specs/2026-09-29-path-signatures-design.md.
 
 **Tropical margins:** Recall scores every layer on one soft sum and returns the
 argmax, which always produces a winner — even when the top two differ by 0.001.
@@ -177,6 +213,24 @@ extraction and explicit FastEmbed-backed clients for embedding and cosine
 reranking. engram creates the four Kuzu full-text indices Graphiti's search
 queries (graphiti-core 0.28.2's Kuzu driver never does; without them every
 feed fails on `node_name_and_summary`). Separate from identity layers.
+The Kuzu database opens with a bounded buffer pool (`[graph] buffer_pool_mb`,
+default 256) through `knowledge._bounded_kuzu_driver`; graphiti's own driver
+takes Kuzu's default of 80% of system RAM in every server process.
+
+**Store identity:** Every store carries `meta.instance_id` and
+`instance_id_origin` (migration 028, assigned by the migration runner inside
+028's transaction; never replaced once set). `creation`: random, for a store
+created by this open. `retroactive`: a store that predates identity gets
+`uuid5(namespace, "<earliest episode id>\x1f<its created_at>")`, earliest by
+`(created_at, id)`, so a snapshot and a working copy agree independently
+(`instance_id_basis_episode` keeps the inputs); an empty old store gets a
+random id (`instance_id_basis = random`). `fork`: `cli.py fork` stamps a new
+random id plus `forked_from_instance_id`. Genome sync records
+`origin_instance_id`, `origin_id`, `origin_created_at` on each synced episode
+(carried through cold storage). Read-only paths (`store_reader`, calibrate's
+SOURCE and snapshot) report the stored id or the one migration would assign,
+and never write it. Logic in `store_identity.py`.
+Spec: docs/superpowers/specs/2026-09-29-inheritance-reading-design.md.
 
 **Operation attribution:** Mutation audit rows retain approved metadata only,
 never submitted content. Migration 026 scrubs historical `operation_log.details`
@@ -216,11 +270,14 @@ payloads down to the same metadata-only representation.
 | `storage.py` | SQLite + vec0 storage layer |
 | `compress.py` | Episode clustering, semantic promotion, instinct formation |
 | `reflection.py` | Self-analysis (reflect, introspect) |
-| `embeddings.py` | FastEmbed wrapper with instruction prefixes |
+| `embeddings.py` | FastEmbed wrapper with instruction prefixes; shared-embedder client |
+| `embedder_service.py` | Shared embedding service over a Unix socket (one model for all processes) |
 | `dreaming.py` | Dream residue — lossy emotional compression and surfacing |
 | `clusters.py` | Community detection, cluster seeding, temperament computation |
 | `sheaf.py` | Cellular-sheaf cohesion — energy metric, subdivision gate, sleep pass |
+| `lighthouse_sheaf.py` | Cross-store sheaf cohesion — per-topic disagreement between lighthouses, scoped trust, read-only CLI |
 | `persistence.py` | Layer 4 — H₀ filtrations, guarded forgetting, gate conjunct, daydream surfacing |
+| `paths.py` | Layer 5 — path signatures of sessions and semantic journeys, different-route detection (observational) |
 | `maintenance.py` | Pain channel — per-step sleep-maintenance report, surfaced via `status()` and wake |
 | `margins.py` | Tropical margins — recall ranking separation, bias-stability counterfactual |
 | `dedup.py` | LLM-based duplicate detection |
@@ -232,12 +289,23 @@ payloads down to the same metadata-only representation.
 | `hooks/wake.py` | SessionStart hook — loads instincts into context on boot |
 | `hooks/sleep.py` | Stop hook — dream residue distillation; marks this session's recalls `used: auto: cited` when a later act cited a result (positive evidence only) |
 | `scoring.py` | Recall score shared by `recall()`, its counterfactual, and the margins replay script |
+| `store_reader.py` | Read-only survey and chronological reading of a store or reader.db, no migration |
+| `store_identity.py` | Store identity (`meta.instance_id`): creation, retroactive derivation, fork stamping; read-only describe/plan |
+| `calibrate.py` | Snapshot a store read-only, migrate only a working copy, report store identity, first-open decay/prune, cohesion and persistence |
 
 ## Testing
 
 ```bash
 .venv/bin/python -m pytest tests/ -q   # full test suite
 ```
+
+A full run writes ~4 GB of `tmp_path` data, and `/tmp` is RAM-backed tmpfs
+on this machine: run with `TMPDIR=/var/tmp` (or `--basetemp` on disk). Bound
+memory with `systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0`;
+a cap without `MemorySwapMax=0` pushes the overflow into swap and stalls the
+desktop (2026-10-02). Measured 2026-10-02 after closing each test's server
+generation (`tests/conftest.py`) and bounding Kuzu: the runner peaks at
+1.6 GB RSS (was 5.4 GB).
 
 ## Evolving-category v2 (shadow runtime)
 

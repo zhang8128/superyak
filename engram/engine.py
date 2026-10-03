@@ -12,7 +12,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from embeddings import NomicEmbedProvider
+from embeddings import create_embedding_provider
 from storage import Storage, vec0_distance_to_similarity, _pack_embedding
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class EngineCore:
 
     def __init__(self, db_path: str | Path):
         self.storage = Storage(str(db_path))
-        self.embeddings = NomicEmbedProvider()
+        self.embeddings = create_embedding_provider()
 
     def recall(
         self,

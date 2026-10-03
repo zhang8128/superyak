@@ -80,6 +80,42 @@ class _LoopThread:
         self._thread.join(timeout=None if wait else 5)
 
 
+def _bounded_kuzu_driver(db_path: str, buffer_pool_mb: int):
+    """graphiti's KuzuDriver with a bounded Kuzu buffer pool.
+
+    graphiti-core 0.28.2's KuzuDriver opens `kuzu.Database(db)` with Kuzu's
+    default buffer pool, 80% of system RAM, and takes no option to change it.
+    Every Engram server holds one, so several sessions could each grow toward
+    most of the machine's memory. This mirrors KuzuDriver.__init__ with only the
+    database call changed; tests/test_knowledge.py fails if the upstream
+    constructor gains state this copy lacks.
+    """
+    import kuzu
+    from graphiti_core.driver import kuzu_driver as upstream
+
+    class BoundedKuzuDriver(upstream.KuzuDriver):
+        def __init__(self, db: str, buffer_pool_size: int, max_concurrent_queries: int = 1):
+            upstream.GraphDriver.__init__(self)
+            self.db = kuzu.Database(db, buffer_pool_size=buffer_pool_size)
+            self.setup_schema()
+            self.client = kuzu.AsyncConnection(
+                self.db, max_concurrent_queries=max_concurrent_queries
+            )
+            self._entity_node_ops = upstream.KuzuEntityNodeOperations()
+            self._episode_node_ops = upstream.KuzuEpisodeNodeOperations()
+            self._community_node_ops = upstream.KuzuCommunityNodeOperations()
+            self._saga_node_ops = upstream.KuzuSagaNodeOperations()
+            self._entity_edge_ops = upstream.KuzuEntityEdgeOperations()
+            self._episodic_edge_ops = upstream.KuzuEpisodicEdgeOperations()
+            self._community_edge_ops = upstream.KuzuCommunityEdgeOperations()
+            self._has_episode_edge_ops = upstream.KuzuHasEpisodeEdgeOperations()
+            self._next_episode_edge_ops = upstream.KuzuNextEpisodeEdgeOperations()
+            self._search_ops = upstream.KuzuSearchOperations()
+            self._graph_ops = upstream.KuzuGraphMaintenanceOperations()
+
+    return BoundedKuzuDriver(db_path, buffer_pool_size=buffer_pool_mb << 20)
+
+
 class KnowledgeGraph:
     """Bridge between engram and Graphiti.
 
@@ -116,7 +152,6 @@ class KnowledgeGraph:
     def _init_graphiti(self):
         """Initialize Graphiti with Kuzu backend and Ollama LLM."""
         from graphiti_core import Graphiti
-        from graphiti_core.driver.kuzu_driver import KuzuDriver
         from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
         from graphiti_core.llm_client.config import LLMConfig
         from graphiti_local import GraphitiEmbedder, GraphitiReranker
@@ -134,7 +169,7 @@ class KnowledgeGraph:
         driver = None
         graphiti = None
         try:
-            driver = KuzuDriver(db=db_path)
+            driver = _bounded_kuzu_driver(db_path, self._config.buffer_pool_mb)
 
             # Ollama exposes an OpenAI-compatible API
             model = os.environ.get("ENGRAM_GRAPH_MODEL", self._config.model)

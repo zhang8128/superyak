@@ -147,17 +147,11 @@ def nudge():
         """)
 
         # Embed the user's message
-        from fastembed import TextEmbedding
         import numpy as np
+        from embeddings import create_embedding_provider
 
-        cache_dir = str(Path.home() / ".kairos" / "models" / "fastembed")
-        model = TextEmbedding(model_name="nomic-ai/nomic-embed-text-v1.5", cache_dir=cache_dir)
-        raw = list(model.embed([f"search_query: {prompt}"]))[0]
-        arr = np.array(raw)
-        norm = np.linalg.norm(arr)
-        if norm > 0:
-            arr = arr / norm
-        query_emb = arr.tolist()
+        embedder = create_embedding_provider()
+        query_emb = embedder.embed([prompt], prefix="search_query")[0]
         packed_query = _pack_embedding(query_emb)
         now = datetime.now(timezone.utc).isoformat()
 
@@ -598,12 +592,7 @@ def nudge():
                     collision_parts.append(echo["content"][:100])
 
                 collision_text = " — ".join(collision_parts)
-                collision_emb = list(model.embed([f"search_document: {collision_text}"]))[0]
-                c_arr = np.array(collision_emb)
-                c_norm = np.linalg.norm(c_arr)
-                if c_norm > 0:
-                    c_arr = c_arr / c_norm
-                collision_emb = c_arr.tolist()
+                collision_emb = embedder.embed([collision_text], prefix="search_document")[0]
 
                 residue = distill(collision_text, collision_emb)
 

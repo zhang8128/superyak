@@ -115,3 +115,8 @@ CREATE TRIGGER IF NOT EXISTS episode_fts_update AFTER UPDATE ON episodes BEGIN
     INSERT INTO episode_fts(rowid, content)
     VALUES (new.rowid, new.content);
 END;
+
+-- Index episodes that predate this migration; without it the update trigger's
+-- 'delete' meets rows the index never held and the first UPDATE fails as
+-- "database disk image is malformed" (found porting a migration-001 store).
+INSERT INTO episode_fts(episode_fts) VALUES('rebuild');

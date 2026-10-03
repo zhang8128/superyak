@@ -1287,3 +1287,49 @@ def test_migration_gap_is_filled_not_skipped(tmp_path):
         ).fetchone(), f"migration {victim} was skipped because it sat below the max"
     finally:
         reopened.close()
+
+
+def test_unrecorded_migration_whose_columns_exist_is_adopted(tmp_path):
+    """A migration whose ADD COLUMN already landed must not fail the open.
+
+    Seen in a real backup (graph.db.bak-2026-06-12-lanes): episodes.lane and
+    semantics.lane existed but version 18 was never recorded, so every open
+    died on "duplicate column name: lane". The column can land without its
+    version when a branch applied the migration under another number.
+    """
+    from pathlib import Path as _Path
+
+    migrations_dir = str(_Path(__file__).resolve().parent.parent / "migrations")
+    db_path = tmp_path / "lanes.db"
+    store = Storage(str(db_path), migrations_dir=migrations_dir)
+    store.conn.execute("DELETE FROM schema_version WHERE version = 18")
+    store.conn.commit()
+    store.close()
+
+    reopened = Storage(str(db_path), migrations_dir=migrations_dir)
+    try:
+        assert reopened.conn.execute(
+            "SELECT 1 FROM schema_version WHERE version = 18").fetchone()
+        indexes = {r[1] for r in reopened.conn.execute(
+            "SELECT type, name FROM sqlite_master WHERE type = 'index'")}
+        assert {"idx_episodes_lane", "idx_semantics_lane"} <= indexes
+    finally:
+        reopened.close()
+
+
+def test_unrecorded_migration_still_adds_missing_columns(tmp_path):
+    """Adoption is per column: a column that is absent is still added."""
+    from storage import _skip_existing_columns
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE episodes (id TEXT, lane TEXT)")
+    conn.execute("CREATE TABLE semantics (id TEXT)")
+    sql = (
+        "ALTER TABLE episodes ADD COLUMN lane TEXT NOT NULL DEFAULT 'personal'\n"
+        "    CHECK (lane IN ('personal', 'work'));\n"
+        "ALTER TABLE semantics ADD COLUMN lane TEXT NOT NULL DEFAULT 'personal'\n"
+        "    CHECK (lane IN ('personal', 'work'));\n"
+    )
+    conn.executescript(_skip_existing_columns(conn, sql))
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(semantics)")}
+    assert "lane" in cols

@@ -43,6 +43,49 @@ def fake_embedding():
 
 
 @pytest.fixture(autouse=True)
+def _close_server_generations():
+    """Close every server generation a test's server._init() opened.
+
+    _init() hands its storage, knowledge graph, watcher and observers to a
+    cleanup coordinator registered with atexit. Tests reset server globals
+    but never ran the coordinator, so each one pinned its resources until the
+    suite exited: about 210 MB per test for the Kuzu knowledge graph alone,
+    which drove a full run past 5 GB and contributed to the 2026-10-02 crash.
+    """
+    import atexit
+    import sys
+    import threading
+
+    server = sys.modules.get("server")
+    if server is None:
+        yield
+        return
+    created = []
+    cls = server._ServerGenerationCleanup
+    real_init = cls.__init__
+
+    def recording_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        created.append(self)
+
+    cls.__init__ = recording_init
+    try:
+        yield
+    finally:
+        cls.__init__ = real_init
+        for coordinator in created:
+            if not coordinator.cleanup_complete:
+                # Bounded: a test that left an operation admitted would
+                # otherwise block teardown forever.
+                worker = threading.Thread(target=coordinator, daemon=True)
+                worker.start()
+                worker.join(timeout=10)
+            atexit.unregister(coordinator)
+            if coordinator in server._server_atexit_callbacks:
+                server._server_atexit_callbacks.remove(coordinator)
+
+
+@pytest.fixture(autouse=True)
 def _deterministic_rng():
     """Start every test from a fixed random state.
 

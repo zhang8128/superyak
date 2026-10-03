@@ -33,11 +33,14 @@ engram-lighthouse-pilot = "lighthouse_pilot:main"
 engram-lighthouse-label = "lighthouse_label:main"
 superyak-sessions = "session_cli:main"
 superyak-adna = "adna_cli:main"
+engram-read-store = "store_reader:main"
+engram-calibrate = "calibrate:main"
 
 [tool.setuptools]
 py-modules = [
     "ask",
     "adna_cli",
+    "calibrate",
     "categories",
     "category_compile",
     "category_context",
@@ -66,6 +69,7 @@ py-modules = [
     "deep_pass",
     "divergence",
     "dreaming",
+    "embedder_service",
     "embeddings",
     "engine",
     "federation",
@@ -83,6 +87,7 @@ py-modules = [
     "lighthouse_protocol",
     "lighthouse_receipts",
     "lighthouse_receiver_config",
+    "lighthouse_sheaf",
     "lighthouse_validation",
     "local_agent",
     "logging_config",
@@ -92,6 +97,7 @@ py-modules = [
     "neighbors",
     "notepad",
     "operation_audit",
+    "paths",
     "persistence",
     "policy_gen",
     "reflection",
@@ -105,6 +111,8 @@ py-modules = [
     "sharing",
     "sheaf",
     "storage",
+    "store_identity",
+    "store_reader",
     "transitions",
     "watcher",
 ]
@@ -119,3 +127,6 @@ py-modules = [
 
 [tool.pytest.ini_options]
 pythonpath = [".", ".."]
+# A full run writes ~4 GB of tmp_path data (SQLite stores, two wheel venvs).
+# Under /tmp that is RAM-backed tmpfs; keep only failing tests' directories.
+tmp_path_retention_policy = "failed"

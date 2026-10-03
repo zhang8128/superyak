@@ -516,11 +516,11 @@ def wake():
         # --- Between-session deep pass ---
         try:
             from deep_pass import deep_pass as run_deep_pass
-            from embeddings import NomicEmbedProvider
+            from embeddings import create_embedding_provider
             from storage import Storage
 
             dp_storage = Storage(str(db_path))
-            dp_embeddings = NomicEmbedProvider()
+            dp_embeddings = create_embedding_provider()
             dp_result = run_deep_pass(dp_storage, dp_embeddings, session_id=None)
             dp_storage.close()
             structural = dp_result.get("structural_count", 0)

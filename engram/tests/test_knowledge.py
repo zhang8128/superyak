@@ -40,7 +40,6 @@ class TestKnowledgeGraphInit:
         self, graph_config, monkeypatch
     ):
         import graphiti_core
-        import graphiti_core.driver.kuzu_driver as kuzu_driver
         import graphiti_core.graphiti as graphiti_module
         from graphiti_core.driver.driver import GraphDriver
         from graphiti_local import GraphitiEmbedder, GraphitiReranker
@@ -71,7 +70,9 @@ class TestKnowledgeGraphInit:
         def openai_default_was_used(*_args, **_kwargs):
             raise AssertionError("Graphiti OpenAI embedding/reranking default was used")
 
-        monkeypatch.setattr(kuzu_driver, "KuzuDriver", FakeDriver)
+        monkeypatch.setattr(
+            "knowledge._bounded_kuzu_driver", lambda db_path, _mb: FakeDriver(db=db_path)
+        )
         monkeypatch.setattr(
             graphiti_module, "OpenAIEmbedder", openai_default_was_used
         )
@@ -100,7 +101,6 @@ class TestKnowledgeGraphInit:
         self, graph_config, monkeypatch, caplog
     ):
         import graphiti_core
-        import graphiti_core.driver.kuzu_driver as kuzu_driver
         from knowledge import KnowledgeGraph
 
         closed = []
@@ -116,7 +116,9 @@ class TestKnowledgeGraphInit:
             def __init__(self, **_kwargs):
                 raise RuntimeError("injected constructor failure")
 
-        monkeypatch.setattr(kuzu_driver, "KuzuDriver", FakeDriver)
+        monkeypatch.setattr(
+            "knowledge._bounded_kuzu_driver", lambda db_path, _mb: FakeDriver(db=db_path)
+        )
         monkeypatch.setattr(graphiti_core, "Graphiti", FailingGraphiti)
 
         with caplog.at_level("WARNING", logger="engram.knowledge"):
@@ -138,7 +140,6 @@ class TestKnowledgeGraphInit:
         self, graph_config, monkeypatch
     ):
         import graphiti_core
-        import graphiti_core.driver.kuzu_driver as kuzu_driver
         from knowledge import KnowledgeGraph
 
         graph_closes = []
@@ -161,7 +162,9 @@ class TestKnowledgeGraphInit:
             async def close(self):
                 graph_closes.append(self)
 
-        monkeypatch.setattr(kuzu_driver, "KuzuDriver", FakeDriver)
+        monkeypatch.setattr(
+            "knowledge._bounded_kuzu_driver", lambda db_path, _mb: FakeDriver(db=db_path)
+        )
         monkeypatch.setattr(graphiti_core, "Graphiti", FailingGraphiti)
 
         kg = KnowledgeGraph(
@@ -645,6 +648,50 @@ class TestKuzuFulltextIndices:
             kg.close()
             del kg
             gc.collect()
+
+
+class TestBoundedKuzuDriver:
+    """Kuzu's default buffer pool is 80% of system RAM in every process that
+    opens a graph; engram bounds it (GraphConfig.buffer_pool_mb)."""
+
+    def test_database_opens_with_configured_buffer_pool(self, graph_config, monkeypatch):
+        import kuzu
+
+        from knowledge import KnowledgeGraph
+
+        opened = []
+        real_database = kuzu.Database
+
+        class RecordingDatabase(real_database):
+            def __init__(self, *args, **kwargs):
+                opened.append(kwargs.get("buffer_pool_size"))
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(kuzu, "Database", RecordingDatabase)
+        graph_config.buffer_pool_mb = 64
+        kg = KnowledgeGraph(graph_config, embedding_provider=_StubEmbeddings())
+        try:
+            assert kg.enabled is True
+            assert opened == [64 << 20]
+        finally:
+            kg.close()
+
+    def test_matches_upstream_driver_state(self, tmp_path):
+        """The copied constructor must set everything graphiti's KuzuDriver sets."""
+        from graphiti_core.driver.kuzu_driver import KuzuDriver
+
+        from knowledge import _bounded_kuzu_driver
+
+        bounded = _bounded_kuzu_driver(str(tmp_path / "bounded.kuzu"), 64)
+        stock = KuzuDriver(db=str(tmp_path / "stock.kuzu"))
+        try:
+            assert isinstance(bounded, KuzuDriver)
+            assert set(vars(bounded)) == set(vars(stock))
+            for name, value in vars(stock).items():
+                assert type(getattr(bounded, name)) is type(value), name
+        finally:
+            bounded.db.close()
+            stock.db.close()
 
 
 def _bare_graph(graph_config):

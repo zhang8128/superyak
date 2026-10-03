@@ -118,17 +118,23 @@ def test_legacy_accepts_prefix_kwarg(legacy_provider):
     assert len(result[0]) == 384
 
 
-# --- Length-bounded batching ---
+def test_token_budget_batches_cover_each_index_once():
+    from embeddings import _token_budget_batches, _BATCH_TOKEN_BUDGET, _MAX_TOKENS
+    texts = ["x" * n for n in (5, 40000, 300, 12, 9000, 300, 2, 600)]
+    batches = _token_budget_batches(texts)
+    assert sorted(i for b in batches for i in b) == list(range(len(texts)))
+    for b in batches:
+        padded = max(min(len(texts[i]) // 3 + 8, _MAX_TOKENS) for i in b)
+        assert len(b) == 1 or len(b) * padded <= _BATCH_TOKEN_BUDGET
 
-def test_length_bounded_batches_respect_budget():
-    from embeddings import _BATCH_CHAR_BUDGET, _length_bounded_batches
 
-    texts = ["x" * 800] * 78 + ["y" * 12_054] + ["z" * 2_000] * 5
-    batches = _length_bounded_batches(texts)
-    assert sorted(i for batch in batches for i in batch) == list(range(len(texts)))
-    for batch in batches:
-        longest = max(len(texts[i]) for i in batch)
-        assert len(batch) == 1 or len(batch) * longest * longest <= _BATCH_CHAR_BUDGET
+def test_nomic_mixed_lengths_keep_input_order(nomic_provider):
+    """Length-sorted batching must return vectors in the caller's order."""
+    texts = ["chocolate cake " * 400, "python function", "a", "python method " * 30]
+    together = nomic_provider.embed(texts)
+    for text, emb in zip(texts, together):
+        alone = nomic_provider.embed([text])[0]
+        assert _cosine_similarity(alone, emb) > 0.999
 
 
 def test_nomic_bounded_batches_match_single_batch(nomic_provider):

@@ -532,12 +532,12 @@ def main(argv: list[str] | None = None) -> int:
         or config["socket"]
         or engram_home / ".engram" / "lighthouse.sock"
     )
-    from embeddings import NomicEmbedProvider
+    from embeddings import create_embedding_provider
 
     daemon = PublisherDaemon(
         build_publishers(engram_home, config["publishers"]),
         socket_path,
-        NomicEmbedProvider(),
+        create_embedding_provider(),
     )
     logging.basicConfig(level=os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
     logger.info("publishing %s on %s", ", ".join(config["publishers"]), socket_path)

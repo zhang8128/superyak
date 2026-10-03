@@ -6,6 +6,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import store_identity
 from federation import InstanceRegistry, SignalBus
 
 ENGRAM_DIR = Path.home() / ".engram"
@@ -37,13 +38,23 @@ def fork_instance(name: str, engram_dir: Path | None = None, from_source: str = 
     # Safe copy via SQLite backup API (handles WAL correctly)
     src = sqlite3.connect(str(source_db))
     dst = sqlite3.connect(str(inst_db))
-    src.backup(dst)
-    src.close()
-    dst.close()
+    try:
+        src.backup(dst)
+        # A fork is a different store from the moment it exists: it gets its
+        # own identity and remembers the source's. A source that predates
+        # identity is named by the id its own migration will derive; the
+        # source itself is never written.
+        source_instance_id = store_identity.effective_id(src)
+        instance_id = store_identity.stamp_fork(dst, source_instance_id)
+        dst.commit()
+    finally:
+        src.close()
+        dst.close()
 
     # Register
     reg = InstanceRegistry(engram_dir / "instances.json")
-    reg.register(name, inst_db, forked_from=from_source)
+    reg.register(name, inst_db, forked_from=from_source, instance_id=instance_id,
+                 forked_from_instance_id=source_instance_id)
     print(f"Forked instance '{name}' from {from_source} → {inst_db}")
 
 

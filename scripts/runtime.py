@@ -51,7 +51,7 @@ def _bounded_text(path: Path, limit: int = MAX_CONFIG_BYTES) -> str:
         raise RuntimeConfigurationError(f"configuration is not UTF-8: {path}") from error
 
 
-def _load_runtime_config(path: Path) -> tuple[Path, str]:
+def _load_runtime_config(path: Path) -> tuple[Path, str, Path | None]:
     try:
         text = _bounded_text(path)
     except RuntimeConfigurationError as error:
@@ -79,7 +79,12 @@ def _load_runtime_config(path: Path) -> tuple[Path, str]:
         raise RuntimeConfigurationError(
             "default_instance must be a valid named instance"
         )
-    return memory_home, instance
+    embedder_value = raw.get("embedder_socket")
+    if embedder_value is None:
+        return memory_home, instance, None
+    if not isinstance(embedder_value, str) or not Path(embedder_value).is_absolute():
+        raise RuntimeConfigurationError("embedder_socket must be an absolute path")
+    return memory_home, instance, Path(embedder_value)
 
 
 def _valid_publishers(value: object) -> bool:
@@ -433,7 +438,9 @@ def _latest_receipt(database: Path) -> tuple[dict | None, str | None]:
     return None, "database changed during status inspection"
 
 
-def _status(memory_home: Path, default_instance: str) -> int:
+def _status(
+    memory_home: Path, default_instance: str, embedder_socket: Path | None = None
+) -> int:
     errors: list[str] = []
     project_root, project_override, instance, project_error = _project_binding(
         default_instance
@@ -474,6 +481,13 @@ def _status(memory_home: Path, default_instance: str) -> int:
     socket_report, socket_connected = _socket_status(socket_path)
     if not socket_connected:
         errors.append("publisher socket is unavailable")
+    if embedder_socket is None:
+        embedder = {"path": None, "configured": False}
+    else:
+        embedder, embedder_connected = _socket_status(embedder_socket)
+        embedder["configured"] = True
+        if not embedder_connected:
+            errors.append("embedder socket is unavailable")
     receipt, receipt_error = _latest_receipt(database)
     if receipt_error:
         errors.append(receipt_error)
@@ -520,6 +534,7 @@ def _status(memory_home: Path, default_instance: str) -> int:
         "receiver": receiver,
         "publisher": publisher,
         "socket": socket_report,
+        "embedder": embedder,
         "latest_lighthouse_receipt": receipt,
         "errors": errors,
     }
@@ -527,7 +542,9 @@ def _status(memory_home: Path, default_instance: str) -> int:
     return 0 if report["ok"] else 1
 
 
-def _command_argv(command: str, hook: str | None, memory_home: Path) -> list[str]:
+def _command_argv(
+    command: str, hook: str | None, memory_home: Path, embedder_socket: Path | None = None
+) -> list[str]:
     if command == "mcp":
         return [str(ENGRAM_ROOT / "server.py")]
     if command == "hook":
@@ -557,6 +574,12 @@ def _command_argv(command: str, hook: str | None, memory_home: Path) -> list[str
             "--socket",
             str(socket_path),
         ]
+    if command == "embedder":
+        if embedder_socket is None:
+            raise RuntimeConfigurationError(
+                "runtime configuration needs embedder_socket to run the embedder"
+            )
+        return [str(ENGRAM_ROOT / "embedder_service.py"), "--socket", str(embedder_socket)]
     raise RuntimeConfigurationError(f"unsupported command: {command}")
 
 
@@ -576,6 +599,7 @@ def _parser() -> argparse.ArgumentParser:
     hook = commands.add_parser("hook")
     hook.add_argument("hook", choices=("wake", "nudge", "sleep"))
     commands.add_parser("publisher")
+    commands.add_parser("embedder")
     commands.add_parser("status")
     return parser
 
@@ -583,12 +607,14 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        memory_home, configured_instance = _load_runtime_config(Path(args.config))
+        memory_home, configured_instance, embedder_socket = _load_runtime_config(
+            Path(args.config)
+        )
         instance = args.instance or configured_instance
         if not NAME.fullmatch(instance):
             raise RuntimeConfigurationError("instance must be a valid named instance")
         if args.command == "status":
-            return _status(memory_home, instance)
+            return _status(memory_home, instance, embedder_socket)
         if not INTERPRETER.is_file() or not os.access(INTERPRETER, os.X_OK):
             raise RuntimeConfigurationError(
                 f"configured interpreter is unavailable: {INTERPRETER}"
@@ -603,13 +629,18 @@ def main(argv: list[str] | None = None) -> int:
                     "memory database does not exist for the effective instance: "
                     f"{database}"
                 )
-        command = _command_argv(args.command, getattr(args, "hook", None), memory_home)
+        command = _command_argv(
+            args.command, getattr(args, "hook", None), memory_home, embedder_socket
+        )
         target = Path(command[0])
         if not target.is_file():
             raise RuntimeConfigurationError(f"configured source script is unavailable: {target}")
         environment = os.environ.copy()
         environment["ENGRAM_HOME"] = str(memory_home)
         environment["ENGRAM_DEFAULT_INSTANCE"] = instance
+        if embedder_socket is not None:
+            # Every Engram process shares one model instead of loading its own.
+            environment["ENGRAM_EMBEDDER_SOCKET"] = str(embedder_socket)
         os.execve(str(INTERPRETER), [str(INTERPRETER), *command], environment)
     except RuntimeConfigurationError as error:
         message = str(error)

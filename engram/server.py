@@ -1177,7 +1177,9 @@ def _run_sleep_maintenance(guarded: bool = False) -> None:
                 from persistence import guarded_prune
                 pruned = guarded_prune(_storage, _config.persistence)
             else:
-                pruned = _storage.prune_decayed(threshold=0.05)
+                pruned = _storage.prune_decayed(
+                    threshold=0.05,
+                    exempt_sources=_config.persistence.never_prune_sources)
             if pruned:
                 logger.info("Pruned %d decayed episodes", pruned)
                 _maint.note("prune", pruned=pruned)
@@ -1244,7 +1246,7 @@ def _run_sleep_maintenance(guarded: bool = False) -> None:
         # 8. Coherence check — anchors + drift detection
         with _maintenance_step_scope(guarded), _maint.step("coherence-check"):
             from coherence import CoherenceChecker
-            _coherence_checker = CoherenceChecker(_storage)
+            _coherence_checker = CoherenceChecker(_storage, _embeddings)
             coherence_report = _coherence_checker.run_full_check(session_id=_session_id)
             if coherence_report["summary"] != "coherence stable":
                 logger.info("Coherence: %s", coherence_report["summary"])
@@ -1293,7 +1295,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
     global _framing_cfg, _sleep_maintenance_deferred
     if _initialized:
         return
-    from embeddings import NomicEmbedProvider
+    from embeddings import create_embedding_provider
     from storage import Storage
 
     setup_logging(os.environ.get("ENGRAM_LOG_LEVEL", "INFO"))
@@ -1312,7 +1314,7 @@ def _init_unlocked(*, allow_startup_consolidation: bool = False, defer_sleep_mai
     # Every server and watcher access is serialized by the lifecycle barrier.
     _storage = Storage(str(db_path), check_same_thread=False)
     _register_server_cleanup(_storage, _storage.close, "storage")
-    _embeddings = NomicEmbedProvider()
+    _embeddings = create_embedding_provider()
 
     harness = os.environ.get("ENGRAM_HARNESS", "claude-code")
     # Claude Code exports CLAUDE_CODE_SESSION_ID to MCP server processes;

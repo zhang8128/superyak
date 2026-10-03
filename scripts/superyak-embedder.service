@@ -1,0 +1,18 @@
+# One shared nomic-embed-text model for every Engram process of this user.
+# Install: cp scripts/superyak-embedder.service ~/.config/systemd/user/
+#          systemctl --user enable --now superyak-embedder
+# then add to ~/.config/superyak/runtime.json:
+#          "embedder_socket": "/run/user/<uid>/superyak/embedder.sock"
+[Unit]
+Description=Superyak shared embedding service
+
+[Service]
+ExecStart=%h/.local/bin/superyak-runtime embedder
+Restart=on-failure
+RestartSec=5
+# Resting ~1.1 GB, measured peak 1.8 GB on a full re-embed (2026-10-02).
+MemoryMax=3G
+MemorySwapMax=0
+
+[Install]
+WantedBy=default.target
