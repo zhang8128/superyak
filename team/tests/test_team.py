@@ -839,3 +839,19 @@ def test_kairos_replies_to_lead_reach_the_transcript(env):
     team.poll_slack_once()
     recs = teamlib.tail_records("t1", 50)
     assert any(r.get("from") == "kairos (slack)" and r.get("to") == "lead" and "merge !6" in r["message"] for r in recs)
+
+
+
+def test_spawn_can_branch_from_an_explicit_base(env):
+    repo = env["repo"]
+    first = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    (repo / "later.txt").write_text("later\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "later"], check=True)
+    team = make_team(env)
+    r = _req(team, "spawn", "lead", {"task": "t", "kind": "codex", "base": first})
+    w = team.state["workers"][r["worker"]]
+    assert w["base"] == first and not (Path(w["path"]) / "later.txt").exists()
+    for bad in ("--orphan", "nope-not-a-ref", "-c"):
+        with pytest.raises(teamlib.RejectedMessage):
+            _req(team, "spawn", "lead", {"task": "t", "kind": "codex", "base": bad})

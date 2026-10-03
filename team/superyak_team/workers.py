@@ -72,10 +72,23 @@ def repo_root(path):
     return Path(git(path, "rev-parse", "--show-toplevel").stdout.strip())
 
 
-def create_worktree(root, team_id, worker):
-    """Branch team/<team>/<worker> off the lead's current HEAD, in <root>-worktrees/."""
+def resolve_base(root, base=None):
+    """The commit a worker branches from: the lead's HEAD, or an explicit ref/commit the lead
+    names (e.g. origin/main when the local branch is stale). Never parsed as an option."""
+    if base is None or base == "":
+        return git(root, "rev-parse", "HEAD").stdout.strip()
+    if not isinstance(base, str) or base.startswith("-") or len(base) > 200:
+        raise teamlib.RejectedMessage("base must be a branch, tag or commit")
+    out = git(root, "rev-parse", "--verify", "--quiet", "--end-of-options", base + "^{commit}", check=False)
+    if out.returncode != 0 or not out.stdout.strip():
+        raise teamlib.RejectedMessage("base %r is not a commit in this repo (fetch first?)" % base)
+    return out.stdout.strip()
+
+
+def create_worktree(root, team_id, worker, base=None):
+    """Branch team/<team>/<worker> off `base` (default: the lead's HEAD), in <root>-worktrees/."""
     root = Path(root)
-    base = git(root, "rev-parse", "HEAD").stdout.strip()
+    base = resolve_base(root, base)
     branch = "team/%s/%s" % (team_id, worker)
     path = root.parent / (root.name + "-worktrees") / team_id / worker
     path.parent.mkdir(parents=True, exist_ok=True)

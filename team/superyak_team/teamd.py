@@ -93,16 +93,15 @@ class Team:
             n += 1
         return "w%d" % n
 
-    def spawn(self, task, kind="codex", context="", mode="build"):
+    def spawn(self, task, kind="codex", context="", mode="build", base=None):
         if kind not in ("codex", "claude"):
             raise teamlib.RejectedMessage("kind must be 'codex' or 'claude'")
         if mode not in ("build", "collab"):
             raise teamlib.RejectedMessage("mode must be 'build' or 'collab'")
         with self.lock:
             wid = self._new_worker_id()
-            teamlib.issue_token(self.team_id, wid)
             if mode == "build":
-                wt = workers.create_worktree(self.repo, self.team_id, wid)
+                wt = workers.create_worktree(self.repo, self.team_id, wid, base)
                 self._seed_engram_config(wt["path"])
             else:   # read-only collaborator: works from the main checkout, never writes or commits
                 # Runs from a private scratch room, not the repo: the (unsandboxed) engram MCP
@@ -113,6 +112,7 @@ class Team:
                 room.mkdir(parents=True, exist_ok=True)
                 wt = {"branch": None, "path": str(room), "base": None}
                 self._seed_engram_config(room)
+            teamlib.issue_token(self.team_id, wid)    # only once the worktree/room exists
             w = {"kind": kind, "mode": mode, "task": task, "context": context, "state": "queued",
                  "ident": None, "pid": None, "inbox": [], "turns": 0,
                  "started_at": None, "commit": None, "summary": None, "last_message": "",
@@ -459,7 +459,8 @@ class Team:
         if is_lead:
             if op == "spawn":
                 return self.spawn(a.get("task", ""), a.get("kind") or self.cfg.get("default_kind", "codex"),
-                                  a.get("context", ""), a.get("mode") or self.cfg.get("default_mode", "build"))
+                                  a.get("context", ""), a.get("mode") or self.cfg.get("default_mode", "build"),
+                                  a.get("base") or None)
             if op == "message":
                 return self.deliver(a["worker"], text, "lead")
             if op == "post":
