@@ -213,6 +213,9 @@ extraction and explicit FastEmbed-backed clients for embedding and cosine
 reranking. engram creates the four Kuzu full-text indices Graphiti's search
 queries (graphiti-core 0.28.2's Kuzu driver never does; without them every
 feed fails on `node_name_and_summary`). Separate from identity layers.
+The Kuzu database opens with a bounded buffer pool (`[graph] buffer_pool_mb`,
+default 256) through `knowledge._bounded_kuzu_driver`; graphiti's own driver
+takes Kuzu's default of 80% of system RAM in every server process.
 
 **Store identity:** Every store carries `meta.instance_id` and
 `instance_id_origin` (migration 028, assigned by the migration runner inside
@@ -295,6 +298,14 @@ payloads down to the same metadata-only representation.
 ```bash
 .venv/bin/python -m pytest tests/ -q   # full test suite
 ```
+
+A full run writes ~4 GB of `tmp_path` data, and `/tmp` is RAM-backed tmpfs
+on this machine: run with `TMPDIR=/var/tmp` (or `--basetemp` on disk). Bound
+memory with `systemd-run --user --scope -p MemoryMax=4G -p MemorySwapMax=0`;
+a cap without `MemorySwapMax=0` pushes the overflow into swap and stalls the
+desktop (2026-10-02). Measured 2026-10-02 after closing each test's server
+generation (`tests/conftest.py`) and bounding Kuzu: the runner peaks at
+1.6 GB RSS (was 5.4 GB).
 
 ## Evolving-category v2 (shadow runtime)
 

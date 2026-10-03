@@ -114,6 +114,8 @@ class GraphConfig:
     model: str = "qwen3.8:27b-mlx"
     ollama_url: str = "http://localhost:11434"
     db_path: str = ""  # set at runtime based on ENGRAM_HOME
+    # Kuzu's default buffer pool is 80% of system RAM, per process.
+    buffer_pool_mb: int = 256
 
 
 @dataclass
