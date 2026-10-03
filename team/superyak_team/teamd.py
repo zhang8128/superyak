@@ -427,6 +427,10 @@ class Team:
                     continue
                 if target == "lead":
                     self.state["lead_inbox"].append({"from": "kairos (slack)", "message": text, "ts": time.time()})
+                    # Also in the append-only transcript, so a lead can watch it without
+                    # consuming the inbox cursor.
+                    teamlib.append_record(self.team_id, {"from": "kairos (slack)", "to": "lead",
+                                                         "type": "message", "message": text})
                 else:
                     self.deliver(target, text, "kairos (slack)")
             self.save()

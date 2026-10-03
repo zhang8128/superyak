@@ -827,3 +827,15 @@ def test_driver_blanking_handles_dotted_spaced_and_cased_names(env, tmp_path):
     assert team.worker_done("w1", "work", "ok")["commit"]
     team.collect("w1")
     assert not pwned.exists()
+
+
+
+def test_kairos_replies_to_lead_reach_the_transcript(env):
+    slack = FakeSlack()
+    team = make_team(env, slack=slack, allowed_user_ids=["UKAIROS"])
+    team.kickoff()
+    kick = team.state["kickoff_ts"]
+    slack.replies_by_thread[kick] = [{"ts": "990.1", "user": "UKAIROS", "text": "merge !6 first"}]
+    team.poll_slack_once()
+    recs = teamlib.tail_records("t1", 50)
+    assert any(r.get("from") == "kairos (slack)" and r.get("to") == "lead" and "merge !6" in r["message"] for r in recs)
