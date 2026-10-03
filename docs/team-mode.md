@@ -111,13 +111,15 @@ mission ends, and the old mission's state goes to `teams/archive/`. Each vessel'
 ### Sharing channels with other people's teams
 The host adds members, each with their own access code (only a hash is kept) and a list of
 channels: `superyak-runtime team channels members add curtin --role human --channels embassy`.
-A `lead` member is another team's lead: it posts as an agent, never as a human. On the other
-machine, `channels remote add embassy https://<host>.ts.net --as <member>` keeps the code in
-the OS keyring, and that lead's channel tools then reach the host. For **bridge channels**
+A `lead` member is another person's agent: it posts as an agent, never as a human. On the other
+machine, `superyak-runtime team join https://<host>.ts.net` does the rest in one step: it keeps
+the code in the OS keyring, learns the member's name and channels from the host, and registers
+the team tools with Claude Code. For **bridge channels**
 (`bridge_channels`, default `["embassy"]`), only leads post and workers read, and a post that
-names a lead goes to that lead's inbox only. Each side needs a different lead name: pick a
-built-in `roster` (`voyager`, `tng`) or define your own crew in `~/.superyak/team/rosters.json`.
-`channels members rename <old> <new>` renames a member and keeps their code. Joining guide: [team-mode-joining.md](team-mode-joining.md).
+names a lead goes to that lead's inbox only. On a remote channel an agent knows its own
+posts by the host's name for it, so both sides can use the same `roster`. A custom crew goes in
+`~/.superyak/team/rosters.json`. `channels members rename <old> <new>` renames a member and
+keeps their code. Joining guide: [team-mode-joining.md](team-mode-joining.md).
 
 ### Memory: agents of their own
 Every worker is a **persistent named agent** (`sol-1`, `claude-2`, or `team_spawn(agent="ada")`)

@@ -1503,3 +1503,30 @@ def test_your_own_crew_from_rosters_json_and_member_renames(env):
     assert channels.member_for(code)["name"] == "athena"                   # same code, new name
     with pytest.raises(teamlib.RejectedMessage):
         channels.rename_member("athena", "kairos")                         # can't take the owner's name
+
+
+def test_join_in_one_step_and_same_roster_teams_never_collide(env, monkeypatch):
+    server, base = _serve(env, monkeypatch)
+    try:
+        code = channels.add_member("curtin-lead", "lead", ["embassy"])
+        kept = {}
+        monkeypatch.setattr(teamlib, "store_secret", lambda svc, v: kept.__setitem__(svc, v))
+        monkeypatch.setattr(teamlib, "keychain_secret", lambda svc: kept.get(svc))
+        me, chans, _ = channels.join(base + "/#t=junk", code, register=False)
+        assert (me, chans) == ("curtin-lead", ["embassy"]) and kept["superyak-channel-embassy"] == code
+        cfg = json.loads((env["tmp"] / "cfg.json").read_text())
+        assert cfg["remote_channels"]["embassy"] == {"url": base, "as": "curtin-lead"}
+        assert "embassy" in cfg["bridge_channels"]
+        # Her team runs the same default roster: her lead is also "janeway".
+        team = make_team(env, remote_channels=cfg["remote_channels"])
+        assert team.lead_name() == "janeway"
+        team.poll_bridges_once()
+        channels.post(env["repo"], "embassy", "janeway", "@curtin-lead welcome, from the host's Janeway")
+        team.poll_bridges_once()
+        got = [m for m in team.state["lead_inbox"] if m["message"].startswith("BRIDGE:")]
+        assert len(got) == 1 and "welcome" in got[0]["message"]          # not mistaken for her own post
+        with pytest.raises(teamlib.RejectedMessage):
+            channels.join(base, "wrong-code", register=False)
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -165,15 +165,20 @@ def team_end(args):
     return res
 
 
+def _repo_for(channel):
+    """Remote channels live on another machine: no local repo needed to use them."""
+    return "." if channel and channels.remote_cfg(channel) else git_root()
+
+
 def lead_channel_read(args):
-    repo = git_root()
+    repo = _repo_for(args.get("channel"))
     ch = args.get("channel") or channels.team_channel(active_team(repo))
     return {"channel": ch, "messages": channels.fenced(
         channels.read_any(repo, ch, int(args.get("after") or 0), int(args.get("limit") or 30)))}
 
 
 def lead_channel_post(args):
-    repo = git_root()
+    repo = _repo_for(args.get("channel"))
     ch = args.get("channel") or channels.team_channel(active_team(repo))
     cfg = teamlib.load_config()
     me = teamlib.roster(cfg.get("roster", "voyager"))["lead"]
@@ -340,6 +345,11 @@ def cli(argv):
     if argv[0] == "brief":
         print((teamlib.package_dir() / "roles" / "lead.md").read_text())
         return 0
+    if argv[0] == "join" and len(argv) == 2:
+        try:
+            return channels.join_cli(argv[1])
+        except teamlib.RejectedMessage as e:
+            sys.exit("error: %s" % e)
     if argv[0] == "channels":
         try:
             return channels.cli(argv[1:], git_root())

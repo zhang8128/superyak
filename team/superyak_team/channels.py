@@ -244,16 +244,20 @@ def remote_cfg(channel):
 
 
 def _remote(channel, method, path, body=None):
-    import urllib.error
-    import urllib.request
-    cfg = remote_cfg(channel)
     token = teamlib.keychain_secret("superyak-channel-" + channel)
     if not token:
         raise teamlib.RejectedMessage("no access code for remote channel %s in the keyring "
-                                      "(superyak-runtime team channels remote add)" % channel)
-    url = cfg["url"].rstrip("/")
+                                      "(superyak-runtime team join <url>)" % channel)
+    return _http(remote_cfg(channel)["url"], token, method, path, body, label=channel)
+
+
+def _http(url, token, method, path, body=None, label=""):
+    import urllib.error
+    import urllib.request
+    url = url.rstrip("/")
     if not url.startswith("https://") and not url.startswith("http://127.0.0.1"):
         raise teamlib.RejectedMessage("remote channels need https:// (got %s)" % url)
+    channel = label or url
     req = urllib.request.Request(url + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": "Bearer " + token,
@@ -287,6 +291,57 @@ def list_any(repo):
         out.append({"channel": name, "remote": cfg.get("url"), "messages": None,
                     "last_ts": None, "last_from": None})
     return out
+
+
+def join(url, code, register=True):
+    """Connect this machine's agents to channels hosted elsewhere, in one step: ask the host who
+    this code is and which channels it may use, keep the code in the OS keyring, mark those
+    channels remote and bridged (leads speak, workers read), and register the team tools with
+    Claude Code if they aren't yet. Returns (identity, channels, registered)."""
+    url = url.strip().split("#")[0].rstrip("/")
+    who = _http(url, code, "GET", "/api/channels", label=url)
+    me, chans = who.get("me"), [c["channel"] for c in who.get("channels", [])]
+    if not me or not chans:
+        raise teamlib.RejectedMessage("the host knows this code but shares no channels with it")
+    for ch in chans:
+        _path(".", ch)
+        teamlib.store_secret("superyak-channel-" + ch, code)
+    cfg_path = teamlib.config_path()
+    raw = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    for ch in chans:
+        raw.setdefault("remote_channels", {})[ch] = {"url": url, "as": me}
+    bridges = raw.get("bridge_channels") or list(teamlib.DEFAULT_CONFIG["bridge_channels"])
+    raw["bridge_channels"] = sorted(set(bridges) | set(chans))
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(json.dumps(raw, indent=1))
+    registered = None
+    if register:
+        import shutil
+        import subprocess
+        if shutil.which("claude"):
+            have = subprocess.run(["claude", "mcp", "get", "superyak-team"], capture_output=True,
+                                  text=True, timeout=60).returncode == 0
+            if not have:
+                subprocess.run(["claude", "mcp", "add", "-s", "user", "superyak-team", "--",
+                                "superyak-runtime", "team"], capture_output=True, text=True, timeout=60)
+            registered = "already" if have else "added"
+    return me, chans, registered
+
+
+def join_cli(url):
+    import getpass
+    code = (getpass.getpass("Access code: ") if sys.stdin.isatty() else sys.stdin.readline()).strip()
+    if not code:
+        raise teamlib.RejectedMessage("no access code given")
+    me, chans, registered = join(url, code)
+    print("Joined as %s: %s" % (me, ", ".join("#" + c for c in chans)))
+    if registered:
+        print("Claude Code team tools: %s (restart Claude Code to load them)." % registered)
+    else:
+        print("Claude Code not found: register the team tools in your agent "
+              "(see docs/team-mode-joining.md).")
+    print("Now ask your agent, e.g.: \"read #%s and introduce yourself there\"." % chans[0])
+    return 0
 
 
 def tailscale_ip():

@@ -639,11 +639,11 @@ class Team:
         """Posts in a bridge channel (e.g. #embassy) that name this team's lead, or @all, reach
         the lead's inbox as quoted data. Never a worker's: the lead decides what to pass on."""
         seen = self.state.setdefault("bridge_seen", {})
-        me = {self.lead_name()}
         for ch in self.cfg.get("bridge_channels") or []:
             cfg = channels.remote_cfg(ch) or {}
-            if cfg.get("as"):
-                me.add(cfg["as"])
+            # Remote: the host names us (cfg "as"), whatever our roster calls our lead, so two
+            # teams on the same roster never mistake each other's posts for their own.
+            me = {cfg["as"]} if cfg.get("as") else {self.lead_name()}
             try:
                 if ch not in seen:                       # start from now, not the backlog
                     last = channels.read_any(self.repo, ch, limit=1)
