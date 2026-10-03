@@ -855,3 +855,27 @@ def test_spawn_can_branch_from_an_explicit_base(env):
     for bad in ("--orphan", "nope-not-a-ref", "-c"):
         with pytest.raises(teamlib.RejectedMessage):
             _req(team, "spawn", "lead", {"task": "t", "kind": "codex", "base": bad})
+
+
+
+def test_done_commit_works_when_gitignore_already_ignores_tool_dirs(env):
+    # Regression (live, 2026-10-02): exclude pathspecs for paths .gitignore already ignores made
+    # `git add` exit 1 ("paths are ignored"), so team_done failed in a real npm repo.
+    repo = env["repo"]
+    (repo / ".gitignore").write_text("node_modules\n.engram/\n")
+    subprocess.run(["git", "-C", str(repo), "add", ".gitignore"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "ignore"], check=True)
+    team = make_team(env)
+    team.spawn("t", "claude")
+    w = team.state["workers"]["w1"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    wt = Path(w["path"])
+    (wt / "node_modules" / "pkg").mkdir(parents=True)
+    (wt / "node_modules" / "pkg" / "index.js").write_text("x")
+    (wt / "README.md").write_text("changed\n")
+    (wt / "gone.txt").write_text("")
+    sha = team.worker_done("w1", "work", "ok")["commit"]
+    assert sha
+    files = subprocess.run(["git", "-C", str(wt), "show", "--name-only", "--format=", "HEAD"],
+                           capture_output=True, text=True).stdout.split()
+    assert "README.md" in files and not any(f.startswith(("node_modules", ".engram")) for f in files)

@@ -61,11 +61,15 @@ def _driver_overrides(gitdir):
     return flags
 
 
-def worker_git(path, gitdir, *args, check=True):
+def worker_git(path, gitdir, *args, check=True, input=None):
     return subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
                           + HARDENED_GIT + _driver_overrides(gitdir) + list(args),
-                          cwd=str(path), env=_isolated_git_env(),
+                          cwd=str(path), env=_isolated_git_env(), input=input,
                           capture_output=True, text=True, check=check)
+
+
+def _is_tool_state(rel):
+    return any(part in COMMIT_EXCLUDES for part in Path(rel).parts)
 
 
 def repo_root(path):
@@ -117,11 +121,15 @@ def commit_subject(worker, summary, limit=72):
 
 def commit_for_worker(path, worker, kind, summary, gitdir):
     """Commit what the worker changed (minus tool state). Returns the new SHA or None if clean."""
-    excludes = []
-    for e in COMMIT_EXCLUDES:   # the entry itself and everything under it, at any depth
-        excludes += [":(exclude,glob)%s" % e, ":(exclude,glob)%s/**" % e,
-                     ":(exclude,glob)**/%s" % e, ":(exclude,glob)**/%s/**" % e]
-    worker_git(path, gitdir, "add", "-A", "--", ".", *excludes)
+    # Stage exactly the changed paths (git's own ignore rules applied), minus tool state.
+    # Exclude pathspecs are not used: git refuses them with exit 1 when .gitignore already
+    # ignores the same path (e.g. node_modules), which failed team_done on 2026-10-02.
+    listed = worker_git(path, gitdir, "ls-files", "-z", "--modified", "--others", "--deleted",
+                        "--exclude-standard").stdout
+    changed = sorted({f for f in listed.split("\0") if f and not _is_tool_state(f)})
+    if changed:
+        worker_git(path, gitdir, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+                   input="\0".join(changed) + "\0")
     if not worker_git(path, gitdir, "diff", "--cached", "--name-only").stdout.strip():
         return None
     name = "%s (%s)" % (worker, kind)
