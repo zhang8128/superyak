@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+echo "$*" >> "${MOCK_TEAM_LOG:-/dev/null}"
+mkdir -p node_modules && echo ok > node_modules/.installed
+exit "${MOCK_NPM_EXIT:-0}"

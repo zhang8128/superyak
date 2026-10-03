@@ -879,3 +879,29 @@ def test_done_commit_works_when_gitignore_already_ignores_tool_dirs(env):
     files = subprocess.run(["git", "-C", str(wt), "show", "--name-only", "--format=", "HEAD"],
                            capture_output=True, text=True).stdout.split()
     assert "README.md" in files and not any(f.startswith(("node_modules", ".engram")) for f in files)
+
+
+
+def test_prepare_installs_before_first_turn_and_only_from_menu(env, monkeypatch):
+    team = make_team(env)
+    r = _req(team, "spawn", "lead", {"task": "t", "kind": "codex", "prepare": "npm-ci"})
+    w = team.state["workers"][r["worker"]]
+    assert r["state"] == "preparing"
+    assert run_until(team, lambda: w["state"] in ("running", "idle"))
+    assert (Path(w["path"]) / "node_modules" / ".installed").exists()
+    log = env["log"].read_text()
+    assert log.index("ci --no-audit --no-fund") < log.index("exec")        # install before the turn
+    for bad in ("rm -rf /", "npm install evil", "make"):
+        with pytest.raises(teamlib.RejectedMessage):
+            _req(team, "spawn", "lead", {"task": "t", "kind": "codex", "prepare": bad})
+    with pytest.raises(teamlib.RejectedMessage):
+        _req(team, "spawn", "lead", {"task": "t", "kind": "claude", "mode": "collab", "prepare": "npm-ci"})
+
+
+def test_prepare_failure_marks_worker_failed(env, monkeypatch):
+    monkeypatch.setenv("MOCK_NPM_EXIT", "1")
+    team = make_team(env)
+    r = team.spawn("t", "codex", prepare="npm-ci")
+    w = team.state["workers"][r["worker"]]
+    assert run_until(team, lambda: w["state"] == "failed")
+    assert w["turns"] == 0

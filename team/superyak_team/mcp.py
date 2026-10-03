@@ -169,6 +169,9 @@ LEAD_TOOLS = [
       "mode": {"type": "string", "enum": ["build", "collab"]}, "context": {"type": "string"},
       "base": {"type": "string", "description": "build only: branch/tag/commit to branch from "
                                                 "(default: the lead's HEAD)"},
+      "prepare": {"type": "string", "enum": ["npm-ci", "pnpm-install", "uv-sync"],
+                  "description": "build only: install dependencies (outside the sandbox) before "
+                                 "the first turn; workers have no network"},
       "team": {"type": "string"}}, ["task"], lambda a: call("spawn", a)),
     ("team_message", "Send a message to a worker (delivered into its running turn when possible).",
      {"worker": {"type": "string"}, "text": {"type": "string"}, "team": {"type": "string"}}, ["worker", "text"],

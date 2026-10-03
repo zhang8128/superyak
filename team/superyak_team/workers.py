@@ -61,6 +61,30 @@ def _driver_overrides(gitdir):
     return flags
 
 
+# Dependency installs teamd may run in a builder's worktree before its first turn (workers have
+# no network). A fixed menu, never a lead-supplied command line.
+PREPARE_COMMANDS = {
+    "npm-ci": ["npm", "ci", "--no-audit", "--no-fund"],
+    "pnpm-install": ["pnpm", "install", "--frozen-lockfile"],
+    "uv-sync": ["uv", "sync", "--locked"],
+}
+
+
+def run_prepare(name, cwd, log_path, timeout=1800):
+    cmd = PREPARE_COMMANDS[name]
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        with open(log_path, "w") as log:
+            rc = subprocess.run(cmd, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=log,
+                                stderr=subprocess.STDOUT, env=env, timeout=timeout).returncode
+    except (OSError, subprocess.TimeoutExpired) as e:
+        rc = "error: %s" % type(e).__name__
+    tail = log_path.read_text(errors="replace")[-400:] if log_path.exists() else ""
+    return rc, teamlib.redact(tail)
+
+
 def worker_git(path, gitdir, *args, check=True, input=None):
     return subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
                           + HARDENED_GIT + _driver_overrides(gitdir) + list(args),

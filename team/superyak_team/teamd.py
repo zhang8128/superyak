@@ -21,7 +21,7 @@ from . import teamlib, workers
 from .slack import Slack, SlackError
 
 ACTIVE = ("running",)
-LIVE = ("queued", "running", "idle")
+LIVE = ("preparing", "queued", "running", "idle")
 
 
 class Team:
@@ -93,7 +93,11 @@ class Team:
             n += 1
         return "w%d" % n
 
-    def spawn(self, task, kind="codex", context="", mode="build", base=None):
+    def spawn(self, task, kind="codex", context="", mode="build", base=None, prepare=None):
+        if prepare and prepare not in workers.PREPARE_COMMANDS:
+            raise teamlib.RejectedMessage("prepare must be one of: %s" % ", ".join(sorted(workers.PREPARE_COMMANDS)))
+        if prepare and mode != "build":
+            raise teamlib.RejectedMessage("prepare is for build workers (collaborators are read-only)")
         if kind not in ("codex", "claude"):
             raise teamlib.RejectedMessage("kind must be 'codex' or 'claude'")
         if mode not in ("build", "collab"):
@@ -127,9 +131,32 @@ class Team:
                 w["thread_ts"] = ts
                 self.state["slack_seen"][ts] = ts
             self.save()
-            self._fill_slots()
+            if prepare:
+                w["state"] = "preparing"
+                self.save()
+                threading.Thread(target=self._prepare, args=(wid, prepare), daemon=True).start()
+            else:
+                self._fill_slots()
             return {"worker": wid, "mode": mode, "state": w["state"], "branch": w["branch"],
                     "worktree": w["path"] if mode == "build" else None}
+
+    def _prepare(self, wid, prepare):
+        """Install dependencies for a builder before its first turn. Runs outside the sandbox
+        because workers have no network; only commands from workers.PREPARE_COMMANDS."""
+        w = self.state["workers"][wid]
+        rc, tail = workers.run_prepare(prepare, w["path"], self.dir / "workers" / wid / "prepare.log")
+        with self.lock:
+            if w["state"] != "preparing":          # stopped meanwhile
+                return
+            if rc == 0:
+                w["state"] = "queued"
+                self.log("%s prepared (%s)" % (wid, prepare))
+                self._fill_slots()
+            else:
+                w["state"] = "failed"
+                self.say(wid, ":x: prepare `%s` failed (rc=%s)\n```%s```" % (prepare, rc, tail), w["thread_ts"])
+                self._to_lead(wid, "PREPARE FAILED:", "%s rc=%s" % (prepare, rc))
+            self.save()
 
     def _running_count(self):
         return sum(1 for w in self.state["workers"].values() if w["state"] in ACTIVE)
@@ -460,7 +487,7 @@ class Team:
             if op == "spawn":
                 return self.spawn(a.get("task", ""), a.get("kind") or self.cfg.get("default_kind", "codex"),
                                   a.get("context", ""), a.get("mode") or self.cfg.get("default_mode", "build"),
-                                  a.get("base") or None)
+                                  a.get("base") or None, a.get("prepare") or None)
             if op == "message":
                 return self.deliver(a["worker"], text, "lead")
             if op == "post":
