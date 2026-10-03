@@ -58,9 +58,9 @@ class Team:
 
     def display_name(self, who):
         if who == "lead":
-            return "Lead · %s" % ("Codex" if self.state.get("lead_kind") == "codex" else "Claude")
+            return "Mal (lead) · %s" % ("Codex" if self.state.get("lead_kind") == "codex" else "Claude")
         w = self.state["workers"].get(who, {})
-        return "%s · %s" % (who.upper(), "Codex Sol" if w.get("kind") == "codex" else "Claude")
+        return "%s · %s" % (who.capitalize(), "Codex Sol" if w.get("kind") == "codex" else "Claude")
 
     def say(self, who, text, thread_ts=None):
         """Record locally, then post to Slack (best effort). Returns Slack ts or None.
@@ -89,7 +89,13 @@ class Team:
             self.save()
 
     # ---------- workers ----------
+    # Workers are named for Serenity's crew (the lead is Mal); past eight, w9, w10, ...
+    CREW = ("kaylee", "wash", "zoe", "simon", "river", "jayne", "inara", "book")
+
     def _new_worker_id(self):
+        for name in self.CREW:
+            if name not in self.state["workers"]:
+                return name
         n = len(self.state["workers"]) + 1
         while "w%d" % n in self.state["workers"]:
             n += 1
@@ -127,7 +133,7 @@ class Team:
             self.save()
             ts = self.say("lead", "%s *%s* (%s, %s) assigned:\n%s"
                           % (":hammer_and_wrench:" if mode == "build" else ":thought_balloon:",
-                             wid.upper(), "Codex Sol" if kind == "codex" else "Claude",
+                             wid.capitalize(), "Codex Sol" if kind == "codex" else "Claude",
                              "builder" if mode == "build" else "collaborator", task))
             if ts:
                 w["thread_ts"] = ts
@@ -435,7 +441,7 @@ class Team:
         if to not in self.state["workers"]:
             raise teamlib.RejectedMessage("no teammate %r (use team_status to see the team)" % to)
         self._peer_guard(sender, to)
-        self.say(sender, ":speech_balloon: *→ %s:* %s" % (to.upper(), text),
+        self.say(sender, ":speech_balloon: *→ %s:* %s" % (("Mal" if to == "lead" else to.capitalize()), text),
                  self.state["workers"][to]["thread_ts"])
         # Live delivery only to read-only collaborators: a steered collaborator can only say
         # things. Builders (who can write code) keep peer messages pull-only.

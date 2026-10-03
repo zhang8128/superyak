@@ -5,7 +5,7 @@
   CLI:          superyak-runtime team <op> ...    — any shell, e.g. `superyak-runtime team status`
   Daemon:       run_team.py teamd --team ...      — started by team_start, never by hand
 
-Mode: SUPERYAK_TEAM_ROLE=w<N> (set by teamd for workers) → worker; otherwise lead.
+Mode: SUPERYAK_TEAM_ROLE=<worker name> (set by teamd for workers, e.g. kaylee) → worker; unset or lead → lead.
 The lead may be Claude Code or Codex; its kind is detected from the environment
 (or SUPERYAK_TEAM_LEAD_KIND) and only changes the display name.
 Lead tools resolve the active team from the current repo (one active team per repo).
@@ -20,7 +20,7 @@ from pathlib import Path
 from . import teamlib
 
 ROLE = os.environ.get("SUPERYAK_TEAM_ROLE", "")
-IS_WORKER = ROLE.startswith("w")
+IS_WORKER = bool(ROLE) and ROLE != "lead"
 
 
 def lead_kind():
