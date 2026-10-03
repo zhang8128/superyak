@@ -933,3 +933,11 @@ def test_prepare_failure_log_stays_local(env, monkeypatch):
 def test_redaction_covers_npm_tokens_and_url_credentials():
     out = teamlib.redact("npm_" + "a" * 36 + " https://u:pw@reg.example.com/x //reg/:_authToken=abc123")
     assert "npm_aaaa" not in out and "u:pw@" not in out and "abc123" not in out
+
+
+
+def test_uv_sync_refuses_a_preexisting_venv(tmp_path):
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    with pytest.raises(ValueError):
+        workers.start_prepare("uv-sync", tmp_path, tmp_path / "log")
+    assert "--ignore-pnpmfile" in workers.PREPARE_COMMANDS["pnpm-install"]

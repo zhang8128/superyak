@@ -153,7 +153,14 @@ class Team:
         with self.lock:
             if w["state"] != "preparing":
                 return
-            proc = workers.start_prepare(prepare, w["path"], log)
+            try:
+                proc = workers.start_prepare(prepare, w["path"], log)
+            except (OSError, ValueError) as e:
+                w["state"] = "failed"
+                self.say(wid, ":x: prepare `%s` refused: %s" % (prepare, e), w["thread_ts"])
+                self._to_lead(wid, "PREPARE FAILED:", "%s: %s" % (prepare, e))
+                self.save()
+                return
             self.prepare_procs[wid] = proc
         try:
             rc = proc.wait(timeout=self.PREPARE_TIMEOUT_S)

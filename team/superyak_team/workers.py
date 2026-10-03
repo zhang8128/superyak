@@ -70,7 +70,7 @@ PREPARE_COMMANDS = {
     # --git/--script-shell on the command line beat a repo .npmrc that points them at its own program.
     "npm-ci": ["npm", "ci", "--no-audit", "--no-fund", "--ignore-scripts",
                "--git=/usr/bin/git", "--script-shell=/bin/sh"],
-    "pnpm-install": ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts",
+    "pnpm-install": ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile",
                      "--config.git=/usr/bin/git", "--config.script-shell=/bin/sh"],
     "uv-sync": ["uv", "sync", "--locked", "--no-install-project", "--no-install-workspace", "--no-build"],
 }
@@ -79,6 +79,9 @@ PREPARE_COMMANDS = {
 def start_prepare(name, cwd, log_path):
     """Start an install in its own process group so stop/end can kill all of it."""
     cmd = PREPARE_COMMANDS[name]
+    if name == "uv-sync" and (Path(cwd) / ".venv").exists():
+        # uv would run that environment's interpreter, which the branch may supply.
+        raise ValueError("refusing uv-sync: the worktree already has a .venv")
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
