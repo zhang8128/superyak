@@ -18,6 +18,13 @@ MOCK_BIN = Path(__file__).resolve().parent / "mock-bin"
 from superyak_team import teamd, teamlib, workers  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolated_team_home(tmp_path, monkeypatch):
+    """No test touches the real ~/.superyak/team or the OS secret store."""
+    monkeypatch.setenv("SUPERYAK_TEAM_HOME", str(tmp_path / "teamhome"))
+    monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "file")
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
@@ -235,6 +242,7 @@ def test_claude_worker_runs_in_claude_code_sandbox(env):
     assert perms["defaultMode"] == "dontAsk"
     assert "Edit(//tmp/wt/**)" in perms["allow"] and "Read(//tmp/repo/**)" in perms["allow"]
     assert "Bash(git push*)" in perms["deny"] and "Bash(security*)" in perms["deny"]
+    assert "Bash(secret-tool*)" in perms["deny"]
 
 
 # ---------- Slack routing ----------
@@ -420,13 +428,73 @@ def test_workers_message_each_other_and_lead(env):
 def test_file_token_store_is_never_a_silent_fallback(monkeypatch):
     monkeypatch.delenv("SUPERYAK_TEAM_TOKEN_STORE", raising=False)
 
-    class Linux:
-        sysname = "Linux"
-    monkeypatch.setattr(teamlib.os, "uname", lambda: Linux)
-    with pytest.raises(teamlib.RejectedMessage, match="Keychain"):
+    class Other:
+        sysname = "FreeBSD"
+    monkeypatch.setattr(teamlib.os, "uname", lambda: Other)
+    with pytest.raises(teamlib.RejectedMessage, match="Secret Service"):
         teamlib._token_store()
     monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "file")   # explicit, test-only opt-in
     assert teamlib._token_store() == "file"
+
+
+def test_linux_uses_secret_service_not_files(monkeypatch):
+    monkeypatch.delenv("SUPERYAK_TEAM_TOKEN_STORE", raising=False)
+
+    class Linux:
+        sysname = "Linux"
+    monkeypatch.setattr(teamlib.os, "uname", lambda: Linux)
+    assert teamlib._token_store() == "secret-service"
+
+
+def test_secret_service_master_key_never_in_argv(monkeypatch):
+    calls = []
+    store = {}
+
+    def fake_run(argv, input=None, **kw):
+        calls.append((list(argv), input))
+        class R:
+            returncode, stdout = 1, ""
+        r = R()
+        if argv[:2] == ["secret-tool", "lookup"] and "master" in store:
+            r.returncode, r.stdout = 0, store["master"] + "\n"
+        if argv[:2] == ["secret-tool", "store"] and input:
+            store["master"] = input
+            r.returncode = 0
+        return r
+
+    monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "secret-service")
+    monkeypatch.setattr(teamlib.subprocess, "run", fake_run)
+    key = teamlib._master_key()
+    assert len(key) == 64 and teamlib._master_key() == key   # created once, then reused
+    assert all(key not in " ".join(argv) for argv, _ in calls)   # only ever on stdin
+    assert sum(argv[1] == "store" for argv, _ in calls) == 1
+
+
+def test_secret_tool_finds_the_session_bus_without_env(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_run(argv, env=None, **kw):
+        seen.append(env)
+        class R:
+            returncode, stdout = 0, "k" * 64
+        return R()
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)   # as under Codex
+    monkeypatch.setattr(teamlib.os.path, "exists", lambda p: p == "/run/user/%d/bus" % os.getuid())
+    monkeypatch.setattr(teamlib.os, "uname", lambda: type("U", (), {"sysname": "Linux"}))
+    monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "secret-service")
+    monkeypatch.setattr(teamlib.subprocess, "run", fake_run)
+    assert teamlib._master_key() == "k" * 64
+    assert teamlib.keychain_secret("superyak-team-slack-bot") == "k" * 64
+    assert all(e["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/%d/bus" % os.getuid() for e in seen)
+
+
+def test_secret_service_unavailable_fails_closed(monkeypatch):
+    def no_secret_tool(argv, **kw):
+        raise FileNotFoundError(argv[0])
+    monkeypatch.setenv("SUPERYAK_TEAM_TOKEN_STORE", "secret-service")
+    monkeypatch.setattr(teamlib.subprocess, "run", no_secret_tool)
+    with pytest.raises(teamlib.RejectedMessage, match="Secret Service"):
+        teamlib._master_key()
 
 
 def test_peer_messages_are_pull_only_never_wake_or_steer(env, monkeypatch):

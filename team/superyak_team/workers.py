@@ -294,7 +294,7 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
              [engram_prefix + t for t in ENGRAM_TOOLS]
     deny = ["Read(//**/.env)", "Read(//**/.env.*)", "WebFetch",
             "Bash(git push*)", "Bash(git commit*)", "Bash(git reset*)", "Bash(git rebase*)",
-            "Bash(security*)", "Bash(*security *)"]
+            "Bash(security*)", "Bash(*security *)", "Bash(secret-tool*)", "Bash(*secret-tool *)"]
     if mode == "collab":
         deny += ["Edit", "Write", "NotebookEdit"]
         allow_write = []

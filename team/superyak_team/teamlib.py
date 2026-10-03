@@ -306,10 +306,24 @@ def check_rate(team_id, sender, now=None):
     return None
 
 
+def _secret_tool_env():
+    """Codex starts MCP servers with a minimal environment (HOME, PATH, USER, ...; seen
+    2026-10-03), without the D-Bus address secret-tool needs; use the standard per-user bus."""
+    env = dict(os.environ)
+    bus = "/run/user/%d/bus" % os.getuid()
+    if not env.get("DBUS_SESSION_BUS_ADDRESS") and os.path.exists(bus):
+        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + bus
+    return env
+
+
 def keychain_secret(service):
+    """A secret from the OS store: the macOS Keychain, or the Secret Service (the default
+    keyring, e.g. GNOME Keyring) on Linux. None if missing or unavailable."""
+    argv = (["secret-tool", "lookup", "service", service] if _os_store() == "secret-service"
+            else ["security", "find-generic-password", "-s", service, "-w"])
     try:
-        out = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
-                             capture_output=True, text=True, timeout=10)
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=10,
+                             env=_secret_tool_env() if argv[0] == "secret-tool" else None)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
@@ -337,29 +351,38 @@ def sock_path(team_id):
 
 
 # Caller tokens are split across two stores so that neither worker sandbox can reach both
-# halves (each verified live 2026-10-02):
-#   - master key: macOS Keychain. Codex's workspace-write sandbox cannot reach the Keychain
-#     (security exits 44) but can read files under $HOME.
+# halves (each verified live: macOS 2026-10-02, Linux 2026-10-03):
+#   - master key: the OS secret store. macOS Keychain: Codex's workspace-write sandbox cannot
+#     reach it (security exits 44). Linux Secret Service: it is only reachable over the D-Bus
+#     session socket, and neither sandbox can connect to a Unix socket (Codex: connect gets
+#     EPERM; Claude: creating the socket gets EPERM). Both sandboxes can read files under $HOME.
 #   - per-caller secret: owner-only file under the teams root. Claude Code's sandbox can
 #     reach the Keychain but gets an OS-enforced denyRead on the teams root.
 # token = HMAC-SHA256(master, team|caller|secret). Only the team MCP servers and teamd,
 # which run outside any sandbox, can compute it. (Command-level deny rules are not a
 # boundary: a `security` call via python bypassed `Bash(security*)` in a live probe.)
-# SUPERYAK_TEAM_TOKEN_STORE=file keeps the master key in a file too (tests, non-macOS).
+# SUPERYAK_TEAM_TOKEN_STORE=file keeps the master key in a file too (tests only).
 TOKEN_SERVICE = "superyak-team"
 MASTER_ACCOUNT = "master"
+TOKEN_STORES = ("keychain", "secret-service", "file")
+
+
+def _os_store():
+    return "keychain" if os.uname().sysname == "Darwin" else "secret-service"
 
 
 def _token_store():
-    """Keychain on macOS. The file store keeps both token halves where Codex workers can read
-    them, so it is test-only: used only on explicit opt-in, never as a silent fallback."""
+    """Keychain on macOS, Secret Service on Linux. The file store keeps both token halves where
+    Codex workers can read them, so it is test-only: used only on explicit opt-in, never as a
+    silent fallback."""
     explicit = os.environ.get("SUPERYAK_TEAM_TOKEN_STORE")
-    if explicit in ("keychain", "file"):
+    if explicit in TOKEN_STORES:
         return explicit
-    if os.uname().sysname == "Darwin":
-        return "keychain"
-    raise RejectedMessage("team mode needs the macOS Keychain to keep worker sandboxes from "
-                          "forging tokens; set SUPERYAK_TEAM_TOKEN_STORE=file only for tests")
+    if os.uname().sysname in ("Darwin", "Linux"):
+        return _os_store()
+    raise RejectedMessage("team mode needs the macOS Keychain or a Linux Secret Service keyring "
+                          "to keep worker sandboxes from forging tokens; set "
+                          "SUPERYAK_TEAM_TOKEN_STORE=file only for tests")
 
 
 def _token_file(team_id, caller):
@@ -375,22 +398,53 @@ def _write_private(path, value):
         f.write(value)
 
 
+def _keychain_master():
+    def lookup():
+        r = subprocess.run(["security", "find-generic-password", "-a", MASTER_ACCOUNT,
+                            "-s", TOKEN_SERVICE, "-w"], capture_output=True, text=True, timeout=15)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    key = lookup()
+    if not key:
+        # Never put the secret in argv (visible to same-user processes via ps, sandboxed
+        # workers included): `security -i` reads the command from stdin instead.
+        subprocess.run(["security", "-i"], input="add-generic-password -a %s -s %s -w %s\n"
+                       % (MASTER_ACCOUNT, TOKEN_SERVICE, secrets.token_hex(32)),
+                       capture_output=True, text=True, timeout=15)
+        key = lookup()   # re-read: a concurrent creator may have won
+    return key
+
+
+def _secret_service_master():
+    attrs = ["service", TOKEN_SERVICE, "account", MASTER_ACCOUNT]
+
+    def lookup():
+        try:
+            r = subprocess.run(["secret-tool", "lookup"] + attrs, capture_output=True, text=True,
+                               timeout=60, env=_secret_tool_env())   # 60s: time to answer an unlock prompt
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        return r.stdout.strip() if r.returncode == 0 else ""
+    key = lookup()
+    if not key:
+        # Into the default keyring; secret-tool reads the secret from stdin, never argv.
+        try:
+            subprocess.run(["secret-tool", "store", "--label=Superyak team master key"] + attrs,
+                           input=secrets.token_hex(32), capture_output=True, text=True, timeout=60,
+                           env=_secret_tool_env())
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        key = lookup()   # re-read: a concurrent creator may have won
+    return key
+
+
 def _master_key():
-    if _token_store() == "keychain":
-        def lookup():
-            r = subprocess.run(["security", "find-generic-password", "-a", MASTER_ACCOUNT,
-                                "-s", TOKEN_SERVICE, "-w"], capture_output=True, text=True, timeout=15)
-            return r.stdout.strip() if r.returncode == 0 else ""
-        key = lookup()
+    store = _token_store()
+    if store in ("keychain", "secret-service"):
+        key = _keychain_master() if store == "keychain" else _secret_service_master()
         if not key:
-            # Never put the secret in argv (visible to same-user processes via ps, sandboxed
-            # workers included): `security -i` reads the command from stdin instead.
-            subprocess.run(["security", "-i"], input="add-generic-password -a %s -s %s -w %s\n"
-                           % (MASTER_ACCOUNT, TOKEN_SERVICE, secrets.token_hex(32)),
-                           capture_output=True, text=True, timeout=15)
-            key = lookup()   # re-read: a concurrent creator may have won
-        if not key:
-            raise RejectedMessage("team master key unavailable in Keychain")
+            raise RejectedMessage("team master key unavailable in the %s" % (
+                "Keychain" if store == "keychain" else
+                "Secret Service (is a default keyring set up and unlocked? needs secret-tool)"))
         return key
     path = teams_root() / ".master"
     if not path.exists():

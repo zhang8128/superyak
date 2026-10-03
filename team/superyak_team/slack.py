@@ -1,7 +1,7 @@
 """Minimal Slack Web API client for team mode (urllib, no SDK).
 
-Only teamd uses this. The bot token is read from the macOS Keychain and never
-written to disk or logs. All calls fail soft: Slack being down must never stop
+Only teamd uses this. The bot token is read from the OS secret store (macOS Keychain,
+Linux Secret Service) and never written to disk or logs. All calls fail soft: Slack being down must never stop
 the team, because messages.jsonl is the source of truth.
 """
 import json
