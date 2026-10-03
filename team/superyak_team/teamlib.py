@@ -35,6 +35,9 @@ SECRET_RES = (
     re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\b[Bb]earer\s+[A-Za-z0-9._~+/=-]{30,}"),
+    re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
+    re.compile(r"\b(?:https?|git|ssh)://[^/\s:@]+:[^@\s/]+@"),        # credentials in URLs
+    re.compile(r"_authToken\s*=\s*\S+"),
 )
 TAG_RE = re.compile(r"^(\s*)\[team\] from \S+?:", re.MULTILINE)
 

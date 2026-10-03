@@ -11,6 +11,7 @@ import os
 import signal
 import stat
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -31,6 +32,7 @@ class Team:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
         self.procs = {}
+        self.prepare_procs = {}
         self.stopping = threading.Event()
         if not teamlib.get_token(team_id, "lead"):
             teamlib.issue_token(team_id, "lead")
@@ -140,12 +142,26 @@ class Team:
             return {"worker": wid, "mode": mode, "state": w["state"], "branch": w["branch"],
                     "worktree": w["path"] if mode == "build" else None}
 
+    PREPARE_TIMEOUT_S = 1800
+
     def _prepare(self, wid, prepare):
         """Install dependencies for a builder before its first turn. Runs outside the sandbox
-        because workers have no network; only commands from workers.PREPARE_COMMANDS."""
+        because workers have no network; only commands from workers.PREPARE_COMMANDS, no
+        lifecycle scripts, killed with the worker on stop/end, log kept local (not posted)."""
         w = self.state["workers"][wid]
-        rc, tail = workers.run_prepare(prepare, w["path"], self.dir / "workers" / wid / "prepare.log")
+        log = self.dir / "workers" / wid / "prepare.log"
         with self.lock:
+            if w["state"] != "preparing":
+                return
+            proc = workers.start_prepare(prepare, w["path"], log)
+            self.prepare_procs[wid] = proc
+        try:
+            rc = proc.wait(timeout=self.PREPARE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            self._kill_group(proc)
+            rc = "timeout"
+        with self.lock:
+            self.prepare_procs.pop(wid, None)
             if w["state"] != "preparing":          # stopped meanwhile
                 return
             if rc == 0:
@@ -154,9 +170,21 @@ class Team:
                 self._fill_slots()
             else:
                 w["state"] = "failed"
-                self.say(wid, ":x: prepare `%s` failed (rc=%s)\n```%s```" % (prepare, rc, tail), w["thread_ts"])
-                self._to_lead(wid, "PREPARE FAILED:", "%s rc=%s" % (prepare, rc))
+                self.say(wid, ":x: prepare `%s` failed (rc=%s); log kept locally for the lead."
+                         % (prepare, rc), w["thread_ts"])
+                self._to_lead(wid, "PREPARE FAILED:", "%s rc=%s, see %s" % (prepare, rc, log))
             self.save()
+
+    @staticmethod
+    def _kill_group(proc):
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
 
     def _running_count(self):
         return sum(1 for w in self.state["workers"].values() if w["state"] in ACTIVE)
@@ -555,6 +583,9 @@ class Team:
 
     def stop_worker(self, wid):
         with self.lock:
+            prep = self.prepare_procs.pop(wid, None)
+            if prep and prep.poll() is None:
+                self._kill_group(prep)
             proc = self.procs.pop(wid, None)
             if proc and proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)

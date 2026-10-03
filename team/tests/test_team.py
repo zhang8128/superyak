@@ -890,7 +890,7 @@ def test_prepare_installs_before_first_turn_and_only_from_menu(env, monkeypatch)
     assert run_until(team, lambda: w["state"] in ("running", "idle"))
     assert (Path(w["path"]) / "node_modules" / ".installed").exists()
     log = env["log"].read_text()
-    assert log.index("ci --no-audit --no-fund") < log.index("exec")        # install before the turn
+    assert log.index("ci --no-audit --no-fund --ignore-scripts") < log.index("exec")   # install first, no scripts
     for bad in ("rm -rf /", "npm install evil", "make"):
         with pytest.raises(teamlib.RejectedMessage):
             _req(team, "spawn", "lead", {"task": "t", "kind": "codex", "prepare": bad})
@@ -905,3 +905,31 @@ def test_prepare_failure_marks_worker_failed(env, monkeypatch):
     w = team.state["workers"][r["worker"]]
     assert run_until(team, lambda: w["state"] == "failed")
     assert w["turns"] == 0
+
+
+
+def test_prepare_is_killed_on_stop(env, monkeypatch):
+    monkeypatch.setenv("MOCK_NPM_SECONDS", "30")
+    team = make_team(env)
+    r = team.spawn("t", "codex", prepare="npm-ci")
+    deadline = time.time() + 5
+    while time.time() < deadline and r["worker"] not in team.prepare_procs:
+        time.sleep(0.05)
+    proc = team.prepare_procs[r["worker"]]
+    team.stop_worker(r["worker"])
+    assert proc.poll() is not None                                        # install killed
+    assert team.state["workers"][r["worker"]]["state"] == "stopped"
+
+
+def test_prepare_failure_log_stays_local(env, monkeypatch):
+    monkeypatch.setenv("MOCK_NPM_EXIT", "1")
+    slack = FakeSlack()
+    team2 = make_team(env, slack=slack)
+    r2 = team2.spawn("t", "codex", prepare="npm-ci")
+    assert run_until(team2, lambda: team2.state["workers"][r2["worker"]]["state"] == "failed")
+    assert not any("s3cr3tpass" in p["text"] for p in slack.posts)
+
+
+def test_redaction_covers_npm_tokens_and_url_credentials():
+    out = teamlib.redact("npm_" + "a" * 36 + " https://u:pw@reg.example.com/x //reg/:_authToken=abc123")
+    assert "npm_aaaa" not in out and "u:pw@" not in out and "abc123" not in out

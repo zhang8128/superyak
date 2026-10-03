@@ -63,26 +63,25 @@ def _driver_overrides(gitdir):
 
 # Dependency installs teamd may run in a builder's worktree before its first turn (workers have
 # no network). A fixed menu, never a lead-supplied command line.
+# Installs run unsandboxed, so they never run lifecycle scripts: neither the repo's (which may
+# come from someone else's branch) nor dependencies'. A package that truly needs its install
+# script is rebuilt deliberately by the lead; uv installs wheels only (never builds sdists).
 PREPARE_COMMANDS = {
-    "npm-ci": ["npm", "ci", "--no-audit", "--no-fund"],
-    "pnpm-install": ["pnpm", "install", "--frozen-lockfile"],
-    "uv-sync": ["uv", "sync", "--locked"],
+    "npm-ci": ["npm", "ci", "--no-audit", "--no-fund", "--ignore-scripts"],
+    "pnpm-install": ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"],
+    "uv-sync": ["uv", "sync", "--locked", "--no-install-project", "--no-install-workspace", "--no-build"],
 }
 
 
-def run_prepare(name, cwd, log_path, timeout=1800):
+def start_prepare(name, cwd, log_path):
+    """Start an install in its own process group so stop/end can kill all of it."""
     cmd = PREPARE_COMMANDS[name]
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    try:
-        with open(log_path, "w") as log:
-            rc = subprocess.run(cmd, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=log,
-                                stderr=subprocess.STDOUT, env=env, timeout=timeout).returncode
-    except (OSError, subprocess.TimeoutExpired) as e:
-        rc = "error: %s" % type(e).__name__
-    tail = log_path.read_text(errors="replace")[-400:] if log_path.exists() else ""
-    return rc, teamlib.redact(tail)
+    log = open(log_path, "w")
+    return subprocess.Popen(cmd, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=log,
+                            stderr=subprocess.STDOUT, env=env, start_new_session=True)
 
 
 def worker_git(path, gitdir, *args, check=True, input=None):

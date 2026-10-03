@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
 echo "$*" >> "${MOCK_TEAM_LOG:-/dev/null}"
+sleep "${MOCK_NPM_SECONDS:-0}"
 mkdir -p node_modules && echo ok > node_modules/.installed
+echo "fetch https://user:s3cr3tpass@registry.example.com/pkg"
 exit "${MOCK_NPM_EXIT:-0}"
