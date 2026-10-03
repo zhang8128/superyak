@@ -19,6 +19,7 @@ ATLAS_PYTHON ?= $(CURDIR)/atlas/.venv/bin/python
 ATLAS_PROJECT ?= $(CURDIR)/.engram/atlas/project
 ATLAS_ARGS ?= --help
 HOME_DATA ?= $(CURDIR)/.engram/home
+LIGHTHOUSE ?=
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
 HOME_ARGS ?=
@@ -27,7 +28,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: request-access setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -35,6 +36,7 @@ help:
 	@echo "make tuning             Dataset, model, train, evaluate and Slurm CLI; TUNING_ARGS sets options"
 	@echo "make setup-peer / check-peer  Install/check the standalone personal home"
 	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
+	@echo "make request-access LIGHTHOUSE=https://…  Ask a lighthouse for an account and wait for approval"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
 	@echo "make setup              Install all five components from their lockfiles"
 	@echo "make check              Run all suites and interoperability checks"
@@ -152,6 +154,10 @@ home-demo:
 	uv run --locked --project peer python -m superyak_peer demo --data-dir "$(HOME_DEMO_DATA)"
 	@echo "Superyak demo: http://127.0.0.1:$(HOME_PORT)"
 	uv run --locked --project peer python -m superyak_peer serve --local-demo --data-dir "$(HOME_DEMO_DATA)" --port "$(HOME_PORT)" $(HOME_ARGS)
+
+request-access:
+	@test -n "$(LIGHTHOUSE)" || { echo 'Usage: make request-access LIGHTHOUSE=https://smart.<tailnet>.ts.net'; exit 2; }
+	python3 peer/scripts/request_access.py "$(LIGHTHOUSE)"
 
 home:
 	@echo "Superyak: http://127.0.0.1:$(HOME_PORT)"

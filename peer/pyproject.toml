@@ -39,6 +39,7 @@ only-include = [
     "README.md",
     "hatch_build.py",
     "pyproject.toml",
+    "scripts/request_access.py",
     "scripts/source_bundle.py",
     "scripts/two_peer_check.py",
     "superyak_peer/__init__.py",
