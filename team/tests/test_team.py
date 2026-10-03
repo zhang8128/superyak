@@ -941,3 +941,15 @@ def test_prepare_commands_never_run_repo_code():
     assert set(workers.PREPARE_COMMANDS) == {"npm-ci", "pnpm-install"}
     assert "--ignore-scripts" in workers.PREPARE_COMMANDS["npm-ci"]
     assert {"--ignore-scripts", "--ignore-pnpmfile"} <= set(workers.PREPARE_COMMANDS["pnpm-install"])
+
+
+
+def test_message_queued_into_running_codex_turn_stays_readable(env, monkeypatch):
+    team = make_team(env)
+    r = team.spawn("t", "codex")
+    w = team.state["workers"][r["worker"]]
+    w["state"], w["ident"] = "running", "thread-1"
+    monkeypatch.setattr(teamd.workers, "queue_message", lambda ident, text: True)
+    assert team.deliver(r["worker"], "you may edit x.test.ts", "lead")["pushed"] is True
+    unread = [m for m in w["inbox"] if not m.get("read")]
+    assert [m["message"] for m in unread] == ["you may edit x.test.ts"]   # team_read still sees it

@@ -280,8 +280,9 @@ class Team:
             if not push:
                 pass
             elif w["state"] == "running" and w["kind"] == "codex" and w["ident"]:
-                item["pushed"] = item["read"] = workers.queue_message(
-                    w["ident"], teamlib.fence_external(sender, text))
+                # `codex queue` only lands at a turn boundary, so a queued message stays unread:
+                # team_read returns it now and the next resume repeats it if still unread.
+                item["pushed"] = workers.queue_message(w["ident"], teamlib.fence_external(sender, text))
             elif w["state"] == "idle" or (w["state"] == "done" and w.get("mode") == "collab"):
                 # a collaborator that already concluded can still be asked to respond
                 self._resume_with_inbox(wid)
@@ -290,8 +291,7 @@ class Team:
 
     def _resume_with_inbox(self, wid):
         w = self.state["workers"][wid]
-        pending = [m for m in w["inbox"]
-                   if not m.get("read") and not m.get("pushed") and not m.get("pull_only")]
+        pending = [m for m in w["inbox"] if not m.get("read") and not m.get("pull_only")]
         if not pending:
             return False
         peer_only = all(m["from"] in self.state["workers"] for m in pending)
