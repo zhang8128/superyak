@@ -1,4 +1,6 @@
 import json
+import os
+import shlex
 import pytest
 from superyak_agent import vault_git
 from superyak_agent.__main__ import main
@@ -71,6 +73,64 @@ def test_install_key_adds_one_restricted_line_and_keeps_the_rest(repo, tmp_path)
             vault_git.install_key(bad, repo, '/usr/bin/python3', '/r/agent/run_agent.py', keys)
 
 
+# Characters that str.splitlines() treats as line ends but sshd does not: one more key line to nobody's knowledge.
+LINE_BREAKS = ['\u2028', '\u2029', '\x1c', '\x1d', '\x1e', '\x0b', '\x0c', '\x85', '\r', '\t', '\x00', '\x7f', '\u00e9']
+
+
+@pytest.mark.parametrize('char', LINE_BREAKS)
+def test_install_key_refuses_a_comment_that_hides_a_second_key_line(repo, tmp_path, char):
+    keys = tmp_path / 'authorized_keys'
+    evil = f'ssh-ed25519 AAAAsync stanley{char}ssh-ed25519 AAAAevil evil'
+    with pytest.raises(ValueError):
+        vault_git.install_key(evil, repo, '/usr/bin/python3', '/r/agent/run_agent.py', keys)
+    assert not keys.exists()
+
+
+def test_install_key_keeps_existing_lines_byte_for_byte_even_with_odd_characters(repo, tmp_path):
+    keys = tmp_path / 'authorized_keys'
+    odd = 'ssh-ed25519 AAAAold odd\u2028comment\x1cssh-ed25519 AAAAhidden x'.encode()
+    original = b'# a comment\n' + odd + b'\n\xff\xfe not utf-8\n\n'
+    keys.write_bytes(original)
+    keys.chmod(0o644)
+    old_umask = os.umask(0)
+    try:
+        assert vault_git.install_key('ssh-ed25519 AAAAone one', repo, '/usr/bin/python3', '/r/run.py', keys) is True
+        assert vault_git.install_key('ssh-ed25519 AAAAtwo two', repo, '/usr/bin/python3', '/r/run.py', keys) is True
+    finally:
+        os.umask(old_umask)
+    data = keys.read_bytes()
+    assert data.startswith(original) and data.count(b'\n') == original.count(b'\n') + 2
+    assert [line for line in data.split(b'\n') if b'AAAAhidden' in line] == [odd]  # never split into its own line
+    assert data.endswith(b' ssh-ed25519 AAAAtwo two\n')
+    assert vault_git.install_key('ssh-ed25519 AAAAhidden again', repo, '/usr/bin/python3', '/r/run.py', keys) is False
+    assert keys.stat().st_mode & 0o777 == 0o600
+    backup = keys.with_name('authorized_keys.bak-wormhole')
+    assert backup.stat().st_mode & 0o777 == 0o600 and backup.read_bytes().startswith(original)  # even with umask 0
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith('.') or p.name.startswith('authorized')) == [
+        'authorized_keys', 'authorized_keys.bak-wormhole']
+
+
+def test_install_key_adds_the_missing_newline_before_its_line(repo, tmp_path):
+    keys = tmp_path / 'authorized_keys'
+    keys.write_text('ssh-ed25519 AAAAold old')
+    assert vault_git.install_key('ssh-ed25519 AAAAone one', repo, '/usr/bin/python3', '/r/run.py', keys) is True
+    assert keys.read_text().splitlines()[0] == 'ssh-ed25519 AAAAold old' and keys.read_text().count('\n') == 2
+
+
+def test_the_forced_command_is_shell_quoted(tmp_path):
+    spaced = tmp_path / 'my vault $HOME' / 'Station.aDNA.git'
+    spaced.mkdir(parents=True)
+    keys = tmp_path / 'authorized_keys'
+    assert vault_git.install_key('ssh-ed25519 AAAAone one', spaced, '/opt/my python/bin/python3', '/r/run agent.py', keys)
+    line = keys.read_text().splitlines()[0]
+    command = line[len('restrict,command="'):line.index('" ssh-ed25519')]
+    assert shlex.split(command) == ['/opt/my python/bin/python3', '/r/run agent.py', 'vault-git', '--repo', str(spaced.resolve())]
+    assert "'" in command and '"' not in command
+    for python, run_agent in (("/it's/python", '/r/run.py'), ('/usr/bin/python3', '/r/"run".py')):
+        with pytest.raises(ValueError):  # a quote or backslash cannot sit inside authorized_keys' command="…"
+            vault_git.install_key('ssh-ed25519 AAAAtwo two', spaced, python, run_agent, keys)
+
+
 # --- the CLI commands ---------------------------------------------------------------------------------
 
 def test_wormhole_key_command_authorizes_once(repo, tmp_path, capsys):
@@ -102,3 +162,48 @@ def test_wormhole_init_and_personas_commands(tmp_path, capsys):
     assert main(['wormhole-personas', '--out', str(out), '--registry', registry.as_uri()]) == 0
     assert json.loads(out.read_text()) == {'venus': {'persona': 'Venus', 'vault': 'Network.aDNA'}}
     assert '1 personas written' in capsys.readouterr().out
+
+
+def key_args(keys, repo, *extra):
+    return ['wormhole-key', '--repo', str(repo), '--authorized-keys', str(keys), *extra]
+
+
+def test_wormhole_key_command_reports_a_bad_key_in_one_line(repo, tmp_path, capsys):
+    keys = tmp_path / 'authorized_keys'
+    assert main(key_args(keys, repo, '--key', 'ssh-ed25519 AAAA\nssh-ed25519 BBBB evil')) == 2
+    captured = capsys.readouterr()
+    assert captured.out == '' and captured.err.count('\n') == 1 and 'Give one SSH public key line' in captured.err
+    assert not keys.exists()
+
+
+@pytest.mark.parametrize('text', ['ssh-ed25519 AAAAsync stanley-sync', 'ssh-ed25519 AAAAsync stanley-sync\n'])
+def test_wormhole_key_command_reads_the_key_from_a_file(repo, tmp_path, capsys, text):
+    keys, pub = tmp_path / 'authorized_keys', tmp_path / 'stanley.pub'
+    pub.write_text(text)
+    assert main(key_args(keys, repo, '--key-file', str(pub))) == 0
+    assert 'Key authorized' in capsys.readouterr().out
+    assert keys.read_text().splitlines()[0].endswith(' ssh-ed25519 AAAAsync stanley-sync') and keys.read_text().count('\n') == 1
+
+
+@pytest.mark.parametrize('text', ['ssh-ed25519 AAAAone a\nssh-ed25519 AAAAtwo b\n', 'ssh-ed25519 AAAAone a\n\n', 'ssh-ed25519 AAAAone a\r\n',
+                                  '', '\n', 'garbage'])
+def test_wormhole_key_command_refuses_a_key_file_that_is_not_exactly_one_key_line(repo, tmp_path, capsys, text):
+    keys, pub = tmp_path / 'authorized_keys', tmp_path / 'stanley.pub'
+    pub.write_text(text)
+    assert main(key_args(keys, repo, '--key-file', str(pub))) == 2
+    assert capsys.readouterr().err.count('\n') == 1 and not keys.exists()
+
+
+def test_wormhole_key_command_reports_a_missing_key_file(repo, tmp_path, capsys):
+    assert main(key_args(tmp_path / 'authorized_keys', repo, '--key-file', str(tmp_path / 'nothing.pub'))) == 2
+    assert 'nothing.pub' in capsys.readouterr().err
+
+
+def test_wormhole_key_command_needs_exactly_one_of_key_and_key_file(repo, tmp_path):
+    keys = tmp_path / 'authorized_keys'
+    (tmp_path / 'a.pub').write_text('ssh-ed25519 AAAAone a\n')
+    for extra in ([], ['--key', 'ssh-ed25519 AAAAone a', '--key-file', str(tmp_path / 'a.pub')]):
+        with pytest.raises(SystemExit) as exit_info:
+            main(key_args(keys, repo, *extra))
+        assert exit_info.value.code == 2
+    assert not keys.exists()

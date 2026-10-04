@@ -26,7 +26,7 @@ AGENT_PYTHON ?= python3
 STATION_DATA ?= $(HOME)/.local/share/superyak/lighthouse
 WORMHOLE_HOME ?= $(HOME)/.local/share/superyak/wormhole
 STATION_VAULT_REPO ?= $(HOME)/aDNA/Station.aDNA.git
-KEY ?=
+KEY_FILE ?=
 APPROVER ?= andy
 ID ?=
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
@@ -51,7 +51,7 @@ help:
 	@echo "make station-pending      On the Pi: list waiting dockings and access requests by short id"
 	@echo "make station-approve ID=… On the Pi: approve one (APPROVER=andy); make station-deny ID=… refuses it"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
-	@echo "make wormhole-key KEY='ssh-ed25519 AAAA… comment'  On the Pi: authorize Stanley's sync key for the station vault only"
+	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
 	@echo "make setup              Install all five components from their lockfiles"
 	@echo "make check              Run all suites and interoperability checks"
@@ -194,8 +194,8 @@ wormhole-personas:
 	python3 agent/run_agent.py wormhole-personas --out "$(WORMHOLE_HOME)/personas.json"
 
 wormhole-key:
-	@test -n "$(KEY)" || { echo "Usage: make wormhole-key KEY='ssh-ed25519 AAAA… comment'"; exit 2; }
-	python3 agent/run_agent.py wormhole-key --key "$(KEY)" --repo "$(STATION_VAULT_REPO)"
+	@test -n "$(KEY_FILE)" || { echo "Usage: make wormhole-key KEY_FILE=<path to Stanley's sync key .pub file>"; exit 2; }
+	python3 agent/run_agent.py wormhole-key --key-file "$(KEY_FILE)" --repo "$(STATION_VAULT_REPO)"
 
 home:
 	@echo "Superyak: http://127.0.0.1:$(HOME_PORT)"

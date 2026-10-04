@@ -54,7 +54,9 @@ def build_parser():
     vg = commands.add_parser('vault-git', help='Forced command for the sync key (fetch/push one repository only)')
     vg.add_argument('--repo', type=Path, required=True)
     key = commands.add_parser('wormhole-key', help="Authorize Stanley's sync key for the station vault only")
-    key.add_argument('--key', required=True)
+    which = key.add_mutually_exclusive_group(required=True)
+    which.add_argument('--key', help='The public key line (in a shell it may be mangled; prefer --key-file)')
+    which.add_argument('--key-file', type=Path, help='A .pub file holding exactly one public key line')
     key.add_argument('--repo', type=Path, required=True)
     key.add_argument('--authorized-keys', type=Path, default=Path.home() / '.ssh' / 'authorized_keys')
     return parser
@@ -163,7 +165,15 @@ def main(argv=None):
         import sys
         from .vault_git import install_key
         run_agent = Path(__file__).resolve().parents[1] / 'run_agent.py'
-        added = install_key(args.key, args.repo, sys.executable, run_agent, args.authorized_keys)
+        try:
+            key = args.key
+            if args.key_file:
+                key = args.key_file.read_bytes().decode('utf-8')  # no newline translation: CRLF is refused too
+                key = key[:-1] if key.endswith('\n') else key  # one trailing newline; install_key refuses any other
+            added = install_key(key, args.repo, sys.executable, run_agent, args.authorized_keys)
+        except (ValueError, OSError) as error:  # a bad key, an unreadable key file or authorized_keys
+            print(f'wormhole-key: {error}', file=sys.stderr)
+            return 2
         print('Key authorized: it can only fetch and push the station vault.' if added else
               'That key is already in authorized_keys; nothing changed. If it is an unrestricted key, ask for a dedicated one.')
         return 0

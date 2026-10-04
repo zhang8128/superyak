@@ -4,13 +4,15 @@ import os
 from pathlib import Path
 import re
 import shlex
-import shutil
 import subprocess
 import sys
+import tempfile
 
 VERBS = ('git-upload-pack', 'git-receive-pack')
-KEY_LINE = re.compile(r'^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com) '
-                      r'[A-Za-z0-9+/]+=*( [^"\\]*)?$')
+# The comment is printable ASCII without `"` and `\`: nothing str.splitlines(), a shell or sshd could read as a line end
+# or an option, so a comment cannot smuggle in a second (unrestricted) key line.
+KEY_LINE = re.compile(r'(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com) '
+                      r'[A-Za-z0-9+/]+=*( [\x20\x21\x23-\x5b\x5d-\x7e]*)?')
 
 
 def allowed(command, repo, home=None):
@@ -52,24 +54,40 @@ def serve(repo, environ=os.environ, execvp=os.execvp, log=None):
     return 0
 
 
+def _write_private(path, data):
+    """Replace `path` with `data` (bytes), 0600 from the start, never leaving a half-written file in its place."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            os.fchmod(fd, 0o600)
+            stream.write(data)
+            stream.flush()
+            os.fsync(fd)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def install_key(key, repo, python, run_agent, authorized_keys):
-    """Append one `restrict,command=…` line for `key`. Returns False when the key is already there."""
-    if '\n' in key or '\r' in key or not KEY_LINE.match(key.strip()):
+    """Append one `restrict,command=…` line for `key`. Returns False when the key is already there. Lines already
+    in the file are kept byte for byte: it is read and written as bytes and split on b"\\n" only."""
+    if '\n' in key or '\r' in key or not KEY_LINE.fullmatch(key.strip()):
         raise ValueError('Give one SSH public key line, e.g. "ssh-ed25519 AAAA… comment"')
     key = key.strip()
-    command = f'{python} {run_agent} vault-git --repo {Path(repo).resolve()}'
+    command = ' '.join([shlex.quote(str(python)), shlex.quote(str(run_agent)), 'vault-git', '--repo',
+                        shlex.quote(str(Path(repo).resolve()))])  # sshd runs it through the login shell
     if '"' in command or '\\' in command:
         raise ValueError('Paths with quotes or backslashes are not supported')
     path = Path(authorized_keys)
-    lines = path.read_text().splitlines() if path.exists() else []
-    if any(key.split()[1] in line.split() for line in lines):
+    data = path.read_bytes() if path.exists() else b''
+    blob = key.split()[1].encode()
+    if any(blob in line.split() for line in data.split(b'\n')):
         return False
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.exists():
-        shutil.copy2(path, path.with_name(path.name + '.bak-wormhole'))
-    tmp = path.with_name(path.name + '.tmp-wormhole')
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'w') as stream:
-        stream.write('\n'.join(lines + [f'restrict,command="{command}" {key}']) + '\n')
-    os.replace(tmp, path)
+        _write_private(path.with_name(path.name + '.bak-wormhole'), data)
+    if data and not data.endswith(b'\n'):
+        data += b'\n'
+    _write_private(path, data + f'restrict,command="{command}" {key}\n'.encode())
     return True

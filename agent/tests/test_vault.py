@@ -131,7 +131,7 @@ def test_create_configures_the_bare_repository_to_refuse_rewrites_and_installs_t
     for key in ('receive.denyNonFastForwards', 'receive.denyDeletes', 'receive.fsckObjects'):
         assert git(bare, 'config', '--get', key).strip() == 'true'
     assert git(bare, 'config', '--get', 'receive.maxInputSize').strip() == '8388608'
-    assert git(bare, 'config', '--get', 'core.hooksPath').strip() == str((bare / 'hooks').resolve())
+    assert git(bare, 'config', '--get', 'core.hooksPath').strip() == 'hooks'  # relative: it follows the repository
     hook = bare / 'hooks' / 'pre-receive'
     assert stat.S_IMODE(hook.stat().st_mode) == 0o755 and hook.read_text().startswith('#!/usr/bin/env python3')
 
@@ -231,26 +231,43 @@ def test_the_lattice_cannot_push_anything_but_new_plain_inbox_or_receipt_files(v
     assert tip(tmp_path) == before
 
 
-def test_a_tree_with_a_dot_git_entry_is_refused_even_without_fsck(vault):
-    _, tmp_path = vault
-    before = tip(tmp_path)
-    other = stanley(tmp_path)
-
+def dot_git_commit(other):
+    """A commit on top of HEAD whose tree also holds who/coordination/inbox/.git/config (built with plumbing:
+    `git add` refuses such a path). Every other entry of the tree is kept, so only the .git entry is wrong."""
     def plumbing(*args, stdin=None):
         return subprocess.run(['git', '-C', str(other), '-c', 'user.name=t', '-c', 'user.email=t@t', *args],
                               input=stdin, capture_output=True, text=True, check=True).stdout.strip()
 
+    def tree_with(base, name, entry):
+        kept = [line for line in plumbing('ls-tree', base).splitlines() if line.split('\t')[1] != name]
+        return plumbing('mktree', stdin='\n'.join([*kept, entry]) + '\n')
+
     config = plumbing('hash-object', '-w', '--stdin', stdin='[core]\n')
     dotgit = plumbing('mktree', stdin=f'100644 blob {config}\tconfig\n')
-    inbox = plumbing('mktree', stdin=f'040000 tree {dotgit}\t.git\n')
-    coordination = plumbing('mktree', stdin=f'040000 tree {inbox}\tinbox\n')
-    who = plumbing('mktree', stdin=f'040000 tree {coordination}\tcoordination\n')
-    root = plumbing('mktree', stdin=plumbing('ls-tree', 'HEAD') + f'\n040000 tree {who}\twho\n')
-    commit = plumbing('commit-tree', root, '-p', 'HEAD', '-m', 'dotgit')
-    assert push(other, 'origin', f'{commit}:refs/heads/main', lattice=True).returncode != 0
-    git(tmp_path / 'Station.aDNA.git', 'config', 'receive.fsckObjects', 'false')
+    inbox = tree_with('HEAD:who/coordination/inbox', '.git', f'040000 tree {dotgit}\t.git')
+    coordination = tree_with('HEAD:who/coordination', 'inbox', f'040000 tree {inbox}\tinbox')
+    who = tree_with('HEAD:who', 'coordination', f'040000 tree {coordination}\tcoordination')
+    root = tree_with('HEAD', 'who', f'040000 tree {who}\twho')
+    return plumbing('commit-tree', root, '-p', 'HEAD', '-m', 'dotgit')
+
+
+def test_git_itself_refuses_a_tree_with_a_dot_git_entry(vault):
+    _, tmp_path = vault
+    before = tip(tmp_path)
+    other = stanley(tmp_path)
+    result = push(other, 'origin', f'{dot_git_commit(other)}:refs/heads/main', lattice=True)
+    assert result.returncode != 0 and 'hasDotgit' in result.stderr and 'station vault' not in result.stderr
+    assert tip(tmp_path) == before
+
+
+def test_the_hooks_own_path_rule_refuses_a_dot_git_entry_that_fsck_lets_through(vault):
+    _, tmp_path = vault
+    before = tip(tmp_path)
+    other = stanley(tmp_path)
+    commit = dot_git_commit(other)
+    git(tmp_path / 'Station.aDNA.git', 'config', 'receive.fsck.hasDotgit', 'ignore')
     result = push(other, 'origin', f'{commit}:refs/heads/main', lattice=True)
-    assert result.returncode != 0 and 'station vault' in result.stderr and 'receive.fsckObjects' in result.stderr
+    assert result.returncode != 0 and 'station vault' in result.stderr and 'inbox/.git/config' in result.stderr
     assert tip(tmp_path) == before
 
 
@@ -376,6 +393,20 @@ def test_a_huge_push_is_refused_before_it_is_stored(vault):
     assert tip(tmp_path) == fits != before
 
 
+def test_a_big_template_can_be_created_but_pushes_are_limited_afterwards(tmp_path):
+    template = tmp_path / 'template'
+    template.mkdir()
+    (template / 'big.bin').write_bytes(os.urandom(9 * 1_048_576))  # the live aDNA template is larger than the push limit
+    vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone', template=template)
+    assert len(blob(tmp_path, 'big.bin')) == 9 * 1_048_576
+    bare = tmp_path / 'Station.aDNA.git'
+    assert git(bare, 'config', '--get', 'receive.maxInputSize').strip() == '8388608'
+    assert git(bare, 'config', '--get', 'core.hooksPath').strip() == 'hooks'
+    (vault.clone / OUTBOUND / 'coord_huge.md').write_bytes(os.urandom(9 * 1_048_576))
+    commit_all(vault.clone, 'huge')
+    assert push(vault.clone, marker='bridge').returncode != 0
+
+
 def test_a_hooks_path_in_global_config_or_on_the_command_line_cannot_switch_the_gate_off(vault):
     _, tmp_path = vault
     before = tip(tmp_path)
@@ -392,6 +423,20 @@ def test_a_hooks_path_in_global_config_or_on_the_command_line_cannot_switch_the_
     assert tip(tmp_path) == before
 
 
+def test_the_gate_still_holds_after_the_bare_repository_is_moved_or_restored_elsewhere(vault):
+    _, tmp_path = vault
+    other = stanley(tmp_path)
+    moved = tmp_path / 'elsewhere' / 'Restored.aDNA.git'
+    moved.parent.mkdir()
+    (tmp_path / 'Station.aDNA.git').rename(moved)  # a pinned absolute hooks path would now point nowhere, and git skips that
+    git(other, 'remote', 'set-url', 'origin', str(moved))
+    (other / OUTBOUND / 'coord_forged.md').write_text('forged\n')
+    commit_all(other)
+    result = push(other)
+    assert result.returncode != 0 and 'station vault' in result.stderr
+    assert git(moved, 'rev-parse', 'refs/heads/main').strip() != git(other, 'rev-parse', 'HEAD').strip()
+
+
 def test_install_gate_is_safe_to_run_again_and_upgrades_an_old_repository(vault):
     _, tmp_path = vault
     bare = tmp_path / 'Station.aDNA.git'
@@ -402,13 +447,13 @@ def test_install_gate_is_safe_to_run_again_and_upgrades_an_old_repository(vault)
     # an older repository: the previous hook, no size limit, no pinned hooks path
     hook.write_text('#!/bin/sh\nexit 0\n')
     git(bare, 'config', '--unset', 'receive.maxInputSize')
-    git(bare, 'config', '--unset', 'core.hooksPath')
+    git(bare, 'config', 'core.hooksPath', str(bare / 'hooks'))  # the first version pinned an absolute path
     git(bare, 'config', 'receive.fsckObjects', 'false')
     install_gate(bare)
     install_gate(bare)
     assert hook.read_text() == current and stat.S_IMODE(hook.stat().st_mode) == 0o755
     assert git(bare, 'config', '--get', 'receive.maxInputSize').strip() == '8388608'
-    assert git(bare, 'config', '--get', 'core.hooksPath').strip() == str((bare / 'hooks').resolve())
+    assert git(bare, 'config', '--get', 'core.hooksPath').strip() == 'hooks'
     assert git(bare, 'config', '--get-all', 'receive.fsckObjects').split() == ['true']
     assert not hook.with_name('pre-receive.tmp').exists()
     other = stanley(tmp_path)

@@ -141,18 +141,26 @@ def bridge_env():
     return {**os.environ, 'STATION_VAULT_PUSHER': 'bridge'}
 
 
-def install_gate(bare, branch='main'):
-    """Make the bare repository refuse rewrites, deletions, other branches and oversized pushes, and install the
-    pre-receive hook that holds every push not made by the bridge to new inbox/receipt files. `core.hooksPath` is
-    pinned to the repository's own hooks folder so a global setting cannot switch the hook off. Safe to run again
-    on an existing repository: it brings the settings and the hook up to date."""
+def set_config(bare, key, value):
+    subprocess.run(['git', '-C', str(bare), 'config', '--replace-all', key, value], check=True, capture_output=True)
+
+
+def install_gate(bare, branch='main', limit=True):
+    """Make the bare repository refuse rewrites, deletions, other branches and (with `limit`) pushes over
+    MAX_PUSH_BYTES, and install the pre-receive hook that holds every push not made by the bridge to new
+    inbox/receipt files. `core.hooksPath` is pinned to `hooks`, relative, so it keeps naming the repository's own
+    folder if the repository is moved or restored elsewhere (an absolute path would then point nowhere, and git
+    skips a missing hooks folder), while a global setting still cannot switch the hook off. Safe to run again on
+    an existing repository: it brings the settings and the hook up to date."""
     bare = Path(bare)
     hooks = bare / 'hooks'
     hooks.mkdir(exist_ok=True)
     settings = {'receive.denyNonFastForwards': 'true', 'receive.denyDeletes': 'true', 'receive.fsckObjects': 'true',
-                'receive.maxInputSize': str(MAX_PUSH_BYTES), 'core.hooksPath': str(hooks.resolve())}
+                'core.hooksPath': 'hooks'}
+    if limit:
+        settings['receive.maxInputSize'] = str(MAX_PUSH_BYTES)
     for key, value in settings.items():
-        subprocess.run(['git', '-C', str(bare), 'config', '--replace-all', key, value], check=True, capture_output=True)
+        set_config(bare, key, value)
     hook = hooks / 'pre-receive'
     temporary = hooks / 'pre-receive.tmp'
     temporary.write_text(PRE_RECEIVE.replace('__BRANCH__', repr(branch)))
@@ -181,7 +189,7 @@ class Vault:
         bare.parent.mkdir(parents=True, exist_ok=True)
         clone.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(['git', 'init', '-q', '--bare', '-b', branch, str(bare)], check=True, capture_output=True)
-        install_gate(bare, branch)
+        install_gate(bare, branch, limit=False)  # the first push carries the whole template, which may be big
         subprocess.run(['git', 'clone', '-q', str(bare), str(clone)], check=True, capture_output=True)
         vault = cls(clone, branch=branch)
         vault.git('symbolic-ref', 'HEAD', f'refs/heads/{branch}')
@@ -198,6 +206,7 @@ class Vault:
         vault.git('add', '-A')
         vault.git(*AUTHOR, 'commit', '-q', '-m', 'Station.aDNA: the shared vault of the Deep Space 9 wormhole bridge')
         vault.git('push', '-q', vault.remote, f'HEAD:{branch}', env=bridge_env())
+        set_config(bare, 'receive.maxInputSize', str(MAX_PUSH_BYTES))
         vault.git('branch', '-q', f'--set-upstream-to={vault.remote}/{branch}')
         return vault
 
