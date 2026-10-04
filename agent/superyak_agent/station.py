@@ -1,4 +1,5 @@
 """Ship-side station client and the machine's private ship configuration."""
+import http.client
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,9 @@ def urllib_transport(timeout=30):
                 return response.status, response.read()
         except urllib.error.HTTPError as error:
             return error.code, error.read()
+        except http.client.HTTPException as error:
+            # A proxy or station that speaks broken HTTP is an unreachable station, not a crash.
+            raise OSError(f'malformed response from the station: {error!r}') from error
     return send
 
 
@@ -54,6 +58,9 @@ class StationClient:
         if status >= 400:
             message = payload.get('error') if isinstance(payload, dict) else None
             raise StationError(status, message or f'HTTP {status}')
+        if payload is None:
+            # Every route a ship may use answers with JSON; an empty or non-JSON success is not one.
+            raise StationError(status, 'Unexpected response from the station')
         return payload
 
     def me(self):
@@ -111,6 +118,15 @@ def client_for(config, timeout=30):
     return StationClient(config['station'], config['key'], config.get('origin'), urllib_transport(timeout))
 
 
+def label(text, limit=80):
+    """Collapse text from the station (a display name, a room title) to one short printable line,
+    so it can sit in a header without breaking out of it: no newlines, control or format
+    characters, and no backticks to open or close a fence."""
+    text = '' if text is None else str(text)
+    text = ''.join(c if c.isprintable() else ' ' for c in text).replace('`', '')
+    return ' '.join(text.split())[:limit].strip() or 'unknown'
+
+
 def describe(member):
     member = member or {'name': 'someone', 'username': 'unknown', 'kind': 'unknown'}
-    return f'{member["name"]} (@{member["username"]}, {member["kind"]})'
+    return f'{label(member.get("name"))} (@{label(member.get("username"))}, {label(member.get("kind"))})'

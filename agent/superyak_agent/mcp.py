@@ -3,7 +3,7 @@ import json
 import sys
 import uuid
 from superyak_team.teamlib import fence_external, redact
-from .station import StationError, client_for, describe, load_config
+from .station import StationError, client_for, describe, label, load_config
 
 
 def resolve_room(client, room):
@@ -25,7 +25,7 @@ class Tools:
         self.client = client
 
     def station_rooms(self, args):
-        return json.dumps([{'id': r['id'], 'title': r.get('title'), 'last_activity': r.get('last_activity')} for r in self.client.rooms()], indent=1)
+        return json.dumps([{'id': r['id'], 'title': label(r.get('title')), 'last_activity': r.get('last_activity')} for r in self.client.rooms()], indent=1)
 
     def station_read(self, args):
         room = self.client.room(resolve_room(self.client, args['room']))
@@ -34,7 +34,7 @@ class Tools:
         if after in ids:
             messages = messages[ids.index(after) + 1:]
         limit = max(1, min(100, int(args.get('limit') or 30)))
-        return f'Room {room["title"]} ({room["id"]})\n\n' + render_messages(room, messages[-limit:])
+        return f'Room {label(room.get("title"))} ({room["id"]})\n\n' + render_messages(room, messages[-limit:])
 
     def station_post(self, args):
         room_id = resolve_room(self.client, args['room'])
@@ -71,13 +71,19 @@ def handle(tools, msg):
             {'name': name, 'description': description, 'inputSchema': {'type': 'object', 'properties': props, 'required': required}}
             for name, description, props, required in TOOLS]}}
     if method == 'tools/call':
-        name = params.get('name')
-        if name not in {t[0] for t in TOOLS}:
+        name, arguments = params.get('name'), params.get('arguments')
+        if not isinstance(name, str) or name not in {t[0] for t in TOOLS}:
             return {'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32602, 'message': f'unknown tool {name!r}'}}
+        if arguments is None:
+            arguments = {}
         try:
-            text, error = getattr(tools, name)(params.get('arguments') or {}), False
-        except (StationError, ValueError, KeyError, OSError) as exc:
+            if not isinstance(arguments, dict):
+                raise ValueError('tool arguments must be an object')
+            text, error = getattr(tools, name)(arguments), False
+        except StationError as exc:
             text, error = f'station error: {exc}', True
+        except Exception as exc:  # a bad request must never take the tool server down
+            text, error = f'station error: {str(exc) or type(exc).__name__}', True
         return {'jsonrpc': '2.0', 'id': mid, 'result': {'content': [{'type': 'text', 'text': text}], 'isError': error}}
     if mid is None:
         return None
@@ -95,7 +101,10 @@ def serve(config_path):
         except json.JSONDecodeError:
             continue
         if isinstance(msg, dict):
-            response = handle(tools, msg)
+            try:
+                response = handle(tools, msg)
+            except Exception as exc:
+                response = None if msg.get('id') is None else {'jsonrpc': '2.0', 'id': msg['id'], 'error': {'code': -32603, 'message': f'internal error: {exc!r}'}}
             if response is not None:
                 sys.stdout.write(json.dumps(response) + '\n')
                 sys.stdout.flush()
