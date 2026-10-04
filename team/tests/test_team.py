@@ -972,3 +972,21 @@ def test_any_non_lead_role_runs_the_mcp_in_worker_mode(monkeypatch):
         assert importlib.reload(mcp).IS_WORKER is worker, role
     monkeypatch.delenv("SUPERYAK_TEAM_ROLE")
     importlib.reload(mcp)
+
+
+def test_launched_workers_are_marked_so_the_station_hook_stays_quiet_in_them(tmp_path, monkeypatch):
+    # A user-scope station hook (agent --hook) would otherwise show a team worker the person's station
+    # messages and move the person's cursor; the hook stays silent when SUPERYAK_RUN is set.
+    monkeypatch.delenv("SUPERYAK_RUN", raising=False)
+    seen = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            seen.append(kwargs)
+    monkeypatch.setattr(workers.subprocess, "Popen", FakePopen)
+    workers.launch(["codex", "exec", "x"], tmp_path, tmp_path / "w1", {"ENGRAM_PROJECT_ROOT": "/r", "SUPERYAK_RUN": ""})
+    workers.launch(["claude", "-p", "x"], tmp_path, tmp_path / "w2")
+    for kwargs in seen:
+        assert kwargs["env"]["SUPERYAK_RUN"] == "1" and kwargs["env"]["VOICE_NOTIFY_MUTE"] == "1"
+    assert seen[0]["env"]["ENGRAM_PROJECT_ROOT"] == "/r"
+    assert "SUPERYAK_RUN" not in os.environ   # the team daemon itself is not marked

@@ -345,6 +345,7 @@ def launch(cmd, cwd, worker_dir, env_extra=None):
     env = dict(os.environ)
     env.update(env_extra or {})
     env["VOICE_NOTIFY_MUTE"] = "1"   # background agents don't ring the human's bell
+    env["SUPERYAK_RUN"] = "1"        # nor read the person's station messages (the station hook stays quiet)
     out = open(worker_dir / "events.jsonl", "a")
     err = open(worker_dir / "stderr.log", "a")
     (worker_dir / "last-command.txt").write_text(" ".join(shlex.quote(c) for c in cmd[:6]) + " ...\n")
