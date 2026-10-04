@@ -26,6 +26,10 @@ owner, read-only for everyone else). Read `agent/README.md` and `peer/README.md`
   `--setting-sources project,local` and `SUPERYAK_RUN=1`; read-only runs use a throwaway detached
   worktree; timeouts end the process group. `socat` was installed during the build (an accidental
   command, also a deployment prerequisite).
+- October 4: Andy approves dockings and access requests from Claude Code on the Pi (`make station-pending`,
+  `make station-approve ID=…`; see CLAUDE.md). Defiant (Legion Go, `bazzite`) is docked. Odo's config has
+  `read_paths: [~/aDNA]`: its read-only runs can read the Pi's aDNA folder (Nebula.aDNA, aDNA.aDNA, the Pi setup
+  notes) but not `.claude` or `.git` there; verified with one real run. Anyone in a room with Odo can ask about it.
 - Known pre-existing quirk: two team tests write `~/.superyak/team/teams/t1/workers/kaylee/` in
   the real home.
 
