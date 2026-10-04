@@ -61,9 +61,13 @@ rooms where it is the only ship with exactly one person, and posts each station 
 redacts secrets on the way out and quotes on the way in. The two sides trade markdown memos through
 one shared git vault, `Station.aDNA`.
 
-A room is bridged when the `wormhole` ship (no owner, like Odo) is a member. On the Pi, Andy bridges
-a room with `make station-rooms` and `make station-bridge ID=<short id>`; `make station-unbridge ID=<short id>`
-stops it. Adding a member makes a new room with the same title and members, as the station always does.
+A room is bridged when the `wormhole` ship (no owner, like Odo) is a member, the room's owner is one of
+the people the service names with `--owner` (on the Pi, Andy; anyone can make a room of their own with
+Wormhole in it, and the bridge ignores it), and it is the current room: adding a member makes a new room
+with the same title and members, as the station always does, and the room it replaces is no longer
+bridged. On the Pi, Andy bridges a room with `make station-rooms` and `make station-bridge ID=<short id>`;
+`make station-unbridge ID=<short id>` stops it and also takes Wormhole out of the earlier rooms that room
+replaced (removing Wormhole in the browser does not, so an earlier room would count as current again).
 The bridge relays only what is said after its first run, and never messages from `wormhole` or `odo`.
 
 - **Out.** A message with an explicit `@persona` that is in the persona map (case-insensitive, trailing
@@ -71,20 +75,24 @@ The bridge relays only what is said after its first run, and never messages from
   `who/coordination/outbound/`. The slug is up to six words; a number makes the name unique. The memo
   is `status: staged`, `reply_required: true`, expires after 14 days, and quotes the message with
   secrets redacted. Wormhole posts `Sent to Venus (Network.aDNA) as <file>.` in the room. Unknown
-  names are ignored. `@wormhole` lists the personas it can reach.
+  names are ignored. `@wormhole` lists each name a person can mention, with its persona and vault
+  (written `(at)venus Venus (Network.aDNA)`: Wormhole never posts an `@`).
 - **In.** A memo in `who/coordination/inbox/` whose `to` or `to_vault` names `Station.aDNA` is posted as
   `**<Persona> (<Vault>) via the wormhole:** <subject>`, then the quoted body: at most 4,000
   characters, and every `@` is written `(at)`, so a memo cannot mention anyone. It goes to the room of
-  the memo that `in_reply_to` names, else the room in `station_room` if Wormhole is in it, else the
-  newest `Gamma Quadrant` it is in (with none, it waits for a later cycle). A reply is relayed as that
-  post only, which also counts as the read receipt; there is no separate "picked up" line.
+  the memo that `in_reply_to` names if that room is still bridged, else the room in `station_room` if it
+  is bridged, else the newest bridged `Gamma Quadrant` (with none, it waits for a later cycle). A reply is
+  relayed as that post only, which also counts as the read receipt; there is no separate "picked up"
+  line. A reply with `status: ratified` is marked `(ratified by …)`. Memos not addressed to the station are
+  skipped and logged by file name.
 - **Receipts.** A file in `who/coordination/receipts/` named exactly like an outbound memo posts
-  `<Persona> (<Vault>) picked up <file>.` in that memo's room.
+  `<Persona> (<Vault>) picked up <file>.` in that memo's room; while that room is not bridged, it waits.
 
 New files only: the bridge never edits or deletes a memo. The bare repository `~/aDNA/Station.aDNA.git`
 holds a gate (a pre-receive hook). Any push that is not the bridge's own may only add new plain files
 under `who/coordination/inbox/` or `who/coordination/receipts/` (at most 1 MiB each, 8 MiB per push), on
-`main`, fast-forward only. Symlinks in the vault are never followed.
+`main`, fast-forward only. Symlinks in the vault are never followed. The vault's own `CLAUDE.md` and
+`AGENTS.md` (in place of the template's) tell the lattice's agents these rules.
 
 | Command | Does |
 | --- | --- |
@@ -92,18 +100,20 @@ under `who/coordination/inbox/` or `who/coordination/receipts/` (at most 1 MiB e
 | `wormhole-personas --out FILE` | Write the persona map from `https://adna.network/api/registry.v1.json` |
 | `wormhole-key --key-file FILE --repo REPO` | Authorize Stanley's sync key for the vault only |
 | `vault-git --repo REPO` | The key's forced command; not run by hand |
-| `wormhole --config … --state … --vault … --personas … [--once]` | The relay: one cycle every 30 seconds |
+| `wormhole --config … --state … --vault … --personas … --owner USERNAME [--owner …] [--once]` | The relay: one cycle every 30 seconds, for rooms these people own |
 
 On the Pi, `make wormhole-personas` refreshes `~/.local/share/superyak/wormhole/personas.json`.
 Each entry is `"venus": "Network.aDNA"` or `"venus": {"persona": "Venus", "vault": "Network.aDNA"}`.
 Entries in `personas.local.json` beside it win over the registry. `wormhole` is reserved. The running
-bridge never fetches anything.
+bridge never fetches anything and reads the map only when it starts: after `make wormhole-personas` or an
+edit to `personas.local.json`, run `systemctl --user restart superyak-wormhole` (if it does not start,
+`journalctl --user -u superyak-wormhole` says why).
 
 `make wormhole-key KEY_FILE=<.pub file>` adds one line to `~/.ssh/authorized_keys` (after saving the
 old file as `authorized_keys.bak-wormhole`): `restrict,command="<python> <run_agent.py> vault-git --repo <repo>"`.
 The command accepts only `git-upload-pack` or `git-receive-pack` on exactly that repository. Anything
 else is refused and logged with `logger -t station-vault`. Until the key is added nothing reaches
-Stanley, but outbound memos are still written and committed locally.
+Stanley, but outbound memos are still written and pushed to the local bare repository.
 
 The service reads the ship's private config made by `create-ship` (see `peer/README.md`: username
 `wormhole`, config `~/.local/share/superyak/wormhole/station.json`; `--workspace` takes an empty
@@ -118,7 +128,7 @@ Requires=superyak-lighthouse.service
 [Service]
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/.local/share/superyak/wormhole
-ExecStart=/usr/bin/python3 %h/superyak/agent/run_agent.py wormhole --config %h/.local/share/superyak/wormhole/station.json --state %h/.local/share/superyak/wormhole/state.json --vault %h/.local/share/superyak/wormhole/Station.aDNA --personas %h/.local/share/superyak/wormhole/personas.json
+ExecStart=/usr/bin/python3 %h/superyak/agent/run_agent.py wormhole --config %h/.local/share/superyak/wormhole/station.json --state %h/.local/share/superyak/wormhole/state.json --vault %h/.local/share/superyak/wormhole/Station.aDNA --personas %h/.local/share/superyak/wormhole/personas.json --owner andy
 Restart=always
 RestartSec=10
 MemoryMax=1G

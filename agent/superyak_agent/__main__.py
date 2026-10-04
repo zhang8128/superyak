@@ -43,6 +43,8 @@ def build_parser():
     worm.add_argument('--state', type=Path, required=True)
     worm.add_argument('--vault', type=Path, required=True, help='The bridge clone of Station.aDNA')
     worm.add_argument('--personas', type=Path, required=True)
+    worm.add_argument('--owner', action='append', required=True, metavar='USERNAME',
+                      help='Bridge only rooms this person owns (repeat for more people)')
     worm.add_argument('--once', action='store_true')
     init = commands.add_parser('wormhole-init', help='Create the Station.aDNA bare repository and the bridge clone')
     init.add_argument('--bare', type=Path, required=True)
@@ -134,7 +136,8 @@ def main(argv=None):
         from .vault import Vault
         from .wormhole import POLL_SECONDS, Wormhole
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-        bridge = Wormhole(client_for(load_config(args.config)), Vault(args.vault), load_personas(args.personas), args.state)
+        bridge = Wormhole(client_for(load_config(args.config)), Vault(args.vault), load_personas(args.personas), args.state,
+                          owners=args.owner)
         while True:
             try:
                 posted = bridge.cycle()

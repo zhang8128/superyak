@@ -64,7 +64,8 @@ def test_inbound_post_is_bounded_quoted_and_mention_free():
     assert '(awaiting ratification)' in head and '@' not in post
     assert '> Hello (at)serenity' in post and post.endswith('`coord_x.md`')
     assert len(post) < 4400
-    ratified = memos.inbound_post({'from': 'Network.aDNA (Venus)', 'status': 'ratified', 'ratified_by': 'Stanley'}, 'ok', 'r.md')
+    ratified = memos.inbound_post({'from': 'Network.aDNA (Venus)', 'status': 'ratified', 'ratified_by': 'Stanley',
+                                   'in_reply_to': 'coord_x.md'}, 'ok', 'r.md')
     assert '(ratified by Stanley)' in ratified.splitlines()[0]
 
 
@@ -108,7 +109,7 @@ def test_inbound_post_stays_bounded_for_at_dense_bodies():
 
 def test_inbound_header_stays_bounded_for_at_dense_fields():
     fields = {'from_persona': '@' * 500, 'from_vault': '@' * 500, 'subject': '@' * 500,
-              'status': 'ratified', 'ratified_by': '@' * 500}
+              'status': 'ratified', 'ratified_by': '@' * 500, 'in_reply_to': 'coord_x.md'}
     post = memos.inbound_post(fields, 'ok', '@' * 500)
     assert '@' not in post
     assert len(post.splitlines()) == 5 and len(post.splitlines()[0]) <= 520, len(post.splitlines()[0])
@@ -135,8 +136,22 @@ def test_parser_strips_trailing_comments_on_every_value_kind():
                       'list': ['a', 'b'], 'note': '', 'quoted': 'x', 'empty': '', 'plain': 'a', 'tab': 'b',
                       'kept': 'a#b', 'broken': 'unterminated'}
     assert body == 'B'
-    post = memos.inbound_post({'from': 'Network.aDNA (Venus)', 'ratification_required': True, 'status': 'ratified'}, 'ok', 'r.md')
+    reply = {'from': 'Network.aDNA (Venus)', 'in_reply_to': 'coord_x.md'}
+    post = memos.inbound_post({**reply, 'ratification_required': True, 'status': 'ratified'}, 'ok', 'r.md')
     assert '(awaiting ratification; ratified by Venus)' in post
     commented, _ = memos.parse_memo('---\nratification_required: true  # Stanley must ratify\nstatus: "ratified" # done\n---\nok')
-    assert memos.inbound_post({'from': 'Network.aDNA (Venus)', **commented}, 'ok', 'r.md').splitlines()[0].endswith(
+    assert memos.inbound_post({**reply, **commented}, 'ok', 'r.md').splitlines()[0].endswith(
         '(awaiting ratification; ratified by Venus)')
+
+
+def test_a_byte_order_mark_before_the_front_matter_is_ignored():
+    fields, body = memos.parse_memo('﻿---\nto: "Station.aDNA (Wormhole)"\nsubject: "Hi"\n---\n\nHello\n')
+    assert fields == {'to': 'Station.aDNA (Wormhole)', 'subject': 'Hi'} and body == 'Hello'
+    assert memos.addressed_to_station(fields)
+
+
+def test_ratified_is_shown_only_for_a_reply():
+    fields = {'from': 'Network.aDNA (Venus)', 'status': 'ratified', 'ratified_by': 'Stanley', 'subject': 'Plan'}
+    assert memos.inbound_post(fields, 'ok', 'r.md').splitlines()[0] == '**Venus (Network.aDNA) via the wormhole:** Plan'
+    reply = memos.inbound_post({**fields, 'in_reply_to': 'coord_x.md'}, 'ok', 'r.md')
+    assert reply.splitlines()[0] == '**Venus (Network.aDNA) via the wormhole:** Plan (ratified by Stanley)'

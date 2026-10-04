@@ -1299,7 +1299,7 @@ Requires=superyak-lighthouse.service
 [Service]
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/.local/share/superyak/wormhole
-ExecStart=/usr/bin/python3 %h/superyak/agent/run_agent.py wormhole --config %h/.local/share/superyak/wormhole/station.json --state %h/.local/share/superyak/wormhole/state.json --vault %h/.local/share/superyak/wormhole/Station.aDNA --personas %h/.local/share/superyak/wormhole/personas.json
+ExecStart=/usr/bin/python3 %h/superyak/agent/run_agent.py wormhole --config %h/.local/share/superyak/wormhole/station.json --state %h/.local/share/superyak/wormhole/state.json --vault %h/.local/share/superyak/wormhole/Station.aDNA --personas %h/.local/share/superyak/wormhole/personas.json --owner andy
 Restart=always
 RestartSec=10
 MemoryMax=256M

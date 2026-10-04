@@ -100,7 +100,9 @@ def _scalar(raw):
 
 def parse_memo(text):
     """(front matter, body). A tolerant subset of YAML: top-level `key: value` lines only; quoted
-    strings unquoted; `[a, b]` lists split; block scalars become ''; nested maps are ignored."""
+    strings unquoted; `[a, b]` lists split; block scalars become ''; nested maps are ignored. A leading byte order
+    mark is dropped."""
+    text = text.removeprefix('\ufeff')
     lines = text.splitlines()
     if not lines or lines[0].strip() != '---':
         return {}, text
@@ -140,7 +142,7 @@ def inbound_post(fields, body, name, limit=4000):
     notes = []
     if fields.get('ratification_required') is True or status == 'awaiting_ratification':
         notes.append('awaiting ratification')
-    if status == 'ratified':
+    if status == 'ratified' and fields.get('in_reply_to'):  # ratification answers an earlier memo
         notes.append(f'ratified by {_safe(fields.get("ratified_by") or persona)}')
     head = f'**{persona} ({vault}) via the wormhole:** {_safe(fields.get("subject") or "", 200)}'
     if notes:

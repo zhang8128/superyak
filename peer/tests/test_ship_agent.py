@@ -216,23 +216,41 @@ def test_the_wormhole_relays_both_ways_through_the_real_station(env, tmp_path):
     vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
     personas = {'venus': {'persona': 'Venus', 'vault': 'Network.aDNA'}}
     bridge = Wormhole(StationClient('http://testserver', key, transport=transport_for(app)), vault, personas,
-                      tmp_path / 'state.json', today=lambda: datetime.date(2026, 10, 4))
+                      tmp_path / 'state.json', owners=['patient'], today=lambda: datetime.date(2026, 10, 4))
     bridge.cycle()
     clock[0] += 1
     clients[0].post(f'/api/chats/{gamma}/messages', json={'client_message_id': 'a', 'body': '@venus is the mesh up?'})
+    clock[0] += 1
+    # Anyone can make a room of their own with Wormhole in it; only rooms the owners named to the bridge are bridged.
+    hers = clients[1].post('/api/chats', json={'title': 'Gamma Quadrant', 'member_ids': [wormhole['id']]}).json()['id']
+    clients[1].post(f'/api/chats/{hers}/messages', json={'client_message_id': 'b', 'body': '@venus from her room @wormhole'})
     assert bridge.cycle() == 1
     name = 'coord_2026_10_04_station_to_venus_is_the_mesh_up.md'
     other = tmp_path / 'stanley'
     subprocess.run(['git', 'clone', '-q', str(tmp_path / 'Station.aDNA.git'), str(other)], check=True)
-    assert (other / OUTBOUND / name).exists()
+    assert sorted(p.name for p in (other / OUTBOUND).glob('coord_*.md')) == [name]
     (other / INBOX / 'coord_reply.md').write_text(
         f'---\nfrom: "Network.aDNA (Venus)"\nto: "Station.aDNA (Wormhole)"\nsubject: "Up"\nin_reply_to: {name}\n---\n\nAll up @patient\n')
+    (other / INBOX / 'coord_zfresh.md').write_text(
+        f'---\nfrom: "Network.aDNA (Venus)"\nto: "Station.aDNA (Wormhole)"\nsubject: "Fresh"\nstation_room: {hers}\n---\n\nNew\n')
     git = ['git', '-C', str(other), '-c', 'user.name=s', '-c', 'user.email=s@s']
     subprocess.run(git + ['add', '-A'], check=True)
     subprocess.run(git + ['commit', '-q', '-m', 'reply'], check=True)
     subprocess.run(git + ['push', '-q'], check=True)
     clock[0] += 1
-    assert bridge.cycle() == 1
-    last = clients[0].get(f'/api/chats/{gamma}').json()['messages'][-1]['body']
-    assert last.startswith('**Venus (Network.aDNA) via the wormhole:** Up') and '@' not in last
+    assert bridge.cycle() == 2
+    posts = [m['body'] for m in clients[0].get(f'/api/chats/{gamma}').json()['messages'] if m['author_id'] == wormhole['id']]
+    assert sorted(b.splitlines()[0] for b in posts if 'via the wormhole' in b) == [  # one cycle, one clock tick: any order
+        '**Venus (Network.aDNA) via the wormhole:** Fresh', '**Venus (Network.aDNA) via the wormhole:** Up']
+    assert not any('@' in b for b in posts)
+    assert [m['body'] for m in clients[1].get(f'/api/chats/{hers}').json()['messages']] == ['@venus from her room @wormhole']
     assert store.mentions(users[0]['id']) == []
+    # Adding a member makes a new linked room; the replaced one keeps Wormhole but is no longer bridged.
+    newer = clients[0].post(f'/api/chats/{gamma}/participants', json={'member_ids': [users[3]['id']]}).json()['id']
+    clock[0] += 1
+    clients[0].post(f'/api/chats/{gamma}/messages', json={'client_message_id': 'c', 'body': '@venus in the replaced room'})
+    clients[0].post(f'/api/chats/{newer}/messages', json={'client_message_id': 'd', 'body': '@venus in the new room'})
+    clock[0] += 1
+    assert bridge.cycle() == 1
+    assert clients[0].get(f'/api/chats/{gamma}').json()['messages'][-1]['body'] == '@venus in the replaced room'
+    assert clients[0].get(f'/api/chats/{newer}').json()['messages'][-1]['body'].startswith('Sent to Venus')

@@ -17,9 +17,12 @@ class FakeStation:
             self.keys[key] = user['id']
         return user
 
-    def room(self, title, *members):
+    def room(self, title, *members, linked_room_id=None):
+        """A room owned by its first member; `linked_room_id` names the room it replaces, as when the station
+        makes a new room for added members."""
         room_id = f'r{len(self.rooms) + 1}'
-        self.rooms[room_id] = {'id': room_id, 'title': title, 'member_ids': [m['id'] for m in members], 'messages': []}
+        self.rooms[room_id] = {'id': room_id, 'title': title, 'owner_id': members[0]['id'], 'linked_room_id': linked_room_id,
+                               'member_ids': [m['id'] for m in members], 'messages': []}
         return room_id
 
     def say(self, room_id, author, body, client_message_id=None):
@@ -41,7 +44,8 @@ class FakeStation:
 
     def view(self, room):
         last = max([m['created'] for m in room['messages']], default=0.0)
-        return {'id': room['id'], 'title': room['title'], 'member_ids': room['member_ids'], 'last_activity': last,
+        return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
+                'member_ids': room['member_ids'], 'last_activity': last,
                 'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'messages': [dict(m) for m in room['messages']]}
 
     def __call__(self, method, url, headers, data):
