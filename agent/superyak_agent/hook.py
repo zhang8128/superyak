@@ -3,7 +3,7 @@ It must never block or break a prompt, so every failure prints nothing."""
 from pathlib import Path
 import time
 from superyak_team.teamlib import fence_external
-from .station import StationClient, describe, read_json, urllib_transport, write_private
+from .station import StationClient, describe, label, read_json, urllib_transport, write_private
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -38,7 +38,7 @@ def _run(config_path, state_path, clock, transport):
                   if m['created'] > cursor and m['author_id'] != me]
     items.sort(key=lambda item: item[0])
     newest = max([cursor] + [m['created'] for _, _, _, m in items])
-    blocks = [f'Room {title}, message {m["id"]}:\n' + fence_external(describe(who), m['body'], limit=800)
+    blocks = [f'Room {label(title)}, message {label(m["id"])}:\n' + fence_external(describe(who), m['body'], limit=800)
               for _, title, who, m in items[-MAX_MESSAGES:]]
     while blocks and len(HEADER) + sum(len(b) + 2 for b in blocks) > MAX_CHARS:
         blocks.pop(0)
