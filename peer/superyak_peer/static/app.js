@@ -17,6 +17,7 @@ const state = {
   activation: null,
   corrections: [],
   connections: [],
+  ships: [], dockCode: null, docking: null,
   activeLayers: {},
   activeLayerErrors: {},
   revisions: [],
@@ -102,6 +103,7 @@ function identityKey(user) {
 function clearAccountAdministration() {
   state.accounts = []; state.accessRequests = []; state.roleChanges = []; state.invitation = null;
   state.accountRolePreview = null; state.profileDialog = false; state.pairPreview = null;
+  state.ships = []; state.docking = null;
 }
 
 function bindEditorIdentity(user) {
@@ -186,7 +188,7 @@ function layout(content) {
         ${content}
       </main>
     </div>
-    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}${accountRoleDialog()}
+    ${spaceDialog()}${profileDialog()}${Dashboard.dialogs()}${reauthDialog()}${accountRoleDialog()}${dockingDialog()}
   </div>`;
 }
 
@@ -487,7 +489,7 @@ function messageMarkup(message) {
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row"><button class="button ghost" data-action="change-participants">Change participants</button>${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -551,6 +553,34 @@ function accessRequests() {
   return `<section class="section"><div class="section-head"><div><h2>Access requests</h2><p class="meta">Approving creates a one-use invitation that only the requester can collect. They become a participant.</p></div></div><div class="item-list">${body}</div></section>`;
 }
 
+function shipsSection() {
+  const ships = state.ships || [];
+  const rows = ships.length ? ships.map(ship => `<div class="item"><span class="item-main"><strong>${escapeHtml(ship.name)}</strong><span>@${escapeHtml(ship.username)} · ${ship.owner_name ? `${escapeHtml(ship.owner_name)}’s ship` : "Station ship"}${ship.machine ? ` · ${escapeHtml(ship.machine)}` : ""} · ${ship.last_used ? `last seen ${formatDate(ship.last_used)}` : "not used yet"}</span></span>${ship.active_keys ? `<button class="button danger secondary" data-action="revoke-ship" data-id="${escapeHtml(ship.id)}">Revoke key</button>` : `<span class="badge">Key revoked</span>`}</div>`).join("") : `<p class="meta">No ships docked yet. Run <code>make dock</code> on a machine to dock its agent.</p>`;
+  return `<section class="section"><div class="section-head"><div><h2>Ships</h2><p class="meta">Each ship is one machine’s agent. A ship reads and posts only in rooms it was added to.</p></div></div><div class="item-list">${rows}</div></section>`;
+}
+
+function dockingDialog() {
+  const docking = state.docking;
+  if (!docking) return "";
+  return `<dialog aria-labelledby="docking-title"><div class="dialog-content"><h2 id="docking-title">${docking.redock ? "Re-dock" : "Dock"} ${escapeHtml(docking.ship_name)}</h2><p>From <strong>${escapeHtml(docking.machine)}</strong>. Confirm only if you just ran <code>make dock</code> there.</p><p>${docking.redock ? "This replaces the ship’s old key." : "The ship will be yours. It reads and posts only in rooms a room owner adds it to."}</p><div class="button-row"><button class="button" data-action="confirm-docking">Confirm docking</button><button class="button secondary" data-action="cancel-docking">Cancel</button></div></div></dialog>`;
+}
+
+function shipBanner(room) {
+  const ships = (room.members || []).filter(member => member.kind === "ship");
+  return ships.length ? `<div class="notice ship-banner"><strong>Ships in this room send its text to Claude.</strong><p>Aboard: ${ships.map(ship => escapeHtml(ship.name)).join(", ")}. Keep patient and participant details out of this room.</p></div>` : "";
+}
+
+async function loadDocking() {
+  if (!state.dockCode || state.docking) return;
+  try {
+    state.docking = await api(`/api/dockings/code/${pathPart(state.dockCode)}`);
+  } catch (error) {
+    state.dockCode = null;
+    if (error.status === 401) throw error;
+    setFlash(error.message, true);
+  }
+}
+
 function roleLabel(role) {
   return { participant: 'Participant', admin: 'Admin', super_admin: 'Super admin' }[role] || 'Not assigned';
 }
@@ -577,7 +607,7 @@ function connectionsView() {
     <section class="grid cols-2"><div class="card"><h2>Paired peers</h2>${state.me.is_admin ? (state.connections.length ? state.connections.map(connectionGroup).join("") : empty("No peers paired", "Import a card and compare its fingerprint before connecting.")) : `<p class="meta">The local account owner manages peer pairing. You control what you share with known contacts.</p>`}</div>
     <div class="card"><h2>Delivery</h2><p class="meta">Background synchronization is ${state.sync.enabled ? "on" : "off"}. Local writing still works while another peer is unavailable.</p><div class="item-list">${statuses.length ? statuses.map(deliveryCard).join("") : empty("No delivery activity", "Pending, delivered, failed, and canceled work will remain distinct here.")}</div></div></section>
     ${state.me.is_admin ? `<section class="section card"><h2>Pair another peer</h2><p>Paste the complete public card, preview it, and compare the fingerprint outside Superyak before confirming.</p><form id="pair-preview-form"><div class="field"><label for="peer-card">Peer card</label><textarea class="textarea code-box" id="peer-card" name="card" placeholder="Paste peer card JSON"></textarea></div><button class="button secondary" type="submit">Preview peer card</button></form>${state.pairPreview ? `<div class="active-panel"><h3>${escapeHtml(state.pairPreview.participant.name)}</h3><p>${escapeHtml(state.pairPreview.endpoint)}</p><p class="fingerprint"><strong>Fingerprint:</strong> ${escapeHtml(state.pairPreview.fingerprint)}</p><button class="button" data-action="confirm-pair">Fingerprint matches — pair this peer</button></div>` : ""}</section>` : ""}
-    ${accessRequests()}${accountSupport()}${accountRights()}`;
+    ${shipsSection()}${accessRequests()}${accountSupport()}${accountRights()}`;
 }
 
 function profileDialog() {
@@ -622,7 +652,7 @@ async function loadData() {
     ]);
     if (!valid()) return false;
     if (home.user.id !== user.id) throw new ApiError("This browser's account changed. Sign in again to continue.", 401);
-    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList] = await Promise.all([
+    const [assistant, sources, activePairs, accounts, connections, roleChanges, accessRequestList, ships] = await Promise.all([
       api("/api/assistant").catch(() => ({ enabled: false, message: "Assistant status unavailable. Manual writing remains available." })),
       api("/api/sources").catch(() => null),
       Promise.all(home.layers.filter(layer => layer.active_revision).map(async layer => {
@@ -633,6 +663,7 @@ async function loadData() {
       home.user.is_admin ? api("/api/connections") : [],
       home.user.is_super_admin ? api("/api/account-role-changes") : [],
       home.user.is_admin ? api("/api/access-requests") : [],
+      api("/api/ships"),
     ]);
     if (!valid()) return false;
     const previousActive = state.activeLayers;
@@ -641,7 +672,7 @@ async function loadData() {
       return active ? [[result.id, active]] : [];
     }));
     const activeLayerErrors = Object.fromEntries(activePairs.flatMap(result => result.error ? [[result.id, result.error.message]] : []));
-    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges });
+    Object.assign(state, { me: { ...user, ...home.user }, home, contacts, files, sync, corrections, assistant, sources, activeLayers, activeLayerErrors, accounts, accessRequests: accessRequestList, connections, roleChanges, ships });
     return true;
   } catch (error) { if (!valid()) return false; throw error; }
 }
@@ -686,6 +717,7 @@ async function loadRoute() {
 let dialogReturn = null;
 function closeDialogs() {
   state.accountRolePreview = null;
+  state.docking = null; state.dockCode = null;
   state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false; Research.close(); Dashboard.close();
   render();
 }
@@ -720,6 +752,7 @@ async function refresh(message = null) {
   try {
     if (!await loadData()) return;
     await loadRoute();
+    await loadDocking();
     if (message) setFlash(message);
     render();
   } catch (error) {
@@ -1128,6 +1161,10 @@ async function demoLogin(username) {
 }
 
 async function bootstrap() {
+  if (location.hash.startsWith('#dock?')) {
+    state.dockCode = new URLSearchParams(location.hash.slice('#dock?'.length)).get('code') || null;
+    history.replaceState(null, '', location.pathname + location.search);
+  }
   if (location.hash.startsWith('#activate?')) {
     const fields = new URLSearchParams(location.hash.slice('#activate?'.length));
     state.activation = Object.fromEntries(['token', 'username', 'name'].map(key => [key, fields.get(key) || '']));
@@ -1320,6 +1357,39 @@ document.addEventListener("click", async (event) => {
     }
     catch (error) { if (identityKey(state.me) !== identity) return; setFlash(error.message, true); }
     render();
+  }
+  if (action === "cancel-docking") { state.docking = null; state.dockCode = null; render(); return; }
+  if (action === "confirm-docking") {
+    if (target.disabled || !state.docking) return;
+    const identity = identityKey(state.me), docking = state.docking, code = state.dockCode;
+    target.disabled = true;
+    try {
+      const ship = await api(`/api/dockings/${pathPart(docking.id)}/confirm`, { method: "POST", json: { code } });
+      if (identityKey(state.me) !== identity) return;
+      state.docking = null; state.dockCode = null;
+      await refresh(`${ship.name} is docked. Its machine finishes setup on its own.`);
+    } catch (error) {
+      if (identityKey(state.me) !== identity) return;
+      state.docking = null; state.dockCode = null;
+      await refresh();
+      setFlash(error.message, true);
+    }
+    return;
+  }
+  if (action === "revoke-ship") {
+    if (target.disabled) return;
+    const identity = identityKey(state.me);
+    target.disabled = true;
+    try {
+      await api(`/api/ships/${pathPart(target.dataset.id)}/revoke`, { method: "POST", json: {} });
+      if (identityKey(state.me) !== identity) return;
+      await refresh("Ship key revoked. That machine must dock again to return.");
+    } catch (error) {
+      if (identityKey(state.me) !== identity) return;
+      await refresh();
+      setFlash(error.message, true);
+    }
+    return;
   }
   if (action === "approve-access" || action === "deny-access") {
     if (target.disabled) return;

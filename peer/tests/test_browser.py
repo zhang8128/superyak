@@ -1493,3 +1493,28 @@ def test_super_admin_activation_and_named_role_preview_in_browser(browser_peer, 
         page.get_by_role('link', name='Connections', exact=True).click()
         expect(page.get_by_role('button', name='Create invitation', exact=True)).to_be_visible()
         expect(page.get_by_role('button', name='Review rights for Dr. Morgan', exact=True)).to_have_count(0)
+
+
+def test_docking_link_confirms_ship_lists_and_revokes_it_and_rooms_show_the_ship_banner(browser_peer):
+    """Break caught: a docking link confirms without review, or a ship room lacks the Claude notice."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    docking = store.start_docking("serenity", "andy-mac")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#dock?code={docking['code']}")
+            page.reload()
+            dialog = page.get_by_role("dialog")
+            expect(dialog.get_by_role("heading", name="Dock serenity")).to_be_visible()
+            expect(dialog.get_by_text("andy-mac")).to_be_visible()
+            dialog.get_by_role("button", name="Confirm docking").click()
+            expect(page.get_by_text("Serenity is docked.")).to_be_visible()
+            assert store.docking_status(docking["id"], docking["secret"])["status"] == "confirmed"
+            ship = next(s for s in store.ships(users["organizer"]["id"]) if s["username"] == "serenity")
+            room = store.create_room(users["patient"]["id"], "Ops", [ship["id"]])
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.get_by_text("Ships in this room send its text to Claude.")).to_be_visible()
+            page.get_by_role("link", name="Connections", exact=True).click()
+            expect(page.get_by_role("heading", name="Ships")).to_be_visible()
+            page.get_by_role("button", name="Revoke key").click()
+            expect(page.get_by_text("Key revoked", exact=True)).to_be_visible()
