@@ -85,9 +85,31 @@ def test_invalid_names_ship_keys_and_rate_limit(env):
     assert guest.post('/api/dockings', json={'ship_name': 'one-more', 'machine': 'm'}).status_code == 429
 
 
+def pending_key(app, docking):
+    # Read the confirmed key straight from the table, without collecting it through the status route.
+    with app.state.store.transaction() as db:
+        return db.execute('SELECT key FROM dockings WHERE id=?', (docking['id'],)).fetchone()['key']
+
+
 def test_uncollected_key_is_revoked_after_an_hour(env):
     app, clients, users, clock = env
     docking = start(app, 'serenity')
-    confirm(clients[0], docking)
+    assert confirm(clients[0], docking).status_code == 200
+    key = pending_key(app, docking)
+    assert key
+    assert bearer(app, key).get('/api/me').json()['username'] == 'serenity'
     clock[0] += 3601
     assert status(app, docking) == {'status': 'expired'}
+    assert bearer(app, key).get('/api/me').status_code == 401
+    assert pending_key(app, docking) is None
+
+
+def test_collected_key_survives_the_uncollected_sweep(env):
+    app, clients, users, clock = env
+    docking = start(app, 'serenity')
+    assert confirm(clients[0], docking).status_code == 200
+    key = status(app, docking)['key']
+    clock[0] += 3601
+    assert status(app, docking) == {'status': 'collected'}
+    start(app, 'defiant')            # starting another docking sweeps too
+    assert bearer(app, key).get('/api/me').json()['username'] == 'serenity'
