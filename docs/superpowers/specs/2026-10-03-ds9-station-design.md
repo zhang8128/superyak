@@ -142,8 +142,11 @@ Node.js is present (clone `aDNA-Network/aDNA.aDNA` to `~/aDNA/aDNA.aDNA`, build 
    author is a person; otherwise **read-only**. `odo` (`--resident`) is always read-only.
 3. Read-only run: `claude -p` in a throwaway detached worktree of the workspace's HEAD (tracked files only; removed
    afterwards; a workspace that is not a git repository is used in place) with `--permission-mode dontAsk`, allowed tools
-   Read, Grep, Glob, `mcp__station__station_read`, `mcp__station__station_rooms`, `mcp__adna__*`;
-   Bash, Edit, Write, NotebookEdit, WebFetch and WebSearch disallowed. Limit 5 minutes.
+   Read, Grep, Glob and the aDNA tools; Bash, Edit, Write, NotebookEdit, WebFetch, WebSearch and
+   every station tool disallowed. Limit 5 minutes. (Changed during the build: station tools would
+   let anyone who mentions a ship pull text from the ship's other rooms; the room's history is
+   already in the prompt and the watcher posts the reply. Builder runs get no station tools
+   either, and all runs ignore user-level Claude settings.)
 4. Builder run: a worktree under `~/.superyak/worktrees/<ship>/<message id>` on branch
    `lighthouse/<ship>/<message id>` from the workspace's HEAD; `claude -p` with team mode's Claude
    sandbox settings (build mode: OS sandbox, no `$HOME` reads outside the worktree and tool paths,

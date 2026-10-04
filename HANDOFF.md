@@ -1,5 +1,34 @@
 # Resume here — medical lighthouse / aDNA
 
+**Deep Space 9 station live on the smart Pi, October 3 (current):** Andy approved and
+`main` was fast-forwarded to the `ds9-station` branch (spec
+`docs/superpowers/specs/2026-10-03-ds9-station-design.md`, plan
+`docs/superpowers/plans/2026-10-03-ds9-station.md`). The lighthouse is now the station where
+people and each machine's agent ("ship") collaborate; ships wake on @mentions (builder for their
+owner, read-only for everyone else). Read `agent/README.md` and `peer/README.md` → Run a station.
+
+- Live user units: `superyak-lighthouse` (127.0.0.1:7435, now with
+  `--share-link-file ~/.config/superyak/tailscale-share-url`), `superyak-door` (127.0.0.1:7436,
+  access requests only), `superyak-odo` (resident ship Odo; config, state and run MCP in
+  `~/.local/share/superyak/odo/`, empty workspace). `tailscale funnel` publishes only the door at
+  `https://smart.tail7db420.ts.net:8443`; 443 stays tailnet-only. Verified via public DNS: the door
+  answers only its two routes and 443 is unreachable from the internet.
+- Rooms `Ops` (notices) and `Promenade`, owned by andy, with Odo aboard. Mal's responder unit,
+  credentials and state were removed; the `mal` account remains dormant (no account removal in
+  the peer). Pre-migration database backup: `~/.local/share/superyak/backups/peer-20261003-193239.sqlite3`.
+- Not yet done (Andy): create the share link (`make station-share-link` in a Pi terminal with a
+  short-lived API token, then delete the token); add the tailnet policy rule limiting
+  `autogroup:shared` to `100.70.202.124:443`; approve no one until that rule is saved; optionally
+  dock a Pi builder ship; `make dock DOCK_ARGS='--ship serenity'` on the Mac and `--ship defiant`
+  on the Legion Go. Live checks not yet done: Andy's `@odo` question in Ops, phone check of the
+  public door, docking from other machines, a builder run.
+- Build-time departures from the spec: watcher runs get no station tools, use
+  `--setting-sources project,local` and `SUPERYAK_RUN=1`; read-only runs use a throwaway detached
+  worktree; timeouts end the process group. `socat` was installed during the build (an accidental
+  command, also a deployment prerequisite).
+- Known pre-existing quirk: two team tests write `~/.superyak/team/teams/t1/workers/kaylee/` in
+  the real home.
+
 **Engram memory stability, October 2 (current):** PR #5 merged `engram-store-reader`
 into `main` (store reader, calibration, store identity, path signatures, lighthouse
 sheaf, shared embedder, test memory fix). Three out-of-memory crashes on Oct 1–2
