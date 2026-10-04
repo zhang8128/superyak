@@ -270,3 +270,72 @@ def test_a_crash_between_the_memo_commit_and_the_state_save_does_not_write_the_m
     assert make().cycle() == 1
     assert sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')) == [
         name, 'coord_2026_10_04_station_to_venus_status_2.md']
+
+
+def crash_before_git(vault, monkeypatch, step):
+    """From now on `git <step>` in the vault's clone kills the process, as a power cut would (call
+    monkeypatch.undo() for the restart)."""
+    real = vault.git
+
+    def dying(*args, **kwargs):
+        if step in args:
+            raise KeyboardInterrupt(f'power loss before git {step}')
+        return real(*args, **kwargs)
+    monkeypatch.setattr(vault, 'git', dying)
+
+
+def published_memos(tmp_path):
+    return sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md'))
+
+
+@pytest.mark.parametrize('step, state', [('add', '??'), ('commit', 'A ')])
+def test_a_crash_while_writing_a_memo_is_finished_and_published_once_after_the_restart(bridge, monkeypatch, step, state):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    message = fake.say(gamma, andy, '@venus status?')
+    crash_before_git(vault, monkeypatch, step)
+    with pytest.raises(KeyboardInterrupt):
+        w.cycle()
+    name = 'coord_2026_10_04_station_to_venus_status.md'
+    assert vault.git('status', '--porcelain').stdout.rstrip('\n') == f'{state} {OUTBOUND}/{name}'  # left half done
+    monkeypatch.undo()
+    assert make().cycle() == 1  # recovered, committed, adopted (not written again), published, announced
+    assert bodies(fake, gamma)[-1] == f'Sent to Venus (Network.aDNA) as `{name}`.'
+    assert sum(b.startswith('Sent to') for b in bodies(fake, gamma)) == 1
+    assert published_memos(tmp_path) == [name]
+    assert memos.parse_memo((lattice(tmp_path) / OUTBOUND / name).read_text())[0]['station_message'] == message['id']
+    assert vault.git('status', '--porcelain').stdout == ''
+    assert make().cycle() == 0 and published_memos(tmp_path) == [name]
+
+
+def test_an_untracked_or_staged_file_outside_the_outbound_folder_does_not_block_the_cycle(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    (vault.clone / 'scratch.txt').write_text('mine')
+    (vault.clone / 'staged.txt').write_text('staged')
+    vault.git('add', '--', 'staged.txt')
+    fresh = '---\nfrom: "Home.aDNA (Hestia)"\nto_vault: Station.aDNA\nsubject: "New node"\n---\n\nHello station\n'
+    lattice(tmp_path, {'coord_fresh.md': fresh})
+    fake.say(gamma, andy, '@venus status?')
+    assert w.cycle() == 2
+    assert (vault.clone / 'scratch.txt').read_text() == 'mine' and (vault.clone / 'staged.txt').read_text() == 'staged'
+    assert vault.git('diff', '--cached', '--name-only').stdout == ''
+    assert published_memos(tmp_path) == ['coord_2026_10_04_station_to_venus_status.md']
+
+
+def test_a_memo_that_is_only_on_disk_is_never_adopted_as_sent(bridge, monkeypatch):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    message = fake.say(gamma, andy, '@venus status?')
+    crash_before_git(vault, monkeypatch, 'add')
+    with pytest.raises(KeyboardInterrupt):
+        w.cycle()
+    monkeypatch.undo()
+    monkeypatch.setattr(vault, 'recover', lambda: [])  # as if recovery could not commit it
+    assert make().cycle() == 1
+    assert published_memos(tmp_path) == ['coord_2026_10_04_station_to_venus_status_2.md']  # a committed memo of its own
+    assert bodies(fake, gamma)[-1] == 'Sent to Venus (Network.aDNA) as `coord_2026_10_04_station_to_venus_status_2.md`.'
+    assert message['id'] in memos.parse_memo((lattice(tmp_path) / OUTBOUND / published_memos(tmp_path)[0]).read_text())[0]['station_message']

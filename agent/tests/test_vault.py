@@ -3,7 +3,7 @@ import shutil
 import stat
 import subprocess
 import pytest
-from superyak_agent.vault import INBOX, OUTBOUND, RECEIPTS, Vault, VaultError
+from superyak_agent.vault import AUTHOR, INBOX, OUTBOUND, RECEIPTS, Vault, VaultError
 
 
 def git(path, *args):
@@ -367,3 +367,78 @@ def test_files_and_read_survive_symlink_loops_and_odd_names(vault, tmp_path):
     shutil.rmtree(vault.clone / 'who')
     os.symlink('who', vault.clone / 'who')
     assert vault.files(INBOX) == [] and vault.read(INBOX, 'coord_ok.md') == ''
+
+
+def test_recover_commits_memos_a_crash_left_untracked_or_staged_in_one_commit(vault):
+    vault, tmp_path = vault
+    outbound = vault.clone / OUTBOUND
+    (outbound / 'coord_untracked.md').write_text('u\n')
+    (outbound / 'coord_staged.md').write_text('s\n')
+    vault.git('add', '--', f'{OUTBOUND}/coord_staged.md')
+    before = vault.git('rev-parse', 'HEAD').stdout
+    assert vault.recover() == ['coord_staged.md', 'coord_untracked.md']
+    assert vault.git('rev-list', '--count', f'{before.strip()}..HEAD').stdout.strip() == '1'
+    assert vault.git('log', '-1', '--format=%an|%s').stdout.strip() == 'Wormhole|wormhole: recover interrupted memos'
+    assert vault.git('status', '--porcelain').stdout == ''
+    assert vault.tracked(OUTBOUND, 'coord_untracked.md') and vault.tracked(OUTBOUND, 'coord_staged.md')
+    vault.publish()
+    other = stanley(tmp_path)
+    assert (other / OUTBOUND / 'coord_untracked.md').read_text() == 'u\n'
+    assert (other / OUTBOUND / 'coord_staged.md').read_text() == 's\n'
+    head = vault.git('rev-parse', 'HEAD').stdout
+    assert vault.recover() == [] and vault.git('rev-parse', 'HEAD').stdout == head  # nothing to do: no commit
+
+
+def test_recover_leaves_unsafe_or_foreign_files_alone_and_unstages_them(vault, tmp_path):
+    vault, _ = vault
+    outbound = vault.clone / OUTBOUND
+    secret = tmp_path / 'secret'
+    secret.write_text('s')
+    os.symlink(secret, outbound / 'coord_link.md')
+    (outbound / 'sub').mkdir()
+    (outbound / 'sub' / 'coord_nested.md').write_text('n')
+    (outbound / 'bad name.md').write_text('b')
+    (outbound / 'notes.txt').write_text('t')
+    (outbound / 'coord_good.md').write_text('g')
+    (vault.clone / 'scratch.txt').write_text('mine')  # untracked, outside the outbound folder
+    (vault.clone / 'staged.txt').write_text('staged')
+    vault.git('add', '--', 'staged.txt', f'{OUTBOUND}/coord_link.md')
+    vault.git('add', '-f', '--', f'{OUTBOUND}/bad name.md')
+    assert vault.recover() == ['coord_good.md']
+    assert vault.git('diff', '--cached', '--name-only').stdout == ''  # nothing else stays staged
+    assert vault.git('ls-tree', '-r', '--name-only', 'HEAD', OUTBOUND).stdout.split() == [
+        f'{OUTBOUND}/README.md', f'{OUTBOUND}/coord_good.md']
+    assert (vault.clone / 'scratch.txt').read_text() == 'mine' and (vault.clone / 'staged.txt').read_text() == 'staged'
+    assert (outbound / 'coord_link.md').is_symlink() and (outbound / 'sub' / 'coord_nested.md').exists()
+    vault.sync()  # an index that is clean (and untracked files elsewhere) no longer blocks the rebase
+
+
+def test_a_staged_index_blocks_sync_until_recover_commits_it(vault):
+    vault, tmp_path = vault
+    (vault.clone / OUTBOUND / 'coord_half.md').write_text('half\n')
+    vault.git('add', '--', f'{OUTBOUND}/coord_half.md')
+    other = stanley(tmp_path)
+    (other / INBOX / 'coord_reply.md').write_text('reply\n')
+    commit_all(other, 'stanley')
+    assert push(other).returncode == 0
+    with pytest.raises(VaultError):
+        vault.sync()
+    vault.recover()
+    vault.sync()
+    vault.publish()
+    assert blob(tmp_path, f'{OUTBOUND}/coord_half.md') == b'half\n'
+    assert blob(tmp_path, f'{INBOX}/coord_reply.md') == b'reply\n'
+
+
+def test_tracked_is_true_only_for_plain_files_committed_in_head(vault):
+    vault, _ = vault
+    assert vault.tracked(OUTBOUND, 'README.md') is True
+    (vault.clone / OUTBOUND / 'coord_t.md').write_text('t')
+    assert vault.tracked(OUTBOUND, 'coord_t.md') is False  # on disk only
+    vault.git('add', '--', f'{OUTBOUND}/coord_t.md')
+    assert vault.tracked(OUTBOUND, 'coord_t.md') is False  # staged only
+    vault.git(*AUTHOR, 'commit', '-q', '-m', 'x')
+    assert vault.tracked(OUTBOUND, 'coord_t.md') is True
+    assert vault.tracked(OUTBOUND, 'missing.md') is False and vault.tracked(OUTBOUND, '') is False
+    assert vault.tracked('who/coordination', 'outbound') is False  # a folder is not a file
+    assert vault.tracked(OUTBOUND, '../outbound/coord_t.md') is False

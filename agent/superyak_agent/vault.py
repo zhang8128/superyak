@@ -147,7 +147,8 @@ class Vault:
         self.clone, self.remote, self.branch = Path(clone), remote, branch
 
     def git(self, *args, check=True):
-        result = subprocess.run(['git', '-C', str(self.clone), *SAFE, *args], capture_output=True, text=True)
+        result = subprocess.run(['git', '-C', str(self.clone), *SAFE, *args], capture_output=True, text=True,
+                                errors='replace')
         if check and result.returncode:
             raise VaultError(f'git {args[0]} failed: {result.stderr.strip()[:300]}')
         return result
@@ -194,6 +195,51 @@ class Vault:
         if rebase.returncode:
             self.git('rebase', '--abort', check=False)
             raise VaultError(f'could not replay local memos on {upstream}: {rebase.stderr.strip()[:300]}')
+
+    def listing(self, *args):
+        """NUL-separated output of a git listing command, as a list of paths (or fields) with surrogate-escaped
+        undecodable bytes, so an odd file name cannot raise."""
+        result = subprocess.run(['git', '-C', str(self.clone), *SAFE, *args], capture_output=True)
+        if result.returncode:
+            raise VaultError(f'git {args[0]} failed: {result.stderr.decode("utf-8", "replace").strip()[:300]}')
+        return [part.decode('utf-8', 'surrogateescape') for part in result.stdout.split(b'\0') if part]
+
+    def recover(self):
+        """Finish what a crash interrupted in add_outbound, which writes the file, stages it, then commits it.
+        New memos left untracked or staged (valid names, plain files, directly in the outbound folder) are
+        committed together as one commit; their names are returned. Anything else staged is unstaged so it cannot
+        block the rebase in sync(); anything else uncommitted is left alone."""
+        root = self.folder(OUTBOUND)
+        staged = self.listing('diff', '--cached', '--name-status', '--no-renames', '-z')
+        staged = dict(zip(staged[1::2], staged[0::2]))  # path -> status letter
+        candidates = [path for path, status in staged.items() if status == 'A']
+        candidates += self.listing('ls-files', '--others', '--exclude-standard', '-z', '--', OUTBOUND)
+        found = {}
+        for path in candidates:
+            folder, _, name = path.rpartition('/')
+            try:
+                plain = (root is not None and folder == OUTBOUND and MEMO_NAME.fullmatch(name)
+                         and stat.S_ISREG(os.lstat(root / name).st_mode))
+            except (OSError, ValueError):
+                plain = False
+            if plain:
+                found[path] = name
+        unwanted = [path for path in staged if path not in found]
+        if unwanted:
+            self.git('reset', '-q', '--', *unwanted)
+        if not found:
+            return []
+        self.git('add', '--', *found)
+        self.git(*AUTHOR, 'commit', '-q', '-m', 'wormhole: recover interrupted memos', '--', *found)
+        return sorted(found.values())
+
+    def tracked(self, folder, name):
+        """True when HEAD holds a plain file `name` directly in `folder`, i.e. it is committed (a memo that is
+        only on disk or only staged is not)."""
+        if not name or '/' in name or name in ('.', '..'):
+            return False
+        result = self.git('cat-file', '-t', f'HEAD:{folder}/{name}', check=False)
+        return result.returncode == 0 and result.stdout.strip() == 'blob'
 
     def publish(self):
         ahead = self.git('rev-list', '--count', f'{self.remote}/{self.branch}..HEAD', check=False)

@@ -67,6 +67,7 @@ class Wormhole:
     def cycle(self):
         if self.me is None:
             self.me = self.client.me()
+        self.vault.recover()  # a crash may have left a memo uncommitted; sync() needs a clean index
         self.vault.sync()
         rooms = [r for r in self.client.rooms() if ':' not in r['id']]
         if 'since' not in self.state:
@@ -125,8 +126,8 @@ class Wormhole:
         recording it. Only we write outbound/ (the vault gate keeps the lattice out), so a file the state does not
         know is ours."""
         for name in self.vault.files(OUTBOUND):
-            if name in self.state['memos']:
-                continue
+            if name in self.state['memos'] or not self.vault.tracked(OUTBOUND, name):
+                continue  # only committed memos: an uncommitted file would never be published
             fields, _ = memos.parse_memo(self.vault.read(OUTBOUND, name))
             if fields.get('station_message') == message_id and str(fields.get('to_persona') or '').lower() == persona.lower():
                 return name
