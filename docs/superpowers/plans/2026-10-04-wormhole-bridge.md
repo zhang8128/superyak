@@ -1247,7 +1247,7 @@ Expected: all pass (fix code, not the test, if it fails).
 
 - [ ] **Step 2: Document**
 
-- `agent/README.md`: add a "The wormhole" section: what it relays (explicit `@persona` mentions in rooms Wormhole is in; memos addressed to `Station.aDNA` back), the vault folders, `make wormhole-personas`, `make wormhole-key KEY=…`, the service command, and that no model runs.
+- `agent/README.md`: add a "The wormhole" section: what it relays (explicit `@persona` mentions in rooms Wormhole is in; memos addressed to `Station.aDNA` back), the vault folders, `make wormhole-personas`, `make wormhole-key KEY_FILE=<.pub file>`, the service command, and that no model runs.
 - `CLAUDE.md` (root), under "Approving on the station": add "To bridge a room to Stanley's aDNA lattice, add the `wormhole` ship to it as the room owner (Andy) when he asks; to unbridge, remove it."
 - `README.md`: one line in the `agent/` description mentioning the wormhole bridge.
 
@@ -1310,4 +1310,4 @@ WantedBy=default.target
 ```
 `systemctl --user daemon-reload && systemctl --user enable --now superyak-wormhole`.
 - [ ] **Step 6: Live check (no Stanley needed).** Write a stand-in inbound memo addressed to `Station.aDNA` from a temporary clone of `~/aDNA/Station.aDNA.git`, push, and confirm Wormhole posts it in Gamma Quadrant within a minute; then remove nothing (new-files-only — label the stand-in memo `coord_…_station_selftest_….md` so it is obviously a test). Outbound needs a person's or ship's message: ask Andy (web) or Defiant (its Claude Code) to post `@venus hello from the station` in Gamma Quadrant, and confirm the memo appears in the bare repository.
-- [ ] **Step 7: Handoff and message.** Add a dated HANDOFF entry; update the message for Stanley with: what Station.aDNA is, how to clone it over the mesh (`git clone andy@10.43.0.16:aDNA/Station.aDNA.git`, after the key is installed), the three folders, and the ask for a dedicated sync public key (installed with `make wormhole-key KEY='…'`).
+- [ ] **Step 7: Handoff and message.** Add a dated HANDOFF entry; update the message for Stanley with: what Station.aDNA is, how to clone it over the mesh (`git clone andy@10.43.0.16:aDNA/Station.aDNA.git`, after the key is installed), the three folders, and the ask for a dedicated sync public key (saved as a `.pub` file and installed with `make wormhole-key KEY_FILE=…`).

@@ -57,7 +57,10 @@ Established by reading `~/aDNA` on the Pi and the published aDNA corpus:
 - One new SSH public key from Stanley, added to `~/.ssh/authorized_keys` with a forced command that
   only allows `git-upload-pack` and `git-receive-pack` on `~/aDNA/Station.aDNA.git`, plus
   `restrict` (no shell, no PTY, no forwarding). Any other command is refused and logged.
-- The wrapper is `~/.local/bin/station-vault-git` (installed by `make wormhole-key KEY='ssh-ed25519 …'`).
+- The forced command is `agent/run_agent.py vault-git --repo ~/aDNA/Station.aDNA.git` (installed by
+  `make wormhole-key KEY_FILE=<Stanley's .pub file>`; key text never goes through a shell command line).
+- The bare repository's pre-receive gate holds every push except the bridge's own to adding new plain
+  files (≤ 1 MiB) under `inbox/` or `receipts/` on `main`, fast-forward only, ≤ 8 MiB per push.
 - Until the key is added, nothing flows; the bridge still records outbound memos locally.
 
 ### 3. The bridge ship and service
