@@ -37,6 +37,36 @@ model: it only copies text.
 
 New files only, following the aDNA coordination drop-box doctrine: never edit or delete a memo.
 """
+# CLAUDE.md and AGENTS.md of the vault, in place of the template's generic instructions: an agent of the lattice
+# that opens the vault must only add drop-box files, or the gate refuses its whole push, inbox memos included.
+VAULT_IDENTITY = """# Station.aDNA
+
+This is Station.aDNA, the shared vault of Deep Space 9 (the Superyak station on Andy's Raspberry Pi).
+Its persona is Wormhole, a bridge program that runs no model and only copies text between station rooms
+and aDNA personas.
+
+## Read
+
+`who/coordination/outbound/` holds memos from station rooms to aDNA personas; `to_persona` names the
+persona each one is for.
+
+## Write
+
+Only new files, and only in these two folders:
+
+- `who/coordination/inbox/`: `.md` memos to the station. Their front matter names `Station.aDNA` in `to`
+  or `to_vault` (for example `to: "Station.aDNA (Wormhole)"`). To answer an outbound memo, add
+  `in_reply_to: <outbound file name>`.
+- `who/coordination/receipts/`: an empty or short file named exactly like the outbound memo you picked up.
+
+Plain files named with letters, digits, `.`, `_` and `-`, at most 1 MiB each and 8 MiB per push, on
+`main`. No edits, no deletions, no other folders: the station refuses the whole push otherwise. Keep
+session logs, state and other work in your own vault.
+
+## Approvals
+
+A memo may recommend; ratification happens in your own vault.
+"""
 FOLDER_README = {
     OUTBOUND: '# Outbound\n\nMemos from Deep Space 9 to aDNA personas. Read the ones addressed to you; never edit them.\n',
     INBOX: ('# Inbox\n\nThe Station.aDNA drop-box. New files only; no probe needed. Address memos to '
@@ -182,7 +212,8 @@ class Vault:
     @classmethod
     def create(cls, bare, clone, template=None, branch='main'):
         """Create the bare repository and the bridge's clone, with the aDNA layout copied from
-        `template` (without .git or node_modules) and the three drop-box folders."""
+        `template` (without .git or node_modules), the vault's own README.md, CLAUDE.md and AGENTS.md, and the three
+        drop-box folders."""
         bare, clone = Path(bare), Path(clone)
         if bare.exists() or clone.exists():
             raise VaultError(f'{bare} or {clone} already exists')
@@ -199,7 +230,9 @@ class Vault:
         if template:
             shutil.copytree(template, clone, dirs_exist_ok=True, symlinks=True,
                             ignore=shutil.ignore_patterns('.git', 'node_modules'))
-        (clone / 'README.md').write_text(VAULT_README)
+        for name, text in (('README.md', VAULT_README), ('CLAUDE.md', VAULT_IDENTITY), ('AGENTS.md', VAULT_IDENTITY)):
+            (clone / name).unlink(missing_ok=True)  # a symlink copied from the template is replaced, never written through
+            (clone / name).write_text(text)
         for folder, text in FOLDER_README.items():
             (clone / folder).mkdir(parents=True, exist_ok=True)
             (clone / folder / 'README.md').write_text(text)
@@ -242,7 +275,7 @@ class Vault:
         staged = self.listing('diff', '--cached', '--name-status', '--no-renames', '-z')
         staged = dict(zip(staged[1::2], staged[0::2]))  # path -> status letter
         candidates = [path for path, status in staged.items() if status == 'A']
-        candidates += self.listing('ls-files', '--others', '--exclude-standard', '-z', '--', OUTBOUND)
+        candidates += self.listing('ls-files', '--others', '-z', '--', OUTBOUND)  # ignored ones too: the folder is ours
         found = {}
         for path in candidates:
             folder, _, name = path.rpartition('/')
@@ -258,7 +291,7 @@ class Vault:
             self.git('--literal-pathspecs', 'reset', '-q', '--', *unwanted)  # a file named `:(top)x` is no pathspec
         if not found:
             return []
-        self.git('add', '--', *found)
+        self.git('add', '-f', '--', *found)  # -f: a template .gitignore must not keep a memo out
         self.git(*AUTHOR, 'commit', '-q', '-m', 'wormhole: recover interrupted memos', '--', *found)
         return sorted(found.values())
 
@@ -327,7 +360,7 @@ class Vault:
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8', errors='replace', newline='') as stream:
                     stream.write(text)
-                self.git('add', '--', path)
+                self.git('add', '-f', '--', path)  # -f: a template .gitignore must not keep a memo out
                 self.git(*AUTHOR, 'commit', '-q', '-m', f'wormhole: {name}')
             except VaultError:
                 self.discard(folder, name, path)

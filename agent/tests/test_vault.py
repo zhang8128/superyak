@@ -16,6 +16,8 @@ def vault(tmp_path):
     template = tmp_path / 'template'
     (template / 'who' / 'coordination').mkdir(parents=True)
     (template / 'CLAUDE.md').write_text('base\n')
+    (template / 'AGENTS.md').write_text('base agents\n')
+    (template / 'STATE.md').write_text('state\n')
     (template / 'node_modules').mkdir()
     (template / 'node_modules' / 'x.js').write_text('x')
     return Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone', template=template), tmp_path
@@ -34,10 +36,26 @@ def test_create_makes_a_bare_repository_with_the_layout_and_drop_box(vault):
     other = stanley(tmp_path)
     for folder in (OUTBOUND, INBOX, RECEIPTS):
         assert (other / folder / 'README.md').exists()
-    assert (other / 'CLAUDE.md').read_text() == 'base\n' and (other / 'README.md').exists()
+    assert (other / 'README.md').exists() and (other / 'STATE.md').read_text() == 'state\n'  # the template's other files stay
+    for name in ('CLAUDE.md', 'AGENTS.md'):  # the template's generic instructions give way to this vault's own
+        text = (other / name).read_text()
+        assert text.startswith('# Station.aDNA') and 'base' not in text
+        for part in ('Deep Space 9', 'Wormhole', 'runs no model', f'`{OUTBOUND}/`', f'`{INBOX}/`', f'`{RECEIPTS}/`',
+                     'in_reply_to', '1 MiB', '8 MiB', 'refuses the whole push', 'your own vault', 'ratification'):
+            assert part in text, part
     assert not (other / 'node_modules').exists()
     with pytest.raises(VaultError):
         Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone2')
+
+
+def test_create_never_writes_through_a_symlinked_identity_file_in_the_template(tmp_path):
+    template, outside = tmp_path / 'template', tmp_path / 'elsewhere.md'
+    template.mkdir()
+    outside.write_text('not the vault\n')
+    os.symlink(outside, template / 'CLAUDE.md')
+    vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone', template=template)
+    assert outside.read_text() == 'not the vault\n'
+    assert not (vault.clone / 'CLAUDE.md').is_symlink() and (vault.clone / 'CLAUDE.md').read_text().startswith('# Station.aDNA')
 
 
 def test_outbound_memos_are_committed_once_and_published(vault):
@@ -649,3 +667,18 @@ def test_recover_unstages_with_literal_pathspecs(vault):
     assert vault.git('diff', '--cached', '--name-only').stdout == ''  # a `:(top)x` pathspec would have spared it
     assert (vault.clone / ':(top)x').read_text() == 'magic name'
     vault.sync()
+
+
+def test_a_gitignore_from_the_template_cannot_keep_memos_out_of_the_vault(tmp_path):
+    template = tmp_path / 'template'
+    template.mkdir()
+    (template / '.gitignore').write_text(f'{OUTBOUND}/coord_*\n')
+    vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone', template=template)
+    assert vault.git('ls-files', '--', '.gitignore').stdout == '.gitignore\n'  # committed with the template
+    assert vault.add_outbound('coord_a.md', MEMO + 'a\n') is True
+    (vault.clone / OUTBOUND / 'coord_b.md').write_text(MEMO + 'b\n')  # a crash came before `git add`
+    assert vault.recover() == ['coord_b.md']
+    vault.sync()
+    vault.publish()
+    assert blob(tmp_path, f'{OUTBOUND}/coord_a.md') == (MEMO + 'a\n').encode()
+    assert blob(tmp_path, f'{OUTBOUND}/coord_b.md') == (MEMO + 'b\n').encode()
