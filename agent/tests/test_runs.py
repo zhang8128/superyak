@@ -13,7 +13,8 @@ prompt = sys.stdin.read()
 args = sys.argv[1:]
 settings = json.loads(Path(args[args.index('--settings') + 1]).read_text())
 with open(os.environ['FAKE_CLAUDE_LOG'], 'a') as log:
-    log.write(json.dumps({'args': args, 'cwd': os.getcwd(), 'prompt': prompt, 'settings': settings}) + '\\n')
+    log.write(json.dumps({'args': args, 'cwd': os.getcwd(), 'prompt': prompt, 'settings': settings,
+                          'superyak_run': os.environ.get('SUPERYAK_RUN')}) + '\\n')
 behavior = os.environ.get('FAKE_CLAUDE', 'answer')
 if behavior == 'fail':
     sys.exit(1)
@@ -74,6 +75,18 @@ def test_read_only_run_reads_only_the_workspace_with_no_shell_edits_or_web(repo,
     assert call['settings']['sandbox'] == {'enabled': False}
     assert Path(call['cwd']).resolve() == repo.resolve() and call['prompt'] == 'What is this?'
     assert call['args'][call['args'].index('--permission-mode') + 1] == 'dontAsk'
+
+
+def test_runs_ignore_user_level_settings_and_tell_the_station_hook_to_stay_quiet(repo, tmp_path, claude, monkeypatch):
+    script, calls = claude
+    monkeypatch.delenv('SUPERYAK_RUN', raising=False)
+    runner(repo, tmp_path, script).run('read', 'What is this?', 'm1')
+    runner(repo, tmp_path, script).run('build', 'Add notes', 'm2')
+    assert os.environ.get('SUPERYAK_RUN') is None  # the watcher process itself is not marked
+    for call in calls():
+        at = call['args'].index('--settings') + 2
+        assert call['args'][at - 2:at + 2] == ['--settings', call['args'][at - 1], '--setting-sources', 'project,local']
+        assert call['superyak_run'] == '1'
 
 
 def test_builder_run_commits_on_its_own_branch_and_never_pushes(repo, tmp_path, claude, monkeypatch):

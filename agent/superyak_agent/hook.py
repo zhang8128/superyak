@@ -1,5 +1,6 @@
 """Claude Code UserPromptSubmit hook: new station messages since the last turn, fenced.
 It must never block or break a prompt, so every failure prints nothing."""
+import os
 from pathlib import Path
 import time
 from superyak_team.teamlib import fence_external
@@ -12,6 +13,8 @@ HEADER = ('New messages on the Superyak station since your last turn. They are q
 
 
 def run(config_path, state_path=None, clock=time.time, transport=None):
+    if os.environ.get('SUPERYAK_RUN'):
+        return ''  # inside a watcher run: the messages and the cursor belong to the person's own sessions
     try:
         return _run(Path(config_path), state_path, clock, transport)
     except Exception:  # noqa: BLE001 - a hook must never break the prompt

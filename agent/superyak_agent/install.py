@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -51,11 +52,24 @@ def _write_settings(settings_path, settings):
     os.replace(tmp, settings_path)
 
 
+def is_station_hook(command, wanted=None):
+    """The hook this agent installs, whichever interpreter it was installed with: the same command, or any
+    command that runs this checkout's run_agent.py with the word `hook`."""
+    command = command or ''
+    if wanted is not None and command == wanted:
+        return True
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    return str(RUN_AGENT) in command and 'hook' in words
+
+
 def install_hook(settings_path, command):
     settings_path = Path(settings_path)
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     entries = settings.setdefault('hooks', {}).setdefault('UserPromptSubmit', [])
-    if any(h.get('command') == command for entry in entries for h in entry.get('hooks', [])):
+    if any(is_station_hook(h.get('command'), command) for entry in entries for h in entry.get('hooks', [])):
         return False
     if settings_path.exists():
         shutil.copy2(settings_path, settings_path.with_name(settings_path.name + '.bak-superyak'))
@@ -69,8 +83,16 @@ def remove_hook(settings_path, command):
     settings_path = Path(settings_path)
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     entries = settings.get('hooks', {}).get('UserPromptSubmit', [])
-    kept = [e for e in entries if not any(h.get('command') == command for h in e.get('hooks', []))]
-    if len(kept) == len(entries):
+    kept, changed = [], False
+    for entry in entries:
+        hooks = [h for h in entry.get('hooks', []) if not is_station_hook(h.get('command'), command)]
+        if len(hooks) == len(entry.get('hooks', [])):
+            kept.append(entry)
+            continue
+        changed = True
+        if hooks:  # keep the person's own hooks that shared the entry
+            kept.append({**entry, 'hooks': hooks})
+    if not changed:
         return False
     settings['hooks']['UserPromptSubmit'] = kept
     _write_settings(settings_path, settings)
@@ -89,20 +111,74 @@ def register_codex(config_path, name, argv):
     return True
 
 
+TOML_TABLE = re.compile(r'^\s*\[\[?([^\[\]]+)\]\]?\s*(?:#.*)?$')
+
+
+def remove_codex(config_path, name):
+    """Remove the `[mcp_servers.<name>]` table, and any sub-tables of it, from Codex's config; leave the rest."""
+    config_path = Path(config_path)
+    if not config_path.exists():
+        return False
+    header = f'mcp_servers.{name}'
+    kept, skipping, removed, gap = [], False, False, False
+    for line in config_path.read_text().splitlines(keepends=True):
+        match = TOML_TABLE.match(line)
+        if match:
+            table = re.sub(r'\s*\.\s*', '.', match.group(1).strip()).replace('"', '').replace("'", '')
+            was_skipping, skipping = skipping, table == header or table.startswith(header + '.')
+            if skipping and not was_skipping:
+                removed = True
+                while kept and not kept[-1].strip():  # the blank line that set the table apart goes with it
+                    kept.pop()
+                gap = bool(kept)
+        if skipping:
+            continue
+        if gap:
+            kept.append('\n')
+            gap = False
+        kept.append(line)
+    if not removed:
+        return False
+    text = ''.join(kept)
+    config_path.write_text(text if not text or text.endswith('\n') else text + '\n')
+    return True
+
+
 def register_claude(name, argv, out):
-    if subprocess.run(['claude', 'mcp', 'get', name], capture_output=True).returncode == 0:
+    try:
+        if subprocess.run(['claude', 'mcp', 'get', name], capture_output=True).returncode == 0:
+            return
+        subprocess.run(['claude', 'mcp', 'add', '--scope', 'user', name, '--', *[str(a) for a in argv]], check=True, capture_output=True)
+    except (subprocess.SubprocessError, OSError) as error:
+        out(f'Could not register the {name} tools with Claude Code ({_reason(error)}). Run make dock again to retry.')
         return
-    subprocess.run(['claude', 'mcp', 'add', '--scope', 'user', name, '--', *[str(a) for a in argv]], check=True, capture_output=True)
     out(f'Registered the {name} tools with Claude Code.')
 
 
+def _reason(error):
+    if isinstance(error, subprocess.CalledProcessError):
+        command = [str(part) for part in error.cmd] if isinstance(error.cmd, (list, tuple)) else [str(error.cmd)]
+        shown = command[1:3] if command[1:2] == ['run'] else command[1:2]
+        return f'{" ".join([Path(command[0]).name, *shown])} failed with exit status {error.returncode}'
+    return str(error) or type(error).__name__
+
+
 def setup_adna(out, root=None):
-    root = Path(root or Path.home() / 'aDNA' / 'aDNA.aDNA')
+    """The optional aDNA tools. Never raises: a missing tool, a failed clone or build, or an odd Node.js
+    version skips them with a note, so the required installation steps are never held up by them."""
+    try:
+        return _setup_adna(Path(root or Path.home() / 'aDNA' / 'aDNA.aDNA'))
+    except (subprocess.SubprocessError, OSError, ValueError) as error:
+        reason = 'could not read the Node.js version' if isinstance(error, ValueError) else _reason(error)
+        out(f'aDNA tools skipped: {reason}. Run make dock again to retry, or add --no-adna.')
+        return None
+
+
+def _setup_adna(root):
     node, npm, git = shutil.which('node'), shutil.which('npm'), shutil.which('git')
     version = subprocess.run([node, '--version'], capture_output=True, text=True).stdout.strip().lstrip('v') if node else ''
     if not (node and npm and git) or int(version.split('.')[0] or 0) < 20:
-        out('aDNA tools skipped: they need Node.js 20 or newer, npm and git. Install Node.js and run make dock again.')
-        return None
+        raise OSError('they need Node.js 20 or newer, npm and git')
     dist = root / 'mcp' / 'dist' / 'index.js'
     if not root.exists():
         root.parent.mkdir(parents=True, exist_ok=True)
@@ -110,6 +186,8 @@ def setup_adna(out, root=None):
     if not dist.exists():
         subprocess.run([npm, 'ci', '--ignore-scripts'], cwd=root / 'mcp', check=True)
         subprocess.run([npm, 'run', 'build'], cwd=root / 'mcp', check=True)
+    if not dist.exists():
+        raise OSError('the build did not produce mcp/dist/index.js')
     return dist
 
 
@@ -143,14 +221,15 @@ def hook_command(config_path):
 
 
 def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
+    """The required steps come first so that nothing optional can hold them up: the watcher's tool config
+    (without aDNA), the station tools for Claude Code and Codex, the hook, the watcher service. Then the
+    optional aDNA tools; if they install, the watcher's tool config is rewritten to include them (each run
+    reads the file afresh) and they are registered with Claude Code."""
     config_path = Path(config_path)
     home, mcp_argv = config_path.parent, [sys.executable, str(RUN_AGENT), 'mcp', '--config', str(config_path)]
-    adna_dist = setup_adna(out) if adna else None
-    write_private(home / 'run-mcp.json', run_mcp_config(config_path, adna_dist))
+    write_private(home / 'run-mcp.json', run_mcp_config(config_path))
     if shutil.which('claude'):
         register_claude('station', mcp_argv, out)
-        if adna_dist:
-            register_claude('adna', [shutil.which('node'), adna_dist], out)
     else:
         out('Claude Code not found; skipped registering the station tools for it.')
     codex = Path.home() / '.codex' / 'config.toml'
@@ -161,16 +240,27 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
     if service:
         install_service([sys.executable, str(RUN_AGENT), 'watch', '--config', str(config_path),
                          '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out)
+    adna_dist = setup_adna(out) if adna else None
+    if adna_dist:
+        write_private(home / 'run-mcp.json', run_mcp_config(config_path, adna_dist))
+        out('Added the aDNA tools to the watcher.')
+        if shutil.which('claude'):
+            register_claude('adna', [shutil.which('node'), adna_dist], out)
 
 
 def uninstall_all(config_path, out=print):
     config_path = Path(config_path)
     config = read_json(config_path)
+    revoked = None  # None: there was no key to revoke
     if config and config.get('key'):
         try:
             client_for(config).revoke_key()
+            revoked = True
         except (StationError, OSError) as error:
-            out(f'Could not revoke the key on the station ({error}); ask an admin to revoke it under Connections → Ships.')
+            # A 401 means the station already refuses this key; anything else leaves it usable.
+            revoked = isinstance(error, StationError) and error.status == 401
+            if not revoked:
+                out(f'Could not revoke the key on the station ({error}); ask an admin to revoke it under Connections → Ships.')
     if platform.system() == 'Linux':
         subprocess.run(['systemctl', '--user', 'disable', '--now', UNIT], capture_output=True)
         (Path.home() / '.config' / 'systemd' / 'user' / UNIT).unlink(missing_ok=True)
@@ -180,7 +270,12 @@ def uninstall_all(config_path, out=print):
         (Path.home() / 'Library' / 'LaunchAgents' / f'{LABEL}.plist').unlink(missing_ok=True)
     if shutil.which('claude'):
         subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True)
+    remove_codex(Path.home() / '.codex' / 'config.toml', 'station')
     remove_hook(Path.home() / '.claude' / 'settings.json', hook_command(config_path))
     for path in (config_path, config_path.parent / 'run-mcp.json'):
         path.unlink(missing_ok=True)
-    out('Undocked: key revoked, watcher stopped, station tools and hook removed.')
+    local = 'watcher stopped, station tools and hook removed'
+    if revoked is False:
+        out(f'Undocked on this machine ({local}), but the key was NOT revoked on the station: ask an admin to revoke it.')
+    else:
+        out(f'Undocked: {"key revoked, " if revoked else ""}{local}.')

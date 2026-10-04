@@ -106,7 +106,8 @@ class ClaudeRunner:
 
     def _command(self, settings_path, limit=None):
         command = [self.claude, '-p', '--output-format', 'text', '--permission-mode', 'dontAsk', '--no-session-persistence',
-                   '--settings', str(settings_path), '--strict-mcp-config', '--append-system-prompt', self.persona]
+                   '--settings', str(settings_path), '--setting-sources', 'project,local', '--strict-mcp-config',
+                   '--append-system-prompt', self.persona]
         if self.mcp_config:
             command += ['--mcp-config', str(self.mcp_config)]
         if self.model:
@@ -124,8 +125,11 @@ class ClaudeRunner:
         settings_path.write_text(json.dumps(settings))
         limit = self.limits[mode]
         # Its own session, so a timeout can end the shells and background jobs claude started, not just claude.
+        # SUPERYAK_RUN tells the person's station hook (installed at user scope, which --setting-sources already
+        # leaves out of these runs) to stay quiet, so a run never reads messages or moves the person's cursor.
         proc = subprocess.Popen(self._command(settings_path, limit), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, cwd=str(cwd), start_new_session=True)
+                                stderr=subprocess.PIPE, text=True, cwd=str(cwd), start_new_session=True,
+                                env=dict(os.environ, SUPERYAK_RUN='1'))
         try:
             stdout, stderr = proc.communicate(input=prompt, timeout=limit)
         except subprocess.TimeoutExpired:

@@ -17,6 +17,9 @@ the Superyak station on Andy's Pi.
   run `make dock DOCK_ARGS='--request --name "…" --contact "…" --note "…" --ship …'`.
 - Andy's own machines: `make dock DOCK_ARGS='--ship <name>'`.
 - Ask whether new room messages should appear in their Claude Code sessions; if yes, add `--hook`.
-- `make dock` prints a `STATUS:` line and exits 3 while it waits (for approval, the Tailscale
-  share, or confirmation in the browser). Relay its instructions, then run it again until it
-  prints `STATUS: docked`. Never ask for or type their password; they choose it in the browser.
+- `make dock` waits up to 9 minutes per run, so run it with a 10-minute Bash timeout (Claude
+  Code's default is 2 minutes). While it waits for approval, the Tailscale share or confirmation
+  in the browser it ends with a `STATUS:` line, and make reports `Error 3`; that is expected, not
+  a failure. Relay the instructions it showed, then run it again until it prints `STATUS: docked`
+  (`STATUS: denied` or `expired` means stop and tell them). Never ask for or type their password;
+  they choose it in the browser.
