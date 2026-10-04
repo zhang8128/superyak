@@ -6,6 +6,7 @@ from .common import Problem, text, uid
 
 REQUEST_LIFETIME = 604800
 INVITATION_LIFETIME = 604800
+SHARE_LINK_PREFIX = 'https://login.tailscale.com/'
 # Behind `tailscale serve` every client shares one source, so the budget is global.
 HOURLY_LIMIT = 20
 PENDING_LIMIT = 50
@@ -16,10 +17,19 @@ CREATE TABLE IF NOT EXISTS access_requests(id TEXT PRIMARY KEY, name TEXT NOT NU
 
 def public_request(row, now):
     status = 'expired' if row['status'] == 'pending' and row['expires'] <= now else row['status']
-    return {key: row[key] for key in ('id', 'name', 'contact', 'note', 'created', 'expires', 'decided_by', 'decided')} | {'status': status}
+    return {key: row[key] for key in ('id', 'name', 'contact', 'note', 'created', 'expires', 'decided_by', 'decided', 'share_status')} | {'status': status}
 
 
 class AccessRequests:
+    def _share_link(self):
+        """The reusable Tailscale share link created once with `make station-share-link`."""
+        path = getattr(self, 'share_link_file', None)
+        try:
+            link = path.read_text().strip() if path else ''
+        except OSError:
+            return None
+        return link if link.startswith(SHARE_LINK_PREFIX) and len(link) <= 500 else None
+
     def request_access(self, name, contact, note):
         text(name, 'name')
         text(contact, 'contact')
@@ -44,10 +54,13 @@ class AccessRequests:
             row = db.execute('SELECT * FROM access_requests WHERE id=?', (key,)).fetchone()
             if not row or not isinstance(secret, str) or not hmac.compare_digest(token_hash(secret), row['secret_hash']):
                 raise Problem(404, 'Not found')
-            result = {'status': public_request(row, self.clock())['status'], 'expires': row['expires']}
+            result = {'status': public_request(row, self.clock())['status'], 'expires': row['expires'], 'share': row['share_status']}
             if row['token']:
                 result['token'] = row['token']
                 db.execute('UPDATE access_requests SET token=NULL WHERE id=?', (key,))
+            if row['share_url']:
+                result['share_url'] = row['share_url']
+                db.execute("UPDATE access_requests SET share_url=NULL,share_status='collected' WHERE id=?", (key,))
             return result
 
     def access_requests(self, actor):
@@ -65,13 +78,15 @@ class AccessRequests:
                 raise Problem(404, 'Not found')
             if public_request(row, now)['status'] != 'pending':
                 raise Problem(409, 'This request was already decided or has expired')
-            token = None
+            token = share_url = share_status = None
             if approve:
                 token = secrets.token_urlsafe(32)
                 db.execute('INSERT INTO invitations(token_hash,creator_id,expires) VALUES(?,?,?)', (token_hash(token), actor, now + INVITATION_LIFETIME))
+                share_url = self._share_link()
+                share_status = 'ready' if share_url else 'missing'
             db.execute(
-                'UPDATE access_requests SET status=?,token=?,decided_by=?,decided=? WHERE id=?',
-                ('approved' if approve else 'denied', token, actor, now, key),
+                'UPDATE access_requests SET status=?,token=?,share_url=?,share_status=?,decided_by=?,decided=? WHERE id=?',
+                ('approved' if approve else 'denied', token, share_url, share_status, actor, now, key),
             )
             return public_request(db.execute('SELECT * FROM access_requests WHERE id=?', (key,)).fetchone(), now)
 

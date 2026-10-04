@@ -201,6 +201,8 @@ class Ships:
             now = self.clock()
             notices = [{'id': f'access-{r["id"]}', 'text': f'{r["name"]} is asking to come aboard. Approve or deny under Connections → Access requests.'}
                        for r in db.execute("SELECT id,name FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
+            notices += [{'id': f'share-{r["id"]}', 'text': f'No Tailscale share link is set, so {r["name"]} cannot reach the station yet. Share the Pi with them by hand, or run make station-share-link on the Pi.'}
+                        for r in db.execute("SELECT id,name FROM access_requests WHERE share_status='missing' ORDER BY decided")]
             notices += [{'id': f'docked-{r["id"]}', 'text': f'{r["ship"]} ({r["owner"]}) docked from {r["machine"]}. Room owners can add it to rooms.'}
                         for r in db.execute("""SELECT dockings.id, ships.name AS ship, owners.name AS owner, dockings.machine FROM dockings
                             JOIN users AS ships ON ships.id=dockings.ship_id JOIN users AS owners ON owners.id=dockings.owner_id

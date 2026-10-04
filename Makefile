@@ -28,7 +28,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: request-access setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: request-access station-share-link setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -37,6 +37,7 @@ help:
 	@echo "make setup-peer / check-peer  Install/check the standalone personal home"
 	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
 	@echo "make request-access LIGHTHOUSE=https://…  Ask a lighthouse for an account and wait for approval"
+	@echo "make station-share-link   On the Pi: create the station's reusable Tailscale share link"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
 	@echo "make setup              Install all five components from their lockfiles"
 	@echo "make check              Run all suites and interoperability checks"
@@ -158,6 +159,9 @@ home-demo:
 request-access:
 	@test -n "$(LIGHTHOUSE)" || { echo 'Usage: make request-access LIGHTHOUSE=https://smart.<tailnet>.ts.net'; exit 2; }
 	python3 peer/scripts/request_access.py "$(LIGHTHOUSE)"
+
+station-share-link:
+	python3 peer/scripts/share_link.py
 
 home:
 	@echo "Superyak: http://127.0.0.1:$(HOME_PORT)"

@@ -37,9 +37,10 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEX
 '''
 
 class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships):
-    def __init__(self, data_dir: Path, *, clock=time.time):
+    def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None):
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
+        self.share_link_file = Path(share_link_file) if share_link_file else None
         self._check_paths()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.data_dir, 0o700)
@@ -59,6 +60,10 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             for name, ddl in [('kind', "TEXT NOT NULL DEFAULT 'person'"), ('owner_id', 'TEXT REFERENCES users(id)')]:
                 if name not in columns:
                     db.execute(f'ALTER TABLE users ADD COLUMN {name} {ddl}')
+            request_columns = {row['name'] for row in db.execute('PRAGMA table_info(access_requests)')}
+            for name in ('share_url', 'share_status'):
+                if name not in request_columns:
+                    db.execute(f'ALTER TABLE access_requests ADD COLUMN {name} TEXT')
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):

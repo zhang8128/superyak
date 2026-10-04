@@ -60,7 +60,7 @@ def test_denied_request_never_yields_a_token(env):
     request = submit(guest).json()
     assert clients[2].post(f'/api/access-requests/{request["id"]}/deny', json={}).json()['status'] == 'denied'
     status = guest.get(f'/api/access-requests/{request["id"]}', params={'secret': request['secret']}).json()
-    assert status == {'status': 'denied', 'expires': request['expires']}
+    assert status == {'status': 'denied', 'expires': request['expires'], 'share': None}
     assert clients[2].post(f'/api/access-requests/{request["id"]}/approve', json={}).status_code == 409
 
 
@@ -95,3 +95,41 @@ def test_pending_listing_for_trusted_local_worker(env):
     assert [(row['id'], row['name']) for row in pending] == [(request['id'], 'Jenn')]
     clients[2].post(f'/api/access-requests/{request["id"]}/deny', json={})
     assert app.state.store.pending_access_requests() == []
+
+
+import pytest
+
+
+def station_with_share_link(tmp_path, link):
+    from superyak_peer.app import create_app
+    path = tmp_path / 'tailscale-share-url'
+    if link is not None:
+        path.write_text(link + '\n')
+    app = create_app(tmp_path / 'peer', clock=lambda: 1000000.0, allowed_origins=['http://testserver'], share_link_file=path)
+    app.state.store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    admin = anonymous(app)
+    admin.headers['x-csrf-token'] = admin.post('/api/login', json={'username': 'andy', 'password': 'long-password-andy'}).json()['csrf_token']
+    return app, admin
+
+
+def test_approval_releases_the_share_link_once_with_the_invitation(tmp_path):
+    app, admin = station_with_share_link(tmp_path, 'https://login.tailscale.com/admin/invite/abc')
+    guest = anonymous(app)
+    request = submit(guest).json()
+    admin.post(f'/api/access-requests/{request["id"]}/approve', json={})
+    first = guest.get(f'/api/access-requests/{request["id"]}', params={'secret': request['secret']}).json()
+    assert (first['share'], first['share_url']) == ('ready', 'https://login.tailscale.com/admin/invite/abc') and first['token']
+    second = guest.get(f'/api/access-requests/{request["id"]}', params={'secret': request['secret']}).json()
+    assert second['share'] == 'collected' and 'share_url' not in second and 'token' not in second
+
+
+@pytest.mark.parametrize('link', [None, 'https://evil.example/invite', ''])
+def test_missing_or_invalid_share_link_is_reported_and_announced(tmp_path, link):
+    app, admin = station_with_share_link(tmp_path, link)
+    guest = anonymous(app)
+    request = submit(guest).json()
+    admin.post(f'/api/access-requests/{request["id"]}/approve', json={})
+    status = guest.get(f'/api/access-requests/{request["id"]}', params={'secret': request['secret']}).json()
+    assert status['share'] == 'missing' and 'share_url' not in status and status['token']
+    assert admin.get('/api/access-requests').json()[0]['share_status'] == 'missing'
+    assert [n['id'] for n in app.state.store.station_notices()] == [f'share-{request["id"]}']

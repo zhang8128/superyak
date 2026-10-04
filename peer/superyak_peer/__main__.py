@@ -101,6 +101,10 @@ def main(argv=None):
     card.add_argument('--endpoint', required=True)
     notices = commands.add_parser('station-notices', help='Trusted local listing of what Odo announces in Ops')
     notices.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
+    door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    door.add_argument('--host', default='127.0.0.1')
+    door.add_argument('--port', type=int, default=7436)
     ship = commands.add_parser('create-ship', help='Trusted local: create the station ship (no owner) and write its private agent config')
     ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     ship.add_argument('--username', required=True)
@@ -122,6 +126,7 @@ def main(argv=None):
     serve.add_argument('--sync', action='store_true')
     serve.add_argument('--proxy-headers', action='store_true', help='Trust X-Forwarded-Proto/For from a loopback reverse proxy such as tailscale serve')
     serve.add_argument('--model-config', type=Path, help='Operator-owned approved local Gemma JSON configuration')
+    serve.add_argument('--share-link-file', type=Path, help='Reusable Tailscale share link released once to approved requesters')
     args = parser.parse_args(argv)
     try:
         if args.command == 'bootstrap-super-admin':
@@ -172,6 +177,16 @@ def main(argv=None):
                 password = args.password_file.read_text().rstrip('\r\n') if args.password_file else getpass.getpass('Owner password (12+ characters): ')
                 store._create_user(db, args.username, args.name, password, True)
             print(f'Superyak owner created in {args.data_dir}')
+        elif args.command == 'door':
+            try:
+                loopback = ipaddress.ip_address(args.host).is_loopback
+            except ValueError:
+                loopback = False
+            if not loopback:
+                raise ValueError('The door binds to loopback; tailscale funnel publishes it')
+            from .door import create_door
+            import uvicorn
+            uvicorn.run(create_door(args.data_dir), host=args.host, port=args.port)
         else:
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback
@@ -201,7 +216,7 @@ def main(argv=None):
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
-            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync)
+            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file)
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=args.proxy_headers, forwarded_allow_ips='127.0.0.1' if args.proxy_headers else None)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')

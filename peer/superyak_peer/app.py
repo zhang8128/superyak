@@ -102,7 +102,7 @@ def actor(request):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
     demo_credentials = []
     if local_demo:
@@ -123,7 +123,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     if federation_endpoint and not federation_endpoint.startswith('https://'):
         raise ValueError('Federation requires HTTPS')
     app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
-    store = app.state.store = Store(data_dir, clock=clock)
+    store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
     app.state.federation = Federation(store, endpoint=federation_endpoint)
     app.state.sync_enabled = sync_enabled
     install(app)
