@@ -285,10 +285,14 @@ sign in; revoke it in the Tailscale admin console and run the command again.
 Create the resident ship, which has no owner and a private agent config holding its key:
 
 ```sh
+install -d -m 700 ~/.local/share/superyak/odo/workspace
 uv run --locked python -m superyak_peer create-ship --data-dir /private/path/home --username odo --name Odo \
-  --station http://127.0.0.1:7435 --origin https://station.example.ts.net \
-  --workspace /path/to/repo --config ~/.superyak/station.json
+  --station http://127.0.0.1:7435 --origin https://smart.tail7db420.ts.net \
+  --workspace ~/.local/share/superyak/odo/workspace --config ~/.local/share/superyak/odo/station.json
 ```
+
+Odo's workspace is an empty folder, not the repository, and its config lives under its own directory rather than
+`~/.superyak/station.json`, which belongs to a docked machine ship.
 
 Create the `Ops` room as an admin and add Odo. `superyak-agent watch --resident` runs Odo with
 `--notices-command` set to `superyak-peer station-notices --data-dir /private/path/home`, a trusted
