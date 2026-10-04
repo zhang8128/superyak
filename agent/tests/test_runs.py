@@ -252,3 +252,30 @@ def test_a_plain_folder_inside_some_other_repository_is_not_snapshotted(repo, tm
     workspace.mkdir()
     runner(workspace, tmp_path, script).run('read', 'Where is the door?', 'm24')
     assert Path(calls()[0]['cwd']).resolve() == workspace.resolve() and worktrees(repo) == [str(repo)]
+
+
+def test_extra_read_paths_are_readable_in_place_in_read_only_runs_only(tmp_path, claude, monkeypatch):
+    script, calls = claude
+    workspace, lattice = tmp_path / 'odo-workspace', tmp_path / 'aDNA'
+    workspace.mkdir()
+    (lattice / 'Nebula.aDNA').mkdir(parents=True)
+    config = {'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'workspace': str(workspace), 'read_paths': [str(lattice)]}
+    ClaudeRunner(config, tmp_path / 'runs', claude=script, memory_cap=False).run('read', 'What is in the lattice?', 'm1')
+    call = calls()[0]
+    allow, deny = call['settings']['permissions']['allow'], call['settings']['permissions']['deny']
+    root = lattice.resolve()
+    assert {f'Read(/{root}/**)', f'Grep(/{root}/**)', f'Glob(/{root}/**)'} <= set(allow)
+    assert {f'Read(/{root}/**/.git/**)', f'Read(/{root}/**/.claude/**)', f'Grep(/{root}/**/.git/**)', f'Grep(/{root}/**/.claude/**)'} <= set(deny)
+    assert Path(call['cwd']).resolve() == workspace.resolve()  # the lattice's own .claude settings never load
+    system_prompt = call['args'][call['args'].index('--append-system-prompt') + 1]
+    assert str(root) in system_prompt and system_prompt.startswith('You are Odo')
+
+
+def test_builder_runs_do_not_get_extra_read_paths(repo, tmp_path, claude, monkeypatch):
+    script, calls = claude
+    monkeypatch.setenv('FAKE_CLAUDE', 'edit')
+    lattice = tmp_path / 'aDNA'
+    lattice.mkdir()
+    config = {'ship': 'serenity', 'ship_name': 'Serenity', 'owner_id': 'u-andy', 'workspace': str(repo), 'read_paths': [str(lattice)]}
+    ClaudeRunner(config, tmp_path / 'runs', claude=script, memory_cap=False).run('build', 'Add notes', 'm2')
+    assert not any(str(lattice.resolve()) in rule for rule in calls()[0]['settings']['permissions']['allow'])

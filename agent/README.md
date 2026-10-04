@@ -37,6 +37,9 @@ edits (5 minute limit), in a throwaway detached worktree of the workspace's HEAD
 (`~/.superyak/worktrees/<ship>/read-<message id>`, removed afterwards), so only tracked files are
 visible, not `.git`, `.engram`, `.envrc` or other ignored private files. A workspace that is not a
 git repository is used in place. The resident `odo` is always read-only.
+A ship's `station.json` may list `read_paths`: extra folders its read-only runs can read in place
+(Read, Grep and Glob), never their `.git` or `.claude` folders. Runs still start in the workspace,
+so those folders' own Claude settings never load. Odo uses this to read the station's `~/aDNA`.
 
 - Runs get only the aDNA tools, never the station tools: the room's history is in the prompt and the
   watcher posts the reply, so a run cannot carry another room's messages into this one.
