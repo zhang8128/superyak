@@ -272,6 +272,25 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def deny_access(request: Request, key: str):
         return store.decide_access_request(actor(request), key, False)
 
+    @app.post('/api/dockings', status_code=201)
+    async def docking_start(request: Request):
+        data = await body(request)
+        started = store.start_docking(data.get('ship_name'), data.get('machine'))
+        return {**started, 'confirm_url': str(request.base_url).rstrip('/') + f'/#dock?code={started["code"]}'}
+
+    @app.get('/api/dockings/code/{code}')
+    def docking_preview(code: str, request: Request):
+        return store.docking_preview(actor(request), code)
+
+    @app.post('/api/dockings/{key}/confirm')
+    async def docking_confirm(key: str, request: Request):
+        who, data = actor(request), await body(request)
+        return store.confirm_docking(who, key, data.get('code'))
+
+    @app.get('/api/dockings/{key}')
+    def docking_status(key: str, secret: str = ''):
+        return store.docking_status(key, secret)
+
     @app.get('/api/contacts')
     def contacts(request: Request):
         return store.contacts(actor(request))
