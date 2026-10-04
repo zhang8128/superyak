@@ -1,16 +1,23 @@
 """One Claude run per mention: read-only for everyone, builder for the ship's owner."""
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 from superyak_team import workers
 from superyak_team.teamlib import redact
 
-STATION_READ_TOOLS = ['mcp__station__station_read', 'mcp__station__station_rooms', 'mcp__adna']
+# Watcher runs get the aDNA tools and nothing from the station: a run that could call station_read could carry
+# another room's messages into the room that mentioned the ship.
+RUN_MCP_TOOLS = ['mcp__adna']
+RUN_MCP_DENY = ['mcp__station']
 NEVER = ['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch']
 LIMITS = {'read': 300, 'build': 1200}
+TERM_GRACE = 5   # seconds between SIGTERM and SIGKILL when a run is ended
+SCOPE_SLACK = 30   # the systemd scope outlives the run's own limit by this much, as a backstop
 ODO_PERSONA = (
     'You are Odo, the resident of Deep Space 9, the Superyak station on a Raspberry Pi where Andy, Jenn and their '
     'agents collaborate on the aDNA network. You keep watch and help people find their way. Reply with only the '
@@ -41,8 +48,8 @@ def read_only_settings(workspace):
     no .env files, no edits, no web. No Bash means no OS sandbox is needed."""
     settings = workers.claude_sandbox_settings(str(workspace), mode='collab', web_search=False)
     permissions = settings['permissions']
-    permissions['allow'] = [r for r in _without_team_tools(permissions['allow']) if r != 'Bash'] + STATION_READ_TOOLS
-    permissions['deny'] = sorted(set(permissions['deny']) | set(NEVER))
+    permissions['allow'] = [r for r in _without_team_tools(permissions['allow']) if r != 'Bash'] + RUN_MCP_TOOLS
+    permissions['deny'] = sorted(set(permissions['deny']) | set(NEVER) | set(RUN_MCP_DENY))
     settings['sandbox'] = {'enabled': False}
     return settings
 
@@ -50,7 +57,9 @@ def read_only_settings(workspace):
 def builder_settings(worktree, workspace):
     """Team mode's builder sandbox: edits and sandboxed Bash in the worktree only; never push."""
     settings = workers.claude_sandbox_settings(str(worktree), mode='build', repo=str(workspace))
-    settings['permissions']['allow'] = _without_team_tools(settings['permissions']['allow']) + STATION_READ_TOOLS
+    permissions = settings['permissions']
+    permissions['allow'] = _without_team_tools(permissions['allow']) + RUN_MCP_TOOLS
+    permissions['deny'] = sorted(set(permissions['deny']) | set(RUN_MCP_DENY))
     return settings
 
 
@@ -65,6 +74,28 @@ def persona(config):
             'questions about the aDNA network.')
 
 
+def _signal_group(proc, sig):
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def _end_group(proc):
+    """End claude and everything it started: SIGTERM the process group, give it a moment, then SIGKILL
+    whatever is left and reap claude. Never waits on pipes a background job may still hold open."""
+    _signal_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=TERM_GRACE)
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_group(proc, signal.SIGKILL)
+    proc.wait()
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            stream.close()
+
+
 class ClaudeRunner:
     def __init__(self, config, run_dir, mcp_config=None, model=None, claude='claude', memory_cap=None, limits=None):
         self.workspace, self.ship = Path(config['workspace']), config['ship']
@@ -73,7 +104,7 @@ class ClaudeRunner:
         self.limits = limits or LIMITS
         self.memory_cap = (sys.platform.startswith('linux') and shutil.which('systemd-run') is not None) if memory_cap is None else memory_cap
 
-    def _command(self, settings_path):
+    def _command(self, settings_path, limit=None):
         command = [self.claude, '-p', '--output-format', 'text', '--permission-mode', 'dontAsk', '--no-session-persistence',
                    '--settings', str(settings_path), '--strict-mcp-config', '--append-system-prompt', self.persona]
         if self.mcp_config:
@@ -81,21 +112,31 @@ class ClaudeRunner:
         if self.model:
             command += ['--model', self.model]
         if self.memory_cap:
-            command = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2G', '-p', 'MemorySwapMax=0'] + command
+            prefix = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2G', '-p', 'MemorySwapMax=0']
+            if limit is not None:
+                prefix += ['-p', f'RuntimeMaxSec={int(limit) + SCOPE_SLACK}']
+            command = prefix + command
         return command
 
     def _claude(self, mode, prompt, settings, cwd):
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         settings_path = self.run_dir / f'{mode}-settings.json'
         settings_path.write_text(json.dumps(settings))
+        limit = self.limits[mode]
+        # Its own session, so a timeout can end the shells and background jobs claude started, not just claude.
+        proc = subprocess.Popen(self._command(settings_path, limit), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, cwd=str(cwd), start_new_session=True)
         try:
-            result = subprocess.run(self._command(settings_path), input=prompt, capture_output=True, text=True,
-                                    timeout=self.limits[mode], cwd=str(cwd))
+            stdout, stderr = proc.communicate(input=prompt, timeout=limit)
         except subprocess.TimeoutExpired:
-            raise RunTimeout(f'{mode} run exceeded {self.limits[mode]} seconds') from None
-        reply = result.stdout.strip()
-        if result.returncode or not reply:
-            raise RuntimeError(f'claude exited {result.returncode}: {redact(result.stderr.strip()[:500])}')
+            _end_group(proc)
+            raise RunTimeout(f'{mode} run exceeded {limit} seconds') from None
+        except BaseException:
+            _end_group(proc)
+            raise
+        reply = stdout.strip()
+        if proc.returncode or not reply:
+            raise RuntimeError(f'claude exited {proc.returncode}: {redact(stderr.strip()[:500])}')
         return reply
 
     def run(self, mode, prompt, message_id):
