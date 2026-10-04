@@ -429,4 +429,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def chat_remove(key: str, user_id: str, request: Request):
         return store.remove_participant(actor(request), key, user_id)
 
+    @app.get('/api/mentions')
+    def mentions(request: Request, after: int = 0, limit: int = 50):
+        return store.mentions(member(request)['id'], after, limit)
+
     return app

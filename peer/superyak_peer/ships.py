@@ -10,10 +10,13 @@ DOCKING_HOURLY_LIMIT = 20
 UNCOLLECTED_KEY_LIFETIME = 3600
 SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')
 CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+POSTS_PER_MINUTE = 30
+MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
 
 SHIP_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS ship_keys(id TEXT PRIMARY KEY, ship_id TEXT NOT NULL REFERENCES users(id), key_hash TEXT UNIQUE NOT NULL, created REAL NOT NULL, last_used REAL, revoked REAL);
 CREATE TABLE IF NOT EXISTS dockings(id TEXT PRIMARY KEY, code_hash TEXT UNIQUE NOT NULL, secret_hash TEXT NOT NULL, ship_name TEXT NOT NULL, machine TEXT NOT NULL, status TEXT NOT NULL, owner_id TEXT REFERENCES users(id), ship_id TEXT REFERENCES users(id), key TEXT, created REAL NOT NULL, expires REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS mentions(seq INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL REFERENCES messages(id), room_id TEXT NOT NULL REFERENCES rooms(id), user_id TEXT NOT NULL REFERENCES users(id), UNIQUE(message_id,user_id));
 '''
 
 
@@ -135,3 +138,37 @@ class Ships:
                 result |= {'key': row['key'], 'ship': public_user(db.execute('SELECT * FROM users WHERE id=?', (row['ship_id'],)).fetchone())}
                 db.execute("UPDATE dockings SET key=NULL,status='collected' WHERE id=?", (docking_id,))
             return result
+
+    def _record_mentions(self, db, room_id, message_id, body):
+        names = list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(body)))[:20]
+        if not names:
+            return
+        marks = ','.join('?' * len(names))
+        rows = db.execute(
+            f'SELECT users.id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? AND users.username IN ({marks})',
+            (room_id, *names),
+        ).fetchall()
+        for row in rows:
+            db.execute('INSERT OR IGNORE INTO mentions(message_id,room_id,user_id) VALUES(?,?,?)', (message_id, room_id, row['id']))
+
+    def _ship_post_budget(self, db, actor):
+        row = db.execute('SELECT kind FROM users WHERE id=?', (actor,)).fetchone()
+        if row and row['kind'] == 'ship':
+            recent = db.execute('SELECT count(*) FROM messages WHERE author_id=? AND created>?', (actor, self.clock() - 60)).fetchone()[0]
+            if recent >= POSTS_PER_MINUTE:
+                raise Problem(429, 'This ship is posting too fast; wait a minute')
+
+    def mentions(self, actor, after=0, limit=50):
+        if type(after) is not int or after < 0 or type(limit) is not int:
+            raise Problem(400, 'Invalid mention cursor')
+        with self.transaction() as db:
+            rows = db.execute('''SELECT mentions.seq, messages.id AS message_id, messages.room_id, messages.body, messages.created,
+                       authors.id AS author_id, authors.username, authors.name, authors.kind, authors.owner_id
+                FROM mentions JOIN messages ON messages.id=mentions.message_id
+                JOIN users AS authors ON authors.id=messages.author_id
+                JOIN room_members ON room_members.room_id=mentions.room_id AND room_members.user_id=mentions.user_id
+                WHERE mentions.user_id=? AND mentions.seq>? ORDER BY mentions.seq LIMIT ?''',
+                (actor, after, min(100, max(1, limit)))).fetchall()
+        return [{'seq': r['seq'], 'message_id': r['message_id'], 'room_id': r['room_id'], 'body': r['body'], 'created': r['created'],
+                 'author': {'id': r['author_id'], 'username': r['username'], 'name': r['name'], 'kind': r['kind'], 'owner_id': r['owner_id']}}
+                for r in rows]

@@ -40,6 +40,9 @@ class Chats:
             room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created,id', (key,))]
             room['messages'] += [dict(r) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created,id', (key,))]
             room['messages'].sort(key=lambda m: (m['created'], m['id']))
+            room['members'] = [dict(r) for r in db.execute(
+                'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
+                (key,))]
             return room
 
     def send_message(self, actor, key, client_message_id, body):
@@ -54,8 +57,10 @@ class Chats:
                 if existing['body'] != body:
                     raise Problem(409, 'Message ID already used with different text')
                 return dict(existing)
+            self._ship_post_budget(db, actor)
             message_id = uid()
             db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)', (message_id, key, actor, client_message_id, body, room['epoch'], self.clock()))
+            self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
             return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
 
