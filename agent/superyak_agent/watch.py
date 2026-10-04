@@ -155,7 +155,9 @@ class Watcher:
             return 0
         listed = json.loads(subprocess.run(self.notices_command, capture_output=True, text=True, check=True, timeout=60).stdout)
         notices = [n for n in listed if n['id'] not in self.state['announced']]
-        ops = next((r for r in self.client.rooms() if r.get('title') == NOTICE_ROOM), None) if notices else None
+        # Local rooms only: a federated room's id carries the other peer's name, and its members are not ours.
+        ops = max((r for r in self.client.rooms() if r.get('title') == NOTICE_ROOM and ':' not in r['id']),
+                  key=lambda r: r.get('last_activity') or 0, default=None) if notices else None
         if ops is None:
             return 0
         posted = 0

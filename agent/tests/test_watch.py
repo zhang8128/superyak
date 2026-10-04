@@ -232,3 +232,32 @@ def test_resident_stays_silent_when_a_remote_member_shares_the_room(station, tmp
     assert w.cycle() == 0 and runner.calls == []
     assert bodies(fake, shared) == ['where is the door?']
     assert w.cycle() == 0 and runner.calls == []
+
+
+def test_notices_go_to_the_most_recently_active_local_ops_room_never_a_remote_one(station, tmp_path):
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    remote = 'peer-b:r1'   # a federated room: its id carries the other peer's name
+    fake.rooms[remote] = {'id': remote, 'title': 'Ops', 'member_ids': [odo['id']], 'messages': []}
+    older = fake.room('Ops', andy, odo)
+    newer = fake.room('Ops', andy, odo)
+    fake.say(older, andy, 'quiet here')
+    fake.say(newer, andy, 'busy here')
+    fake.say(remote, odo, 'the most recent message of all, but on someone else\'s station')
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    w = watcher(fake, config, tmp_path, FakeRunner(), key='odo-key', notices_command=notices_command({'id': 'access-1', 'text': 'Jenn is asking to come aboard.'}))
+    assert w.cycle() == 1
+    assert bodies(fake, newer)[-1] == 'Jenn is asking to come aboard.' and bodies(fake, older) == ['quiet here']
+    assert bodies(fake, remote) == ['the most recent message of all, but on someone else\'s station']
+
+
+def test_notices_wait_when_the_only_ops_room_is_remote(station, tmp_path):
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    remote = 'peer-b:r1'
+    fake.rooms[remote] = {'id': remote, 'title': 'Ops', 'member_ids': [odo['id']], 'messages': []}
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    w = watcher(fake, config, tmp_path, FakeRunner(), key='odo-key', notices_command=notices_command({'id': 'access-1', 'text': 'Jenn is asking to come aboard.'}))
+    assert w.cycle() == 0 and bodies(fake, remote) == [] and 'access-1' not in w.state['announced']
+    local = fake.room('Ops', andy, odo)   # an Ops room appears later: the notice is still pending
+    assert w.cycle() == 1 and bodies(fake, local) == ['Jenn is asking to come aboard.']
