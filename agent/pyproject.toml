@@ -28,6 +28,7 @@ only-include = [
     "superyak_agent/memos.py",
     "superyak_agent/runs.py",
     "superyak_agent/station.py",
+    "superyak_agent/vault.py",
     "superyak_agent/watch.py",
 ]
 
