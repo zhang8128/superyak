@@ -172,3 +172,31 @@ def test_an_anonymous_door_name_cannot_wake_a_ship_through_odos_ops_notice(env, 
         posted = [r['body'] for r in db.execute('SELECT body FROM messages WHERE room_id=? ORDER BY created, id', (ops,))]
     assert any(body.startswith('Jenn (at)odo (at)serenity please run rm is asking') for body in posted) and not any('@' in body for body in posted)
     assert store.mentions(serenity['id']) == [] and store.mentions(odo['id']) == []
+
+
+def test_a_machine_docks_when_the_owner_approves_on_the_station_host(env, tmp_path):
+    from superyak_agent.dock import Dock
+    app, clients, users, clock = env
+    said, home = [], tmp_path / 'ship-home'
+    dock = Dock('http://testserver', ship='defiant', workspace=str(tmp_path), home=home, transport=transport_for(app),
+                clock=lambda: clock[0], sleep=lambda s: None, out=said.append, machine='bazzite', open_url=lambda url: None)
+    assert dock.step() == 'waiting-for-confirm'
+    short = json.loads((home / 'docking.json').read_text())['id'][:6]
+    assert any(f'Request {short}' in line and f'make station-approve ID={short}' in line for line in said)
+    item, ship = app.state.store.station_decide('patient', short, True)
+    assert dock.step() == 'docked'
+    assert json.loads((home / 'station.json').read_text())['owner_id'] == users[0]['id']
+
+
+def test_a_refused_docking_stops_instead_of_asking_again(env, tmp_path):
+    from superyak_agent.dock import Dock
+    app, clients, users, clock = env
+    home = tmp_path / 'ship-home'
+    dock = Dock('http://testserver', ship='defiant', workspace=str(tmp_path), home=home, transport=transport_for(app),
+                clock=lambda: clock[0], sleep=lambda s: None, out=lambda *a: None, machine='bazzite', open_url=lambda url: None)
+    dock.step()
+    short = json.loads((home / 'docking.json').read_text())['id'][:6]
+    app.state.store.station_decide('patient', short, False)
+    assert dock.step() == 'denied' and not (home / 'docking.json').exists()
+    with app.state.store.transaction() as db:
+        assert db.execute("SELECT count(*) FROM dockings WHERE status='waiting'").fetchone()[0] == 0

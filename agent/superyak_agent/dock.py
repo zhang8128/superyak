@@ -128,7 +128,10 @@ class Dock:
                 return self._say('docked', f'{ship["name"]} is docked at {self.station}.')
             if status['status'] == 'waiting':
                 return self._say('waiting-for-confirm', self._confirm_message(pending))
-            self.docking_path.unlink()  # expired, or collected elsewhere: start again
+            self.docking_path.unlink()
+            if status['status'] == 'denied':
+                return self._say('denied', 'The station owner refused this docking request. Run make dock again to ask again.')
+            # expired, or collected elsewhere: start again
         if not self.ship:
             raise SystemExit('Pass a ship name: make dock DOCK_ARGS="--ship <name>"')
         started = client.request('POST', '/api/dockings', {'ship_name': self.ship, 'machine': self.machine})
@@ -138,5 +141,7 @@ class Dock:
         return status
 
     def _confirm_message(self, docking):
-        return (f'Confirm docking in your browser while signed in to the station: {docking["confirm_url"]}\n'
-                f'Check that it shows the code {docking["code"]}. The code expires 10 minutes after it was made.')
+        short = docking['id'][:6]
+        return (f'Request {short} is waiting. The station owner can approve it on the station host with '
+                f'make station-approve ID={short}, or in a browser signed in to the station: {docking["confirm_url"]} '
+                f'(check that it shows the code {docking["code"]}). It expires 10 minutes after it was made.')

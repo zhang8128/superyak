@@ -23,6 +23,9 @@ STATION ?= https://smart.tail7db420.ts.net
 DOOR ?= https://smart.tail7db420.ts.net:8443
 DOCK_ARGS ?=
 AGENT_PYTHON ?= python3
+STATION_DATA ?= $(HOME)/.local/share/superyak/lighthouse
+APPROVER ?= andy
+ID ?=
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
 HOME_ARGS ?=
@@ -31,7 +34,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock station-share-link setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock station-share-link station-pending station-approve station-deny setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -42,6 +45,8 @@ help:
 	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
 	@echo "make dock DOCK_ARGS='--ship NAME'  Dock this machine's agent at the station (see CLAUDE.md)"
 	@echo "make station-share-link   On the Pi: create the station's reusable Tailscale share link"
+	@echo "make station-pending      On the Pi: list waiting dockings and access requests by short id"
+	@echo "make station-approve ID=… On the Pi: approve one (APPROVER=andy); make station-deny ID=… refuses it"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
 	@echo "make setup              Install all five components from their lockfiles"
 	@echo "make check              Run all suites and interoperability checks"
@@ -172,6 +177,13 @@ dock:
 
 station-share-link:
 	python3 peer/scripts/share_link.py
+
+station-pending:
+	uv run --locked --project peer python -m superyak_peer station-pending --data-dir "$(STATION_DATA)"
+
+station-approve station-deny:
+	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<short id from make station-pending> [APPROVER=andy]'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer $@ --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)"
 
 home:
 	@echo "Superyak: http://127.0.0.1:$(HOME_PORT)"

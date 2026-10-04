@@ -121,17 +121,60 @@ class Ships:
             row = self._waiting_docking(db, code)
             if row['id'] != docking_id:
                 raise Problem(404, 'This docking code is unknown, used or expired')
-            ship = db.execute('SELECT * FROM users WHERE username=?', (row['ship_name'],)).fetchone()
-            if ship is not None and (ship['kind'] != 'ship' or ship['owner_id'] != actor):
-                raise Problem(409, 'That ship name is taken; dock again with another name')
-            if ship is None:
-                ship_id = self._new_ship(db, row['ship_name'], row['ship_name'].replace('-', ' ').title(), actor)['id']
-            else:
-                ship_id = ship['id']
-                db.execute('UPDATE ship_keys SET revoked=? WHERE ship_id=? AND revoked IS NULL', (self.clock(), ship_id))
-            key = self._new_ship_key(db, ship_id)
-            db.execute("UPDATE dockings SET status='confirmed',owner_id=?,ship_id=?,key=? WHERE id=?", (actor, ship_id, key, row['id']))
-            return public_user(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
+            return self._confirm_docking_row(db, actor, row)
+
+    def _confirm_docking_row(self, db, actor, row):
+        """Shared by the browser confirmation and the station host's trusted CLI."""
+        ship = db.execute('SELECT * FROM users WHERE username=?', (row['ship_name'],)).fetchone()
+        if ship is not None and (ship['kind'] != 'ship' or ship['owner_id'] != actor):
+            raise Problem(409, 'That ship name is taken; dock again with another name')
+        if ship is None:
+            ship_id = self._new_ship(db, row['ship_name'], row['ship_name'].replace('-', ' ').title(), actor)['id']
+        else:
+            ship_id = ship['id']
+            db.execute('UPDATE ship_keys SET revoked=? WHERE ship_id=? AND revoked IS NULL', (self.clock(), ship_id))
+        key = self._new_ship_key(db, ship_id)
+        db.execute("UPDATE dockings SET status='confirmed',owner_id=?,ship_id=?,key=? WHERE id=?", (actor, ship_id, key, row['id']))
+        return public_user(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
+
+    def station_pending(self):
+        """Trusted local operator only: waiting dockings and pending access requests."""
+        with self.transaction() as db:
+            now = self.clock()
+            dockings = [{'kind': 'docking', **dict(r)} for r in db.execute(
+                "SELECT id,ship_name,machine,created,expires FROM dockings WHERE status='waiting' AND expires>? ORDER BY created", (now,))]
+            requests = [{'kind': 'access', **dict(r)} for r in db.execute(
+                "SELECT id,name,contact,note,created,expires FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
+            return dockings + requests
+
+    def station_decide(self, username, prefix, approve):
+        """Trusted local operator only: approve or refuse one pending item by a short id,
+        acting as the named person. Returns (item, result); never returns keys or tokens."""
+        if not isinstance(prefix, str) or len(prefix.strip()) < 4:
+            raise Problem(400, 'Give at least 4 characters of the short id')
+        prefix = prefix.strip().lower()
+        matches = [item for item in self.station_pending() if item['id'].startswith(prefix)]
+        if not matches:
+            raise Problem(404, f'Nothing waiting starts with {prefix}')
+        if len(matches) > 1:
+            raise Problem(409, f'{prefix} matches more than one waiting item; give more characters')
+        item = matches[0]
+        with self.transaction() as db:
+            person = db.execute('SELECT id FROM users WHERE username=?', (username,)).fetchone()
+            if person is None:
+                raise Problem(404, f'No account named {username}')
+            self._person(db, person['id'])
+            actor = person['id']
+        if item['kind'] == 'access':
+            return item, self.decide_access_request(actor, item['id'], approve)
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM dockings WHERE id=? AND status='waiting' AND expires>?", (item['id'], self.clock())).fetchone()
+            if row is None:
+                raise Problem(404, 'This docking request is no longer waiting')
+            if not approve:
+                db.execute("UPDATE dockings SET status='denied' WHERE id=?", (row['id'],))
+                return item, None
+            return item, self._confirm_docking_row(db, actor, row)
 
     def docking_status(self, docking_id, secret):
         """Docking script view; the confirmed key is released exactly once."""

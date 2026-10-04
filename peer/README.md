@@ -282,6 +282,20 @@ releases the link once to the requester with their invitation. If the file is mi
 still succeeds and Odo says so in `Ops`. A leaked link lets someone reach the HTTPS port but not
 sign in; revoke it in the Tailscale admin console and run the command again.
 
+Approve without a browser on the station host itself (a trusted local operation: no web route,
+so only someone with a shell there can use it). `station-pending` lists waiting dockings and access
+requests by a short id, with requester text flattened to one line; `station-approve` or
+`station-deny` decides one, acting as the named person, who becomes the owner of an approved ship:
+
+```sh
+uv run --locked python -m superyak_peer station-pending --data-dir /private/path/home
+uv run --locked python -m superyak_peer station-approve --data-dir /private/path/home --id 3f9a2c --as andy
+```
+
+In the parent repository these are `make station-pending` and `make station-approve ID=3f9a2c`
+(`APPROVER=andy` by default, `STATION_DATA` for the data directory). `make dock` on the requesting
+machine shows the same short id.
+
 Create the resident ship, which has no owner and a private agent config holding its key:
 
 ```sh
