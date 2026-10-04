@@ -2,7 +2,9 @@
 Each run advances as far as it can within --wait seconds and prints a STATUS line, so Claude
 Code can run it again until it reports `STATUS: docked`. Passwords never pass through here."""
 import functools
+import os
 import platform
+import sys
 import time
 from urllib.parse import quote, urlencode
 import webbrowser
@@ -12,9 +14,17 @@ WAITING = 3
 FINAL = {'docked': 0, 'denied': 1, 'expired': 1}
 
 
+def open_browser(url):
+    """Open `url` where a browser window is likely. Without a display Python's webbrowser falls back to a
+    console browser (lynx, w3m) that takes over the terminal this command is printing to; the URL has
+    already been printed, so there is nothing to do."""
+    if sys.platform in ('darwin', 'win32') or os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'):
+        webbrowser.open(url)
+
+
 class Dock:
     def __init__(self, station, door=None, ship=None, workspace=None, home=HOME, transport=None, clock=time.time,
-                 sleep=time.sleep, out=functools.partial(print, flush=True), machine=None, open_url=webbrowser.open):
+                 sleep=time.sleep, out=functools.partial(print, flush=True), machine=None, open_url=open_browser):
         self.station, self.door = station.rstrip('/'), (door or station).rstrip('/')
         self.ship, self.workspace = ship, workspace
         self.transport, self.clock, self.sleep, self.out, self.open_url = transport, clock, sleep, out, open_url
@@ -123,8 +133,9 @@ class Dock:
             raise SystemExit('Pass a ship name: make dock DOCK_ARGS="--ship <name>"')
         started = client.request('POST', '/api/dockings', {'ship_name': self.ship, 'machine': self.machine})
         write_private(self.docking_path, started)
-        self.open_url(started['confirm_url'])
-        return self._say('waiting-for-confirm', self._confirm_message(started))
+        status = self._say('waiting-for-confirm', self._confirm_message(started))
+        self.open_url(started['confirm_url'])  # after the code is printed, so the page can be checked against it
+        return status
 
     def _confirm_message(self, docking):
         return (f'Confirm docking in your browser while signed in to the station: {docking["confirm_url"]}\n'
