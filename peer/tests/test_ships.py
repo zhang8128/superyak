@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import pytest
 from fastapi.testclient import TestClient
 from superyak_peer.__main__ import main as cli
 from superyak_peer.db import Store
@@ -74,6 +75,39 @@ def test_create_ship_cli_writes_a_private_station_config(env, tmp_path):
     assert config.stat().st_mode & 0o777 == 0o600
     assert (data['ship'], data['ship_name'], data['owner_id'], data['origin']) == ('odo', 'Odo', None, 'https://smart.example.ts.net')
     assert ship_client(app, data['key']).get('/api/me').json()['username'] == 'odo'
+
+
+def create_ship_args(app, tmp_path, config, username='odo'):
+    return ['create-ship', '--data-dir', str(app.state.store.data_dir), '--username', username, '--name', 'Odo',
+            '--station', 'http://127.0.0.1:7435', '--workspace', str(tmp_path), '--config', str(config)]
+
+
+def ship_usernames(app):
+    with app.state.store.transaction() as db:
+        return [row['username'] for row in db.execute("SELECT username FROM users WHERE kind='ship'")]
+
+
+def test_create_ship_claims_the_config_before_creating_the_ship(env, tmp_path):
+    app, *_ = env
+    stale = tmp_path / 'odo' / 'station.json'
+    stale.parent.mkdir()
+    stale.write_text('stale\n')
+    with pytest.raises(SystemExit):
+        cli(create_ship_args(app, tmp_path, stale))
+    assert stale.read_text() == 'stale\n' and ship_usernames(app) == []
+    fresh = tmp_path / 'odo' / 'fresh.json'
+    cli(create_ship_args(app, tmp_path, fresh))
+    assert ship_usernames(app) == ['odo']
+    assert ship_client(app, json.loads(fresh.read_text())['key']).get('/api/me').json()['username'] == 'odo'
+
+
+def test_create_ship_leaves_no_config_when_the_ship_cannot_be_created(env, tmp_path):
+    app, *_ = env
+    cli(create_ship_args(app, tmp_path, tmp_path / 'first.json'))
+    again = tmp_path / 'again.json'
+    with pytest.raises(SystemExit):
+        cli(create_ship_args(app, tmp_path, again))
+    assert not again.exists() and ship_usernames(app) == ['odo']
 
 
 def test_existing_accounts_become_people_on_migration(tmp_path):

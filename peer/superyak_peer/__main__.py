@@ -132,11 +132,21 @@ def main(argv=None):
             import platform
             import time
             store = Store(args.data_dir)
-            ship = store.create_station_ship(args.username, args.name)
             args.config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            private_json(args.config, {'station': args.station, 'origin': args.origin, 'ship': ship['username'], 'ship_id': ship['id'],
-                                       'ship_name': ship['name'], 'owner_id': None, 'key': store.issue_ship_key(ship['id']),
-                                       'workspace': str(args.workspace), 'machine': platform.node(), 'created': time.time()})
+            # Claim the private config first; the ship and its key commit only once the file holds them.
+            fd = os.open(args.config, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                with os.fdopen(fd, 'w') as stream, store.transaction() as db:
+                    ship = store._new_ship(db, args.username, args.name, None)
+                    json.dump({'station': args.station, 'origin': args.origin, 'ship': ship['username'], 'ship_id': ship['id'],
+                               'ship_name': ship['name'], 'owner_id': None, 'key': store._new_ship_key(db, ship['id']),
+                               'workspace': str(args.workspace), 'machine': platform.node(), 'created': time.time()}, stream, indent=2)
+                    stream.write('\n')
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            except BaseException:
+                args.config.unlink(missing_ok=True)
+                raise
             print(f'Station ship {ship["username"]} created. Private config: {args.config}')
         elif args.command == 'access-requests':
             print(json.dumps(Store(args.data_dir).pending_access_requests(), indent=2))
