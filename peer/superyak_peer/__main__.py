@@ -102,6 +102,14 @@ def main(argv=None):
     requests = commands.add_parser('access-requests', help='Trusted local listing of pending access requests')
     requests.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     requests.add_argument('--pending', action='store_true', required=True)
+    ship = commands.add_parser('create-ship', help='Trusted local: create the station ship (no owner) and write its private agent config')
+    ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    ship.add_argument('--username', required=True)
+    ship.add_argument('--name', required=True)
+    ship.add_argument('--station', required=True, help='URL the ship uses, e.g. http://127.0.0.1:7435')
+    ship.add_argument('--origin', help='Public origin when --station is a loopback proxy target')
+    ship.add_argument('--workspace', type=Path, required=True)
+    ship.add_argument('--config', type=Path, required=True)
     serve = commands.add_parser('serve')
     serve.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     serve.add_argument('--host', default='127.0.0.1')
@@ -120,6 +128,16 @@ def main(argv=None):
         if args.command == 'bootstrap-super-admin':
             user = Store(args.data_dir).bootstrap_super_admin(args.username, args.name, args.activation_file, renew_activation=args.renew_activation)
             print(f'Super admin reserved for {user["username"]}. Private activation: {args.activation_file}')
+        elif args.command == 'create-ship':
+            import platform
+            import time
+            store = Store(args.data_dir)
+            ship = store.create_station_ship(args.username, args.name)
+            args.config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            private_json(args.config, {'station': args.station, 'origin': args.origin, 'ship': ship['username'], 'ship_id': ship['id'],
+                                       'ship_name': ship['name'], 'owner_id': None, 'key': store.issue_ship_key(ship['id']),
+                                       'workspace': str(args.workspace), 'machine': platform.node(), 'created': time.time()})
+            print(f'Station ship {ship["username"]} created. Private config: {args.config}')
         elif args.command == 'access-requests':
             print(json.dumps(Store(args.data_dir).pending_access_requests(), indent=2))
         elif args.command == 'card':

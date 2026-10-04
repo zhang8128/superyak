@@ -11,6 +11,7 @@ from .layers import Layers
 from .files import Files
 from .chats import Chats
 from .access_requests import AccessRequests, ACCESS_SCHEMA
+from .ships import Ships, SHIP_SCHEMA
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
 from .dispatch import DispatchGate
@@ -35,7 +36,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships):
     def __init__(self, data_dir: Path, *, clock=time.time):
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
@@ -48,13 +49,16 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests):
         os.close(fd)
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA)
         # Additive migration preserves every existing identity and credential.
         with self.transaction() as db:
             columns = {row['name'] for row in db.execute('PRAGMA table_info(users)')}
             for name, default in [('is_super_admin', 0), ('role_version', 1), ('activation_pending', 0)]:
                 if name not in columns:
                     db.execute(f'ALTER TABLE users ADD COLUMN {name} INTEGER NOT NULL DEFAULT {default}')
+            for name, ddl in [('kind', "TEXT NOT NULL DEFAULT 'person'"), ('owner_id', 'TEXT REFERENCES users(id)')]:
+                if name not in columns:
+                    db.execute(f'ALTER TABLE users ADD COLUMN {name} {ddl}')
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):

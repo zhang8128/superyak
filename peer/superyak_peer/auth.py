@@ -16,7 +16,7 @@ def password_hash(password, salt):
     return hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
 
 def public_user(row):
-    return {key: row[key] for key in ('id', 'username', 'name', 'is_admin', 'is_super_admin', 'role_version', 'activation_pending', 'created')}
+    return {key: row[key] for key in ('id', 'username', 'name', 'is_admin', 'is_super_admin', 'role_version', 'activation_pending', 'created', 'kind', 'owner_id')}
 
 
 def account_role(row):
@@ -87,7 +87,7 @@ class Auth:
             else:
                 row = db.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
                 candidate = password_hash(password, row['salt'] if row else b'\0' * 16)
-                valid = hmac.compare_digest(candidate, row['password_hash'] if row else b'\0' * 32) and row and not row['activation_pending']
+                valid = hmac.compare_digest(candidate, row['password_hash'] if row else b'\0' * 32) and row and not row['activation_pending'] and row['kind'] == 'person'
                 if not valid:
                     for key, attempt in zip(keys, attempts):
                         count = attempt['count'] + 1 if attempt and attempt['reset'] > now else 1
@@ -106,7 +106,7 @@ class Auth:
     def session(self, token):
         with self.transaction() as db:
             row = db.execute('SELECT users.*, sessions.csrf FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>?', (token_hash(token or ''), self.clock())).fetchone()
-            if not row or row['activation_pending']:
+            if not row or row['activation_pending'] or row['kind'] != 'person':
                 raise Problem(401, 'Sign in required')
             return {**public_user(row), 'csrf_token': row['csrf']}
 
@@ -160,6 +160,8 @@ class Auth:
         with self.transaction() as db:
             self._super_admin(db, actor)
             current = require(db.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone())
+            if current['kind'] != 'person':
+                raise Problem(400, 'Ships cannot hold account roles')
             if current['role_version'] != expected_version:
                 raise Problem(409, 'Account rights changed; refresh and review them again')
             if current['activation_pending']:
@@ -188,7 +190,7 @@ class Auth:
     def accounts(self, actor):
         with self.transaction() as db:
             self._admin(db, actor)
-            return [public_user(r) for r in db.execute('SELECT * FROM users ORDER BY created,id')]
+            return [public_user(r) for r in db.execute("SELECT * FROM users WHERE kind='person' ORDER BY created,id")]
 
     def invite(self, actor, expires_in=86400):
         if type(expires_in) is not int or not 60 <= expires_in <= 604800:

@@ -76,14 +76,25 @@ async def body(request):
     except RecursionError:
         raise Problem(400, 'JSON is too deeply nested') from None
 
+def bearer_key(request):
+    scheme, _, value = request.headers.get('authorization', '').partition(' ')
+    return value.strip() if scheme.lower() == 'bearer' else None
+
 def current_user(request: Request):
     """Shared route dependency; verifies session and CSRF on browser mutations."""
+    if bearer_key(request) is not None:
+        raise Problem(403, 'Ship keys cannot use this route')
     user = request.app.state.store.session(request.cookies.get(COOKIE))
     if request.method not in ('GET', 'HEAD', 'OPTIONS'):
         csrf = request.headers.get('x-csrf-token', '')
         if not hmac.compare_digest(csrf.encode(), user['csrf_token'].encode()):
             raise Problem(403, 'Refresh the page before making changes')
     return user
+
+def member(request: Request):
+    """Room routes: a signed-in person, or a ship presenting its key."""
+    key = bearer_key(request)
+    return current_user(request) if key is None else request.app.state.store.ship_for_key(key)
 
 def actor(request):
     return current_user(request)['id']
@@ -184,7 +195,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/me')
     def me(request: Request):
-        return {**current_user(request), 'peer_id':app.state.federation.identity.peer_id}
+        user = member(request)
+        if user['kind'] == 'ship':
+            return user
+        return {**user, 'peer_id': app.state.federation.identity.peer_id}
+
+    @app.delete('/api/ships/me/key')
+    def ship_undock(request: Request):
+        key = bearer_key(request)
+        if key is None:
+            raise Problem(403, 'Only a ship key can revoke itself')
+        return store.revoke_presented_key(key)
 
     @app.patch('/api/me')
     async def rename_me(request: Request):
@@ -364,7 +385,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/chats')
     def chats(request: Request):
-        return store.list_rooms(actor(request))
+        return store.list_rooms(member(request)['id'])
 
     @app.post('/api/chats', status_code=201)
     async def chat_create(request: Request):
@@ -373,11 +394,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/chats/{key}')
     def chat_get(key: str, request: Request):
-        return store.get_room(actor(request), key)
+        return store.get_room(member(request)['id'], key)
 
     @app.post('/api/chats/{key}/messages', status_code=201)
     async def chat_send(key: str, request: Request):
-        who, data = actor(request), await body(request)
+        who, data = member(request)['id'], await body(request)
         return store.send_message(who, key, data.get('client_message_id'), data.get('body'))
 
     @app.post('/api/chats/{key}/participants', status_code=201)
