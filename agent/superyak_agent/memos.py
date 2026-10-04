@@ -12,6 +12,10 @@ REGISTRY = 'https://adna.network/api/registry.v1.json'
 EXPIRES_DAYS = 14
 MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
 LINE = re.compile(r'^([A-Za-z_][\w-]*):[ \t]*(.*)$')
+DOUBLE_QUOTED = re.compile(r'^"(?:[^"\\]|\\.)*"')
+SINGLE_QUOTED = re.compile(r"^'(?:[^']|'')*'")
+COMMENT = re.compile(r'(?:^|\s)#.*$')
+TOKEN_MAX, SLUG_MAX = 24, 60  # keep a memo's file name far below the 255-byte file system limit
 
 
 def mentioned(body):
@@ -20,8 +24,10 @@ def mentioned(body):
 
 
 def slug(text, words=6):
-    tokens = re.findall(r'[a-z0-9]+', re.sub(r'@\S+', ' ', (text or '').lower()))
-    return '_'.join(tokens[:words]) or 'message'
+    """Up to `words` lowercase [a-z0-9] tokens joined by '_': each token at most 24 characters, the
+    whole slug at most 60."""
+    tokens = [t[:TOKEN_MAX] for t in re.findall(r'[a-z0-9]+', re.sub(r'@\S+', ' ', (text or '').lower()))]
+    return '_'.join(tokens[:words])[:SLUG_MAX].rstrip('_') or 'message'
 
 
 def memo_name(day, persona, text, taken):
@@ -72,20 +78,24 @@ def outbound_memo(*, day, persona, vault, author, room_title, room_id, message_i
 
 def _scalar(raw):
     if raw.startswith('"'):
-        try:
-            return json.loads(raw)
-        except ValueError:
+        match = DOUBLE_QUOTED.match(raw)  # the string alone: whatever follows the closing quote is a comment
+        if not match:
             return raw.strip('"')
-    if raw.startswith("'") and len(raw) >= 2:
-        end = raw.rfind("'")
-        return raw[1:end].replace("''", "'") if end > 0 else raw.strip("'")
+        try:
+            return json.loads(match.group(0))
+        except ValueError:
+            return match.group(0)[1:-1]
+    if raw.startswith("'"):
+        match = SINGLE_QUOTED.match(raw)
+        return match.group(0)[1:-1].replace("''", "'") if match else raw.strip("'")
+    raw = COMMENT.sub('', raw).strip()  # an unquoted ` #` starts a comment, before booleans and lists are told apart
     if raw.startswith('[') and raw.endswith(']'):
         return [item.strip().strip('"\'') for item in raw[1:-1].split(',') if item.strip()]
     if raw.lower() in ('true', 'false'):
         return raw.lower() == 'true'
     if raw in ('|', '>', '|-', '>-', '|+', '>+'):
         return ''
-    return raw.split(' #', 1)[0].strip()
+    return raw
 
 
 def parse_memo(text):
@@ -117,21 +127,28 @@ def sender(fields):
     return label(persona or 'someone'), label(vault or 'the lattice')
 
 
+def _safe(text, limit=80):
+    """label() of text whose '@' is already spelled '(at)', so the limit bounds what is really posted."""
+    return label(str(text).replace('@', '(at)'), limit)
+
+
 def inbound_post(fields, body, name, limit=4000):
-    """A station post for a memo addressed to the station: labelled header, quoted body, no '@'."""
-    persona, vault = sender(fields)
+    """A station post for a memo addressed to the station: labelled header, quoted body, no '@'.
+    The quoted body (with its '> ' markers) is cut at `limit` characters after '@' is spelled out."""
+    persona, vault = (_safe(part) for part in sender(fields))
     status = str(fields.get('status') or '').lower()
     notes = []
     if fields.get('ratification_required') is True or status == 'awaiting_ratification':
         notes.append('awaiting ratification')
     if status == 'ratified':
-        notes.append(f'ratified by {label(fields.get("ratified_by") or persona)}')
-    head = f'**{persona} ({vault}) via the wormhole:** {label(fields.get("subject") or "", 200)}'
+        notes.append(f'ratified by {_safe(fields.get("ratified_by") or persona)}')
+    head = f'**{persona} ({vault}) via the wormhole:** {_safe(fields.get("subject") or "", 200)}'
     if notes:
         head += f' ({"; ".join(notes)})'
-    text = body if len(body) <= limit else body[:limit].rstrip() + ' …'
-    quoted = '\n'.join('> ' + line if line.strip() else '>' for line in text.splitlines()) or '>'
-    return f'{head}\n\n{quoted}\n\n`{label(name)}`'.replace('@', '(at)')
+    quoted = '\n'.join('> ' + line if line.strip() else '>' for line in body.replace('@', '(at)').splitlines()) or '>'
+    if len(quoted) > limit:
+        quoted = quoted[:limit].rstrip() + ' …'
+    return f'{head}\n\n{quoted}\n\n`{_safe(name)}`'.replace('@', '(at)')
 
 
 def personas_from_registry(registry):

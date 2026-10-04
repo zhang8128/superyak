@@ -1,6 +1,7 @@
 import datetime
 import io
 import json
+import re
 from superyak_agent import memos
 
 DAY = datetime.date(2026, 10, 4)
@@ -93,3 +94,49 @@ def test_fetch_registry_uses_the_opener():
         return Response(b'{"vaults": []}')
     assert memos.fetch_registry(opener=opener) == {'vaults': []}
     assert seen == [('https://adna.network/api/registry.v1.json', 30)]
+
+
+def test_inbound_post_stays_bounded_for_at_dense_bodies():
+    fields = {'from': 'Network.aDNA (Venus)', 'subject': 'dense'}
+    for body in ('@' * 4000, '@\n' * 2000, '@ ' * 4000, '@@@@\n\n' * 1500):
+        post = memos.inbound_post(fields, body, 'r.md')
+        quoted = post.split('\n\n', 1)[1].rsplit('\n\n', 1)[0]
+        assert '@' not in post
+        assert len(quoted) <= 4000 + len(' …'), len(quoted)
+        assert len(post.splitlines()[0]) < 100 and len(post) < 4400, len(post)
+
+
+def test_inbound_header_stays_bounded_for_at_dense_fields():
+    fields = {'from_persona': '@' * 500, 'from_vault': '@' * 500, 'subject': '@' * 500,
+              'status': 'ratified', 'ratified_by': '@' * 500}
+    post = memos.inbound_post(fields, 'ok', '@' * 500)
+    assert '@' not in post
+    assert len(post.splitlines()) == 5 and len(post.splitlines()[0]) <= 520, len(post.splitlines()[0])
+    assert len(post) < 800
+
+
+def test_slug_tokens_and_memo_names_are_capped():
+    assert memos.slug('a' * 400) == 'a' * 24
+    assert memos.slug('abcdefghijk ' * 6) == '_'.join(['abcdefghijk'] * 5)  # cut at 60 characters, no trailing underscore
+    for persona, text in (('Venus', 'a' * 400), ('p' * 400, 'a' * 400), ('Venus', 'word ' * 100)):
+        name = memos.memo_name(DAY, persona, text, {'x'})
+        assert len(name) <= 120, len(name)
+        assert re.fullmatch(r'coord_\d{4}_\d{2}_\d{2}_station_to_[a-z0-9]+_[a-z0-9]+(_[a-z0-9]+)*\.md', name), name
+    taken = {memos.memo_name(DAY, 'Venus', 'a' * 400, set())}
+    assert len(memos.memo_name(DAY, 'Venus', 'a' * 400, taken)) <= 120
+
+
+def test_parser_strips_trailing_comments_on_every_value_kind():
+    text = ('---\nflag: true  # c\nratification_required: true  # Stanley must ratify\nstatus: "ratified" # done\n'
+            'subject: "x # y" # c\nlist: [a, b] # c\nnote: | # c\nquoted: \'x\' # don\'t\nempty: # c\n'
+            'plain: a # c\ntab: b\t# c\nkept: a#b\nbroken: "unterminated\n---\nB')
+    fields, body = memos.parse_memo(text)
+    assert fields == {'flag': True, 'ratification_required': True, 'status': 'ratified', 'subject': 'x # y',
+                      'list': ['a', 'b'], 'note': '', 'quoted': 'x', 'empty': '', 'plain': 'a', 'tab': 'b',
+                      'kept': 'a#b', 'broken': 'unterminated'}
+    assert body == 'B'
+    post = memos.inbound_post({'from': 'Network.aDNA (Venus)', 'ratification_required': True, 'status': 'ratified'}, 'ok', 'r.md')
+    assert '(awaiting ratification; ratified by Venus)' in post
+    commented, _ = memos.parse_memo('---\nratification_required: true  # Stanley must ratify\nstatus: "ratified" # done\n---\nok')
+    assert memos.inbound_post({'from': 'Network.aDNA (Venus)', **commented}, 'ok', 'r.md').splitlines()[0].endswith(
+        '(awaiting ratification; ratified by Venus)')
