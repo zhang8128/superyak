@@ -172,3 +172,37 @@ class Ships:
         return [{'seq': r['seq'], 'message_id': r['message_id'], 'room_id': r['room_id'], 'body': r['body'], 'created': r['created'],
                  'author': {'id': r['author_id'], 'username': r['username'], 'name': r['name'], 'kind': r['kind'], 'owner_id': r['owner_id']}}
                 for r in rows]
+
+    def ships(self, actor):
+        with self.transaction() as db:
+            person = self._person(db, actor)
+            only_mine = '' if person['is_admin'] else ' AND ships.owner_id=?'
+            rows = db.execute(f'''SELECT ships.*, owners.name AS owner_name,
+                    (SELECT MAX(last_used) FROM ship_keys WHERE ship_id=ships.id) AS last_used,
+                    (SELECT count(*) FROM ship_keys WHERE ship_id=ships.id AND revoked IS NULL) AS active_keys,
+                    (SELECT machine FROM dockings WHERE ship_id=ships.id ORDER BY created DESC LIMIT 1) AS machine
+                FROM users AS ships LEFT JOIN users AS owners ON owners.id=ships.owner_id
+                WHERE ships.kind='ship'{only_mine} ORDER BY ships.created, ships.id''',
+                () if person['is_admin'] else (actor,)).fetchall()
+            return [public_user(r) | {k: r[k] for k in ('owner_name', 'last_used', 'active_keys', 'machine')} for r in rows]
+
+    def revoke_ship(self, actor, ship_id):
+        with self.transaction() as db:
+            person = self._person(db, actor)
+            ship = require(db.execute("SELECT * FROM users WHERE id=? AND kind='ship'", (ship_id,)).fetchone())
+            if ship['owner_id'] != actor and not person['is_admin']:
+                raise Problem(403, "Only the ship's owner or an admin can revoke it")
+            db.execute('UPDATE ship_keys SET revoked=? WHERE ship_id=? AND revoked IS NULL', (self.clock(), ship_id))
+            return {'id': ship_id, 'active_keys': 0}
+
+    def station_notices(self):
+        """Trusted local workers only (Odo): what to announce in Ops. No HTTP route exposes this."""
+        with self.transaction() as db:
+            now = self.clock()
+            notices = [{'id': f'access-{r["id"]}', 'text': f'{r["name"]} is asking to come aboard. Approve or deny under Connections → Access requests.'}
+                       for r in db.execute("SELECT id,name FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
+            notices += [{'id': f'docked-{r["id"]}', 'text': f'{r["ship"]} ({r["owner"]}) docked from {r["machine"]}. Room owners can add it to rooms.'}
+                        for r in db.execute("""SELECT dockings.id, ships.name AS ship, owners.name AS owner, dockings.machine FROM dockings
+                            JOIN users AS ships ON ships.id=dockings.ship_id JOIN users AS owners ON owners.id=dockings.owner_id
+                            WHERE dockings.status IN ('confirmed','collected') ORDER BY dockings.created""")]
+            return notices

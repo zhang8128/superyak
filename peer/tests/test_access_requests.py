@@ -1,4 +1,3 @@
-import json
 from fastapi.testclient import TestClient
 
 
@@ -96,11 +95,3 @@ def test_pending_listing_for_trusted_local_worker(env):
     assert [(row['id'], row['name']) for row in pending] == [(request['id'], 'Jenn')]
     clients[2].post(f'/api/access-requests/{request["id"]}/deny', json={})
     assert app.state.store.pending_access_requests() == []
-
-
-def test_cli_lists_pending_requests(tmp_path, capsys):
-    from superyak_peer.__main__ import main
-    from superyak_peer.db import Store
-    Store(tmp_path / 'peer').request_access('Jenn', 'jenn@example.org', '')
-    main(['access-requests', '--pending', '--data-dir', str(tmp_path / 'peer')])
-    assert [row['name'] for row in json.loads(capsys.readouterr().out)] == ['Jenn']

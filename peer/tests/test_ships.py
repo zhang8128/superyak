@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 import pytest
 from fastapi.testclient import TestClient
 from superyak_peer.__main__ import main as cli
@@ -122,3 +123,42 @@ def test_existing_accounts_become_people_on_migration(tmp_path):
     with store.transaction() as conn:
         row = conn.execute("SELECT kind, owner_id, is_super_admin FROM users WHERE username='andy'").fetchone()
     assert (row['kind'], row['owner_id'], row['is_super_admin']) == ('person', None, 0)
+
+
+def dock(app, client, name):
+    guest = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    docking = guest.post('/api/dockings', json={'ship_name': name, 'machine': f'{name}-host'}).json()
+    assert client.post(f'/api/dockings/{docking["id"]}/confirm', json={'code': docking['code']}).status_code == 200
+    return guest.get(f'/api/dockings/{docking["id"]}', params={'secret': docking['secret']}).json()
+
+
+def test_owners_see_their_ships_and_admins_see_all(env):
+    app, clients, users, _ = env
+    dock(app, clients[0], 'serenity')
+    dock(app, clients[1], 'defiant')
+    mine = clients[0].get('/api/ships').json()
+    assert [(s['username'], s['owner_name'], s['machine'], s['active_keys']) for s in mine] == [('serenity', 'Patient', 'serenity-host', 1)]
+    assert {s['username'] for s in clients[2].get('/api/ships').json()} == {'serenity', 'defiant'}
+
+
+def test_owner_or_admin_revokes_a_ship(env):
+    app, clients, users, _ = env
+    serenity, defiant = dock(app, clients[0], 'serenity'), dock(app, clients[1], 'defiant')
+    assert clients[0].post(f'/api/ships/{defiant["ship"]["id"]}/revoke', json={}).status_code == 403
+    assert clients[0].post(f'/api/ships/{serenity["ship"]["id"]}/revoke', json={}).json()['active_keys'] == 0
+    assert clients[2].post(f'/api/ships/{defiant["ship"]["id"]}/revoke', json={}).status_code == 200
+    for docked in (serenity, defiant):
+        assert ship_client(app, docked['key']).get('/api/me').status_code == 401
+
+
+def test_station_notices_list_requests_and_docked_ships(env, capsys):
+    app, clients, users, clock = env
+    guest = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'})
+    dock(app, clients[0], 'serenity')
+    clock[0] = time.time()  # the CLI reads the real clock, so the request must still be pending by it
+    guest.post('/api/access-requests', json={'name': 'Jenn', 'contact': 'jenn@example.org', 'note': ''})
+    cli(['station-notices', '--data-dir', str(app.state.store.data_dir)])
+    notices = json.loads(capsys.readouterr().out)
+    assert [n['id'].split('-')[0] for n in notices] == ['access', 'docked']
+    assert notices[0]['text'] == 'Jenn is asking to come aboard. Approve or deny under Connections → Access requests.'
+    assert notices[1]['text'] == 'Serenity (Patient) docked from serenity-host. Room owners can add it to rooms.'

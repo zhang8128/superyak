@@ -256,6 +256,14 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         data = await body(request)
         return store.request_access(data.get('name'), data.get('contact'), data.get('note', ''))
 
+    @app.get('/api/ships')
+    def ships(request: Request):
+        return store.ships(actor(request))
+
+    @app.post('/api/ships/{ship_id}/revoke')
+    def ship_revoke(ship_id: str, request: Request):
+        return store.revoke_ship(actor(request), ship_id)
+
     @app.get('/api/access-requests')
     def access_requests(request: Request):
         return store.access_requests(actor(request))

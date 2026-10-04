@@ -99,9 +99,8 @@ def main(argv=None):
     card.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     card.add_argument('--username', required=True)
     card.add_argument('--endpoint', required=True)
-    requests = commands.add_parser('access-requests', help='Trusted local listing of pending access requests')
-    requests.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
-    requests.add_argument('--pending', action='store_true', required=True)
+    notices = commands.add_parser('station-notices', help='Trusted local listing of what Odo announces in Ops')
+    notices.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     ship = commands.add_parser('create-ship', help='Trusted local: create the station ship (no owner) and write its private agent config')
     ship.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     ship.add_argument('--username', required=True)
@@ -148,8 +147,8 @@ def main(argv=None):
                 args.config.unlink(missing_ok=True)
                 raise
             print(f'Station ship {ship["username"]} created. Private config: {args.config}')
-        elif args.command == 'access-requests':
-            print(json.dumps(Store(args.data_dir).pending_access_requests(), indent=2))
+        elif args.command == 'station-notices':
+            print(json.dumps(Store(args.data_dir).station_notices(), indent=2))
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
