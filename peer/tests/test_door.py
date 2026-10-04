@@ -36,3 +36,12 @@ def test_door_bounds_request_bodies(tmp_path):
     app, door = door_and_station(tmp_path)
     body = b'{"name": "' + b'x' * 20000 + b'"}'
     assert door.post('/api/access-requests', content=body, headers={'content-type': 'application/json'}).status_code == 413
+
+
+def test_door_command_turns_off_the_access_log_so_status_secrets_stay_out_of_it(tmp_path, monkeypatch):
+    import uvicorn
+    from superyak_peer.__main__ import main
+    calls = []
+    monkeypatch.setattr(uvicorn, 'run', lambda app, **kwargs: calls.append(kwargs))
+    main(['door', '--data-dir', str(tmp_path / 'peer'), '--port', '7999'])
+    assert calls == [{'host': '127.0.0.1', 'port': 7999, 'access_log': False}]

@@ -186,7 +186,7 @@ def main(argv=None):
                 raise ValueError('The door binds to loopback; tailscale funnel publishes it')
             from .door import create_door
             import uvicorn
-            uvicorn.run(create_door(args.data_dir), host=args.host, port=args.port)
+            uvicorn.run(create_door(args.data_dir), host=args.host, port=args.port, access_log=False)  # status polls carry ?secret=
         else:
             try:
                 loopback = ipaddress.ip_address(args.host).is_loopback
