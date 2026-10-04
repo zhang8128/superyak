@@ -200,3 +200,39 @@ def test_a_refused_docking_stops_instead_of_asking_again(env, tmp_path):
     assert dock.step() == 'denied' and not (home / 'docking.json').exists()
     with app.state.store.transaction() as db:
         assert db.execute("SELECT count(*) FROM dockings WHERE status='waiting'").fetchone()[0] == 0
+
+
+def test_the_wormhole_relays_both_ways_through_the_real_station(env, tmp_path):
+    import datetime
+    import subprocess
+    from superyak_agent.station import StationClient
+    from superyak_agent.vault import INBOX, OUTBOUND, Vault
+    from superyak_agent.wormhole import Wormhole
+    app, clients, users, clock = env
+    store = app.state.store
+    wormhole = store.create_station_ship('wormhole', 'Wormhole')
+    key = store.issue_ship_key(wormhole['id'])
+    gamma = clients[0].post('/api/chats', json={'title': 'Gamma Quadrant', 'member_ids': [wormhole['id']]}).json()['id']
+    vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
+    personas = {'venus': {'persona': 'Venus', 'vault': 'Network.aDNA'}}
+    bridge = Wormhole(StationClient('http://testserver', key, transport=transport_for(app)), vault, personas,
+                      tmp_path / 'state.json', today=lambda: datetime.date(2026, 10, 4))
+    bridge.cycle()
+    clock[0] += 1
+    clients[0].post(f'/api/chats/{gamma}/messages', json={'client_message_id': 'a', 'body': '@venus is the mesh up?'})
+    assert bridge.cycle() == 1
+    name = 'coord_2026_10_04_station_to_venus_is_the_mesh_up.md'
+    other = tmp_path / 'stanley'
+    subprocess.run(['git', 'clone', '-q', str(tmp_path / 'Station.aDNA.git'), str(other)], check=True)
+    assert (other / OUTBOUND / name).exists()
+    (other / INBOX / 'coord_reply.md').write_text(
+        f'---\nfrom: "Network.aDNA (Venus)"\nto: "Station.aDNA (Wormhole)"\nsubject: "Up"\nin_reply_to: {name}\n---\n\nAll up @patient\n')
+    git = ['git', '-C', str(other), '-c', 'user.name=s', '-c', 'user.email=s@s']
+    subprocess.run(git + ['add', '-A'], check=True)
+    subprocess.run(git + ['commit', '-q', '-m', 'reply'], check=True)
+    subprocess.run(git + ['push', '-q'], check=True)
+    clock[0] += 1
+    assert bridge.cycle() == 1
+    last = clients[0].get(f'/api/chats/{gamma}').json()['messages'][-1]['body']
+    assert last.startswith('**Venus (Network.aDNA) via the wormhole:** Up') and '@' not in last
+    assert store.mentions(users[0]['id']) == []

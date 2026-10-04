@@ -40,7 +40,7 @@ packages and lockfiles remain independent, with shared commands and CI at the ro
 | [`tuning/`](tuning/README.md) | Clinical/biotech datasets, local evaluations, and text-attention LoRA training |
 | [`team/`](team/README.md) | Team mode: a Claude Code or Codex lead with Codex and Claude Code builders/collaborators, Slack threads, plan canvases, shared engram memory ([guide](docs/team-mode.md)) |
 | [`peer/`](peer/README.md) | Standalone personal home, private chats, sharing layers, and paired peer exchange |
-| [`agent/`](agent/README.md) | Dock a machine's agent at a station: room tools, hook, mention watcher and `make dock` |
+| [`agent/`](agent/README.md) | Dock a machine's agent at a station: room tools, hook, mention watcher and `make dock`; the wormhole bridge to Stanley's aDNA lattice |
 | [`engram/`](engram/) | Python memory system, MCP server, dynamic chat, and Lighthouse publisher/receiver |
 | [`atlas/`](atlas/README.md) | Evidence workbench, literature workers, source review, and browser/Obsidian views |
 | [`lighthouse/`](lighthouse/README.md) | Protocol schemas, TypeScript packages, adapters, bridges, and proofs |
