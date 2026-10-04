@@ -30,6 +30,7 @@ only-include = [
     "superyak_agent/station.py",
     "superyak_agent/vault.py",
     "superyak_agent/watch.py",
+    "superyak_agent/wormhole.py",
 ]
 
 [tool.pytest.ini_options]
