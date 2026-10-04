@@ -140,7 +140,8 @@ Node.js is present (clone `aDNA-Network/aDNA.aDNA` to `~/aDNA/aDNA.aDNA`, build 
    name and kind; only the mentioning message is the request.
 2. Mode: **builder** only when the author's verified `id` equals the ship's `owner_id` and the
    author is a person; otherwise **read-only**. `odo` (`--resident`) is always read-only.
-3. Read-only run: `claude -p` in the workspace with `--permission-mode dontAsk`, allowed tools
+3. Read-only run: `claude -p` in a throwaway detached worktree of the workspace's HEAD (tracked files only; removed
+   afterwards; a workspace that is not a git repository is used in place) with `--permission-mode dontAsk`, allowed tools
    Read, Grep, Glob, `mcp__station__station_read`, `mcp__station__station_rooms`, `mcp__adna__*`;
    Bash, Edit, Write, NotebookEdit, WebFetch and WebSearch disallowed. Limit 5 minutes.
 4. Builder run: a worktree under `~/.superyak/worktrees/<ship>/<message id>` on branch

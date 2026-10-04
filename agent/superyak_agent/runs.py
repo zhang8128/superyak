@@ -1,4 +1,5 @@
 """One Claude run per mention: read-only for everyone, builder for the ship's owner."""
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
@@ -44,8 +45,9 @@ def _without_team_tools(rules):
 
 
 def read_only_settings(workspace):
-    """Team mode's collaborator allowlist minus the shell: Read/Grep/Glob inside the workspace only,
-    no .env files, no edits, no web. No Bash means no OS sandbox is needed."""
+    """Team mode's collaborator allowlist minus the shell: Read/Grep/Glob inside the folder only (a snapshot
+    of the workspace, see ClaudeRunner._snapshot), no .env files, no edits, no web. No Bash means no OS
+    sandbox is needed."""
     settings = workers.claude_sandbox_settings(str(workspace), mode='collab', web_search=False)
     permissions = settings['permissions']
     permissions['allow'] = [r for r in _without_team_tools(permissions['allow']) if r != 'Bash'] + RUN_MCP_TOOLS
@@ -145,8 +147,40 @@ class ClaudeRunner:
 
     def run(self, mode, prompt, message_id):
         if mode == 'read':
-            return RunResult(self._claude('read', prompt, read_only_settings(self.workspace), self.workspace))
+            with self._snapshot(message_id) as folder:
+                return RunResult(self._claude('read', prompt, read_only_settings(folder), folder))
         return self._build(prompt, message_id)
+
+    def _is_repo_root(self):
+        top = workers.git(self.workspace, 'rev-parse', '--show-toplevel', check=False)
+        # Only a workspace that is itself a repository's top level: a plain folder that merely sits inside
+        # some other repository (Odo's empty workspace under a dotfiles-managed home) is not snapshotted.
+        return top.returncode == 0 and Path(top.stdout.strip()).resolve() == self.workspace.resolve()
+
+    @contextmanager
+    def _snapshot(self, message_id):
+        """What a read-only run may see. Anyone who can mention the ship starts one, and Read/Grep/Glob over the
+        workspace would also reach .git, .engram, .envrc, .claude and every ignored private file in it. So a
+        repository workspace is shown as a throwaway detached worktree of HEAD: tracked files only, removed
+        afterwards however the run ends. A workspace that is not a repository (Odo's) is used in place."""
+        if not self._is_repo_root():
+            yield self.workspace
+            return
+        path = Path.home() / '.superyak' / 'worktrees' / self.ship / f'read-{message_id}'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() or path.is_symlink():  # left by a watcher that was killed mid-run
+            workers.remove_worktree(self.workspace, path, None)
+            workers.git(self.workspace, 'worktree', 'prune', check=False)
+            if path.is_symlink():
+                path.unlink()
+            else:
+                shutil.rmtree(path, ignore_errors=True)
+        head = workers.git(self.workspace, 'rev-parse', 'HEAD').stdout.strip()
+        workers.git(self.workspace, 'worktree', 'add', '-q', '--detach', str(path), head)
+        try:
+            yield path
+        finally:
+            workers.remove_worktree(self.workspace, path, None)
 
     def _build(self, prompt, message_id):
         branch = f'lighthouse/{self.ship}/{message_id}'

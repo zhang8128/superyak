@@ -32,8 +32,11 @@ into the prompt, each quoted through `fence_external` with the author's name and
 mentioning message is the request. A mention from the ship's owner, a person verified by the station,
 runs Claude as a **builder** in a worktree `~/.superyak/worktrees/<ship>/<message id>` on branch
 `lighthouse/<ship>/<message id>` (OS-sandboxed, 20 minute limit). The watcher commits the changed
-files and never pushes. Anyone else's mention runs **read-only**: Read, Grep and Glob in the
-workspace, no shell or edits (5 minute limit). The resident `odo` is always read-only.
+files and never pushes. Anyone else's mention runs **read-only**: Read, Grep and Glob, no shell or
+edits (5 minute limit), in a throwaway detached worktree of the workspace's HEAD
+(`~/.superyak/worktrees/<ship>/read-<message id>`, removed afterwards), so only tracked files are
+visible, not `.git`, `.engram`, `.envrc` or other ignored private files. A workspace that is not a
+git repository is used in place. The resident `odo` is always read-only.
 
 - Runs get only the aDNA tools, never the station tools: the room's history is in the prompt and the
   watcher posts the reply, so a run cannot carry another room's messages into this one.

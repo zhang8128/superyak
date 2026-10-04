@@ -14,7 +14,8 @@ args = sys.argv[1:]
 settings = json.loads(Path(args[args.index('--settings') + 1]).read_text())
 with open(os.environ['FAKE_CLAUDE_LOG'], 'a') as log:
     log.write(json.dumps({'args': args, 'cwd': os.getcwd(), 'prompt': prompt, 'settings': settings,
-                          'superyak_run': os.environ.get('SUPERYAK_RUN')}) + '\\n')
+                          'superyak_run': os.environ.get('SUPERYAK_RUN'), 'files': sorted(os.listdir('.')),
+                          'secret_visible': os.path.exists('.engram/secret.txt')}) + '\\n')
 behavior = os.environ.get('FAKE_CLAUDE', 'answer')
 if behavior == 'fail':
     sys.exit(1)
@@ -63,17 +64,23 @@ def branches(repo):
     return subprocess.run(['git', '-C', str(repo), 'branch', '--list', 'lighthouse/*', '--format=%(refname:short)'], capture_output=True, text=True).stdout.split()
 
 
+def worktrees(repo):
+    out = subprocess.run(['git', '-C', str(repo), 'worktree', 'list', '--porcelain'], capture_output=True, text=True, check=True).stdout
+    return [line.removeprefix('worktree ') for line in out.splitlines() if line.startswith('worktree ')]
+
+
 def test_read_only_run_reads_only_the_workspace_with_no_shell_edits_or_web(repo, tmp_path, claude):
     script, calls = claude
     result = runner(repo, tmp_path, script).run('read', 'What is this?', 'm1')
     assert result.reply == 'Here is my answer.' and result.branch is None
     call = calls()[0]
     allow, deny = call['settings']['permissions']['allow'], call['settings']['permissions']['deny']
-    assert f'Read(/{repo}/**)' in allow and 'Bash' not in allow
+    snapshot = tmp_path / 'home' / '.superyak' / 'worktrees' / 'serenity' / 'read-m1'
+    assert f'Read(/{snapshot}/**)' in allow and f'Read(/{repo}/**)' not in allow and 'Bash' not in allow
     assert 'mcp__adna' in allow and not any(rule.startswith('mcp__station') for rule in allow) and 'mcp__station' in deny
     assert {'Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch'} <= set(deny)
     assert call['settings']['sandbox'] == {'enabled': False}
-    assert Path(call['cwd']).resolve() == repo.resolve() and call['prompt'] == 'What is this?'
+    assert Path(call['cwd']).resolve() == snapshot.resolve() and call['prompt'] == 'What is this?'
     assert call['args'][call['args'].index('--permission-mode') + 1] == 'dontAsk'
 
 
@@ -127,6 +134,7 @@ def test_a_run_over_its_time_limit_raises_run_timeout(repo, tmp_path, claude, mo
     monkeypatch.setenv('FAKE_CLAUDE', 'sleep')
     with pytest.raises(RunTimeout):
         runner(repo, tmp_path, script, limits={'read': 1, 'build': 1}).run('read', 'slow', 'm10')
+    assert not (tmp_path / 'home' / '.superyak' / 'worktrees' / 'serenity' / 'read-m10').exists() and worktrees(repo) == [str(repo)]
 
 
 def test_linux_runs_are_wrapped_in_a_memory_capped_scope(repo, tmp_path, claude):
@@ -175,3 +183,72 @@ def test_a_build_run_over_its_time_limit_ends_every_process_and_cleans_up(repo, 
     assert time.monotonic() - started < 15
     assert branches(repo) == []
     assert not (tmp_path / 'home' / '.superyak' / 'worktrees' / 'serenity' / 'm11').exists()
+
+
+def private_repo(repo):
+    """A repository whose workspace holds private files git does not track."""
+    (repo / '.gitignore').write_text('.engram/\n')
+    subprocess.run(['git', '-C', str(repo), 'add', '.gitignore'], check=True)
+    subprocess.run(['git', '-C', str(repo), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'ignore engram'], check=True)
+    (repo / '.engram').mkdir()
+    (repo / '.engram' / 'secret.txt').write_text('hunter2\n')
+    (repo / '.envrc').write_text('export TOKEN=hunter2\n')
+
+
+def test_read_only_run_sees_a_throwaway_worktree_of_head_not_the_private_files_in_the_workspace(repo, tmp_path, claude):
+    script, calls = claude
+    private_repo(repo)
+    result = runner(repo, tmp_path, script).run('read', 'What is this?', 'm20')
+    assert result.reply == 'Here is my answer.'
+    call = calls()[0]
+    snapshot = tmp_path / 'home' / '.superyak' / 'worktrees' / 'serenity' / 'read-m20'
+    assert Path(call['cwd']).resolve() == snapshot.resolve() and Path(call['cwd']).resolve() != repo.resolve()
+    assert call['secret_visible'] is False and '.engram' not in call['files'] and '.envrc' not in call['files']
+    assert 'README.md' in call['files'] and '.gitignore' in call['files']
+    allow = call['settings']['permissions']['allow']
+    assert f'Read(/{snapshot}/**)' in allow and f'Grep(/{snapshot}/**)' in allow and f'Glob(/{snapshot}/**)' in allow
+    assert not any(str(repo) in rule for rule in allow)
+    # Always removed afterwards, leaving the workspace untouched: no worktree, no branch, the private files still there.
+    assert not snapshot.exists() and worktrees(repo) == [str(repo)] and branches(repo) == []
+    assert (repo / '.engram' / 'secret.txt').read_text() == 'hunter2\n' and (repo / '.envrc').exists()
+
+
+def test_the_snapshot_is_of_head_so_uncommitted_edits_are_not_shown(repo, tmp_path, claude):
+    script, calls = claude
+    (repo / 'README.md').write_text('uncommitted edit\n')
+    (repo / 'scratch.txt').write_text('untracked\n')
+    runner(repo, tmp_path, script).run('read', 'What is this?', 'm21')
+    assert calls()[0]['files'] == ['.git', 'README.md']
+
+
+def test_a_failed_read_run_removes_its_worktree_and_a_stale_one_does_not_block_a_retry(repo, tmp_path, claude, monkeypatch):
+    script, calls = claude
+    snapshot = tmp_path / 'home' / '.superyak' / 'worktrees' / 'serenity' / 'read-m22'
+    monkeypatch.setenv('FAKE_CLAUDE', 'fail')
+    with pytest.raises(RuntimeError):
+        runner(repo, tmp_path, script).run('read', 'What is this?', 'm22')
+    assert not snapshot.exists() and worktrees(repo) == [str(repo)]
+    subprocess.run(['git', '-C', str(repo), 'worktree', 'add', '-q', '--detach', str(snapshot), 'HEAD'], check=True)  # a killed watcher's leftover
+    (snapshot / 'leftover.txt').write_text('x')
+    monkeypatch.setenv('FAKE_CLAUDE', 'answer')
+    assert runner(repo, tmp_path, script).run('read', 'What is this?', 'm22').reply == 'Here is my answer.'
+    assert 'leftover.txt' not in calls()[-1]['files'] and not snapshot.exists() and worktrees(repo) == [str(repo)]
+
+
+def test_a_workspace_that_is_not_a_repository_is_used_in_place(tmp_path, claude):
+    script, calls = claude
+    workspace = tmp_path / 'odo-workspace'
+    workspace.mkdir()
+    result = runner(workspace, tmp_path, script).run('read', 'Where is the door?', 'm23')
+    assert result.reply == 'Here is my answer.'
+    call = calls()[0]
+    assert Path(call['cwd']).resolve() == workspace.resolve() and f'Read(/{workspace}/**)' in call['settings']['permissions']['allow']
+    assert not (tmp_path / 'home' / '.superyak' / 'worktrees').exists()
+
+
+def test_a_plain_folder_inside_some_other_repository_is_not_snapshotted(repo, tmp_path, claude):
+    script, calls = claude
+    workspace = repo / 'odo-workspace'   # e.g. an empty workspace under a home directory that is itself a repository
+    workspace.mkdir()
+    runner(workspace, tmp_path, script).run('read', 'Where is the door?', 'm24')
+    assert Path(calls()[0]['cwd']).resolve() == workspace.resolve() and worktrees(repo) == [str(repo)]
