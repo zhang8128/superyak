@@ -19,7 +19,10 @@ ATLAS_PYTHON ?= $(CURDIR)/atlas/.venv/bin/python
 ATLAS_PROJECT ?= $(CURDIR)/.engram/atlas/project
 ATLAS_ARGS ?= --help
 HOME_DATA ?= $(CURDIR)/.engram/home
-LIGHTHOUSE ?=
+STATION ?= https://smart.tail7db420.ts.net
+DOOR ?= https://smart.tail7db420.ts.net:8443
+DOCK_ARGS ?=
+AGENT_PYTHON ?= python3
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
 HOME_ARGS ?=
@@ -28,7 +31,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: request-access station-share-link setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock station-share-link setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -37,7 +40,7 @@ help:
 	@echo "make tuning             Dataset, model, train, evaluate and Slurm CLI; TUNING_ARGS sets options"
 	@echo "make setup-peer / check-peer  Install/check the standalone personal home"
 	@echo "make home-demo / home    Serve the fictional demo / ordinary peer on loopback"
-	@echo "make request-access LIGHTHOUSE=https://…  Ask a lighthouse for an account and wait for approval"
+	@echo "make dock DOCK_ARGS='--ship NAME'  Dock this machine's agent at the station (see CLAUDE.md)"
 	@echo "make station-share-link   On the Pi: create the station's reusable Tailscale share link"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
 	@echo "make setup              Install all five components from their lockfiles"
@@ -163,9 +166,9 @@ home-demo:
 	@echo "Superyak demo: http://127.0.0.1:$(HOME_PORT)"
 	uv run --locked --project peer python -m superyak_peer serve --local-demo --data-dir "$(HOME_DEMO_DATA)" --port "$(HOME_PORT)" $(HOME_ARGS)
 
-request-access:
-	@test -n "$(LIGHTHOUSE)" || { echo 'Usage: make request-access LIGHTHOUSE=https://smart.<tailnet>.ts.net'; exit 2; }
-	python3 peer/scripts/request_access.py "$(LIGHTHOUSE)"
+dock:
+	@$(AGENT_PYTHON) -c 'import sys; sys.exit(sys.version_info < (3, 11))' || { echo 'superyak-agent needs Python 3.11 or newer. With uv installed: make dock AGENT_PYTHON="uv run --no-project --python 3.13 python" DOCK_ARGS=...'; exit 2; }
+	$(AGENT_PYTHON) agent/run_agent.py dock --station "$(STATION)" --door "$(DOOR)" $(DOCK_ARGS)
 
 station-share-link:
 	python3 peer/scripts/share_link.py

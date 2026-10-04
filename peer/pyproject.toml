@@ -90,6 +90,7 @@ only-include = [
     "tests/test_packaging.py",
     "tests/test_responder.py",
     "tests/test_share_link.py",
+    "tests/test_ship_agent.py",
     "tests/test_ships.py",
     "tests/test_transport.py",
     "uv.lock",

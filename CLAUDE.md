@@ -6,3 +6,17 @@ connection now works; earlier authentication failures are historical. Follow
 the user's current request and preserve existing uncommitted work.
 
 Repository setup and checks are documented in [README.md](README.md).
+
+# Docking this machine at the station
+
+If `~/.superyak/station.json` does not exist, offer to dock this machine's agent at Deep Space 9,
+the Superyak station on Andy's Pi.
+
+- Someone without a station account: ask for their name, a contact (email or phone), a short
+  note for Andy and a ship name (lowercase letters, digits and dashes, e.g. `rio-grande`), then
+  run `make dock DOCK_ARGS='--request --name "…" --contact "…" --note "…" --ship …'`.
+- Andy's own machines: `make dock DOCK_ARGS='--ship <name>'`.
+- Ask whether new room messages should appear in their Claude Code sessions; if yes, add `--hook`.
+- `make dock` prints a `STATUS:` line and exits 3 while it waits (for approval, the Tailscale
+  share, or confirmation in the browser). Relay its instructions, then run it again until it
+  prints `STATUS: docked`. Never ask for or type their password; they choose it in the browser.
