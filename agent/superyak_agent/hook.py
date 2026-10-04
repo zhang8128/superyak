@@ -1,5 +1,6 @@
 """Claude Code UserPromptSubmit hook: new station messages since the last turn, fenced.
 It must never block or break a prompt, so every failure prints nothing."""
+import math
 import os
 from pathlib import Path
 import time
@@ -21,17 +22,28 @@ def run(config_path, state_path=None, clock=time.time, transport=None):
         return ''
 
 
+def _cursor(state_path):
+    """The saved cursor, or None when the state is missing or damaged (a torn write, a hand edit): that
+    counts as a first run, which rewrites it. A hook that gave up on a bad file would stay silent forever."""
+    try:
+        state = read_json(state_path)
+    except (OSError, ValueError, RecursionError):
+        return None
+    cursor = state.get('cursor') if isinstance(state, dict) else None
+    return cursor if type(cursor) in (int, float) and math.isfinite(cursor) else None
+
+
 def _run(config_path, state_path, clock, transport):
     config = read_json(config_path)
     if not config or not config.get('key'):
         return ''
     state_path = Path(state_path or config_path.parent / 'hook-state.json')
-    state = read_json(state_path, {}) or {}
-    if 'cursor' not in state:
+    cursor = _cursor(state_path)
+    if cursor is None:
         write_private(state_path, {'cursor': clock()})
         return ''
     client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(5))
-    me, cursor, items = client.me()['id'], state['cursor'], []
+    me, items = client.me()['id'], []
     for summary in client.rooms():
         if ':' in summary['id'] or (summary.get('last_activity') or 0) <= cursor:
             continue

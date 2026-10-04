@@ -1,3 +1,5 @@
+import json
+import pytest
 from superyak_agent import hook
 from superyak_agent.station import write_private
 
@@ -68,3 +70,24 @@ def test_inside_a_watcher_run_the_hook_is_silent_and_leaves_the_cursor_alone(sta
     assert run(fake, config_path) == '' and state.read_text() == before
     monkeypatch.delenv('SUPERYAK_RUN')
     assert 'Lunch at noon?' in run(fake, config_path)
+
+
+@pytest.mark.parametrize('damaged', [b'', b'{"cursor": 12', b'not json', b'[]', b'"cursor"', b'null', b'{}', b'{"cursor": "soon"}',
+                                     b'{"cursor": null}', b'{"cursor": true}', b'{"cursor": NaN}', b'{"cursor": [1]}', b'\xff\xfe'])
+def test_unreadable_hook_state_counts_as_a_first_run_and_is_rewritten(station, ship_config, tmp_path, damaged):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'old news')
+    state = config_path.parent / 'hook-state.json'
+    state.write_bytes(damaged)
+    assert run(fake, config_path, now=fake.clock) == ''
+    assert json.loads(state.read_text()) == {'cursor': fake.clock} and state.stat().st_mode & 0o777 == 0o600
+    fake.say(room, jenn, 'Lunch at noon? @serenity')
+    text = run(fake, config_path)
+    assert 'Lunch at noon?' in text and 'old news' not in text
+
+
+def test_a_state_path_that_cannot_be_read_does_not_break_the_prompt(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    (config_path.parent / 'hook-state.json').mkdir()   # unreadable as a file, and not replaceable by a file either
+    assert run(fake, config_path) == ''

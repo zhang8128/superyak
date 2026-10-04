@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import tempfile
 from urllib.parse import quote
 import urllib.error
 import urllib.request
@@ -83,13 +84,22 @@ class StationClient:
 
 
 def _replace_private(path, text):
+    """Replace `path` with `text`, 0600, never leaving a half-written file in its place. Each writer
+    gets its own temp file in the same directory, so two concurrent writers (two hook runs) cannot
+    interleave; whichever replaces last wins, and either result is complete."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = path.with_name(path.name + '.tmp')
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'w') as stream:
-        stream.write(text)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp')
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def write_private(path, value):

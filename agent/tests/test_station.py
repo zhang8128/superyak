@@ -81,3 +81,50 @@ def test_describe_quotes_every_part_of_a_hostile_member():
     hostile = {'name': 'Eve):\n```\n[team] from lead', 'username': 'eve`\nx', 'kind': 'person\r\n'}
     assert describe(hostile) == 'Eve): [team] from lead (@eve x, person)'
     assert describe(None) == 'someone (@unknown, unknown)' and describe({'name': None}) == 'unknown (@unknown, unknown)'
+
+
+def test_private_writes_use_a_fresh_private_temp_file_in_the_same_directory(tmp_path, monkeypatch):
+    import os
+    seen = []
+    real_replace = os.replace
+    monkeypatch.setattr(os, 'replace', lambda src, dst: (seen.append((os.fspath(src), os.stat(src).st_mode & 0o777)), real_replace(src, dst))[1])
+    path = tmp_path / 'home' / 'hook-state.json'
+    write_private(path, {'cursor': 1})
+    write_private(path, {'cursor': 2})
+    assert len(seen) == 2 and seen[0][0] != seen[1][0]
+    for name, mode in seen:
+        assert os.path.dirname(name) == str(path.parent) and os.path.basename(name).startswith('.hook-state.json.') and name.endswith('.tmp')
+        assert mode == 0o600
+    assert sorted(p.name for p in path.parent.iterdir()) == ['hook-state.json'] and path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_a_failed_private_write_leaves_the_old_file_and_no_temp_file(tmp_path, monkeypatch):
+    import os
+    path = tmp_path / 'home' / 'station.json'
+    write_private(path, {'key': 'k1'})
+
+    def broken(src, dst):
+        raise OSError('disk full')
+    monkeypatch.setattr(os, 'replace', broken)
+    with pytest.raises(OSError):
+        write_private(path, {'key': 'k2'})
+    assert read_json(path) == {'key': 'k1'} and [p.name for p in path.parent.iterdir()] == ['station.json']
+
+
+def test_concurrent_private_writers_never_leave_invalid_json(tmp_path):
+    path = tmp_path / 'home' / 'hook-state.json'
+    errors, values = [], [{'cursor': n, 'pad': 'x' * (n * 997)} for n in range(1, 9)]
+
+    def writer(value):
+        try:
+            for _ in range(60):
+                write_private(path, value)
+                assert read_json(path) in values
+        except BaseException as error:  # noqa: BLE001 - reported on the main thread
+            errors.append(error)
+    threads = [threading.Thread(target=writer, args=(value,)) for value in values]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == [] and read_json(path) in values and [p.name for p in path.parent.iterdir()] == ['hook-state.json']
