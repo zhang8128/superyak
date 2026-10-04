@@ -1,0 +1,46 @@
+from superyak_agent import hook
+from superyak_agent.station import write_private
+
+
+def setup(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    config_path = tmp_path / 'home' / 'station.json'
+    write_private(config_path, ship_config)
+    return fake, andy, jenn, serenity, config_path
+
+
+def run(fake, config_path, now=2000.0):
+    return hook.run(config_path, clock=lambda: now, transport=fake)
+
+
+def test_first_turn_is_quiet_then_new_messages_from_others_appear_once(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'old news')
+    assert run(fake, config_path, now=fake.clock) == ''
+    fake.say(room, jenn, 'Lunch at noon? @serenity')
+    fake.say(room, serenity, 'my own post')
+    text = run(fake, config_path)
+    assert 'Lunch at noon?' in text and 'Jenn (@jenn, person)' in text and 'quoted message' in text
+    assert 'my own post' not in text and 'old news' not in text
+    assert run(fake, config_path) == ''
+
+
+def test_output_is_capped(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    run(fake, config_path, now=fake.clock)
+    for n in range(25):
+        fake.say(room, jenn, f'message {n} ' + 'x' * 400)
+    text = run(fake, config_path)
+    assert len(text) <= 4000 and 'message 24' in text and 'message 4 ' not in text
+
+
+def test_unreachable_station_or_missing_config_prints_nothing(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    run(fake, config_path, now=fake.clock)
+    state_before = (config_path.parent / 'hook-state.json').read_text()
+    fake.down = True
+    assert run(fake, config_path) == ''
+    assert (config_path.parent / 'hook-state.json').read_text() == state_before
+    assert hook.run(tmp_path / 'nowhere' / 'station.json', transport=fake) == ''

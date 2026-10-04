@@ -17,6 +17,8 @@ def build_parser():
     watch.add_argument('--resident', action='store_true', help='Station resident: always read-only; answers one-person rooms')
     watch.add_argument('--model')
     watch.add_argument('--once', action='store_true')
+    hook = commands.add_parser('hook', help='Claude Code UserPromptSubmit hook')
+    hook.add_argument('--config', type=Path, default=CONFIG)
     return parser
 
 
@@ -26,6 +28,12 @@ def main(argv=None):
     if args.command == 'mcp':
         from .mcp import serve
         serve(args.config)
+        return 0
+    if args.command == 'hook':
+        from .hook import run
+        text = run(args.config)
+        if text:
+            print(text)
         return 0
     if args.command == 'watch':
         import logging
