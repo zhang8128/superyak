@@ -3,7 +3,7 @@ import shutil
 import stat
 import subprocess
 import pytest
-from superyak_agent.vault import AUTHOR, INBOX, OUTBOUND, RECEIPTS, Vault, VaultError
+from superyak_agent.vault import AUTHOR, INBOX, OUTBOUND, RECEIPTS, Vault, VaultError, install_gate
 
 
 def git(path, *args):
@@ -94,12 +94,21 @@ def test_a_symlinked_parent_folder_cannot_lead_outside_the_vault(tmp_path):
 
 # --- the server-side gate: a pre-receive hook on the bare repository -------------------------------
 
-LATTICE = {**os.environ, 'STATION_VAULT_PUSHER': 'lattice'}
+def pusher_env(marker=None, **extra):
+    """The environment of a push: STATION_VAULT_PUSHER is `lattice` (Stanley's forced command), `bridge` (our
+    own Vault) or, for anything else, unset or some other value."""
+    env = {k: v for k, v in os.environ.items() if k != 'STATION_VAULT_PUSHER'}
+    if marker is not None:
+        env['STATION_VAULT_PUSHER'] = marker
+    return {**env, **extra}
 
 
-def push(path, *args, lattice=False):
+LATTICE = pusher_env('lattice')
+
+
+def push(path, *args, lattice=False, marker=None, **extra):
     return subprocess.run(['git', '-C', str(path), 'push', '-q', *args], capture_output=True, text=True,
-                          env=LATTICE if lattice else None)
+                          env=pusher_env('lattice' if lattice else marker, **extra))
 
 
 def commit_all(path, message='stanley'):
@@ -121,6 +130,8 @@ def test_create_configures_the_bare_repository_to_refuse_rewrites_and_installs_t
     bare = tmp_path / 'Station.aDNA.git'
     for key in ('receive.denyNonFastForwards', 'receive.denyDeletes', 'receive.fsckObjects'):
         assert git(bare, 'config', '--get', key).strip() == 'true'
+    assert git(bare, 'config', '--get', 'receive.maxInputSize').strip() == '8388608'
+    assert git(bare, 'config', '--get', 'core.hooksPath').strip() == str((bare / 'hooks').resolve())
     hook = bare / 'hooks' / 'pre-receive'
     assert stat.S_IMODE(hook.stat().st_mode) == 0o755 and hook.read_text().startswith('#!/usr/bin/env python3')
 
@@ -239,7 +250,7 @@ def test_a_tree_with_a_dot_git_entry_is_refused_even_without_fsck(vault):
     assert push(other, 'origin', f'{commit}:refs/heads/main', lattice=True).returncode != 0
     git(tmp_path / 'Station.aDNA.git', 'config', 'receive.fsckObjects', 'false')
     result = push(other, 'origin', f'{commit}:refs/heads/main', lattice=True)
-    assert result.returncode != 0 and 'station vault' in result.stderr
+    assert result.returncode != 0 and 'station vault' in result.stderr and 'receive.fsckObjects' in result.stderr
     assert tip(tmp_path) == before
 
 
@@ -265,27 +276,145 @@ def test_nobody_can_rewrite_delete_or_branch_the_vault(vault):
     (other / OUTBOUND / 'coord_a.md').write_text('rewritten\n')
     git(other, 'add', '-A')
     git(other, 'commit', '-q', '--amend', '-m', 'rewrite')
-    for lattice in (False, True):
-        assert push(other, '-f', 'origin', 'HEAD:main', lattice=lattice).returncode != 0
-        assert push(other, 'origin', ':main', lattice=lattice).returncode != 0
-        assert push(other, 'origin', 'HEAD:refs/heads/other', lattice=lattice).returncode != 0
+    for marker in (None, 'lattice', 'bridge'):
+        assert push(other, '-f', 'origin', 'HEAD:main', marker=marker).returncode != 0
+        assert push(other, 'origin', ':main', marker=marker).returncode != 0
+        assert push(other, 'origin', 'HEAD:refs/heads/other', marker=marker).returncode != 0
     git(other, 'checkout', '-q', '--orphan', 'orphan')
     (other / 'README.md').write_text('different\n')
     commit_all(other, 'orphan')
-    assert push(other, '-f', 'origin', 'HEAD:main').returncode != 0
+    assert push(other, '-f', 'origin', 'HEAD:main', marker='bridge').returncode != 0
     assert tip(tmp_path) == before
 
 
-def test_pushes_without_the_lattice_marker_may_add_outbound_memos(vault):
+def test_the_bridge_marker_may_add_outbound_memos_and_publishes_still_work(vault):
     vault, tmp_path = vault
     other = stanley(tmp_path)
     (other / OUTBOUND / 'coord_b.md').write_text('out\n')
     commit_all(other)
-    assert push(other).returncode == 0
+    assert push(other, marker='bridge').returncode == 0
     vault.add_outbound('coord_c.md', 'out\n')
     vault.sync()
     vault.publish()
     assert blob(tmp_path, f'{OUTBOUND}/coord_c.md') == b'out\n'
+
+
+@pytest.mark.parametrize('marker', [None, '', 'Bridge', 'bridge ', 'nonsense'])
+@pytest.mark.parametrize('change', [make_outbound_file, make_outside_path, modify_existing])
+def test_a_push_without_the_bridge_marker_is_held_to_the_drop_box_rules(vault, change, marker):
+    _, tmp_path = vault
+    before = tip(tmp_path)
+    other = stanley(tmp_path)
+    (other / INBOX / 'coord_ok.md').write_text('fine\n')
+    change(other)
+    commit_all(other)
+    result = push(other, marker=marker)
+    assert result.returncode != 0 and 'station vault' in result.stderr
+    assert tip(tmp_path) == before
+
+
+def test_a_push_without_a_marker_may_still_add_inbox_memos(vault):
+    _, tmp_path = vault
+    other = stanley(tmp_path)
+    (other / INBOX / 'coord_reply.md').write_text('reply\n')
+    commit_all(other)
+    assert push(other).returncode == 0, 'an unmarked push is the drop-box, not a ban'
+    assert blob(tmp_path, f'{INBOX}/coord_reply.md') == b'reply\n'
+
+
+def test_the_vaults_own_pushes_carry_the_bridge_marker_and_the_bare_hook_does_run(vault, monkeypatch):
+    vault, tmp_path = vault
+    seen = tmp_path / 'seen-marker'
+    hook = tmp_path / 'Station.aDNA.git' / 'hooks' / 'pre-receive'
+    hook.write_text(f'#!/bin/sh\nprintf %s "$STATION_VAULT_PUSHER" >> {seen}\ncat >/dev/null\n')
+    for inherited in (None, 'lattice'):  # nothing we are run with changes who the vault says it is
+        monkeypatch.delenv('STATION_VAULT_PUSHER', raising=False)
+        if inherited:
+            monkeypatch.setenv('STATION_VAULT_PUSHER', inherited)
+        vault.add_outbound(f'coord_{inherited}.md', 'out\n')
+        vault.publish()
+        assert os.environ.get('STATION_VAULT_PUSHER') == inherited  # the push did not change our own environment
+    assert seen.read_text() == 'bridgebridge'  # the hook ran for both, despite the `core.hooksPath=/dev/null` we pass
+
+
+def test_creating_a_vault_pushes_as_the_bridge_whatever_the_environment_says(tmp_path, monkeypatch):
+    monkeypatch.setenv('STATION_VAULT_PUSHER', 'lattice')  # would hold README.md and the folders to the drop-box rules
+    Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
+    assert blob(tmp_path, 'README.md')
+
+
+def test_the_gate_refuses_every_push_unless_the_repository_has_fsck_on(vault):
+    _, tmp_path = vault
+    bare = tmp_path / 'Station.aDNA.git'
+    other = stanley(tmp_path)
+    for value in ('false', 'unset'):
+        if value == 'unset':
+            git(bare, 'config', '--unset', 'receive.fsckObjects')
+        else:
+            git(bare, 'config', 'receive.fsckObjects', value)
+        for marker in (None, 'lattice', 'bridge'):
+            (other / INBOX / f'coord_{value}_{marker}.md').write_text('x\n')
+            commit_all(other)
+            result = push(other, marker=marker)
+            assert result.returncode != 0 and 'receive.fsckObjects' in result.stderr and 'station vault' in result.stderr
+    git(bare, 'config', 'receive.fsckObjects', 'true')
+    assert push(other, marker='lattice').returncode == 0  # the earlier commits go through once fsck is back on
+
+
+def test_a_huge_push_is_refused_before_it_is_stored(vault):
+    _, tmp_path = vault
+    before = tip(tmp_path)
+    other = stanley(tmp_path)
+    (other / OUTBOUND / 'coord_ok.md').write_bytes(os.urandom(1_000_000))
+    commit_all(other, 'fits')
+    assert push(other, marker='bridge').returncode == 0
+    fits = tip(tmp_path)
+    (other / OUTBOUND / 'coord_huge.md').write_bytes(os.urandom(9 * 1_048_576))  # incompressible, over 8 MiB
+    commit_all(other, 'huge')
+    result = push(other, marker='bridge')
+    assert result.returncode != 0 and 'station vault' not in result.stderr  # git itself, before the hook
+    assert tip(tmp_path) == fits != before
+
+
+def test_a_hooks_path_in_global_config_or_on_the_command_line_cannot_switch_the_gate_off(vault):
+    _, tmp_path = vault
+    before = tip(tmp_path)
+    off = tmp_path / 'gitconfig'
+    off.write_text('[core]\n\thooksPath = /dev/null\n')
+    other = stanley(tmp_path)
+    (other / OUTBOUND / 'coord_forged.md').write_text('forged\n')
+    commit_all(other)
+    for args, extra in ((['-c', 'core.hooksPath=/dev/null'], {}),
+                        ([], {'GIT_CONFIG_GLOBAL': str(off), 'GIT_CONFIG_NOSYSTEM': '1'})):
+        result = subprocess.run(['git', '-C', str(other), *args, 'push', '-q'], capture_output=True, text=True,
+                                env=pusher_env('lattice', **extra))
+        assert result.returncode != 0 and 'station vault' in result.stderr
+    assert tip(tmp_path) == before
+
+
+def test_install_gate_is_safe_to_run_again_and_upgrades_an_old_repository(vault):
+    _, tmp_path = vault
+    bare = tmp_path / 'Station.aDNA.git'
+    hook = bare / 'hooks' / 'pre-receive'
+    current = hook.read_text()
+    install_gate(bare)
+    assert hook.read_text() == current and stat.S_IMODE(hook.stat().st_mode) == 0o755
+    # an older repository: the previous hook, no size limit, no pinned hooks path
+    hook.write_text('#!/bin/sh\nexit 0\n')
+    git(bare, 'config', '--unset', 'receive.maxInputSize')
+    git(bare, 'config', '--unset', 'core.hooksPath')
+    git(bare, 'config', 'receive.fsckObjects', 'false')
+    install_gate(bare)
+    install_gate(bare)
+    assert hook.read_text() == current and stat.S_IMODE(hook.stat().st_mode) == 0o755
+    assert git(bare, 'config', '--get', 'receive.maxInputSize').strip() == '8388608'
+    assert git(bare, 'config', '--get', 'core.hooksPath').strip() == str((bare / 'hooks').resolve())
+    assert git(bare, 'config', '--get-all', 'receive.fsckObjects').split() == ['true']
+    assert not hook.with_name('pre-receive.tmp').exists()
+    other = stanley(tmp_path)
+    (other / OUTBOUND / 'coord_forged.md').write_text('forged\n')
+    commit_all(other)
+    assert push(other, lattice=True).returncode != 0  # and the upgraded gate is live
 
 
 # --- client-side defence in depth ---------------------------------------------------------------------
@@ -296,7 +425,7 @@ def replace_with_symlink(tmp_path, target, link):
     shutil.rmtree(other / link)
     os.symlink(target, other / link)
     commit_all(other, 'symlink')
-    assert push(other).returncode == 0  # without the lattice marker the gate lets it through
+    assert push(other, marker='bridge').returncode == 0  # only the lattice (and unmarked pushers) are held to the drop-box
 
 
 @pytest.mark.parametrize('link', [OUTBOUND, 'who/coordination', 'who'])
@@ -344,7 +473,7 @@ def test_pushed_gitattributes_cannot_change_or_block_our_memos(vault, attributes
     other = stanley(tmp_path)
     (other / '.gitattributes').write_text(attributes)
     commit_all(other, 'attributes')
-    assert push(other).returncode == 0
+    assert push(other, marker='bridge').returncode == 0
     vault.sync()
     assert vault.add_outbound('coord_e.md', 'odd $Id$\nlines\n') is True
     assert vault.git('status', '--porcelain').stdout == ''
@@ -369,11 +498,14 @@ def test_files_and_read_survive_symlink_loops_and_odd_names(vault, tmp_path):
     assert vault.files(INBOX) == [] and vault.read(INBOX, 'coord_ok.md') == ''
 
 
+MEMO = '---\nto_persona: Venus\n---\n\n'  # what every memo of ours starts with
+
+
 def test_recover_commits_memos_a_crash_left_untracked_or_staged_in_one_commit(vault):
     vault, tmp_path = vault
     outbound = vault.clone / OUTBOUND
-    (outbound / 'coord_untracked.md').write_text('u\n')
-    (outbound / 'coord_staged.md').write_text('s\n')
+    (outbound / 'coord_untracked.md').write_text(MEMO + 'u\n')
+    (outbound / 'coord_staged.md').write_text(MEMO + 's\n')
     vault.git('add', '--', f'{OUTBOUND}/coord_staged.md')
     before = vault.git('rev-parse', 'HEAD').stdout
     assert vault.recover() == ['coord_staged.md', 'coord_untracked.md']
@@ -383,8 +515,8 @@ def test_recover_commits_memos_a_crash_left_untracked_or_staged_in_one_commit(va
     assert vault.tracked(OUTBOUND, 'coord_untracked.md') and vault.tracked(OUTBOUND, 'coord_staged.md')
     vault.publish()
     other = stanley(tmp_path)
-    assert (other / OUTBOUND / 'coord_untracked.md').read_text() == 'u\n'
-    assert (other / OUTBOUND / 'coord_staged.md').read_text() == 's\n'
+    assert (other / OUTBOUND / 'coord_untracked.md').read_text() == MEMO + 'u\n'
+    assert (other / OUTBOUND / 'coord_staged.md').read_text() == MEMO + 's\n'
     head = vault.git('rev-parse', 'HEAD').stdout
     assert vault.recover() == [] and vault.git('rev-parse', 'HEAD').stdout == head  # nothing to do: no commit
 
@@ -399,7 +531,7 @@ def test_recover_leaves_unsafe_or_foreign_files_alone_and_unstages_them(vault, t
     (outbound / 'sub' / 'coord_nested.md').write_text('n')
     (outbound / 'bad name.md').write_text('b')
     (outbound / 'notes.txt').write_text('t')
-    (outbound / 'coord_good.md').write_text('g')
+    (outbound / 'coord_good.md').write_text(MEMO + 'g')
     (vault.clone / 'scratch.txt').write_text('mine')  # untracked, outside the outbound folder
     (vault.clone / 'staged.txt').write_text('staged')
     vault.git('add', '--', 'staged.txt', f'{OUTBOUND}/coord_link.md')
@@ -415,18 +547,18 @@ def test_recover_leaves_unsafe_or_foreign_files_alone_and_unstages_them(vault, t
 
 def test_a_staged_index_blocks_sync_until_recover_commits_it(vault):
     vault, tmp_path = vault
-    (vault.clone / OUTBOUND / 'coord_half.md').write_text('half\n')
+    (vault.clone / OUTBOUND / 'coord_half.md').write_text(MEMO + 'half\n')
     vault.git('add', '--', f'{OUTBOUND}/coord_half.md')
     other = stanley(tmp_path)
     (other / INBOX / 'coord_reply.md').write_text('reply\n')
     commit_all(other, 'stanley')
-    assert push(other).returncode == 0
+    assert push(other, lattice=True).returncode == 0
     with pytest.raises(VaultError):
         vault.sync()
     vault.recover()
     vault.sync()
     vault.publish()
-    assert blob(tmp_path, f'{OUTBOUND}/coord_half.md') == b'half\n'
+    assert blob(tmp_path, f'{OUTBOUND}/coord_half.md') == (MEMO + 'half\n').encode()
     assert blob(tmp_path, f'{INBOX}/coord_reply.md') == b'reply\n'
 
 
@@ -442,3 +574,33 @@ def test_tracked_is_true_only_for_plain_files_committed_in_head(vault):
     assert vault.tracked(OUTBOUND, 'missing.md') is False and vault.tracked(OUTBOUND, '') is False
     assert vault.tracked('who/coordination', 'outbound') is False  # a folder is not a file
     assert vault.tracked(OUTBOUND, '../outbound/coord_t.md') is False
+
+
+@pytest.mark.parametrize('content', [b'', b'-', b'--', b'\n---\n', b'hello\n', b' ---\n', b'\xff\xfe---'])
+@pytest.mark.parametrize('staged', [False, True])
+def test_recover_skips_an_outbound_file_that_is_empty_or_has_no_front_matter(vault, content, staged):
+    vault, _ = vault
+    outbound = vault.clone / OUTBOUND
+    (outbound / 'coord_blank.md').write_bytes(content)  # a crash between creating the file and writing it
+    (outbound / 'coord_good.md').write_text(MEMO + 'g')
+    if staged:
+        vault.git('add', '--', f'{OUTBOUND}/coord_blank.md')
+    assert vault.recover() == ['coord_good.md']
+    assert (outbound / 'coord_blank.md').read_bytes() == content  # left on disk untouched
+    assert not vault.tracked(OUTBOUND, 'coord_blank.md') and vault.tracked(OUTBOUND, 'coord_good.md')
+    assert vault.git('diff', '--cached', '--name-only').stdout == ''
+    head = vault.git('rev-parse', 'HEAD').stdout
+    assert vault.recover() == [] and vault.git('rev-parse', 'HEAD').stdout == head
+    vault.sync()  # nothing staged: the rebase is not blocked
+
+
+def test_recover_unstages_with_literal_pathspecs(vault):
+    vault, _ = vault
+    (vault.clone / ':(top)x').write_text('magic name')
+    (vault.clone / 'x').write_text('plain name')
+    vault.git('--literal-pathspecs', 'add', '--', ':(top)x', 'x')
+    assert vault.git('diff', '--cached', '--name-only').stdout.split('\n')[:-1] == [':(top)x', 'x']
+    assert vault.recover() == []
+    assert vault.git('diff', '--cached', '--name-only').stdout == ''  # a `:(top)x` pathspec would have spared it
+    assert (vault.clone / ':(top)x').read_text() == 'magic name'
+    vault.sync()

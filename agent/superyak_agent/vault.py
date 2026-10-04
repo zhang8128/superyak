@@ -3,8 +3,9 @@ mesh, and the bridge's working clone. Both sides only add files, so syncing repl
 top of theirs.
 
 Stanley's side can push anything git allows, so two layers keep it harmless: a pre-receive hook on the bare
-repository (`install_gate`) lets the lattice only add plain files to the inbox and receipts folders, and the
-clone never follows a symlink or lets pushed attributes touch what it writes."""
+repository (`install_gate`) lets every pusher except our own Vault (which sets STATION_VAULT_PUSHER=bridge)
+only add plain files to the inbox and receipts folders, and the clone never follows a symlink or lets pushed
+attributes touch what it writes."""
 from pathlib import Path
 import os
 import re
@@ -18,6 +19,7 @@ RECEIPTS = 'who/coordination/receipts'
 AUTHOR = ['-c', 'user.name=Wormhole', '-c', 'user.email=wormhole@station.invalid']
 SAFE = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false',
         '-c', 'submodule.recurse=false']
+MAX_PUSH_BYTES = 8 * 1024 * 1024  # receive.maxInputSize of the bare repository
 MEMO_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.md')
 # Highest-precedence attributes: nothing a pushed .gitattributes says may re-encode, filter or fail our memos.
 ATTRIBUTES = '* -text -filter -ident !eol !working-tree-encoding\n'
@@ -45,9 +47,10 @@ FOLDER_README = {
 
 PRE_RECEIVE = r"""#!/usr/bin/env python3
 # Station.aDNA pre-receive gate, installed by superyak_agent.vault.install_gate.
-# Always: only the vault branch, no deletions, history only grows. When STATION_VAULT_PUSHER=lattice (set
-# by the forced command of Stanley's sync key): every commit, and the push as a whole, may only ADD new
-# plain files (mode 100644, at most 1 MiB) directly in who/coordination/inbox/ or who/coordination/receipts/.
+# Always: receive.fsckObjects must be on, only the vault branch, no deletions, history only grows. Unless
+# STATION_VAULT_PUSHER=bridge (set by superyak_agent.vault.Vault for its own pushes; the forced command of
+# Stanley's sync key sets `lattice`): every commit, and the push as a whole, may only ADD new plain files
+# (mode 100644, at most 1 MiB) directly in who/coordination/inbox/ or who/coordination/receipts/.
 import os
 import re
 import subprocess
@@ -92,8 +95,11 @@ def problem(base, commit):
     return None
 
 
-lattice = os.environ.get('STATION_VAULT_PUSHER') == 'lattice'
-for line in sys.stdin.read().splitlines():
+dropbox = os.environ.get('STATION_VAULT_PUSHER') != 'bridge'  # fail closed: any other pusher gets the drop-box rules
+lines = sys.stdin.read().splitlines()
+if subprocess.run(['git', 'config', '--bool', 'receive.fsckObjects'], capture_output=True).stdout.strip() != b'true':
+    refuse('receive.fsckObjects must be true in the repository config')
+for line in lines:
     old, new, ref = line.split(' ', 2)
     if ref != 'refs/heads/' + BRANCH:
         refuse('only %s may be pushed, not %r' % (BRANCH, ref[:80]))
@@ -102,7 +108,7 @@ for line in sys.stdin.read().splitlines():
     created = set(old) == {'0'}
     if not created and subprocess.run(['git', 'merge-base', '--is-ancestor', old, new]).returncode:
         refuse('history may only grow: pull, then push again')
-    if not lattice:
+    if not dropbox:
         continue
     for entry in git('rev-list', '--parents', '--reverse', new if created else old + '..' + new).decode().splitlines():
         commit, *parents = entry.split()
@@ -130,25 +136,37 @@ def plain_text(name):
     return name.isprintable()
 
 
+def bridge_env():
+    """The environment of our own pushes: it tells the gate this pusher is the bridge, not the lattice."""
+    return {**os.environ, 'STATION_VAULT_PUSHER': 'bridge'}
+
+
 def install_gate(bare, branch='main'):
-    """Make the bare repository refuse rewrites, deletions and other branches, and install the pre-receive
-    hook that holds pushes made with STATION_VAULT_PUSHER=lattice to new inbox/receipt files."""
+    """Make the bare repository refuse rewrites, deletions, other branches and oversized pushes, and install the
+    pre-receive hook that holds every push not made by the bridge to new inbox/receipt files. `core.hooksPath` is
+    pinned to the repository's own hooks folder so a global setting cannot switch the hook off. Safe to run again
+    on an existing repository: it brings the settings and the hook up to date."""
     bare = Path(bare)
-    for key in ('receive.denyNonFastForwards', 'receive.denyDeletes', 'receive.fsckObjects'):
-        subprocess.run(['git', '-C', str(bare), 'config', key, 'true'], check=True, capture_output=True)
-    hook = bare / 'hooks' / 'pre-receive'
-    hook.parent.mkdir(exist_ok=True)
-    hook.write_text(PRE_RECEIVE.replace('__BRANCH__', repr(branch)))
-    hook.chmod(0o755)
+    hooks = bare / 'hooks'
+    hooks.mkdir(exist_ok=True)
+    settings = {'receive.denyNonFastForwards': 'true', 'receive.denyDeletes': 'true', 'receive.fsckObjects': 'true',
+                'receive.maxInputSize': str(MAX_PUSH_BYTES), 'core.hooksPath': str(hooks.resolve())}
+    for key, value in settings.items():
+        subprocess.run(['git', '-C', str(bare), 'config', '--replace-all', key, value], check=True, capture_output=True)
+    hook = hooks / 'pre-receive'
+    temporary = hooks / 'pre-receive.tmp'
+    temporary.write_text(PRE_RECEIVE.replace('__BRANCH__', repr(branch)))
+    temporary.chmod(0o755)
+    os.replace(temporary, hook)  # a push that starts meanwhile sees the old hook or the new one, never half of one
 
 
 class Vault:
     def __init__(self, clone, remote='origin', branch='main'):
         self.clone, self.remote, self.branch = Path(clone), remote, branch
 
-    def git(self, *args, check=True):
+    def git(self, *args, check=True, env=None):
         result = subprocess.run(['git', '-C', str(self.clone), *SAFE, *args], capture_output=True, text=True,
-                                errors='replace')
+                                errors='replace', env=env)
         if check and result.returncode:
             raise VaultError(f'git {args[0]} failed: {result.stderr.strip()[:300]}')
         return result
@@ -179,7 +197,7 @@ class Vault:
             (clone / folder / 'README.md').write_text(text)
         vault.git('add', '-A')
         vault.git(*AUTHOR, 'commit', '-q', '-m', 'Station.aDNA: the shared vault of the Deep Space 9 wormhole bridge')
-        vault.git('push', '-q', vault.remote, f'HEAD:{branch}')
+        vault.git('push', '-q', vault.remote, f'HEAD:{branch}', env=bridge_env())
         vault.git('branch', '-q', f'--set-upstream-to={vault.remote}/{branch}')
         return vault
 
@@ -207,8 +225,10 @@ class Vault:
     def recover(self):
         """Finish what a crash interrupted in add_outbound, which writes the file, stages it, then commits it.
         New memos left untracked or staged (valid names, plain files, directly in the outbound folder) are
-        committed together as one commit; their names are returned. Anything else staged is unstaged so it cannot
-        block the rebase in sync(); anything else uncommitted is left alone."""
+        committed together as one commit; their names are returned. A file that is empty or does not start with
+        `---` front matter (a crash between creating it and writing it) is not a memo yet: it stays on disk,
+        uncommitted. Anything else staged is unstaged so it cannot block the rebase in sync(); anything else
+        uncommitted is left alone."""
         root = self.folder(OUTBOUND)
         staged = self.listing('diff', '--cached', '--name-status', '--no-renames', '-z')
         staged = dict(zip(staged[1::2], staged[0::2]))  # path -> status letter
@@ -219,19 +239,26 @@ class Vault:
             folder, _, name = path.rpartition('/')
             try:
                 plain = (root is not None and folder == OUTBOUND and MEMO_NAME.fullmatch(name)
-                         and stat.S_ISREG(os.lstat(root / name).st_mode))
+                         and self.begins_memo(root / name))
             except (OSError, ValueError):
                 plain = False
             if plain:
                 found[path] = name
         unwanted = [path for path in staged if path not in found]
         if unwanted:
-            self.git('reset', '-q', '--', *unwanted)
+            self.git('--literal-pathspecs', 'reset', '-q', '--', *unwanted)  # a file named `:(top)x` is no pathspec
         if not found:
             return []
         self.git('add', '--', *found)
         self.git(*AUTHOR, 'commit', '-q', '-m', 'wormhole: recover interrupted memos', '--', *found)
         return sorted(found.values())
+
+    @staticmethod
+    def begins_memo(path):
+        """True when `path` is a plain file (never a symlink or device) that starts with `---`, a memo's front matter."""
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            return stat.S_ISREG(os.fstat(stream.fileno()).st_mode) and stream.read(3) == b'---'
 
     def tracked(self, folder, name):
         """True when HEAD holds a plain file `name` directly in `folder`, i.e. it is committed (a memo that is
@@ -244,7 +271,7 @@ class Vault:
     def publish(self):
         ahead = self.git('rev-list', '--count', f'{self.remote}/{self.branch}..HEAD', check=False)
         if ahead.returncode or ahead.stdout.strip() != '0':
-            self.git('push', '-q', self.remote, f'HEAD:{self.branch}')
+            self.git('push', '-q', self.remote, f'HEAD:{self.branch}', env=bridge_env())
 
     def outbound_fd(self):
         """The outbound folder as a directory descriptor, creating missing folders. Every step opens a real

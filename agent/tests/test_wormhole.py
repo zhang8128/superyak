@@ -339,3 +339,16 @@ def test_a_memo_that_is_only_on_disk_is_never_adopted_as_sent(bridge, monkeypatc
     assert published_memos(tmp_path) == ['coord_2026_10_04_station_to_venus_status_2.md']  # a committed memo of its own
     assert bodies(fake, gamma)[-1] == 'Sent to Venus (Network.aDNA) as `coord_2026_10_04_station_to_venus_status_2.md`.'
     assert message['id'] in memos.parse_memo((lattice(tmp_path) / OUTBOUND / published_memos(tmp_path)[0]).read_text())[0]['station_message']
+
+
+def test_a_blank_memo_file_left_by_a_crash_is_never_published_and_the_mention_gets_a_fresh_memo(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    blank = vault.clone / OUTBOUND / 'coord_2026_10_04_station_to_venus_status.md'
+    blank.write_text('')  # the file was created, then power went before anything was written to it
+    fake.say(gamma, andy, '@venus status?')
+    assert w.cycle() == 1
+    assert published_memos(tmp_path) == ['coord_2026_10_04_station_to_venus_status_2.md']
+    assert blank.read_text() == '' and not vault.tracked(OUTBOUND, blank.name)
+    assert bodies(fake, gamma)[-1] == 'Sent to Venus (Network.aDNA) as `coord_2026_10_04_station_to_venus_status_2.md`.'
