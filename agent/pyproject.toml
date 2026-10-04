@@ -24,6 +24,7 @@ only-include = [
     "superyak_agent/mcp.py",
     "superyak_agent/runs.py",
     "superyak_agent/station.py",
+    "superyak_agent/watch.py",
 ]
 
 [tool.pytest.ini_options]
