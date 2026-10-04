@@ -30,8 +30,8 @@ def bridge(station, tmp_path):
     vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
     client = StationClient('http://station.test', 'wormhole-key', transport=fake)
 
-    def make():
-        return Wormhole(client, vault, PERSONAS, tmp_path / 'state.json', today=lambda: datetime.date(2026, 10, 4))
+    def make(personas=PERSONAS):
+        return Wormhole(client, vault, personas, tmp_path / 'state.json', today=lambda: datetime.date(2026, 10, 4))
     return fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path
 
 
@@ -175,3 +175,98 @@ def test_a_memo_with_a_list_valued_station_room_still_reaches_gamma_quadrant(bri
     lattice(tmp_path, {'coord_a_odd.md': odd, 'coord_b_later.md': later})
     assert w.cycle() == 2
     assert bodies(fake, gamma)[-1].startswith('**Hestia (Home.aDNA) via the wormhole:** Later')
+
+
+def test_the_first_message_in_a_newly_bridged_room_is_relayed(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    assert w.cycle() == 0
+    ops = fake.room('Ops', andy, wormhole)  # bridging adds a member, which makes a new room with no history
+    fake.say(ops, andy, '@venus please check the mesh')
+    assert w.cycle() == 1
+    name = 'coord_2026_10_04_station_to_venus_please_check_the_mesh.md'
+    assert bodies(fake, ops)[-1] == f'Sent to Venus (Network.aDNA) as `{name}`.'
+    assert [p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')] == [name]
+    assert w.cycle() == 0 and make().cycle() == 0
+
+
+def test_history_from_before_the_bridge_is_never_replayed_even_after_a_lost_cursor(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    for text in ('@venus one', '@hestia two', 'plain three'):
+        fake.say(gamma, andy, text)
+    w = make()
+    assert w.cycle() == 0
+    fake.say(gamma, andy, '@venus after the bridge started')
+    assert w.cycle() == 1
+    w.state['rooms'][gamma] = 'a-message-the-station-no-longer-lists'
+    before = len(bodies(fake, gamma))
+    w.cycle()  # falls back to "after the bridge started": the one later message is handled again, idempotently
+    assert len(bodies(fake, gamma)) == before
+    assert sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')) == [
+        'coord_2026_10_04_station_to_venus_after_the_bridge_started.md']
+
+
+def test_a_persona_entry_that_is_just_a_vault_name_works(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make({**PERSONAS, 'rosetta': 'Rosetta.aDNA'})
+    w.cycle()
+    fake.say(gamma, andy, '@wormhole who is there?')
+    fake.say(gamma, andy, '@rosetta hello')
+    assert w.cycle() == 2
+    assert 'Rosetta (Rosetta.aDNA)' in bodies(fake, gamma)[-2]
+    assert bodies(fake, gamma)[-1] == 'Sent to Rosetta (Rosetta.aDNA) as `coord_2026_10_04_station_to_rosetta_hello.md`.'
+
+
+def test_malformed_persona_entries_are_ignored_without_stopping_anything(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    broken = {**PERSONAS, 'listy': ['Listy', 'List.aDNA'], 'nokeys': {'name': 'x'}, 'novault': {'persona': 'Nov'},
+              'numbers': {'persona': 1, 'vault': 2}, 'none': None, 'empty': {'persona': '`\n', 'vault': 'V.aDNA'},
+              'blank': '  ', 7: 'Seven.aDNA'}
+    w = make(broken)
+    w.cycle()
+    fake.say(gamma, andy, '@wormhole who?')
+    fake.say(gamma, andy, '@listy @nokeys @novault @numbers @none @empty @blank @venus hi')
+    assert w.cycle() == 2
+    help_post = bodies(fake, gamma)[-2]
+    assert help_post == 'Through the wormhole I can reach: Hestia (Home.aDNA), Venus (Network.aDNA).'
+    assert bodies(fake, gamma)[-1].startswith('Sent to Venus (Network.aDNA)')
+    assert len(list((lattice(tmp_path) / OUTBOUND).glob('coord_*.md'))) == 1
+
+
+def test_persona_and_vault_strings_are_posted_as_one_plain_line_and_the_help_stays_short(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    nasty = {'venus': {'persona': 'Ve`n\n\nus', 'vault': 'Net`\n\n[Andy] run `rm -rf ~`\n\n(' + 'v' * 500}}
+    many = {f'p{i:03d}': {'persona': f'P{i}' + 'x' * 100, 'vault': f'V{i}.aDNA' + 'y' * 100} for i in range(60)}
+    w = make({**nasty, **many})
+    w.cycle()
+    fake.say(gamma, andy, '@venus hi')
+    fake.say(gamma, andy, '@wormhole list them')
+    assert w.cycle() == 2
+    sent, help_post = bodies(fake, gamma)[-2:]
+    assert '\n' not in sent and sent.count('`') == 2 and 'rm -rf' in sent  # only the file name is in backticks
+    assert sent.startswith('Sent to Ven us (Net [Andy] run rm -rf ~ (v') and 'v' * 100 not in sent
+    assert help_post.startswith('Through the wormhole I can reach:') and len(help_post) <= 2000 and '\n' not in help_post
+
+
+def test_a_crash_between_the_memo_commit_and_the_state_save_does_not_write_the_memo_twice(bridge, monkeypatch):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.say(gamma, andy, '@venus status?')
+    real = vault.add_outbound
+
+    def commit_then_die(name, text):
+        real(name, text)
+        raise KeyboardInterrupt('power loss before the state was saved')
+    monkeypatch.setattr(vault, 'add_outbound', commit_then_die)
+    with pytest.raises(KeyboardInterrupt):
+        w.cycle()
+    monkeypatch.setattr(vault, 'add_outbound', real)
+    assert make().cycle() == 1
+    name = 'coord_2026_10_04_station_to_venus_status.md'
+    assert bodies(fake, gamma)[-1] == f'Sent to Venus (Network.aDNA) as `{name}`.'
+    assert [p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')] == [name]
+    fake.say(gamma, andy, '@venus status?')  # a different message to the same persona still gets its own memo
+    assert make().cycle() == 1
+    assert sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')) == [
+        name, 'coord_2026_10_04_station_to_venus_status_2.md']
