@@ -42,7 +42,7 @@ class FakeStation:
     def view(self, room):
         last = max([m['created'] for m in room['messages']], default=0.0)
         return {'id': room['id'], 'title': room['title'], 'member_ids': room['member_ids'], 'last_activity': last,
-                'members': [self.users[i] for i in room['member_ids']], 'messages': [dict(m) for m in room['messages']]}
+                'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'messages': [dict(m) for m in room['messages']]}
 
     def __call__(self, method, url, headers, data):
         if self.down:

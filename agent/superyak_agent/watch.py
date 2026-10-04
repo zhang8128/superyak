@@ -62,7 +62,11 @@ class Watcher:
     def cycle(self):
         if self.me is None:
             self.me = self.client.me()
-        posted = self._announce()
+        try:
+            posted = self._announce()
+        except Exception as error:  # noqa: BLE001 - notices must never keep the ship from answering
+            log.warning('could not announce notices: %s', redact(str(error)))
+            posted = 0
         for mention in self.client.mentions(self.state['mention_seq']):
             done, sent = self._handle(mention)
             posted += sent
@@ -154,11 +158,20 @@ class Watcher:
         ops = next((r for r in self.client.rooms() if r.get('title') == NOTICE_ROOM), None) if notices else None
         if ops is None:
             return 0
+        posted = 0
         for notice in notices:
-            self.client.post(ops['id'], notice['text'], f'notice-{notice["id"]}')
+            try:
+                self.client.post(ops['id'], notice['text'], f'notice-{notice["id"]}')
+                posted += 1
+            except StationError as error:
+                if error.status not in (403, 404, 409):
+                    log.warning('could not announce notice %s, will retry: %s', notice['id'], error)
+                    continue
+                # Rejected for good (a changed text under a used id, a room that is gone): do not retry it every cycle.
+                log.warning('notice %s was rejected, not retrying: %s', notice['id'], error)
             self.state['announced'].append(notice['id'])
-        self.save()
-        return len(notices)
+            self.save()
+        return posted
 
     def _resident(self):
         posted = 0
@@ -172,7 +185,8 @@ class Watcher:
             members = room.get('members', [])
             people = [m for m in members if m['kind'] == 'person']
             ships = [m['id'] for m in members if m['kind'] == 'ship']
-            if len(people) == 1 and ships == [self.me['id']]:
+            # member_ids also counts remote members (paired peers) that `members` leaves out: exactly the person and Odo.
+            if len(people) == 1 and ships == [self.me['id']] and len(room.get('member_ids', [])) == 2:
                 done, sent = self._resident_reply(room, seen)
                 posted += sent
                 if not done:

@@ -164,3 +164,71 @@ def test_failed_post_keeps_the_reply_and_the_next_cycle_does_not_run_claude_agai
     assert json.loads((tmp_path / 'state.json').read_text())['replies'] == {}
     assert restarted.cycle() == 0 and len(runner.calls) == 1
 
+
+
+def notices_command(*notices):
+    return [sys.executable, '-c', f'import json; print(json.dumps({list(notices)!r}))']
+
+
+def test_a_failing_notices_command_does_not_silence_mentions(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    asked = fake.say(room, andy, '@serenity status?')
+    runner = FakeRunner()
+    broken = [sys.executable, '-c', 'import sys; sys.exit(3)']
+    w = watcher(fake, ship_config, tmp_path, runner, notices_command=broken)
+    assert w.cycle() == 1
+    assert [(mode, mid) for mode, mid, _ in runner.calls] == [('build', asked['id'])]
+    assert bodies(fake, room)[-1].startswith('Added notes') and fake.rooms[room]['messages'][-1]['client_message_id'] == f'reply-{asked["id"]}'
+    assert w.cycle() == 0 and len(runner.calls) == 1
+
+
+def test_a_rejected_notice_is_marked_announced_and_the_others_still_post(station, tmp_path):
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    ops = fake.room('Ops', andy, odo)
+    fake.say(ops, odo, 'Jenn is asking to come aboard.', 'notice-access-1')   # posted before a restart lost the save
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    command = notices_command({'id': 'access-1', 'text': 'Jenn is asking to come aboard. (updated)'}, {'id': 'access-2', 'text': 'Serenity is asking to dock.'})
+    w = watcher(fake, config, tmp_path, FakeRunner(), key='odo-key', notices_command=command)
+    attempts = []
+    real_post = w.client.post
+    w.client.post = lambda room_id, body, cid: (attempts.append(cid), real_post(room_id, body, cid))[1]
+    assert w.cycle() == 1
+    assert bodies(fake, ops) == ['Jenn is asking to come aboard.', 'Serenity is asking to dock.']
+    assert json.loads((tmp_path / 'state.json').read_text())['announced'] == ['access-1', 'access-2']
+    assert w.cycle() == 0 and attempts == ['notice-access-1', 'notice-access-2']
+
+
+def test_a_notice_post_failing_for_another_reason_is_retried_without_stopping_the_rest(station, tmp_path):
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    ops = fake.room('Ops', andy, odo)
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    command = notices_command({'id': 'a', 'text': 'first'}, {'id': 'b', 'text': 'second'})
+    w = watcher(fake, config, tmp_path, FakeRunner(), key='odo-key', notices_command=command)
+    real_post, failed = w.client.post, []
+
+    def flaky(room_id, body, cid):
+        if cid == 'notice-a' and not failed:
+            failed.append(1)
+            raise StationError(500, 'boom')
+        return real_post(room_id, body, cid)
+    w.client.post = flaky
+    assert w.cycle() == 1 and bodies(fake, ops) == ['second']
+    assert w.cycle() == 1 and bodies(fake, ops) == ['second', 'first']
+    assert w.cycle() == 0
+
+
+def test_resident_stays_silent_when_a_remote_member_shares_the_room(station, tmp_path):
+    fake, andy, jenn, serenity = station
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    shared = fake.room('Ask Odo', andy, odo)
+    fake.rooms[shared]['member_ids'].append('remote-user-1')   # a paired peer's member: in member_ids, not in members
+    fake.say(shared, andy, 'where is the door?')
+    config = {'station': 'http://station.test', 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': 'odo-key', 'workspace': str(tmp_path)}
+    runner = FakeRunner()
+    w = watcher(fake, config, tmp_path, runner, key='odo-key', resident=True)
+    assert w.cycle() == 0 and runner.calls == []
+    assert bodies(fake, shared) == ['where is the door?']
+    assert w.cycle() == 0 and runner.calls == []
