@@ -20,6 +20,14 @@ CREATE TABLE IF NOT EXISTS mentions(seq INTEGER PRIMARY KEY AUTOINCREMENT, messa
 '''
 
 
+def safe_line(value, limit=80):
+    """Text from outside the station (an anonymous access-request name, a person's display name, a docking
+    machine) as one short display line. Odo posts station notices in Ops, and a posted '@serenity' would start
+    a run on that ship's machine, so no '@' survives; control characters and newlines cannot start a new line."""
+    value = ''.join(c if c.isprintable() else ' ' for c in str(value))
+    return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
+
+
 class Ships:
     def _new_ship(self, db, username, name, owner_id):
         # Ships never sign in: the random password is discarded and login rejects kind='ship'.
@@ -196,14 +204,15 @@ class Ships:
             return {'id': ship_id, 'active_keys': 0}
 
     def station_notices(self):
-        """Trusted local workers only (Odo): what to announce in Ops. No HTTP route exposes this."""
+        """Trusted local workers only (Odo): what to announce in Ops. No HTTP route exposes this.
+        Every interpolated value goes through safe_line: the text is posted in a room, where it must not mention anyone."""
         with self.transaction() as db:
             now = self.clock()
-            notices = [{'id': f'access-{r["id"]}', 'text': f'{r["name"]} is asking to come aboard. Approve or deny under Connections → Access requests.'}
+            notices = [{'id': f'access-{r["id"]}', 'text': f'{safe_line(r["name"])} is asking to come aboard. Approve or deny under Connections → Access requests.'}
                        for r in db.execute("SELECT id,name FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
-            notices += [{'id': f'share-{r["id"]}', 'text': f'No Tailscale share link is set, so {r["name"]} cannot reach the station yet. Share the Pi with them by hand, or run make station-share-link on the Pi.'}
+            notices += [{'id': f'share-{r["id"]}', 'text': f'No Tailscale share link is set, so {safe_line(r["name"])} cannot reach the station yet. Share the Pi with them by hand, or run make station-share-link on the Pi.'}
                         for r in db.execute("SELECT id,name FROM access_requests WHERE share_status='missing' ORDER BY decided")]
-            notices += [{'id': f'docked-{r["id"]}', 'text': f'{r["ship"]} ({r["owner"]}) docked from {r["machine"]}. Room owners can add it to rooms.'}
+            notices += [{'id': f'docked-{r["id"]}', 'text': f'{safe_line(r["ship"])} ({safe_line(r["owner"])}) docked from {safe_line(r["machine"])}. Room owners can add it to rooms.'}
                         for r in db.execute("""SELECT dockings.id, ships.name AS ship, owners.name AS owner, dockings.machine FROM dockings
                             JOIN users AS ships ON ships.id=dockings.ship_id JOIN users AS owners ON owners.id=dockings.owner_id
                             WHERE dockings.status IN ('confirmed','collected') ORDER BY dockings.created""")]

@@ -162,3 +162,35 @@ def test_station_notices_list_requests_and_docked_ships(env, capsys):
     assert [n['id'].split('-')[0] for n in notices] == ['access', 'docked']
     assert notices[0]['text'] == 'Jenn is asking to come aboard. Approve or deny under Connections → Access requests.'
     assert notices[1]['text'] == 'Serenity (Patient) docked from serenity-host. Room owners can add it to rooms.'
+
+
+def test_station_notices_make_anonymous_and_remote_text_safe_one_line_display_text(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    clock[0] = time.time()
+    store.request_access('Jenn @odo\n@serenity\x00\x1b[31m   and\ttabs ' + 'x' * 150, 'jenn@example.org', '')
+    started = store.start_docking('serenity', 'mac @odo\r\n@serenity')
+    # The owner's display name is account text too (people choose it; a federated person's can be anything).
+    with store.transaction() as db:
+        db.execute("UPDATE users SET name='Pat @serenity\n@odo' WHERE id=?", (users[0]['id'],))
+    ship = store.confirm_docking(users[0]['id'], started['id'], started['code'])
+    with store.transaction() as db:
+        db.execute("UPDATE users SET name='Ser @enity\n@odo' WHERE id=?", (ship['id'],))
+    texts = [n['text'] for n in store.station_notices()]
+    assert len(texts) == 2
+    for notice in texts:
+        assert '@' not in notice and '\n' not in notice and '\x1b' not in notice and '\x00' not in notice and '\r' not in notice
+    assert texts[0].startswith('Jenn (at)odo (at)serenity [31m and tabs xxx')
+    assert len(texts[0].split(' is asking to come aboard.')[0]) <= 80
+    assert texts[1] == 'Ser (at)enity (at)odo (Pat (at)serenity (at)odo) docked from mac (at)odo (at)serenity. Room owners can add it to rooms.'
+
+
+def test_station_notice_for_a_missing_share_link_is_safe_too(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    clock[0] = time.time()
+    request = store.request_access('Jenn @odo', 'jenn@example.org', '')
+    with store.transaction() as db:
+        db.execute("UPDATE access_requests SET share_status='missing',decided=? WHERE id=?", (clock[0], request['id']))
+    assert [n['text'] for n in store.station_notices() if n['id'].startswith('share-')] == [
+        'No Tailscale share link is set, so Jenn (at)odo cannot reach the station yet. Share the Pi with them by hand, or run make station-share-link on the Pi.']
