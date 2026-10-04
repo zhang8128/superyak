@@ -38,6 +38,25 @@ def build_parser():
     run_mcp.add_argument('--adna-dist', type=Path)
     for name in ('status', 'undock'):
         commands.add_parser(name).add_argument('--config', type=Path, default=CONFIG)
+    worm = commands.add_parser('wormhole', help='Relay bridged rooms and the Station.aDNA vault (runs as a service)')
+    worm.add_argument('--config', type=Path, required=True)
+    worm.add_argument('--state', type=Path, required=True)
+    worm.add_argument('--vault', type=Path, required=True, help='The bridge clone of Station.aDNA')
+    worm.add_argument('--personas', type=Path, required=True)
+    worm.add_argument('--once', action='store_true')
+    init = commands.add_parser('wormhole-init', help='Create the Station.aDNA bare repository and the bridge clone')
+    init.add_argument('--bare', type=Path, required=True)
+    init.add_argument('--clone', type=Path, required=True)
+    init.add_argument('--template', type=Path)
+    personas = commands.add_parser('wormhole-personas', help='Write the persona map from the public aDNA registry')
+    personas.add_argument('--out', type=Path, required=True)
+    personas.add_argument('--registry', default=None)
+    vg = commands.add_parser('vault-git', help='Forced command for the sync key (fetch/push one repository only)')
+    vg.add_argument('--repo', type=Path, required=True)
+    key = commands.add_parser('wormhole-key', help="Authorize Stanley's sync key for the station vault only")
+    key.add_argument('--key', required=True)
+    key.add_argument('--repo', type=Path, required=True)
+    key.add_argument('--authorized-keys', type=Path, default=Path.home() / '.ssh' / 'authorized_keys')
     return parser
 
 
@@ -104,5 +123,48 @@ def main(argv=None):
     if args.command == 'undock':
         from .install import uninstall_all
         uninstall_all(args.config)
+        return 0
+    if args.command == 'wormhole':
+        import logging
+        import time
+        from .memos import load_personas
+        from .station import client_for, load_config
+        from .vault import Vault
+        from .wormhole import POLL_SECONDS, Wormhole
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+        bridge = Wormhole(client_for(load_config(args.config)), Vault(args.vault), load_personas(args.personas), args.state)
+        while True:
+            try:
+                posted = bridge.cycle()
+                if posted:
+                    logging.info('posted %d message(s)', posted)
+            except Exception:  # noqa: BLE001 - keep the service alive
+                logging.exception('cycle failed')
+                bridge.me = None
+            if args.once:
+                return 0
+            time.sleep(POLL_SECONDS)
+    if args.command == 'wormhole-init':
+        from .vault import Vault
+        Vault.create(args.bare, args.clone, template=args.template)
+        print(f'Station.aDNA created: {args.bare} (bridge clone {args.clone})')
+        return 0
+    if args.command == 'wormhole-personas':
+        from .memos import REGISTRY, fetch_registry, personas_from_registry
+        from .station import write_private
+        found = personas_from_registry(fetch_registry(args.registry or REGISTRY))
+        write_private(args.out, found)
+        print(f'{len(found)} personas written to {args.out}. Add your own in {args.out.with_name("personas.local.json")}.')
+        return 0
+    if args.command == 'vault-git':
+        from .vault_git import serve
+        return serve(args.repo)
+    if args.command == 'wormhole-key':
+        import sys
+        from .vault_git import install_key
+        run_agent = Path(__file__).resolve().parents[1] / 'run_agent.py'
+        added = install_key(args.key, args.repo, sys.executable, run_agent, args.authorized_keys)
+        print('Key authorized: it can only fetch and push the station vault.' if added else
+              'That key is already in authorized_keys; nothing changed. If it is an unrestricted key, ask for a dedicated one.')
         return 0
     parser.error(f'unknown command {args.command}')
