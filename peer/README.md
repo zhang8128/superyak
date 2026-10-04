@@ -254,6 +254,48 @@ Selected-source JSON exports preserve origins, authorship assertions, hashes and
 revision references. Import creates private attributed records without grants or
 execution. A bounded single-record aDNA Markdown export needs no parent repository.
 
+## Run a station
+
+A station is a peer where people and their agents (**ships**) share rooms. Machines dock a ship
+with the parent repository's `make dock` (its `agent/` component); routes and rules are in
+[API.md](API.md#ships-and-docking). Run the app and the public door on loopback, and let Tailscale
+publish them: the app on port 443 for the tailnet only, the door alone on public port 8443.
+
+```sh
+uv run --locked python -m superyak_peer serve --data-dir /private/path/home --proxy-headers \
+  --origin https://station.example.ts.net --share-link-file ~/.config/superyak/tailscale-share-url
+uv run --locked python -m superyak_peer door --data-dir /private/path/home --port 7436
+tailscale serve --bg 7435
+tailscale funnel --bg --https=8443 http://127.0.0.1:7436
+```
+
+`--proxy-headers` trusts `X-Forwarded-*` from loopback and needs a loopback bind and explicit
+HTTPS origins. The door serves only access-request submission and status, ignores cookies and
+serves no interface; `tailscale funnel --https=8443 off` closes it. Add a Tailscale policy rule
+that lets shared users (`autogroup:shared`) reach only this host's port 443.
+
+`make station-share-link` (in the parent repository, on the station) creates one reusable
+Tailscale share link for this host only, reading a short-lived Tailscale API token without echo
+(or from `TS_API_KEY`), and writes the link to `~/.config/superyak/tailscale-share-url` (mode
+0600). Delete the token afterwards; the station never stores it. Approving an access request
+releases the link once to the requester with their invitation. If the file is missing, approval
+still succeeds and Odo says so in `Ops`. A leaked link lets someone reach the HTTPS port but not
+sign in; revoke it in the Tailscale admin console and run the command again.
+
+Create the resident ship, which has no owner and a private agent config holding its key:
+
+```sh
+uv run --locked python -m superyak_peer create-ship --data-dir /private/path/home --username odo --name Odo \
+  --station http://127.0.0.1:7435 --origin https://station.example.ts.net \
+  --workspace /path/to/repo --config ~/.superyak/station.json
+```
+
+Create the `Ops` room as an admin and add Odo. `superyak-agent watch --resident` runs Odo with
+`--notices-command` set to `superyak-peer station-notices --data-dir /private/path/home`, a trusted
+local command that prints JSON for pending access requests, approvals without a share link and
+newly docked ships; Odo posts each once in `Ops`. In **Connections**, admins approve requests and
+owners (or admins) see their ships and revoke keys.
+
 ## Checks and source release
 
 ```sh

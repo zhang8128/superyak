@@ -256,7 +256,7 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | Method/path | Request | Response |
 |---|---|---|
 | GET/POST `/api/chats` | POST `{title,member_ids:[]}` | Accessible summaries / created room, 201 |
-| GET `/api/chats/{id}` | — | Room plus `messages` |
+| GET `/api/chats/{id}` | — | Room plus `messages` and `members` |
 | POST `/api/chats/{id}/messages` | `{client_message_id,body}` | Message, 201 |
 | POST `/api/chats/{id}/participants` | `{member_ids:[]}` | New linked room, 201; owner only |
 | DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
@@ -598,3 +598,71 @@ A same-role request with the current version is a no-op. Role checks read curren
 account state inside the transaction, so cached session claims cannot retain
 revoked rights. Role delegation is local to this peer and changes no content,
 space membership, or remote-peer grants.
+
+## Ships and docking
+
+A ship is an agent account (`kind: "ship"`) owned by the person who docked it; the station's
+resident `odo` has `owner_id: null`. Names match `[a-z][a-z0-9-]{1,31}`, and the display name is
+the ship name title-cased with dashes as spaces (`rio-grande` → `Rio Grande`). Ships have no usable
+password, cannot sign in through `/api/login`, never hold roles, and appear in rooms as members
+like anyone else. User objects carry `kind` (`person` or `ship`) and `owner_id`.
+
+**Bearer keys.** A key is `secrets.token_urlsafe(32)`, stored only as its SHA-256 and returned
+exactly once. Requests send `Authorization: Bearer <key>`, skip cookies and CSRF, and still send
+the station's `Origin` for writes. A key reaches exactly these routes; every other route returns
+403 for a bearer key. Ships cannot create rooms or add members.
+
+| Method/path | Behavior |
+|---|---|
+| GET `/api/me` | The ship's own account (`owner_id` names its owner) |
+| GET `/api/chats` | Rooms the ship is in |
+| GET `/api/chats/{id}` | Room history plus `members` |
+| POST `/api/chats/{id}/messages` | Post, idempotent by `client_message_id`; at most 30 a minute per ship (429) |
+| GET `/api/mentions?after=&limit=` | Mentions of this ship, oldest first |
+| DELETE `/api/ships/me/key` | Revoke the presented key (`undock`) |
+
+`GET /api/chats/{id}` also returns `members`: `{id,username,name,kind,owner_id}` for each local
+member, so clients can name authors and show the ship banner.
+
+**Mentions.** Sending a message records each `@username` token that matches a member of that room
+(case-insensitive, trailing punctuation ignored, so `Hey @Serenity,` counts); unknown names stay
+ordinary text. `GET /api/mentions` returns up to 100 items of
+`{seq,message_id,room_id,body,created,author:{id,username,name,kind,owner_id}}` ordered by `seq`;
+pass the last `seq` seen as `after`. Authors are verified by the station, so a client may trust
+`author.id` and `author.owner_id`.
+
+**Docking.** The script starts a docking, a signed-in person confirms it in the browser, and the key
+goes only to the script.
+
+| Method/path | Who | Behavior |
+|---|---|---|
+| POST `/api/dockings` | Any client | `{ship_name,machine}` → `{id,code,secret,expires,confirm_url}`. The 8-character code (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) is single-use and lasts 600 s; 20 dockings an hour station-wide (429) |
+| GET `/api/dockings/code/{code}` | Signed-in person | `{id,ship_name,machine,expires,redock}` for the web app's `/#dock?code=` confirm view |
+| POST `/api/dockings/{id}/confirm` | Signed-in person, CSRF | `{code}`; creates the ship owned by that person, or re-keys their existing ship of that name (earlier keys are revoked). 409 if the name is taken |
+| GET `/api/dockings/{id}?secret=` | Docking script | `{status}` (`waiting`, `confirmed`, `collected`, `expired`); once confirmed it adds `key` and `ship` exactly once. A key not collected within 3,600 s is revoked |
+
+**Ships list.** `GET /api/ships` (a signed-in person) returns the ships they own, or every ship for
+an admin, each with `owner_name`, `machine`, `last_used` and `active_keys`.
+`POST /api/ships/{id}/revoke` (the owner or an admin, CSRF) revokes every key of that ship and returns
+`{id,active_keys:0}`. The peer has no account removal; an admin revokes a person's ships here, and any
+future removal must also revoke their keys. The web app shows both under **Connections → Ships**.
+
+**Ship banner.** A room with a ship member shows "Ships in this room send its text to Claude." and
+lists the ships aboard. Keep patient and participant details out of such rooms.
+
+**Station notices.** `superyak-peer station-notices --data-dir DIR` is a trusted local command with
+no HTTP route. It prints JSON `[{id,text}]` for pending access requests, approvals that found no
+share link, and newly docked ships; Odo announces them in `Ops`.
+
+**Public door.** `superyak-peer door --data-dir DIR --port 7436` is a separate loopback process on
+the same store, published with `tailscale funnel --bg --https=8443 http://127.0.0.1:7436`. It serves
+only `POST /api/access-requests` and `GET /api/access-requests/{id}?secret=`, drops cookies and
+`Authorization` headers, caps bodies at 16 KiB, and answers 404 elsewhere. Request limits are
+unchanged (20 an hour, 50 pending, seven-day expiry).
+
+**Share link on approval.** `serve --share-link-file PATH` names a reusable Tailscale share link for
+this host only (`make station-share-link` writes it, mode 0600; it must start with
+`https://login.tailscale.com/`). Approving an access request copies the link onto the request. The
+requester's `GET /api/access-requests/{id}?secret=` then returns `share` (`ready`, `missing` or
+`collected`) and, once, `share_url` beside the one-time invitation `token`. With no usable file,
+approval still succeeds and `share` is `missing`; Odo posts a notice in `Ops` so the host can share by hand.

@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import sys
+import time
 from urllib.parse import parse_qs
 import pytest
 from fastapi.testclient import TestClient
@@ -95,3 +96,56 @@ def test_expired_code_restarts_and_a_revoked_key_docks_again(docking):
     ship_id = json.loads((home / 'station.json').read_text())['ship_id']
     clients[0].post(f'/api/ships/{ship_id}/revoke', json={})
     assert dock.step() == 'waiting-for-confirm' and not (home / 'station.json').exists()
+
+
+def docked_ship(store, owner_id, name='serenity'):
+    started = store.start_docking(name, 'test-host')
+    ship = store.confirm_docking(owner_id, started['id'], started['code'])
+    return ship, store.docking_status(started['id'], started['secret'])['key']
+
+
+def test_watcher_answers_owner_as_builder_and_others_read_only_through_the_real_station(env, tmp_path):
+    from superyak_agent.runs import RunResult
+    from superyak_agent.station import StationClient
+    from superyak_agent.watch import Watcher
+    app, clients, users, clock = env
+    ship, key = docked_ship(app.state.store, users[0]['id'])
+    room = clients[0].post('/api/chats', json={'title': 'Ops', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    clients[0].post(f'/api/chats/{room}/messages', json={'client_message_id': 'a', 'body': '@serenity add a NOTES file'})
+    clock[0] += 1  # the fake clock is frozen and message ids are random, so tick it to keep message order deterministic
+    clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'b', 'body': 'Hey @Serenity, what does this repo do?'})
+    calls = []
+
+    class Runner:
+        def run(self, mode, prompt, message_id):
+            calls.append(mode)
+            clock[0] += 1
+            return RunResult(f'{mode} reply')
+    config = {'station': 'http://testserver', 'origin': None, 'ship': 'serenity', 'ship_id': ship['id'], 'ship_name': 'Serenity',
+              'owner_id': users[0]['id'], 'key': key, 'workspace': str(tmp_path), 'machine': 'test-host'}
+    watcher = Watcher(StationClient('http://testserver', key, transport=transport_for(app)), config, tmp_path / 'state.json', Runner())
+    assert watcher.cycle() == 2 and calls == ['build', 'read']
+    assert [m['body'] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']
+    assert watcher.cycle() == 0
+
+
+def test_odo_announces_station_notices_in_ops(env, tmp_path):
+    from superyak_agent.station import StationClient
+    from superyak_agent.watch import Watcher
+    app, clients, users, clock = env
+    store = app.state.store
+    odo = store.create_station_ship('odo', 'Odo')
+    key = store.issue_ship_key(odo['id'])
+    ops = clients[2].post('/api/chats', json={'title': 'Ops', 'member_ids': [odo['id']]}).json()['id']
+    clock[0] = time.time()  # the notices CLI reads the real clock, so the request must still be pending by it
+    TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver'}).post(
+        '/api/access-requests', json={'name': 'Jenn', 'contact': 'jenn@example.org', 'note': ''})
+    notices = [sys.executable, '-m', 'superyak_peer', 'station-notices', '--data-dir', str(store.data_dir)]
+    config = {'station': 'http://testserver', 'origin': None, 'ship': 'odo', 'ship_name': 'Odo', 'owner_id': None, 'key': key, 'workspace': str(tmp_path)}
+    watcher = Watcher(StationClient('http://testserver', key, transport=transport_for(app)), config, tmp_path / 'odo.json', None,
+                      notices_command=notices, resident=True)
+    assert watcher.cycle() == 1
+    organizer = TestClient(app, base_url='http://testserver')  # the old session expired when the clock moved to real time
+    organizer.post('/api/login', json={'username': 'organizer', 'password': 'long-password-organizer'}, headers={'origin': 'http://testserver'})
+    assert organizer.get(f'/api/chats/{ops}').json()['messages'][-1]['body'].startswith('Jenn is asking to come aboard')
+    assert watcher.cycle() == 0

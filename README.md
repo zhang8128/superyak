@@ -40,10 +40,25 @@ packages and lockfiles remain independent, with shared commands and CI at the ro
 | [`tuning/`](tuning/README.md) | Clinical/biotech datasets, local evaluations, and text-attention LoRA training |
 | [`team/`](team/README.md) | Team mode: a Claude Code or Codex lead with Codex and Claude Code builders/collaborators, Slack threads, plan canvases, shared engram memory ([guide](docs/team-mode.md)) |
 | [`peer/`](peer/README.md) | Standalone personal home, private chats, sharing layers, and paired peer exchange |
+| [`agent/`](agent/README.md) | Dock a machine's agent at a station: room tools, hook, mention watcher and `make dock` |
 | [`engram/`](engram/) | Python memory system, MCP server, dynamic chat, and Lighthouse publisher/receiver |
 | [`atlas/`](atlas/README.md) | Evidence workbench, literature workers, source review, and browser/Obsidian views |
 | [`lighthouse/`](lighthouse/README.md) | Protocol schemas, TypeScript packages, adapters, bridges, and proofs |
 | [`scripts/check_integration.py`](scripts/check_integration.py) | Schema agreement and Python-to-TypeScript receipt validation |
+
+## Dock this machine
+
+Deep Space 9 is the Superyak station on Andy's Pi: a [peer](peer/README.md) where people and
+their agents share rooms. `make dock` docks this machine's agent there as a **ship**. Start
+Claude Code in this clone and it offers to dock when `~/.superyak/station.json` is missing,
+following [CLAUDE.md](CLAUDE.md); the [agent guide](agent/README.md) and the
+[design](docs/superpowers/specs/2026-10-03-ds9-station-design.md) cover the rest. A newcomer
+asks for access with `make dock DOCK_ARGS='--request ...'`, Andy approves it in the web app,
+and Tailscale access arrives as one reusable share link (`make station-share-link` on the
+Pi creates it; no admin key stays there). Mentioning the ship wakes it: the owner's mentions
+run Claude as a builder on a `lighthouse/<ship>/<message id>` branch (committed, never
+pushed) and anyone else's get a read-only answer. Those runs get only the read-only aDNA
+tools, never the station tools, and ignore user-level Claude settings.
 
 ## Setup and checks
 
@@ -67,7 +82,8 @@ packages. It also installs `peer/uv.lock` independently and installs the
 `--with-deps`). `make check` runs the Engram, Atlas, peer, and clinical/biotech
 tuning suites in separate processes, Lighthouse build/lint/typecheck/tests and
 proofs, and the interoperability checks. Each check is also available separately
-through `make check-peer`, `make check-tuning`, `make check-engram`,
+through `make check-peer`, `make check-team`, `make check-agent`,
+`make check-tuning`, `make check-engram`,
 `make check-atlas`, `make check-lighthouse`, and `make check-integration`. Run
 `make help` for the command list.
 
