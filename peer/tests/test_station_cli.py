@@ -179,6 +179,44 @@ def test_unbridging_removes_wormhole_and_says_so_when_it_is_not_there(rooms, cap
     assert set(after['member_ids']) == {andy['id'], doctor['id']} and after['epoch'] > new['epoch']
 
 
+def bridged_twice(store, andy, gamma, capsys):
+    """Bridge Gamma, then add a member: the station makes another linked room, and the one it replaces keeps
+    its members, Wormhole included. Returns the bridged room and the room that replaced it."""
+    run(capsys, store, 'station-bridge', '--id', gamma['id'][:6], '--as', 'andy')
+    bridged = current_room(store, andy, gamma)
+    nurse = store.create_user('nurse', 'Nurse', 'long-password-nurse')
+    return bridged, store.add_participants(andy['id'], bridged['id'], [nurse['id']])
+
+
+def test_unbridging_also_takes_wormhole_out_of_the_earlier_rooms_it_replaced(rooms, capsys):
+    store, andy, doctor, wormhole, gamma = rooms
+    bridged, later = bridged_twice(store, andy, gamma, capsys)
+    assert {r['id'] for r in store.list_rooms(wormhole['id'])} == {bridged['id'], later['id']}
+    out = run(capsys, store, 'station-unbridge', '--id', later['id'][:6], '--as', 'andy')
+    assert 'Unbridged' in out and later['id'][:6] in out
+    assert store.list_rooms(wormhole['id']) == []  # no earlier room is left for the bridge to take as current
+    assert set(store.get_room(andy['id'], bridged['id'])['member_ids']) == {andy['id'], doctor['id']}
+
+
+def test_unbridging_cleans_earlier_rooms_even_when_wormhole_already_left_the_current_one(rooms, capsys):
+    store, andy, doctor, wormhole, gamma = rooms
+    bridged, later = bridged_twice(store, andy, gamma, capsys)
+    store.remove_participant(andy['id'], later['id'], wormhole['id'])  # removed in the browser, not by station-unbridge
+    assert [r['id'] for r in store.list_rooms(wormhole['id'])] == [bridged['id']]  # the bridge would take it as current
+    assert 'Unbridged' in run(capsys, store, 'station-unbridge', '--id', later['id'][:6], '--as', 'andy')
+    assert store.list_rooms(wormhole['id']) == []
+    assert 'is not bridged' in run(capsys, store, 'station-unbridge', '--id', later['id'][:6], '--as', 'andy')
+
+
+def test_unbridging_leaves_an_earlier_room_someone_else_owns_alone(rooms, capsys):
+    store, andy, doctor, wormhole, gamma = rooms
+    bridged, later = bridged_twice(store, andy, gamma, capsys)
+    with store.transaction() as db:
+        db.execute('UPDATE rooms SET owner_id=? WHERE id=?', (doctor['id'], bridged['id']))
+    run(capsys, store, 'station-unbridge', '--id', later['id'][:6], '--as', 'andy')
+    assert [r['id'] for r in store.list_rooms(wormhole['id'])] == [bridged['id']]
+
+
 @pytest.mark.parametrize('who, prefix, message', [
     ('doctor', None, 'No room you own starts with'),
     ('andy', 'zzzzzz', 'No room you own starts with'),

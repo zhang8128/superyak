@@ -173,9 +173,24 @@ class Ships:
                 rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged})
             return rooms
 
+    def _earlier_bridged(self, db, actor, room, wormhole):
+        """Rooms earlier in this room's linked chain, owned by the same person, that still have the wormhole ship:
+        a replaced room keeps its members, so once the current room loses Wormhole the bridge would take it as current."""
+        found, seen, key = [], set(), room['linked_room_id']
+        while key and key not in seen:
+            seen.add(key)
+            row = db.execute('SELECT owner_id,linked_room_id FROM rooms WHERE id=?', (key,)).fetchone()
+            if row is None:
+                break
+            if row['owner_id'] == actor and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (key, wormhole)).fetchone():
+                found.append(key)
+            key = row['linked_room_id']
+        return found
+
     def station_bridge(self, username, prefix, bridge):
         """Trusted local operator only: add the wormhole ship to (or remove it from) a current room its owner
-        names by a short id, through the station's own rules: adding members makes a new linked room.
+        names by a short id, through the station's own rules: adding members makes a new linked room. Unbridging
+        also removes it from the earlier rooms that room replaced.
         Returns (room, changed); room is the new room after a bridge, the same room after an unbridge."""
         if not isinstance(prefix, str) or len(prefix.strip()) < 4:
             raise Problem(400, 'Give at least 4 characters of the short id')
@@ -191,11 +206,16 @@ class Ships:
             if len(matches) > 1:
                 raise Problem(409, f'{prefix} matches more than one room; give more characters')
             room = self._room(db, actor, matches[0])
-        if (wormhole in room['member_ids']) == bridge:
+            earlier = [] if bridge else self._earlier_bridged(db, actor, room, wormhole)
+        if (wormhole in room['member_ids']) == bridge and not earlier:
             return room, False
         if bridge:
             return self.add_participants(actor, room['id'], [wormhole]), True
-        return self.remove_participant(actor, room['id'], wormhole), True
+        for key in earlier:  # the earlier rooms first: if this stops halfway, the current room still shows bridged
+            self.remove_participant(actor, key, wormhole)
+        if wormhole in room['member_ids']:
+            room = self.remove_participant(actor, room['id'], wormhole)
+        return room, True
 
     def station_decide(self, username, prefix, approve):
         """Trusted local operator only: approve or refuse one pending item by a short id,
