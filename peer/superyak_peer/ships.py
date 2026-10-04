@@ -147,6 +147,56 @@ class Ships:
                 "SELECT id,name,contact,note,created,expires FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
             return dockings + requests
 
+    def _operator(self, db, username):
+        person = db.execute('SELECT id FROM users WHERE username=?', (username,)).fetchone()
+        if person is None:
+            raise Problem(404, f'No account named {username}')
+        self._person(db, person['id'])
+        return person['id']
+
+    def _current_rooms(self, db, actor):
+        return db.execute('SELECT id,title FROM rooms WHERE owner_id=? AND id NOT IN (SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL) ORDER BY title,id', (actor,)).fetchall()
+
+    def _wormhole_id(self, db):
+        ship = db.execute("SELECT id FROM users WHERE username='wormhole' AND kind='ship'").fetchone()
+        return ship['id'] if ship else None
+
+    def station_rooms(self, username):
+        """Trusted local operator only: the current rooms this person owns, with member usernames and whether
+        the wormhole ship is in them. A room replaced by a linked one (added members) is not current."""
+        with self.transaction() as db:
+            actor, wormhole = self._operator(db, username), self._wormhole_id(db)
+            rooms = []
+            for room in self._current_rooms(db, actor):
+                members = [r[0] for r in db.execute('SELECT users.username FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_id=? ORDER BY users.username', (room['id'],))]
+                bridged = wormhole is not None and db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (room['id'], wormhole)).fetchone() is not None
+                rooms.append({'id': room['id'], 'title': room['title'], 'members': members, 'bridged': bridged})
+            return rooms
+
+    def station_bridge(self, username, prefix, bridge):
+        """Trusted local operator only: add the wormhole ship to (or remove it from) a current room its owner
+        names by a short id, through the station's own rules: adding members makes a new linked room.
+        Returns (room, changed); room is the new room after a bridge, the same room after an unbridge."""
+        if not isinstance(prefix, str) or len(prefix.strip()) < 4:
+            raise Problem(400, 'Give at least 4 characters of the short id')
+        prefix = prefix.strip().lower()
+        with self.transaction() as db:
+            actor = self._operator(db, username)
+            wormhole = self._wormhole_id(db)
+            if wormhole is None:
+                raise Problem(404, 'There is no wormhole ship on the station; create it first (create-ship --username wormhole)')
+            matches = [r['id'] for r in self._current_rooms(db, actor) if r['id'].startswith(prefix)]
+            if not matches:
+                raise Problem(404, f'No room you own starts with {prefix}')
+            if len(matches) > 1:
+                raise Problem(409, f'{prefix} matches more than one room; give more characters')
+            room = self._room(db, actor, matches[0])
+        if (wormhole in room['member_ids']) == bridge:
+            return room, False
+        if bridge:
+            return self.add_participants(actor, room['id'], [wormhole]), True
+        return self.remove_participant(actor, room['id'], wormhole), True
+
     def station_decide(self, username, prefix, approve):
         """Trusted local operator only: approve or refuse one pending item by a short id,
         acting as the named person. Returns (item, result); never returns keys or tokens."""
@@ -160,11 +210,7 @@ class Ships:
             raise Problem(409, f'{prefix} matches more than one waiting item; give more characters')
         item = matches[0]
         with self.transaction() as db:
-            person = db.execute('SELECT id FROM users WHERE username=?', (username,)).fetchone()
-            if person is None:
-                raise Problem(404, f'No account named {username}')
-            self._person(db, person['id'])
-            actor = person['id']
+            actor = self._operator(db, username)
         if item['kind'] == 'access':
             return item, self.decide_access_request(actor, item['id'], approve)
         with self.transaction() as db:
