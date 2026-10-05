@@ -1,5 +1,30 @@
 # Resume here — medical lighthouse / aDNA
 
+**The wormhole to Stanley's aDNA lattice, live October 4 (current):** Andy approved and `main` was
+fast-forwarded to the `wormhole` branch (spec `docs/superpowers/specs/2026-10-04-wormhole-bridge-design.md`,
+plan `docs/superpowers/plans/2026-10-04-wormhole-bridge.md`; read `agent/README.md` → The wormhole). A
+deterministic bridge (no model) relays `@persona` mentions in Andy's bridged rooms to memos in the shared vault
+`Station.aDNA`, and memos addressed to `Station.aDNA` back into rooms with `@` replaced by `(at)`.
+
+- Live: ship `wormhole` (no owner); room `Gamma Quadrant` (7c91c8; andy, odo, wormhole); user unit
+  `superyak-wormhole` (`--owner andy`: only current rooms Andy owns are bridged); bare vault
+  `~/aDNA/Station.aDNA.git` (excluded in `~/aDNA/.git/info/exclude`), bridge clone, state and personas in
+  `~/.local/share/superyak/wormhole/`. 56 personas from the public registry plus a local test persona `standin`
+  (`personas.local.json`). Restart the unit after changing personas.
+- Live check passed: Andy's test mention (posted for him from the Pi) became
+  `outbound/coord_2026_10_04_station_to_stand_wormhole_self_test_posted_for_andy.md` and "Sent to Stand-in…";
+  a stand-in reply pushed through the gate came back into Gamma Quadrant with `@odo` defused; a forged push into
+  `outbound/` was refused. These self-test memos stay in the vault (new files only).
+- Bridge more rooms with `make station-rooms` / `make station-bridge ID=…`; unbridge only with
+  `make station-unbridge ID=…` (removing Wormhole in the browser makes the room it replaced current again).
+- Not yet flowing: Stanley has no access until he sends a dedicated sync public key; save it as a `.pub` file and
+  run `make wormhole-key KEY_FILE=…` from `~/superyak` (no venv active; check `test ! -L ~/.ssh/authorized_keys`).
+  He must also agree before pointing his agents at Station.aDNA. Never use `lattice-master-to-andy` for this.
+- If the unit logs `cycle failed` with a git `index.lock` error after a power cut, remove
+  `~/.local/share/superyak/wormhole/Station.aDNA/.git/index.lock`. Parked follow-ups (ledger rulings): receipts
+  for memos from a replaced room wait; per-file state saves grow with the inbox; other owners' rooms are fetched
+  every cycle.
+
 **Deep Space 9 station live on the smart Pi, October 3 (current):** Andy approved and
 `main` was fast-forwarded to the `ds9-station` branch (spec
 `docs/superpowers/specs/2026-10-03-ds9-station-design.md`, plan
