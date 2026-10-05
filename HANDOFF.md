@@ -20,6 +20,8 @@ deterministic bridge (no model) relays `@persona` mentions in Andy's bridged roo
 - Not yet flowing: Stanley has no access until he sends a dedicated sync public key; save it as a `.pub` file and
   run `make wormhole-key KEY_FILE=…` from `~/superyak` (no venv active; check `test ! -L ~/.ssh/authorized_keys`).
   He must also agree before pointing his agents at Station.aDNA. Never use `lattice-master-to-andy` for this.
+  October 5: the request is left for him on the Pi as `~/aDNA/coord_2026_10_05_station_to_stanley_wormhole_bridge.md`
+  (git-excluded; also repeats the open joining / Nebula / RareArchive asks). Stanley isn't in Andy's Slack.
 - If the unit logs `cycle failed` with a git `index.lock` error after a power cut, remove
   `~/.local/share/superyak/wormhole/Station.aDNA/.git/index.lock`. Parked follow-ups (ledger rulings): receipts
   for memos from a replaced room wait; per-file state saves grow with the inbox; other owners' rooms are fetched
