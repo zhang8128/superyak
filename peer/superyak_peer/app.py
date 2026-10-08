@@ -1,15 +1,18 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
+import asyncio
 import hmac
 import ipaddress
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from .common import Problem, valid_utf8
 from .db import Store
+from .inbox import wait_seconds
 
 MAX_REQUEST = 6 * 1024 * 1024
 COOKIE = 'superyak_session'
@@ -227,6 +230,31 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     async def ticket_issue(request: Request):
         who, data = ship_member(request)['id'], await body(request)
         return store.issue_ticket(who, data.get('message_id'), app.state.federation.identity.peer_id)
+
+    @app.post('/api/ships/me/unread')
+    async def inbox_unread(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        cursor, limit, wait = data.get('cursor'), data.get('limit', 30), wait_seconds(data.get('wait'))
+        if not wait:
+            return store.unread(who, cursor, limit)
+        # Every route shares this event loop, so a wait sleeps with await and holds no transaction across a sleep.
+        # Store calls take the process lock and write (last_used, the cursor touch), so in a wait they run on the
+        # threadpool: a busy store delays only this waiter, never the event loop the other routes share.
+        with store.inbox_wait_slot(who):
+            loop = asyncio.get_running_loop()
+            deadline, got = loop.time() + wait, await run_in_threadpool(store.unread, who, cursor, limit)
+            while not got['messages'] and (left := deadline - loop.time()) > 0:
+                await asyncio.sleep(min(1, left))
+                if await request.is_disconnected():  # uvicorn never cancels us; the slot is freed on the way out (R6)
+                    return got
+                await run_in_threadpool(ship_member, request)  # a key revoked mid-wait gets 401
+                got = await run_in_threadpool(store.unread, who, cursor, limit, counted=False)
+            return got
+
+    @app.post('/api/ships/me/unread/advance')
+    async def inbox_advance(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        return store.advance(who, data.get('cursor'), data.get('to'))
 
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
@@ -451,7 +479,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/chats/{key}/messages', status_code=201)
     async def chat_send(key: str, request: Request):
         who, data = member(request)['id'], await body(request)
-        return store.send_message(who, key, data.get('client_message_id'), data.get('body'), data.get('ticket_id'))
+        return store.send_message(who, key, data.get('client_message_id'), data.get('body'), data.get('ticket_id'), data.get('reply_to'))
 
     @app.post('/api/chats/{key}/participants', status_code=201)
     async def chat_add(key: str, request: Request):

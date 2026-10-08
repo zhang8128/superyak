@@ -1,5 +1,6 @@
 """superyak-agent: dock this machine's ship, serve its station tools, watch its mentions."""
 import argparse
+import sys
 from pathlib import Path
 from .station import CONFIG, HOME
 
@@ -72,8 +73,8 @@ def main(argv=None):
         serve(args.config)
         return 0
     if args.command == 'hook':
-        from .hook import run
-        text = run(args.config)
+        from .hook import run, session_from_stdin
+        text = run(args.config, session_id=session_from_stdin(sys.stdin))
         if text:
             print(text)
         return 0
