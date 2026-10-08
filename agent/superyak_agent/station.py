@@ -77,11 +77,19 @@ class StationClient:
     def room(self, room_id):
         return self.request('GET', f'/api/chats/{quote(room_id, safe="")}')
 
-    def post(self, room_id, body, client_message_id, ticket_id=None):
+    def post(self, room_id, body, client_message_id, ticket_id=None, reply_to=None):
         payload = {'client_message_id': client_message_id, 'body': body}
         if ticket_id:
             payload['ticket_id'] = ticket_id
+        if reply_to:
+            payload['reply_to'] = reply_to
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/messages', payload)
+
+    def unread(self, cursor, limit=30, wait=0):
+        return self.request('POST', '/api/ships/me/unread', {'cursor': cursor, 'limit': limit, 'wait': wait})
+
+    def advance(self, cursor, to):
+        return self.request('POST', '/api/ships/me/unread/advance', {'cursor': cursor, 'to': to})
 
     def ticket(self, message_id):
         return self.request('POST', '/api/ships/me/tickets', {'message_id': message_id})
