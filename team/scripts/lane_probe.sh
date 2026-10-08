@@ -29,11 +29,22 @@ done
 probe home_private_files fail sh -c 'for f in .bashrc .zshrc .profile .bash_history .zsh_history .ssh/config .ssh/known_hosts .superyak/station.json; do if head -c1 "$HOME/$f" >/dev/null 2>&1; then echo "readable: $f"; exit 0; fi; done; exit 1'
 probe npm_cache_write ok sh -c 'mkdir -p "$npm_config_cache" && touch "$npm_config_cache/spike" && echo "$npm_config_cache"'
 probe darwin_user_temp_dir info getconf DARWIN_USER_TEMP_DIR
-if [ -n "${SPIKE_PLAYWRIGHT:-}" ]; then
+if [ -n "${SPIKE_PLAYWRIGHT:-}" ] && [ -z "${SPIKE_BROKER_WS:-}" ]; then
   for channel in ${SPIKE_CHANNELS:-chrome}; do
     probe "chrome[$channel]_sandbox_off" ok env SPIKE_CHANNEL="$channel" "$NODE" "${SPIKE_CHROME_SCRIPT}" off
     # The same launch with Playwright's and Chrome's own logs, kept whole in a file the driver prints after the run.
     probe "chrome[$channel]_debug_log" info sh -c 'SPIKE_CHANNEL="$2" DEBUG="pw:browser*" SPIKE_CHROME_DEBUG=1 "$0" "$1" off > "$SPIKE_LOG.$2" 2>&1; echo "exit $?"' "$NODE" "${SPIKE_CHROME_SCRIPT}" "$channel"
   done
+fi
+# Spike 4: drive the broker's browser (started outside the lane). A plain broker shows what a broker must close
+# (info); a profiled one must close it (fail = the leak is refused).
+if [ -n "${SPIKE_BROKER_WS:-}" ]; then
+  if [ "${SPIKE_BROKER_MODE:-}" = plain ]; then leak=info; else leak=fail; fi
+  probe broker_page_on_loopback ok "$NODE" "$SPIKE_BROKER_SCRIPT" page
+  probe broker_wrong_secret fail "$NODE" "$SPIKE_BROKER_SCRIPT" wrongsecret
+  probe broker_external "$leak" "$NODE" "$SPIKE_BROKER_SCRIPT" external
+  probe broker_file_home "$leak" "$NODE" "$SPIKE_BROKER_SCRIPT" file
+  probe broker_canary info "$NODE" "$SPIKE_BROKER_SCRIPT" canary
+  probe broker_write_attempt info "$NODE" "$SPIKE_BROKER_SCRIPT" write
 fi
 echo "done"
