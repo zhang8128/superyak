@@ -124,3 +124,73 @@ def test_ids_with_unusual_characters_never_reach_the_output_raw(station, monkeyp
         outside = text.split('quoted message')[0] if 'quoted message' in text else text
         assert 'IGNORE PREVIOUS' not in outside and '`\n' not in outside
     assert 'more replies follow' in thread and 'IGNORE PREVIOUS' not in thread.split('more replies follow')[1]
+
+
+def test_a_reply_in_a_federated_room_posts_without_the_field(station, monkeypatch):
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'session-one')
+    fake, andy, jenn, serenity = station
+    remote = 'peer-abc:room-1'
+    fake.rooms[remote] = {'id': remote, 'title': 'Wormhole', 'owner_id': andy['id'], 'linked_room_id': None,
+                          'member_ids': [andy['id'], serenity['id']], 'messages': []}
+    asked = fake.say(remote, andy, 'from far away')
+    text, error = call(tools_for(fake), 'station_post', room=remote, text='answering', reply_to=asked['id'])
+    assert not error and text.startswith('Posted message')
+
+
+def test_codex_sessions_and_scripts_never_share_post_ids(station, monkeypatch):
+    monkeypatch.delenv('CLAUDE_CODE_SESSION_ID', raising=False)
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    one, two = tools_for(fake), tools_for(fake)  # two Codex processes
+    assert call(one, 'station_post', room=room, text='status: green')[0].startswith('Posted')
+    assert call(two, 'station_post', room=room, text='status: green')[0].startswith('Posted')
+    assert call(one, 'station_post', room=room, text='status: green')[0].startswith('Already posted')
+    assert [m['body'] for m in fake.rooms[room]['messages']] == ['status: green', 'status: green']
+    call(one, 'station_post', room=room, text='named', cursor='codex-a')
+    assert call(two, 'station_post', room=room, text='named', cursor='codex-a')[0].startswith('Already posted')
+
+
+def test_already_posted_is_known_after_a_restart(station, monkeypatch):
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'session-one')
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    call(tools_for(fake), 'station_post', room=room, text='deployed')
+    assert call(tools_for(fake), 'station_post', room=room, text='deployed')[0].startswith('Already posted')
+
+
+def test_unread_counts_what_is_left_honestly(station, monkeypatch):
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'session-one')
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    for n in range(5):
+        fake.say(room, andy, f'long {n} ' + 'w' * 15000)
+    text, _ = call(tools_for(fake), 'station_unread', limit=3, max_chars=15000)
+    shown = sum(f'long {n} ' in text for n in range(5))
+    assert shown == 2 and '1+ more unread' in text  # one fetched but cut, and the page itself was full
+
+
+def test_a_cancelled_wait_never_advances(station, monkeypatch):
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'session-one')
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    fake.say(room, andy, 'arrived while you were interrupted')
+    tools = tools_for(fake)
+    tools.current = 7
+    tools.cancel(7)  # Claude Code sent notifications/cancelled for request 7 during the wait
+    call(tools, 'station_unread', wait_seconds=5)
+    tools.current = 8
+    assert 'arrived while you were interrupted' in call(tools, 'station_unread')[0]
+
+
+def test_serve_records_cancellations_without_answering_them(station, tmp_path, monkeypatch):
+    import io
+    import json as js
+    from superyak_agent import mcp
+    fake, andy, jenn, serenity = station
+    tools = tools_for(fake)
+    lines = [js.dumps({'jsonrpc': '2.0', 'method': 'notifications/cancelled', 'params': {'requestId': 3}}),
+             js.dumps({'jsonrpc': '2.0', 'id': 4, 'method': 'ping'})]
+    out = io.StringIO()
+    mcp.serve_with(tools, io.StringIO('\n'.join(lines) + '\n'), out)
+    assert 3 in tools.cancelled
+    assert [js.loads(l)['id'] for l in out.getvalue().splitlines()] == [4]

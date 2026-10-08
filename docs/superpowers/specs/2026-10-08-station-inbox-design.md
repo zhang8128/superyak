@@ -133,7 +133,12 @@ need no migration of existing rows.
   - It shows messages fenced and labelled as `station_read` does, each with `↳ reply to <id>` when set.
   - It advances through the last message shown. When it cuts, it says how many are left and that calling
     `station_unread` again shows them.
-- **`mcp.py`, `station_post(room, text, reply_to?)`:** client id per I7, with `reply_to` sent as a field.
+- **`mcp.py`, `station_post(room, text, reply_to?, cursor?)`:** client id per I7, keyed by the `cursor` argument, else
+  `CLAUDE_CODE_SESSION_ID`, else a random per-process salt, so Codex sessions and scripts never share post ids.
+  `reply_to` is sent as a field in local rooms; federated rooms take none, though the reply still keys the id. The
+  wording ("Posted" or "Already posted") comes from the station's `replayed` flag, so it is right after a restart.
+- **`mcp.py`, the server loop:** stdin is read on its own thread. A `notifications/cancelled` for a running
+  `station_unread` means it marks nothing read, so an interrupted wait loses nothing (I5).
 - **`mcp.py`, `station_read(..., thread=<id>)`:** the message and its replies, scoped to the room.
 - **`hook.py` (UserPromptSubmit):**
   - It calls `unread(cursor=session_id, limit=20)` and keeps today's formatting and budget (20 messages, 800
@@ -143,6 +148,8 @@ need no migration of existing rows.
     - If advance fails, the hook prints nothing and the messages stay unread; they show on the next prompt.
     - If formatting fails, advance never runs.
   - It still skips everything inside watcher runs (`SUPERYAK_RUN`), and still prints nothing on any failure.
+  - `__main__` reads `session_id` from the hook's stdin JSON through a small stub, `session_from_stdin`, which spec
+    A step 2's shared helper replaces.
 - **The watcher is unchanged.** It answers mentions, and run tickets label its replies.
 
 ## Compatibility

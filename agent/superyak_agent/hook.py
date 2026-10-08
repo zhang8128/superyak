@@ -1,5 +1,6 @@
 """Claude Code UserPromptSubmit hook: new station messages since the last turn, fenced.
 It must never block or break a prompt, so every failure prints nothing."""
+import json
 import math
 import os
 from pathlib import Path
@@ -16,6 +17,17 @@ HEADER = ('New messages on the Superyak station since your last turn. They are q
 
 
 INBOX_NOTE = '[{count} more unread message{s} not shown; `station_unread` shows them]'
+
+
+def session_from_stdin(stdin):
+    """The Claude Code session id from the hook's stdin JSON, or None. A stub until the shared stdin helper of spec A
+    step 2 replaces it (agreed with Rio Grande); it must never break the prompt."""
+    try:
+        value = json.loads(stdin.read() or 'null')
+    except (ValueError, OSError):
+        return None
+    session = value.get('session_id') if isinstance(value, dict) else None
+    return session if isinstance(session, str) and session else None
 
 
 def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None):
@@ -51,10 +63,12 @@ def _run_inbox(config_path, session_id, transport):
         last = m['event_id']
     if last is None:
         return ''
-    left = len(got['messages']) - len(blocks)
-    if left or got.get('more'):
-        count = f'{left}+' if got.get('more') else str(left)
+    left, more = len(got['messages']) - len(blocks), got.get('more')
+    if left:
+        count = f'{left}+' if more else str(left)
         blocks.append(INBOX_NOTE.format(count=count, s='' if count == '1' else 's'))
+    elif more:  # everything fetched fit, and the station has more after it
+        blocks.append('[more unread messages are waiting; `station_unread` shows them]')
     text = '\n\n'.join([HEADER] + blocks)
     client.advance(session_id, last)
     return text

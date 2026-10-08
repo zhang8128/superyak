@@ -88,9 +88,11 @@ class FakeStation:
                 ticket_id = payload.get('ticket_id')
                 reply_to = payload.get('reply_to')
                 existing = next((m for m in room['messages'] if m['author_id'] == me and m['client_message_id'] == payload['client_message_id']), None)
+                if ':' in room['id'] and reply_to is not None:
+                    return 400, b'{"error": "Replies are labelled in local rooms only"}'
                 if existing is not None:
                     same = existing['body'] == payload['body'] and self.replies.get(existing['id']) == reply_to
-                    return ok(existing, 201) if same else (409, b'{"error": "Message ID already used with different text"}')
+                    return ok(dict(existing, replayed=True), 201) if same else (409, b'{"error": "Message ID already used with different text"}')
                 if reply_to is not None and not any(m['id'] == reply_to for m in room['messages']):
                     return 400, b'{"error": "reply_to is not a message in this room"}'
                 if ticket_id is not None:
@@ -106,7 +108,7 @@ class FakeStation:
                     self.sources[message['id']] = ticket_id
                 if reply_to is not None:
                     self.replies[message['id']] = reply_to
-                return ok(message, 201)
+                return ok(dict(message, replayed=False), 201)
         if method == 'GET' and path == '/api/mentions':
             after, rows = int(query.get('after', ['0'])[0]), []  # one page holds at most 50, as on the station
             for row in self.mention_rows:

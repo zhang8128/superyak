@@ -115,3 +115,22 @@ def test_a_ships_message_keeps_its_provenance_label(station, ship_config, tmp_pa
     posted = fake.say(room, rio, 'a ship speaking')
     expected = source_label({'source': fake.source_of(posted)})
     assert expected and f'({expected})' in run(fake, config_path, 's1')
+
+
+def test_the_hook_reads_its_session_id_from_claude_codes_stdin():
+    import io
+    assert hook.session_from_stdin(io.StringIO('{"session_id": "abc-123", "prompt": "hi"}')) == 'abc-123'
+    assert hook.session_from_stdin(io.StringIO('not json')) is None
+    assert hook.session_from_stdin(io.StringIO('{"session_id": 5}')) is None
+    assert hook.session_from_stdin(io.StringIO('')) is None
+
+
+def test_a_full_page_that_all_fits_says_more_without_a_false_count(station, ship_config, tmp_path, monkeypatch):
+    fake, andy, jenn, serenity = station
+    config_path = write_config(ship_config, tmp_path)
+    room = fake.room('Ops', andy, serenity)
+    for n in range(25):
+        fake.say(room, andy, f'tiny {n}')
+    monkeypatch.setattr(hook, 'MAX_CHARS', 100000)
+    text = run(fake, config_path, 's1')
+    assert 'more unread' in text and '0+' not in text and '0 more' not in text
