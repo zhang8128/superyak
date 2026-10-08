@@ -14,6 +14,7 @@ CURSOR_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')
 
 INBOX_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS read_cursors(ship_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, position INTEGER NOT NULL, updated REAL NOT NULL, PRIMARY KEY(ship_id, name));
+CREATE TABLE IF NOT EXISTS message_replies(message_id TEXT PRIMARY KEY, reply_to TEXT NOT NULL);
 '''
 
 
@@ -103,8 +104,25 @@ class Inbox:
                 messages.append({'event_id': row['id'], 'message_id': found['id'], 'room_id': row['resource_id'],
                                  'room_title': row['title'], 'body': found['body'], 'created': found['created'],
                                  'author': self._inbox_author(db, found['author_id']), 'mentions_me': bool(mentioned),
-                                 'reply_to': None, 'source': sources[row['resource_id']].get(found['id'])})
+                                 'reply_to': self._reply_to(db, found['id']), 'source': sources[row['resource_id']].get(found['id'])})
         return {'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': messages}
+
+    def _reply_to(self, db, message_id):
+        row = db.execute('SELECT reply_to FROM message_replies WHERE message_id=?', (message_id,)).fetchone()
+        return row['reply_to'] if row else None
+
+    def _replies(self, db, room_id):
+        """Every reply in a room, keyed by the replying message (local posts only carry the field)."""
+        return {r['message_id']: r['reply_to'] for r in db.execute(
+            'SELECT message_replies.* FROM message_replies JOIN messages ON messages.id=message_replies.message_id WHERE messages.room_id=?', (room_id,))}
+
+    def _check_reply_to(self, db, room_id, reply_to):
+        """A reply names a message in the same local room, a local post or a federated member's reply."""
+        if not isinstance(reply_to, str) or not 0 < len(reply_to) <= 100:
+            raise Problem(400, 'reply_to is the id of a message in this room')
+        if not (db.execute('SELECT 1 FROM messages WHERE id=? AND room_id=?', (reply_to, room_id)).fetchone()
+                or db.execute('SELECT 1 FROM peer_messages WHERE id=? AND room_id=?', (reply_to, room_id)).fetchone()):
+            raise Problem(400, 'reply_to is not a message in this room')
 
     def advance(self, actor, cursor=None, to=None):
         name = cursor_name(cursor)

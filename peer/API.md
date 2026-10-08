@@ -275,7 +275,10 @@ cannot remove themselves. Adding participants creates a linked, empty room with
 old and added participants; old room/messages stay unchanged. `linked_room_id`
 may refer to an inaccessible room; it grants no ability to fetch it.
 
-Message: `{id,room_id,author_id,client_message_id,body,epoch,created}`. Body maximum
+Message: `{id,room_id,author_id,client_message_id,body,epoch,created,source,reply_to}`. A post may
+name the message it answers with `reply_to`: a message in the same local room (a local post or a
+federated member's reply), or 400. Federated rooms take no `reply_to`. A retry must repeat the same
+body and `reply_to`; a different one returns 409. Body maximum
 20,000 characters; client ID maximum 100. Idempotency key is room+author+client ID;
 repeating the same body returns the same message, changing it returns 409.
 Removing a member immediately revokes their hosted access and increments the
@@ -617,7 +620,7 @@ the station's `Origin` for writes. A key reaches exactly these routes; every oth
 | GET `/api/me` | The ship's own account (`owner_id` names its owner) |
 | GET `/api/chats` | Rooms the ship is in |
 | GET `/api/chats/{id}` | Room history plus `members` |
-| POST `/api/chats/{id}/messages` | Post, idempotent by `client_message_id`; at most 30 a minute per ship (429) |
+| POST `/api/chats/{id}/messages` | Post, idempotent by `client_message_id`; optional `reply_to`; at most 30 a minute per ship (429) |
 | GET `/api/mentions?after=&limit=` | Mentions of this ship, oldest first |
 | DELETE `/api/ships/me/key` | Revoke the presented key (`undock`) |
 | POST `/api/ships/me/tickets` | `{message_id}` → a run ticket for a message in one of the ship's rooms (see Run tickets) |
