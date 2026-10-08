@@ -196,9 +196,16 @@ def source_label(message):
     return 'no run ticket' if source.get('kind') == 'post' else ''
 
 
+def defuse(text):
+    """Line breaks normalised, and every line that starts like an instruction header (`===`) or a withdrawal
+    (`Instructions '`) indented by a space, so no room message can imitate the law."""
+    return '\n'.join(' ' + line if line.startswith(('===', "Instructions '")) else line for line in text.splitlines())
+
+
 def fence_message(member, body, limit, hint='', source=''):
     """A message fenced as quoted data, at most `limit` characters of it. A cut is said after the fence,
     where the author's text cannot imitate it, so a reader never mistakes part of a message for all of it."""
     sender = describe(member) + (f', {source}' if source else '')
-    text = fence_external(sender, body[:limit], limit=limit)
+    quoted = defuse(body[:limit])
+    text = fence_external(sender, quoted, limit=max(len(quoted), 1))
     return text + f'\n[cut at {limit:,} of {len(body):,} characters{hint}]' if len(body) > limit else text
