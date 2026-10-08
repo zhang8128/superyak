@@ -156,11 +156,16 @@ def shown_id(value):
     return value if plain_id(value) else '(an id with unusual characters)'
 
 
-def read_hint(room_id, message_id):
-    """The cut note's way back to the whole message: one call that returns just that message."""
-    if not (plain_id(room_id) and plain_id(message_id)):
+def read_hint(room_id, message_id, position=None):
+    """The cut note's way back to the whole message: one call that returns just that message. By id when the id
+    is plain; by its position in the room when not (a remote peer chooses its own ids); otherwise no call."""
+    if not plain_id(room_id):
         return ''
-    return f'; `station_read room={room_id} message={message_id}` shows all of it'
+    if plain_id(message_id):
+        return f'; `station_read room={room_id} message={message_id}` shows all of it'
+    if position is not None:
+        return f'; `station_read room={room_id} at={int(position)} limit=1 max_chars={MESSAGE_LIMIT}` shows all of it'
+    return ''
 
 
 def fence_message(member, body, limit, hint=''):
