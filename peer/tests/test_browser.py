@@ -1507,7 +1507,8 @@ def test_docking_link_confirms_ship_lists_and_revokes_it_and_rooms_show_the_ship
             expect(dialog.get_by_role("heading", name="Dock serenity")).to_be_visible()
             expect(dialog.get_by_text("andy-mac")).to_be_visible()
             dialog.get_by_role("button", name="Confirm docking").click()
-            expect(page.get_by_text("Serenity is docked.")).to_be_visible()
+            expect(page.get_by_role("status")).to_contain_text("Serenity is docked.")
+            expect(page.locator("#announcer")).to_contain_text("Serenity is docked.")
             assert store.docking_status(docking["id"], docking["secret"])["status"] == "confirmed"
             ship = next(s for s in store.ships(users["organizer"]["id"]) if s["username"] == "serenity")
             room = store.create_room(users["patient"]["id"], "Ops", [ship["id"]])
