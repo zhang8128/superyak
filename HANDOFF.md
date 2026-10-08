@@ -6,30 +6,33 @@ instructions come through the station room "Superyak: city of AI" (39fd79; andy,
 Mac) coordinates between Superyak and the Bricks lead and proposes; Andy decides. Superyak is the proof of concept for a
 city of AI that runs with very little human involvement.
 
-- **Andy's decisions** are recorded in the room and in spec A's table
+- **Andy's decisions** (Q1, Q2, D1–D7 are in spec A's table; D8 and D9 are recorded only in the room)
   (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`):
   - Q1, Q2 and D1: only people sign instructions, "agents grant agents", and text never carries authority.
   - D2, "law only": people sign the charter and instructions; merging, deploying and admitting become agent work under
     the charter.
-  - D3, the interim rule until the charter exists: a branch merges to main and main is pushed when another ship, or a
-    fresh reviewer agent, approves it in the room and its suites pass on the Pi. The merger restarts the affected
+  - D3, the interim rule until the charter exists: a branch merges to main and main is pushed when a reviewer approves
+    it in the room (another ship, or per D4 a fresh reviewer agent) and its suites pass on the Pi. The merger restarts the affected
     services, checks them, and reverts on failure.
   - D4 and D5: a fresh reviewer agent reviews this ship's branches, safety code included.
-  - D6 and D8: a fresh reviewer agent approves every Superyak spec. Bricks production, Guyana data and other people's
-    repositories stay with a person.
+  - D6: a fresh reviewer agent approved spec A. D8 (room only) extends that to every Superyak spec; Bricks
+    production, Guyana data and other people's repositories stay with a person.
+  - D9 (room only): browser-lane workers run only while every localhost listener on the Mac is on Andy's approved
+    list, rechecked every turn.
   - D7: one ship per team or role, and every act records a session label.
 - **Live on main and the Pi:**
   - station-full-text (8f63287): agents see where a message or room was cut, and each note names the exact
-    `station_read` call (`message=`, `start=`, `after=`, `oldest=true`, `at=`).
+    call (`station_read` with `message=`, `start=`, `after=`, `oldest=true` or `at=`; `station_mentions after=`).
   - Quoted names don't wake ships, and the wormhole applies the same rule (a21b20d, 5efefdf).
   - Run tickets, spec A step 1 (8e81016): the station decides each run's mode and labels replies by source.
   - DB backup: `~/.local/share/superyak/backups/peer-20261008-131613-pre-tickets.sqlite3`. A ship must roll back with
     the station.
 - **In flight:**
-  - Serenity's `station-key-refusal` merges after main is merged into it.
-  - Serenity is writing the `station-inbox` spec: per-session unread state and a way to wait.
+  - Serenity's `station-key-refusal` is merged and live (9c6b1b8).
+  - Per the room: Serenity is building the `station-inbox` branch (on origin): per-session unread state and a way to
+    wait.
   - Browser lane for team-mode workers (branch `browser-lane`): the spec needs changes after its review. The Mac spike
-    (`team/scripts/lane_spike.py`) is waiting for Serenity's run with the Bricks lead.
+    (`team/scripts/lane_spike.py` on origin/browser-lane) ran once; spike 2 (Chrome's profile lock) waits for Serenity.
 - **Next:**
   - Spec A step 2, instruction layers. Its plan follows the run-tickets pattern: fresh implementer, task reviewer and
     final reviewer, under subagent-driven development.
@@ -40,7 +43,7 @@ city of AI that runs with very little human involvement.
   or already-answered messages once acts spend build tickets. The Mac and the Legion Go show "no run ticket" until they
   pull main and restart `superyak-ship`.
 
-**The wormhole to Stanley's aDNA lattice, live October 4 (current):** Andy approved and `main` was
+**The wormhole to Stanley's aDNA lattice, live October 4 (earlier; still live, see City of AI above for the newest state):** Andy approved and `main` was
 fast-forwarded to the `wormhole` branch (spec `docs/superpowers/specs/2026-10-04-wormhole-bridge-design.md`,
 plan `docs/superpowers/plans/2026-10-04-wormhole-bridge.md`; read `agent/README.md` → The wormhole). A
 deterministic bridge (no model) relays `@persona` mentions in Andy's bridged rooms to memos in the shared vault
@@ -67,7 +70,7 @@ deterministic bridge (no model) relays `@persona` mentions in Andy's bridged roo
   for memos from a replaced room wait; per-file state saves grow with the inbox; other owners' rooms are fetched
   every cycle.
 
-**Deep Space 9 station live on the smart Pi, October 3 (current):** Andy approved and
+**Deep Space 9 station live on the smart Pi, October 3 (earlier; still live, see City of AI above):** Andy approved and
 `main` was fast-forwarded to the `ds9-station` branch (spec
 `docs/superpowers/specs/2026-10-03-ds9-station-design.md`, plan
 `docs/superpowers/plans/2026-10-03-ds9-station.md`). The lighthouse is now the station where
