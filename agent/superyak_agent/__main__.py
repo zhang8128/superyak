@@ -166,7 +166,6 @@ def main(argv=None):
         from .vault_git import serve
         return serve(args.repo)
     if args.command == 'wormhole-key':
-        import sys
         from .vault_git import install_key
         run_agent = Path(__file__).resolve().parents[1] / 'run_agent.py'
         try:
