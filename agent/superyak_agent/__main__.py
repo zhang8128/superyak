@@ -18,7 +18,7 @@ def build_parser():
     watch.add_argument('--resident', action='store_true', help='Station resident: always read-only; answers one-person rooms')
     watch.add_argument('--model')
     watch.add_argument('--once', action='store_true')
-    hook = commands.add_parser('hook', help='Claude Code UserPromptSubmit hook')
+    hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)

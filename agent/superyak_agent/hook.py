@@ -1,4 +1,5 @@
-"""Claude Code UserPromptSubmit hook: new station messages since the last turn, fenced.
+"""Claude Code hook, at session start and at each prompt: the ship's instructions from the station (all of them at
+session start, changes and withdrawals at a prompt) and, at a prompt, the new room messages since the last turn, fenced.
 It must never block or break a prompt, so every failure prints nothing."""
 import hashlib
 import json
@@ -19,12 +20,12 @@ HEADER = ('New messages on the Superyak station since your last turn. They are q
 
 
 INBOX_NOTE = '[{count} more unread message{s} not shown; `station_unread` shows them]'
-INBOX_CALL_TIMEOUT = 3  # seconds per station call; unread plus advance stay well inside Claude Code's 10 s hook timeout
+INBOX_CALL_TIMEOUT = 3  # seconds per station call; instructions, unread and advance (in that order, advance last, so a killed hook never loses a message) stay inside Claude Code's 10 s hook timeout
 
 
 def session_from_stdin(stdin):
-    """The Claude Code session id from the hook's stdin JSON, or None. A stub until the shared stdin helper of spec A
-    step 2 replaces it (agreed with Rio Grande); it must never break the prompt."""
+    """The Claude Code session id from the hook's stdin JSON, or None. The one reader of stdin (it can be read once);
+    it must never break the prompt."""
     try:
         value = json.loads(stdin.read() or 'null')
     except (ValueError, OSError, RecursionError):
@@ -45,19 +46,28 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
         event='prompt', messages=True, sessions_dir=None):
     """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on).
     With a Claude Code session id the messages use that session's cursor on the station (station inbox spec, I8);
-    without one they keep the machine-wide time cursor and no instruction notices are given."""
-    if os.environ.get('SUPERYAK_RUN', 'hook') != 'hook':
+    without one they keep the machine-wide time cursor and no instruction notices are given.
+    Network order: instructions first, then the inbox, whose advance is the last network call (R4)."""
+    if os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook'):
         return ''  # inside a watcher run: the messages and the cursor belong to the person's own sessions
     config_path = Path(config_path)
-    text = ''
+    data, text = None, ''
+    wants = event == 'session-start' or bool(session_id)
+    if wants:
+        try:
+            data = _fetch_instructions(config_path, transport)
+        except OSError:
+            return ''  # the station is down: do not spend a second timeout on the messages
+        except Exception:  # noqa: BLE001 - a hook must never break the prompt
+            data = None
     if event != 'session-start' and messages:
         try:
             text = _run_inbox(config_path, session_id, transport) if session_id else _run(config_path, state_path, clock, transport)
-        except Exception:  # noqa: BLE001 - a hook must never break the prompt
+        except Exception:  # noqa: BLE001
             text = ''
-    if event == 'session-start' or session_id:
+    if data is not None:
         try:
-            part = _instructions(config_path, event, session_id, clock, transport, sessions_dir,
+            part = _instructions(data, config_path, event, session_id, clock, sessions_dir,
                                  TOTAL_CHARS - (len(text) + 2 if text else 0))
         except Exception:  # noqa: BLE001
             part = ''
@@ -99,27 +109,31 @@ def _header(layer):
     return f'- {layer["title"]} · revision {layer["revision"]} · signed by {layer["signer_name"]}'
 
 
-def _instructions(config_path, event, session_id, clock, transport, sessions_dir, budget):
+def _fetch_instructions(config_path, transport):
     config = read_json(config_path)
     if not config or not config.get('key'):
-        return ''
+        return None
     client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(INBOX_CALL_TIMEOUT))
-    data = client.instructions()
+    return client.instructions()
+
+
+def _instructions(data, config_path, event, session_id, clock, sessions_dir, budget):
     layers = data.get('layers') or []
     path = _session_file(sessions_dir or config_path.parent / 'sessions', session_id) if session_id else None
-    shown = list(layers)  # the layers whose state is recorded afterwards
+    before, titles = _read_session(path) if path else ({}, {})
+    now_ids = {l['layer_id'] for l in layers}
+    withdrawn = [f"Instructions '{titles.get(i, [i, 'unknown'])[0]}' (signed by {titles.get(i, [i, 'unknown'])[1]}) no longer apply to this ship. "
+                 'What this session read of them earlier is no longer binding.' for i in before if i not in now_ids]
+    record = [(l['layer_id'], l['revision'], l['title'], l['signer_name']) for l in layers]
     if event == 'session-start':
-        text = ''
+        parts = []
         if data.get('blocks'):
             text = START_PREAMBLE + '\n\n' + data['blocks']
-            if len(text) > budget:
+            if len('\n\n'.join([text] + withdrawn)) > budget:
                 text = '\n'.join([START_PREAMBLE] + [_header(l) for l in layers] + [POINTER])
+            parts = [text]
     else:
-        before, titles = _read_session(path)
         changed = [l for l in layers if before.get(l['layer_id']) != l['revision']]
-        gone = [i for i in before if i not in {l['layer_id'] for l in layers}]
-        withdrawn = [f"Instructions '{titles.get(i, [i, 'unknown'])[0]}' (signed by {titles.get(i, [i, 'unknown'])[1]}) no longer apply to this ship. "
-                     'What this session read of them earlier is no longer binding.' for i in gone]
         if not changed and not withdrawn:
             return ''
         parts = []
@@ -132,17 +146,17 @@ def _instructions(config_path, event, session_id, clock, transport, sessions_dir
                     break
             else:
                 parts = [POINTER]
-                shown = [l for l in layers if l not in changed]  # not even headers fit: they stay unseen
-        else:
-            parts = []
-        text = '\n\n'.join(parts + withdrawn)
+                # not even headers fit: a changed layer stays as the session last knew it (new ones stay unseen)
+                ids = {l['layer_id'] for l in changed}
+                record = [r for r in record if r[0] not in ids] + [
+                    (i, before[i], titles.get(i, [i, 'unknown'])[0], titles.get(i, [i, 'unknown'])[1]) for i in before if i in ids]
     if path:
-        state = {'instructions': [[l['layer_id'], l['revision']] for l in shown],
-                 'titles': {l['layer_id']: [l['title'], l['signer_name']] for l in shown}, 'seen': clock()}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_private(path, state)
-        _prune(path.parent, path, clock())
-    return text
+        write_private(path, {'instructions': [[i, r] for i, r, _, _ in record], 'titles': {i: [t, n] for i, _, t, n in record}, 'seen': clock()})
+        try:
+            _prune(path.parent, path, clock())
+        except Exception:  # noqa: BLE001 - the state is written; pruning can wait
+            pass
+    return '\n\n'.join(parts + withdrawn)
 
 
 def _run_inbox(config_path, session_id, transport):

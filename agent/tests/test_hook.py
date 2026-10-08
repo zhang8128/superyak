@@ -289,6 +289,7 @@ def test_the_hook_command_never_blocks_a_prompt(monkeypatch, capsys, station, sh
         assert cli.main(['hook', '--config', str(tmp_path / 'missing.json')]) == 0
     monkeypatch.setattr('sys.stdin', io.StringIO('{}'))
     assert cli.main(['hook', '--config', str(config_path), '--some-future-flag']) == 0
+    assert capsys.readouterr().out == ''
 
 
 def test_a_hook_run_marked_hook_still_prints_but_a_watcher_run_is_silent(monkeypatch, station, ship_config, tmp_path):
@@ -319,3 +320,102 @@ def test_the_hook_command_reads_event_and_messages_from_the_environment(monkeypa
     monkeypatch.setenv('SUPERYAK_HOOK_MESSAGES', '0')
     assert cli.main(['hook', '--config', str(config_path)]) == 0
     assert 'v1' in capsys.readouterr().out
+
+
+class Recorder:
+    def __init__(self, fake):
+        self.fake, self.calls = fake, []
+
+    def __call__(self, method, url, headers, data):
+        self.calls.append((method, url.split('?')[0].split('/api/')[-1]))
+        return self.fake(method, url, headers, data)
+
+
+def test_the_inbox_advance_is_the_last_network_call_at_a_prompt(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'hello there')
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    rec = Recorder(fake)
+    text = hook.run(config_path, transport=rec, event='prompt', session_id='s1', sessions_dir=tmp_path / 'sessions', messages=True)
+    assert 'hello there' in text and 'v1' in text
+    assert rec.calls[-1] == ('POST', 'ships/me/unread/advance') and rec.calls[0] == ('GET', 'ships/me/instructions')
+
+
+def named_law(fake, serenity, layers):
+    """layers: [(id, rev, title, signer)]"""
+    fake.instruction_state[serenity['id']] = {
+        'instructions': [[i, r] for i, r, t, n in layers],
+        'layers': [{'layer_id': i, 'revision': r, 'title': t, 'signer_name': n, 'block': 'B' * 400} for i, r, t, n in layers],
+        'blocks': 'PREAMBLE\n\n' + '\n\n'.join('B' * 400 for _ in layers)}
+
+
+def test_a_shrunk_notice_keeps_the_old_state_so_a_later_withdrawal_is_still_announced(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    named_law(fake, serenity, [('K', 1, 'Known rule', 'Andy')])
+    start(fake, config_path, 's1', sessions)
+    heavy = [(f'N{n:02d}', 1, f'{n:02d}' + 't' * 198, 'n' * 80) for n in range(40)]
+    named_law(fake, serenity, [('K', 2, 'Known rule', 'Andy')] + heavy)
+    text = prompt(fake, config_path, 's1', sessions)
+    assert text == hook.POINTER  # not even the header lines fit
+    named_law(fake, serenity, heavy)
+    text = prompt(fake, config_path, 's1', sessions)
+    assert "Instructions 'Known rule' (signed by Andy) no longer apply to this ship." in text and hook.POINTER in text
+    assert len(text) <= 9500
+
+
+def test_a_resumed_session_start_announces_what_stopped_binding(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1'), ('L2', 1, 'Old rule', 'old')])
+    start(fake, config_path, 's1', sessions)
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    text = start(fake, config_path, 's1', sessions)
+    assert 'v1' in text and "Instructions 'Old rule' (signed by Andy) no longer apply to this ship." in text
+    assert 'no longer apply' not in start(fake, config_path, 's1', sessions)
+
+
+def test_an_empty_superyak_run_counts_as_unset(monkeypatch, station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    monkeypatch.setenv('SUPERYAK_RUN', '')
+    assert 'v1' in start(fake, config_path, 's1', tmp_path / 'sessions')
+
+
+def test_a_failing_prune_keeps_the_notice_and_the_sessions_folder_is_private(monkeypatch, station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    def boom(*a):
+        raise OSError('no listing')
+    monkeypatch.setattr(hook, '_prune', boom)
+    assert 'v1' in start(fake, config_path, 's1', sessions)
+    assert oct(sessions.stat().st_mode & 0o777) == '0o700' and len(list(sessions.iterdir())) == 1
+
+
+def test_a_down_station_costs_one_call_not_two(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    fake.down = True
+    rec = Recorder(fake)
+    assert hook.run(config_path, transport=rec, event='prompt', session_id='s1', sessions_dir=tmp_path / 'sessions', messages=True) == ''
+    assert len(rec.calls) == 1
+
+
+def test_messages_off_leaves_the_inbox_cursor_alone(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'hello there')
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    assert 'hello there' not in prompt(fake, config_path, 's1', tmp_path / 'sessions')
+    assert fake.unread_calls == [] and fake.cursors == {}
+
+
+def test_a_notice_plus_messages_stays_within_the_total(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    for n in range(10):
+        fake.say(room, jenn, f'message {n} ' + 'x' * 700)
+    law(fake, serenity, [(f'N{n}', 1, f'New {n}', 'x' * 4800) for n in range(10)])
+    text = hook.run(config_path, transport=fake, event='prompt', session_id='s1', sessions_dir=tmp_path / 'sessions', messages=True)
+    assert 'message 0' in text and 'call the station_instructions tool' in text and len(text) <= 9500
