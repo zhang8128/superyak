@@ -193,13 +193,15 @@ With `lane=None`, the output is byte-for-byte what it is today.
 - **What it reads:** `lsof -nP -iTCP -sTCP:LISTEN -F pcn`. When lsof fails, the result is "not ok".
 - **What passes:** a listener passes when its port is in a live lane's block, or when it matches an entry on the
   approved list, `~/.superyak/team/lane-listeners.json`. Only the person edits that file; it is never a team key.
-  An entry matches on the executable path, and, for interpreters, the working directory.
+  Under D10, an entry is a macOS service's executable (in `/System`, `/usr/libexec` or `/usr/sbin`) plus an exact
+  port, and both must match.
 - **What fails:** a lane process listening on a non-loopback address fails the check. `127.0.0.0/8` and `::1` count
   as loopback, and every other address, IPv6 included, does not. lsof's IPv6 output is parsed, not just IPv4.
 - **UDP is not checked.** Egress is already closed, DNS included, and the browser's profile allows TCP only to the
   lane's ports. A local UDP service that does something dangerous on request is accepted as a known limit.
 - **Matching is a convenience, not a boundary.** A process can change directory after it starts listening, and an
-  approved executable approves every port it opens. See the open question for Andy.
+  approved executable would approve every port it opens. D10 therefore approves only Apple's own services, each on
+  its exact port.
 - **On failure:** the lane's turn doesn't start. The worker waits, and the lead gets a message naming each unapproved
   listener by command name and port.
 
@@ -244,19 +246,16 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 - Bricks' specs need the Bricks change before they run in a lane.
 - Linux and Codex workers get no lane.
 
-## Open question for Andy
+## Approved listeners (Andy's decision D10, 2026-10-08)
 
-Which listeners may stay up while a lane runs? The reviewer's point is that matching is a convenience, not a boundary:
-an approved executable approves every port it opens, and a working directory can change.
-- **macOS's own services only.** Only Apple's services (AirPlay, rapportd and the like, from `/System`,
-  `/usr/libexec` or `/usr/sbin`) are approved, each by executable and exact port. Dev servers, Ollama, Postgres and
-  every other service must be stopped while a lane runs.
-- **Anything approved by executable and port.** For node and python, the working directory is matched too.
-  - This is convenient, but each approval trusts that service with whatever a worker can ask it to do. Ollama, for
-    example, can be asked to pull from the internet.
-- **Lane ports only.** Nothing else may listen at all, so AirPlay Receiver and similar services have to be turned off.
-
-Whichever option is chosen, the rest of the design is unchanged.
+Only macOS's own services stay up while a lane runs: AirPlay, rapportd and the like, from `/System`, `/usr/libexec`
+or `/usr/sbin`, each approved by executable and exact port.
+- Dev servers, Ollama, Postgres, Serena dashboards and every other service must be stopped while a lane runs.
+- The approved list (`~/.superyak/team/lane-listeners.json`) refuses any entry whose executable lies outside those
+  three folders, and any entry without an exact port.
+- There is no working-directory matching, because interpreters are never approved.
+- Test 8 adds two cases: an entry for `/opt/homebrew/bin/ollama` is refused when the list is loaded, and so is a
+  `/System` entry without a port.
 
 ## Build order
 
@@ -328,7 +327,7 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
    finished, and a block that something else already uses is skipped.
 8. **Listener check** (lsof output fixtures):
    - lane ports pass;
-   - an approved executable passes, and an interpreter only passes with its working directory;
+   - an approved Apple service passes on its port, and fails on any other port;
    - an unknown listener fails, and so does a lane process listening on `*` or on a LAN address;
    - an lsof failure fails;
    - `::1` and `127.0.0.2` count as loopback, and `fe80::1`, `::` and a tailnet address don't;
