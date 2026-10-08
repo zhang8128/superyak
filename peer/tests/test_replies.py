@@ -99,3 +99,10 @@ def test_a_reply_carrying_a_live_key_is_refused_and_writes_no_reply_row(env):
     assert post(serenity, room, 'b', f'it is {key}', reply_to=asked['id']).status_code == 422
     with app.state.store.transaction() as db:
         assert db.execute('SELECT count(*) FROM message_replies').fetchone()[0] == 0
+
+
+def test_a_retry_says_it_was_replayed(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    first = post(serenity, room, 'same', 'hello').json()
+    again = post(serenity, room, 'same', 'hello').json()
+    assert first['replayed'] is False and again['replayed'] is True and again['id'] == first['id']

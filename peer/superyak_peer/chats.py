@@ -68,7 +68,7 @@ class Chats:
             if existing:
                 if existing['body'] != body or self._reply_to(db, existing['id']) != reply_to:
                     raise Problem(409, 'Message ID already used with different text')
-                return dict(existing)
+                return dict(existing, replayed=True)  # a retry: nothing new was posted
             if reply_to is not None:
                 self._check_reply_to(db, key, reply_to)
             self._ship_post_budget(db, actor)
@@ -82,7 +82,7 @@ class Chats:
                 db.execute('INSERT INTO message_replies VALUES(?,?)', (message_id, reply_to))
             self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
-            return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
+            return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
 
     def add_participants(self, actor, key, member_ids):
         with self.transaction() as db:

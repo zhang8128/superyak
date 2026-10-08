@@ -278,7 +278,8 @@ may refer to an inaccessible room; it grants no ability to fetch it.
 Message: `{id,room_id,author_id,client_message_id,body,epoch,created,source,reply_to}`. A post may
 name the message it answers with `reply_to`: a message in the same local room (a local post or a
 federated member's reply), or 400. Federated rooms take no `reply_to`. A retry must repeat the same
-body and `reply_to`; a different one returns 409. Body maximum
+body and `reply_to`; a different one returns 409. A local post's response says `replayed: true` when
+it was a retry and nothing new was posted. Body maximum
 20,000 characters; client ID maximum 100. Idempotency key is room+author+client ID;
 repeating the same body returns the same message, changing it returns 409.
 A body that carries a live ship key (any standalone 43-character URL-safe token whose hash matches an
@@ -653,14 +654,17 @@ sessions use their session id). A position is the id of a `chat.message` event.
   contact's name.
 - Reading never moves the cursor. `more` says the page was cut. Reads are limited to 60 a minute
   per ship (429).
-- A new name starts at the furthest position any of the ship's cursors has reached, and a ship's
-  first cursor starts at 0.
+- A new name starts at the furthest position any of the ship's cursors has reached. A ship's first
+  cursor starts at the inbox epoch: the newest message when the station first installed the inbox,
+  so installing it never replays history. Making a cursor removes the ship's cursors unused for 30
+  days.
 With `wait` (0–25 seconds) the read returns as soon as something is unread, or an empty list at the
 limit. A wait sleeps without holding the station, counts as one read, and a ship may hold 2 at a
 time (a third gets 429); a client that goes away frees its wait.
 `POST /api/ships/me/unread/advance` sets the position to the larger of the current one and `to`.
-`to` must be a message event id (400 otherwise), so a reader that shows part of a page advances
-through what it showed and loses nothing.
+`to` must be the event id of a message in one of the ship's rooms (400 otherwise), so a reader that
+shows part of a page advances through what it showed and loses nothing. Advances count against the
+same 60-a-minute budget as reads. A wait ends early, freeing its slot, when the client disconnects.
 
 **Docking.** The script starts a docking, a signed-in person confirms it in the browser, and the key
 goes only to the script.

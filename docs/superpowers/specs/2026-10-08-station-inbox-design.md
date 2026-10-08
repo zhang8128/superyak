@@ -52,8 +52,11 @@ Codex sessions have no hook at all. For them the tool below is the only way to s
   The station builds it as `{id: "<origin>:<actor>", username: null, name: <the remote contact's display name, else
   null>, kind: "remote", owner_id: null}`, with the name taken from `remote_contacts` for that origin and actor.
 - **I4. A new name starts where this ship has read furthest.**
-  - Its position is `MAX(position)` across the ship's existing cursors (R9). A ship's first cursor starts at
-    position 0, the beginning of its rooms, and pages with `more` (R11).
+  - Its position is `MAX(position)` across the ship's existing cursors (R9). A ship's first cursor starts at the
+    inbox epoch: the newest message when the station first installed the inbox (`inbox_meta`). Installing onto a
+    live station therefore never replays history; on a new station the epoch is 0 (R11; changed after the
+    whole-branch review).
+  - Making a cursor prunes the ship's cursors unused for 30 days. Every read touches its cursor.
   - So a restarted watcher or a fresh session sees what arrived since the ship last read, instead of nothing.
   - Two live sessions each keep their own cursor and never take each other's messages.
 - **I5. Reading never moves the cursor; advancing is explicit and only goes forward.**

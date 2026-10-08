@@ -137,3 +137,34 @@ def test_reads_that_do_not_wait_have_a_budget(env):
     assert serenity.post('/api/ships/me/unread', json={'cursor': 's1'}).status_code == 429
     clock[0] += 61
     assert serenity.post('/api/ships/me/unread', json={'cursor': 's1'}).status_code == 200
+
+
+def test_advance_only_accepts_messages_in_the_ships_own_rooms(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    elsewhere = clients[2].post('/api/chats', json={'title': 'Not mine', 'member_ids': [users[3]['id']]}).json()['id']
+    say(clients[2], elsewhere, 'x', 'secret room')
+    hidden = max(e['id'] for e in app.state.store.events_since(0) if e['kind'] == 'chat.message')
+    assert advance(serenity, hidden, cursor='s1').status_code == 400
+
+
+def test_cursors_unused_for_thirty_days_are_pruned_when_a_new_one_is_made(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    unread(serenity, cursor='old-session')
+    clock[0] += 31 * 86400
+    unread(serenity, cursor='new-session')
+    with app.state.store.transaction() as db:
+        names = {r['name'] for r in db.execute('SELECT name FROM read_cursors WHERE ship_id=?', (ship['id'],))}
+    assert names == {'new-session'}
+
+
+def test_installing_the_inbox_on_existing_data_never_replays_history(env, tmp_path):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    say(clients[0], room, 'a', 'posted before the inbox existed')
+    store = app.state.store
+    with store.transaction() as db:  # as if this station ran without the inbox until now
+        db.execute('DROP TABLE inbox_meta')
+    from superyak_peer.db import Store
+    Store(store.data_dir, clock=store.clock)  # the next start installs the inbox onto existing data
+    assert unread(serenity, cursor='first-ever')['messages'] == []
+    say(clients[0], room, 'b', 'posted after')
+    assert [m['body'] for m in unread(serenity, cursor='first-ever')['messages']] == ['posted after']

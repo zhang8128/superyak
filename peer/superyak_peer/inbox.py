@@ -8,6 +8,7 @@ import re
 from .common import Problem, require
 
 READS_PER_MINUTE = 60
+CURSOR_IDLE_DAYS = 30
 MAX_WAIT = 25
 WAITS_PER_SHIP = 2
 CURSOR_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')
@@ -15,6 +16,9 @@ CURSOR_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')
 INBOX_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS read_cursors(ship_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, position INTEGER NOT NULL, updated REAL NOT NULL, PRIMARY KEY(ship_id, name));
 CREATE TABLE IF NOT EXISTS message_replies(message_id TEXT PRIMARY KEY, reply_to TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS inbox_meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+INSERT OR IGNORE INTO inbox_meta VALUES('epoch', (SELECT COALESCE(MAX(id), 0) FROM events WHERE kind='chat.message'));
+CREATE INDEX IF NOT EXISTS events_kind_id ON events(kind, id);
 '''
 
 
@@ -61,12 +65,19 @@ class Inbox:
         reads[actor] = recent + [now]
 
     def _cursor(self, db, actor, name):
-        """The cursor's position. A new name starts where the ship has read furthest; a first cursor starts at 0."""
+        """The cursor's position, touched so a cursor in use is never pruned. A new name starts where the ship has
+        read furthest; a ship's first cursor starts at the inbox's epoch, the newest message when the station first
+        installed the inbox, so a deploy never replays history (R11). Making a cursor prunes the ship's idle ones."""
+        now = self.clock()
         row = db.execute('SELECT position FROM read_cursors WHERE ship_id=? AND name=?', (actor, name)).fetchone()
         if row:
+            db.execute('UPDATE read_cursors SET updated=? WHERE ship_id=? AND name=?', (now, actor, name))
             return row['position']
-        start = db.execute('SELECT MAX(position) FROM read_cursors WHERE ship_id=?', (actor,)).fetchone()[0] or 0
-        db.execute('INSERT INTO read_cursors VALUES(?,?,?,?)', (actor, name, start, self.clock()))
+        db.execute('DELETE FROM read_cursors WHERE ship_id=? AND updated<?', (actor, now - CURSOR_IDLE_DAYS * 86400))
+        start = db.execute('SELECT MAX(position) FROM read_cursors WHERE ship_id=?', (actor,)).fetchone()[0]
+        if start is None:
+            start = db.execute("SELECT value FROM inbox_meta WHERE key='epoch'").fetchone()[0]
+        db.execute('INSERT INTO read_cursors VALUES(?,?,?,?)', (actor, name, start, now))
         return start
 
     def _inbox_author(self, db, author_id):
@@ -130,8 +141,10 @@ class Inbox:
             raise Problem(400, 'to is the event id of a message')
         with self.transaction() as db:
             self._inbox_ship(db, actor)
-            if not db.execute("SELECT 1 FROM events WHERE id=? AND kind='chat.message'", (to,)).fetchone():
-                raise Problem(400, 'to is not the event id of a message')
+            self._inbox_budget(actor)
+            if not db.execute('''SELECT 1 FROM events JOIN room_members ON room_members.room_id=events.resource_id AND room_members.user_id=?
+                                 WHERE events.id=? AND events.kind='chat.message' ''', (actor, to)).fetchone():
+                raise Problem(400, 'to is not the event id of a message in your rooms')
             position = max(self._cursor(db, actor, name), to)
             db.execute('UPDATE read_cursors SET position=?, updated=? WHERE ship_id=? AND name=?', (position, self.clock(), actor, name))
         return {'cursor': name, 'position': position}

@@ -112,3 +112,47 @@ def test_a_key_revoked_mid_wait_gets_nothing_more(env):
     response = asyncio.run(scenario())
     assert response.status_code == 401
     assert 'after the key was revoked' not in response.text
+
+
+def test_a_client_that_goes_away_mid_wait_frees_its_slot_on_a_real_server(env):
+    """uvicorn never cancels a handler when the client goes away; it answers receive() with http.disconnect. So the
+    wait must notice that itself (R6). A raw ASGI call reproduces exactly what uvicorn sends."""
+    import json
+    app, users, store, key, room = setup(env)
+    first = [{'type': 'http.request', 'body': json.dumps({'cursor': 's1', 'wait': 10}).encode(), 'more_body': False}]
+
+    async def receive():
+        return first.pop() if first else {'type': 'http.disconnect'}
+
+    async def send(message):
+        pass
+    scope = {'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1', 'method': 'POST', 'scheme': 'http',
+             'path': '/api/ships/me/unread', 'raw_path': b'/api/ships/me/unread', 'query_string': b'', 'root_path': '',
+             'headers': [(b'host', b'testserver'), (b'origin', b'http://testserver'), (b'content-type', b'application/json'),
+                         (b'authorization', f'Bearer {key}'.encode())],
+             'client': ('127.0.0.1', 50000), 'server': ('testserver', 80)}
+
+    async def scenario():
+        started = time.perf_counter()
+        await app(scope, receive, send)
+        elapsed = time.perf_counter() - started
+        async with ship(app, key) as serenity:
+            again = await asyncio.gather(*[serenity.post('/api/ships/me/unread', json={'cursor': f'n{n}', 'wait': 1}) for n in range(2)])
+        return elapsed, [r.status_code for r in again]
+    elapsed, statuses = asyncio.run(scenario())
+    assert elapsed < 3
+    assert statuses == [200, 200]
+
+
+def test_a_wait_counts_as_one_read(env):
+    app, users, store, key, room = setup(env)
+
+    async def scenario():
+        async with ship(app, key) as serenity:
+            for _ in range(58):
+                assert (await serenity.post('/api/ships/me/unread', json={'cursor': 's1'})).status_code == 200
+            waited = await serenity.post('/api/ships/me/unread', json={'cursor': 's1', 'wait': 3})
+            last = await serenity.post('/api/ships/me/unread', json={'cursor': 's1'})
+            over = await serenity.post('/api/ships/me/unread', json={'cursor': 's1'})
+            return waited.status_code, last.status_code, over.status_code
+    assert asyncio.run(scenario()) == (200, 200, 429)

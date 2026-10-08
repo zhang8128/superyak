@@ -233,6 +233,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             deadline, got = loop.time() + wait, store.unread(who, cursor, limit)
             while not got['messages'] and (left := deadline - loop.time()) > 0:
                 await asyncio.sleep(min(1, left))
+                if await request.is_disconnected():  # uvicorn never cancels us; the slot is freed on the way out (R6)
+                    return got
                 ship_member(request)  # the key is checked again before every read: a key revoked mid-wait gets 401
                 got = store.unread(who, cursor, limit, counted=False)
             return got
