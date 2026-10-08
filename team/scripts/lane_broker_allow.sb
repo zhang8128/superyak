@@ -1,0 +1,9 @@
+; Spike 5: what the broker's deny-default profile allows beyond what the driver generates (the broker's own folder,
+; node, Playwright, Chrome's bundle, the lane's ports). Add rules ONE at a time from the denial stream until
+; broker_page_on_loopback passes for branded Chrome, each with a one-line reason. Never add: mach-register,
+; appleevent-send, the pasteboard, securityd or Keychain services, launchd job submission (ServiceManagement, smd),
+; LaunchServices (launchservicesd, lsd), camera or microphone services, any wildcard or prefix rule for mach-lookup,
+; network-outbound or file-*, or any write under $HOME. The reviewed result becomes the lane's broker.sb.tmpl.
+
+; Homebrew node links its libraries from here (read only).
+(allow file-read* (subpath "/opt/homebrew/Cellar") (subpath "/opt/homebrew/opt") (subpath "/usr/local/Cellar") (subpath "/usr/local/opt"))

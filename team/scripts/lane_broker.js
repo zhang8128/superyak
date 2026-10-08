@@ -5,7 +5,7 @@
 const { chromium } = require(process.env.SPIKE_PLAYWRIGHT);
 (async () => {
   const server = await chromium.launchServer({
-    channel: process.env.SPIKE_CHANNEL || 'chrome', headless: true, host: '127.0.0.1', port: 0,
+    channel: process.env.SPIKE_CHANNEL || 'chrome', headless: true, host: '127.0.0.1', port: Number(process.env.SPIKE_BROKER_PORT || 0),
     wsPath: '/' + process.env.SPIKE_BROKER_SECRET, chromiumSandbox: process.env.SPIKE_BROKER_CHROME_SANDBOX === 'on',
     args: process.env.SPIKE_CHROME_DEBUG ? ['--enable-logging=stderr', '--v=1'] : [],
   });

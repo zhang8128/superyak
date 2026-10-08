@@ -12,6 +12,8 @@ const what = process.argv[2];
 const secret = new URL(process.env.SPIKE_BROKER_WS).pathname;
 const redact = text => String(text).split(secret).join('/<secret>').replace(/\x1b\[[0-9;]*m/g, '');
 const say = text => console.log(redact(text));
+// Servers the browser loads take the lane's own ports when the driver gave a block (spike 5's profile allows only those).
+const lanePort = k => (process.env.SPIKE_LANE_PORT_BASE ? +process.env.SPIKE_LANE_PORT_BASE + k : 0);
 (async () => {
   if (what === 'wrongsecret') {
     const url = new URL(process.env.SPIKE_BROKER_WS);
@@ -23,7 +25,7 @@ const say = text => console.log(redact(text));
   const page = await browser.newPage();
   let code = 1, note = '';
   if (what === 'page') {
-    const srv = require('http').createServer((q, r) => r.end('<title>lane ok</title>')).listen(0, '127.0.0.1');
+    const srv = require('http').createServer((q, r) => r.end('<title>lane ok</title>')).listen(lanePort(0), '127.0.0.1');
     await new Promise(resolve => srv.on('listening', resolve));
     await page.goto(`http://127.0.0.1:${srv.address().port}/`, { timeout: 15000 });
     note = await page.title();
@@ -51,7 +53,7 @@ const say = text => console.log(redact(text));
     const srv = require('http').createServer((q, r) => {
       if (q.url === '/f') { r.setHeader('Content-Disposition', `attachment; filename="${name}"`); r.end('lane spike write probe\n'); }
       else r.end('<a id="f" href="/f">f</a>');
-    }).listen(0, '127.0.0.1');
+    }).listen(lanePort(1), '127.0.0.1');
     await new Promise(resolve => srv.on('listening', resolve));
     const cdp = await browser.newBrowserCDPSession();
     const { browserContextIds } = await cdp.send('Target.getBrowserContexts');
