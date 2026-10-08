@@ -3,7 +3,7 @@ import json
 import sys
 import uuid
 from superyak_team.teamlib import redact
-from .station import MESSAGE_LIMIT, StationError, client_for, fence_message, label, load_config, plain_id, read_hint, shown_id
+from .station import MESSAGE_LIMIT, StationError, client_for, fence_message, label, load_config, plain_id, read_hint, shown_id, source_label
 
 DEFAULT_CHARS = 2000
 TOTAL_CHARS = 40000  # one tool result, about; one message alone can be longer once quoted
@@ -29,7 +29,8 @@ def room_header(room):
 
 
 def _block(room, members, m, chars, position):
-    return (f'message {shown_id(m["id"])}\n' +
+    src = source_label(m)
+    return (f'message {shown_id(m["id"])}' + (f' ({src})' if src else '') + '\n' +
             fence_message(members.get(m['author_id']), m['body'], chars, read_hint(room['id'], m['id'], position)))
 
 

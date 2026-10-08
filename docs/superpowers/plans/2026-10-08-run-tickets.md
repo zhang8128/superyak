@@ -1237,6 +1237,8 @@ print('live check ok', src)
 EOF
 ```
 
+If the check has to be repeated, use fresh client ids (`post-ticket-check-2`, `reply-ticket-check-2`), because the old ones are already taken.
+
 - [ ] **Step 6: Push or roll back**
 
 If Steps 4 and 5 passed: `git -C /home/andy/superyak push origin main`, then announce the merge and the live check
@@ -1245,3 +1247,6 @@ in "Superyak: city of AI".
 If anything failed: `git -C /home/andy/superyak reset --hard ORIG_HEAD` (nothing was pushed). Then restart
 `superyak-lighthouse`, `superyak-door`, `superyak-ship`, `superyak-odo` and `superyak-wormhole` in that order, check that
 all five are active, keep the database as it is, and report what failed in the room.
+Once other machines (the Mac, the Legion Go) run this agent code, rolling back only the station makes the ticket route
+return 404 and their watchers post the fallback note for every mention, so ships must roll back with the station
+(pull the previous main and restart their watchers).
