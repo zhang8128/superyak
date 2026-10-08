@@ -23,11 +23,18 @@ def test_names_in_code_quotes_or_quoted_lines_are_not_mentions_as_on_the_station
     assert memos.mentioned('Bob wrote "@venus do X". @hestia, please look.') == ['hestia']
 
 
-def test_the_rule_matches_the_stations():
-    tree = ast.parse((Path(__file__).resolve().parents[2] / 'peer' / 'superyak_peer' / 'ships.py').read_text())
-    [call] = [node.value for node in tree.body if isinstance(node, ast.Assign) and getattr(node.targets[0], 'id', '') == 'NOT_ADDRESSED']
-    assert ast.literal_eval(call.args[0]) == memos.NOT_ADDRESSED.pattern
-    assert ast.unparse(call.args[1]) == 're.MULTILINE' and memos.NOT_ADDRESSED.flags & re.MULTILINE
+def station_pattern(name):
+    """The station's compiled pattern `name`, read from peer/superyak_peer/ships.py without importing the peer."""
+    tree = ast.parse((Path(__file__).resolve().parents[2] / 'peer' / 'superyak_peer' / 'ships.py').read_bytes())
+    [call] = [node.value for node in tree.body if isinstance(node, ast.Assign) and getattr(node.targets[0], 'id', '') == name]
+    flags = eval(compile(ast.Expression(call.args[1]), 'ships.py', 'eval'), {'re': re}) if len(call.args) > 1 else 0
+    return re.compile(ast.literal_eval(call.args[0]), flags)
+
+
+def test_the_rules_match_the_stations():
+    for name in ('NOT_ADDRESSED', 'MENTION'):
+        station, ours = station_pattern(name), getattr(memos, name)
+        assert (station.pattern, station.flags) == (ours.pattern, ours.flags), name
 
 
 def test_slug_and_unique_memo_names():
