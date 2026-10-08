@@ -117,6 +117,25 @@ def _fetch_instructions(config_path, transport):
     return client.instructions()
 
 
+def _with_withdrawals(parts, withdrawn, budget):
+    """The notice parts, then the withdrawal lines oldest first while they fit, keeping room for one summary line
+    that says how many more no longer apply. Every path returns at most `budget` characters (when the parts do)."""
+    def text(lines):
+        return '\n\n'.join(parts + lines)
+
+    def summary(n):
+        return (f'{n} more instructions no longer apply to this ship.' if n > 1 else '1 more instruction no longer applies to this ship.') \
+            + ' Only what station_instructions lists now is binding.'
+    shown = []
+    for line in withdrawn:
+        left = len(withdrawn) - len(shown) - 1
+        if len(text(shown + [line] + ([summary(left)] if left else []))) > budget:
+            break
+        shown.append(line)
+    left = len(withdrawn) - len(shown)
+    return text(shown + ([summary(left)] if left else []))
+
+
 def _instructions(data, config_path, event, session_id, clock, sessions_dir, budget):
     layers = data.get('layers') or []
     path = _session_file(sessions_dir or config_path.parent / 'sessions', session_id) if session_id else None
@@ -130,7 +149,12 @@ def _instructions(data, config_path, event, session_id, clock, sessions_dir, bud
         if data.get('blocks'):
             text = START_PREAMBLE + '\n\n' + data['blocks']
             if len('\n\n'.join([text] + withdrawn)) > budget:
-                text = '\n'.join([START_PREAMBLE] + [_header(l) for l in layers] + [POINTER])
+                heads, room = [], budget - len(START_PREAMBLE) - len(POINTER) - 300  # 300: room left for withdrawal lines
+                for l in layers:
+                    if sum(len(h) + 1 for h in heads) + len(_header(l)) + 1 > room:
+                        break
+                    heads.append(_header(l))
+                text = '\n'.join([START_PREAMBLE] + heads + [POINTER])
             parts = [text]
     else:
         changed = [l for l in layers if before.get(l['layer_id']) != l['revision']]
@@ -156,7 +180,7 @@ def _instructions(data, config_path, event, session_id, clock, sessions_dir, bud
             _prune(path.parent, path, clock())
         except Exception:  # noqa: BLE001 - the state is written; pruning can wait
             pass
-    return '\n\n'.join(parts + withdrawn)
+    return _with_withdrawals(parts, withdrawn, budget)
 
 
 def _run_inbox(config_path, session_id, transport):

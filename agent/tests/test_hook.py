@@ -411,11 +411,52 @@ def test_messages_off_leaves_the_inbox_cursor_alone(station, ship_config, tmp_pa
     assert fake.unread_calls == [] and fake.cursors == {}
 
 
-def test_a_notice_plus_messages_stays_within_the_total(station, ship_config, tmp_path):
+def test_a_notice_that_fits_alone_but_not_beside_the_messages_falls_back_within_the_total(station, ship_config, tmp_path):
     fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
     room = fake.room('Promenade', andy, jenn, serenity)
     for n in range(10):
         fake.say(room, jenn, f'message {n} ' + 'x' * 700)
-    law(fake, serenity, [(f'N{n}', 1, f'New {n}', 'x' * 4800) for n in range(10)])
+    probe = hook.run(config_path, transport=fake, event='prompt', session_id='probe', sessions_dir=tmp_path / 'p', messages=True)
+    assert 2000 < len(probe) <= 4000
+    law(fake, serenity, [('N', 1, 'New rule', 'B' * 8800)])
+    block = fake.instruction_state[serenity['id']]['layers'][0]['block']
+    assert len(hook.CHANGE_PREAMBLE) + 2 + len(block) <= 9500 - 0 and len(block) > 9500 - len(probe) - 2  # fits alone, not beside the messages
     text = hook.run(config_path, transport=fake, event='prompt', session_id='s1', sessions_dir=tmp_path / 'sessions', messages=True)
-    assert 'message 0' in text and 'call the station_instructions tool' in text and len(text) <= 9500
+    assert hook.HEADER in text and hook.POINTER in text and 'B' * 100 not in text and len(text) <= hook.TOTAL_CHARS
+
+
+SUMMARY_END = re.compile(r'\d+ more instructions no longer apply to this ship\. Only what station_instructions lists now is binding\.$')
+
+
+def long_titled(count):
+    return [(f'W{n:02d}', 1, f'{n:02d}' + 't' * 198, 'Andy') for n in range(count)]
+
+
+def test_many_withdrawals_at_session_start_fit_the_budget_and_end_with_a_summary(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    named_law(fake, serenity, long_titled(30))
+    start(fake, config_path, 's1', sessions)
+    law(fake, serenity, [('Z', 1, 'Z rule', 'B' * 9600)])  # the full text does not fit: headers
+    text = start(fake, config_path, 's1', sessions)
+    assert len(text) <= 9500 and hook.POINTER in text and SUMMARY_END.search(text) and 'no longer apply to this ship. What this' in text
+    assert (sessions.glob('*.json') and 'W00' not in json.dumps([json.loads(f.read_text()) for f in sessions.glob('*.json')]))  # all recorded as gone
+
+
+def test_many_withdrawals_at_a_prompt_fit_the_budget_and_end_with_a_summary(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    named_law(fake, serenity, long_titled(30))
+    start(fake, config_path, 's1', sessions)
+    named_law(fake, serenity, [(f'N{n:02d}', 1, f'{n:02d}' + 't' * 198, 'n' * 80) for n in range(40)])  # not even headers fit: POINTER
+    text = prompt(fake, config_path, 's1', sessions)
+    assert len(text) <= 9500 and text.startswith(hook.POINTER) and SUMMARY_END.search(text)
+
+
+def test_one_withdrawal_left_over_uses_the_singular_summary():
+    lines = ['L' * 150] * 3
+    one = '1 more instruction no longer applies to this ship. Only what station_instructions lists now is binding.'
+    budget = len('\n\n'.join(['P'] + lines[:2] + [one]))
+    text = hook._with_withdrawals(['P'], lines, budget)
+    assert text.endswith(one) and text.count('L' * 150) == 2 and len(text) <= budget
+    assert hook._with_withdrawals(['P'], lines, 10_000) == '\n\n'.join(['P'] + lines)
