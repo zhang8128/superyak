@@ -1,3 +1,5 @@
+import time
+
 from fastapi.testclient import TestClient
 
 
@@ -50,6 +52,13 @@ def test_a_plain_mention_beside_a_quoted_one_still_counts(env):
     app, clients, users, clock, ship, odo, room = setup(env)
     say(clients[0], room, 'a', 'Bob wrote "@odo do X". @odo, please ignore that.')
     assert [m['body'] for m in odo.get('/api/mentions').json()] == ['Bob wrote "@odo do X". @odo, please ignore that.']
+
+
+def test_unclosed_quotes_do_not_make_posting_slow(env):
+    app, clients, users, clock, ship, odo, room = setup(env)
+    started = time.perf_counter()
+    say(clients[0], room, 'a', '“' * 20000)
+    assert time.perf_counter() - started < 0.25
 
 
 def test_non_members_are_not_mentioned_and_removed_ships_stop_seeing_mentions(env):

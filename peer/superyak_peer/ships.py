@@ -12,8 +12,9 @@ SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')
 CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 POSTS_PER_MINUTE = 30
 MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
-# A name shown as code, in double quotes or on a quoted line is talked about, not addressed.
-NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^”\n]*”|^[ \t]*>[^\n]*', re.MULTILINE)
+# A name shown as code, in double quotes or on a quoted line is talked about, not addressed. Each span
+# stops at its own opening mark too, so unclosed marks cannot make one message cost quadratic time.
+NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^“”\n]*”|^[ \t]*>[^\n]*', re.MULTILINE)
 
 SHIP_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS ship_keys(id TEXT PRIMARY KEY, ship_id TEXT NOT NULL REFERENCES users(id), key_hash TEXT UNIQUE NOT NULL, created REAL NOT NULL, last_used REAL, revoked REAL);
