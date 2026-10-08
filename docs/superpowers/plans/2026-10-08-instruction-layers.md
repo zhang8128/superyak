@@ -953,3 +953,8 @@ test uses the same labels as the note flow on purpose.
 7. Push main. Announce, and tell the other machines to pull main and re-run `dock`.
 8. Rollback: `git reset --hard ORIG_HEAD` before the push, then restart in the same order. The installed hooks stay
    harmless under the old code, because it ignores the environment variables. Ships roll back with the station.
+   Deployed 2026-10-08 as ac76d85; the backup is `~/.local/share/superyak/backups/peer.sqlite3.pre-instruction-layers-20261008-163222`.
+   What the old station can't open (verified against bdf00af): instructions layers and every ship draft, including a
+   ship draft the owner turned into a note (it keeps `drafted_by`); each gets 400 "Unknown layer field" on preview and
+   activate. Note layers open, preview and activate normally. An active instructions layer stays active and can still
+   be withdrawn.

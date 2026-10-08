@@ -109,23 +109,39 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
     config_path = Path(config_path)
     marker = Path(sessions_dir or config_path.parent / 'sessions') / UNREACHABLE
     if _recently_unreachable(marker, clock()):
+        _forget_unless(False, config_path, event, session_id, sessions_dir)
         return ''
     link = _Link(transport)
     try:
-        return _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
-                        lambda: monotonic() - started > INSTRUCTIONS_DEADLINE)
+        text, shown = _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
+                               lambda: monotonic() - started > INSTRUCTIONS_DEADLINE)
+        _forget_unless(shown, config_path, event, session_id, sessions_dir)
+        return text
     finally:
         _note_reachability(marker, link, clock())
 
 
+def _forget_unless(shown, config_path, event, session_id, sessions_dir):
+    """A session start that could not show the law (a quiet minute, a failed fetch) forgets what the session knew: after
+    compaction or a resume the law is no longer in its context, and an empty state makes the next prompt show it whole.
+    A failed prompt keeps the state; nothing left the context."""
+    if shown or event != 'session-start' or not session_id:
+        return
+    try:
+        _session_file(sessions_dir or config_path.parent / 'sessions', session_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, late):
-    data, text = None, ''
+    """(text, shown): shown is whether the instructions step ran to the end, so the session's state matches its context."""
+    data, text, shown = None, '', False
     wants = event == 'session-start' or bool(session_id)
     if wants:
         try:
             data = _fetch_instructions(config_path, link(INBOX_CALL_TIMEOUT))
         except OSError:
-            return ''  # the station is down: do not spend a second timeout on the messages
+            return '', False  # the station is down: do not spend a second timeout on the messages
         except Exception:  # noqa: BLE001 - a hook must never break the prompt
             data = None
     if event != 'session-start' and messages and not late():
@@ -138,10 +154,11 @@ def _run_all(config_path, state_path, clock, link, session_id, event, messages, 
         try:
             part = _instructions(data, config_path, event, session_id, clock, sessions_dir,
                                  TOTAL_CHARS - (len(text) + 2 if text else 0))
+            shown = True
         except Exception:  # noqa: BLE001
             part = ''
         text = '\n\n'.join(t for t in (part, text) if t)
-    return text
+    return text, shown
 
 
 def _session_file(sessions_dir, session_id):
