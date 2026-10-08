@@ -135,10 +135,18 @@ def main(argv=None):
         write_private(args.out, run_mcp_config(args.config, args.adna_dist))
         return 0
     if args.command == 'status':
-        from .station import client_for, load_config
+        from .station import client_for, label, load_config
         config = load_config(args.config)
-        me = client_for(config).me()
+        client = client_for(config)
+        me = client.me()
         print(f'{me["name"]} (@{me["username"]}) is docked at {config["station"]}; workspace {config["workspace"]}.')
+        layers = client.instructions().get('layers') or []
+        if not layers:
+            print('Instructions: none')
+        else:
+            print('Instructions:')
+            for layer in layers:
+                print(f'  {label(layer.get("title"))} · revision {layer.get("revision")} · signed by {label(layer.get("signer_name"))}')
         return 0
     if args.command == 'undock':
         from .install import uninstall_all
