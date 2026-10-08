@@ -77,17 +77,31 @@ class StationClient:
     def room(self, room_id):
         return self.request('GET', f'/api/chats/{quote(room_id, safe="")}')
 
-    def post(self, room_id, body, client_message_id, ticket_id=None):
+    def post(self, room_id, body, client_message_id, ticket_id=None, reply_to=None):
         payload = {'client_message_id': client_message_id, 'body': body}
         if ticket_id:
             payload['ticket_id'] = ticket_id
+        if reply_to:
+            payload['reply_to'] = reply_to
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/messages', payload)
+
+    def unread(self, cursor, limit=30, wait=0):
+        return self.request('POST', '/api/ships/me/unread', {'cursor': cursor, 'limit': limit, 'wait': wait})
+
+    def advance(self, cursor, to):
+        return self.request('POST', '/api/ships/me/unread/advance', {'cursor': cursor, 'to': to})
 
     def ticket(self, message_id):
         return self.request('POST', '/api/ships/me/tickets', {'message_id': message_id})
 
     def finish_ticket(self, ticket_id):
         return self.request('POST', f'/api/ships/me/tickets/{quote(ticket_id, safe="")}/finish', {})
+
+    def instructions(self):
+        return self.request('GET', '/api/ships/me/instructions')
+
+    def draft_instructions(self, title, body):
+        return self.request('POST', '/api/ships/me/drafts', {'title': title, 'body': body})
 
     def mentions(self, after=0):
         return self.request('GET', f'/api/mentions?after={int(after)}')
@@ -190,9 +204,16 @@ def source_label(message):
     return 'no run ticket' if source.get('kind') == 'post' else ''
 
 
+def defuse(text):
+    """Line breaks normalised, and every line that starts like an instruction header (`===`) or a withdrawal
+    (`Instructions '`) indented by a space, so no room message can imitate the law."""
+    return '\n'.join(' ' + line if line.startswith(('===', "Instructions '")) else line for line in text.splitlines())
+
+
 def fence_message(member, body, limit, hint='', source=''):
     """A message fenced as quoted data, at most `limit` characters of it. A cut is said after the fence,
     where the author's text cannot imitate it, so a reader never mistakes part of a message for all of it."""
     sender = describe(member) + (f', {source}' if source else '')
-    text = fence_external(sender, body[:limit], limit=limit)
+    quoted = defuse(body[:limit])
+    text = fence_external(sender, quoted, limit=max(len(quoted), 1))
     return text + f'\n[cut at {limit:,} of {len(body):,} characters{hint}]' if len(body) > limit else text

@@ -2,20 +2,38 @@
 import json
 from .common import Problem, text, ids, uid, require, encode
 
-FIELDS = {'title', 'body', 'audience_users', 'audience_spaces', 'public', 'attachment_ids'}
-DEFAULT = {'title': 'Untitled', 'body': '', 'audience_users': [], 'audience_spaces': [], 'public': False, 'attachment_ids': []}
+FIELDS = {'kind', 'title', 'body', 'audience_users', 'audience_spaces', 'public', 'attachment_ids'}
+DEFAULT = {'kind': 'note', 'title': 'Untitled', 'body': '', 'audience_users': [], 'audience_spaces': [], 'public': False, 'attachment_ids': []}
+SERVER_KEYS = {'drafted_by', 'drafted_at'}
 
 class Layers:
-    def _draft(self, db, actor, data, previous=None):
-        if set(data) - FIELDS - {'version'}:
+    def _draft(self, db, actor, data, previous=None, stored=False):
+        if set(data) - (FIELDS | {'version'} | (SERVER_KEYS if stored else set())):
             raise Problem(400, 'Unknown layer field')
-        draft = {**(previous or DEFAULT), **{k: v for k, v in data.items() if k in FIELDS}}
+        draft = {**DEFAULT, **(previous or {}), **{k: v for k, v in data.items() if k in FIELDS or (stored and k in SERVER_KEYS)}}
+        if draft['kind'] not in ('note', 'instructions'):
+            raise Problem(400, 'Invalid layer kind')
         text(draft['title'], 'title')
         text(draft['body'], 'body', 100000, empty=True)
         if type(draft['public']) is not bool:
             raise Problem(400, 'Invalid public selection')
         for field in ('audience_users', 'audience_spaces', 'attachment_ids'):
             draft[field] = ids(draft[field])
+        if draft['kind'] == 'instructions':
+            title = draft['title']
+            if len(title) > 200 or title.splitlines() != [title]:
+                raise Problem(400, 'An instructions title is one line of at most 200 characters')
+            if len(draft['body']) > 20000:
+                raise Problem(400, 'Instructions are at most 20,000 characters')
+            if '\x00' in title or '\x00' in draft['body']:
+                raise Problem(400, 'Instructions cannot contain a NUL character')
+            if draft['audience_spaces'] or draft['public'] or draft['attachment_ids']:
+                raise Problem(400, 'Instructions go to ships only')
+            if len(draft['audience_users']) > 50:
+                raise Problem(400, 'Too many ships')
+            for ship_id in draft['audience_users']:
+                if not db.execute("SELECT 1 FROM users WHERE id=? AND kind='ship'", (ship_id,)).fetchone():
+                    raise Problem(400, 'Instructions go to ships only')
         self._known_contacts(db, draft['audience_users'])
         for key in draft['audience_spaces']:
             self._space(db, key, actor)
@@ -24,13 +42,15 @@ class Layers:
             attachment_size += require(db.execute('SELECT size FROM files WHERE id=? AND owner_id=?', (key, actor)).fetchone())[0]
         if any(u.startswith('remote_') for u in draft['audience_users']) and attachment_size > 4 * 1024 * 1024:
             raise Problem(400, 'Remote release attachments exceed 4 MiB')
+        if draft['kind'] == 'note':
+            del draft['kind']  # never stored for a note: a rolled-back station refuses any key it does not know
         return draft
 
     def _owned_layer(self, db, actor, key):
         return require(db.execute('SELECT * FROM layers WHERE id=? AND owner_id=?', (key, actor)).fetchone())
 
     def _layer_json(self, row):
-        return {**json.loads(row['draft']), 'id': row['id'], 'owner_id': row['owner_id'], 'version': row['version'], 'resource_version': row['resource_version'], 'active_revision': row['active_revision'], 'state': 'active' if row['active_revision'] else 'draft'}
+        return {'kind': 'note', **json.loads(row['draft']), 'id': row['id'], 'owner_id': row['owner_id'], 'version': row['version'], 'resource_version': row['resource_version'], 'active_revision': row['active_revision'], 'state': 'active' if row['active_revision'] else 'draft'}
 
     def create_layer(self, actor, data):
         with self.transaction() as db:
@@ -70,7 +90,7 @@ class Layers:
     def preview_layer(self, actor, key):
         with self.transaction() as db:
             row = self._owned_layer(db, actor, key)
-            draft = self._draft(db, actor, json.loads(row['draft']))
+            draft = self._draft(db, actor, json.loads(row['draft']), stored=True)
             details = self._audience_details(db, draft)
             files = [dict(require(db.execute('SELECT id,name,media_type,size,digest FROM files WHERE id=? AND owner_id=?', (fid,actor)).fetchone())) for fid in draft['attachment_ids']]
             people = []
@@ -85,7 +105,9 @@ class Layers:
             row = self._owned_layer(db, actor, key)
             if type(version) is not int or version != row['version']:
                 raise Problem(409, 'Draft changed; preview this version again')
-            snapshot = self._draft(db, actor, json.loads(row['draft']))
+            snapshot = self._draft(db, actor, json.loads(row['draft']), stored=True)
+            if snapshot.get('kind') == 'instructions':
+                self._check_instruction_caps(db, actor, key, snapshot)
             if space_versions is not None:
                 current = {space['id']:space['version'] for space in self._audience_details(db, snapshot)}
                 if not isinstance(space_versions, dict) or space_versions != current:
@@ -160,7 +182,7 @@ class Layers:
             text(actor, 'actor ID', 100)
         row = require(db.execute('SELECT layers.id,layers.owner_id,layers.resource_version,layer_revisions.* FROM layers JOIN layer_revisions ON layers.id=layer_revisions.layer_id AND layers.active_revision=layer_revisions.revision WHERE layers.id=?', (key,)).fetchone())
         snapshot = json.loads(row['snapshot'])
-        content = {'id': key, 'revision': row['revision'], 'title': snapshot['title'], 'body': snapshot['body'], 'attachment_ids': snapshot['attachment_ids']}
+        content = {'id': key, 'revision': row['revision'], 'title': snapshot['title'], 'body': snapshot['body'], 'kind': snapshot.get('kind', 'note'), 'attachment_ids': snapshot['attachment_ids']}
         if public:
             if not snapshot['public']:
                 raise Problem(404, 'Not found')
@@ -198,7 +220,7 @@ class Layers:
     def layer_revisions(self, actor, key):
         with self.transaction() as db:
             row = self._owned_layer(db, actor, key)
-            return [{**json.loads(r['snapshot']), 'id': key, 'owner_id': row['owner_id'], 'revision': r['revision'], 'draft_version': r['draft_version'], 'created': r['created']} for r in db.execute('SELECT * FROM layer_revisions WHERE layer_id=? ORDER BY revision', (key,))]
+            return [{'kind': 'note', **json.loads(r['snapshot']), 'id': key, 'owner_id': row['owner_id'], 'revision': r['revision'], 'draft_version': r['draft_version'], 'created': r['created']} for r in db.execute('SELECT * FROM layer_revisions WHERE layer_id=? ORDER BY revision', (key,))]
 
     def can_deliver_layer(self, key, actor, resource_version):
         try:

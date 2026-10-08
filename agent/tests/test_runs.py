@@ -279,3 +279,24 @@ def test_builder_runs_do_not_get_extra_read_paths(repo, tmp_path, claude, monkey
     config = {'ship': 'serenity', 'ship_name': 'Serenity', 'owner_id': 'u-andy', 'workspace': str(repo), 'read_paths': [str(lattice)]}
     ClaudeRunner(config, tmp_path / 'runs', claude=script, memory_cap=False).run('build', 'Add notes', 'm2')
     assert not any(str(lattice.resolve()) in rule for rule in calls()[0]['settings']['permissions']['allow'])
+
+
+def test_instructions_follow_the_persona_in_one_system_prompt_argument(tmp_path):
+    runner = ClaudeRunner({'workspace': str(tmp_path), 'ship': 'serenity', 'owner_id': 'u1'}, tmp_path / 'runs', memory_cap=False)
+    plain = runner._command(tmp_path / 's.json')
+    assert plain[plain.index('--append-system-prompt') + 1] == runner.persona
+    command = runner._command(tmp_path / 's.json', instructions='=== Instructions: X ===\nRun tests.')
+    assert command[command.index('--append-system-prompt') + 1] == runner.persona + '\n\n=== Instructions: X ===\nRun tests.'
+    assert command.count('--append-system-prompt') == 1
+
+
+def test_a_nul_never_reaches_the_command_line(tmp_path):
+    """Break caught: Popen refuses an argument with a NUL, so three runs failed and the mention got the fallback note."""
+    runner = ClaudeRunner({'workspace': str(tmp_path), 'ship': 'serenity', 'ship_name': 'Sere\x00nity', 'owner_id': 'u1'},
+                          tmp_path / 'runs', memory_cap=False)
+    assert '\x00' in runner.persona
+    for instructions in ('', '=== Instructions: X\x00 ===\nRun\x00 tests.'):
+        command = runner._command(tmp_path / 's.json', instructions=instructions)
+        assert not any('\x00' in str(arg) for arg in command)
+    assert command[command.index('--append-system-prompt') + 1].endswith('\n\n=== Instructions: X ===\nRun tests.')
+    assert 'You are Serenity' in command[command.index('--append-system-prompt') + 1]

@@ -10,6 +10,8 @@ class FakeStation:
         self.users, self.rooms, self.mention_rows, self.keys = {}, {}, [], {}
         self.clock, self.counter, self.down = 1000.0, 0, False
         self.tickets, self.sources, self.ticket_override, self.label_refusals = {}, {}, {}, set()
+        self.blocks, self.instruction_state, self.drafts = {}, {}, []
+        self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -47,7 +49,8 @@ class FakeStation:
         last = max([m['created'] for m in room['messages']], default=0.0)
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
-                'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'messages': [dict(m, source=self.source_of(m)) for m in room['messages']]}
+                'members': [self.users[i] for i in room['member_ids'] if i in self.users],
+                'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']]}
 
     def source_of(self, message):
         author = self.users.get(message['author_id'], {})
@@ -84,9 +87,15 @@ class FakeStation:
             if method == 'POST' and segments[3:] == ['messages']:
                 payload = json.loads(data)
                 ticket_id = payload.get('ticket_id')
+                reply_to = payload.get('reply_to')
                 existing = next((m for m in room['messages'] if m['author_id'] == me and m['client_message_id'] == payload['client_message_id']), None)
+                if ':' in room['id'] and reply_to is not None:
+                    return 400, b'{"error": "Replies are labelled in local rooms only"}'
                 if existing is not None:
-                    return ok(existing, 201) if existing['body'] == payload['body'] else (409, b'{"error": "Message ID already used with different text"}')
+                    same = existing['body'] == payload['body'] and self.replies.get(existing['id']) == reply_to
+                    return ok(dict(existing, replayed=True), 201) if same else (409, b'{"error": "Message ID already used with different text"}')
+                if reply_to is not None and not any(m['id'] == reply_to for m in room['messages']):
+                    return 400, b'{"error": "reply_to is not a message in this room"}'
                 if ticket_id is not None:
                     ticket = self.tickets.get(ticket_id)
                     ticket_room = next((r['id'] for r in self.rooms.values() for m in r['messages'] if ticket and m['id'] == ticket['message_id']), None)
@@ -98,7 +107,9 @@ class FakeStation:
                     return 409, b'{"error": "Message ID already used with different text"}'
                 if ticket_id is not None:
                     self.sources[message['id']] = ticket_id
-                return ok(message, 201)
+                if reply_to is not None:
+                    self.replies[message['id']] = reply_to
+                return ok(dict(message, replayed=False), 201)
         if method == 'GET' and path == '/api/mentions':
             after, rows = int(query.get('after', ['0'])[0]), []  # one page holds at most 50, as on the station
             for row in self.mention_rows:
@@ -107,6 +118,24 @@ class FakeStation:
                     rows.append({'seq': row['seq'], 'message_id': message['id'], 'room_id': row['room_id'], 'body': message['body'],
                                  'created': message['created'], 'author': self.users[message['author_id']]})
             return ok(rows[:50])
+        if method == 'POST' and path == '/api/ships/me/unread':
+            payload = json.loads(data)
+            name, limit = payload.get('cursor') or 'default', payload.get('limit', 30)
+            self.unread_calls.append(dict(payload))
+            position = self.cursors.setdefault((me, name), max([p for (s, _), p in self.cursors.items() if s == me], default=0))
+            rows = [(int(m['id'][1:]), r, m) for r in self.rooms.values() if me in r['member_ids'] for m in r['messages']
+                    if m['author_id'] != me and int(m['id'][1:]) > position]
+            rows.sort(key=lambda row: row[0])
+            return ok({'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': [
+                {'event_id': n, 'message_id': m['id'], 'room_id': r['id'], 'room_title': r['title'], 'body': m['body'], 'created': m['created'],
+                 'author': self.users[m['author_id']], 'mentions_me': any(x['message_id'] == m['id'] and x['user_id'] == me for x in self.mention_rows),
+                 'reply_to': self.replies.get(m['id']), 'source': self.source_of(m)} for n, r, m in rows[:limit]]})
+        if method == 'POST' and path == '/api/ships/me/unread/advance':
+            payload = json.loads(data)
+            name = payload.get('cursor') or 'default'
+            position = self.cursors.setdefault((me, name), max([p for (s, _), p in self.cursors.items() if s == me], default=0))
+            self.cursors[(me, name)] = max(position, payload['to'])
+            return ok({'cursor': name, 'position': self.cursors[(me, name)]})
         if method == 'DELETE' and path == '/api/ships/me/key':
             self.keys.pop(key)
             return ok({'ok': True})
@@ -127,10 +156,16 @@ class FakeStation:
             ticket = {'id': f't{len(self.tickets) + 1}', 'ship_id': me, 'message_id': message_id, 'mode': 'build' if build else 'read',
                       'basis': 'owner' if build else 'none', 'root_id': ship['owner_id'] if build else None,
                       'root_name': self.users[ship['owner_id']]['name'] if build else None, 'chain': [], 'hops': 0,
-                      'instructions': [], 'blocks': '', 'footer': f'Builder for {self.users[ship["owner_id"]]["name"]} (owner)' if build else '',
+                      'instructions': [], 'blocks': self.blocks.get(me, ''), 'footer': f'Builder for {self.users[ship["owner_id"]]["name"]} (owner)' if build else '',
                       'status': 'running'}
             self.tickets[ticket['id']] = ticket
             return ok(ticket)
+        if method == 'GET' and path == '/api/ships/me/instructions':
+            return ok(self.instruction_state.get(me) or {'instructions': [], 'layers': [], 'blocks': self.blocks.get(me, '')})
+        if method == 'POST' and path == '/api/ships/me/drafts':
+            payload = json.loads(data)
+            self.drafts.append((payload['title'], payload['body']))
+            return ok({'id': 'L9', 'title': payload['title'], 'version': 1, 'state': 'draft', 'drafted_by': me}, 201)
         if method == 'POST' and segments[:4] == ['api', 'ships', 'me', 'tickets'] and segments[5:] == ['finish']:
             ticket = self.tickets.get(segments[4])
             if ticket is None or ticket['ship_id'] != me:
