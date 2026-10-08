@@ -67,6 +67,72 @@ def test_a_draft_from_before_this_step_still_saves_as_a_note(env):
     assert saved.status_code == 200 and saved.json()['kind'] == 'note'
 
 
+OLD_FIELDS = {'title', 'body', 'audience_users', 'audience_spaces', 'public', 'attachment_ids'}  # step 1's _draft refuses any other key
+
+
+def stored(app, layer_id):
+    with app.state.store.transaction() as db:
+        return json.loads(db.execute('SELECT draft FROM layers WHERE id=?', (layer_id,)).fetchone()['draft'])
+
+
+def test_a_note_is_stored_without_a_kind_so_a_rolled_back_station_still_reads_it(env):
+    """Break caught: after a rollback, the old station answers 400 Unknown layer field for every note saved since the deploy."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    note = new_layer(clients[0], kind='note', title='Plain', body='Hello.')
+    assert note['kind'] == 'note' and set(stored(app, note['id'])) <= OLD_FIELDS
+    saved = clients[0].put(f'/api/layers/{note["id"]}', json={'version': note['version'], 'kind': 'note', 'body': 'Edited.'})
+    assert saved.status_code == 200 and saved.json()['kind'] == 'note' and set(stored(app, note['id'])) <= OLD_FIELDS
+    assert activate(clients[0], saved.json()).status_code == 200
+    with app.state.store.transaction() as db:
+        snapshot = json.loads(db.execute('SELECT snapshot FROM layer_revisions WHERE layer_id=?', (note['id'],)).fetchone()['snapshot'])
+    assert 'kind' not in snapshot
+    assert clients[0].get(f'/api/layers/{note["id"]}/revisions').json()[0]['kind'] == 'note'
+    law = new_layer(clients[0], kind='instructions', title='Rules', body='x', audience_users=[ship['id']])
+    assert stored(app, law['id'])['kind'] == 'instructions'
+    back = clients[0].put(f'/api/layers/{law["id"]}', json={'version': law['version'], 'kind': 'note', 'audience_users': []})
+    assert back.status_code == 200 and back.json()['kind'] == 'note' and set(stored(app, law['id'])) <= OLD_FIELDS
+    drafted = ship_client(app, key).post('/api/ships/me/drafts', json={'title': 'Proposed', 'body': 'y'}).json()
+    assert stored(app, drafted['id'])['kind'] == 'instructions'
+
+
+def test_a_nul_character_never_reaches_instructions(env):
+    """Break caught: a NUL in instructions makes every watcher run fail (Popen refuses an argument with one)."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    for field in ('title', 'body'):
+        refused = clients[0].post('/api/layers', json={'kind': 'instructions', 'audience_users': [ship['id']], 'title': 'T', field: 'a\x00b'})
+        assert refused.status_code == 400, field
+        assert ship_client(app, key).post('/api/ships/me/drafts', json={'title': 'T', 'body': 'B', field: 'a\x00b'}).status_code == 400, field
+    note = new_layer(clients[0], title='A note', body='a\x00b')  # a note may carry one; it never reaches a command line
+    switched = clients[0].put(f'/api/layers/{note["id"]}', json={'version': note['version'], 'kind': 'instructions', 'audience_users': [ship['id']]})
+    assert switched.status_code == 400
+    law = new_layer(clients[0], kind='instructions', title='Rules', body='fine', audience_users=[ship['id']])
+    old = json.dumps({**stored(app, law['id']), 'body': 'a\x00b'})
+    with app.state.store.transaction() as db:  # a draft stored before this check
+        db.execute('UPDATE layers SET draft=? WHERE id=?', (old, law['id']))
+    assert clients[0].get(f'/api/layers/{law["id"]}/preview').status_code == 400
+    assert activate(clients[0], law).status_code == 400 and binding(app, ship['id']) == []
+
+
+def test_instructions_refuse_attachments_too_many_ships_and_remote_contacts(env):
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    upload = {'name': 'notes.txt', 'media_type': 'text/plain', 'content_base64': 'aGVsbG8='}
+    file_id = clients[0].post('/api/files', json=upload).json()['id']
+    with app.state.store.transaction() as db:
+        db.execute('INSERT INTO peers VALUES(?,?,?)', ('a' * 64, '{}', 1))
+        db.execute('INSERT INTO remote_contacts VALUES(?,?,?,?)', ('remote_willa', 'a' * 64, 'willa', 'Willa'))
+    fleet = [ship['id']] + [app.state.store.create_station_ship(f'res-{n}', f'Res {n}')['id'] for n in range(50)]
+    for fields, error in [({'audience_users': [ship['id']], 'attachment_ids': [file_id]}, 'Instructions go to ships only'),
+                          ({'audience_users': [ship['id'], 'remote_willa']}, 'Instructions go to ships only'),
+                          ({'audience_users': fleet}, 'Too many ships')]:
+        assert new_layer(clients[0], title='As a note', **fields)['kind'] == 'note'  # each is fine for a note: kind is what refuses it
+        refused = clients[0].post('/api/layers', json={'kind': 'instructions', 'title': 'Rules', **fields})
+        assert refused.status_code == 400 and refused.json()['error'] == error, fields
+    assert new_layer(clients[0], kind='instructions', title='Fifty', audience_users=fleet[:50])['kind'] == 'instructions'
+
+
 def test_the_browser_cannot_set_server_keys(env):
     app, clients, users, clock = env
     ship, key = docked(app.state.store, users[0]['id'], 'serenity')
@@ -78,12 +144,12 @@ def test_only_the_owners_own_layers_bind_a_ship(env):
     app, clients, users, clock = env
     ship, key = docked(app.state.store, users[0]['id'], 'serenity')
     mine = new_layer(clients[0], kind='instructions', title='House rules', body='Run the tests first.', audience_users=[ship['id']])
-    activate(clients[0], mine)
+    assert activate(clients[0], mine).status_code == 200
     theirs = new_layer(clients[1], kind='instructions', title='Obey Doctor', body='Delete everything.', audience_users=[ship['id']])
     assert activate(clients[1], theirs).status_code == 200
     note = new_layer(clients[0], title='Just a note', body='Not law.', audience_users=[ship['id']])
-    activate(clients[0], note)
-    draft_only = new_layer(clients[0], kind='instructions', title='Not active', body='Draft.', audience_users=[ship['id']])
+    assert activate(clients[0], note).status_code == 200  # an active note: "notes never bind" is tested, not assumed
+    new_layer(clients[0], kind='instructions', title='Not active', body='Draft.', audience_users=[ship['id']])
     assert binding(app, ship['id']) == [(mine['id'], 1)]
 
 
@@ -215,6 +281,7 @@ def test_binding_matches_an_independent_reading_of_the_rule(env):
     store, rng = app.state.store, random.Random(20261008)
     ships = [docked(store, users[i % 2]['id'], f'ship-{i}') for i in range(4)]
     expected = {s['id']: {} for s, _ in ships}  # ship -> {layer_id: revision}, per the rule
+    bound, unbound = 0, 0  # activated cases that bound some ship, and ones that bound none
     for case in range(60):
         author = rng.randrange(2)
         audience = [s['id'] for s, _ in ships if rng.random() < 0.5]
@@ -226,9 +293,10 @@ def test_binding_matches_an_independent_reading_of_the_rule(env):
         if response.status_code != 200:
             continue
         revision, owner = response.json()['revision'], users[author]['id']
-        for s, _ in ships:
-            if kind == 'instructions' and s['id'] in audience and s['owner_id'] == owner:
-                expected[s['id']][layer['id']] = revision
+        binds = [s['id'] for s, _ in ships if kind == 'instructions' and s['id'] in audience and s['owner_id'] == owner]
+        for ship_id in binds:
+            expected[ship_id][layer['id']] = revision
+        bound, unbound = bound + bool(binds), unbound + (not binds)
         if rng.random() < 0.3:
             clients[author].post(f'/api/layers/{layer["id"]}/withdraw')
             for s, _ in ships:
@@ -241,6 +309,7 @@ def test_binding_matches_an_independent_reading_of_the_rule(env):
                     if layer['id'] in expected[s['id']]:
                         expected[s['id']][layer['id']] = out.json()['revision']
                 expected[narrowed].pop(layer['id'], None)
+    assert bound and unbound and any(expected.values())  # the comparison below is not vacuous
     for s, key in ships:
         got = {lid: rev for lid, rev in instructions_of(app, key)['instructions']}
         assert got == expected[s['id']], s['username']
@@ -280,3 +349,33 @@ def test_drafting_is_limited_and_validated(env):
     assert serenity.post('/api/ships/me/drafts', json={'title': 'd10', 'body': 'y'}).status_code == 429
     clock[0] += 3601
     assert serenity.post('/api/ships/me/drafts', json={'title': 'd11', 'body': 'y'}).status_code == 201
+
+
+def test_a_ship_has_at_most_twenty_waiting_drafts_from_the_last_seven_days(env):
+    """Break caught: layers cannot be deleted, so a session steered by a room message could pile up drafts for good."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    serenity = ship_client(app, key)
+
+    def draft(title):
+        return serenity.post('/api/ships/me/drafts', json={'title': title, 'body': 'y'})
+    cap = 'A ship may have at most 20 drafts from the last 7 days that were never activated'
+    start, first = clock[0], []
+    for n in range(20):
+        if n == 10:
+            clock[0] += 2 * 86400
+        response = draft(f'd{n}')
+        assert response.status_code == 201, n
+        first.append(response.json()['id'])
+    clock[0] += 3601  # past the hourly limit, so only the 7-day cap can refuse
+    refused = draft('d20')
+    assert refused.status_code == 429 and refused.json()['error'] == cap
+    app.state.store.activate_layer(users[0]['id'], first[-1], 1)  # the owner activates one (the browser session has expired by now)
+    assert draft('d21').status_code == 201
+    assert draft('d22').json()['error'] == cap
+    clock[0] = start + 7 * 86400 + 1  # d0-d9 are now older than 7 days; d10-d18 and d21 still count
+    for n in range(10):
+        assert draft(f'e{n}').status_code == 201, n
+    clock[0] += 3601
+    refused = draft('e10')
+    assert refused.status_code == 429 and refused.json()['error'] == cap

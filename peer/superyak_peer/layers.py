@@ -25,6 +25,8 @@ class Layers:
                 raise Problem(400, 'An instructions title is one line of at most 200 characters')
             if len(draft['body']) > 20000:
                 raise Problem(400, 'Instructions are at most 20,000 characters')
+            if '\x00' in title or '\x00' in draft['body']:
+                raise Problem(400, 'Instructions cannot contain a NUL character')
             if draft['audience_spaces'] or draft['public'] or draft['attachment_ids']:
                 raise Problem(400, 'Instructions go to ships only')
             if len(draft['audience_users']) > 50:
@@ -40,6 +42,8 @@ class Layers:
             attachment_size += require(db.execute('SELECT size FROM files WHERE id=? AND owner_id=?', (key, actor)).fetchone())[0]
         if any(u.startswith('remote_') for u in draft['audience_users']) and attachment_size > 4 * 1024 * 1024:
             raise Problem(400, 'Remote release attachments exceed 4 MiB')
+        if draft['kind'] == 'note':
+            del draft['kind']  # never stored for a note: a rolled-back station refuses any key it does not know
         return draft
 
     def _owned_layer(self, db, actor, key):
@@ -216,7 +220,7 @@ class Layers:
     def layer_revisions(self, actor, key):
         with self.transaction() as db:
             row = self._owned_layer(db, actor, key)
-            return [{**json.loads(r['snapshot']), 'id': key, 'owner_id': row['owner_id'], 'revision': r['revision'], 'draft_version': r['draft_version'], 'created': r['created']} for r in db.execute('SELECT * FROM layer_revisions WHERE layer_id=? ORDER BY revision', (key,))]
+            return [{'kind': 'note', **json.loads(r['snapshot']), 'id': key, 'owner_id': row['owner_id'], 'revision': r['revision'], 'draft_version': r['draft_version'], 'created': r['created']} for r in db.execute('SELECT * FROM layer_revisions WHERE layer_id=? ORDER BY revision', (key,))]
 
     def can_deliver_layer(self, key, actor, resource_version):
         try:

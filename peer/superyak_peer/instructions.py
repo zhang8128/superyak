@@ -9,6 +9,7 @@ PREAMBLE = ('These instructions were signed by people and bind this ship. If two
             'ask in the room.')
 MAX_LAYERS, MAX_BYTES = 10, 48000
 DRAFTS_PER_HOUR = 10
+WAITING_DRAFTS, WAITING_DAYS = 20, 7  # a rolling window: layers cannot be deleted, so a lifetime cap could lock a ship out
 
 
 def defuse_body(text):
@@ -56,11 +57,15 @@ class Instructions:
             if ship['kind'] != 'ship' or not ship['owner_id']:
                 raise Problem(403, 'Only a docked ship with an owner can draft instructions')
             owner, now = ship['owner_id'], self.clock()
-            recent = 0
-            for row in db.execute('SELECT draft FROM layers WHERE owner_id=?', (owner,)):
+            recent = waiting = 0
+            for row in db.execute('SELECT draft, NOT EXISTS (SELECT 1 FROM layer_revisions WHERE layer_id=layers.id) AS never '
+                                  'FROM layers WHERE owner_id=?', (owner,)):
                 d = json.loads(row['draft'])
-                if d.get('drafted_by') == actor and d.get('drafted_at', 0) > now - 3600:
-                    recent += 1
+                if d.get('drafted_by') == actor:
+                    recent += d.get('drafted_at', 0) > now - 3600
+                    waiting += bool(row['never']) and d.get('drafted_at', 0) > now - WAITING_DAYS * 86400
+            if waiting >= WAITING_DRAFTS:
+                raise Problem(429, 'A ship may have at most 20 drafts from the last 7 days that were never activated')
             if recent >= DRAFTS_PER_HOUR:
                 raise Problem(429, 'A ship may draft 10 instruction layers an hour')
             draft = self._draft(db, owner, {'kind': 'instructions', 'title': data.get('title', 'Untitled'),

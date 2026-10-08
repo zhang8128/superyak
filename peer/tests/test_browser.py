@@ -1566,3 +1566,24 @@ def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(brow
             page.get_by_role("button", name="Turn on version 2").click()
             expect(page.get_by_text("Active · version 2")).to_be_visible()
     assert store.ship_instructions(ship["id"], "x")["instructions"]
+
+
+def test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed(browser_peer):
+    """Break caught: every layer opens marked "Unsaved changes" (Task 9's precedence bug); the drafted-layer check alone
+    cannot see it for a plain note."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    store.create_layer(users["patient"]["id"], {"title": "Plain note", "body": "Hello."})
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Plain note").click()
+            editor = page.locator("section.editor")
+            expect(editor.get_by_label("Layer title")).to_have_value("Plain note")
+            expect(editor.get_by_label("Kind")).to_have_value("note")
+            expect(editor.get_by_text("Private draft", exact=True)).to_be_visible()
+            expect(editor.get_by_text("Unsaved changes")).to_have_count(0)
+            editor.get_by_label("What do you want to share?").press_sequentially("!")
+            page.get_by_role("button", name="Account and sign out").click()  # typing does not rerender; the dialog does
+            page.get_by_role("button", name="Close").click()
+            expect(editor.get_by_label("What do you want to share?")).to_have_value("!Hello.")
+            expect(editor.get_by_text("Unsaved changes", exact=True)).to_be_visible()  # the absence above is not vacuous

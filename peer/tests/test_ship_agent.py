@@ -142,6 +142,33 @@ def test_watcher_answers_owner_as_builder_and_others_read_only_through_the_real_
         assert [r['status'] for r in db.execute('SELECT status FROM tickets ORDER BY created')] == ['finished', 'finished']
 
 
+def test_the_hook_reads_the_real_stations_instructions_and_hears_a_withdrawal(env, tmp_path):
+    """Break caught: the station's instructions response and the hook drift apart (a renamed field), and the hook
+    falls silent, which looks exactly like "no instructions"."""
+    from superyak_agent import hook
+    from superyak_agent.station import write_private
+    app, clients, users, clock = env
+    ship, key = docked_ship(app.state.store, users[0]['id'])
+    layer = clients[0].post('/api/layers', json={'kind': 'instructions', 'title': 'House rules', 'body': 'Always run the tests.',
+                                                 'audience_users': [ship['id']]}).json()
+    assert clients[0].post(f'/api/layers/{layer["id"]}/activate', json={'version': layer['version']}).status_code == 200
+    config_path, sessions = tmp_path / 'home' / 'station.json', tmp_path / 'home' / 'sessions'
+    write_private(config_path, {'station': 'http://testserver', 'origin': None, 'ship': 'serenity', 'ship_id': ship['id'], 'key': key,
+                                'owner_id': users[0]['id'], 'workspace': str(tmp_path), 'machine': 'test-host'})
+
+    def hook_run(event):
+        return hook.run(config_path, transport=transport_for(app), clock=lambda: clock[0], event=event, session_id='s1',
+                        sessions_dir=sessions, messages=True)
+    block = app.state.store.ship_instructions(ship['id'], app.state.federation.identity.peer_id)['layers'][0]['block']
+    started = hook_run('session-start')
+    assert block in started and 'Always run the tests.' in started and started.startswith(hook.START_PREAMBLE)
+    assert hook_run('prompt') == ''
+    assert clients[0].post(f'/api/layers/{layer["id"]}/withdraw').status_code == 200
+    notice = hook_run('prompt')
+    assert "Instructions 'House rules' (signed by Patient) no longer apply to this ship." in notice
+    assert 'Always run the tests.' not in notice and hook_run('prompt') == ''
+
+
 def test_odo_announces_station_notices_in_ops(env, tmp_path):
     from superyak_agent.station import StationClient
     from superyak_agent.watch import Watcher
