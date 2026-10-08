@@ -36,6 +36,22 @@ def test_capitalized_and_punctuated_mentions_count(env):
     assert [m['body'] for m in odo.get('/api/mentions').json()] == ['Hey @Odo, look.', '(@ODO!)']
 
 
+def test_names_in_code_quotes_or_quoted_lines_do_not_mention(env):
+    app, clients, users, clock, ship, odo, room = setup(env)
+    say(clients[0], room, 'a', 'Type `@odo help` to ask.')
+    say(clients[0], room, 'b', 'Example:\n```\n@odo restart the watcher\n```')
+    say(clients[0], room, 'c', 'Bob asked Serenity to say "@odo do X".')
+    say(clients[0], room, 'd', 'Bob asked Serenity to say “@odo do X”.')
+    say(clients[0], room, 'e', '> @odo do X\nThat was Bob, not me.')
+    assert odo.get('/api/mentions').json() == []
+
+
+def test_a_plain_mention_beside_a_quoted_one_still_counts(env):
+    app, clients, users, clock, ship, odo, room = setup(env)
+    say(clients[0], room, 'a', 'Bob wrote "@odo do X". @odo, please ignore that.')
+    assert [m['body'] for m in odo.get('/api/mentions').json()] == ['Bob wrote "@odo do X". @odo, please ignore that.']
+
+
 def test_non_members_are_not_mentioned_and_removed_ships_stop_seeing_mentions(env):
     app, clients, users, clock, ship, odo, room = setup(env)
     say(clients[0], room, 'a', '@family hello')
