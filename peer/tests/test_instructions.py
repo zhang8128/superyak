@@ -48,7 +48,7 @@ def test_instructions_go_to_ships_only(env):
 
 def test_an_instructions_title_is_one_line_and_the_body_has_a_limit(env):
     app, clients, users, clock = env
-    for title in ('two\nlines', 'two\rlines', 'two\u2028lines', 'two\x0blines', 'two\x85lines', 'x' * 201):
+    for title in ('two\nlines', 'two\rlines', 'two\u2028lines', 'two\x0blines', 'two\x85lines', 'abc\u2028', 'abc\u2029', 'abc\x85', 'abc\x0c', 'abc\x1e', 'abc\x0b', 'abc\x1c', 'abc\x1d', 'x' * 201):
         assert clients[0].post('/api/layers', json={'kind': 'instructions', 'title': title}).status_code == 400
     assert clients[0].post('/api/layers', json={'kind': 'instructions', 'body': 'x' * 20001}).status_code == 400
     assert clients[0].post('/api/layers', json={'kind': 'instructions', 'body': 'x' * 20000}).status_code == 201

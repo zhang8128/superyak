@@ -21,7 +21,7 @@ class Layers:
             draft[field] = ids(draft[field])
         if draft['kind'] == 'instructions':
             title = draft['title']
-            if len(title) > 200 or len(title.splitlines()) > 1 or '\r' in title or '\n' in title:
+            if len(title) > 200 or title.splitlines() != [title]:
                 raise Problem(400, 'An instructions title is one line of at most 200 characters')
             if len(draft['body']) > 20000:
                 raise Problem(400, 'Instructions are at most 20,000 characters')
