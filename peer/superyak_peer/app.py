@@ -219,6 +219,16 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = ship_member(request)['id'], await body(request)
         return store.issue_ticket(who, data.get('message_id'))
 
+    @app.post('/api/ships/me/unread')
+    async def inbox_unread(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        return store.unread(who, data.get('cursor'), data.get('limit', 30))
+
+    @app.post('/api/ships/me/unread/advance')
+    async def inbox_advance(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        return store.advance(who, data.get('cursor'), data.get('to'))
+
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
         return store.finish_ticket(ship_member(request)['id'], key)
