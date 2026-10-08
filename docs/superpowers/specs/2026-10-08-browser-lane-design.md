@@ -1,6 +1,6 @@
 # Browser lane: team-mode workers that run and test the app they build
 
-Status: revision 2. It was designed by Rio Grande from the Bricks lead's requirements, which Serenity relayed and
+Status: revision 2, approved with changes by a fresh reviewer: 4 must-fix and 6 should-fix items, all folded in below. It was designed by Rio Grande from the Bricks lead's requirements, which Serenity relayed and
 checked against the team logs in "Superyak: city of AI" (39fd79). Under Andy's decision D8, a fresh reviewer agent
 approves it. It touches no Bricks production, no Guyana data and nobody else's repositories. The Bricks changes it asks
 for (lane ports in the Playwright config and fixtures) are the Bricks lead's to make.
@@ -45,7 +45,7 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
   path, and the lane connects to it.
   - **Plain, with no sandbox:** the browser reaches the internet, reads `~/.zshrc` over `file://`, and saves a CDP
     download into `$HOME`.
-  - **Under a sandbox-exec profile with Chrome's sandbox off:** the lane's page loads, a wrong secret gets 400, the
+  - **Under a sandbox-exec profile with Chrome's sandbox off:** the lane's page loads, a wrong secret is refused (Playwright drops the upgrade, and the client saw 400), the
     internet is blocked (ERR_NAME_NOT_RESOLVED), `file://` dotfiles are blocked (ERR_ACCESS_DENIED), and nothing is
     written.
   - **With Chrome's own sandbox on, inside the profile:** every helper fails with `deny(1) forbidden-sandbox-reinit`.
@@ -75,9 +75,9 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
 | Where Chrome runs | In a **browser broker** for each lane. teamd starts `launchServer` outside the worker's sandbox, under a teamd-owned Seatbelt profile. The worker's Playwright connects with `PW_TEST_CONNECT_WS_ENDPOINT`, which Playwright Test reads natively. | Chrome can't run inside the worker's sandbox (the second wall), and a separate profile is the only wall that works (spike 4). |
 | Chrome's own sandbox | **Off**, because macOS forbids a second sandbox inside our profile (`forbidden-sandbox-reinit`). The broker's profile is the wall around Chrome. | The alternative is no outer profile at all, which leaks the internet, `$HOME` and writes (the plain row of spike 4). |
 | The broker's profile | **Deny by default.** Its allowances come from spike 5's denial stream, and each one has a one-line reason in the template. The browser can reach only the lane's own ports. It can't use the network beyond those, read or write `$HOME`, send Apple Events, use the pasteboard, or start programs other than Chrome's own. Any widening goes back to a reviewer. | Code that takes over a renderer (Chrome's sandbox is off) runs with exactly the profile's powers. `(allow default)` would let it run `osascript` against other apps, which is a full escape. |
-| The broker's code | A Playwright copy pinned and owned by teamd. It is the same version as the worktree's Playwright, downloaded from the npm registry with its integrity hash checked, and stored outside every worktree. It is never the worktree's `node_modules`. | The worker can write its own `node_modules`. Running that code outside the worker's sandbox would hand the worker the broker's powers. |
-| Ports | Each lane gets a block of 32 loopback ports from a pool (`SUPERYAK_LANE_PORT_BASE`, `SUPERYAK_LANE_PORT_COUNT`). The broker listens on the last one. Bricks' servers and fixtures, including the fake Google, take ports from the block. | The broker's profile can then allow only the lane's ports, and shards can't reach each other's servers (`reuseExistingServer`). |
-| Other localhost services (D9) | A lane's turn starts only while every TCP listener on the machine is either in a lane's own port block or on the approved list. teamd checks before every turn and before starting a broker. The check fails closed. | The worker's sandbox can connect to any localhost port (`allowLocalBinding` can't be narrowed), so every listener is part of the lane's attack surface. |
+| The broker's code | A Playwright copy that teamd pins and owns. Its version and its integrity hash come from the lockfile **at the worker's base commit** (`git show <base>:package-lock.json`, entry `packages["node_modules/playwright-core"]`). It is downloaded from the npm registry, checked against that committed hash, and stored outside every worktree. It is never the worktree's `node_modules`, and never a version the worker chose. | The worker can write its own `node_modules`, its `package.json` and its branch. The base commit is the lead's, fixed when the worker is spawned, so the worker can't pick which published version runs outside its sandbox. |
+| Ports | Each lane gets a block of 32 loopback ports from a pool, `41000`–`48999`. That is below macOS's ephemeral range (49152–65535), so an outgoing connection never takes a lane's port. The worker gets `SUPERYAK_LANE_PORT_BASE` and `SUPERYAK_LANE_PORT_COUNT`. The broker listens on the last port. A block returns to the pool only after the lane's process cleanup has finished. Bricks' servers and fixtures, including the fake Google, take ports from the block. | The broker's profile can then allow only the lane's ports, and shards can't reach each other's servers (`reuseExistingServer`). |
+| Other localhost services (D9) | A lane's turn starts only while every TCP listener on the machine is either in a lane's own port block or on the approved list. teamd checks before every turn and before starting a broker, and again every 60 s during a turn. A failure during a turn stops the turn and the broker. The check fails closed. | The worker's sandbox can connect to any localhost port (`allowLocalBinding` can't be narrowed), so every listener is part of the lane's attack surface. |
 | Binding beyond loopback | A Node preload (`NODE_OPTIONS=--require <lane>/preload.cjs`) rewrites `listen()` on an unspecified address, `0.0.0.0` or `::` to `127.0.0.1`. teamd's listener check also stops a lane whose processes listen on any non-loopback address. | `listen(0)` binds `::` (spike 3), which would accept connections from the LAN or the tailnet. |
 | Temp, caches | One lane directory for each worker: `/tmp/sy-lane-<uid>/<h>`, where `<h>` is the first 10 hex characters of `sha256(team_id + '/' + worker_id)`. It holds `tmp/` (`CLAUDE_CODE_TMPDIR`), `npm-cache/` (`npm_config_cache`) and `b/` (the broker's folder, which the worker can't write). | It fixes denials 1 and 3. The short paths keep Chrome's and tsx's sockets under macOS's 104-byte limit. |
 | Page text | Text from pages, test output and traces is data. The lane brief says so. | The app under test can render anything, so it is a prompt-injection surface. |
@@ -88,6 +88,8 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
 - Add `"browser_lane": False` to `DEFAULT_CONFIG`.
 - `team_config` accepts `browser_lane` from `config.json` and presets, and refuses it in `overrides` with a
   `RejectedMessage` that names the reason. A value that isn't a bool is refused wherever it comes from.
+- `TEAM_KEYS` is one set today, used for presets, overrides and `status()`. It is split into `PRESET_KEYS`
+  (`TEAM_KEYS` plus `browser_lane`) and `OVERRIDE_KEYS` (`TEAM_KEYS`). `status()` shows `browser_lane`.
 
 **Spawn** (`teamd.Team.spawn(task, kind, context, mode, base, prepare, browser=False)`, and the MCP and CLI
 `team_spawn` argument `browser`, a strict bool):
@@ -133,13 +135,22 @@ With `lane=None`, the output is byte-for-byte what it is today.
   `SUPERYAK_LANE_PORT_COUNT=32`, `PW_TEST_CONNECT_WS_ENDPOINT=ws://127.0.0.1:<broker port>/<secret>` and
   `NODE_OPTIONS=--require <lane>/preload.cjs`.
 - **Drop:** `launch` gains a `drop_env` parameter, which removes `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` and `DOCKER_HOST`.
-- **The secret:** 32 random bytes, new for each broker. It is never logged and never shown in tool output.
+- **The secret:** 32 random bytes, new for each broker. Playwright's errors quote the whole endpoint, so a failing
+  test can print it, and `teamlib.redact()` doesn't recognise it.
+  - teamd removes the secret string from everything it forwards or stores: worker summaries, `team_post` and its
+    Slack mirror, lead messages, `events.jsonl`, and the broker's stderr when it is shown.
+  - The broker's stderr is kept in `<lane>/b` and is never posted. Its last lines reach the lead only after this scrub.
 
 **The broker** (`team/superyak_team/lane.py`, plus `team/superyak_team/lane_broker.js`, which is spike 4's script):
 - **When it starts:** teamd starts it at the lane's first turn, after the listener check. It runs as
   `sandbox-exec -f <lane>/b/broker.sb <node> lane_broker.js`.
-- **Its environment:** `TMPDIR` and `MAC_CHROMIUM_TMPDIR` are `<lane>/b`, `channel: 'chrome'`,
-  `chromiumSandbox: false`, and `host` `127.0.0.1` on the lane's last port, with the secret as the path.
+- **Its environment** is built from nothing, not inherited, so no `NODE_OPTIONS`, `PLAYWRIGHT_*` or `PW_*` can
+  reach the broker. It holds only `PATH=/usr/bin:/bin`, `HOME`, `TMPDIR` and `MAC_CHROMIUM_TMPDIR` (both
+  `<lane>/b`), the pinned Playwright path, and the secret.
+- **Its options:** `channel: 'chrome'`, `chromiumSandbox: false`, and host `127.0.0.1` on the lane's last port, with
+  the secret as the path.
+- **Its node** is an absolute path in teamd's own config (`lane_node`). It is refused if it lies under any worktree or
+  is writable by anyone but its owner. It is never `which node`.
 - **When it stops:** teamd stops it in the same four places that remove the lane. The broker runs in its own process
   group, and teamd kills that group.
 - **Its Playwright:** `~/.superyak/team/broker/playwright-core-<version>/`. `<version>` is read from the worktree's
@@ -157,6 +168,13 @@ With `lane=None`, the output is byte-for-byte what it is today.
 
   It refuses paths containing `"` or `\`. Whatever the spike shows Chrome needs, the template never allows any of
   these:
+  - `mach-register`;
+  - mach-lookup of securityd and the Keychain (`com.apple.SecurityServer`, `com.apple.securityd*`), even though
+    Playwright passes `--use-mock-keychain`;
+  - launchd job submission and anything that starts programs on the process's behalf: `com.apple.ServiceManagement*`,
+    `com.apple.xpc.smd`, `com.apple.coreservices.launchservicesd` and `com.apple.lsd.*`;
+  - the camera and microphone services (`com.apple.cmio*`, `com.apple.audio.*` input);
+  - any wildcard or prefix rule for `mach-lookup`, `network-outbound` or `file-*`;
   - `appleevent-send`;
   - the pasteboard services;
   - `process-exec` outside node and Chrome's bundle;
@@ -165,14 +183,23 @@ With `lane=None`, the output is byte-for-byte what it is today.
   - `/private/tmp/claude-*`;
   - `/Users/Shared`;
   - `/Volumes`;
-  - the user's `/private/var/folders` tree outside `<lane>/b`.
+  - the user's `/private/var/folders` tree outside `<lane>/b`;
+  - any write in `$HOME`, which covers `~/Library/LaunchAgents`, shell rc files and Chrome's own profile folders.
+
+  `(import "system.sb")` grants a good deal by itself (process-fork, many Mach lookups, sysctl reads, metadata). So
+  "deny default" means deny everything apart from that import, and the probe battery, not the phrase, is the guarantee.
 
 **The listener check (D9)** (`lane.listeners_ok(team)`, run by teamd outside every sandbox):
 - **What it reads:** `lsof -nP -iTCP -sTCP:LISTEN -F pcn`. When lsof fails, the result is "not ok".
 - **What passes:** a listener passes when its port is in a live lane's block, or when it matches an entry on the
   approved list, `~/.superyak/team/lane-listeners.json`. Only the person edits that file; it is never a team key.
   An entry matches on the executable path, and, for interpreters, the working directory.
-- **What fails:** a lane process listening on a non-loopback address fails the check.
+- **What fails:** a lane process listening on a non-loopback address fails the check. `127.0.0.0/8` and `::1` count
+  as loopback, and every other address, IPv6 included, does not. lsof's IPv6 output is parsed, not just IPv4.
+- **UDP is not checked.** Egress is already closed, DNS included, and the browser's profile allows TCP only to the
+  lane's ports. A local UDP service that does something dangerous on request is accepted as a known limit.
+- **Matching is a convenience, not a boundary.** A process can change directory after it starts listening, and an
+  approved executable approves every port it opens. See the open question for Andy.
 - **On failure:** the lane's turn doesn't start. The worker waits, and the lead gets a message naming each unapproved
   listener by command name and port.
 
@@ -208,6 +235,10 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   takes over a renderer gets the profile's powers: the lane's ports, `<lane>/b`, and reads of Chrome and Playwright.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
   only as good as the approved list.
+- The preload is advisory: a worker can start a child without `NODE_OPTIONS`. Binding beyond loopback is caught only
+  by the next check (at most 60 s later). The README therefore tells people running lanes to keep the macOS firewall's
+  "Block all incoming connections" on.
+- A listener that starts during a turn is reachable from the worker until the next check, at most 60 s later.
 - `team_post`, mirrored to Slack, is still a way out for data. The lane removes network egress from sandboxed
   commands, not every channel a worker has.
 - Bricks' specs need the Bricks change before they run in a lane.
@@ -215,15 +246,24 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 
 ## Open question for Andy
 
-How should approved listeners be matched? This spec assumes a match on the executable path, plus the working directory
-for interpreters such as node and python.
-- **The other option:** approve nothing outside the lanes' own ports. That is safer, but on the Mac the lane would
-  never run while AirPlay, rapportd, Ollama, Postgres or any dev server listens.
-- **If Andy chooses ports only:** the check drops the approved list and nothing else changes.
+Which listeners may stay up while a lane runs? The reviewer's point is that matching is a convenience, not a boundary:
+an approved executable approves every port it opens, and a working directory can change.
+- **macOS's own services only.** Only Apple's services (AirPlay, rapportd and the like, from `/System`,
+  `/usr/libexec` or `/usr/sbin`) are approved, each by executable and exact port. Dev servers, Ollama, Postgres and
+  every other service must be stopped while a lane runs.
+- **Anything approved by executable and port.** For node and python, the working directory is matched too.
+  - This is convenient, but each approval trusts that service with whatever a worker can ask it to do. Ollama, for
+    example, can be asked to pull from the internet.
+- **Lane ports only.** Nothing else may listen at all, so AirPlay Receiver and similar services have to be turned off.
+
+Whichever option is chosen, the rest of the design is unchanged.
 
 ## Build order
 
-0. **Spike 5** (Serenity, on the Mac): run the broker under `(deny default)` plus `(import "system.sb")`. Add
+0. **Spike 5, a blocking gate** (Serenity, on the Mac). The lane does not ship unless the broker runs branded Chrome
+   under a deny-default profile **with zero writes in `$HOME`** and every probe below fails. Any allowance Chrome turns
+   out to need in `$HOME` (`~/Library/Caches`, `HTTPStorages` and the like) is reviewed against the whole never-list
+   before it goes into the template. The method: run the broker under `(deny default)` plus `(import "system.sb")`. Add
    allowances one at a time from the denial stream until `broker_page_on_loopback` passes for branded Chrome. Then
    run spike 4's probes again, and also these, run directly under the profile:
    - `osascript` to Finder;
@@ -233,7 +273,11 @@ for interpreters such as node and python.
    - `cat ~/.zshrc`;
    - `touch ~/x`;
    - a connect to a canary outside the lane's ports;
-   - a read of `/private/tmp/claude-<uid>`.
+   - a read of `/private/tmp/claude-<uid>`;
+   - `security find-generic-password -s anything`;
+   - `launchctl submit -l x -- /usr/bin/true`;
+   - a write to `~/Library/LaunchAgents/x.plist` and to `~/.zshrc`;
+   - a page's `getUserMedia({audio: true, video: true})`.
 
    Each must fail. The resulting template, with a reason for each rule, is reviewed before step 1.
 
@@ -269,26 +313,38 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
 4. **Who sets `browser_lane`.** It is accepted from `config.json` and from a preset, refused in `team_start`
    overrides, and refused when it isn't a bool.
 5. **Environment.** A browser worker's environment has the lane variables, `NODE_OPTIONS` and the endpoint, and none
-   of `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` or `DOCKER_HOST`. A non-browser worker's environment is unchanged. The secret
-   appears in no log line.
+   of `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` or `DOCKER_HOST`. A non-browser worker's environment is unchanged.
+   - The broker's environment holds exactly the listed keys, even when teamd's own environment has `NODE_OPTIONS`,
+     `PLAYWRIGHT_BROWSERS_PATH` and `PW_TEST_CONNECT_WS_ENDPOINT`.
+   - **Scrub:** the secret appears in nothing teamd writes or sends. A worker summary, a `team_post` (and its Slack
+     text), an `events.jsonl` line and the broker stderr shown to the lead each contain the endpoint on the way in,
+     and none contains the secret on the way out.
 6. **Lane directory.**
    - The parent is created 0700. The parent is refused when it has another owner, another mode, or is a symlink.
    - The lane is refused when it is a symlink at turn time.
    - Removal is fd-safe, and is refused when `avoids_symlink_attacks` is false.
    - The sweep removes only this team's dead lanes, by exact hash (team `bricks` never touches `bricks-ux`).
-7. **Ports.** Blocks never overlap, a block is freed when its lane ends, and a block that something else already uses
-   is skipped.
+7. **Ports.** Blocks never overlap and lie within 41000–48999. A block is freed only after its lane's cleanup has
+   finished, and a block that something else already uses is skipped.
 8. **Listener check** (lsof output fixtures):
    - lane ports pass;
    - an approved executable passes, and an interpreter only passes with its working directory;
    - an unknown listener fails, and so does a lane process listening on `*` or on a LAN address;
-   - an lsof failure fails.
+   - an lsof failure fails;
+   - `::1` and `127.0.0.2` count as loopback, and `fe80::1`, `::` and a tailnet address don't;
+   - during a turn, a check that fails stops the turn and the broker (with a fake clock).
 9. **Profile generator.**
    - The output starts with `(deny default)` and has one rule per lane port.
    - It contains no `(allow default)`, no `appleevent-send` and no rule for `$HOME` beyond the pinned folder.
    - Paths containing quotes or backslashes are refused.
-10. **Pinned Playwright.** A malformed version is refused, and so is an integrity mismatch (with a fake fetch).
-    Extraction rejects members whose paths escape the folder.
+   - **The template itself.** A test parses the checked-in template and fails on any of these: `(allow default)`; a
+     wildcard or prefix rule for `mach-lookup`, `network-outbound` or `file-*`; `mach-register`; `appleevent-send`;
+     any service on the never-list; a file rule under `$HOME` other than the pinned Playwright folder. A slip in
+     reviewing the template is then caught by a test, not only by a person reading the reasons.
+10. **Pinned Playwright.** The version and hash are read from the base commit's lockfile, never from the worktree: a
+    test edits the worktree's `node_modules/playwright-core/package.json` and `package-lock.json`, and the pin doesn't
+    change. A lockfile without the entry refuses the lane, and so do a malformed version and an integrity mismatch
+    (with a fake fetch). Extraction rejects members whose paths escape the folder.
 11. **Preload.** Run under node, `listen(0)`, `listen(0, '0.0.0.0')` and `listen(0, '::')` all bind `127.0.0.1`.
 
 **Mac acceptance** (Serenity runs it at a time the Bricks lead picks). The prerequisites are:
@@ -306,7 +362,10 @@ The run:
    - `npx tsx -e 1` exits 0;
    - each of these sockets is refused, directly and through a symlink and a hard link placed in `<lane>/tmp`:
      the real ssh-agent socket (passed in from outside), teamd's sockets and Docker's socket;
-   - `~/.zshrc`, another lane's directory and `/private/tmp/claude-<uid>` are unreadable.
+   - `~/.zshrc`, another lane's directory and `/private/tmp/claude-<uid>` are unreadable;
+   - with tighter filesystem rules than the spikes used, `npx tsx -e 1` and an npm cache write still work;
+   - a `.claude/settings.json` in the worktree that adds `example.com` to `allowedDomains` and a
+     `WebFetch(domain:example.com)` rule doesn't let curl, node or the browser reach example.com.
 3. **Through the broker:**
    - a page on a lane port loads;
    - a wrong secret is refused;
@@ -314,7 +373,9 @@ The run:
    - `file://` dotfiles are blocked;
    - a canary on a port outside the lane is blocked;
    - a CDP download into `$HOME` writes nothing;
-   - a second lane's worker can't find or use this lane's endpoint (`ps eww` and a guessed path).
+   - a second lane's worker can't read this lane's endpoint: `ps eww`, and sysctl `KERN_PROCARGS2` from node, against
+     the first lane's processes. If it can, the build falls back to one browser lane per machine at a time, and the
+     spec records it. Workers outside a lane can't connect to localhost, so they don't matter here.
 4. **D9.** Start an unapproved listener: the next lane turn is refused and names it. Approve it, and the turn runs.
 5. **Two browser workers at once,** on different port blocks, each run Bricks spec 1.
 6. **The Bricks smoke specs,** in order, with the Bricks change:
