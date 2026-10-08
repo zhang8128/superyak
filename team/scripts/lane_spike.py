@@ -171,7 +171,7 @@ def main():
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
     env.update(CLAUDE_CODE_TMPDIR=str(lane / 'tmp'), npm_config_cache=str(lane / 'npm-cache'), SUPERYAK_BROWSER_LANE='1',
                SPIKE_CANARY_PORT=str(srv.getsockname()[1]), SPIKE_SOCKETS=' '.join(dict.fromkeys(sockets)),
-               SPIKE_CHANNEL=args.channel, SPIKE_CHROME_SCRIPT=str(work / 'lane_chrome_probe.js'))
+               SPIKE_CHANNEL=args.channel, SPIKE_CHROME_SCRIPT=str(work / 'lane_chrome_probe.js'), SPIKE_LOG=str(work / 'chrome-debug.log'))
     if args.playwright:
         env['SPIKE_PLAYWRIGHT'] = str(Path(args.playwright).resolve())
     print(f'lane: {lane}  (settings: {lane / "settings.json"})')
@@ -198,6 +198,13 @@ def main():
         print(f'{judge(expect, code):5} {name:28} exit={code:3} {detail[:160]}')
     if not rows:
         print('(no probe lines: claude did not run the script)\n' + output[-2000:])
+    log = work / 'chrome-debug.log'
+    if log.exists():
+        lines = log.read_text(errors='replace').splitlines()
+        keep = [l for l in lines if re.search(r'(?i)singleton|denied|not permitted|EPERM|EACCES|sandbox|failed|error|mach|socket|lock', l)]
+        print(f'\n== Chrome debug log: {len(lines)} lines, {len(keep)} that look relevant (first 80) ==')
+        for line in keep[:80]:
+            print(line[:300])
     print('\n== localhost listeners a lane worker could reach on macOS (decide on each) ==')
     for line in listeners():
         print(line)

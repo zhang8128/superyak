@@ -5,8 +5,18 @@ const { chromium } = require(process.env.SPIKE_PLAYWRIGHT);
   const sandbox = process.argv[2] === 'on';
   const srv = require('http').createServer((q, r) => r.end('<title>lane ok</title>')).listen(0, '127.0.0.1');
   await new Promise(resolve => srv.on('listening', resolve));
-  const browser = await chromium.launch({ channel: process.env.SPIKE_CHANNEL || 'chrome', chromiumSandbox: sandbox, headless: true, timeout: 30000 });
-  const page = await browser.newPage();
+  const mode = process.argv[3] || 'launch';  // launch | persistent: a profile folder of our own inside the lane's tmp
+  const options = { channel: process.env.SPIKE_CHANNEL || 'chrome', chromiumSandbox: sandbox, headless: true, timeout: 30000,
+                    args: process.env.SPIKE_CHROME_DEBUG ? ['--enable-logging=stderr', '--v=1'] : [] };
+  let browser, page;
+  if (mode === 'persistent') {
+    const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'chrome-profile-'));
+    browser = await chromium.launchPersistentContext(dir, options);
+    page = await browser.newPage();
+  } else {
+    browser = await chromium.launch(options);
+    page = await browser.newPage();
+  }
   await page.goto(`http://127.0.0.1:${srv.address().port}/`);
   const title = await page.title();
   let external = 'blocked';
