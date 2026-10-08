@@ -34,10 +34,16 @@ class Chats:
 
     def get_room(self, actor, key):
         if ":" in key:
-            return self.remote_room(actor, key)
+            room = self.remote_room(actor, key)
+            for message in room.get('messages', []):
+                message['source'] = None  # a paired peer's payload is passed through: a label in it is never ours
+            return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
             room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created,id', (key,))]
+            sources = self._sources(db, key)
+            for message in room['messages']:
+                message['source'] = sources.get(message['id'])
             room['messages'] += [dict(r) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created,id', (key,))]
             room['messages'].sort(key=lambda m: (m['created'], m['id']))
             room['members'] = [dict(r) for r in db.execute(
@@ -45,8 +51,10 @@ class Chats:
                 (key,))]
             return room
 
-    def send_message(self, actor, key, client_message_id, body):
+    def send_message(self, actor, key, client_message_id, body, ticket_id=None):
         if ':' in key:
+            if ticket_id is not None:
+                raise Problem(409, 'Tickets label messages in local rooms only')
             return self.remote_send(actor, key, client_message_id, body)
         text(client_message_id, 'client message ID', 100)
         text(body, 'message', 20000)
@@ -58,8 +66,12 @@ class Chats:
                     raise Problem(409, 'Message ID already used with different text')
                 return dict(existing)
             self._ship_post_budget(db, actor)
+            if ticket_id is not None:
+                self._check_ticket_label(db, actor, key, ticket_id)
             message_id = uid()
             db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)', (message_id, key, actor, client_message_id, body, room['epoch'], self.clock()))
+            if ticket_id is not None:
+                db.execute('INSERT INTO message_sources VALUES(?,?)', (message_id, ticket_id))
             self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
             return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())

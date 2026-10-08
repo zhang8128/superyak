@@ -4,7 +4,7 @@ import math
 import os
 from pathlib import Path
 import time
-from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, shown_id, urllib_transport, write_private
+from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, shown_id, source_label, urllib_transport, write_private
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -55,7 +55,7 @@ def _run(config_path, state_path, clock, transport):
                   for position, m in enumerate(room['messages']) if m['created'] > cursor and m['author_id'] != me]
     items.sort(key=lambda item: item[0])
     newest = max([cursor] + [item[3]['created'] for item in items])
-    blocks = [f'Room {label(title)}, message {shown_id(m["id"])}:\n' + fence_message(who, m['body'], MESSAGE_CHARS, read_hint(room_id, m['id'], position))
+    blocks = [f'Room {label(title)}, message {shown_id(m["id"])}' + (f' ({source_label(m)})' if source_label(m) else '') + ':\n' + fence_message(who, m['body'], MESSAGE_CHARS, read_hint(room_id, m['id'], position))
               for _, title, who, m, room_id, position in items[-MAX_MESSAGES:]]
     # Messages left out for space are counted, never dropped silently: the cursor moves past them.
     while blocks and len(HEADER) + sum(len(b) + 2 for b in blocks) + (NOTE_ROOM if len(blocks) < len(items) else 0) > MAX_CHARS:
