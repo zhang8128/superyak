@@ -100,3 +100,23 @@ def test_a_long_message_is_cut_with_a_visible_note(station, ship_config, tmp_pat
     fake.say(room, jenn, 'e' * 1000 + ' the ending')
     text = run(fake, config_path)
     assert 'the ending' not in text and '[cut at 800 of 1,011 characters; station_read with max_chars=20000 shows all of it]' in text
+
+
+def test_messages_left_out_for_space_are_counted_with_their_rooms(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    run(fake, config_path, now=fake.clock)
+    for n in range(25):
+        fake.say(room, jenn, f'message {n} ' + 'x' * 400)
+    text = run(fake, config_path)
+    shown = text.count('Room Promenade, message ')
+    assert len(text) <= 4000 and 'message 24' in text
+    assert f'{25 - shown} earlier messages not shown (Promenade); station_read shows them.' in text
+
+
+def test_nothing_is_said_when_every_message_fits(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    run(fake, config_path, now=fake.clock)
+    fake.say(room, jenn, 'short')
+    assert 'not shown' not in run(fake, config_path)
