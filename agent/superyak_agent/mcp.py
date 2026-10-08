@@ -110,8 +110,8 @@ def more_count(left, more):
 
 
 class Tools:
-    def __init__(self, client):
-        self.client = client
+    def __init__(self, client, quick_client=None):
+        self.client, self.quick_client = client, quick_client or client
         # Without a Claude Code session id (Codex, scripts) posts are keyed to this process, so two sessions'
         # identical posts never collapse into one; a retry within the process still posts once.
         self.salt, self.current, self.cancelled = f'proc-{uuid.uuid4().hex[:12]}', None, set()
@@ -119,6 +119,18 @@ class Tools:
     def cancel(self, request_id):
         """notifications/cancelled for a request: whatever it read is not marked read (spec I5)."""
         self.cancelled.add(request_id)
+
+    def station_instructions(self, args):
+        blocks = self.client.instructions().get('blocks')
+        if blocks is not None and not isinstance(blocks, str):
+            # an error result, never "none bind": a session would believe that and drop the law it holds
+            raise ValueError('the station sent the instructions in a form this agent cannot read')
+        return blocks or 'No instructions bind this ship.'
+
+    def station_draft_instructions(self, args):
+        drafted = self.client.draft_instructions(args['title'], args['body'])
+        return (f"Drafted '{label(drafted['title'])}' (layer {drafted['id']}). "
+                "Your owner can read, edit and activate it in the station's web app.")
 
     def station_rooms(self, args):
         return json.dumps([{'id': r['id'], 'title': label(r.get('title')), 'last_activity': r.get('last_activity')} for r in self.client.rooms()], indent=1)
@@ -243,15 +255,35 @@ TOOLS = [
     ('station_post', 'Post a message to a room as this ship. Pass reply_to with the message id you are answering.',
      {'room': {'type': 'string'}, 'text': {'type': 'string'}, 'reply_to': {'type': 'string'}, 'cursor': {'type': 'string', 'description': 'A name for this poster (Codex sessions and scripts); defaults to this Claude Code session'}}, ['room', 'text']),
     ('station_mentions', 'List mentions of this ship after a cursor (the number of the last mention you handled).', {'after': {'type': 'integer'}, 'max_chars': {'type': 'integer', 'description': f'Characters shown of each message (default {DEFAULT_CHARS:,}, at most {MESSAGE_LIMIT:,}); a longer message says where it was cut'}}, []),
+    ('station_instructions', 'The instructions that bind this ship, in full. People sign them through the station; they are the one part of station text that is not quoted data.', {}, []),
+    ('station_draft_instructions', "Draft instructions for this ship. A draft binds nothing until your owner reads, edits and activates it in the station's web app.",
+     {'title': {'type': 'string', 'description': 'One line, at most 200 characters'}, 'body': {'type': 'string'}}, ['title', 'body']),
 ]
+
+
+def initialize_instructions(tools, params):
+    """The ship's instructions for clients that do not get them from the Claude Code hook; None on any trouble."""
+    try:
+        info = params.get('clientInfo')
+        name = info.get('name') if isinstance(info, dict) else None
+        if isinstance(name, str) and 'claude' in name.lower():
+            return None
+        blocks = tools.quick_client.instructions().get('blocks')
+        return blocks if isinstance(blocks, str) and blocks else None
+    except Exception:  # noqa: BLE001 - initialize must always answer
+        return None
 
 
 def handle(tools, msg):
     mid, method = msg.get('id'), msg.get('method', '')
     params = msg.get('params') if isinstance(msg.get('params'), dict) else {}
     if method == 'initialize':
-        return {'jsonrpc': '2.0', 'id': mid, 'result': {'protocolVersion': params.get('protocolVersion', '2025-06-18'),
-                'capabilities': {'tools': {}}, 'serverInfo': {'name': 'superyak-station', 'version': '0.1.0'}}}
+        result = {'protocolVersion': params.get('protocolVersion', '2025-06-18'),
+                  'capabilities': {'tools': {}}, 'serverInfo': {'name': 'superyak-station', 'version': '0.1.0'}}
+        blocks = initialize_instructions(tools, params)
+        if blocks:
+            result['instructions'] = blocks
+        return {'jsonrpc': '2.0', 'id': mid, 'result': result}
     if method == 'ping':
         return {'jsonrpc': '2.0', 'id': mid, 'result': {}}
     if method == 'tools/list':
@@ -279,7 +311,8 @@ def handle(tools, msg):
 
 
 def serve(config_path):
-    serve_with(Tools(client_for(load_config(config_path))), sys.stdin, sys.stdout)
+    config = load_config(config_path)
+    serve_with(Tools(client_for(config), quick_client=client_for(config, timeout=3)), sys.stdin, sys.stdout)
 
 
 def serve_with(tools, stdin, stdout):

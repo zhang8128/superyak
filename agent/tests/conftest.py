@@ -10,6 +10,7 @@ class FakeStation:
         self.users, self.rooms, self.mention_rows, self.keys = {}, {}, [], {}
         self.clock, self.counter, self.down = 1000.0, 0, False
         self.tickets, self.sources, self.ticket_override, self.label_refusals = {}, {}, {}, set()
+        self.blocks, self.instruction_state, self.drafts = {}, {}, []
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
@@ -155,10 +156,16 @@ class FakeStation:
             ticket = {'id': f't{len(self.tickets) + 1}', 'ship_id': me, 'message_id': message_id, 'mode': 'build' if build else 'read',
                       'basis': 'owner' if build else 'none', 'root_id': ship['owner_id'] if build else None,
                       'root_name': self.users[ship['owner_id']]['name'] if build else None, 'chain': [], 'hops': 0,
-                      'instructions': [], 'blocks': '', 'footer': f'Builder for {self.users[ship["owner_id"]]["name"]} (owner)' if build else '',
+                      'instructions': [], 'blocks': self.blocks.get(me, ''), 'footer': f'Builder for {self.users[ship["owner_id"]]["name"]} (owner)' if build else '',
                       'status': 'running'}
             self.tickets[ticket['id']] = ticket
             return ok(ticket)
+        if method == 'GET' and path == '/api/ships/me/instructions':
+            return ok(self.instruction_state.get(me) or {'instructions': [], 'layers': [], 'blocks': self.blocks.get(me, '')})
+        if method == 'POST' and path == '/api/ships/me/drafts':
+            payload = json.loads(data)
+            self.drafts.append((payload['title'], payload['body']))
+            return ok({'id': 'L9', 'title': payload['title'], 'version': 1, 'state': 'draft', 'drafted_by': me}, 201)
         if method == 'POST' and segments[:4] == ['api', 'ships', 'me', 'tickets'] and segments[5:] == ['finish']:
             ticket = self.tickets.get(segments[4])
             if ticket is None or ticket['ship_id'] != me:

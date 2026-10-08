@@ -113,7 +113,8 @@ class Watcher:
                 self.state['tickets'][mid] = ticket['id']
                 self.save()
                 mode = 'read' if self.resident or ticket.get('mode') != 'build' else 'build'  # never above the ticket
-                result = self.runner.run(mode, build_prompt(room, mention, self.config['ship'], mode), mid)
+                result = self.runner.run(mode, build_prompt(room, mention, self.config['ship'], mode), mid,
+                                           instructions=ticket.get('blocks') or '')
                 footer = label(ticket.get('footer'), 200).replace('@', '(at)') if mode == 'build' and ticket.get('footer') else ''
                 reply = format_reply(result, footer)
         except RunTimeout as error:

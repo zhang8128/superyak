@@ -13,6 +13,7 @@ from .chats import Chats
 from .access_requests import AccessRequests, ACCESS_SCHEMA
 from .ships import Ships, SHIP_SCHEMA
 from .tickets import Tickets, TICKET_SCHEMA
+from .instructions import Instructions
 from .inbox import Inbox, INBOX_SCHEMA
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
@@ -38,7 +39,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Inbox):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox):
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None):
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
