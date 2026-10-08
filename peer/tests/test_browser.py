@@ -1550,6 +1550,10 @@ def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(brow
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
             expect(page.get_by_text("Drafted by Serenity").first).to_be_visible()
+            page.get_by_role("button", name="Proposed by the ship").click()
+            editor = page.locator("section.editor")
+            expect(editor.get_by_text("Drafted by Serenity. Read it before you activate it.")).to_be_visible()
+            expect(editor.get_by_text("Unsaved changes")).to_have_count(0)
             page.get_by_role("button", name="New layer").click()
             page.get_by_label("Kind").select_option("instructions")
             expect(page.get_by_role("checkbox", name="Defiant")).to_have_count(0)

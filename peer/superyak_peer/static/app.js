@@ -311,7 +311,7 @@ function formatBytes(value) {
 
 function editorState(layer, active) {
   const drafted = layer.drafted_by ? `<span class="state-note">${escapeHtml(draftedBy(layer))}</span>` : "";
-  const unsaved = drafted + currentLayerEdit()?.dirty ? '<span class="badge draft">Unsaved changes</span>' : "";
+  const unsaved = (currentLayerEdit()?.dirty ? '<span class="badge draft">Unsaved changes</span>' : "") + drafted;
   if (layer.active_revision && state.activeLayerErrors[layer.id]) {
     return `<span class="badge active">Active release</span>${unsaved}<span class="state-note">Latest sharing details unavailable</span>`;
   }
