@@ -11,6 +11,9 @@ STATION_VAULT = 'Station.aDNA'
 REGISTRY = 'https://adna.network/api/registry.v1.json'
 EXPIRES_DAYS = 14
 MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
+# The station's rule (peer/superyak_peer/ships.py NOT_ADDRESSED, kept identical by a test): a name shown as code,
+# in double quotes or on a quoted line is talked about, not addressed, so it sends no memo either.
+NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^“”\n]*”|^[ \t]*>[^\n]*', re.MULTILINE)
 LINE = re.compile(r'^([A-Za-z_][\w-]*):[ \t]*(.*)$')
 DOUBLE_QUOTED = re.compile(r'^"(?:[^"\\]|\\.)*"')
 SINGLE_QUOTED = re.compile(r"^'(?:[^']|'')*'")
@@ -20,7 +23,7 @@ TOKEN_MAX, SLUG_MAX = 24, 60  # keep a memo's file name far below the 255-byte f
 
 def mentioned(body):
     """Lowercase @names in a message, in order, without trailing punctuation."""
-    return list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(body or '')))
+    return list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(NOT_ADDRESSED.sub(' ', body or ''))))
 
 
 def slug(text, words=6):
