@@ -189,3 +189,12 @@ def test_the_hook_says_which_ship_messages_came_from_runs(station, ship_config, 
     run(fake, config_path, now=fake.clock)
     fake.say(room, defiant, 'I typed this in a session')
     assert '(no run ticket)' in run(fake, config_path)
+
+
+def test_the_hook_command_runs_through_main(monkeypatch, capsys, tmp_path):
+    """Regression: a local `import sys` elsewhere in main() made `sys` unbound in the hook branch, so every prompt's hook
+    crashed. The command path must run and exit 0 even with a missing config."""
+    import io
+    from superyak_agent import __main__ as cli
+    monkeypatch.setattr('sys.stdin', io.StringIO('{"session_id": "s1"}'))
+    assert cli.main(['hook', '--config', str(tmp_path / 'missing.json')]) == 0
