@@ -3,12 +3,16 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from urllib.parse import quote
 import urllib.error
 import urllib.request
+from superyak_team.teamlib import fence_external
 
 HOME = Path.home() / '.superyak'
+MESSAGE_LIMIT = 20000  # the station's longest message
+PLAIN_ID = re.compile(r'[A-Za-z0-9:_.-]{1,200}')
 CONFIG = HOME / 'station.json'
 
 
@@ -140,3 +144,32 @@ def label(text, limit=80):
 def describe(member):
     member = member or {'name': 'someone', 'username': 'unknown', 'kind': 'unknown'}
     return f'{label(member.get("name"))} (@{label(member.get("username"))}, {label(member.get("kind"))})'
+
+
+def plain_id(value):
+    """Only an id of plain characters is written into a call an agent can copy: a remote peer chooses its own
+    message ids, and one with spaces or brackets could break the call or write text outside the fence."""
+    return isinstance(value, str) and PLAIN_ID.fullmatch(value) is not None
+
+
+def shown_id(value):
+    return value if plain_id(value) else '(an id with unusual characters)'
+
+
+def read_hint(room_id, message_id, position=None):
+    """The cut note's way back to the whole message: one call that returns just that message. By id when the id
+    is plain; by its position in the room when not (a remote peer chooses its own ids); otherwise no call."""
+    if not plain_id(room_id):
+        return ''
+    if plain_id(message_id):
+        return f'; `station_read room={room_id} message={message_id}` shows all of it'
+    if position is not None:
+        return f'; `station_read room={room_id} at={int(position)} limit=1 max_chars={MESSAGE_LIMIT}` shows all of it'
+    return ''
+
+
+def fence_message(member, body, limit, hint=''):
+    """A message fenced as quoted data, at most `limit` characters of it. A cut is said after the fence,
+    where the author's text cannot imitate it, so a reader never mistakes part of a message for all of it."""
+    text = fence_external(describe(member), body[:limit], limit=limit)
+    return text + f'\n[cut at {limit:,} of {len(body):,} characters{hint}]' if len(body) > limit else text
