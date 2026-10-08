@@ -65,38 +65,80 @@ def is_station_hook(command, wanted=None):
     return str(RUN_AGENT) in command and 'hook' in words
 
 
-def install_hook(settings_path, command):
-    settings_path = Path(settings_path)
-    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    entries = settings.setdefault('hooks', {}).setdefault('UserPromptSubmit', [])
-    if any(is_station_hook(h.get('command'), command) for entry in entries for h in entry.get('hooks', [])):
-        return False
-    if settings_path.exists():
-        shutil.copy2(settings_path, settings_path.with_name(settings_path.name + '.bak-superyak'))
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    entries.append({'hooks': [{'type': 'command', 'command': command, 'timeout': 10}]})
-    _write_settings(settings_path, settings)
-    return True
+ENV_RUN = 'SUPERYAK_RUN=${SUPERYAK_RUN:-hook}'  # unquoted on purpose: the shell expands it
+HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit')
 
 
-def remove_hook(settings_path, command):
+def _hook_words(command):
+    try:
+        return shlex.split(command or '')
+    except ValueError:
+        return (command or '').split()
+
+
+def _hook_commands(config_path, messages):
+    base = hook_command(config_path)
+    return {'SessionStart': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-start {base}',
+            'UserPromptSubmit': base if messages else f'{ENV_RUN} SUPERYAK_HOOK_MESSAGES=0 {base}'}
+
+
+def _same_hook(command, wanted):
+    """Whether an installed station hook is the wanted one in kind, whichever interpreter it was installed with."""
+    def kind(c):
+        words = _hook_words(c)
+        return ('SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_MESSAGES=0' in words)
+    return command == wanted or kind(command) == kind(wanted)
+
+
+def install_hooks(settings_path, config_path, messages):
+    """Install the station's SessionStart (instructions) and UserPromptSubmit hooks. Returns the list of what
+    changed: 'SessionStart', 'UserPromptSubmit' and, when a messages-on prompt hook was replaced, 'messages-off'."""
     settings_path = Path(settings_path)
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    entries = settings.get('hooks', {}).get('UserPromptSubmit', [])
-    kept, changed = [], False
-    for entry in entries:
-        hooks = [h for h in entry.get('hooks', []) if not is_station_hook(h.get('command'), command)]
-        if len(hooks) == len(entry.get('hooks', [])):
-            kept.append(entry)
+    changes = []
+    for event, wanted in _hook_commands(config_path, messages).items():
+        entries = settings.setdefault('hooks', {}).setdefault(event, [])
+        ours = [h.get('command') for entry in entries for h in entry.get('hooks', []) if is_station_hook(h.get('command'), wanted)]
+        if len(ours) == 1 and _same_hook(ours[0], wanted):
             continue
-        changed = True
-        if hooks:  # keep the person's own hooks that shared the entry
-            kept.append({**entry, 'hooks': hooks})
-    if not changed:
-        return False
-    settings['hooks']['UserPromptSubmit'] = kept
-    _write_settings(settings_path, settings)
-    return True
+        if event == 'UserPromptSubmit' and not messages and any('SUPERYAK_HOOK_MESSAGES=0' not in _hook_words(c) for c in ours):
+            changes.append('messages-off')
+        kept = []
+        for entry in entries:
+            hooks = [h for h in entry.get('hooks', []) if not is_station_hook(h.get('command'), wanted)]
+            if hooks:
+                kept.append({**entry, 'hooks': hooks} if len(hooks) != len(entry.get('hooks', [])) else entry)
+        kept.append({'hooks': [{'type': 'command', 'command': wanted, 'timeout': 10}]})
+        settings['hooks'][event] = kept
+        changes.append(event)
+    if changes:
+        backup = settings_path.with_name(settings_path.name + '.bak-superyak')
+        if settings_path.exists() and not backup.exists():
+            shutil.copy2(settings_path, backup)
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_settings(settings_path, settings)
+    return changes
+
+
+def remove_hooks(settings_path):
+    settings_path = Path(settings_path)
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    changed = False
+    for event in HOOK_EVENTS:
+        kept = []
+        for entry in settings.get('hooks', {}).get(event, []):
+            hooks = [h for h in entry.get('hooks', []) if not is_station_hook(h.get('command'))]
+            if len(hooks) == len(entry.get('hooks', [])):
+                kept.append(entry)
+                continue
+            changed = True
+            if hooks:  # keep the person's own hooks that shared the entry
+                kept.append({**entry, 'hooks': hooks})
+        if changed and event in settings.get('hooks', {}):
+            settings['hooks'][event] = kept
+    if changed:
+        _write_settings(settings_path, settings)
+    return changed
 
 
 def register_codex(config_path, name, argv):
@@ -235,8 +277,17 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
     codex = Path.home() / '.codex' / 'config.toml'
     if (shutil.which('codex') or codex.exists()) and register_codex(codex, 'station', mcp_argv):
         out('Registered the station tools with Codex.')
-    if hook and install_hook(Path.home() / '.claude' / 'settings.json', hook_command(config_path)):
-        out('Added the station hook: new room messages appear at the start of each Claude Code turn.')
+    try:
+        changes = install_hooks(Path.home() / '.claude' / 'settings.json', config_path, messages=hook)
+    except (OSError, ValueError, AttributeError, TypeError) as error:
+        out(f'Could not install the Claude Code hooks in ~/.claude/settings.json ({_reason(error)}). Fix the file and run make dock again.')
+    else:
+        if changes and hook:
+            out('Added the station hooks: instructions load in every session and new room messages appear at the start of each Claude Code turn.')
+        elif 'messages-off' in changes:
+            out('Room messages will no longer appear in Claude Code sessions (instructions still load).')
+        elif changes:
+            out('Added the station hooks: instructions load at the start of each Claude Code session.')
     if service:
         install_service([sys.executable, str(RUN_AGENT), 'watch', '--config', str(config_path),
                          '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out)
@@ -271,7 +322,7 @@ def uninstall_all(config_path, out=print):
     if shutil.which('claude'):
         subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True)
     remove_codex(Path.home() / '.codex' / 'config.toml', 'station')
-    remove_hook(Path.home() / '.claude' / 'settings.json', hook_command(config_path))
+    remove_hooks(Path.home() / '.claude' / 'settings.json')
     for path in (config_path, config_path.parent / 'run-mcp.json'):
         path.unlink(missing_ok=True)
     local = 'watcher stopped, station tools and hook removed'

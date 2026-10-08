@@ -23,18 +23,74 @@ def test_launchd_plist_keeps_the_watcher_alive():
     assert plist['KeepAlive'] is True and plist['EnvironmentVariables'] == {'PATH': '/usr/bin:/bin'}
 
 
-def test_hook_is_added_once_preserving_settings_and_can_be_removed(tmp_path):
+SETTINGS_CONFIG = '/home/j/.superyak/station.json'
+
+
+def hook_commands(settings, event):
+    data = json.loads(Path(settings).read_text())
+    return [h['command'] for entry in data['hooks'].get(event, []) for h in entry['hooks']]
+
+
+def test_both_hooks_are_installed_with_the_given_commands_and_settings_are_kept(tmp_path):
     settings = tmp_path / '.claude' / 'settings.json'
     settings.parent.mkdir()
     settings.write_text(json.dumps({'model': 'opus', 'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'x'}]}]}}))
-    assert install.install_hook(settings, 'python3 run_agent.py hook') is True
-    assert install.install_hook(settings, 'python3 run_agent.py hook') is False
+    assert install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    base = install.hook_command(SETTINGS_CONFIG)
     data = json.loads(settings.read_text())
     assert data['model'] == 'opus' and data['hooks']['Stop']
-    assert data['hooks']['UserPromptSubmit'] == [{'hooks': [{'type': 'command', 'command': 'python3 run_agent.py hook', 'timeout': 10}]}]
+    assert hook_commands(settings, 'SessionStart') == ['SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_EVENT=session-start ' + base]
+    assert hook_commands(settings, 'UserPromptSubmit') == [base]
+    assert data['hooks']['UserPromptSubmit'][0]['hooks'][0]['timeout'] == 10
     assert (tmp_path / '.claude' / 'settings.json.bak-superyak').exists()
-    assert install.remove_hook(settings, 'python3 run_agent.py hook') is True
-    assert json.loads(settings.read_text())['hooks']['UserPromptSubmit'] == []
+
+
+def test_messages_off_prompt_hook_command(tmp_path):
+    settings = tmp_path / 'settings.json'
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=False)
+    base = install.hook_command(SETTINGS_CONFIG)
+    assert hook_commands(settings, 'UserPromptSubmit') == ['SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_MESSAGES=0 ' + base]
+    assert not settings.with_name('settings.json.bak-superyak').exists()  # nothing to back up
+
+
+@pytest.mark.parametrize('messages', [True, False])
+def test_installing_hooks_twice_changes_nothing(tmp_path, messages):
+    settings = tmp_path / 'settings.json'
+    settings.write_text('{}')
+    assert install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)
+    first = settings.read_text()
+    assert not install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)
+    assert settings.read_text() == first
+
+
+def test_switching_messages_replaces_the_prompt_hook_without_duplicating_it(tmp_path):
+    settings = tmp_path / 'settings.json'
+    mine = {'type': 'command', 'command': 'notify-me'}
+    settings.write_text(json.dumps({'hooks': {'UserPromptSubmit': [{'hooks': [mine]}]}}))
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=False)
+    prompt = hook_commands(settings, 'UserPromptSubmit')
+    assert prompt[0] == 'notify-me' and len(prompt) == 2 and 'SUPERYAK_HOOK_MESSAGES=0' in prompt[1]
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    assert hook_commands(settings, 'UserPromptSubmit') == ['notify-me', install.hook_command(SETTINGS_CONFIG)]
+    assert len(hook_commands(settings, 'SessionStart')) == 1
+
+
+def test_remove_hooks_removes_both_and_keeps_the_persons_own(tmp_path):
+    settings = tmp_path / 'settings.json'
+    mine = {'type': 'command', 'command': 'notify-me'}
+    settings.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [mine]}]}}))
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    assert install.remove_hooks(settings) is True
+    assert hook_commands(settings, 'SessionStart') == ['notify-me'] and hook_commands(settings, 'UserPromptSubmit') == []
+    assert install.remove_hooks(settings) is False
+
+
+def test_prefixed_commands_are_station_hooks():
+    base = install.hook_command(SETTINGS_CONFIG)
+    assert install.is_station_hook('SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_EVENT=session-start ' + base)
+    assert install.is_station_hook('SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_MESSAGES=0 ' + base)
+    assert not install.is_station_hook('SUPERYAK_RUN=${SUPERYAK_RUN:-hook} python3 other.py hook')
 
 
 def test_codex_registration_appends_one_block(tmp_path):
@@ -58,14 +114,15 @@ def test_hook_installed_with_another_interpreter_is_the_same_hook(tmp_path):
     ours = lambda python: f'{python} {install.RUN_AGENT} hook --config /home/j/.superyak/station.json'  # noqa: E731
     mine = {'type': 'command', 'command': 'notify-me'}
     settings.write_text(json.dumps({'hooks': {'UserPromptSubmit': [{'hooks': [mine, {'type': 'command', 'command': ours('/old/python3.11')}]}]}}))
-    assert install.install_hook(settings, ours('/new/python3.13')) is False
+    install.install_hooks(settings, '/home/j/.superyak/station.json', messages=True)
     assert json.loads(settings.read_text())['hooks']['UserPromptSubmit'][0]['hooks'][1]['command'] == ours('/old/python3.11')
-    assert install.remove_hook(settings, ours('/new/python3.13')) is True
+    assert len(hook_commands(settings, 'UserPromptSubmit')) == 2
+    assert install.remove_hooks(settings) is True
     assert json.loads(settings.read_text())['hooks']['UserPromptSubmit'] == [{'hooks': [mine]}]
-    assert install.remove_hook(settings, ours('/new/python3.13')) is False
+    assert install.remove_hooks(settings) is False
     unrelated = {'hooks': {'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': 'python3 other.py hook'}]}]}}
     settings.write_text(json.dumps(unrelated))
-    assert install.remove_hook(settings, ours('/new/python3.13')) is False and json.loads(settings.read_text()) == unrelated
+    assert install.remove_hooks(settings) is False and json.loads(settings.read_text()) == unrelated
 
 
 def test_codex_block_is_removed_and_other_tables_are_kept(tmp_path):
@@ -203,3 +260,29 @@ def test_undock_reports_a_revoked_key(monkeypatch, tmp_path):
     monkeypatch.setattr(install, 'client_for', lambda config: SimpleNamespace(revoke_key=lambda: revoked.append(config['key'])))
     install.uninstall_all(machine.config, out=machine.out.append)
     assert revoked == ['k'] and machine.out == ['Undocked: key revoked, watcher stopped, station tools and hook removed.']
+
+
+def test_dock_without_hook_flag_installs_the_law_hooks_with_messages_off(monkeypatch, tmp_path):
+    machine = Machine(monkeypatch, tmp_path)
+    machine.install(adna=False)
+    settings = machine.home / '.claude' / 'settings.json'
+    assert len(hook_commands(settings, 'SessionStart')) == 1
+    assert 'SUPERYAK_HOOK_MESSAGES=0' in hook_commands(settings, 'UserPromptSubmit')[0]
+    machine.out.clear()
+    machine.install(adna=False, hook=True)
+    assert hook_commands(settings, 'UserPromptSubmit') == [install.hook_command(machine.config)]
+    machine.out.clear()
+    machine.install(adna=False)
+    assert 'Room messages will no longer appear in Claude Code sessions (instructions still load).' in machine.out
+    assert len(hook_commands(settings, 'UserPromptSubmit')) == 1
+
+
+def test_a_malformed_settings_file_is_reported_and_the_service_still_installs(monkeypatch, tmp_path):
+    machine = Machine(monkeypatch, tmp_path)
+    settings = machine.home / '.claude' / 'settings.json'
+    settings.parent.mkdir()
+    settings.write_text('{not json')
+    machine.install(adna=False, hook=True)
+    assert any('hook' in line and 'settings.json' in line for line in machine.out)
+    assert machine.called('systemctl', '--user', 'restart', install.UNIT)
+    assert settings.read_text() == '{not json'
