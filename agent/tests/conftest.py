@@ -76,13 +76,13 @@ class FakeStation:
                 message = self.say(room['id'], self.users[me], payload['body'], payload['client_message_id'])
                 return (409, b'{"error": "Message ID already used with different text"}') if message is None else ok(message, 201)
         if method == 'GET' and path == '/api/mentions':
-            after, rows = int(query.get('after', ['0'])[0]), []
+            after, rows = int(query.get('after', ['0'])[0]), []  # one page holds at most 50, as on the station
             for row in self.mention_rows:
                 if row['user_id'] == me and row['seq'] > after and me in self.rooms[row['room_id']]['member_ids']:
                     message = next(m for m in self.rooms[row['room_id']]['messages'] if m['id'] == row['message_id'])
                     rows.append({'seq': row['seq'], 'message_id': message['id'], 'room_id': row['room_id'], 'body': message['body'],
                                  'created': message['created'], 'author': self.users[message['author_id']]})
-            return ok(rows)
+            return ok(rows[:50])
         if method == 'DELETE' and path == '/api/ships/me/key':
             self.keys.pop(key)
             return ok({'ok': True})
