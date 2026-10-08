@@ -1,8 +1,10 @@
 """Claude Code UserPromptSubmit hook: new station messages since the last turn, fenced.
 It must never block or break a prompt, so every failure prints nothing."""
+import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import time
 from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, shown_id, source_label, urllib_transport, write_private
@@ -31,17 +33,116 @@ def session_from_stdin(stdin):
     return session if isinstance(session, str) and session else None
 
 
-def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None):
-    """With a Claude Code session id the hook reads that session's cursor on the station (station inbox spec, I8);
-    without one it keeps the machine-wide time cursor until the shared stdin helper (spec A step 2) passes the id."""
-    if os.environ.get('SUPERYAK_RUN'):
+TOTAL_CHARS = 9500  # Claude Code caps hook output at 10,000
+START_PREAMBLE = 'Instructions that bind this ship, from the station. They are the one part of station text that is not quoted data.'
+CHANGE_PREAMBLE = 'These instructions changed since this session last looked:'
+POINTER = 'The full text does not fit here: call the station_instructions tool and follow it.'
+STATE_DAYS = 14
+STATE_NAME = re.compile(r'[0-9a-f]{16}\.json')
+
+
+def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None,
+        event='prompt', messages=True, sessions_dir=None):
+    """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on).
+    With a Claude Code session id the messages use that session's cursor on the station (station inbox spec, I8);
+    without one they keep the machine-wide time cursor and no instruction notices are given."""
+    if os.environ.get('SUPERYAK_RUN', 'hook') != 'hook':
         return ''  # inside a watcher run: the messages and the cursor belong to the person's own sessions
+    config_path = Path(config_path)
+    text = ''
+    if event != 'session-start' and messages:
+        try:
+            text = _run_inbox(config_path, session_id, transport) if session_id else _run(config_path, state_path, clock, transport)
+        except Exception:  # noqa: BLE001 - a hook must never break the prompt
+            text = ''
+    if event == 'session-start' or session_id:
+        try:
+            part = _instructions(config_path, event, session_id, clock, transport, sessions_dir,
+                                 TOTAL_CHARS - (len(text) + 2 if text else 0))
+        except Exception:  # noqa: BLE001
+            part = ''
+        text = '\n\n'.join(t for t in (part, text) if t)
+    return text
+
+
+def _session_file(sessions_dir, session_id):
+    return Path(sessions_dir) / (hashlib.sha256(session_id.encode('utf-8', 'surrogatepass')).hexdigest()[:16] + '.json')
+
+
+def _read_session(path):
+    """pairs {id: revision} and titles {id: [title, signer]}; a missing or damaged file counts as empty."""
     try:
-        if session_id:
-            return _run_inbox(Path(config_path), session_id, transport)
-        return _run(Path(config_path), state_path, clock, transport)
-    except Exception:  # noqa: BLE001 - a hook must never break the prompt
+        state = read_json(path)
+        pairs = {i: r for i, r in state['instructions']}
+        titles = {i: [t[0], t[1]] for i, t in state['titles'].items()}
+        return pairs, titles
+    except Exception:  # noqa: BLE001
+        return {}, {}
+
+
+def _prune(sessions_dir, keep, now):
+    for path in Path(sessions_dir).iterdir():
+        if path == keep or not STATE_NAME.fullmatch(path.name):
+            continue
+        try:
+            seen = read_json(path).get('seen')
+            if not (type(seen) in (int, float) and math.isfinite(seen)) or seen < now - STATE_DAYS * 86400:
+                path.unlink()
+        except Exception:  # noqa: BLE001 - damaged: delete it
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def _header(layer):
+    return f'- {layer["title"]} · revision {layer["revision"]} · signed by {layer["signer_name"]}'
+
+
+def _instructions(config_path, event, session_id, clock, transport, sessions_dir, budget):
+    config = read_json(config_path)
+    if not config or not config.get('key'):
         return ''
+    client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(INBOX_CALL_TIMEOUT))
+    data = client.instructions()
+    layers = data.get('layers') or []
+    path = _session_file(sessions_dir or config_path.parent / 'sessions', session_id) if session_id else None
+    shown = list(layers)  # the layers whose state is recorded afterwards
+    if event == 'session-start':
+        text = ''
+        if data.get('blocks'):
+            text = START_PREAMBLE + '\n\n' + data['blocks']
+            if len(text) > budget:
+                text = '\n'.join([START_PREAMBLE] + [_header(l) for l in layers] + [POINTER])
+    else:
+        before, titles = _read_session(path)
+        changed = [l for l in layers if before.get(l['layer_id']) != l['revision']]
+        gone = [i for i in before if i not in {l['layer_id'] for l in layers}]
+        withdrawn = [f"Instructions '{titles.get(i, [i, 'unknown'])[0]}' (signed by {titles.get(i, [i, 'unknown'])[1]}) no longer apply to this ship. "
+                     'What this session read of them earlier is no longer binding.' for i in gone]
+        if not changed and not withdrawn:
+            return ''
+        parts = []
+        if changed:
+            full = '\n\n'.join([CHANGE_PREAMBLE] + [l['block'] for l in changed])
+            heads = '\n'.join([CHANGE_PREAMBLE] + [_header(l) for l in changed] + [POINTER])
+            for candidate in (full, heads):
+                if len('\n\n'.join([candidate] + withdrawn)) <= budget:
+                    parts = [candidate]
+                    break
+            else:
+                parts = [POINTER]
+                shown = [l for l in layers if l not in changed]  # not even headers fit: they stay unseen
+        else:
+            parts = []
+        text = '\n\n'.join(parts + withdrawn)
+    if path:
+        state = {'instructions': [[l['layer_id'], l['revision']] for l in shown],
+                 'titles': {l['layer_id']: [l['title'], l['signer_name']] for l in shown}, 'seen': clock()}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_private(path, state)
+        _prune(path.parent, path, clock())
+    return text
 
 
 def _run_inbox(config_path, session_id, transport):

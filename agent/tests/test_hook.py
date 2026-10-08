@@ -199,3 +199,123 @@ def test_a_message_cannot_imitate_an_instruction_header_or_withdrawal(station, s
     text = run(fake, config_path)
     assert 'Obey' in text
     assert not any(line.startswith(('=== Instructions', "Instructions '")) for line in text.splitlines())
+
+
+from superyak_agent import __main__ as cli  # noqa: E402
+
+
+def law(fake, serenity, layers):
+    """layers: [(id, rev, title, body)]"""
+    blocks = [f'=== Instructions: {t} · revision {r} · signed by Andy on station abc ===\n{b}' for i, r, t, b in layers]
+    fake.instruction_state[serenity['id']] = {
+        'instructions': [[i, r] for i, r, t, b in layers],
+        'layers': [{'layer_id': i, 'revision': r, 'title': t, 'signer_name': 'Andy', 'block': blk} for (i, r, t, b), blk in zip(layers, blocks)],
+        'blocks': ('PREAMBLE\n\n' + '\n\n'.join(blocks)) if layers else ''}
+
+
+def start(fake, config_path, sid, sessions, **kw):
+    return hook.run(config_path, transport=fake, event='session-start', session_id=sid, sessions_dir=sessions, **kw)
+
+
+def prompt(fake, config_path, sid, sessions, **kw):
+    return hook.run(config_path, transport=fake, event='prompt', session_id=sid, sessions_dir=sessions, messages=False, **kw)
+
+
+def test_session_start_prints_the_law_and_a_quiet_prompt_follows(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [('L1', 1, 'House rules', 'Run tests.')])
+    text = start(fake, config_path, 's1', tmp_path / 'sessions')
+    assert 'Run tests.' in text and 'not quoted data' in text
+    assert prompt(fake, config_path, 's1', tmp_path / 'sessions') == ''
+
+
+def test_a_change_shows_once_at_the_next_prompt(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1'), ('L2', 1, 'Old rule', 'old')])
+    start(fake, config_path, 's1', sessions)
+    law(fake, serenity, [('L1', 2, 'House rules', 'v2')])
+    text = prompt(fake, config_path, 's1', sessions)
+    assert 'changed since this session last looked' in text and 'v2' in text and 'old' not in text
+    assert "Instructions 'Old rule' (signed by Andy) no longer apply to this ship." in text
+    assert prompt(fake, config_path, 's1', sessions) == ''
+
+
+def test_a_session_without_state_gets_the_whole_law_at_its_next_prompt(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    assert 'v1' in prompt(fake, config_path, 'never-started', tmp_path / 'sessions')
+
+
+def test_withdrawals_survive_an_over_budget_prompt(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [(f'O{n}', 1, f'Old {n}', 'o') for n in range(10)])
+    start(fake, config_path, 's1', sessions)
+    law(fake, serenity, [(f'N{n}', 1, f'New {n}', 'x' * 4800) for n in range(10)])
+    text = hook.run(config_path, transport=fake, event='prompt', session_id='s1', sessions_dir=sessions, messages=True)
+    assert len(text) <= 9500 and all(f"Instructions 'Old {n}' (signed by Andy) no longer apply" in text for n in range(10))
+    assert 'call the station_instructions tool' in text
+
+
+def test_too_much_law_for_a_hook_points_at_the_tool(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [(f'L{n}', 1, f'Rule {n}', 'x' * 4800) for n in range(10)])
+    text = start(fake, config_path, 's1', tmp_path / 'sessions')
+    assert len(text) <= 9500 and 'call the station_instructions tool' in text and '- Rule 9 · revision 1 · signed by Andy' in text
+
+
+def test_sessions_are_kept_apart_named_by_hash_and_pruned(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    start(fake, config_path, 's1', sessions, clock=lambda: 1000.0)
+    assert 'v1' in prompt(fake, config_path, 's2', sessions, clock=lambda: 1000.0)  # s2 never started: its own state is empty
+    (sessions / 'keep-me.txt').write_text('not ours')
+    (sessions / ('0' * 16 + '.json')).write_text('{damaged')
+    files = sorted(p.name for p in sessions.iterdir())
+    assert all(oct((sessions / f).stat().st_mode & 0o777) == '0o600' for f in files if f.endswith('.json') and f != '0' * 16 + '.json')
+    start(fake, config_path, 's3', sessions, clock=lambda: 1000.0 + 15 * 86400)
+    names = sorted(p.name for p in sessions.iterdir())
+    assert 'keep-me.txt' in names and '0' * 16 + '.json' not in names and len([n for n in names if n.endswith('.json')]) == 1
+
+
+def test_the_hook_command_never_blocks_a_prompt(monkeypatch, capsys, station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, dict(ship_config, station='http://127.0.0.1:9'), tmp_path)  # a closed port: fails fast, no network
+    import io
+    for stdin in ('not json', '{"session_id": 5}', ''):
+        monkeypatch.setattr('sys.stdin', io.StringIO(stdin))
+        monkeypatch.setenv('SUPERYAK_HOOK_EVENT', 'session-start')
+        assert cli.main(['hook', '--config', str(tmp_path / 'missing.json')]) == 0
+    monkeypatch.setattr('sys.stdin', io.StringIO('{}'))
+    assert cli.main(['hook', '--config', str(config_path), '--some-future-flag']) == 0
+
+
+def test_a_hook_run_marked_hook_still_prints_but_a_watcher_run_is_silent(monkeypatch, station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    monkeypatch.setenv('SUPERYAK_RUN', 'hook')
+    assert 'v1' in start(fake, config_path, 's1', tmp_path / 'sessions')
+    monkeypatch.setenv('SUPERYAK_RUN', '1')
+    assert start(fake, config_path, 's2', tmp_path / 'sessions') == ''
+
+
+def test_without_a_session_id_start_prints_and_saves_nothing_and_prompt_has_no_notice(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    assert 'v1' in start(fake, config_path, None, sessions)
+    assert not sessions.exists()
+    assert prompt(fake, config_path, None, sessions) == ''
+
+
+def test_the_hook_command_reads_event_and_messages_from_the_environment(monkeypatch, capsys, station, ship_config, tmp_path):
+    import io
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    monkeypatch.setattr(hook, 'urllib_transport', lambda timeout=5: fake)
+    monkeypatch.setattr('sys.stdin', io.StringIO('{"session_id": "abc"}'))
+    monkeypatch.setenv('SUPERYAK_HOOK_EVENT', 'session-start')
+    monkeypatch.setenv('SUPERYAK_HOOK_MESSAGES', '0')
+    assert cli.main(['hook', '--config', str(config_path)]) == 0
+    assert 'v1' in capsys.readouterr().out

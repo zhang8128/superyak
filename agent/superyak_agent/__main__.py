@@ -65,18 +65,33 @@ def build_parser():
     return parser
 
 
+def _hook(parser, argv):
+    """Claude Code hook: unknown flags are ignored and nothing may break the prompt, so it always exits 0."""
+    try:
+        import os
+        from .hook import run, session_from_stdin
+        args, _ = parser.parse_known_args(argv)
+        session_id = None if sys.stdin.isatty() else session_from_stdin(sys.stdin)
+        text = run(args.config, session_id=session_id,
+                   event='session-start' if os.environ.get('SUPERYAK_HOOK_EVENT') == 'session-start' else 'prompt',
+                   messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
+        if text:
+            print(text)
+    except BaseException:  # noqa: BLE001
+        pass
+    return 0
+
+
 def main(argv=None):
     parser = build_parser()
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv[:1] == ['hook']:
+        return _hook(parser, argv)
     args = parser.parse_args(argv)
     if args.command == 'mcp':
         from .mcp import serve
         serve(args.config)
-        return 0
-    if args.command == 'hook':
-        from .hook import run, session_from_stdin
-        text = run(args.config, session_id=session_from_stdin(sys.stdin))
-        if text:
-            print(text)
         return 0
     if args.command == 'watch':
         import logging
@@ -166,7 +181,6 @@ def main(argv=None):
         from .vault_git import serve
         return serve(args.repo)
     if args.command == 'wormhole-key':
-        import sys
         from .vault_git import install_key
         run_agent = Path(__file__).resolve().parents[1] / 'run_agent.py'
         try:
