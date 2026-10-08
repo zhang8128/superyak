@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from urllib.parse import quote
 import urllib.error
@@ -11,6 +12,7 @@ from superyak_team.teamlib import fence_external
 
 HOME = Path.home() / '.superyak'
 MESSAGE_LIMIT = 20000  # the station's longest message
+PLAIN_ID = re.compile(r'[A-Za-z0-9:_.-]{1,200}')
 CONFIG = HOME / 'station.json'
 
 
@@ -144,9 +146,21 @@ def describe(member):
     return f'{label(member.get("name"))} (@{label(member.get("username"))}, {label(member.get("kind"))})'
 
 
+def plain_id(value):
+    """Only an id of plain characters is written into a call an agent can copy: a remote peer chooses its own
+    message ids, and one with spaces or brackets could break the call or write text outside the fence."""
+    return isinstance(value, str) and PLAIN_ID.fullmatch(value) is not None
+
+
+def shown_id(value):
+    return value if plain_id(value) else '(an id with unusual characters)'
+
+
 def read_hint(room_id, message_id):
     """The cut note's way back to the whole message: one call that returns just that message."""
-    return f'; station_read room={label(room_id, 100)} message={label(message_id, 100)} shows all of it'
+    if not (plain_id(room_id) and plain_id(message_id)):
+        return ''
+    return f'; station_read room={room_id} message={message_id} shows all of it'
 
 
 def fence_message(member, body, limit, hint=''):

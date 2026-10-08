@@ -113,7 +113,8 @@ def test_messages_left_out_for_space_are_counted_with_where_to_resume(station, s
     text = run(fake, config_path)
     shown = text.count('Room Promenade, message ')
     assert len(text) <= 4000 and 'message 24' in text
-    assert f'{25 - shown} earlier messages not shown. Promenade: station_read room={room} after={anchor["id"]}' in text
+    left_out = [m for m in fake.rooms[room]['messages'] if m['id'] != anchor['id']][:25 - shown]
+    assert f'{25 - shown} earlier messages not shown: station_read room={room} start={left_out[0]["id"]}.' in text
 
 
 def test_left_out_messages_in_a_new_room_name_the_room(station, ship_config, tmp_path):
@@ -123,7 +124,8 @@ def test_left_out_messages_in_a_new_room_name_the_room(station, ship_config, tmp
     for n in range(25):
         fake.say(room, jenn, f'message {n} ' + 'x' * 400)
     text = run(fake, config_path)
-    assert f'earlier messages not shown. Fresh: station_read room={room} limit=100' in text
+    first = fake.rooms[room]['messages'][0]
+    assert f'earlier messages not shown: station_read room={room} start={first["id"]}.' in text
 
 
 def test_nothing_is_said_when_every_message_fits(station, ship_config, tmp_path):
@@ -142,4 +144,4 @@ def test_the_left_out_note_keeps_the_hook_within_its_budget_whatever_the_rooms(s
         for n in range(8):
             fake.say(room, jenn, f'message {r}.{n} ' + 'x' * 400)
     text = run(fake, config_path)
-    assert len(text) <= 4000 and 'earlier messages not shown.' in text and 'more rooms.' in text
+    assert len(text) <= 4000 and 'earlier messages not shown:' in text and 'more rooms (station_rooms lists them).' in text

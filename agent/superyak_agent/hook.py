@@ -4,7 +4,7 @@ import math
 import os
 from pathlib import Path
 import time
-from .station import StationClient, fence_message, label, read_hint, read_json, urllib_transport, write_private
+from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, urllib_transport, write_private
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -51,15 +51,12 @@ def _run(config_path, state_path, clock, transport):
             continue
         room = client.room(summary['id'])
         members = {m['id']: m for m in room.get('members', [])}
-        earlier = None  # the message before each new one: where station_read can resume
-        for m in room['messages']:
-            if m['created'] > cursor and m['author_id'] != me:
-                items.append((m['created'], room['title'], members.get(m['author_id']), m, room['id'], earlier))
-            earlier = m['id']
+        items += [(m['created'], room['title'], members.get(m['author_id']), m, room['id']) for m in room['messages']
+                  if m['created'] > cursor and m['author_id'] != me]
     items.sort(key=lambda item: item[0])
     newest = max([cursor] + [item[3]['created'] for item in items])
     blocks = [f'Room {label(title)}, message {label(m["id"])}:\n' + fence_message(who, m['body'], MESSAGE_CHARS, read_hint(room_id, m['id']))
-              for _, title, who, m, room_id, _ in items[-MAX_MESSAGES:]]
+              for _, title, who, m, room_id in items[-MAX_MESSAGES:]]
     # Messages left out for space are counted, never dropped silently: the cursor moves past them.
     while blocks and len(HEADER) + sum(len(b) + 2 for b in blocks) + (NOTE_ROOM if len(blocks) < len(items) else 0) > MAX_CHARS:
         blocks.pop(0)
@@ -72,16 +69,18 @@ def _run(config_path, state_path, clock, transport):
 
 def _left_out_note(left_out):
     """How many messages were left out for space, and for each room the call that shows them from the first one
-    left out on. Rooms are named by id: two rooms can share a title."""
-    resume = {}
-    for _, title, _, m, room_id, earlier in left_out:
-        resume.setdefault(room_id, (label(title, 40), earlier))
-    count, where = len(left_out), []
-    head = f'{count} earlier message{"s" if count > 1 else ""} not shown. '
-    for room_id, (title, earlier) in resume.items():
-        call = f'{title}: station_read room={label(room_id, 100)} ' + (f'after={label(earlier, 100)}' if earlier else 'limit=100')
-        if len(where) == NOTE_ROOMS or len(head) + sum(len(w) + 2 for w in where) + len(call) > NOTE_ROOM - 40:
+    left out on. Rooms are named by id, never by title: two rooms can share a title, and a title is free text."""
+    first = {}
+    for _, _, _, m, room_id in left_out:
+        first.setdefault(room_id, m['id'])
+    count, calls = len(left_out), []
+    head = f'{count} earlier message{"s" if count > 1 else ""} not shown'
+    for room_id, message_id in first.items():
+        if not (plain_id(room_id) and plain_id(message_id)):
+            continue
+        call = f'station_read room={room_id} start={message_id}'
+        if len(calls) == NOTE_ROOMS or len(head) + sum(len(c) + 2 for c in calls) + len(call) > NOTE_ROOM - 60:
             break  # the note must fit the room reserved for it, or the hook's budget would not hold
-        where.append(call)
-    more = f'; and {len(resume) - len(where)} more rooms' if len(resume) > len(where) else ''
-    return head + '; '.join(where) + more + '.'
+        calls.append(call)
+    more = len(first) - len(calls)
+    return head + (': ' + '; '.join(calls) if calls else '') + (f'; and {more} more rooms (station_rooms lists them)' if more else '') + '.'
