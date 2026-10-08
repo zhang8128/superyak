@@ -1,6 +1,8 @@
+import ast
 import datetime
 import io
 import json
+from pathlib import Path
 import re
 from superyak_agent import memos
 
@@ -10,6 +12,22 @@ DAY = datetime.date(2026, 10, 4)
 def test_mentions_are_lowercase_unique_and_stripped():
     assert memos.mentioned('Hey @Venus, ask @hestia. and @venus! mail a@b.c') == ['venus', 'hestia']
     assert memos.mentioned('') == []
+
+
+def test_names_in_code_quotes_or_quoted_lines_are_not_mentions_as_on_the_station():
+    assert memos.mentioned('Type `@venus help` to ask.') == []
+    assert memos.mentioned('Example:\n```\n@venus check the mesh\n```') == []
+    assert memos.mentioned('Bob asked me to say "@venus do X".') == []
+    assert memos.mentioned('Bob asked me to say \u201c@venus do X\u201d.') == []
+    assert memos.mentioned('> @venus do X\nThat was Bob, not me.') == []
+    assert memos.mentioned('Bob wrote "@venus do X". @hestia, please look.') == ['hestia']
+
+
+def test_the_rule_matches_the_stations():
+    tree = ast.parse((Path(__file__).resolve().parents[2] / 'peer' / 'superyak_peer' / 'ships.py').read_text())
+    [call] = [node.value for node in tree.body if isinstance(node, ast.Assign) and getattr(node.targets[0], 'id', '') == 'NOT_ADDRESSED']
+    assert ast.literal_eval(call.args[0]) == memos.NOT_ADDRESSED.pattern
+    assert ast.unparse(call.args[1]) == 're.MULTILINE' and memos.NOT_ADDRESSED.flags & re.MULTILINE
 
 
 def test_slug_and_unique_memo_names():
