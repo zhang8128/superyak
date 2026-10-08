@@ -33,6 +33,7 @@ gives the station:
 | D4 | Reviewer | With Serenity reassigned, a fresh reviewer agent on the Pi reviews Rio Grande's branches. | Andy, terminal |
 | D5 | Law code | Branches that change safety code also merge on review plus tests, without a person. | Andy, terminal |
 | D6 | This spec | A fresh reviewer agent approves it in Andy's place. | Andy, terminal |
+| D7 | One machine, many sessions | Dock a ship per team or role (e.g. `serenity-bricks` for the Bricks lead). Grants, budgets and keys are per ship. Every act also records a session label the client declares, as provenance only, never authority. | Andy, terminal |
 
 ## The rules every feature keeps (Serenity's Brief 1)
 
@@ -53,6 +54,9 @@ everything. 5. Plurality: ids and signatures still mean something between indepe
 - **Direct:** a structured request from a ship for another ship to do one task in one room.
 - **Ticket:** the station's decision, made just before a run, about that run's mode and authority, together
   with the record of it.
+- **Session label:** a short string the client declares on each act and ticket (a Claude Code session id, a
+  team name, or `watcher`). It is at most 100 characters, collapsed to one line, recorded and shown for the
+  audit. The station can't verify it, so it never grants or narrows anything. Ships are the boundary of authority (D7).
 
 ## 1. Instruction layers and the charter (station)
 
