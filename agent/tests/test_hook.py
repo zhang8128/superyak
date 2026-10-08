@@ -611,3 +611,16 @@ def test_a_failed_prompt_keeps_what_the_session_knows(station, ship_config, tmp_
     assert prompt(fake, config_path, 's1', sessions, clock=lambda: 1010.0) == ''
     fake.down = False
     assert prompt(fake, config_path, 's1', sessions, clock=lambda: 1071.0) == ''  # a prompt failure loses no context
+
+
+def test_a_session_start_that_shows_the_law_keeps_the_session(station, ship_config, tmp_path):
+    """Guards the other side: a start that did show the law (or found none) keeps its state, so prompts stay quiet."""
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    assert 'v1' in start(fake, config_path, 's1', sessions)
+    assert 'v1' in start(fake, config_path, 's1', sessions)  # a resume shows it again
+    assert prompt(fake, config_path, 's1', sessions) == ''
+    law(fake, serenity, [])
+    start(fake, config_path, 's2', sessions)  # no law at all: still a successful start
+    assert prompt(fake, config_path, 's2', sessions) == ''
