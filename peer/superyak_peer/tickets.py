@@ -63,3 +63,27 @@ class Tickets:
             if row['status'] == 'running':
                 db.execute("UPDATE tickets SET status='finished',finished=? WHERE id=?", (self.clock(), ticket_id))
             return self._ticket_json(db, db.execute('SELECT * FROM tickets WHERE id=?', (ticket_id,)).fetchone())
+
+    def _check_ticket_label(self, db, actor, room_id, ticket_id):
+        """A post may carry a ticket only if it is this ship's, still running, for a message in this room, and has
+        labelled nothing yet: one labelled message per ticket, so a session can never borrow a run's label."""
+        text(ticket_id, 'ticket ID', 100)
+        row = db.execute('SELECT tickets.*, messages.room_id AS ticket_room FROM tickets JOIN messages ON messages.id=tickets.message_id '
+                         'WHERE tickets.id=? AND tickets.ship_id=?', (ticket_id, actor)).fetchone()
+        if row is None or not self._ticket_running(row) or row['ticket_room'] != room_id:
+            raise Problem(409, 'This ticket cannot label a message here')
+        if db.execute('SELECT 1 FROM message_sources WHERE ticket_id=?', (ticket_id,)).fetchone():
+            raise Problem(409, 'This ticket has already labelled a message')
+
+    def _sources(self, db, room_id):
+        """Each local message's source as the station recorded it: a run's ticket, a ship's own post, or none for a
+        person. Never derived from a client's own message ids."""
+        runs = {r['message_id']: {'kind': 'run', 'mode': r['mode'], 'basis': r['basis'],
+                                  'root_name': safe_line(r['root_name']) if r['root_name'] else None, 'answering': r['answering']}
+                for r in db.execute('SELECT message_sources.message_id, tickets.mode, tickets.basis, tickets.message_id AS answering, '
+                                    'users.name AS root_name FROM message_sources JOIN tickets ON tickets.id=message_sources.ticket_id '
+                                    'JOIN messages ON messages.id=message_sources.message_id LEFT JOIN users ON users.id=tickets.root_id '
+                                    'WHERE messages.room_id=?', (room_id,))}
+        ships = {r[0] for r in db.execute("SELECT id FROM users WHERE kind='ship'")}
+        return {r['id']: runs.get(r['id'], {'kind': 'post'}) if r['author_id'] in ships else None
+                for r in db.execute('SELECT id,author_id FROM messages WHERE room_id=?', (room_id,))}

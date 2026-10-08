@@ -96,3 +96,65 @@ def test_the_footer_never_mentions_anyone(env):
     owner = say(clients[0], room, 'a', '@serenity add notes')
     footer = ticket(serenity, owner['id']).json()['footer']
     assert '@' not in footer and '\n' not in footer and footer == 'Builder for (at)odo boss (owner)'
+
+
+def post(client, room, cid, body, ticket_id=None):
+    payload = {'client_message_id': cid, 'body': body}
+    if ticket_id is not None:
+        payload['ticket_id'] = ticket_id
+    return client.post(f'/api/chats/{room}/messages', json=payload)
+
+
+def sources(client, room):
+    return {m['body']: m['source'] for m in client.get(f'/api/chats/{room}').json()['messages']}
+
+
+def test_a_reply_with_its_ticket_is_labelled_as_that_run(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    owner = say(clients[0], room, 'a', '@serenity add notes')
+    other = say(clients[1], room, 'b', '@serenity what is this?')
+    build, read = ticket(serenity, owner['id']).json(), ticket(serenity, other['id']).json()
+    assert post(serenity, room, f'reply-{owner["id"]}', 'Added notes', build['id']).status_code == 201
+    assert post(serenity, room, f'reply-{other["id"]}', 'It is a station', read['id']).status_code == 201
+    assert post(serenity, room, 'post-1', 'Hello from my session').status_code == 201
+    got = sources(clients[0], room)
+    assert got['Added notes'] == {'kind': 'run', 'mode': 'build', 'basis': 'owner', 'root_name': 'Patient', 'answering': owner['id']}
+    assert got['It is a station'] == {'kind': 'run', 'mode': 'read', 'basis': 'none', 'root_name': None, 'answering': other['id']}
+    assert got['Hello from my session'] == {'kind': 'post'}
+    assert got['@serenity add notes'] is None
+
+
+def test_a_ticket_labels_one_message_only_and_never_a_finished_or_foreign_one(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    owner = say(clients[0], room, 'a', '@serenity add notes')
+    build = ticket(serenity, owner['id']).json()
+    assert post(serenity, room, 'r1', 'first', build['id']).status_code == 201
+    assert post(serenity, room, 'r1', 'first', build['id']).status_code == 201  # the same post again is idempotent
+    assert post(serenity, room, 'r2', 'second', build['id']).status_code == 409
+    second = say(clients[0], room, 'b', '@serenity more notes')
+    later = ticket(serenity, second['id']).json()
+    serenity.post(f'/api/ships/me/tickets/{later["id"]}/finish', json={})
+    assert post(serenity, room, 'r3', 'too late', later['id']).status_code == 409
+    other_room = clients[0].post('/api/chats', json={'title': 'Elsewhere', 'member_ids': [ship['id']]}).json()['id']
+    third = say(clients[0], room, 'c', '@serenity again')
+    wrong_room = ticket(serenity, third['id']).json()
+    assert post(serenity, other_room, 'r4', 'misplaced', wrong_room['id']).status_code == 409
+    assert post(clients[0], room, 'r5', 'a person cannot use a ticket', wrong_room['id']).status_code == 409
+    assert 'second' not in sources(clients[0], room) and 'too late' not in sources(clients[0], room)
+
+
+def test_a_remote_rooms_messages_never_carry_a_label(env, monkeypatch):
+    """A paired peer's payload is passed through for ':' rooms; a label in it must never reach a reader."""
+    app, clients, users, clock = env
+    store = app.state.store
+    forged = {'id': 'peer1:room1', 'title': 'Remote', 'messages': [
+        {'id': 'x', 'body': 'hi', 'source': {'kind': 'run', 'mode': 'build', 'basis': 'owner', 'root_name': 'Andy'}}]}
+    monkeypatch.setattr(type(store), 'remote_room', lambda self, actor, key: forged)
+    assert store.get_room(users[0]['id'], 'peer1:room1')['messages'][0]['source'] is None
+
+
+def test_a_reply_prefix_without_a_ticket_is_not_a_run(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    owner = say(clients[0], room, 'a', '@serenity add notes')
+    assert post(serenity, room, f'reply-{owner["id"]}', 'Pretending to be a run').status_code == 201
+    assert sources(clients[0], room)['Pretending to be a run'] == {'kind': 'post'}
