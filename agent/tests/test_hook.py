@@ -566,3 +566,48 @@ def test_the_hook_command_runs_through_main_with_no_arguments(monkeypatch, capsy
     monkeypatch.setenv('SUPERYAK_HOOK_EVENT', 'session-start')
     assert cli.main() == 0
     assert 'v1' in capsys.readouterr().out
+
+
+def test_a_session_start_that_shows_no_law_forgets_the_session_so_the_next_prompt_shows_it(station, ship_config, tmp_path):
+    """Break caught: a SessionStart from compaction or resume inside the unreachable minute printed nothing, but the
+    session's state still listed the layers, so no later prompt showed the law again until a layer changed."""
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+
+    def go(now, event):
+        return hook.run(config_path, transport=fake, clock=lambda: now, event=event, session_id='s1',
+                        sessions_dir=sessions, messages=False)
+    assert 'v1' in go(1000.0, 'session-start')
+    fake.down = True
+    assert go(1010.0, 'prompt') == ''  # the station fails: the marker is written
+    fake.down = False
+    assert go(1020.0, 'session-start') == ''  # compaction inside the minute: nothing printed, the law left this context
+    assert 'v1' in go(1071.0, 'prompt')  # so the next prompt after the minute brings it back
+
+
+@pytest.mark.parametrize('failure', [OSError('down'), ValueError('garbage')])
+def test_a_failed_fetch_at_session_start_also_forgets_the_session(monkeypatch, station, ship_config, tmp_path, failure):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    assert 'v1' in start(fake, config_path, 's1', sessions, clock=lambda: 1000.0)
+    real = hook._fetch_instructions
+
+    def broken(*a):
+        raise failure
+    monkeypatch.setattr(hook, '_fetch_instructions', broken)
+    assert start(fake, config_path, 's1', sessions, clock=lambda: 2000.0) == ''
+    monkeypatch.setattr(hook, '_fetch_instructions', real)
+    assert 'v1' in prompt(fake, config_path, 's1', sessions, clock=lambda: 3000.0)
+
+
+def test_a_failed_prompt_keeps_what_the_session_knows(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    sessions = tmp_path / 'sessions'
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    assert 'v1' in start(fake, config_path, 's1', sessions, clock=lambda: 1000.0)
+    fake.down = True
+    assert prompt(fake, config_path, 's1', sessions, clock=lambda: 1010.0) == ''
+    fake.down = False
+    assert prompt(fake, config_path, 's1', sessions, clock=lambda: 1071.0) == ''  # a prompt failure loses no context
