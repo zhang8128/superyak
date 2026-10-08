@@ -1519,3 +1519,21 @@ def test_docking_link_confirms_ship_lists_and_revokes_it_and_rooms_show_the_ship
             expect(page.get_by_role("heading", name="Ships")).to_be_visible()
             page.get_by_role("button", name="Revoke key").click()
             expect(page.get_by_text("Key revoked", exact=True)).to_be_visible()
+
+
+def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
+    """Break caught: a run's reply and a ship's own post look the same to people."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    room = store.create_room(users["patient"]["id"], "Ops", [ship["id"]])
+    asked = store.send_message(users["patient"]["id"], room["id"], "a", "@serenity add notes")
+    ticket = store.issue_ticket(ship["id"], asked["id"])
+    store.send_message(ship["id"], room["id"], f"reply-{asked['id']}", "Added notes", ticket["id"])
+    store.send_message(ship["id"], room["id"], "post-1", "Hello from my session")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.get_by_text("builder run for Alex Patient")).to_be_visible()
+            expect(page.get_by_text("no run ticket")).to_be_visible()

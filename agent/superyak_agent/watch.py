@@ -5,7 +5,7 @@ import subprocess
 import time
 from superyak_team.teamlib import redact
 from .runs import RunTimeout
-from .station import MESSAGE_LIMIT, StationError, describe, fence_message, label, read_json, write_private
+from .station import MESSAGE_LIMIT, StationError, describe, fence_message, label, read_json, source_label, write_private
 
 log = logging.getLogger('superyak.agent')
 POLL_SECONDS = 30
@@ -25,7 +25,8 @@ def build_prompt(room, mention, ship, mode):
     members = {m['id']: m for m in room.get('members', [])}
     messages, ids = room['messages'], [m['id'] for m in room['messages']]
     end = ids.index(mention['message_id']) + 1 if mention['message_id'] in ids else len(messages)
-    quoted = [fence_message(members.get(m['author_id']), m['body'], MESSAGE_LIMIT if m['id'] == mention['message_id'] else HISTORY_CHARS)
+    quoted = [fence_message(members.get(m['author_id']), m['body'], MESSAGE_LIMIT if m['id'] == mention['message_id'] else HISTORY_CHARS,
+                           source=source_label(m))
               for m in messages[max(0, end - HISTORY):end]]
     author = mention['author']
     if mode == 'build':

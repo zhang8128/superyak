@@ -177,8 +177,22 @@ def read_hint(room_id, message_id, position=None):
     return ''
 
 
-def fence_message(member, body, limit, hint=''):
+def source_label(message):
+    """Where a ship's message came from, as the station recorded it from a ticket; never a client's own claim.
+    Older watchers' replies have no ticket, so the label says only that: no run ticket."""
+    source = message.get('source') if isinstance(message, dict) else None
+    if not isinstance(source, dict):
+        return ''
+    if source.get('kind') == 'run':
+        if source.get('mode') == 'build':
+            return f'builder run for {label(source["root_name"])}' if source.get('root_name') else 'builder run'
+        return 'read-only run'
+    return 'no run ticket' if source.get('kind') == 'post' else ''
+
+
+def fence_message(member, body, limit, hint='', source=''):
     """A message fenced as quoted data, at most `limit` characters of it. A cut is said after the fence,
     where the author's text cannot imitate it, so a reader never mistakes part of a message for all of it."""
-    text = fence_external(describe(member), body[:limit], limit=limit)
+    sender = describe(member) + (f', {source}' if source else '')
+    text = fence_external(sender, body[:limit], limit=limit)
     return text + f'\n[cut at {limit:,} of {len(body):,} characters{hint}]' if len(body) > limit else text

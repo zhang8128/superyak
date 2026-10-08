@@ -47,7 +47,16 @@ class FakeStation:
         last = max([m['created'] for m in room['messages']], default=0.0)
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
-                'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'messages': [dict(m) for m in room['messages']]}
+                'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'messages': [dict(m, source=self.source_of(m)) for m in room['messages']]}
+
+    def source_of(self, message):
+        author = self.users.get(message['author_id'], {})
+        if author.get('kind') != 'ship':
+            return None
+        ticket = self.tickets.get(self.sources.get(message['id']))
+        if ticket is None:
+            return {'kind': 'post'}
+        return {'kind': 'run', 'mode': ticket['mode'], 'basis': ticket['basis'], 'root_name': ticket['root_name'], 'answering': ticket['message_id']}
 
     def __call__(self, method, url, headers, data):
         if self.down:
