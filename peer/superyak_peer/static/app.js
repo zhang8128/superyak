@@ -481,9 +481,16 @@ function readChatDraft(roomId) {
   }
 }
 
+function sourceLabel(message) {
+  const source = message.source;
+  if (!source) return "";
+  if (source.kind === "run") return source.mode === "build" ? (source.root_name ? `builder run for ${source.root_name}` : "builder run") : "read-only run";
+  return source.kind === "post" ? "no run ticket" : "";
+}
+
 function messageMarkup(message) {
   const mine = isSelf(message.author_id);
-  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(mine ? "You" : participantName(message.author_id))}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
+  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(mine ? "You" : participantName(message.author_id))}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
 }
 
 function roomDetail(room) {
