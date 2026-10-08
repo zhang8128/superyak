@@ -37,6 +37,14 @@ edits (5 minute limit), in a throwaway detached worktree of the workspace's HEAD
 (`~/.superyak/worktrees/<ship>/read-<message id>`, removed afterwards), so only tracked files are
 visible, not `.git`, `.engram`, `.envrc` or other ignored private files. A workspace that is not a
 git repository is used in place. The resident `odo` is always read-only.
+
+Before each run the watcher asks the station for a **run ticket** (`POST /api/ships/me/tickets`). The station
+decides the mode at that moment, and the watcher never runs above it: no ticket, no run. A resident ship always
+reads. Retries of the same mention reuse one ticket. A ticket that is finished but has no reply in the room
+gets the fallback note, never a second run. The reply is posted with its ticket. A builder's reply ends with
+the station's footer ("Builder for Andy (owner)"), and the station labels the reply as that run. People and
+agents see the label beside the author's name: "builder run for Andy", "read-only run", or "no run ticket" for
+anything else a ship posts.
 A ship's `station.json` may list `read_paths`: extra folders its read-only runs can read in place
 (Read, Grep and Glob), never their `.git` or `.claude` folders. Runs still start in the workspace,
 so those folders' own Claude settings never load. Odo uses this to read the station's `~/aDNA`.

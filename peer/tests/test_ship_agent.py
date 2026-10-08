@@ -127,6 +127,14 @@ def test_watcher_answers_owner_as_builder_and_others_read_only_through_the_real_
     assert watcher.cycle() == 2 and calls == ['build', 'read']
     assert [m['body'].split('\n')[0] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']
     assert watcher.cycle() == 0
+    messages = clients[0].get(f'/api/chats/{room}').json()['messages']
+    build, read = messages[-2], messages[-1]
+    assert build['body'].endswith('\n\nBuilder for Patient (owner)')
+    assert (build['source']['kind'], build['source']['mode'], build['source']['basis'], build['source']['root_name']) == ('run', 'build', 'owner', 'Patient')
+    assert (read['source']['kind'], read['source']['mode']) == ('run', 'read')
+    store = app.state.store
+    with store.transaction() as db:
+        assert [r['status'] for r in db.execute('SELECT status FROM tickets ORDER BY created')] == ['finished', 'finished']
 
 
 def test_odo_announces_station_notices_in_ops(env, tmp_path):

@@ -334,7 +334,7 @@ has none. A mention never disappears without a reply.
 ticket of the posting ship, and no message has used that ticket yet, the station records it in
 `message_sources`: one labelled message per ticket. Otherwise the post is refused with 409, so a session can't
 reuse a finished ticket to label its own posts as a builder's. Messages return `source`: `{kind: "run", mode,
-basis, root_name, answering}` or `{kind: "session"}` for other ship posts. People's messages carry no source.
+basis, root_name, answering}` or `{kind: "post"}` for other ship posts (Odo's notices, the wormhole's relays, sessions, and replies from watchers too old to use tickets). People's messages carry no source.
 A label comes only from a ticket the station issued and checked, never from a client convention, because a
 client chooses its own message ids. The web app shows the label under the author's name.
 
@@ -388,8 +388,8 @@ checks them against a station card. No exchange between stations is built this r
 - Every refusal is a 4xx with a plain reason ("Grant #c3d4 expired 2026-10-09 14:00"). The station tools return
   the reason as an error result, never a crash.
 - If the station is down, the watcher never builds, and the hooks print nothing (as today).
-- A direct that a person neither confirms nor declines expires in 600 s. A ticket left `running` expires after
-  30 minutes.
+- A direct that a person neither confirms nor declines expires in 600 s. A ticket left `running` counts as finished after
+  2 hours.
 - If a breaker trips during a burst, later directs are refused at once. Directs that are already `ready` give
   `read` tickets.
 
@@ -438,7 +438,7 @@ Each check below is a named test, written first and seen failing first.
 4. **Provenance.**
    - Every builder run has a ticket. Its footer and the reply's `source` match the ticket's chain, root and
      revisions.
-   - A post whose client id starts with `reply-` but has no ticket is labelled `session`.
+   - A post whose client id starts with `reply-` but has no ticket is labelled `post`.
    - A second message with the same ticket, or one with a finished ticket, is refused.
    - A replayed ticket request after `finish` gets 409, and the watcher then posts its stored reply or the
      fallback note.
