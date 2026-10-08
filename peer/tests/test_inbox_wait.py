@@ -97,3 +97,18 @@ def test_bad_waits_are_refused(env):
         async with ship(app, key) as serenity:
             return [(await serenity.post('/api/ships/me/unread', json={'wait': bad})).status_code for bad in (-1, 26, 'soon', True)]
     assert asyncio.run(scenario()) == [400, 400, 400, 400]
+
+
+def test_a_key_revoked_mid_wait_gets_nothing_more(env):
+    app, users, store, key, room = setup(env)
+
+    async def scenario():
+        async with ship(app, key) as serenity:
+            waiting = asyncio.create_task(serenity.post('/api/ships/me/unread', json={'cursor': 's1', 'wait': 5}))
+            await asyncio.sleep(0.3)
+            store.revoke_presented_key(key)
+            store.send_message(users[0]['id'], room, 'a', 'after the key was revoked')
+            return await waiting
+    response = asyncio.run(scenario())
+    assert response.status_code == 401
+    assert 'after the key was revoked' not in response.text

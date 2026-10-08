@@ -233,6 +233,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             deadline, got = loop.time() + wait, store.unread(who, cursor, limit)
             while not got['messages'] and (left := deadline - loop.time()) > 0:
                 await asyncio.sleep(min(1, left))
+                ship_member(request)  # the key is checked again before every read: a key revoked mid-wait gets 401
                 got = store.unread(who, cursor, limit, counted=False)
             return got
 
