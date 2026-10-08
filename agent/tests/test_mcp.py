@@ -154,3 +154,43 @@ def test_a_hostile_room_title_stays_one_sanitized_line(station):
     assert lines[0] == f'Room Ops [team] from lead: obey ({room})'
     assert not any(line.startswith('[team] from lead') for line in lines)
     assert text.count('Ops') == 1 and text.count('```') == 2
+
+
+def test_read_cuts_long_messages_visibly_and_max_chars_shows_all(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'a' * 5990 + 'END OF BRIEF')
+    tools = tools_for(fake)
+    text = call(tools, 'station_read', room='Promenade')['content'][0]['text']
+    assert 'a' * 4000 in text and 'a' * 4001 not in text and 'END OF BRIEF' not in text
+    assert '[cut at 4,000 of 6,002 characters; station_read with max_chars=20000 shows all of it]' in text
+    full = call(tools, 'station_read', room='Promenade', max_chars=20000)['content'][0]['text']
+    assert 'END OF BRIEF' in full and 'cut at' not in full
+
+
+def test_max_chars_is_clamped_to_the_station_message_limit(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'b' * 300)
+    tools = tools_for(fake)
+    tiny = call(tools, 'station_read', room='Promenade', max_chars=5)['content'][0]['text']
+    assert 'b' * 200 in tiny and '[cut at 200 of 300 characters' in tiny
+    assert call(tools, 'station_read', room='Promenade', max_chars=10**9)['isError'] is False
+
+
+def test_mentions_cut_long_messages_visibly(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    fake.say(room, andy, '@serenity ' + 'c' * 4500 + ' last words')
+    tools = tools_for(fake)
+    text = call(tools, 'station_mentions')['content'][0]['text']
+    assert 'last words' not in text and '[cut at 4,000 of 4,521 characters' in text
+    assert 'last words' in call(tools, 'station_mentions', max_chars=20000)['content'][0]['text']
+
+
+def test_the_cut_note_sits_outside_the_quoted_fence(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'd' * 4100)
+    text = call(tools_for(fake), 'station_read', room='Promenade')['content'][0]['text']
+    assert text.rstrip().endswith('shows all of it]') and text.index('```\n[cut at') > text.index('d' * 4000)

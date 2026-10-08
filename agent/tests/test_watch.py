@@ -261,3 +261,15 @@ def test_notices_wait_when_the_only_ops_room_is_remote(station, tmp_path):
     assert w.cycle() == 0 and bodies(fake, remote) == [] and 'access-1' not in w.state['announced']
     local = fake.room('Ops', andy, odo)   # an Ops room appears later: the notice is still pending
     assert w.cycle() == 1 and bodies(fake, local) == ['Jenn is asking to come aboard.']
+
+
+def test_prompt_keeps_the_request_whole_and_marks_cut_history(station, ship_config):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    fake.say(room, jenn, 'f' * 2500 + ' earlier tail')
+    asked = fake.say(room, andy, '@serenity ' + 'g' * 5000 + ' the actual ask')
+    view = fake.view(fake.rooms[room])
+    mention = {'message_id': asked['id'], 'room_id': room, 'author': andy, 'body': asked['body']}
+    prompt = build_prompt(view, mention, 'serenity', 'build')
+    assert 'the actual ask' in prompt and 'earlier tail' not in prompt
+    assert '[cut at 2,000 of 2,513 characters]' in prompt

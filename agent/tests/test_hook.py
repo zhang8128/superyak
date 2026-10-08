@@ -91,3 +91,12 @@ def test_a_state_path_that_cannot_be_read_does_not_break_the_prompt(station, shi
     fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
     (config_path.parent / 'hook-state.json').mkdir()   # unreadable as a file, and not replaceable by a file either
     assert run(fake, config_path) == ''
+
+
+def test_a_long_message_is_cut_with_a_visible_note(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    run(fake, config_path, now=fake.clock)
+    fake.say(room, jenn, 'e' * 1000 + ' the ending')
+    text = run(fake, config_path)
+    assert 'the ending' not in text and '[cut at 800 of 1,011 characters; station_read with max_chars=20000 shows all of it]' in text

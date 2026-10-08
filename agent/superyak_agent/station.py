@@ -7,8 +7,11 @@ import tempfile
 from urllib.parse import quote
 import urllib.error
 import urllib.request
+from superyak_team.teamlib import fence_external
 
 HOME = Path.home() / '.superyak'
+MESSAGE_LIMIT = 20000  # the station's longest message
+READ_HINT = f'; station_read with max_chars={MESSAGE_LIMIT} shows all of it'
 CONFIG = HOME / 'station.json'
 
 
@@ -140,3 +143,10 @@ def label(text, limit=80):
 def describe(member):
     member = member or {'name': 'someone', 'username': 'unknown', 'kind': 'unknown'}
     return f'{label(member.get("name"))} (@{label(member.get("username"))}, {label(member.get("kind"))})'
+
+
+def fence_message(member, body, limit, hint=''):
+    """A message fenced as quoted data, at most `limit` characters of it. A cut is said after the fence,
+    where the author's text cannot imitate it, so a reader never mistakes part of a message for all of it."""
+    text = fence_external(describe(member), body[:limit], limit=limit)
+    return text + f'\n[cut at {limit:,} of {len(body):,} characters{hint}]' if len(body) > limit else text
