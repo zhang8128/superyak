@@ -134,3 +134,14 @@ def test_a_full_page_that_all_fits_says_more_without_a_false_count(station, ship
     monkeypatch.setattr(hook, 'MAX_CHARS', 100000)
     text = run(fake, config_path, 's1')
     assert 'more unread' in text and '0+' not in text and '0 more' not in text
+
+
+def test_deeply_nested_stdin_never_breaks_the_hook():
+    import io
+    assert hook.session_from_stdin(io.StringIO('[' * 100000 + ']' * 100000)) is None
+
+
+def test_the_hooks_two_station_calls_fit_inside_claude_codes_hook_timeout():
+    # unread then advance: each call's timeout times two must stay well under the 10 s hook timeout, or Claude Code
+    # could stop the hook after the advance and before the text is printed (R4).
+    assert 2 * hook.INBOX_CALL_TIMEOUT <= 7

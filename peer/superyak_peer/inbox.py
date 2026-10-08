@@ -9,6 +9,7 @@ from .common import Problem, require
 
 READS_PER_MINUTE = 60
 CURSOR_IDLE_DAYS = 30
+CURSORS_PER_SHIP = 100
 MAX_WAIT = 25
 WAITS_PER_SHIP = 2
 CURSOR_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS message_replies(message_id TEXT PRIMARY KEY, reply_to
 CREATE TABLE IF NOT EXISTS inbox_meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
 INSERT OR IGNORE INTO inbox_meta VALUES('epoch', (SELECT COALESCE(MAX(id), 0) FROM events WHERE kind='chat.message'));
 CREATE INDEX IF NOT EXISTS events_kind_id ON events(kind, id);
+CREATE INDEX IF NOT EXISTS events_kind_room_id ON events(kind, resource_id, id);
 '''
 
 
@@ -73,10 +75,17 @@ class Inbox:
         if row:
             db.execute('UPDATE read_cursors SET updated=? WHERE ship_id=? AND name=?', (now, actor, name))
             return row['position']
-        db.execute('DELETE FROM read_cursors WHERE ship_id=? AND updated<?', (actor, now - CURSOR_IDLE_DAYS * 86400))
-        start = db.execute('SELECT MAX(position) FROM read_cursors WHERE ship_id=?', (actor,)).fetchone()[0]
-        if start is None:
-            start = db.execute("SELECT value FROM inbox_meta WHERE key='epoch'").fetchone()[0]
+        # Where the ship has read furthest, decided before anything is pruned; that cursor is never pruned, so a ship
+        # idle for months, or one that made many names, never replays what it read (I4, R11).
+        furthest = db.execute('SELECT name, position FROM read_cursors WHERE ship_id=? ORDER BY position DESC, updated DESC LIMIT 1',
+                              (actor,)).fetchone()
+        start = furthest['position'] if furthest else db.execute("SELECT value FROM inbox_meta WHERE key='epoch'").fetchone()[0]
+        keep = furthest['name'] if furthest else None
+        db.execute('DELETE FROM read_cursors WHERE ship_id=? AND updated<? AND name IS NOT ?', (actor, now - CURSOR_IDLE_DAYS * 86400, keep))
+        over = db.execute('SELECT count(*) FROM read_cursors WHERE ship_id=?', (actor,)).fetchone()[0] - CURSORS_PER_SHIP + 1
+        if over > 0:  # the least recently used go first
+            db.execute('''DELETE FROM read_cursors WHERE rowid IN (SELECT rowid FROM read_cursors WHERE ship_id=? AND name IS NOT ?
+                          ORDER BY updated LIMIT ?)''', (actor, keep, over))
         db.execute('INSERT INTO read_cursors VALUES(?,?,?,?)', (actor, name, start, now))
         return start
 
@@ -137,7 +146,7 @@ class Inbox:
 
     def advance(self, actor, cursor=None, to=None):
         name = cursor_name(cursor)
-        if type(to) is not int:
+        if type(to) is not int or not 0 <= to < 2 ** 63:
             raise Problem(400, 'to is the event id of a message')
         with self.transaction() as db:
             self._inbox_ship(db, actor)

@@ -147,14 +147,17 @@ def test_advance_only_accepts_messages_in_the_ships_own_rooms(env):
     assert advance(serenity, hidden, cursor='s1').status_code == 400
 
 
-def test_cursors_unused_for_thirty_days_are_pruned_when_a_new_one_is_made(env):
+def test_cursors_unused_for_thirty_days_are_pruned_when_a_new_one_is_made_except_the_furthest(env):
     app, clients, users, clock, ship, serenity, room = setup(env)
+    say(clients[0], room, 'a', 'one')
     unread(serenity, cursor='old-session')
+    event = unread(serenity, cursor='ahead')['messages'][0]['event_id']
+    advance(serenity, event, cursor='ahead')
     clock[0] += 31 * 86400
     unread(serenity, cursor='new-session')
     with app.state.store.transaction() as db:
         names = {r['name'] for r in db.execute('SELECT name FROM read_cursors WHERE ship_id=?', (ship['id'],))}
-    assert names == {'new-session'}
+    assert names == {'ahead', 'new-session'}
 
 
 def test_installing_the_inbox_on_existing_data_never_replays_history(env, tmp_path):
@@ -168,3 +171,32 @@ def test_installing_the_inbox_on_existing_data_never_replays_history(env, tmp_pa
     assert unread(serenity, cursor='first-ever')['messages'] == []
     say(clients[0], room, 'b', 'posted after')
     assert [m['body'] for m in unread(serenity, cursor='first-ever')['messages']] == ['posted after']
+
+
+def test_a_ship_idle_for_a_month_never_replays_what_it_read(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    say(clients[0], room, 'a', 'read long ago')
+    got = unread(serenity, cursor='sess-1')['messages']
+    advance(serenity, got[-1]['event_id'], cursor='sess-1')
+    clock[0] += 31 * 86400
+    assert unread(serenity, cursor='sess-2')['messages'] == []
+
+
+def test_cursors_per_ship_are_capped_and_the_furthest_is_kept(env):
+    from superyak_peer.inbox import CURSORS_PER_SHIP
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    say(clients[0], room, 'a', 'one')
+    event = unread(serenity, cursor='furthest')['messages'][0]['event_id']
+    advance(serenity, event, cursor='furthest')
+    for n in range(CURSORS_PER_SHIP + 5):
+        clock[0] += 2  # stay inside the read budget; the furthest cursor becomes the least recently used
+        unread(serenity, cursor=f'n{n}')
+    with app.state.store.transaction() as db:
+        rows = {r['name']: r['position'] for r in db.execute('SELECT name, position FROM read_cursors WHERE ship_id=?', (ship['id'],))}
+    assert len(rows) <= CURSORS_PER_SHIP and max(rows.values()) == event
+    assert unread(serenity, cursor='brand-new')['messages'] == []
+
+
+def test_advance_refuses_an_id_too_large_to_be_an_event(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    assert advance(serenity, 10 ** 30, cursor='s1').status_code == 400

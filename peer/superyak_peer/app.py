@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -228,15 +229,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         if not wait:
             return store.unread(who, cursor, limit)
         # Every route shares this event loop, so a wait sleeps with await and holds no transaction across a sleep.
+        # Store calls take the process lock and write (last_used, the cursor touch), so in a wait they run on the
+        # threadpool: a busy store delays only this waiter, never the event loop the other routes share.
         with store.inbox_wait_slot(who):
             loop = asyncio.get_running_loop()
-            deadline, got = loop.time() + wait, store.unread(who, cursor, limit)
+            deadline, got = loop.time() + wait, await run_in_threadpool(store.unread, who, cursor, limit)
             while not got['messages'] and (left := deadline - loop.time()) > 0:
                 await asyncio.sleep(min(1, left))
                 if await request.is_disconnected():  # uvicorn never cancels us; the slot is freed on the way out (R6)
                     return got
-                ship_member(request)  # the key is checked again before every read: a key revoked mid-wait gets 401
-                got = store.unread(who, cursor, limit, counted=False)
+                await run_in_threadpool(ship_member, request)  # a key revoked mid-wait gets 401
+                got = await run_in_threadpool(store.unread, who, cursor, limit, counted=False)
             return got
 
     @app.post('/api/ships/me/unread/advance')

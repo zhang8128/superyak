@@ -56,7 +56,9 @@ Codex sessions have no hook at all. For them the tool below is the only way to s
     inbox epoch: the newest message when the station first installed the inbox (`inbox_meta`). Installing onto a
     live station therefore never replays history; on a new station the epoch is 0 (R11; changed after the
     whole-branch review).
-  - Making a cursor prunes the ship's cursors unused for 30 days. Every read touches its cursor.
+  - Making a cursor prunes the ship's cursors unused for 30 days and keeps at most 100 per ship, evicting the least
+    recently used; the furthest cursor is never removed, and the start is decided before anything is pruned. Every
+    read touches its cursor.
   - So a restarted watcher or a fresh session sees what arrived since the ship last read, instead of nothing.
   - Two live sessions each keep their own cursor and never take each other's messages.
 - **I5. Reading never moves the cursor; advancing is explicit and only goes forward.**
@@ -122,7 +124,7 @@ Both routes are added to the ship-key allowlist (API.md, "Ship keys").
 - `to` must be an existing `chat.message` event id; otherwise 400.
 
 Storage: `read_cursors(ship_id, name, position INTEGER NOT NULL, updated, PRIMARY KEY(ship_id, name))`. A new row's
-position comes from I4, and it is 0 for a ship's first cursor. Plus `message_replies` from I7. Both are additive and
+position comes from I4: the ship's furthest cursor, or the inbox epoch for its first. Plus `message_replies` from I7. Both are additive and
 need no migration of existing rows.
 
 ## Agent

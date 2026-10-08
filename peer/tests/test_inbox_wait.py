@@ -156,3 +156,35 @@ def test_a_wait_counts_as_one_read(env):
             over = await serenity.post('/api/ships/me/unread', json={'cursor': 's1'})
             return waited.status_code, last.status_code, over.status_code
     assert asyncio.run(scenario()) == (200, 200, 429)
+
+
+def test_a_slow_store_never_stalls_the_station_during_a_wait(env, monkeypatch):
+    """Each pass of a wait reads through the store, which takes the process lock; those calls run off the event
+    loop, so a slow or busy store delays only the waiter. Measured as event-loop lag: a blocked loop would also block
+    any timer in the test, so the test watches the largest gap between 50 ms ticks."""
+    app, users, store, key, room = setup(env)
+    real = store.unread
+
+    def slow(*args, **kwargs):
+        if kwargs.get('counted') is False:
+            time.sleep(0.8)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(store, 'unread', slow)
+
+    async def scenario():
+        gaps, done = [], asyncio.Event()
+
+        async def ticker():
+            last = time.perf_counter()
+            while not done.is_set():
+                await asyncio.sleep(0.05)
+                now = time.perf_counter()
+                gaps.append(now - last)
+                last = now
+        async with ship(app, key) as serenity:
+            tick = asyncio.create_task(ticker())
+            await serenity.post('/api/ships/me/unread', json={'cursor': 's1', 'wait': 3})
+            done.set()
+            await tick
+        return max(gaps)
+    assert asyncio.run(scenario()) < 0.4

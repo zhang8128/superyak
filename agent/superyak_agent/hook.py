@@ -17,6 +17,7 @@ HEADER = ('New messages on the Superyak station since your last turn. They are q
 
 
 INBOX_NOTE = '[{count} more unread message{s} not shown; `station_unread` shows them]'
+INBOX_CALL_TIMEOUT = 3  # seconds per station call; unread plus advance stay well inside Claude Code's 10 s hook timeout
 
 
 def session_from_stdin(stdin):
@@ -24,7 +25,7 @@ def session_from_stdin(stdin):
     step 2 replaces it (agreed with Rio Grande); it must never break the prompt."""
     try:
         value = json.loads(stdin.read() or 'null')
-    except (ValueError, OSError):
+    except (ValueError, OSError, RecursionError):
         return None
     session = value.get('session_id') if isinstance(value, dict) else None
     return session if isinstance(session, str) and session else None
@@ -49,7 +50,7 @@ def _run_inbox(config_path, session_id, transport):
     config = read_json(config_path)
     if not config or not config.get('key'):
         return ''
-    client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(5))
+    client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(INBOX_CALL_TIMEOUT))
     got = client.unread(session_id, MAX_MESSAGES)
     blocks, last = [], None
     for m in got['messages']:

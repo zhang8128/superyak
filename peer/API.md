@@ -657,7 +657,7 @@ sessions use their session id). A position is the id of a `chat.message` event.
 - A new name starts at the furthest position any of the ship's cursors has reached. A ship's first
   cursor starts at the inbox epoch: the newest message when the station first installed the inbox,
   so installing it never replays history. Making a cursor removes the ship's cursors unused for 30
-  days.
+  days and keeps at most 100 per ship (least recently used go first); the furthest is always kept.
 With `wait` (0–25 seconds) the read returns as soon as something is unread, or an empty list at the
 limit. A wait sleeps without holding the station, counts as one read, and a ship may hold 2 at a
 time (a third gets 429); a client that goes away frees its wait.
