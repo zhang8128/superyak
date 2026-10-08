@@ -1,6 +1,9 @@
 # Browser lane: team-mode workers that run and test the app they build
 
-Status: revision 2, approved with changes by a fresh reviewer: 4 must-fix and 6 should-fix items, all folded in below. It was designed by Rio Grande from the Bricks lead's requirements, which Serenity relayed and
+Status: revision 3. Revision 2 was approved with changes by a fresh reviewer (4 must-fix and 6 should-fix items, all
+folded in below). Revision 3 records spike 5, which passed. It names the lane's browser, Playwright's headless shell,
+which the Bricks lead agreed to. It also asks the reviewer to accept or refuse one exception to the never-list:
+Chromium's own rendezvous service, explained under "The broker". The spec was designed by Rio Grande from the Bricks lead's requirements, which Serenity relayed and
 checked against the team logs in "Superyak: city of AI" (39fd79). Under Andy's decision D8, a fresh reviewer agent
 approves it. It touches no Bricks production, no Guyana data and nobody else's repositories. The Bricks changes it asks
 for (lane ports in the Playwright config and fixtures) are the Bricks lead's to make.
@@ -15,8 +18,9 @@ worker, under a profile that teamd owns.
 
 ## Goal
 
-Team-mode builders start the app they are working on and test it in real Google Chrome, with no network beyond the
-lane's own loopback ports. Today the Bricks UX plan says "workers can't run browsers", so the Bricks lead runs every UX
+Team-mode builders start the app they are working on and test it in a real Chromium, Playwright's headless shell, with
+no network beyond the lane's own loopback ports. The full real-Chrome suite, run locally and in CI, stays the Bricks
+merge gate. Lane runs catch logic and UI regressions; the gate catches Chrome-specific ones. Today the Bricks UX plan says "workers can't run browsers", so the Bricks lead runs every UX
 check personally and is the bottleneck. Builders also write browser specs blind: the first real run found about 73
 failures, 5 of them product bugs. With the lane, UX verification becomes work that agents can take on.
 
@@ -51,12 +55,36 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
   - **With Chrome's own sandbox on, inside the profile:** every helper fails with `deny(1) forbidden-sandbox-reinit`.
     macOS doesn't let a sandboxed process sandbox itself again.
   - **Still open under the profile:** other localhost services, because the spike allowed `localhost:*`.
+- **Spike 5, the deny-default broker** (the profile `team/scripts/lane_spike.py --broker deny` writes, plus
+  `team/scripts/lane_broker_allow.sb`, commit b20b868): **passes with Playwright's headless shell**
+  (`chromium-headless-shell` 1243).
+  - In the lane, the page on a lane port loads, and a wrong secret is refused.
+  - A public page is blocked (ERR_NAME_NOT_RESOLVED), and so is `file://` in `$HOME`.
+  - The canary outside the lane's ports is refused (ERR_ACCESS_DENIED), so the per-lane port rule closes spike 4's
+    localhost reach.
+  - A CDP download writes nothing in `$HOME`.
+  - Run directly under the profile, all 15 probes are refused:
+    - exec of osascript, launchctl, security, pbpaste and curl;
+    - network by domain, by IP and to the canary;
+    - reads of dotfiles, `/private/tmp/claude-<uid>` and the user temp tree;
+    - writes to `$HOME`, LaunchAgents, rc files and `/Users/Shared`.
+  - Both positive controls succeed, and nothing is left behind.
+  - Bisection reduced the allowances to three rules beyond the generated ones (see "The broker").
+  - **Branded Chrome and Chrome for Testing don't pass:** both reach for LaunchServices (launchservicesd,
+    coreservicesd) and WindowServer at start, and the never-list forbids those. The headless shell also tries the
+    pasteboard and LaunchServices, but it runs with them denied.
 - **On Linux**, the Claude Code sandbox gives every command its own network namespace, so a lane can't reach host
   loopback at all. That ends the broker design there.
 
 ## What the lane must allow (Bricks' `playwright.config.ts`)
 
-- Real Chrome (`channel: 'chrome'`).
+- A real Chromium. The Bricks lead agreed (relayed by Serenity, 2026-10-08) that the headless shell is fine for lane
+  runs, because no Bricks spec depends on branded-Chrome features (codecs, the channel itself, DRM).
+  - Two groups of results are **advisory** in a lane, because they already differ between the Mac's Chrome and CI's:
+    the geometry checks (card widths and overflow in approval-anatomy, four-up-school, content-recipes-cards and
+    supplied-presentation) and the opt-in GTM pixel suite.
+  - Bricks tags those specs `@lane-advisory`. The lane brief tells workers to report them separately, so a geometry
+    difference never reads as a lane failure.
 - Loopback ports for each run: the test port, Vite, the auth host, a fake Google server and child fixture hosts.
 - Node IPC sockets.
 - Vite file watching.
@@ -73,6 +101,7 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
 | Platform | macOS only. Asking for a lane on Linux is refused. | On Linux the worker's network namespace can't reach the broker, and Unix sockets can only be allowed all at once (the ssh-agent too). |
 | Who can turn it on | A **person** turns it on for teams: `browser_lane: true` in `config.json` or in a preset. A `team_start` override that sets it is refused. Then the lead asks for it per worker: `team_spawn(..., browser=true)`. Both values must be strict bools. | The two keys belong to different hands. A lead can't widen its own team's sandbox. |
 | Where Chrome runs | In a **browser broker** for each lane. teamd starts `launchServer` outside the worker's sandbox, under a teamd-owned Seatbelt profile. The worker's Playwright connects with `PW_TEST_CONNECT_WS_ENDPOINT`, which Playwright Test reads natively. | Chrome can't run inside the worker's sandbox (the second wall), and a separate profile is the only wall that works (spike 4). |
+| The lane's browser | Playwright's **headless shell**, from a teamd-owned browsers folder (`PLAYWRIGHT_BROWSERS_PATH=~/.superyak/team/broker/browsers`). It is installed outside every sandbox by the pinned Playwright's own installer, at the revision that Playwright names. Branded Chrome and Chrome for Testing are not lane browsers. | Spike 5: only the headless shell starts without LaunchServices and WindowServer, both on the never-list. The real-Chrome suite stays the Bricks merge gate. |
 | Chrome's own sandbox | **Off**, because macOS forbids a second sandbox inside our profile (`forbidden-sandbox-reinit`). The broker's profile is the wall around Chrome. | The alternative is no outer profile at all, which leaks the internet, `$HOME` and writes (the plain row of spike 4). |
 | The broker's profile | **Deny by default.** Its allowances come from spike 5's denial stream, and each one has a one-line reason in the template. The browser can reach only the lane's own ports. It can't use the network beyond those, read or write `$HOME`, send Apple Events, use the pasteboard, or start programs other than Chrome's own. Any widening goes back to a reviewer. | Code that takes over a renderer (Chrome's sandbox is off) runs with exactly the profile's powers. `(allow default)` would let it run `osascript` against other apps, which is a full escape. |
 | The broker's code | A Playwright copy that teamd pins and owns. Its version and its integrity hash come from the lockfile **at the worker's base commit** (`git show <base>:package-lock.json`, entry `packages["node_modules/playwright-core"]`). It is downloaded from the npm registry, checked against that committed hash, and stored outside every worktree. It is never the worktree's `node_modules`, and never a version the worker chose. | The worker can write its own `node_modules`, its `package.json` and its branch. The base commit is the lead's, fixed when the worker is spawned, so the worker can't pick which published version runs outside its sandbox. |
@@ -147,8 +176,12 @@ With `lane=None`, the output is byte-for-byte what it is today.
 - **Its environment** is built from nothing, not inherited, so no `NODE_OPTIONS`, `PLAYWRIGHT_*` or `PW_*` can
   reach the broker. It holds only `PATH=/usr/bin:/bin`, `HOME`, `TMPDIR` and `MAC_CHROMIUM_TMPDIR` (both
   `<lane>/b`), the pinned Playwright path, and the secret.
-- **Its options:** `channel: 'chrome'`, `chromiumSandbox: false`, and host `127.0.0.1` on the lane's last port, with
-  the secret as the path.
+- **Its options:** the headless shell, `chromiumSandbox: false`, and host `127.0.0.1` on the lane's last port, with the
+  secret as the path. The headless shell is Playwright's own build for headless Chromium, and it is what
+  `chromium.launchServer({headless: true})` starts with no `channel`. The environment adds `PLAYWRIGHT_BROWSERS_PATH`,
+  set to the teamd-owned browsers folder.
+- **The command:** sandbox-exec is given the resolved node binary, never a bare `node`. A deny-default profile refuses
+  the PATH search (spike 5).
 - **Its node** is an absolute path in teamd's own config (`lane_node`). It is refused if it lies under any worktree or
   is writable by anyone but its owner. It is never `which node`.
 - **When it stops:** teamd stops it in the same four places that remove the lane. The broker runs in its own process
@@ -162,13 +195,38 @@ With `lane=None`, the output is byte-for-byte what it is today.
   with `(deny default)`. The template's allowances come from spike 5 (see Build order), each with its reason. The
   generator fills in only:
   - the lane's `b/` path (read and write);
-  - the pinned Playwright folder, node's prefix and the Chrome app bundle (read and exec);
+  - the pinned Playwright folder and the pinned browsers folder (read; exec of the headless shell's binaries only);
+  - node's prefix (read) and the node binary itself (exec);
+  - metadata reads (`file-read-metadata`, literals only) of exactly the ancestor directories of those paths: `/`,
+    `/private`, `/tmp`, `/Users`, and so on. Node's `realpath` lstats each one. No directory listing and no other
+    file comes with them;
   - one `(remote tcp "localhost:<port>")` rule for each port in the lane's block;
   - the broker's own listening port.
 
-  It refuses paths containing `"` or `\`. Whatever the spike shows Chrome needs, the template never allows any of
-  these:
-  - `mach-register`;
+  It refuses paths containing `"` or `\`.
+
+  **The template's own allowances** (from spike 5, each with its reason in the file):
+  - **Homebrew node's libraries:** read-only, `/opt/homebrew/{Cellar,opt}` and `/usr/local/{Cellar,opt}`.
+  - **`(allow iokit-open-user-client (iokit-user-client-class "RootDomainUserClient"))`:** without it the shell
+    crashes at start (SIGSEGV). Most likely this is Chromium's power monitor (sleep and wake state). It opens the power
+    domain's user client: reading power state and holding sleep assertions. It doesn't grant sleep or shutdown, which
+    need root.
+  - **The one exception to the never-list, for the reviewer to accept or refuse:**
+    - `(allow mach-register (global-name-regex #"^org\.chromium\.Chromium\.MachPortRendezvousServer\.[0-9]+$"))`;
+    - the matching `mach-lookup` with the same anchored pattern.
+
+    Chromium's multi-process design registers one rendezvous service per browser process, to hand Mach ports to its
+    own children. Without it, `base/apple/mach_port_rendezvous_mac.cc:159` is FATAL. The pid varies, so the rule has
+    to be a pattern. It is anchored, digits only, and Chromium's own name only, so it can't match an Apple service.
+    Other processes could look the service up only if their own sandbox allows that name. The worker's Claude Code
+    sandbox has no such rule (acceptance step 3 checks this), and the server hands its ports only to children it
+    launched.
+
+  The template test (unit test 9) allows exactly these rules and fails on any other `mach-register`, regex or prefix
+  rule.
+
+  Whatever the spike shows Chrome needs, the template never allows any of these:
+  - any other `mach-register`;
   - mach-lookup of securityd and the Keychain (`com.apple.SecurityServer`, `com.apple.securityd*`), even though
     Playwright passes `--use-mock-keychain`;
   - launchd job submission and anything that starts programs on the process's behalf: `com.apple.ServiceManagement*`,
@@ -178,8 +236,8 @@ With `lane=None`, the output is byte-for-byte what it is today.
   - `appleevent-send`;
   - the pasteboard services;
   - `process-exec` outside node and Chrome's bundle;
-  - reads or writes in `$HOME` (except the pinned Playwright folder and the read-only Chrome-for-Testing cache, if
-    that channel is ever used);
+  - reads or writes in `$HOME`, except read-only access to the pinned Playwright and browsers folders under
+    `~/.superyak/team/broker/`;
   - `/private/tmp/claude-*`;
   - `/Users/Shared`;
   - `/Volumes`;
@@ -188,6 +246,11 @@ With `lane=None`, the output is byte-for-byte what it is today.
 
   `(import "system.sb")` grants a good deal by itself (process-fork, many Mach lookups, sysctl reads, metadata). So
   "deny default" means deny everything apart from that import, and the probe battery, not the phrase, is the guarantee.
+
+**Diagnostics.** When teamd collects sandbox denials for a broker (`log stream`), it keeps only the broker's own
+processes: node and the headless shell's processes. The stream sees every sandbox on the Mac. In spike 5, the
+unfiltered error path printed other apps' denials, including file names from Mail's downloads. That output stayed on
+the Mac.
 
 **The listener check (D9)** (`lane.listeners_ok(team)`, run by teamd outside every sandbox):
 - **What it reads:** `lsof -nP -iTCP -sTCP:LISTEN -F pcn`. When lsof fails, the result is "not ok".
@@ -259,11 +322,13 @@ or `/usr/sbin`, each approved by executable and exact port.
 
 ## Build order
 
-0. **Spike 5, a blocking gate** (Serenity, on the Mac). The lane does not ship unless the broker runs branded Chrome
+0. **Spike 5, a blocking gate. PASSED on 2026-10-08 with the headless shell** (b20b868; see Evidence). The probes
+   it ran and the gate's terms are kept here as the record. The lane does not ship unless the broker runs the lane's
+   browser
    under a deny-default profile **with zero writes in `$HOME`** and every probe below fails. Any allowance Chrome turns
    out to need in `$HOME` (`~/Library/Caches`, `HTTPStorages` and the like) is reviewed against the whole never-list
    before it goes into the template. The method: run the broker under `(deny default)` plus `(import "system.sb")`. Add
-   allowances one at a time from the denial stream until `broker_page_on_loopback` passes for branded Chrome. Then
+   allowances one at a time from the denial stream until `broker_page_on_loopback` passes for the lane's browser. Then
    run spike 4's probes again, and also these, run directly under the profile:
    - `osascript` to Finder;
    - `pbpaste`;
@@ -287,6 +352,12 @@ or `/usr/sbin`, each approved by executable and exact port.
    tests.
 2. The broker: the pinned Playwright, the profile generator, start, stop and process cleanup, with unit tests.
 3. The briefs. Then the Mac acceptance run.
+
+**Long suites.** Claude Code's Bash tool stops a command after its timeout. The default is 2 minutes and the most a
+command can ask for is 10. Bricks' shards run 20–35 minutes.
+- For browser workers, teamd sets `BASH_DEFAULT_TIMEOUT_MS=600000` and `BASH_MAX_TIMEOUT_MS=600000`.
+- The lane brief says to run Playwright in pieces that finish within 10 minutes (by file, or with `--shard`), or to
+  start it in the background and wait for its result file.
 
 ## Testing
 
@@ -336,8 +407,9 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
    - The output starts with `(deny default)` and has one rule per lane port.
    - It contains no `(allow default)`, no `appleevent-send` and no rule for `$HOME` beyond the pinned folder.
    - Paths containing quotes or backslashes are refused.
-   - **The template itself.** A test parses the checked-in template and fails on any of these: `(allow default)`; a
-     wildcard or prefix rule for `mach-lookup`, `network-outbound` or `file-*`; `mach-register`; `appleevent-send`;
+   - **The template itself.** A test parses the checked-in template and fails on any of these, apart from the one
+     reviewed rendezvous exception (exactly its two rules, byte for byte): `(allow default)`; a wildcard, regex or
+     prefix rule for `mach-lookup`, `network-outbound` or `file-*`; `mach-register`; `appleevent-send`;
      any service on the never-list; a file rule under `$HOME` other than the pinned Playwright folder. A slip in
      reviewing the template is then caught by a test, not only by a person reading the reasons.
 10. **Pinned Playwright.** The version and hash are read from the base commit's lockfile, never from the worktree: a
@@ -372,6 +444,8 @@ The run:
    - `file://` dotfiles are blocked;
    - a canary on a port outside the lane is blocked;
    - a CDP download into `$HOME` writes nothing;
+   - the worker can't look up the broker's `org.chromium.Chromium.MachPortRendezvousServer.<broker pid>` service. Check
+     it with `bootstrap_look_up` through Python's ctypes, inside the worker's sandbox. It must fail;
    - a second lane's worker can't read this lane's endpoint: `ps eww`, and sysctl `KERN_PROCARGS2` from node, against
      the first lane's processes. If it can, the build falls back to one browser lane per machine at a time, and the
      spec records it. Workers outside a lane can't connect to localhost, so they don't matter here.
@@ -396,4 +470,5 @@ The acceptance passes when steps 1–7 all pass in one run. Serenity posts the t
 - a Codex lane;
 - browsing beyond loopback;
 - recording beyond Playwright's own traces;
-- Chrome for Testing as the lane's channel.
+- branded Chrome and Chrome for Testing as lane browsers: both need LaunchServices and WindowServer (spike 5);
+- WebKit and Firefox.
