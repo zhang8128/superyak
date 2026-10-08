@@ -43,11 +43,24 @@ line is a requirement, and its Testing list maps onto the named tests in "Testin
    - Once the owner edits the brief, the text is theirs in this room, and that date would be wrong, so the note goes.
    - The `chat.brief` event of the carry keeps the trail.
 
-**Dry run.** Before this plan was committed, the code of Tasks 1–5 was applied, exactly as written here, to an export of
-the instruction-layers tree, at both 183fe1d and its later tip 4a2c600. Results:
-- The new station tests, the full agent suite (399 tests at 183fe1d, 423 at 4a2c600) and the whole browser file (49)
-  passed.
-- Taking out the brief's count in `used`, the `_remote_room` drop or the audit event makes its test fail.
+**One departure from the spec, from the plan's review:** the brief editor has no `maxlength`. A browser's `maxlength`
+counts UTF-16 units, so it would stop 4,000 emoji at 2,000. The station's 400 says the limit instead ("A brief is at most
+4,000 characters"), and the editor shows that message. Task 5 records this in the spec too.
+
+**Review:** a fresh reviewer approved the plan with 1 must-fix, 6 should-fix items and a nit, and accepted its six
+assumptions. All are folded in.
+
+**Dry run.** The code of Tasks 1–5 was applied, exactly as written here, to an export of main at ef37be7. Before the
+review it was also applied to instruction-layers at 183fe1d and 4a2c600. Results on main:
+- The full agent suite (429 tests) and the whole peer suite (371, browser tests included) passed.
+- Each of these makes its test fail when it is taken out or broken:
+  - the brief's count in `used`;
+  - the `_remote_room` drop, of `brief` or of `brief_revision`;
+  - the audit event;
+  - the owner check for a first brief or a removal;
+  - `actor()` on the PUT route;
+  - the dialog's re-read after a refused carry;
+  - the double-submit guard (3 of 3 runs).
 - One browser locator was fixed: the flash and the hidden announcer both say "Room brief saved.".
 - `test_late_home_refresh_cannot_replace_the_next_accounts_data`, which this plan doesn't touch, timed out several times
   in a row right after a full suite run while a desktop Chromium was running. It then passed alone and in the full
@@ -55,13 +68,13 @@ the instruction-layers tree, at both 183fe1d and its later tip 4a2c600. Results:
 
 ## Base and sequencing
 
-- **Start only after instruction-layers has merged to main.** The brief's fence reuses its `defuse()` inside
-  `fence_message`. Once it is on main, the build begins by **merging main into room-brief** (a merge, never a rebase):
-  Task 1, Step 1.
-- Until then, read that code in `/home/andy/superyak/.worktrees/instruction-layers`:
+- **instruction-layers is on main** (ac76d85, then ef37be7 with a hook follow-up). The brief's fence reuses its `defuse()`
+  inside `fence_message`, so the build begins by **merging main into room-brief** (a merge, never a rebase): Task 1,
+  Step 1. Main has already resolved the `test_hook.py` conflict between instruction-layers and station-inbox.
+- The code this plan builds on, on main:
   - `agent/superyak_agent/station.py`: `fence_message`, `defuse`;
   - `peer/superyak_peer/instructions.py`: `defuse_body`, the station-side twin. This plan doesn't use it.
-- **All code here is written against main after that merge.**
+- **All code here is written against main (ef37be7).**
   - From station-inbox (already on main): `agent/superyak_agent/mcp.py` with `station_unread`, thread reads, the `cursor`
     argument and the stdin reader thread. Also `render_forward(room, messages, first, limit, chars, used=0)`,
     `render_newest(room, messages, limit, chars, used=0)`, `_block` and `room_header`.
@@ -102,7 +115,8 @@ the instruction-layers tree, at both 183fe1d and its later tip 4a2c600. Results:
   in both lists (sdist and wheel); a test file goes in the sdist list only.
 - **The brief** (spec, Station):
   - `body` is a `str` of 0–4,000 characters, counted as Python `len()` (code points), with valid UTF-8 and no NUL.
-    Otherwise 400.
+    Otherwise 400. Over 4,000 characters, the message is exactly "A brief is at most 4,000 characters", which the
+    editor shows.
   - A body that is empty or only whitespace (`not body.strip()`) removes the brief and is stored as `''`. The row stays.
   - `revision` must be an `int` that isn't a `bool` (`type(revision) is int`), and it must equal the current revision
     (0 with no row). Otherwise 409.
@@ -141,8 +155,11 @@ the instruction-layers tree, at both 183fe1d and its later tip 4a2c600. Results:
    the note still names the call that shows the left-out messages (Task 4,
    `test_a_full_brief_and_a_full_read_stay_within_the_total`).
 4. **Unicode at the 4,000 boundary.**
-   - Accepted: 4,000 emoji (16,000 bytes, 8,000 UTF-16 units), 4,000 `é` and 2,000 letter-plus-accent pairs. Refused:
-     4,001 code points (Task 1, `test_the_limit_counts_characters_not_bytes_or_utf16_units`).
+   - The station accepts 4,000 emoji (16,000 bytes, 8,000 UTF-16 units), 4,000 `é` and 2,000 letter-plus-accent pairs,
+     and refuses 4,001 code points (Task 1, `test_the_limit_counts_characters_not_bytes_or_utf16_units`).
+   - The editor lets the owner type all 4,000 emoji: it has no `maxlength`, which would count UTF-16 units and stop at
+     2,000. Over the limit, it shows the station's "A brief is at most 4,000 characters" and keeps the text (Task 5,
+     `test_the_brief_editor_saves_4000_emoji_and_shows_the_limit_past_it`).
    - An agent sees such a brief uncut (Task 4, `test_a_4000_character_brief_is_shown_uncut`).
 5. **A received room (`:` in its id).**
    - A `brief` key that a paired peer puts in its room snapshot is never shown, in the room or in its summary (Task 3,
@@ -160,7 +177,7 @@ the instruction-layers tree, at both 183fe1d and its later tip 4a2c600. Results:
 | 2: carrying copies the body with `carried_from`; no old messages | `test_carrying_copies_the_brief_into_the_new_room_and_never_its_messages` (2) |
 | 2: `null` gives no brief; no old messages | `test_without_carry_the_new_room_has_no_brief` (2) |
 | 2: a stale carry 409, anything but `null` or an `int` 400 | `test_a_stale_carry_gets_409_and_anything_but_null_or_an_int_gets_400` (2) |
-| 2: `make station-bridge` carries; removal and unbridging keep it; the removed member gets 404 | `test_bridging_carries_the_brief_and_removing_members_keeps_it` (2, test_station_cli.py), `test_removing_a_member_keeps_the_room_and_its_brief` (2) |
+| 2: `make station-bridge` carries; removal and unbridging keep it; the removed member gets 404 | `test_bridging_carries_the_brief_and_removing_members_keeps_it`, `test_bridging_a_room_without_a_brief_carries_nothing` (2, test_station_cli.py), `test_removing_a_member_keeps_the_room_and_its_brief` (2) |
 | 3: GET returns the brief; `null` for none and removed | `test_get_returns_the_brief_to_members_and_null_when_there_is_none` (2) |
 | 3: GET `null` for remote rooms | `test_a_received_room_has_no_brief_and_takes_none` (2, test_federation.py) |
 | 3: summaries carry no brief | `test_room_summaries_carry_no_brief` (2) |
@@ -210,11 +227,11 @@ the instruction-layers tree, at both 183fe1d and its later tip 4a2c600. Results:
   - Route `PUT /api/chats/{key}/brief` takes `{body, revision}` and returns the brief or `null` (200). The person must
     have CSRF.
 
-- [ ] **Step 1: Merge main** (only once instruction-layers is on main):
+- [ ] **Step 1: Merge main** (instruction-layers is on main since ac76d85):
   ```bash
   cd /home/andy/superyak/.worktrees/room-brief
   git merge --no-ff main -m "Merge main into room-brief: instruction-layers and station-inbox, which the brief builds on"
-  grep -n "def defuse" agent/superyak_agent/station.py   # must print the function; if not, stop: instruction-layers is not on main yet
+  grep -n "def defuse" agent/superyak_agent/station.py   # prints the function: instruction-layers came in
   grep -n "Instructions, Inbox" peer/superyak_peer/db.py
   ```
   Then confirm that the base is green:
@@ -261,21 +278,37 @@ def brief_row(app, room):
 
 
 def test_only_the_owner_writes_the_brief(env):
+    """Create, change and remove: a member and a ship key are refused each one, and nothing is written."""
     app, clients, users, clock = env
     patient, doctor, organizer, family = clients
     ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    serenity = ship_client(app, key)
     room = new_room(patient, users[1], ship)
+
+    def refused_ship_key(body, revision):
+        """403 at the route itself: the detail shows it is the person-only route, not the owner check."""
+        response = serenity.put(f'/api/chats/{room}/brief', json={'body': body, 'revision': revision})
+        return response.status_code == 403 and response.json()['error'] == 'Ship keys cannot use this route'
+
+    assert put_brief(doctor, room, 'Mine.', 0).status_code == 403  # a member cannot write the first brief
+    assert brief_row(app, room) is None
+    assert refused_ship_key('Mine.', 0) and refused_ship_key('', 0)
+    assert brief_row(app, room) is None
     saved = put_brief(patient, room, 'Decisions D1-D9. Rio Grande builds the brief.', 0)
     assert saved.status_code == 200, saved.text
     assert saved.json() == {'body': 'Decisions D1-D9. Rio Grande builds the brief.', 'revision': 1, 'author_id': users[0]['id'],
                             'author_name': 'Patient', 'updated': 1000000.0, 'carried_from': None}
-    assert put_brief(doctor, room, 'Mine now.', 1).status_code == 403  # a member who is not the owner
-    assert ship_client(app, key).put(f'/api/chats/{room}/brief', json={'body': 'Mine now.', 'revision': 1}).status_code == 403
+    kept = ('Decisions D1-D9. Rio Grande builds the brief.', 1)
+    for body in ('Mine now.', ''):  # a change, then a removal
+        assert put_brief(doctor, room, body, 1).status_code == 403, body
+        assert brief_row(app, room) == kept
+        assert refused_ship_key(body, 1), body
+        assert brief_row(app, room) == kept
     assert put_brief(organizer, room, 'Mine now.', 1).status_code == 404  # not a member
     assert put_brief(patient, 'f' * 64 + ':' + room, 'Remote.', 0).status_code == 404  # a remote room's id
     no_csrf = patient.put(f'/api/chats/{room}/brief', json={'body': 'Mine now.', 'revision': 1}, headers={'x-csrf-token': ''})
     assert no_csrf.status_code == 403
-    assert brief_row(app, room) == ('Decisions D1-D9. Rio Grande builds the brief.', 1)
+    assert brief_row(app, room) == kept
 
 
 def test_a_stale_or_non_int_revision_gets_409(env):
@@ -295,7 +328,8 @@ def test_the_body_is_up_to_4000_characters_of_valid_text(env):
     app, clients, users, clock = env
     patient = clients[0]
     room = new_room(patient)
-    assert put_brief(patient, room, 'x' * 4001, 0).status_code == 400
+    too_long = put_brief(patient, room, 'x' * 4001, 0)
+    assert too_long.status_code == 400 and too_long.json()['error'] == 'A brief is at most 4,000 characters'
     assert put_brief(patient, room, 'a NUL\x00inside', 0).status_code == 400
     lone = patient.put(f'/api/chats/{room}/brief', content=json.dumps({'body': 'bad\ud800', 'revision': 0}),
                        headers={'content-type': 'application/json'})
@@ -374,7 +408,10 @@ CREATE TABLE IF NOT EXISTS room_briefs(room_id TEXT PRIMARY KEY REFERENCES rooms
 
 def brief_body(body):
     """0-4,000 characters (code points, as Python counts them) of valid UTF-8 with no NUL, else 400. A body that is
-    empty or only whitespace removes the brief and is stored as ''."""
+    empty or only whitespace removes the brief and is stored as ''. The length has its own message, because the web
+    editor has no maxlength (a browser counts UTF-16 units) and shows the owner this one."""
+    if isinstance(body, str) and len(body) > MAX_BRIEF:
+        raise Problem(400, 'A brief is at most 4,000 characters')
     text(body, 'brief', MAX_BRIEF, empty=True)
     if '\x00' in body:
         raise Problem(400, 'A brief cannot contain a NUL character')
@@ -386,14 +423,15 @@ class Briefs:
         """(brief, revision). The brief is what members see: None when the room never had one or it was removed. The
         revision is the one the owner's next save must name: 0 before the first brief, and a removed brief's own
         revision after a removal."""
-        row = db.execute('SELECT room_briefs.*, users.name AS author_name FROM room_briefs JOIN users ON users.id=room_briefs.author_id '
+        # LEFT JOIN: a missing author row must never make the revision read as 0.
+        row = db.execute('SELECT room_briefs.*, users.name AS author_name FROM room_briefs LEFT JOIN users ON users.id=room_briefs.author_id '
                          'WHERE room_briefs.room_id=?', (room_id,)).fetchone()
         if row is None:
             return None, 0
         if row['body'] == '':
             return None, row['revision']
         return ({'body': row['body'], 'revision': row['revision'], 'author_id': row['author_id'],
-                 'author_name': safe_line(row['author_name']), 'updated': row['updated'], 'carried_from': row['carried_from']},
+                 'author_name': safe_line(row['author_name'] or ''), 'updated': row['updated'], 'carried_from': row['carried_from']},
                 row['revision'])
 
     def _write_brief(self, db, room_id, body, revision, author_id, carried_from=None):
@@ -461,7 +499,9 @@ git commit -m "station: a room brief only its owner writes; revisions only go up
   - `get_room` adds `brief` and `brief_revision` (a received room gets `None`, 0);
   - `add_participants(actor, key, member_ids, carry_brief=None)`.
 - Modify: `peer/superyak_peer/app.py`: `chat_add` passes `data.get('carry_brief')`.
-- Modify: `peer/superyak_peer/ships.py`: `station_bridge` carries the current brief.
+- Modify: `peer/superyak_peer/ships.py`: `station_bridge` carries the current brief and says whether it did.
+- Modify: `peer/superyak_peer/__main__.py`: `describe_bridge` tells the operator whether a brief came along.
+- Modify: `CLAUDE.md`: the bridging paragraph says so too, so the operator can tell Andy.
 - Test:
   - `peer/tests/test_room_brief.py` (append);
   - `peer/tests/test_station_cli.py` (append, and add the `Problem` import);
@@ -477,6 +517,8 @@ git commit -m "station: a room brief only its owner writes; revisions only go up
     when `carry_brief` is neither `None` nor an `int`.
   - `GET /api/chats/{id}` adds `brief` (the dict or `null`) and `brief_revision` (`int`). Summaries are unchanged.
   - `POST /api/chats/{id}/participants` accepts `{member_ids, carry_brief}`.
+  - `Ships.station_bridge(username, prefix, bridge) -> (room, changed)`: after a bridge, `room` also has
+    `brief_carried: bool`. `describe_bridge` reads it with `room.get('brief_carried')`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -610,7 +652,8 @@ Append to `peer/tests/test_station_cli.py`, and add `from superyak_peer.common i
 def test_bridging_carries_the_brief_and_removing_members_keeps_it(rooms, capsys):
     store, andy, doctor, wormhole, gamma = rooms
     store.save_brief(andy['id'], gamma['id'], 'Gamma: decisions D1-D9.', 0)
-    run(capsys, store, 'station-bridge', '--id', gamma['id'][:6], '--as', 'andy')
+    out = run(capsys, store, 'station-bridge', '--id', gamma['id'][:6], '--as', 'andy')
+    assert "The room's brief came along." in out
     new = current_room(store, andy, gamma)
     brief = store.get_room(andy['id'], new['id'])['brief']
     assert (brief['body'], brief['revision'], brief['carried_from'], brief['author_id']) == ('Gamma: decisions D1-D9.', 1, gamma['id'], andy['id'])
@@ -625,6 +668,21 @@ def test_bridging_carries_the_brief_and_removing_members_keeps_it(rooms, capsys)
     with pytest.raises(Problem) as removed:
         store.get_room(doctor['id'], new['id'])
     assert removed.value.status == 404
+
+
+def test_bridging_a_room_without_a_brief_carries_nothing(rooms, capsys):
+    store, andy, doctor, wormhole, gamma = rooms
+    out = run(capsys, store, 'station-bridge', '--id', gamma['id'][:6], '--as', 'andy')
+    new = current_room(store, andy, gamma)
+    got = store.get_room(andy['id'], new['id'])
+    assert got['brief'] is None and got['brief_revision'] == 0 and 'The room had no brief to carry.' in out
+    store.save_brief(andy['id'], new['id'], 'Soon gone.', 0)
+    store.save_brief(andy['id'], new['id'], '', 1)  # a removed brief carries nothing either
+    run(capsys, store, 'station-unbridge', '--id', new['id'][:6], '--as', 'andy')
+    again = run(capsys, store, 'station-bridge', '--id', new['id'][:6], '--as', 'andy')
+    newest = current_room(store, andy, new)
+    assert newest['id'] != new['id'] and store.get_room(andy['id'], newest['id'])['brief'] is None
+    assert 'The room had no brief to carry.' in again
 ```
 
 Append to `peer/tests/test_federation.py`:
@@ -714,9 +772,29 @@ In `peer/superyak_peer/ships.py`, `station_bridge`:
               brief, revision = self._room_brief(db, room['id'])
               carry = revision if brief else None  # bridging is the same room continuing, so its brief comes along
   ```
-- Change `return self.add_participants(actor, room['id'], [wormhole]), True` to
-  `return self.add_participants(actor, room['id'], [wormhole], carry), True`.
+- Change `return self.add_participants(actor, room['id'], [wormhole]), True` to:
+  ```python
+              new = self.add_participants(actor, room['id'], [wormhole], carry)
+              return {**new, 'brief_carried': carry is not None}, True  # the operator tells Andy whether it came along
+  ```
 - Unbridging is unchanged: `remove_participant` keeps the room and its brief.
+
+In `peer/superyak_peer/__main__.py`, replace `describe_bridge` with:
+
+```python
+def describe_bridge(room, changed, bridge):
+    where = f'room {room["id"][:6]} {safe_line(room["title"])}'
+    if not changed:
+        return f'The {where} is already bridged. Nothing changed.' if bridge else f'The {where} is not bridged. Nothing changed.'
+    if bridge:
+        brief = "The room's brief came along." if room.get('brief_carried') else 'The room had no brief to carry.'
+        return (f'Bridged. Wormhole is in a new {where} with the same members; the room it replaces, {room["linked_room_id"][:6]}, '
+                f'stays as it was but is no longer the current room. {brief}')
+    return f'Unbridged. Wormhole left the {where}.'
+```
+
+In `CLAUDE.md`, "Approving on the station", the bridging paragraph: after "tell him the new short id.", add: "Bridging also
+carries the room's brief when it has one, and the command says whether a brief came along; tell him that too."
 
 - [ ] **Step 4: Run the tests**
 
@@ -728,7 +806,7 @@ Run: `cd /home/andy/superyak/.worktrees/room-brief/peer && $CAP uv run --locked 
 
 ```bash
 cd /home/andy/superyak/.worktrees/room-brief
-git add peer/superyak_peer/briefs.py peer/superyak_peer/chats.py peer/superyak_peer/app.py peer/superyak_peer/ships.py peer/tests/test_room_brief.py peer/tests/test_station_cli.py peer/tests/test_federation.py
+git add peer/superyak_peer/briefs.py peer/superyak_peer/chats.py peer/superyak_peer/app.py peer/superyak_peer/ships.py peer/superyak_peer/__main__.py CLAUDE.md peer/tests/test_room_brief.py peer/tests/test_station_cli.py peer/tests/test_federation.py
 git commit -m "station: members read the room brief; its owner chooses to carry it into the next room, and bridging carries it" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -736,7 +814,7 @@ git commit -m "station: members read the room brief; its owner chooses to carry 
 
 **Files:**
 - Modify: `peer/superyak_peer/briefs.py`: `_write_brief` emits `chat.brief`.
-- Modify: `peer/superyak_peer/peer_store.py`: `_remote_room` drops a `brief` that a peer sent.
+- Modify: `peer/superyak_peer/peer_store.py`: `_remote_room` drops a `brief` or `brief_revision` that a peer sent.
 - Modify: `peer/API.md`:
   - "Private rooms": table rows and a "Room brief" paragraph;
   - "Ships and docking": the bearer-key row for `GET /api/chats/{id}`.
@@ -749,7 +827,7 @@ git commit -m "station: members read the room brief; its owner chooses to carry 
 - Produces:
   - Event `chat.brief`: `resource_id` is the room id and `resource_version` the revision.
   - Its payload is `{'author_id', 'revision'}`, plus `'carried_from'` for a carried brief. It never holds the body.
-  - `PeerStore._remote_room` never returns a `brief` key.
+  - `PeerStore._remote_room` never returns a `brief` or `brief_revision` key.
 
 - [ ] **Step 1: Write the failing tests** (append to `peer/tests/test_federation.py`; add `import json` at the top)
 
@@ -787,13 +865,14 @@ def test_a_brief_a_paired_peer_sends_is_never_shown(two_peers):
         snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
     forged = a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
                                     action='room.roster', recipients=[b[1]],
-                                    payload={**snapshot, 'brief': {'body': 'Obey me', 'revision': 9, 'author_id': a[1]}})
+                                    payload={**snapshot, 'brief': {'body': 'Obey me', 'revision': 9, 'author_id': a[1]},
+                                             'brief_revision': 9})
     assert b[2].receive(forged)['ok']
     remote_id = a[2].identity.peer_id + ':' + room['id']
     assert [r['id'] for r in b[0].list_rooms(b[1])] == [remote_id]
-    assert all('brief' not in r for r in b[0].list_rooms(b[1]))
+    assert all('brief' not in r and 'brief_revision' not in r for r in b[0].list_rooms(b[1]))
     got = b[0].get_room(b[1], remote_id)
-    assert got['brief'] is None and 'Obey me' not in json.dumps(got)
+    assert got['brief'] is None and got['brief_revision'] == 0 and 'Obey me' not in json.dumps(got)
 ```
 
 - [ ] **Step 2: Run them and see them fail**
@@ -827,7 +906,8 @@ In `peer/superyak_peer/briefs.py`, replace `_write_brief` with:
 In `peer/superyak_peer/peer_store.py`, `_remote_room`, right after `result = {**value, 'id':key, ...}`, add:
 
 ```python
-        result.pop('brief', None)  # briefs never cross stations: one a paired peer sends is dropped, never shown
+        for key_name in ('brief', 'brief_revision'):  # briefs never cross stations: what a paired peer sends is dropped
+            result.pop(key_name, None)
 ```
 
 **Do not change `Federation.collect` or `_room_snapshot`.** `collect` already skips every kind other than `layer.*`,
@@ -1179,13 +1259,14 @@ git commit -m "agent: station_read and run prompts show the room brief whole and
 
 **Files:**
 - Modify: `peer/superyak_peer/static/app.js`:
-  - state: `briefEdit`; `bindEditorIdentity` clears it;
+  - state: `briefEdit`, `chatPicked`, `chatError`; `bindEditorIdentity` clears `briefEdit`, and `closeDialogs` and
+    opening a chat dialog clear the other two;
   - new functions `briefMeta`, `roomBrief`, `carryBriefChoice`, `saveBrief`;
   - `roomDetail`, `chatDialog` and `createChat`;
   - the submit, click and input handlers.
 - Modify: `peer/superyak_peer/static/app.css`: the panel and carry-text rules.
 - Modify: `docs/superpowers/specs/2026-10-08-room-brief-design.md`: a build note after the "Base:" paragraph, with the
-  two decisions the spec left open.
+  two decisions the spec left open and the review's one departure (no `maxlength`).
 - Test: `peer/tests/test_browser.py` (append)
 
 **Interfaces:**
@@ -1195,7 +1276,8 @@ git commit -m "agent: station_read and run prompts show the room brief whole and
   - `POST /api/chats/{id}/participants` `{member_ids, carry_brief}`;
   - in tests, `store.save_brief(actor, key, body, revision)` and `store.get_room(actor, key)`.
 - Produces:
-  - `state.briefEdit = {roomId, revision, body, status, error} | null`;
+  - `state.briefEdit = {roomId, revision, body, status, error, saving} | null`;
+  - `state.chatPicked: string[] | null` (the people ticked when a carry was refused) and `state.chatError: string | null`;
   - DOM hooks the tests use: `.room-brief`, `.room-brief-body`, `#brief-body` (labelled "Edit brief"),
     `#brief-status`, `.carry-brief-text`, and the checkbox `name="carry-brief"`.
 
@@ -1319,19 +1401,91 @@ def test_a_save_from_a_stale_tab_keeps_the_text_and_shows_the_newer_brief(browse
             page.get_by_role("button", name="Save brief").click()
             expect(page.locator(".room-brief .room-brief-body")).to_have_text("My edit from this tab.")
     assert store.get_room(patient, room["id"])["brief"]["revision"] == 3
+
+
+def test_a_carry_refused_for_a_newer_brief_shows_it_and_carries_it_on_a_second_tick(browser_peer):
+    """Review: after a 409 the dialog must show the newer brief, unticked, or the owner is stuck on the old revision."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "Plan for everyone.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.locator(".carry-brief-text")).to_have_text("Plan for everyone.")
+            store.save_brief(patient, room["id"], "Plan for everyone, revised.", 1)  # another tab
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(dialog.get_by_role("alert")).to_contain_text("The room brief changed since you opened this.")
+            expect(dialog.locator(".carry-brief-text")).to_have_text("Plan for everyone, revised.")
+            expect(dialog.get_by_role("checkbox", name="Carry the room brief")).not_to_be_checked()
+            expect(dialog.get_by_role("checkbox", name="Dr. Morgan")).to_be_checked()
+            assert store.list_rooms(doctor) == []
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Plan for everyone, revised.")
+    rooms = store.list_rooms(doctor)
+    assert len(rooms) == 1 and store.get_room(doctor, rooms[0]["id"])["brief"]["body"] == "Plan for everyone, revised."
+
+
+def test_the_brief_editor_saves_4000_emoji_and_shows_the_limit_past_it(browser_peer):
+    """Review focus: a browser's maxlength counts UTF-16 units, so the editor has none and shows the station's limit."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("😀" * 4001)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status")).to_have_text("A brief is at most 4,000 characters. Your brief is still here.")
+            expect(page.get_by_label("Edit brief")).to_have_value("😀" * 4001)
+            page.get_by_label("Edit brief").fill("😀" * 4000)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("😀" * 4000)
+    assert store.get_room(patient, room["id"])["brief"]["body"] == "😀" * 4000
+
+
+def test_a_double_click_on_save_brief_saves_once(browser_peer):
+    """Review: a second submit while the first is saving would read as a false "newer brief" conflict."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First brief.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            puts = []
+            page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("Saved once.")
+            page.get_by_role("button", name="Save brief").dblclick()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Saved once.")
+            expect(page.get_by_text("A newer brief was saved")).to_have_count(0)
+            assert len(puts) == 1
+    assert store.get_room(patient, room["id"])["brief"]["revision"] == 2
 ```
 
 - [ ] **Step 2: Run them and see them fail**
 
 Run: `cd /home/andy/superyak/.worktrees/room-brief/peer && $CAP uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k brief`
 
-**Expected:** all five fail, each timing out on a `.room-brief` locator or the "Edit brief" button.
+**Expected:** all eight fail, each timing out on a `.room-brief` locator, the "Edit brief" button or the carry box.
 
 - [ ] **Step 3: Implement** (`peer/superyak_peer/static/app.js`)
 
 State and identity:
-- In the `state` object, add `briefEdit: null,` after `transitionNote: null,`.
+- In the `state` object, add `briefEdit: null, chatPicked: null, chatError: null,` after `transitionNote: null,`.
 - In `bindEditorIdentity`, inside the `if (state.editorIdentity !== next) { ... }` block, add `state.briefEdit = null;`.
+- In `closeDialogs`, change `state.chatDialog = null; state.profileDialog = false;` to
+  `state.chatDialog = null; state.chatPicked = null; state.chatError = null; state.profileDialog = false;`.
 
 New functions, placed after `messageMarkup`:
 
@@ -1352,7 +1506,7 @@ function roomBrief(room) {
     ? `<div class="room-brief-body">${escapeHtml(brief.body)}</div><p class="meta">${escapeHtml(briefMeta(brief))}</p>`
     : `<p class="meta">No brief yet. Write what this room is for, what it has decided and who does what.</p>`;
   const editor = edit
-    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body" maxlength="4000">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p><div class="button-row"><button class="button" type="submit">Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
+    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p><div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
     : owner ? `<button class="button ghost" type="button" data-action="edit-brief">Edit brief</button>` : "";
   return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Visible to members on this station only.</p>${editor}</section>`;
 }
@@ -1367,14 +1521,55 @@ function carryBriefChoice(room) {
 
 Wiring the panel and the dialog:
 - In `roomDetail`, insert `${roomBrief(room)}` immediately before `${shipBanner(room)}`.
-- In `chatDialog`, insert `${state.chatDialog === "linked" ? carryBriefChoice(room) : ""}` right after the Participants
-  `</fieldset>` and before `<div class="button-row">`.
-- In `createChat`, the linked branch becomes:
+- In `chatDialog`:
+  - after `const existing = ...`, add `const picked = new Set(state.chatPicked || []);`;
+  - each contact checkbox's `${existing.has(contact.id) ? "checked disabled" : ""}` becomes
+    `${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}`, so the people chosen
+    survive a refused carry;
+  - insert `${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}` immediately before
+    `<form id="chat-form">`;
+  - insert `${state.chatDialog === "linked" ? carryBriefChoice(room) : ""}` right after the Participants `</fieldset>`
+    and before `<div class="button-row">`.
+- Replace `createChat` with the version below. The linked branch sends `carry_brief`. On a 409 (the brief changed since
+  the dialog opened), it re-reads the room before rendering, so the dialog shows the newer brief, unticked, with the
+  people still chosen.
 
 ```js
+async function createChat(form) {
+  const members = [...form.querySelectorAll('[name="chat-member"]:checked:not(:disabled)')].map((input) => input.value);
+  try {
+    let room;
+    if (state.chatDialog === "new") {
+      room = await api("/api/chats", { method: "POST", json: { title: form.elements.title.value, member_ids: members } });
+      state.transitionNote = null;
+    } else {
       const carry = form.querySelector('[name="carry-brief"]:checked');
       room = await api(`/api/chats/${pathPart(state.room.id)}/participants`, { method: "POST", json: { member_ids: members, carry_brief: carry ? Number(carry.value) : null } });
       state.transitionNote = "New room · earlier messages stay in the original chat";
+    }
+    state.chatDialog = null; state.chatPicked = null; state.chatError = null;
+    await loadData();
+    state.selectedChatId = room.id;
+    state.room = await api(`/api/chats/${pathPart(room.id)}`);
+    history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
+    render();
+  } catch (error) {
+    if (error.status === 409 && state.chatDialog === "linked" && state.room) {
+      state.chatPicked = members;
+      state.chatError = "The room brief changed since you opened this. The newer brief is shown below; tick the box again to carry it.";
+      try {
+        state.room = await api(`/api/chats/${pathPart(state.room.id)}`);
+      } catch (_) {
+        state.chatError = "The room brief changed since you opened this. Close this and open the room again to see the newer brief.";
+      }
+      announce(state.chatError);
+      render();
+      return;
+    }
+    setFlash(error.message, true);
+    render();
+  }
+}
 ```
 
 Add `saveBrief` after `createChat`:
@@ -1382,9 +1577,11 @@ Add `saveBrief` after `createChat`:
 ```js
 async function saveBrief(form) {
   const room = state.room, edit = state.briefEdit;
-  if (!room || !edit || edit.roomId !== room.id) return;
+  // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
+  if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
   const body = form.elements.body.value;
-  edit.body = body;
+  Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
+  form.querySelector('button[type="submit"]').disabled = true;
   const status = form.querySelector("#brief-status");
   status.className = "inline-message";
   status.textContent = "Saving…";
@@ -1392,7 +1589,8 @@ async function saveBrief(form) {
     // The revision is the one this editor opened, never a newer one: a stale tab gets 409 and overwrites nothing.
     await api(`/api/chats/${pathPart(room.id)}/brief`, { method: "PUT", json: { body, revision: edit.revision } });
   } catch (error) {
-    let message = error.status === 0 ? "Connection lost. Your brief is still here." : `${error.message} Your brief is still here.`;
+    // The station's own message: the editor has no maxlength, so "A brief is at most 4,000 characters" arrives here.
+    let message = error.status === 0 ? "Connection lost. Your brief is still here." : `${error.message.replace(/\.?$/, ".")} Your brief is still here.`;
     if (error.status === 409) {
       message = "A newer brief was saved while you were editing. It is shown above, and your text is still here. Save again to replace it.";
       try {
@@ -1403,12 +1601,12 @@ async function saveBrief(form) {
         message = "A newer brief was saved while you were editing. Your text is still here; reload the room to see the newer brief.";
       }
     }
-    Object.assign(edit, { status: message, error: true });
+    Object.assign(edit, { status: message, error: true, saving: false });
     announce(message);
     render();
     return;
   }
-  state.briefEdit = null;
+  if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
   try {
     const latest = await api(`/api/chats/${pathPart(room.id)}`);
     if (state.room?.id === room.id) state.room = latest;
@@ -1432,6 +1630,10 @@ Event handlers:
   if (action === "cancel-brief") { state.briefEdit = null; render(); }
 ```
 
+  Opening either chat dialog starts with nothing ticked and no message: the `new-chat` and `change-participants`
+  handlers become `{ state.chatDialog = "new"; state.chatPicked = null; state.chatError = null; render(); }` and
+  `{ state.chatDialog = "linked"; state.chatPicked = null; state.chatError = null; render(); }`.
+
 - **Input:** in the `input` listener, add
   `if (event.target.id === "brief-body" && state.briefEdit) state.briefEdit.body = event.target.value;`. Any re-render
   then keeps the typed text.
@@ -1452,12 +1654,16 @@ Event handlers:
 > - `GET /api/chats/{id}` also returns `brief_revision` (0 with no row, and 0 for a received room), so an owner can
 >   write a brief again after removing one.
 > - A save clears `carried_from`, because "Carried from the previous room on <date>" dates the carried revision.
+>
+> And one departure, from the plan's review: the brief editor has no `maxlength`. A browser's `maxlength` counts UTF-16
+> units and would stop 4,000 emoji at 2,000, so the editor shows the station's 400 ("A brief is at most 4,000
+> characters") instead.
 
 - [ ] **Step 4: Run the tests**
 
 Run: `cd /home/andy/superyak/.worktrees/room-brief/peer && $CAP uv run --locked python -m pytest -q -p no:cacheprovider tests/test_browser.py -k brief`
 
-**Expected:** 5 passed. Then run the full peer suite (about 4 minutes):
+**Expected:** 8 passed. Then run the full peer suite (about 4 minutes):
 
 Run: `cd /home/andy/superyak/.worktrees/room-brief/peer && $CAP uv run --locked python -m pytest -q -p no:cacheprovider`
 
@@ -1486,17 +1692,25 @@ mention starts a watcher run.
    python3 -c 'import sqlite3, sys; sqlite3.connect(sys.argv[1]).backup(sqlite3.connect(sys.argv[2]))' ~/.local/share/superyak/lighthouse/peer.sqlite3 "$BACKUP"
    chmod 600 "$BACKUP" && stat -c '%a %s %n' "$BACKUP"   # expect 600 and a non-zero size
    ```
-2. **Run both suites in the worktree, capped:**
+2. **Merge main into room-brief again if main moved since Task 1, then run both suites in the worktree, capped:**
    ```bash
+   cd /home/andy/superyak/.worktrees/room-brief
+   git merge-base --is-ancestor main HEAD || git merge --no-ff main -m "Merge main into room-brief"   # a merge, never a rebase
    CAP='systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0'
    cd /home/andy/superyak/.worktrees/room-brief/agent && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider
    cd /home/andy/superyak/.worktrees/room-brief/peer && $CAP uv run --locked python -m pytest -q -p no:cacheprovider
    ```
-3. **Merge into main locally:**
+3. **Check the main checkout, then merge into main locally.** `/home/andy/superyak` must be on main, clean, and not
+   behind origin/main, so the push in step 6 is a fast-forward:
    ```bash
-   cd /home/andy/superyak && git status --short   # must print nothing
+   cd /home/andy/superyak
+   test "$(git branch --show-current)" = main && test -z "$(git status --short)" && echo 'on main, clean'   # must print it
+   git fetch -q origin
+   git log --oneline main..origin/main   # must print nothing: main is not behind origin/main
    git merge --no-ff room-brief -m "Merge room-brief: the room brief a room's owner carries into its next room"
    ```
+   If main is behind, run `git merge --ff-only origin/main` there, then go back to step 2. If that fails because the
+   two have diverged, stop and ask in the room.
 4. **Restart in order, then check that all are active.** The `room_briefs` table is created when the lighthouse starts.
    ```bash
    for unit in lighthouse door ship odo wormhole; do systemctl --user restart superyak-$unit; done
