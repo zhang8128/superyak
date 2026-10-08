@@ -77,8 +77,17 @@ class StationClient:
     def room(self, room_id):
         return self.request('GET', f'/api/chats/{quote(room_id, safe="")}')
 
-    def post(self, room_id, body, client_message_id):
-        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/messages', {'client_message_id': client_message_id, 'body': body})
+    def post(self, room_id, body, client_message_id, ticket_id=None):
+        payload = {'client_message_id': client_message_id, 'body': body}
+        if ticket_id:
+            payload['ticket_id'] = ticket_id
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/messages', payload)
+
+    def ticket(self, message_id):
+        return self.request('POST', '/api/ships/me/tickets', {'message_id': message_id})
+
+    def finish_ticket(self, ticket_id):
+        return self.request('POST', f'/api/ships/me/tickets/{quote(ticket_id, safe="")}/finish', {})
 
     def mentions(self, after=0):
         return self.request('GET', f'/api/mentions?after={int(after)}')

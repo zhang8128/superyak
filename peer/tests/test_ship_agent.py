@@ -125,7 +125,7 @@ def test_watcher_answers_owner_as_builder_and_others_read_only_through_the_real_
               'owner_id': users[0]['id'], 'key': key, 'workspace': str(tmp_path), 'machine': 'test-host'}
     watcher = Watcher(StationClient('http://testserver', key, transport=transport_for(app)), config, tmp_path / 'state.json', Runner())
     assert watcher.cycle() == 2 and calls == ['build', 'read']
-    assert [m['body'] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']
+    assert [m['body'].split('\n')[0] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']
     assert watcher.cycle() == 0
 
 

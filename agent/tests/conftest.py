@@ -9,6 +9,7 @@ class FakeStation:
     def __init__(self):
         self.users, self.rooms, self.mention_rows, self.keys = {}, {}, [], {}
         self.clock, self.counter, self.down = 1000.0, 0, False
+        self.tickets, self.sources, self.ticket_override, self.label_refusals = {}, {}, {}, set()
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -73,8 +74,22 @@ class FakeStation:
                 return ok(self.view(room))
             if method == 'POST' and segments[3:] == ['messages']:
                 payload = json.loads(data)
+                ticket_id = payload.get('ticket_id')
+                existing = next((m for m in room['messages'] if m['author_id'] == me and m['client_message_id'] == payload['client_message_id']), None)
+                if existing is not None:
+                    return ok(existing, 201) if existing['body'] == payload['body'] else (409, b'{"error": "Message ID already used with different text"}')
+                if ticket_id is not None:
+                    ticket = self.tickets.get(ticket_id)
+                    ticket_room = next((r['id'] for r in self.rooms.values() for m in r['messages'] if ticket and m['id'] == ticket['message_id']), None)
+                    if (ticket is None or ticket['ship_id'] != me or ticket['status'] != 'running' or ticket_room != room['id']
+                            or ticket_id in self.sources.values() or ticket_id in self.label_refusals):
+                        return 409, b'{"error": "This ticket cannot label a message here"}'
                 message = self.say(room['id'], self.users[me], payload['body'], payload['client_message_id'])
-                return (409, b'{"error": "Message ID already used with different text"}') if message is None else ok(message, 201)
+                if message is None:
+                    return 409, b'{"error": "Message ID already used with different text"}'
+                if ticket_id is not None:
+                    self.sources[message['id']] = ticket_id
+                return ok(message, 201)
         if method == 'GET' and path == '/api/mentions':
             after, rows = int(query.get('after', ['0'])[0]), []  # one page holds at most 50, as on the station
             for row in self.mention_rows:
@@ -86,6 +101,33 @@ class FakeStation:
         if method == 'DELETE' and path == '/api/ships/me/key':
             self.keys.pop(key)
             return ok({'ok': True})
+        if method == 'POST' and path == '/api/ships/me/tickets':
+            message_id = json.loads(data)['message_id']
+            if message_id in self.ticket_override:
+                status, payload = self.ticket_override[message_id]
+                return status, json.dumps(payload).encode()
+            message = next((m for r in self.rooms.values() if me in r['member_ids'] for m in r['messages'] if m['id'] == message_id), None)
+            if message is None:
+                return 404, b'{"error": "Not found"}'
+            existing = next((t for t in self.tickets.values() if t['ship_id'] == me and t['message_id'] == message_id), None)
+            if existing:
+                return (409, b'{"error": "This message has already been answered"}') if existing['status'] == 'finished' else ok(existing)
+            ship, author = self.users[me], self.users[message['author_id']]
+            mentioned = any(r['message_id'] == message_id and r['user_id'] == me for r in self.mention_rows)
+            build = bool(ship['owner_id'] and mentioned and author['kind'] == 'person' and author['id'] == ship['owner_id'])
+            ticket = {'id': f't{len(self.tickets) + 1}', 'ship_id': me, 'message_id': message_id, 'mode': 'build' if build else 'read',
+                      'basis': 'owner' if build else 'none', 'root_id': ship['owner_id'] if build else None,
+                      'root_name': self.users[ship['owner_id']]['name'] if build else None, 'chain': [], 'hops': 0,
+                      'instructions': [], 'blocks': '', 'footer': f'Builder for {self.users[ship["owner_id"]]["name"]} (owner)' if build else '',
+                      'status': 'running'}
+            self.tickets[ticket['id']] = ticket
+            return ok(ticket)
+        if method == 'POST' and segments[:4] == ['api', 'ships', 'me', 'tickets'] and segments[5:] == ['finish']:
+            ticket = self.tickets.get(segments[4])
+            if ticket is None or ticket['ship_id'] != me:
+                return 404, b'{"error": "Not found"}'
+            ticket['status'] = 'finished'
+            return ok(ticket)
         return 403, b'{"error": "Ship keys cannot use this route"}'
 
 

@@ -3,7 +3,7 @@ import sys
 import pytest
 from superyak_agent.runs import RunResult, RunTimeout
 from superyak_agent.station import StationClient, StationError
-from superyak_agent.watch import Watcher, build_prompt
+from superyak_agent.watch import FALLBACK, Watcher, build_prompt
 
 
 class FakeRunner:
@@ -273,3 +273,83 @@ def test_prompt_keeps_the_request_whole_and_marks_cut_history(station, ship_conf
     prompt = build_prompt(view, mention, 'serenity', 'build')
     assert 'the actual ask' in prompt and 'earlier tail' not in prompt
     assert '[cut at 2,000 of 2,513 characters]' in prompt
+
+
+def test_the_mode_comes_from_the_station_never_from_the_watcher(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    fake.ticket_override[asked['id']] = (200, {'id': 'tx', 'mode': 'read', 'basis': 'none', 'footer': '', 'status': 'running'})
+    runner = FakeRunner()
+    watcher(fake, ship_config, tmp_path, runner).cycle()
+    assert [mode for mode, _, _ in runner.calls] == ['read']
+
+
+def test_no_ticket_no_run_and_three_failures_post_the_fallback(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    fake.ticket_override[asked['id']] = (404, {'error': 'Not found'})
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    assert w.cycle() == 0 and w.cycle() == 0 and runner.calls == []
+    assert w.cycle() == 1 and bodies(fake, room)[-1] == FALLBACK and runner.calls == []
+
+
+def test_a_finished_ticket_without_a_reply_gets_the_fallback_not_a_second_run(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    fake.ticket_override[asked['id']] = (409, {'error': 'This message has already been answered'})
+    runner = FakeRunner()
+    assert watcher(fake, ship_config, tmp_path, runner).cycle() == 1
+    assert runner.calls == [] and bodies(fake, room)[-1] == FALLBACK
+
+
+def test_the_reply_carries_its_ticket_and_the_build_footer_then_the_ticket_is_finished(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    question = fake.say(room, jenn, '@serenity what is this?')
+    watcher(fake, ship_config, tmp_path, FakeRunner()).cycle()
+    replies = [m for m in fake.rooms[room]['messages'] if m['author_id'] == serenity['id']]
+    assert replies[0]['body'].endswith('\n\nBuilder for Andy (owner)') and 'Builder for' not in replies[1]['body']
+    assert [fake.tickets[fake.sources[m['id']]]['message_id'] for m in replies] == [asked['id'], question['id']]
+    assert all(t['status'] == 'finished' for t in fake.tickets.values())
+
+
+def test_retries_reuse_one_ticket_so_the_decision_cannot_change(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    fake.say(room, andy, '@serenity fix it')
+    flaky = FakeRunner(error=RuntimeError('model unavailable'))
+    w = watcher(fake, ship_config, tmp_path, flaky)
+    assert w.cycle() == 0
+    w = watcher(fake, ship_config, tmp_path, FakeRunner())  # a restart between tries
+    assert w.cycle() == 1 and len(fake.tickets) == 1
+
+
+def test_a_reply_whose_ticket_can_no_longer_label_is_posted_unlabelled(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    fake.say(room, andy, '@serenity fix it')
+    fake.label_refusals.add('t1')
+    assert watcher(fake, ship_config, tmp_path, FakeRunner()).cycle() == 1
+    assert bodies(fake, room)[-1].startswith('Added notes') and fake.sources == {}
+    assert fake.tickets['t1']['status'] == 'finished'
+
+
+def test_a_long_build_reply_keeps_its_footer():
+    from superyak_agent.watch import format_reply
+    text = format_reply(RunResult('x' * 25000), 'Builder for Andy (owner)')
+    assert len(text) <= 20000 and text.endswith('\n\nBuilder for Andy (owner)')
+
+
+def test_a_resident_reads_even_if_a_ticket_said_build(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    fake.ticket_override[asked['id']] = (200, {'id': 'tx', 'mode': 'build', 'basis': 'owner', 'footer': 'Builder for Andy (owner)', 'status': 'running'})
+    runner = FakeRunner()
+    Watcher(StationClient('http://station.test', 'serenity-key', transport=fake), ship_config, tmp_path / 'state.json', runner, resident=True).cycle()
+    assert [mode for mode, _, _ in runner.calls] == ['read']

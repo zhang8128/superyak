@@ -14,6 +14,7 @@ HISTORY_CHARS = 2000  # each earlier message; the mentioning message, the reques
 MAX_FAILURES = 3
 SHIP_EXCHANGES_PER_HOUR = 5
 ANSWERED_KEPT = 500
+REPLY_MAX = 20000
 NOTICE_ROOM = 'Ops'
 FALLBACK = "I couldn't answer this one. My owner can check the watcher log on this machine."
 TIMEOUT_NOTE = 'This took longer than my time limit, so I stopped. Try a smaller request.'
@@ -39,13 +40,14 @@ def build_prompt(room, mention, ship, mode):
             f'\n\nThe last message, from {describe(author)}, mentions you (@{ship}). {task}\n')
 
 
-def format_reply(result):
-    if not result.branch:
-        return result.reply
-    lines = [result.reply, '', f'Branch `{result.branch}`, commit {result.commit[:9]} (not pushed).']
-    if result.stat:
-        lines += ['', result.stat[-1500:]]
-    return '\n'.join(lines)
+def format_reply(result, footer=''):
+    lines = [result.reply]
+    if result.branch:
+        lines += ['', f'Branch `{result.branch}`, commit {result.commit[:9]} (not pushed).']
+        if result.stat:
+            lines += ['', result.stat[-1500:]]
+    text = '\n'.join(lines)
+    return text[:REPLY_MAX - len(footer) - 2] + '\n\n' + footer if footer else text
 
 
 class Watcher:
@@ -54,7 +56,7 @@ class Watcher:
         self.state_path, self.notices_command, self.resident, self.clock = state_path, notices_command, resident, clock
         self.state = read_json(state_path, {}) or {}
         for key, default in (('mention_seq', 0), ('failures', {}), ('answered', []), ('announced', []),
-                             ('ship_exchanges', {}), ('paused', []), ('rooms', {}), ('replies', {})):
+                             ('ship_exchanges', {}), ('paused', []), ('rooms', {}), ('replies', {}), ('tickets', {})):
             self.state.setdefault(key, default)
         self.me = None
 
@@ -89,18 +91,28 @@ class Watcher:
             return True, 0
         if author['kind'] == 'ship' and mid not in self.state['replies'] and not self._ship_budget(mention):
             return True, self._pause_note(mention)
-        owner = self.config.get('owner_id')
-        mode = 'build' if not self.resident and owner and author['kind'] == 'person' and author['id'] == owner else 'read'
         try:
             room = self.client.room(mention['room_id'])
             if any(m['author_id'] == self.me['id'] and m.get('client_message_id') == f'reply-{mid}' for m in room['messages']):
+                self._finish(mid)
                 self._remember(mid)
                 self.state['replies'].pop(mid, None)
                 self.save()
                 return True, 0
             reply = self.state['replies'].get(mid)  # a reply whose post failed is posted as it was, never re-run
             if reply is None:
-                reply = format_reply(self.runner.run(mode, build_prompt(room, mention, self.config['ship'], mode), mid))
+                try:
+                    ticket = self.client.ticket(mid)  # the station decides the mode now; no ticket, no run
+                except StationError as error:
+                    if error.status != 409:
+                        raise
+                    log.warning('mention %s: its ticket is finished but no reply is in the room', mid)
+                    return True, self._reply(mention['room_id'], mid, FALLBACK)
+                self.state['tickets'][mid] = ticket['id']
+                self.save()
+                mode = 'read' if self.resident or ticket.get('mode') != 'build' else 'build'  # never above the ticket
+                result = self.runner.run(mode, build_prompt(room, mention, self.config['ship'], mode), mid)
+                reply = format_reply(result, ticket.get('footer', '') if mode == 'build' else '')
         except RunTimeout as error:
             log.warning('mention %s timed out: %s', mid, error)
             reply = TIMEOUT_NOTE
@@ -119,18 +131,41 @@ class Watcher:
         # Stored before posting: if the post fails the run is not repeated (a build whose branch was kept cannot be).
         self.state['replies'][message_id] = body
         self.save()
-        posted = 0
+        posted, ticket_id = 0, self.state['tickets'].get(message_id)
         try:
-            self.client.post(room_id, body, f'reply-{message_id}')
+            self.client.post(room_id, body, f'reply-{message_id}', ticket_id)
             posted = 1
         except StationError as error:
             if error.status not in (403, 404, 409):
                 raise
-            log.warning('could not reply to %s: %s', message_id, error)
+            if error.status == 409 and ticket_id:
+                posted = self._post_unlabelled(room_id, message_id, body)
+            else:
+                log.warning('could not reply to %s: %s', message_id, error)
+        self._finish(message_id)
         self.state['replies'].pop(message_id, None)
         self._remember(message_id)
         self.save()
         return posted
+
+    def _post_unlabelled(self, room_id, message_id, body):
+        """The ticket can no longer label a reply (finished or expired): the reply still goes out, unlabelled."""
+        try:
+            self.client.post(room_id, body, f'reply-{message_id}')
+            return 1
+        except StationError as error:
+            if error.status not in (403, 404, 409):
+                raise
+            log.warning('could not reply to %s: %s', message_id, error)
+            return 0
+
+    def _finish(self, message_id):
+        ticket_id = self.state['tickets'].pop(message_id, None)
+        if ticket_id:
+            try:
+                self.client.finish_ticket(ticket_id)
+            except (StationError, OSError) as error:  # the station closes it after two hours anyway
+                log.warning('could not finish ticket %s: %s', ticket_id, redact(str(error)))
 
     def _ship_budget(self, mention):
         key, now = f'{mention["room_id"]}:{mention["author"]["id"]}', self.clock()
