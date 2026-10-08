@@ -16,6 +16,8 @@ and the station tools, hook, run prompt and web app show the station's label.
 **Tech Stack:** Python 3.11; FastAPI and SQLite in `peer/`; standard library only in `agent/`, with
 `superyak_team.teamlib` from `../team`; pytest; Playwright for the browser test.
 
+**Review:** a fresh reviewer agent approved this plan with changes (4 must-fix, 9 should-fix), all folded in.
+
 **Spec:** [`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`](../specs/2026-10-08-instruction-layers-and-grants-design.md),
 section 4 "Run tickets and loading instructions", and "Build order" step 1. Read both before Task 1. Steps 2 to 5
 (instructions, grants, charter, directs) are **not** in this plan. The tables carry their spec columns
@@ -26,13 +28,15 @@ their defaults.
 
 - **Base:** branch `run-tickets` in the worktree `/home/andy/superyak/.worktrees/run-tickets`. Before Task 1,
   rebase it onto `main` after `station-full-text` has merged: `git -C /home/andy/superyak/.worktrees/run-tickets rebase main`.
-  Tasks 3 and 4 use `fence_message`, `read_hint`, `plain_id` and `shown_id` from that branch's
-  `agent/superyak_agent/station.py`, and `_block` from its `mcp.py`. If that branch changes again before it merges,
+  Tasks 3 and 4 use `fence_message(member, body, limit, hint='')`, `read_hint(room_id, message_id, position=None)`,
+  `plain_id` and `shown_id` from that branch's `agent/superyak_agent/station.py`, and
+  `_block(room, members, m, chars, position)` from its `mcp.py`. If that branch changes again before it merges,
   check these names and signatures before Task 4.
   Never edit `/home/andy/superyak` itself (main; the live services run from it) before Task 6.
 - **Test commands.** Below, `CAP` means `systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0`.
   - Agent: `cd agent && CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider <files>`
   - Peer: `cd peer && CAP uv run --locked python -m pytest -q -p no:cacheprovider <files>`
+  - Never run `make check-peer` or `make check-agent` uncapped on the Pi; use the capped commands above.
   - After a temporary change to a source file, delete the `__pycache__` folders before re-running. Python can
     reuse stale bytecode when the file's size and modification second are unchanged.
 - **Decision rule (step 1 only).**
@@ -78,6 +82,7 @@ their defaults.
 - Create: `peer/superyak_peer/tickets.py`
 - Modify: `peer/superyak_peer/db.py` (import, `Store` bases, schema script)
 - Modify: `peer/superyak_peer/app.py` (`ship_member` dependency, two routes)
+- Modify: `peer/pyproject.toml` (the release inventories list every file)
 - Test: `peer/tests/test_tickets.py` (new)
 
 **Interfaces:**
@@ -317,15 +322,22 @@ After the `@app.delete('/api/ships/me/key')` route add:
         return store.finish_ticket(ship_member(request)['id'], key)
 ```
 
-- [ ] **Step 6: Run the tests and see them pass**
+- [ ] **Step 6: Add the new files to the release inventories** (`peer/pyproject.toml`)
 
-Run: `cd peer && CAP uv run --locked python -m pytest -q -p no:cacheprovider tests/test_tickets.py tests/test_ships.py tests/test_mentions.py`
-Expected: all pass. `test_ship_key_reaches_only_room_routes` still passes: none of its listed routes changed.
+The sdist and wheel list every file (`only-include`). In **both** lists, add `"superyak_peer/tickets.py",` on the line after
+`"superyak_peer/ships.py",`. In the sdist list, add `"tests/test_tickets.py",` on the line after `"tests/test_ships.py",`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Run the tests and see them pass**
+
+Run: `cd peer && CAP uv run --locked python -m pytest -q -p no:cacheprovider tests/test_tickets.py tests/test_ships.py tests/test_mentions.py tests/test_packaging.py`
+Expected: all pass. `test_ship_key_reaches_only_room_routes` still passes, because none of its listed routes changed.
+`test_packaging.py` builds the wheel from a fresh extraction, and it fails with `ModuleNotFoundError: superyak_peer.tickets`
+if Step 6 was missed.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add peer/superyak_peer/tickets.py peer/superyak_peer/db.py peer/superyak_peer/app.py peer/tests/test_tickets.py
+git add peer/superyak_peer/tickets.py peer/superyak_peer/db.py peer/superyak_peer/app.py peer/pyproject.toml peer/tests/test_tickets.py
 git commit -m "station: run tickets decide a run's mode just before it starts
 
 Step 1 of spec A: the owner's mention gets a build ticket, everyone else and
@@ -339,7 +351,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `peer/superyak_peer/tickets.py` (`_check_ticket_label`, `_sources`)
-- Modify: `peer/superyak_peer/chats.py` (`send_message` takes `ticket_id`; `get_room` adds `source`)
+- Modify: `peer/superyak_peer/chats.py` (`send_message` takes `ticket_id`; `get_room` adds `source`, and blanks it for remote rooms)
 - Modify: `peer/superyak_peer/app.py` (`chat_send` passes `ticket_id`)
 - Modify: `peer/API.md` (new section "Run tickets"; message shape)
 - Test: `peer/tests/test_tickets.py`
@@ -401,6 +413,16 @@ def test_a_ticket_labels_one_message_only_and_never_a_finished_or_foreign_one(en
     assert 'second' not in sources(clients[0], room) and 'too late' not in sources(clients[0], room)
 
 
+def test_a_remote_rooms_messages_never_carry_a_label(env, monkeypatch):
+    """A paired peer's payload is passed through for ':' rooms; a label in it must never reach a reader."""
+    app, clients, users, clock = env
+    store = app.state.store
+    forged = {'id': 'peer1:room1', 'title': 'Remote', 'messages': [
+        {'id': 'x', 'body': 'hi', 'source': {'kind': 'run', 'mode': 'build', 'basis': 'owner', 'root_name': 'Andy'}}]}
+    monkeypatch.setattr(type(store), 'remote_room', lambda self, actor, key: forged)
+    assert store.get_room(users[0]['id'], 'peer1:room1')['messages'][0]['source'] is None
+
+
 def test_a_reply_prefix_without_a_ticket_is_not_a_run(env):
     app, clients, users, clock, ship, serenity, room = setup(env)
     owner = say(clients[0], room, 'a', '@serenity add notes')
@@ -411,8 +433,8 @@ def test_a_reply_prefix_without_a_ticket_is_not_a_run(env):
 - [ ] **Step 2: Run the tests and see them fail**
 
 Run: `cd peer && CAP uv run --locked python -m pytest -q -p no:cacheprovider tests/test_tickets.py`
-Expected: the three new tests fail. Messages have no `source` key (KeyError), and `ticket_id` is ignored, so
-'second' is posted with 201.
+Expected: the four new tests fail. Messages have no `source` key (KeyError), `ticket_id` is ignored so 'second'
+is posted with 201, and the forged remote label comes back unchanged.
 
 - [ ] **Step 3: Add the label check and sources to `peer/superyak_peer/tickets.py`** (methods of `Tickets`)
 
@@ -483,6 +505,23 @@ In `get_room`, after the line `room['messages'] = [dict(r) for r in db.execute('
 
 Leave the `peer_messages` that follow without `source`. The browser and agents treat a missing key as null.
 
+At the top of `get_room`, replace the remote branch
+
+```python
+        if ":" in key:
+            return self.remote_room(actor, key)
+```
+
+with
+
+```python
+        if ":" in key:
+            room = self.remote_room(actor, key)
+            for message in room.get('messages', []):
+                message['source'] = None  # a paired peer's payload is passed through: a label in it is never ours
+            return room
+```
+
 - [ ] **Step 5: Pass `ticket_id` through in `peer/superyak_peer/app.py`**
 
 ```python
@@ -520,7 +559,11 @@ posting ship's, still running, for a message in this room, and has labelled noth
 refused with 409. Each message in `GET /api/chats/{id}` carries `source`:
 `{kind:"run", mode, basis, root_name, answering}` for a ticketed reply, `{kind:"post"}` for anything else a ship
 posts (including replies from watchers too old to use tickets), and `null` for people. Labels come only from
-tickets the station issued and checked, never from client message ids.
+tickets the station issued and checked, never from client message ids. Messages in remote rooms (ids with `:`) always
+have `source: null`, whatever the paired peer sent. Known limit: a ship's key is the ship. A session on the ship's
+machine that holds the key could ask for a ticket on its owner's mention and label its own post as that builder
+run. The watcher's reply then goes out unlabelled. This stays within one owner's machine; later steps record
+which session acted.
 ```
 
 - [ ] **Step 7: Run the peer suite**
@@ -599,16 +642,22 @@ In `__call__`, before the final `return 403, ...`, add:
             return ok(ticket)
 ```
 
-In the existing `POST .../messages` branch, replace its two lines with:
+In the existing `POST .../messages` branch, replace its two lines with the following. It mirrors the station's
+order: an identical repeat of a post returns the existing message before any ticket check, and a ticket must be for
+a message in this room.
 
 ```python
             if method == 'POST' and segments[3:] == ['messages']:
                 payload = json.loads(data)
                 ticket_id = payload.get('ticket_id')
+                existing = next((m for m in room['messages'] if m['author_id'] == me and m['client_message_id'] == payload['client_message_id']), None)
+                if existing is not None:
+                    return ok(existing, 201) if existing['body'] == payload['body'] else (409, b'{"error": "Message ID already used with different text"}')
                 if ticket_id is not None:
                     ticket = self.tickets.get(ticket_id)
-                    if (ticket is None or ticket['ship_id'] != me or ticket['status'] != 'running' or ticket_id in self.sources.values()
-                            or ticket_id in self.label_refusals):
+                    ticket_room = next((r['id'] for r in self.rooms.values() for m in r['messages'] if ticket and m['id'] == ticket['message_id']), None)
+                    if (ticket is None or ticket['ship_id'] != me or ticket['status'] != 'running' or ticket_room != room['id']
+                            or ticket_id in self.sources.values() or ticket_id in self.label_refusals):
                         return 409, b'{"error": "This ticket cannot label a message here"}'
                 message = self.say(room['id'], self.users[me], payload['body'], payload['client_message_id'])
                 if message is None:
@@ -682,6 +731,13 @@ def test_a_reply_whose_ticket_can_no_longer_label_is_posted_unlabelled(station, 
     fake.label_refusals.add('t1')
     assert watcher(fake, ship_config, tmp_path, FakeRunner()).cycle() == 1
     assert bodies(fake, room)[-1].startswith('Added notes') and fake.sources == {}
+    assert fake.tickets['t1']['status'] == 'finished'
+
+
+def test_a_long_build_reply_keeps_its_footer():
+    from superyak_agent.watch import format_reply
+    text = format_reply(RunResult('x' * 25000), 'Builder for Andy (owner)')
+    assert len(text) <= 20000 and text.endswith('\n\nBuilder for Andy (owner)')
 
 
 def test_a_resident_reads_even_if_a_ticket_said_build(station, ship_config, tmp_path):
@@ -702,8 +758,9 @@ file's existing `watcher(...)` and `bodies(...)` helpers. If `bodies` doesn't ex
 - [ ] **Step 3: Run the tests and see them fail**
 
 Run: `cd agent && CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_watch.py`
-Expected: the seven new tests fail. The watcher still decides the mode locally, never calls the ticket route,
-and posts without `ticket_id`.
+Expected: seven of the eight new tests fail. The watcher still decides the mode locally, never calls the ticket
+route, posts without `ticket_id`, and `format_reply` takes no footer.
+`test_a_resident_reads_even_if_a_ticket_said_build` already passes: it guards behaviour that must not change.
 
 - [ ] **Step 4: Add the client methods** (`agent/superyak_agent/station.py`, in `StationClient`)
 
@@ -742,7 +799,7 @@ def format_reply(result, footer=''):
 In `Watcher.__init__`, add `('tickets', {})` to the tuple of state defaults.
 
 Replace the body of `_handle` from `owner = self.config.get('owner_id')` down to just before
-`self.state['failures'].pop(mid, None)` with:
+`except RunTimeout as error:` with:
 
 ```python
         try:
@@ -770,6 +827,20 @@ Replace the body of `_handle` from `owner = self.config.get('owner_id')` down to
 ```
 
 Keep the existing `except RunTimeout` and `except Exception` blocks, and the final two lines, unchanged.
+
+Add `REPLY_MAX = 20000` beside the other constants. The footer must survive `_reply`'s cut, so `format_reply` caps
+the text before adding the footer (replace the version above with this one):
+
+```python
+def format_reply(result, footer=''):
+    lines = [result.reply]
+    if result.branch:
+        lines += ['', f'Branch `{result.branch}`, commit {result.commit[:9]} (not pushed).']
+        if result.stat:
+            lines += ['', result.stat[-1500:]]
+    text = '\n'.join(lines)
+    return text[:REPLY_MAX - len(footer) - 2] + '\n\n' + footer if footer else text
+```
 
 Replace `_reply` and add `_finish`:
 
@@ -816,9 +887,19 @@ Replace `_reply` and add `_finish`:
                 log.warning('could not finish ticket %s: %s', ticket_id, redact(str(error)))
 ```
 
-- [ ] **Step 6: Run the agent suite**
+- [ ] **Step 6: Update the real-station watcher test, then run the agent suite and it**
+
+In `peer/tests/test_ship_agent.py`, `test_watcher_answers_owner_as_builder_and_others_read_only_through_the_real_station`
+compares exact reply bodies, and the build reply now carries the footer. Change
+`assert [m['body'] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']`
+to:
+
+```python
+    assert [m['body'].split('\n')[0] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']
+```
 
 Run: `cd agent && CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
+and `cd peer && CAP uv run --locked python -m pytest -q -p no:cacheprovider tests/test_ship_agent.py`
 Expected: all pass. Existing watcher tests pass unchanged, because the fake station's ticket rule is today's rule.
 If an existing test asserts an exact reply body for a build, it now needs the footer. Update that expected string
 to end with `'\n\nBuilder for Andy (owner)'`; that is the only acceptable change to existing tests.
@@ -826,7 +907,7 @@ to end with `'\n\nBuilder for Andy (owner)'`; that is the only acceptable change
 - [ ] **Step 7: Commit**
 
 ```bash
-git add agent/superyak_agent/station.py agent/superyak_agent/watch.py agent/tests/conftest.py agent/tests/test_watch.py
+git add agent/superyak_agent/station.py agent/superyak_agent/watch.py agent/tests/conftest.py agent/tests/test_watch.py peer/tests/test_ship_agent.py
 git commit -m "agent: the watcher runs only on the station's ticket
 
 No ticket, no run: the mode comes from the station and never rises above it;
@@ -976,10 +1057,10 @@ def fence_message(member, body, limit, hint='', source=''):
 `agent/superyak_agent/mcp.py`: replace `_block` (from `station-full-text`) with
 
 ```python
-def _block(room, members, m, chars):
+def _block(room, members, m, chars, position):
     src = source_label(m)
     return (f'message {shown_id(m["id"])}' + (f' ({src})' if src else '') + '\n' +
-            fence_message(members.get(m['author_id']), m['body'], chars, read_hint(room['id'], m['id'])))
+            fence_message(members.get(m['author_id']), m['body'], chars, read_hint(room['id'], m['id'], position)))
 ```
 
 and import `source_label` from `.station`.
@@ -1061,14 +1142,6 @@ At the end of `test_watcher_answers_owner_as_builder_and_others_read_only_throug
         assert [r['status'] for r in db.execute('SELECT status FROM tickets ORDER BY created')] == ['finished', 'finished']
 ```
 
-Change the earlier assertion
-`assert [m['body'] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']`
-to:
-
-```python
-    assert [m['body'].split('\n')[0] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']
-```
-
 Run: `cd peer && CAP uv run --locked python -m pytest -q -p no:cacheprovider tests/test_ship_agent.py`
 Expected: all pass.
 
@@ -1091,7 +1164,8 @@ anything else a ship posts.
 In the spec's "Source labels" paragraph, replace `` `{kind: "session"}` for other ship posts `` with
 `` `{kind: "post"}` for other ship posts (Odo's notices, the wormhole's relays, sessions, and replies from
 watchers too old to use tickets) ``. In Testing item 4, replace "is labelled `session`" with
-"is labelled `post`".
+"is labelled `post`". In "Error handling", replace "A ticket left `running` expires after
+30 minutes." with "A ticket left `running` counts as finished after 2 hours."
 
 - [ ] **Step 4: Commit**
 
@@ -1105,34 +1179,69 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 6: Review, merge and deploy on the Pi (interim rule)
 
 This task is a procedure, not code. It runs only after a fresh reviewer agent has approved the whole branch in
-the room.
+the room. The new tables are additive, and older code ignores them, so a rollback keeps the database. The backup is
+for corruption only.
 
-- [ ] **Step 1: Back up the live database**
+- [ ] **Step 1: Back up the live database** (SQLite's online backup, safe while the station runs)
 
 ```bash
 mkdir -p ~/.local/share/superyak/backups
 python3 -c "import sqlite3,time; s=sqlite3.connect('/home/andy/.local/share/superyak/lighthouse/peer.sqlite3'); d=sqlite3.connect(f'/home/andy/.local/share/superyak/backups/peer-{time.strftime(\"%Y%m%d-%H%M%S\")}.sqlite3'); s.backup(d); d.close(); s.close()"
 ```
 
-- [ ] **Step 2: Merge, run both suites on main, push**
+- [ ] **Step 2: Run both suites in the worktree, capped**
 
 ```bash
-cd /home/andy/superyak && git merge --no-ff run-tickets -m "Merge run-tickets: spec A step 1 ..." && make check-peer && make check-agent && git push origin main
+cd /home/andy/superyak/.worktrees/run-tickets/agent && CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider
+cd /home/andy/superyak/.worktrees/run-tickets/peer && CAP uv run --locked python -m pytest -q -p no:cacheprovider
 ```
 
-- [ ] **Step 3: Restart the station first, then the watchers**
+- [ ] **Step 3: Merge into main locally. Don't push yet.**
 
 ```bash
-systemctl --user restart superyak-lighthouse && sleep 3
+cd /home/andy/superyak && git merge --no-ff run-tickets -m "Merge run-tickets: spec A step 1, the station decides each run
+
+Approved by a fresh reviewer agent in Superyak: city of AI. Merged under Andy's
+interim rule.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 4: Restart the station, then the door, then the watchers**
+
+```bash
+systemctl --user restart superyak-lighthouse && sleep 3 && systemctl --user restart superyak-door
 systemctl --user restart superyak-ship superyak-odo superyak-wormhole
 systemctl --user is-active superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole
 ```
 
-Expected: five lines reading `active`. If any check fails, run `git revert -m 1 HEAD`, restore the backup by
-copying it over `peer.sqlite3` while the lighthouse is stopped, restart, and report in the room.
+Expected: five lines reading `active`.
 
-- [ ] **Step 4: Live check with this ship's key**
+- [ ] **Step 5: Live check with this ship's key.** The key stays in the config file and never appears on a command line.
 
-Post a message as `rio-grande` that mentions nobody. Ask for a ticket for it with this ship's key: expect
-`read`/`none`. Post a reply with that ticket, then read the room: the reply's `source` is
-`{kind: "run", mode: "read", …}`. Finish the ticket. Announce the merge and the result in "Superyak: city of AI".
+```bash
+cd /home/andy/superyak/agent && python3 - <<'EOF'
+import sys; sys.path[:0] = ['/home/andy/superyak/agent', '/home/andy/superyak/team']
+from pathlib import Path
+from superyak_agent.station import client_for, load_config
+c = client_for(load_config(Path.home() / '.superyak/station.json'))
+room = '39fd790491fc42e78d974764428926a1'
+probe = c.post(room, 'Rio Grande: live check of run tickets (this mentions no one).', 'post-ticket-check-1')
+t = c.ticket(probe['id'])
+assert (t['mode'], t['basis']) == ('read', 'none'), t
+reply = c.post(room, 'Rio Grande: this reply is labelled by its ticket.', 'reply-ticket-check-1', t['id'])
+c.finish_ticket(t['id'])
+src = next(m for m in c.room(room)['messages'] if m['id'] == reply['id'])['source']
+assert src['kind'] == 'run' and src['mode'] == 'read', src
+print('live check ok', src)
+EOF
+```
+
+- [ ] **Step 6: Push or roll back**
+
+If Steps 4 and 5 passed: `git -C /home/andy/superyak push origin main`, then announce the merge and the live check
+in "Superyak: city of AI".
+
+If anything failed: `git -C /home/andy/superyak reset --hard ORIG_HEAD` (nothing was pushed). Then restart
+`superyak-lighthouse`, `superyak-door`, `superyak-ship`, `superyak-odo` and `superyak-wormhole` in that order, check that
+all five are active, keep the database as it is, and report what failed in the room.
