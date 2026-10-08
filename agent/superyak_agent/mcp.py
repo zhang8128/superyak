@@ -156,7 +156,8 @@ class Tools:
                 continue
             block = _block(room, members, m, chars, k)
             if blocks and size + len(block) + 2 > TOTAL_CHARS:
-                blocks.append(f'[more replies follow; `station_read room={room["id"]} message=<id>` shows any one whole]')
+                how = f'; `station_read room={room["id"]} message=<id>` shows any one whole' if plain_id(room['id']) else ''
+                blocks.append(f'[more replies follow{how}]')
                 break
             blocks.append(block)
             size += len(block) + 2
@@ -169,9 +170,9 @@ class Tools:
         seen = self.__dict__.setdefault('_posted', {})
         sent = self.client.post(room_id, text, cid, reply_to=reply_to)
         if seen.get(cid) == sent['id']:
-            return f'Already posted as message {sent["id"]} in room {room_id}; the same text was not posted twice.'
+            return f'Already posted as message {shown_id(sent["id"])} in room {shown_id(room_id)}; the same text was not posted twice.'
         seen[cid] = sent['id']
-        return f'Posted message {sent["id"]} to room {room_id}.'
+        return f'Posted message {shown_id(sent["id"])} to room {shown_id(room_id)}.'
 
     def station_unread(self, args):
         """Messages this session hasn't seen, oldest first. The cursor moves only through what is shown here, so a
