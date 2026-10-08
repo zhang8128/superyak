@@ -1,6 +1,50 @@
 # Resume here — medical lighthouse / aDNA
 
-**The wormhole to Stanley's aDNA lattice, live October 4 (current):** Andy approved and `main` was
+**City of AI: Superyak run by its agents, October 8 (current):** Andy told the Pi's Claude Code session (ship
+`rio-grande`, workspace `~/superyak`) to take ownership of Superyak and build more helpful tools. Framing and
+instructions come through the station room "Superyak: city of AI" (39fd79; andy, rio-grande, serenity). Serenity (the
+Mac) coordinates between Superyak and the Bricks lead and proposes; Andy decides. Superyak is the proof of concept for a
+city of AI that runs with very little human involvement.
+
+- **Andy's decisions** (Q1, Q2, D1–D7 are in spec A's table; D8 and D9 are recorded only in the room)
+  (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`):
+  - Q1, Q2 and D1: only people sign instructions, "agents grant agents", and text never carries authority.
+  - D2, "law only": people sign the charter and instructions; merging, deploying and admitting become agent work under
+    the charter.
+  - D3, the interim rule until the charter exists: a branch merges to main and main is pushed when a reviewer approves
+    it in the room (another ship, or per D4 a fresh reviewer agent) and its suites pass on the Pi. The merger restarts the affected
+    services, checks them, and reverts on failure.
+  - D4 and D5: a fresh reviewer agent reviews this ship's branches, safety code included.
+  - D6: a fresh reviewer agent approved spec A. D8 (room only) extends that to every Superyak spec; Bricks
+    production, Guyana data and other people's repositories stay with a person.
+  - D9 (room only): browser-lane workers run only while every localhost listener on the Mac is on Andy's approved
+    list, rechecked every turn.
+  - D7: one ship per team or role, and every act records a session label.
+- **Live on main and the Pi:**
+  - station-full-text (8f63287): agents see where a message or room was cut, and each note names the exact
+    call (`station_read` with `message=`, `start=`, `after=`, `oldest=true` or `at=`; `station_mentions after=`).
+  - Quoted names don't wake ships, and the wormhole applies the same rule (a21b20d, 5efefdf).
+  - Run tickets, spec A step 1 (8e81016): the station decides each run's mode and labels replies by source.
+  - DB backup: `~/.local/share/superyak/backups/peer-20261008-131613-pre-tickets.sqlite3`. A ship must roll back with
+    the station.
+- **In flight:**
+  - Serenity's `station-key-refusal` is merged and live (9c6b1b8).
+  - Per the room: Serenity is building the `station-inbox` branch (on origin): per-session unread state and a way to
+    wait.
+  - Browser lane for team-mode workers (branch `browser-lane`): the spec needs changes after its review. The Mac spike
+    (`team/scripts/lane_spike.py` on origin/browser-lane) ran once on the Mac (per the room); spike 2 (Chrome's profile
+    lock) waits for Serenity.
+- **Next:**
+  - Spec A step 2, instruction layers. Its plan follows the run-tickets pattern: fresh implementer, task reviewer and
+    final reviewer, under subagent-driven development.
+  - A room brief that carries into linked rooms. It's needed before `serenity-bricks` joins the room (D7).
+  - Spec B: reviews, merging, deploying and admitting under the charter. Per Serenity, it names each repo and
+    environment with its own terms, and a live institution's arrangement is governance.
+- **Parked for spec step 3/5:** the station gives a build ticket for any owner mention, however old. It must refuse old
+  or already-answered messages once acts spend build tickets. The Mac and the Legion Go show "no run ticket" until they
+  pull main and restart `superyak-ship`.
+
+**The wormhole to Stanley's aDNA lattice, live October 4 (earlier; still live, see City of AI above for the newest state):** Andy approved and `main` was
 fast-forwarded to the `wormhole` branch (spec `docs/superpowers/specs/2026-10-04-wormhole-bridge-design.md`,
 plan `docs/superpowers/plans/2026-10-04-wormhole-bridge.md`; read `agent/README.md` → The wormhole). A
 deterministic bridge (no model) relays `@persona` mentions in Andy's bridged rooms to memos in the shared vault
@@ -27,7 +71,7 @@ deterministic bridge (no model) relays `@persona` mentions in Andy's bridged roo
   for memos from a replaced room wait; per-file state saves grow with the inbox; other owners' rooms are fetched
   every cycle.
 
-**Deep Space 9 station live on the smart Pi, October 3 (current):** Andy approved and
+**Deep Space 9 station live on the smart Pi, October 3 (earlier; still live, see City of AI above):** Andy approved and
 `main` was fast-forwarded to the `ds9-station` branch (spec
 `docs/superpowers/specs/2026-10-03-ds9-station-design.md`, plan
 `docs/superpowers/plans/2026-10-03-ds9-station.md`). The lighthouse is now the station where
@@ -60,7 +104,7 @@ owner, read-only for everyone else). Read `agent/README.md` and `peer/README.md`
 - Known pre-existing quirk: two team tests write `~/.superyak/team/teams/t1/workers/kaylee/` in
   the real home.
 
-**Engram memory stability, October 2 (current):** PR #5 merged `engram-store-reader`
+**Engram memory stability, October 2 (earlier):** PR #5 merged `engram-store-reader`
 into `main` (store reader, calibration, store identity, path signatures, lighthouse
 sheaf, shared embedder, test memory fix). Three out-of-memory crashes on Oct 1–2
 came from Engram's startup embedding (16 GB), parallel Lanternhaven Godot runs, and
@@ -87,7 +131,7 @@ each with `systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0`.
   `engram/docs/superpowers/specs/` (2026-09-29 inheritance reading, 2026-09-30
   reading decay).
 
-**Stanley first super admin, September 14 (current):** Kairos requested
+**Stanley first super admin, September 14 (earlier):** Kairos requested
 `[address removed]` as the first super admin, able to grant rights
 to others. The current loopback peer at **http://127.0.0.1:7435** now serves the
 reviewed installed wheel from `.worktrees/stanley-admin/.engram/stanley-admin/`,
@@ -129,7 +173,7 @@ Its accessible text export is retained privately as `mg-target-inventory.txt`
 with `document-receipt.json`. It is a source snapshot, not validated research,
 a patient case record, an automatic live import, or a training grant.
 
-**Hackathon dashboard expanded, September 13 (current):** The live password-free
+**Hackathon dashboard expanded, September 13 (earlier):** The live password-free
 home remains **http://127.0.0.1:7435**, now PID `10555` at verification. It serves
 an installed reviewed wheel from
 `.worktrees/hackathon-dashboard/.engram/hackathon-dashboard/`; `runtime.json`
@@ -160,7 +204,7 @@ retained alongside the live verification. Runtime/static inventories now include
 from the standalone artifact. The local `progress.json` records the final commit
 and CI result as integration completes. Preserve this worktree and all evidence.
 
-**Local demo model and research sources, September 13 (current):** Kairos chose
+**Local demo model and research sources, September 13 (earlier):** Kairos chose
 Stanley's HauhauCS Gemma4 Uncensored Balanced variant for the live demo, external
 research feeds/publications as the first source lane, and source-grounded research
 and evidence review as the first adapter objective. Stampede3 access details are
@@ -189,7 +233,7 @@ papers, gold-label creation or training occurred. Full supervision still needs
 reviewed answers and source-use grants. PMC's August 2026 dataset migration is
 material: use current AWS article objects, not the retired OA package service.
 
-**Clinical/biotech tuning implementation, September 13 (current):** User approved
+**Clinical/biotech tuning implementation, September 13 (earlier):** User approved
 implementation and explicitly selected the HauhauCS uncensored Balanced variant.
 `tuning/` supports identifiable clinical and confidential biotech data with
 separate local/shared training and adapter-publication grants. Read
@@ -228,7 +272,7 @@ status as synchronization completes. Preserve these receipts and the worktree. T
 Dated candidate-only statements and “no weights downloaded” below are superseded
 by this update. Retain the worktree and evidence; use Git for integration status.
 
-**Model-tuning research plan, September 13 (latest):** The
+**Model-tuning research plan, September 13 (earlier):** The
 [Stampede3 LoRA plan](docs/reports/2026-09-13-stampede3-model-tuning-plan.md)
 proposes official Gemma 4 12B Unified BF16 LoRA alongside a 26B-A4B BF16
 attention-adapter lane, with 31B as a larger reference and E4B for smaller peers.
@@ -242,7 +286,7 @@ examined here require CUDA. This is a research/design artifact, not an executed
 training campaign. No model weights were downloaded, model generated, remote
 job submitted, or application/research/model/MCP service changed.
 
-**Backend data-source management, September 13 (latest):** The peer now has an
+**Backend data-source management, September 13 (earlier):** The peer now has an
 account-owned source registry at `/api/data-sources`, with versioned names and
 descriptions, pause/resume, item listings, and success/failure import receipts.
 Sources register owned uploaded files or selected-source documents. Successful
@@ -270,7 +314,7 @@ and CI result when integration finishes. Preserve the original demo state and
 all prior evidence. Only the peer demo was reloaded; no external source fetch,
 model generation, research-worker restart, or MCP-server restart occurred.
 
-**Password-free local demo, September 13 (latest):** `make home-demo` now uses
+**Password-free local demo, September 13 (earlier):** `make home-demo` now uses
 `serve --local-demo`: fresh visits open the patient home, the account menu switches
 between the four seeded dashboards, and expired demo sessions renew without a
 password. An optional password form remains available for invited accounts.
@@ -296,7 +340,7 @@ the maintainer's U.S. provenance is unverified. This is a candidate, not an
 installed or measured replacement. The demo still uses the existing pinned
 `gemma4:31b`; ask/read current user steering before treating the variant as chosen.
 
-**Peer home reviewed and integrated, September 12 (latest):** The reviewed
+**Peer home reviewed and integrated, September 12 (earlier):** The reviewed
 implementation through `7222037a32b3b2fbbbe2823cff549127c15b4c66` is merged into local
 `main`. All required final findings are addressed. The existing user demo now
 serves the reviewed candidate-9 wheel at **http://127.0.0.1:7435**; a fresh Chromium

@@ -281,6 +281,9 @@ federated member's reply), or 400. Federated rooms take no `reply_to`. A retry m
 body and `reply_to`; a different one returns 409. Body maximum
 20,000 characters; client ID maximum 100. Idempotency key is room+author+client ID;
 repeating the same body returns the same message, changing it returns 409.
+A body that carries a live ship key (any standalone 43-character URL-safe token whose hash matches an
+unrevoked key) is refused with 422 before anything is stored or sent to another peer, and the error never repeats
+the key. Revoked keys and lookalikes post normally.
 Removing a member immediately revokes their hosted access and increments the
 room epoch. Old queued deliveries fail the documented epoch recheck. No old
 plaintext copies are claimed to be erased.
