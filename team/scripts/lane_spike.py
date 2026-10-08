@@ -98,7 +98,7 @@ def user_allowlists():
     return found
 
 
-def lane_settings(work, lane, playwright):
+def lane_settings(work, lane, playwright, variant='base', allow_read=()):
     settings = workers.claude_sandbox_settings(work, 'build', repo=work)
     sandbox, fs = settings['sandbox'], settings['sandbox']['filesystem']
     # Claude Code points a sandboxed command's TMPDIR at <CLAUDE_CODE_TMPDIR>/claude-<uid> (seen in the Linux dry run);
@@ -106,26 +106,41 @@ def lane_settings(work, lane, playwright):
     sandbox['network'] = {'allowedDomains': [], 'strictAllowlist': True, 'allowLocalBinding': True,
                           'allowUnixSockets': [str(lane / 'tmp')]}
     fs['allowWrite'] = sorted(set(fs['allowWrite']) | {str(lane)})
-    fs['allowRead'] = sorted(set(fs['allowRead']) | {str(lane)} | ({str(Path(playwright).resolve().parent)} if playwright else set()))
+    fs['allowRead'] = sorted(set(fs['allowRead']) | {str(lane)} | ({str(Path(playwright).resolve().parent)} if playwright else set())
+                             | {str(Path(p).expanduser().resolve()) for p in allow_read})
+    if variant == 'mach-star':  # diagnosis only: if Chrome starts with every Mach service allowed, the wall is a Mach lookup
+        sandbox['network']['allowMachLookup'] = ['*']
     return settings
 
 
-def sandbox_denials():
+def denial_stream():
+    """Sandbox denials as they happen (macOS): `log show` after the fact caught nothing in spikes 1 and 2."""
     if platform.system() != 'Darwin':
-        return ['(denial log is collected on macOS only)']
+        return None
     try:
-        out = subprocess.run(['log', 'show', '--last', '10m', '--style', 'compact', '--predicate',
-                              'eventMessage CONTAINS[c] "deny" AND eventMessage CONTAINS[c] "Sandbox"'],
-                             capture_output=True, text=True, timeout=120).stdout
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return [f'(log show failed: {error})']
+        return subprocess.Popen(['log', 'stream', '--style', 'compact', '--predicate',
+                                 'eventMessage CONTAINS "Sandbox:" OR subsystem == "com.apple.sandbox.reporting"'],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+
+
+def stop_stream(stream):
+    if stream is None:
+        return ['(denials are streamed on macOS only)']
+    stream.terminate()
+    try:
+        out, _ = stream.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        stream.kill()
+        out, _ = stream.communicate()
     seen = []
     for line in out.splitlines():
         found = re.search(r'deny\(\d+\) (\S+) (.*)$', line)
         key = f'{found.group(1)} {found.group(2)[:160]}' if found else line[-200:]
-        if key not in seen:
+        if 'deny' in line and key not in seen:
             seen.append(key)
-    return seen[:80] or ['(no sandbox denials logged)']
+    return seen
 
 
 def listeners():
@@ -148,11 +163,13 @@ def judge(expect, code):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--playwright', help='path to a playwright (or playwright-core) package folder, e.g. <repo>/node_modules/playwright')
-    parser.add_argument('--channel', default='chrome', help="Playwright browser channel (default chrome; 'chromium' for the bundled one)")
     parser.add_argument('--socket', action='append', default=[], help='a Unix socket the lane must NOT reach (repeatable)')
     parser.add_argument('--model', default='haiku')
     parser.add_argument('--keep', action='store_true', help='keep the lane folder for inspection')
     parser.add_argument('--baseline', action='store_true', help='also run the probes outside the sandbox, for comparison')
+    parser.add_argument('--variant', action='append', choices=['base', 'mach-star'], help='sandbox variants to run (default: base)')
+    parser.add_argument('--channels', default='chrome', help="browser channels to probe, e.g. 'chrome chromium'")
+    parser.add_argument('--allow-read', action='append', default=[], help='an extra folder the lane may read (e.g. ~/Library/Caches/ms-playwright)')
     args = parser.parse_args()
 
     version, text = claude_version()
@@ -164,52 +181,57 @@ def main():
     work = lane / 'work'
     for name in ('lane_probe.sh', 'lane_chrome_probe.js'):
         shutil.copy(HERE / name, work / name)
-    settings = lane_settings(work, lane, args.playwright)
-    (lane / 'settings.json').write_text(json.dumps(settings, indent=1))
     srv = canary()
     sockets = [s for s in args.socket + [os.environ.get('SSH_AUTH_SOCK', '')] if s]
     env = {k: v for k, v in os.environ.items() if k not in DROP_ENV}
-    env.update(CLAUDE_CODE_TMPDIR=str(lane / 'tmp'), npm_config_cache=str(lane / 'npm-cache'), SUPERYAK_BROWSER_LANE='1',
-               SPIKE_CANARY_PORT=str(srv.getsockname()[1]), SPIKE_SOCKETS=' '.join(dict.fromkeys(sockets)),
-               SPIKE_CHANNEL=args.channel, SPIKE_CHROME_SCRIPT=str(work / 'lane_chrome_probe.js'), SPIKE_LOG=str(work / 'chrome-debug.log'))
+    # MAC_CHROMIUM_TMPDIR: Chromium on macOS makes its singleton socket under the user temp folder (spike 2), not TMPDIR.
+    env.update(CLAUDE_CODE_TMPDIR=str(lane / 'tmp'), MAC_CHROMIUM_TMPDIR=str(lane / 'tmp'), npm_config_cache=str(lane / 'npm-cache'),
+               SUPERYAK_BROWSER_LANE='1', SPIKE_CANARY_PORT=str(srv.getsockname()[1]), SPIKE_SOCKETS=' '.join(dict.fromkeys(sockets)),
+               SPIKE_CHANNELS=args.channels, SPIKE_CHROME_SCRIPT=str(work / 'lane_chrome_probe.js'), SPIKE_LOG=str(work / 'chrome-debug.log'))
     if args.playwright:
         env['SPIKE_PLAYWRIGHT'] = str(Path(args.playwright).resolve())
-    print(f'lane: {lane}  (settings: {lane / "settings.json"})')
+    print(f'lane: {lane}')
 
     if args.baseline:
         print('\n== baseline, outside the sandbox ==')
         print(subprocess.run(['bash', str(work / 'lane_probe.sh')], cwd=work, env=env, capture_output=True, text=True, timeout=600).stdout)
 
-    prompt = (f'Run exactly this one Bash command, once: bash {work / "lane_probe.sh"}\n'
-              'Then reply with only its output, unchanged. Do not run anything else.')
-    cmd = ['claude', '-p', prompt, '--output-format', 'text', '--model', args.model, '--permission-mode', 'dontAsk',
-           '--settings', str(lane / 'settings.json')]
     try:
-        result = subprocess.run(cmd, cwd=work, env=env, capture_output=True, text=True, timeout=900)
-        output = result.stdout
-    except subprocess.TimeoutExpired:
-        output = '(claude -p timed out)'
+        for variant in args.variant or ['base']:
+            settings = lane_settings(work, lane, args.playwright, variant, args.allow_read)
+            (lane / f'settings-{variant}.json').write_text(json.dumps(settings, indent=1))
+            stream = denial_stream()
+            prompt = (f'Run exactly this one Bash command, once: bash {work / "lane_probe.sh"}\n'
+                      'Then reply with only its output, unchanged. Do not run anything else.')
+            cmd = ['claude', '-p', prompt, '--output-format', 'text', '--model', args.model, '--permission-mode', 'dontAsk',
+                   '--settings', str(lane / f'settings-{variant}.json')]
+            try:
+                output = subprocess.run(cmd, cwd=work, env=env, capture_output=True, text=True, timeout=900).stdout
+            except subprocess.TimeoutExpired:
+                output = '(claude -p timed out)'
+            denials = stop_stream(stream)
+            print(f'\n== inside the lane, variant {variant} ==')
+            rows = [line.split('\t', 3) for line in output.splitlines() if line.count('\t') >= 3]
+            for name, expect, code, detail in rows:
+                print(f'{judge(expect, code):5} {name:32} exit={code:3} {detail[:160]}')
+            if not rows:
+                print('(no probe lines: claude did not run the script)\n' + output[-2000:])
+            for channel in args.channels.split():
+                log = Path(f'{work / "chrome-debug.log"}.{channel}')
+                if log.exists():
+                    lines = log.read_text(errors='replace').splitlines()
+                    keep = [l for l in lines if re.search(r'(?i)singleton|denied|not permitted|EPERM|EACCES|sandbox|failed|error|fatal|mach|socket|lock|check', l)]
+                    print(f'\n-- Chrome debug log [{channel}], variant {variant}: {len(lines)} lines, {len(keep)} relevant (first 60) --')
+                    for line in keep[:60]:
+                        print(line[:300])
+                    log.unlink()
+            print(f'\n-- sandbox denials streamed during variant {variant} (unique, first 80) --')
+            for line in denials[:80] or ['(none captured)']:
+                print(line)
     finally:
         srv.close()
-
-    print('\n== inside the lane ==')
-    rows = [line.split('\t', 3) for line in output.splitlines() if line.count('\t') >= 3]
-    for name, expect, code, detail in rows:
-        print(f'{judge(expect, code):5} {name:28} exit={code:3} {detail[:160]}')
-    if not rows:
-        print('(no probe lines: claude did not run the script)\n' + output[-2000:])
-    log = work / 'chrome-debug.log'
-    if log.exists():
-        lines = log.read_text(errors='replace').splitlines()
-        keep = [l for l in lines if re.search(r'(?i)singleton|denied|not permitted|EPERM|EACCES|sandbox|failed|error|mach|socket|lock', l)]
-        print(f'\n== Chrome debug log: {len(lines)} lines, {len(keep)} that look relevant (first 80) ==')
-        for line in keep[:80]:
-            print(line[:300])
     print('\n== localhost listeners a lane worker could reach on macOS (decide on each) ==')
     for line in listeners():
-        print(line)
-    print('\n== sandbox denials (macOS log) ==')
-    for line in sandbox_denials():
         print(line)
     if args.keep:
         print(f'\nkept {lane}')

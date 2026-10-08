@@ -25,15 +25,15 @@ probe dns_lookup info "$NODE" -e "require('dns').lookup('example.com',(e,a)=>{co
 for sock in ${SPIKE_SOCKETS:-}; do
   probe "socket:$sock" fail "$NODE" -e "require('net').connect(process.argv[1]).on('connect',()=>process.exit(0)).on('error',e=>{console.log(e.code);process.exit(1)})" "$sock"
 done
-probe home_list fail ls "$HOME"
+# Private files under $HOME stay unreadable (the allowed tool folders, like ~/.local/bin, may show through).
+probe home_private_files fail sh -c 'for f in .bashrc .zshrc .profile .bash_history .zsh_history .ssh/config .ssh/known_hosts .superyak/station.json; do if head -c1 "$HOME/$f" >/dev/null 2>&1; then echo "readable: $f"; exit 0; fi; done; exit 1'
 probe npm_cache_write ok sh -c 'mkdir -p "$npm_config_cache" && touch "$npm_config_cache/spike" && echo "$npm_config_cache"'
 probe darwin_user_temp_dir info getconf DARWIN_USER_TEMP_DIR
 if [ -n "${SPIKE_PLAYWRIGHT:-}" ]; then
-  for sandbox in off on; do
-    probe "chrome_sandbox_$sandbox" "$([ $sandbox = off ] && echo ok || echo info)" "$NODE" "${SPIKE_CHROME_SCRIPT}" "$sandbox"
+  for channel in ${SPIKE_CHANNELS:-chrome}; do
+    probe "chrome[$channel]_sandbox_off" ok env SPIKE_CHANNEL="$channel" "$NODE" "${SPIKE_CHROME_SCRIPT}" off
+    # The same launch with Playwright's and Chrome's own logs, kept whole in a file the driver prints after the run.
+    probe "chrome[$channel]_debug_log" info sh -c 'SPIKE_CHANNEL="$2" DEBUG="pw:browser*" SPIKE_CHROME_DEBUG=1 "$0" "$1" off > "$SPIKE_LOG.$2" 2>&1; echo "exit $?"' "$NODE" "${SPIKE_CHROME_SCRIPT}" "$channel"
   done
-  probe chrome_persistent_profile info "$NODE" "${SPIKE_CHROME_SCRIPT}" off persistent
-  # The same launch with Playwright's and Chrome's own logs, kept whole in a file the driver prints after the run.
-  probe chrome_debug_log info sh -c 'DEBUG="pw:browser*" SPIKE_CHROME_DEBUG=1 "$0" "$1" off > "$SPIKE_LOG" 2>&1; echo "exit $?"' "$NODE" "${SPIKE_CHROME_SCRIPT}"
 fi
 echo "done"
