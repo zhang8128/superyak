@@ -89,6 +89,12 @@ class StationClient:
     def finish_ticket(self, ticket_id):
         return self.request('POST', f'/api/ships/me/tickets/{quote(ticket_id, safe="")}/finish', {})
 
+    def instructions(self):
+        return self.request('GET', '/api/ships/me/instructions')
+
+    def draft_instructions(self, title, body):
+        return self.request('POST', '/api/ships/me/drafts', {'title': title, 'body': body})
+
     def mentions(self, after=0):
         return self.request('GET', f'/api/mentions?after={int(after)}')
 

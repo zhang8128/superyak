@@ -119,10 +119,10 @@ class ClaudeRunner:
         self.limits = limits or LIMITS
         self.memory_cap = (sys.platform.startswith('linux') and shutil.which('systemd-run') is not None) if memory_cap is None else memory_cap
 
-    def _command(self, settings_path, limit=None):
+    def _command(self, settings_path, limit=None, instructions=''):
         command = [self.claude, '-p', '--output-format', 'text', '--permission-mode', 'dontAsk', '--no-session-persistence',
                    '--settings', str(settings_path), '--setting-sources', 'project,local', '--strict-mcp-config',
-                   '--append-system-prompt', self.persona]
+                   '--append-system-prompt', self.persona + '\n\n' + instructions if instructions else self.persona]
         if self.mcp_config:
             command += ['--mcp-config', str(self.mcp_config)]
         if self.model:
@@ -134,7 +134,7 @@ class ClaudeRunner:
             command = prefix + command
         return command
 
-    def _claude(self, mode, prompt, settings, cwd):
+    def _claude(self, mode, prompt, settings, cwd, instructions=''):
         self.run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         settings_path = self.run_dir / f'{mode}-settings.json'
         settings_path.write_text(json.dumps(settings))
@@ -142,7 +142,7 @@ class ClaudeRunner:
         # Its own session, so a timeout can end the shells and background jobs claude started, not just claude.
         # SUPERYAK_RUN tells the person's station hook (installed at user scope, which --setting-sources already
         # leaves out of these runs) to stay quiet, so a run never reads messages or moves the person's cursor.
-        proc = subprocess.Popen(self._command(settings_path, limit), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(self._command(settings_path, limit, instructions), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, cwd=str(cwd), start_new_session=True,
                                 env=dict(os.environ, SUPERYAK_RUN='1'))
         try:
@@ -158,11 +158,11 @@ class ClaudeRunner:
             raise RuntimeError(f'claude exited {proc.returncode}: {redact(stderr.strip()[:500])}')
         return reply
 
-    def run(self, mode, prompt, message_id):
+    def run(self, mode, prompt, message_id, instructions=''):
         if mode == 'read':
             with self._snapshot(message_id) as folder:
-                return RunResult(self._claude('read', prompt, read_only_settings(folder, self.read_paths), folder))
-        return self._build(prompt, message_id)
+                return RunResult(self._claude('read', prompt, read_only_settings(folder, self.read_paths), folder, instructions))
+        return self._build(prompt, message_id, instructions)
 
     def _is_repo_root(self):
         top = workers.git(self.workspace, 'rev-parse', '--show-toplevel', check=False)
@@ -195,7 +195,7 @@ class ClaudeRunner:
         finally:
             workers.remove_worktree(self.workspace, path, None)
 
-    def _build(self, prompt, message_id):
+    def _build(self, prompt, message_id, instructions=''):
         branch = f'lighthouse/{self.ship}/{message_id}'
         path = Path.home() / '.superyak' / 'worktrees' / self.ship / message_id
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,7 +204,7 @@ class ClaudeRunner:
         # Recorded now, before the agent runs; later git calls never follow path/.git.
         gitdir = workers.git(path, 'rev-parse', '--absolute-git-dir').stdout.strip()
         try:
-            reply = self._claude('build', prompt, builder_settings(path, self.workspace), path)
+            reply = self._claude('build', prompt, builder_settings(path, self.workspace), path, instructions)
             sha = workers.commit_for_worker(path, self.ship, 'ship', reply.splitlines()[0][:200], gitdir)
             stat = workers.diff_stat(path, base, gitdir) if sha else ''
         except BaseException:

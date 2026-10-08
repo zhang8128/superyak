@@ -8,10 +8,11 @@ from superyak_agent.watch import FALLBACK, Watcher, build_prompt
 
 class FakeRunner:
     def __init__(self, error=None):
-        self.calls, self.error = [], error
+        self.calls, self.error, self.instructions = [], error, []
 
-    def run(self, mode, prompt, message_id):
+    def run(self, mode, prompt, message_id, instructions=''):
         self.calls.append((mode, message_id, prompt))
+        self.instructions.append(instructions)
         if self.error:
             raise self.error
         if mode == 'build':
@@ -392,3 +393,13 @@ def test_a_run_prompt_names_the_source_of_each_ship_message(station, ship_config
     view = fake.view(fake.rooms[room])
     mention = {'message_id': asked['id'], 'room_id': room, 'author': andy, 'body': asked['body']}
     assert 'Defiant (@defiant, ship), no run ticket' in build_prompt(view, mention, 'serenity', 'build')
+
+
+def test_a_run_gets_the_tickets_instructions(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    fake.say(room, andy, '@serenity fix it')
+    fake.blocks[serenity['id']] = 'PREAMBLE\n\n=== Instructions: X · revision 1 · signed by Andy on station abc ===\nRun tests.'
+    runner = FakeRunner()
+    watcher(fake, ship_config, tmp_path, runner).cycle()
+    assert runner.instructions == [fake.blocks[serenity['id']]]

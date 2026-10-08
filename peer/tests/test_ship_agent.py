@@ -111,20 +111,25 @@ def test_watcher_answers_owner_as_builder_and_others_read_only_through_the_real_
     app, clients, users, clock = env
     ship, key = docked_ship(app.state.store, users[0]['id'])
     room = clients[0].post('/api/chats', json={'title': 'Ops', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    layer = clients[0].post('/api/layers', json={'kind': 'instructions', 'title': 'House rules', 'body': 'Always run the tests.',
+                                                 'audience_users': [ship['id']]}).json()
+    assert clients[0].post(f'/api/layers/{layer["id"]}/activate', json={'version': layer['version']}).status_code == 200
     clients[0].post(f'/api/chats/{room}/messages', json={'client_message_id': 'a', 'body': '@serenity add a NOTES file'})
     clock[0] += 1  # the fake clock is frozen and message ids are random, so tick it to keep message order deterministic
     clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'b', 'body': 'Hey @Serenity, what does this repo do?'})
-    calls = []
+    calls, given = [], []
 
     class Runner:
-        def run(self, mode, prompt, message_id):
+        def run(self, mode, prompt, message_id, instructions=''):
             calls.append(mode)
+            given.append(instructions)
             clock[0] += 1
             return RunResult(f'{mode} reply')
     config = {'station': 'http://testserver', 'origin': None, 'ship': 'serenity', 'ship_id': ship['id'], 'ship_name': 'Serenity',
               'owner_id': users[0]['id'], 'key': key, 'workspace': str(tmp_path), 'machine': 'test-host'}
     watcher = Watcher(StationClient('http://testserver', key, transport=transport_for(app)), config, tmp_path / 'state.json', Runner())
     assert watcher.cycle() == 2 and calls == ['build', 'read']
+    assert len(given) == 2 and all('Always run the tests.' in text for text in given)
     assert [m['body'].split('\n')[0] for m in clients[0].get(f'/api/chats/{room}').json()['messages']][-2:] == ['build reply', 'read reply']
     assert watcher.cycle() == 0
     messages = clients[0].get(f'/api/chats/{room}').json()['messages']

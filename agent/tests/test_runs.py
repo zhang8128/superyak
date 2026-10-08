@@ -279,3 +279,12 @@ def test_builder_runs_do_not_get_extra_read_paths(repo, tmp_path, claude, monkey
     config = {'ship': 'serenity', 'ship_name': 'Serenity', 'owner_id': 'u-andy', 'workspace': str(repo), 'read_paths': [str(lattice)]}
     ClaudeRunner(config, tmp_path / 'runs', claude=script, memory_cap=False).run('build', 'Add notes', 'm2')
     assert not any(str(lattice.resolve()) in rule for rule in calls()[0]['settings']['permissions']['allow'])
+
+
+def test_instructions_follow_the_persona_in_one_system_prompt_argument(tmp_path):
+    runner = ClaudeRunner({'workspace': str(tmp_path), 'ship': 'serenity', 'owner_id': 'u1'}, tmp_path / 'runs', memory_cap=False)
+    plain = runner._command(tmp_path / 's.json')
+    assert plain[plain.index('--append-system-prompt') + 1] == runner.persona
+    command = runner._command(tmp_path / 's.json', instructions='=== Instructions: X ===\nRun tests.')
+    assert command[command.index('--append-system-prompt') + 1] == runner.persona + '\n\n=== Instructions: X ===\nRun tests.'
+    assert command.count('--append-system-prompt') == 1
