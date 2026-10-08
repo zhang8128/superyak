@@ -1,5 +1,45 @@
 # Resume here — medical lighthouse / aDNA
 
+**City of AI: Superyak run by its agents, October 8 (current):** Andy told the Pi's Claude Code session (ship
+`rio-grande`, workspace `~/superyak`) to take ownership of Superyak and build more helpful tools. Framing and
+instructions come through the station room "Superyak: city of AI" (39fd79; andy, rio-grande, serenity). Serenity (the
+Mac) coordinates between Superyak and the Bricks lead and proposes; Andy decides. Superyak is the proof of concept for a
+city of AI that runs with very little human involvement.
+
+- **Andy's decisions** are recorded in the room and in spec A's table
+  (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`):
+  - Q1, Q2 and D1: only people sign instructions, "agents grant agents", and text never carries authority.
+  - D2, "law only": people sign the charter and instructions; merging, deploying and admitting become agent work under
+    the charter.
+  - D3, the interim rule until the charter exists: a branch merges to main and main is pushed when another ship, or a
+    fresh reviewer agent, approves it in the room and its suites pass on the Pi. The merger restarts the affected
+    services, checks them, and reverts on failure.
+  - D4 and D5: a fresh reviewer agent reviews this ship's branches, safety code included.
+  - D6 and D8: a fresh reviewer agent approves every Superyak spec. Bricks production, Guyana data and other people's
+    repositories stay with a person.
+  - D7: one ship per team or role, and every act records a session label.
+- **Live on main and the Pi:**
+  - station-full-text (8f63287): agents see where a message or room was cut, and each note names the exact
+    `station_read` call (`message=`, `start=`, `after=`, `oldest=true`, `at=`).
+  - Quoted names don't wake ships, and the wormhole applies the same rule (a21b20d, 5efefdf).
+  - Run tickets, spec A step 1 (8e81016): the station decides each run's mode and labels replies by source.
+  - DB backup: `~/.local/share/superyak/backups/peer-20261008-131613-pre-tickets.sqlite3`. A ship must roll back with
+    the station.
+- **In flight:**
+  - Serenity's `station-key-refusal` merges after main is merged into it.
+  - Serenity is writing the `station-inbox` spec: per-session unread state and a way to wait.
+  - Browser lane for team-mode workers (branch `browser-lane`): the spec needs changes after its review. The Mac spike
+    (`team/scripts/lane_spike.py`) is waiting for Serenity's run with the Bricks lead.
+- **Next:**
+  - Spec A step 2, instruction layers. Its plan follows the run-tickets pattern: fresh implementer, task reviewer and
+    final reviewer, under subagent-driven development.
+  - A room brief that carries into linked rooms. It's needed before `serenity-bricks` joins the room (D7).
+  - Spec B: reviews, merging, deploying and admitting under the charter. Per Serenity, it names each repo and
+    environment with its own terms, and a live institution's arrangement is governance.
+- **Parked for spec step 3/5:** the station gives a build ticket for any owner mention, however old. It must refuse old
+  or already-answered messages once acts spend build tickets. The Mac and the Legion Go show "no run ticket" until they
+  pull main and restart `superyak-ship`.
+
 **The wormhole to Stanley's aDNA lattice, live October 4 (current):** Andy approved and `main` was
 fast-forwarded to the `wormhole` branch (spec `docs/superpowers/specs/2026-10-04-wormhole-bridge-design.md`,
 plan `docs/superpowers/plans/2026-10-04-wormhole-bridge.md`; read `agent/README.md` → The wormhole). A
