@@ -104,3 +104,14 @@ def test_inside_a_watcher_run_the_hook_reads_nothing(station, ship_config, tmp_p
     fake.say(room, andy, 'for the person, not the run')
     monkeypatch.setenv('SUPERYAK_RUN', '1')
     assert run(fake, config_path, 's1') == '' and fake.unread_calls == []
+
+
+def test_a_ships_message_keeps_its_provenance_label(station, ship_config, tmp_path):
+    from superyak_agent.station import source_label
+    fake, andy, jenn, serenity = station
+    config_path = write_config(ship_config, tmp_path)
+    rio = fake.user('rio-grande', 'Rio Grande', 'ship', andy['id'], key='rio-key')
+    room = fake.room('Ops', andy, serenity, rio)
+    posted = fake.say(room, rio, 'a ship speaking')
+    expected = source_label({'source': fake.source_of(posted)})
+    assert expected and f'({expected})' in run(fake, config_path, 's1')

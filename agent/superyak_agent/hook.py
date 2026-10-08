@@ -41,7 +41,8 @@ def _run_inbox(config_path, session_id, transport):
     got = client.unread(session_id, MAX_MESSAGES)
     blocks, last = [], None
     for m in got['messages']:
-        block = (f'Room {label(m.get("room_title"))}, message {shown_id(m["message_id"])}'
+        src = source_label(m)  # provenance, exactly as the old path and station_read show it
+        block = (f'Room {label(m.get("room_title"))}, message {shown_id(m["message_id"])}' + (f' ({src})' if src else '')
                  + (f', reply to {shown_id(m["reply_to"])}' if m.get('reply_to') else '') + ':\n'
                  + fence_message(m['author'], m['body'], MESSAGE_CHARS, read_hint(m['room_id'], m['message_id'])))
         if len(HEADER) + sum(len(b) + 2 for b in blocks) + len(block) + 2 + NOTE_ROOM > MAX_CHARS:
