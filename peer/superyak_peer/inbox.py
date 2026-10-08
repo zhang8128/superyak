@@ -2,11 +2,14 @@
 the station. Positions are the ids of 'chat.message' events, which both local posts and federated members' replies
 emit. Reading never moves a cursor; advancing is explicit and only goes forward, so a reader that shows part of a
 page loses nothing."""
+from contextlib import contextmanager
 import json
 import re
 from .common import Problem, require
 
 READS_PER_MINUTE = 60
+MAX_WAIT = 25
+WAITS_PER_SHIP = 2
 CURSOR_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')
 
 INBOX_SCHEMA = '''
@@ -21,7 +24,28 @@ def cursor_name(value):
     return name
 
 
+def wait_seconds(value):
+    if value is None:
+        return 0
+    if type(value) not in (int, float) or not 0 <= value <= MAX_WAIT:
+        raise Problem(400, f'wait is a number of seconds from 0 to {MAX_WAIT}')
+    return value
+
+
 class Inbox:
+    @contextmanager
+    def inbox_wait_slot(self, actor):
+        """At most two waits per ship. The slot is freed in finally, so a client that goes away mid-wait (the route
+        is cancelled) never keeps one."""
+        waits = self.__dict__.setdefault('_inbox_waits', {})
+        if waits.get(actor, 0) >= WAITS_PER_SHIP:
+            raise Problem(429, f'This ship already has {WAITS_PER_SHIP} waits open')
+        waits[actor] = waits.get(actor, 0) + 1
+        try:
+            yield
+        finally:
+            waits[actor] -= 1
+
     def _inbox_ship(self, db, actor):
         row = require(db.execute('SELECT kind FROM users WHERE id=?', (actor,)).fetchone())
         if row['kind'] != 'ship':
@@ -52,13 +76,14 @@ class Inbox:
         contact = db.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, actor)).fetchone()
         return {'id': author_id, 'username': None, 'name': contact['name'] if contact else None, 'kind': 'remote', 'owner_id': None}
 
-    def unread(self, actor, cursor=None, limit=30):
+    def unread(self, actor, cursor=None, limit=30, counted=True):
         name = cursor_name(cursor)
         if type(limit) is not int or not 1 <= limit <= 100:
             raise Problem(400, 'limit is a whole number from 1 to 100')
         with self.transaction() as db:
             self._inbox_ship(db, actor)
-            self._inbox_budget(actor)
+            if counted:  # a wait's later checks don't count: a wait is one read
+                self._inbox_budget(actor)
             position = self._cursor(db, actor, name)
             rows = db.execute('''SELECT events.id, events.resource_id, events.payload, rooms.title FROM events
                 JOIN room_members ON room_members.room_id=events.resource_id AND room_members.user_id=?

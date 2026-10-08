@@ -1,4 +1,5 @@
 """Same-origin browser API; additional peer routers attach to this factory."""
+import asyncio
 import hmac
 import ipaddress
 import time
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from .common import Problem, valid_utf8
 from .db import Store
+from .inbox import wait_seconds
 
 MAX_REQUEST = 6 * 1024 * 1024
 COOKIE = 'superyak_session'
@@ -222,7 +224,17 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/ships/me/unread')
     async def inbox_unread(request: Request):
         who, data = ship_member(request)['id'], await body(request)
-        return store.unread(who, data.get('cursor'), data.get('limit', 30))
+        cursor, limit, wait = data.get('cursor'), data.get('limit', 30), wait_seconds(data.get('wait'))
+        if not wait:
+            return store.unread(who, cursor, limit)
+        # Every route shares this event loop, so a wait sleeps with await and holds no transaction across a sleep.
+        with store.inbox_wait_slot(who):
+            loop = asyncio.get_running_loop()
+            deadline, got = loop.time() + wait, store.unread(who, cursor, limit)
+            while not got['messages'] and (left := deadline - loop.time()) > 0:
+                await asyncio.sleep(min(1, left))
+                got = store.unread(who, cursor, limit, counted=False)
+            return got
 
     @app.post('/api/ships/me/unread/advance')
     async def inbox_advance(request: Request):

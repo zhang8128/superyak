@@ -1,0 +1,99 @@
+"""Station inbox, step 2: an unread read may wait up to 25 s for a message, and a wait never blocks the station.
+The station's routes share one event loop, so these tests drive the app on a single loop (httpx's ASGI transport)
+rather than TestClient, which gives each request its own loop and would hide a blocking wait."""
+import asyncio
+import time
+
+import httpx
+
+
+def setup(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    started = store.start_docking('serenity', 'test-host')
+    ship = store.confirm_docking(users[0]['id'], started['id'], started['code'])
+    key = store.docking_status(started['id'], started['secret'])['key']
+    room = clients[0].post('/api/chats', json={'title': 'Ops', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    return app, users, store, key, room
+
+
+def ship(app, key):
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://testserver',
+                             headers={'origin': 'http://testserver', 'authorization': f'Bearer {key}'})
+
+
+async def timed(call):
+    started = time.perf_counter()
+    response = await call
+    return response, time.perf_counter() - started
+
+
+def test_a_wait_returns_soon_after_a_message_arrives(env):
+    app, users, store, key, room = setup(env)
+
+    async def scenario():
+        async with ship(app, key) as serenity:
+            waiting = asyncio.create_task(timed(serenity.post('/api/ships/me/unread', json={'cursor': 's1', 'wait': 10})))
+            await asyncio.sleep(0.3)
+            store.send_message(users[0]['id'], room, 'a', 'hello while you wait')
+            return await waiting
+    response, elapsed = asyncio.run(scenario())
+    assert response.status_code == 200
+    assert [m['body'] for m in response.json()['messages']] == ['hello while you wait']
+    assert elapsed < 2.5
+
+
+def test_a_wait_returns_empty_at_its_limit(env):
+    app, users, store, key, room = setup(env)
+
+    async def scenario():
+        async with ship(app, key) as serenity:
+            return await timed(serenity.post('/api/ships/me/unread', json={'cursor': 's1', 'wait': 1}))
+    response, elapsed = asyncio.run(scenario())
+    assert response.status_code == 200 and response.json()['messages'] == []
+    assert 0.9 <= elapsed < 2.5
+
+
+def test_other_requests_stay_fast_while_a_ship_waits(env):
+    app, users, store, key, room = setup(env)
+
+    async def scenario():
+        async with ship(app, key) as serenity:
+            waiting = asyncio.create_task(serenity.post('/api/ships/me/unread', json={'cursor': 's1', 'wait': 3}))
+            await asyncio.sleep(0.2)
+            other, elapsed = await timed(serenity.get('/api/me'))
+            still_waiting = not waiting.done()
+            await waiting
+            return other, elapsed, still_waiting
+    other, elapsed, still_waiting = asyncio.run(scenario())
+    assert other.status_code == 200 and still_waiting
+    assert elapsed < 0.5
+
+
+def test_a_ship_holds_at_most_two_waits_and_a_dropped_wait_frees_its_slot(env):
+    app, users, store, key, room = setup(env)
+
+    async def scenario():
+        async with ship(app, key) as serenity:
+            waits = [asyncio.create_task(serenity.post('/api/ships/me/unread', json={'cursor': f's{n}', 'wait': 5})) for n in range(2)]
+            await asyncio.sleep(0.2)
+            third = await serenity.post('/api/ships/me/unread', json={'cursor': 's3', 'wait': 5})
+            waits[0].cancel()  # the client goes away mid-wait
+            await asyncio.gather(waits[0], return_exceptions=True)
+            await asyncio.sleep(0.1)
+            again = asyncio.create_task(serenity.post('/api/ships/me/unread', json={'cursor': 's4', 'wait': 1}))
+            replacement = await again
+            await waits[1]
+            return third, replacement
+    third, replacement = asyncio.run(scenario())
+    assert third.status_code == 429
+    assert replacement.status_code == 200
+
+
+def test_bad_waits_are_refused(env):
+    app, users, store, key, room = setup(env)
+
+    async def scenario():
+        async with ship(app, key) as serenity:
+            return [(await serenity.post('/api/ships/me/unread', json={'wait': bad})).status_code for bad in (-1, 26, 'soon', True)]
+    assert asyncio.run(scenario()) == [400, 400, 400, 400]

@@ -622,7 +622,7 @@ the station's `Origin` for writes. A key reaches exactly these routes; every oth
 | DELETE `/api/ships/me/key` | Revoke the presented key (`undock`) |
 | POST `/api/ships/me/tickets` | `{message_id}` → a run ticket for a message in one of the ship's rooms (see Run tickets) |
 | POST `/api/ships/me/tickets/{id}/finish` | Close the ship's own ticket |
-| POST `/api/ships/me/unread` | `{cursor?, limit?}` → messages after this cursor, oldest first (see Inbox) |
+| POST `/api/ships/me/unread` | `{cursor?, limit?, wait?}` → messages after this cursor, oldest first; may wait up to 25 s (see Inbox) |
 | POST `/api/ships/me/unread/advance` | `{cursor?, to}` → move this cursor forward to message event `to` |
 
 `GET /api/chats/{id}` also returns `members`: `{id,username,name,kind,owner_id}` for each local
@@ -649,6 +649,9 @@ sessions use their session id). A position is the id of a `chat.message` event.
   per ship (429).
 - A new name starts at the furthest position any of the ship's cursors has reached, and a ship's
   first cursor starts at 0.
+With `wait` (0–25 seconds) the read returns as soon as something is unread, or an empty list at the
+limit. A wait sleeps without holding the station, counts as one read, and a ship may hold 2 at a
+time (a third gets 429); a client that goes away frees its wait.
 `POST /api/ships/me/unread/advance` sets the position to the larger of the current one and `to`.
 `to` must be a message event id (400 otherwise), so a reader that shows part of a page advances
 through what it showed and loses nothing.
