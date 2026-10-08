@@ -7,7 +7,8 @@ from .station import MESSAGE_LIMIT, StationError, client_for, fence_message, lab
 
 DEFAULT_CHARS = 2000
 TOTAL_CHARS = 40000  # one tool result, about; one message alone can be longer once quoted
-NOTE_ROOM = 400  # the header and the note, counted in the total
+NOTE_ROOM = 500  # the header and the note, counted in the total
+MENTION_PAGE = 50  # the station returns at most this many mentions per call
 
 
 def resolve_room(client, room):
@@ -20,6 +21,11 @@ def resolve_room(client, room):
 
 def max_chars(args):
     return max(200, min(MESSAGE_LIMIT, int(args.get('max_chars') or DEFAULT_CHARS)))
+
+
+def room_header(room):
+    room_id = f'({room["id"]})' if plain_id(room['id']) else shown_id(room['id'])
+    return f'Room {label(room.get("title"))} {room_id}\n\n'
 
 
 def _block(room, members, m, chars, position):
@@ -86,9 +92,11 @@ class Tools:
 
     def station_read(self, args):
         room = self.client.room(resolve_room(self.client, args['room']))
-        header = f'Room {label(room.get("title"))} ({room["id"]})\n\n'
+        header = room_header(room)
         messages, ids = room['messages'], [m['id'] for m in room['messages']]
         for key in ('message', 'start', 'after'):
+            if args.get(key) is not None and not isinstance(args[key], str):
+                raise ValueError(f'{key} is a message id')
             if args.get(key) and args[key] not in ids:
                 raise ValueError(f'No message {label(str(args[key]), 100)!r} in this room')
         if args.get('oldest') not in (None, False, True, 'true', 'false'):
@@ -96,7 +104,8 @@ class Tools:
         oldest = args.get('oldest') in (True, 'true')
         at = args.get('at')
         if at is not None:
-            at = int(at)
+            if type(at) is not int:
+                raise ValueError('at is a whole number')
             if not 0 <= at < len(messages):
                 raise ValueError(f'at must be between 0 and {len(messages) - 1}')
         if sum(x is not None and x is not False and x != '' for x in (args.get('message'), args.get('start'), args.get('after'), oldest or None, at)) > 1:
@@ -126,11 +135,13 @@ class Tools:
             block = (f'mention {m["seq"]} in room {shown_id(m["room_id"])}, message {shown_id(m["message_id"])}\n' +
                      fence_message(m['author'], m['body'], max_chars(args), read_hint(m['room_id'], m['message_id'])))
             if blocks and size + len(block) + 2 > TOTAL_CHARS - NOTE_ROOM:
-                left = len(rows) - len(blocks)
-                blocks.append(f'[{left} more mention{"s" if left > 1 else ""}; `station_mentions after={rows[len(blocks) - 1]["seq"]}` shows them]')
                 break
             blocks.append(block)
             size += len(block) + 2
+        left, full = len(rows) - len(blocks), len(rows) >= MENTION_PAGE  # a full page may have more behind it
+        if left or full:
+            count = (f'{left} more mention{"s" if left > 1 else ""}' + (' and perhaps more after them' if full else '')) if left else 'perhaps more mentions'
+            blocks.append(f'[{count}; `station_mentions after={rows[len(blocks) - 1]["seq"]}` shows them]')
         return '\n\n'.join(blocks) or '(no new mentions)'
 
 

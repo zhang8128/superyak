@@ -168,3 +168,14 @@ def test_following_the_hooks_calls_reaches_every_message_it_left_out(station, sh
     text = run(fake, config_path)
     shown = set(re.findall(r', message (\S+):', text))
     assert follow_notes(tools_for(fake), text) | shown >= {m['id'] for m in sent}
+
+
+def test_a_cut_message_with_an_unusual_id_gets_a_position_call(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'earlier')
+    run(fake, config_path, now=fake.clock)
+    fake.say(room, jenn, 'u' * 1000)
+    fake.rooms[room]['messages'][-1]['id'] = 'odd id'
+    text = run(fake, config_path)
+    assert f'[cut at 800 of 1,000 characters; `station_read room={room} at=1 limit=1 max_chars=20000` shows all of it]' in text

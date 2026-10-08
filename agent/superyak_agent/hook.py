@@ -51,12 +51,12 @@ def _run(config_path, state_path, clock, transport):
             continue
         room = client.room(summary['id'])
         members = {m['id']: m for m in room.get('members', [])}
-        items += [(m['created'], room['title'], members.get(m['author_id']), m, room['id']) for m in room['messages']
-                  if m['created'] > cursor and m['author_id'] != me]
+        items += [(m['created'], room['title'], members.get(m['author_id']), m, room['id'], position)
+                  for position, m in enumerate(room['messages']) if m['created'] > cursor and m['author_id'] != me]
     items.sort(key=lambda item: item[0])
     newest = max([cursor] + [item[3]['created'] for item in items])
-    blocks = [f'Room {label(title)}, message {shown_id(m["id"])}:\n' + fence_message(who, m['body'], MESSAGE_CHARS, read_hint(room_id, m['id']))
-              for _, title, who, m, room_id in items[-MAX_MESSAGES:]]
+    blocks = [f'Room {label(title)}, message {shown_id(m["id"])}:\n' + fence_message(who, m['body'], MESSAGE_CHARS, read_hint(room_id, m['id'], position))
+              for _, title, who, m, room_id, position in items[-MAX_MESSAGES:]]
     # Messages left out for space are counted, never dropped silently: the cursor moves past them.
     while blocks and len(HEADER) + sum(len(b) + 2 for b in blocks) + (NOTE_ROOM if len(blocks) < len(items) else 0) > MAX_CHARS:
         blocks.pop(0)
@@ -71,7 +71,7 @@ def _left_out_note(left_out):
     """How many messages were left out for space, and for each room the call that shows them from the first one
     left out on. Rooms are named by id, never by title: two rooms can share a title, and a title is free text."""
     first = {}
-    for _, _, _, m, room_id in left_out:
+    for _, _, _, m, room_id, _ in left_out:
         first.setdefault(room_id, m['id'])
     count, calls = len(left_out), []
     head = f'{count} earlier message{"s" if count > 1 else ""} not shown'
