@@ -52,6 +52,7 @@ class Chats:
             return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None):
+        self._refuse_live_ship_keys(body)
         if ':' in key:
             if ticket_id is not None:
                 raise Problem(409, 'Tickets label messages in local rooms only')
