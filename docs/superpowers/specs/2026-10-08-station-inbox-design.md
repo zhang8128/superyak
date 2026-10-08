@@ -75,7 +75,8 @@ Codex sessions have no hook at all. For them the tool below is the only way to s
     The `messages` table and its positional INSERT stay unchanged.
   - `reply_to` must name a message in the same local room; otherwise 400.
   - `station_post` derives its client id from the content:
-    `post-<first 8 characters of the cursor name>-<first 24 hex of sha256(room \0 reply_to \0 text)>`.
+    `post-<first 8 characters of the cursor name>-<first 24 hex of sha256(cursor \0 room \0 reply_to \0 text)>`.
+      The whole cursor name is hashed, so two sessions whose names share a prefix never collide (found while building).
     - A retried call from the same session posts once.
     - Different text, or another session, gets a different id, so it never collides with the watcher (which keeps
       `reply-<id>`, labelled by tickets) or gets a 409.
