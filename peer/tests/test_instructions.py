@@ -244,3 +244,39 @@ def test_binding_matches_an_independent_reading_of_the_rule(env):
     for s, key in ships:
         got = {lid: rev for lid, rev in instructions_of(app, key)['instructions']}
         assert got == expected[s['id']], s['username']
+
+
+def test_a_ship_drafts_and_its_owner_previews_and_activates(env):
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    drafted = ship_client(app, key).post('/api/ships/me/drafts', json={'title': 'Proposed rule', 'body': 'Write tests first.'})
+    assert drafted.status_code == 201 and drafted.json()['drafted_by'] == ship['id']
+    layer_id = drafted.json()['id']
+    owners = clients[0].get(f'/api/layers/{layer_id}').json()
+    assert owners['kind'] == 'instructions' and owners['drafted_by'] == ship['id'] and owners['audience_users'] == [ship['id']]
+    assert clients[0].get(f'/api/layers/{layer_id}/preview').status_code == 200
+    assert activate(clients[0], owners).status_code == 200
+    assert instructions_of(app, key)['instructions'] == [[layer_id, 1]]
+    saved = clients[0].put(f'/api/layers/{layer_id}', json={'version': owners['version'], 'body': 'Edited by the owner.'}).json()
+    assert saved['drafted_by'] == ship['id']
+    assert clients[1].get(f'/api/layers/{layer_id}').status_code == 404
+
+
+def test_a_resident_has_no_one_to_sign_its_drafts(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    odo = store.create_station_ship('odo', 'Odo')
+    assert ship_client(app, store.issue_ship_key(odo['id'])).post('/api/ships/me/drafts', json={'title': 'x', 'body': 'y'}).status_code == 403
+
+
+def test_drafting_is_limited_and_validated(env):
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    serenity = ship_client(app, key)
+    assert serenity.post('/api/ships/me/drafts', json={'title': 'a\nb', 'body': 'y'}).status_code == 400
+    assert serenity.post('/api/ships/me/drafts', json={'title': 'x', 'body': 'y', 'audience_users': []}).status_code == 400
+    for n in range(10):
+        assert serenity.post('/api/ships/me/drafts', json={'title': f'd{n}', 'body': 'y'}).status_code == 201
+    assert serenity.post('/api/ships/me/drafts', json={'title': 'd10', 'body': 'y'}).status_code == 429
+    clock[0] += 3601
+    assert serenity.post('/api/ships/me/drafts', json={'title': 'd11', 'body': 'y'}).status_code == 201

@@ -218,6 +218,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def ship_instructions(request: Request):
         return store.ship_instructions(ship_member(request)['id'], app.state.federation.identity.peer_id)
 
+    @app.post('/api/ships/me/drafts', status_code=201)
+    async def ship_draft(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        return store.ship_draft(who, data)
+
     @app.post('/api/ships/me/tickets')
     async def ticket_issue(request: Request):
         who, data = ship_member(request)['id'], await body(request)
