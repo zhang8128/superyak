@@ -7,3 +7,18 @@
 
 ; Homebrew node links its libraries from here (read only).
 (allow file-read* (subpath "/opt/homebrew/Cellar") (subpath "/opt/homebrew/opt") (subpath "/usr/local/Cellar") (subpath "/usr/local/opt"))
+
+
+; Found by bisection on the Mac (2026-10-08, chromium-headless-shell 1243): without this the shell crashes at start
+; (SIGSEGV, no log line); preference reads, the setup flag, disk-space info and DiskArbitration were each not needed.
+; Most likely Chromium's power monitor (sleep/wake state); that attribution is an inference.
+(allow iokit-open-user-client (iokit-user-client-class "RootDomainUserClient"))
+
+; EXCEPTION to the never-list (mach-register, and a pattern rule), for the reviewer to accept or refuse explicitly.
+; Chromium's multi-process design registers one rendezvous service per browser process to hand ports to its
+; children: base/apple/mach_port_rendezvous_mac.cc:159 is FATAL without it ("bootstrap_check_in
+; org.chromium.Chromium.MachPortRendezvousServer.<pid>: Permission denied"). The pid varies, so it must be a pattern:
+; anchored, digits only, Chromium's own name only. It cannot match any Apple service.
+(allow mach-register (global-name-regex #"^org\.chromium\.Chromium\.MachPortRendezvousServer\.[0-9]+$"))
+; The other half: the children look up the service their parent registered.
+(allow mach-lookup (global-name-regex #"^org\.chromium\.Chromium\.MachPortRendezvousServer\.[0-9]+$"))
