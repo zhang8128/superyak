@@ -478,7 +478,8 @@ Each step is useful on its own and merges under the interim rule:
 1. **Tickets.** The station decides `owner` and `read` (today's rule, moved to the station), the watcher uses
    tickets with the retry and 409 flow, and source labels arrive.
 2. **Instruction layers.** `kind`, binding for owner layers, drafts, prompt blocks in runs, both hooks, MCP
-   `instructions`, status.
+   `instructions`, status. (built 2026-10-08; signatures, diffs and the Ships status view come with
+   steps 3–4)
 3. **Grants and chains.** Browser roots, delegation, validity under the policy defaults, budgets, `instruct`
    grants between people, signatures, the grants page.
 4. **The charter.** Policy, widening against baselines, acceptance as grants, charter roots.
