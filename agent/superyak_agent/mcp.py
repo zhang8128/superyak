@@ -121,7 +121,11 @@ class Tools:
         self.cancelled.add(request_id)
 
     def station_instructions(self, args):
-        return self.client.instructions().get('blocks') or 'No instructions bind this ship.'
+        blocks = self.client.instructions().get('blocks')
+        if blocks is not None and not isinstance(blocks, str):
+            # an error result, never "none bind": a session would believe that and drop the law it holds
+            raise ValueError('the station sent the instructions in a form this agent cannot read')
+        return blocks or 'No instructions bind this ship.'
 
     def station_draft_instructions(self, args):
         drafted = self.client.draft_instructions(args['title'], args['body'])

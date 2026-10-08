@@ -135,18 +135,19 @@ def main(argv=None):
         write_private(args.out, run_mcp_config(args.config, args.adna_dist))
         return 0
     if args.command == 'status':
-        from .station import client_for, label, load_config
+        from .station import StationError, client_for, label, load_config
         config = load_config(args.config)
         client = client_for(config)
         me = client.me()
         print(f'{me["name"]} (@{me["username"]}) is docked at {config["station"]}; workspace {config["workspace"]}.')
-        layers = client.instructions().get('layers') or []
-        if not layers:
-            print('Instructions: none')
-        else:
-            print('Instructions:')
-            for layer in layers:
-                print(f'  {label(layer.get("title"))} · revision {layer.get("revision")} · signed by {label(layer.get("signer_name"))}')
+        try:
+            layers = client.instructions().get('layers') or []
+            lines = ['Instructions:'] + [f'  {label(layer.get("title"))} · revision {layer.get("revision")} · signed by '
+                                         f'{label(layer.get("signer_name"))}' for layer in layers] if layers else ['Instructions: none']
+        except (StationError, OSError, ValueError, AttributeError, TypeError) as error:
+            # an older station (403), a station gone mid-command or an odd answer; the key never goes into the reason
+            lines = [f'Instructions: unavailable ({label(str(error).replace(config["key"], "[key]"))})']
+        print('\n'.join(lines))
         return 0
     if args.command == 'undock':
         from .install import uninstall_all

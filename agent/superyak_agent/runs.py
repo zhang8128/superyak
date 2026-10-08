@@ -122,7 +122,7 @@ class ClaudeRunner:
     def _command(self, settings_path, limit=None, instructions=''):
         command = [self.claude, '-p', '--output-format', 'text', '--permission-mode', 'dontAsk', '--no-session-persistence',
                    '--settings', str(settings_path), '--setting-sources', 'project,local', '--strict-mcp-config',
-                   '--append-system-prompt', self.persona + '\n\n' + instructions if instructions else self.persona]
+                   '--append-system-prompt', (self.persona + '\n\n' + instructions if instructions else self.persona).replace('\x00', '')]
         if self.mcp_config:
             command += ['--mcp-config', str(self.mcp_config)]
         if self.model:

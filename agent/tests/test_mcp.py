@@ -480,3 +480,16 @@ def test_drafting_instructions_from_a_session(station):
     fake, andy, jenn, serenity = station
     text = call(tools_for(fake), 'station_draft_instructions', title='Proposed', body='Write tests first.')['content'][0]['text']
     assert "Drafted 'Proposed'" in text and fake.drafts == [('Proposed', 'Write tests first.')]
+
+
+def test_the_instructions_tool_never_says_none_bind_when_the_answer_is_not_text(station):
+    """Break caught: a malformed answer read as "No instructions bind this ship.", which a session would believe."""
+    fake, andy, jenn, serenity = station
+    for blocks in (['Run tests.'], 5, {'text': 'Run tests.'}, True):
+        fake.instruction_state[serenity['id']] = {'instructions': [['L1', 1]], 'layers': [], 'blocks': blocks}
+        result = call(tools_for(fake), 'station_instructions')
+        assert result['isError'] is True and 'No instructions' not in result['content'][0]['text'], blocks
+    for blocks in (None, ''):
+        fake.instruction_state[serenity['id']] = {'instructions': [], 'layers': [], 'blocks': blocks}
+        result = call(tools_for(fake), 'station_instructions')
+        assert result['isError'] is False and result['content'][0]['text'] == 'No instructions bind this ship.'
