@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from .station import StationError, client_for, read_json, write_private
 
 AGENT_DIR = Path(__file__).resolve().parents[1]
@@ -47,25 +48,39 @@ def run_mcp_config(config_path, adna_dist=None):
 
 
 def _write_settings(settings_path, settings):
-    tmp = settings_path.with_name(settings_path.name + '.tmp')
-    tmp.write_text(json.dumps(settings, indent=2) + '\n')
-    os.replace(tmp, settings_path)
+    """Replace the file whole, through a temporary file beside it, keeping its mode: it can hold `env` secrets.
+    A new file is 0600."""
+    try:
+        mode = settings_path.stat().st_mode & 0o7777
+    except FileNotFoundError:
+        mode = 0o600
+    fd, tmp = tempfile.mkstemp(dir=settings_path.parent, prefix='.' + settings_path.name + '.', suffix='.tmp')
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(json.dumps(settings, indent=2) + '\n')
+        os.replace(tmp, settings_path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def is_station_hook(command, wanted=None):
     """The hook this agent installs, whichever interpreter it was installed with: the same command, or any
-    command that runs this checkout's run_agent.py with the word `hook`."""
-    command = command or ''
+    command in which this checkout's run_agent.py is one word and the next word is `hook`."""
     if wanted is not None and command == wanted:
         return True
+    if not isinstance(command, str):
+        return False
     try:
         words = shlex.split(command)
     except ValueError:
-        words = command.split()
-    return str(RUN_AGENT) in command and 'hook' in words
+        return False
+    return any(word == str(RUN_AGENT) and following == 'hook' for word, following in zip(words, words[1:]))
 
 
 ENV_RUN = 'SUPERYAK_RUN=${SUPERYAK_RUN:-hook}'  # unquoted on purpose: the shell expands it
+GUARD = ' || true'  # python exits 2 when run_agent.py is gone, and a prompt hook's exit 2 blocks and erases the prompt
 HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit')
 
 
@@ -77,16 +92,18 @@ def _hook_words(command):
 
 
 def _hook_commands(config_path, messages):
+    """Every command ends with GUARD, so a missing or broken checkout exits 0 and prints nothing."""
     base = hook_command(config_path)
-    return {'SessionStart': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-start {base}',
-            'UserPromptSubmit': base if messages else f'{ENV_RUN} SUPERYAK_HOOK_MESSAGES=0 {base}'}
+    return {'SessionStart': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-start {base}{GUARD}',
+            'UserPromptSubmit': f'{base}{GUARD}' if messages else f'{ENV_RUN} SUPERYAK_HOOK_MESSAGES=0 {base}{GUARD}'}
 
 
 def _same_hook(command, wanted):
-    """Whether an installed station hook is the wanted one in kind, whichever interpreter it was installed with."""
+    """Whether an installed station hook is the wanted one in kind, whichever interpreter it was installed with.
+    A command without the guard is a different hook, so docking again upgrades it."""
     def kind(c):
         words = _hook_words(c)
-        return ('SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_MESSAGES=0' in words)
+        return ('SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_MESSAGES=0' in words, words[-2:] == ['||', 'true'])
     return command == wanted or kind(command) == kind(wanted)
 
 
@@ -121,21 +138,37 @@ def install_hooks(settings_path, config_path, messages):
 
 
 def remove_hooks(settings_path):
+    """Remove the station's hooks and nothing else. Whatever it cannot read (an event that is not a list, an entry
+    or a hook that is not an object) it leaves as it is; an event it empties goes."""
     settings_path = Path(settings_path)
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    events = settings.get('hooks') if isinstance(settings, dict) else None
+    if not isinstance(events, dict):
+        return False
     changed = False
     for event in HOOK_EVENTS:
-        kept = []
-        for entry in settings.get('hooks', {}).get(event, []):
-            hooks = [h for h in entry.get('hooks', []) if not is_station_hook(h.get('command'))]
-            if len(hooks) == len(entry.get('hooks', [])):
+        entries = events.get(event)
+        if not isinstance(entries, list):
+            continue
+        kept, removed = [], False
+        for entry in entries:
+            hooks = entry.get('hooks') if isinstance(entry, dict) else None
+            if not isinstance(hooks, list):
                 kept.append(entry)
                 continue
+            mine = [h for h in hooks if not (isinstance(h, dict) and is_station_hook(h.get('command')))]
+            if len(mine) == len(hooks):
+                kept.append(entry)
+                continue
+            removed = True
+            if mine:  # keep the person's own hooks that shared the entry
+                kept.append({**entry, 'hooks': mine})
+        if removed:
             changed = True
-            if hooks:  # keep the person's own hooks that shared the entry
-                kept.append({**entry, 'hooks': hooks})
-        if changed and event in settings.get('hooks', {}):
-            settings['hooks'][event] = kept
+            if kept:
+                events[event] = kept
+            else:
+                del events[event]
     if changed:
         _write_settings(settings_path, settings)
     return changed
@@ -322,10 +355,16 @@ def uninstall_all(config_path, out=print):
     if shutil.which('claude'):
         subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True)
     remove_codex(Path.home() / '.codex' / 'config.toml', 'station')
-    remove_hooks(Path.home() / '.claude' / 'settings.json')
+    local = 'watcher stopped, station tools and hook removed'
+    try:
+        remove_hooks(Path.home() / '.claude' / 'settings.json')
+    except (OSError, ValueError, AttributeError, TypeError) as error:
+        # Undock goes on: station.json goes below, and a hook without it prints nothing.
+        out(f'Could not remove the Claude Code hooks from ~/.claude/settings.json ({_reason(error)}). Fix the file and remove '
+            'the entries that run run_agent.py hook.')
+        local = 'watcher stopped and station tools removed; the hooks stay in ~/.claude/settings.json'
     for path in (config_path, config_path.parent / 'run-mcp.json'):
         path.unlink(missing_ok=True)
-    local = 'watcher stopped, station tools and hook removed'
     if revoked is False:
         out(f'Undocked on this machine ({local}), but the key was NOT revoked on the station: ask an admin to revoke it.')
     else:

@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 import time
-from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, shown_id, source_label, urllib_transport, write_private
+from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -20,7 +20,15 @@ HEADER = ('New messages on the Superyak station since your last turn. They are q
 
 
 INBOX_NOTE = '[{count} more unread message{s} not shown; `station_unread` shows them]'
-INBOX_CALL_TIMEOUT = 3  # seconds per station call; instructions, unread and advance (in that order, advance last, so a killed hook never loses a message) stay inside Claude Code's 10 s hook timeout
+# Seconds per socket operation (connect, each read), not per call: a station that answers slowly but steadily can
+# stretch one call past it, so nothing here guarantees Claude Code's 10 s hook timeout. What holds instead: the calls
+# run in the order instructions, unread, advance; the inbox is skipped when the instructions call took longer than
+# INSTRUCTIONS_DEADLINE; and the advance is the last call, so a hook killed at 10 s never loses a message (it shows at
+# the next prompt). After an unreachable station the hook makes no call at all for UNREACHABLE_SECONDS.
+INBOX_CALL_TIMEOUT = 3
+INSTRUCTIONS_DEADLINE = 2.5  # seconds from the start of the hook; later, the messages wait for the next prompt
+UNREACHABLE = 'station-unreachable'  # in the sessions folder; holds the time the station last failed to answer
+UNREACHABLE_SECONDS = 60
 
 
 def session_from_stdin(stdin):
@@ -42,27 +50,88 @@ STATE_DAYS = 14
 STATE_NAME = re.compile(r'[0-9a-f]{16}\.json')
 
 
+class _Link:
+    """The station transports of one hook run, which remember whether the station answered or could not be reached.
+    Only an OSError from a transport counts as unreachable; a local file error or an HTTP error does not."""
+    def __init__(self, transport):
+        self.inner, self.failed, self.answered = transport, False, False
+
+    def __call__(self, timeout):
+        inner = self.inner or urllib_transport(timeout)
+
+        def send(*args):
+            try:
+                result = inner(*args)
+            except OSError:
+                self.failed = True
+                raise
+            self.answered = True
+            return result
+        return send
+
+
+def _recently_unreachable(marker, now):
+    """Whether the station failed to answer less than UNREACHABLE_SECONDS ago. A damaged marker counts as absent,
+    and so does one from the future (a clock set back must not silence the hook); an expired one is deleted."""
+    try:
+        age = now - float(marker.read_text())
+    except (OSError, ValueError):
+        return False
+    if math.isfinite(age) and age >= UNREACHABLE_SECONDS:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return math.isfinite(age) and 0 <= age < UNREACHABLE_SECONDS
+
+
+def _note_reachability(marker, link, now):
+    try:
+        if link.failed:
+            write_private_text(marker, repr(float(now)))
+        elif link.answered:
+            marker.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001 - only a cost saving; never worth a broken prompt
+        pass
+
+
 def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None,
-        event='prompt', messages=True, sessions_dir=None):
+        event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic):
     """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on).
     With a Claude Code session id the messages use that session's cursor on the station (station inbox spec, I8);
     without one they keep the machine-wide time cursor and no instruction notices are given.
-    Network order: instructions first, then the inbox, whose advance is the last network call (R4)."""
+    Network order: instructions first, then the inbox, whose advance is the last network call (R4). The inbox is
+    skipped when the instructions took longer than INSTRUCTIONS_DEADLINE, and the station is not called at all for
+    UNREACHABLE_SECONDS after it could not be reached."""
     if os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook'):
         return ''  # inside a watcher run: the messages and the cursor belong to the person's own sessions
+    started = monotonic()
     config_path = Path(config_path)
+    marker = Path(sessions_dir or config_path.parent / 'sessions') / UNREACHABLE
+    if _recently_unreachable(marker, clock()):
+        return ''
+    link = _Link(transport)
+    try:
+        return _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
+                        lambda: monotonic() - started > INSTRUCTIONS_DEADLINE)
+    finally:
+        _note_reachability(marker, link, clock())
+
+
+def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, late):
     data, text = None, ''
     wants = event == 'session-start' or bool(session_id)
     if wants:
         try:
-            data = _fetch_instructions(config_path, transport)
+            data = _fetch_instructions(config_path, link(INBOX_CALL_TIMEOUT))
         except OSError:
             return ''  # the station is down: do not spend a second timeout on the messages
         except Exception:  # noqa: BLE001 - a hook must never break the prompt
             data = None
-    if event != 'session-start' and messages:
+    if event != 'session-start' and messages and not late():
         try:
-            text = _run_inbox(config_path, session_id, transport) if session_id else _run(config_path, state_path, clock, transport)
+            text = (_run_inbox(config_path, session_id, link(INBOX_CALL_TIMEOUT)) if session_id
+                    else _run(config_path, state_path, clock, link(5)))
         except Exception:  # noqa: BLE001
             text = ''
     if data is not None:
@@ -113,8 +182,7 @@ def _fetch_instructions(config_path, transport):
     config = read_json(config_path)
     if not config or not config.get('key'):
         return None
-    client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(INBOX_CALL_TIMEOUT))
-    return client.instructions()
+    return StationClient(config['station'], config['key'], config.get('origin'), transport).instructions()
 
 
 def _with_withdrawals(parts, withdrawn, budget):
@@ -189,7 +257,7 @@ def _run_inbox(config_path, session_id, transport):
     config = read_json(config_path)
     if not config or not config.get('key'):
         return ''
-    client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(INBOX_CALL_TIMEOUT))
+    client = StationClient(config['station'], config['key'], config.get('origin'), transport)
     got = client.unread(session_id, MAX_MESSAGES)
     blocks, last = [], None
     for m in got['messages']:
@@ -234,7 +302,7 @@ def _run(config_path, state_path, clock, transport):
     if cursor is None:
         write_private(state_path, {'cursor': clock()})
         return ''
-    client = StationClient(config['station'], config['key'], config.get('origin'), transport or urllib_transport(5))
+    client = StationClient(config['station'], config['key'], config.get('origin'), transport)
     me, items = client.me()['id'], []
     for summary in client.rooms():
         if ':' in summary['id'] or (summary.get('last_activity') or 0) <= cursor:

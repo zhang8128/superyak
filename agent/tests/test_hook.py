@@ -460,3 +460,94 @@ def test_one_withdrawal_left_over_uses_the_singular_summary():
     text = hook._with_withdrawals(['P'], lines, budget)
     assert text.endswith(one) and text.count('L' * 150) == 2 and len(text) <= budget
     assert hook._with_withdrawals(['P'], lines, 10_000) == '\n\n'.join(['P'] + lines)
+
+
+class Slow:
+    """The fake station, where the instructions call takes `seconds` on a monotonic clock the test controls."""
+    def __init__(self, fake, seconds):
+        self.fake, self.seconds, self.now, self.calls = fake, seconds, 500.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def __call__(self, method, url, headers, data):
+        self.calls.append(url.split('/api/')[-1])
+        if url.endswith('/api/ships/me/instructions'):
+            self.now += self.seconds
+        return self.fake(method, url, headers, data)
+
+
+def test_a_slow_instructions_call_leaves_the_messages_for_the_next_prompt(station, ship_config, tmp_path):
+    """Break caught: three calls of up to 3 s each, one after another, can run past Claude Code's 10 s hook timeout."""
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'hello there')
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+
+    def go(transport):
+        return hook.run(config_path, transport=transport, monotonic=transport.monotonic, event='prompt', session_id='s1',
+                        sessions_dir=tmp_path / 'sessions', messages=True)
+    slow = Slow(fake, 2.6)
+    text = go(slow)
+    assert 'v1' in text and 'hello there' not in text  # the instructions part is still printed
+    assert slow.calls == ['ships/me/instructions'] and fake.unread_calls == [] and fake.cursors == {}
+    quick = Slow(fake, 2.4)
+    text = go(quick)
+    assert 'hello there' in text and 'v1' not in text and quick.calls[-1] == 'ships/me/unread/advance'
+
+
+def unreachable(tmp_path):
+    return tmp_path / 'sessions' / 'station-unreachable'
+
+
+def test_an_unreachable_station_is_left_alone_for_a_minute(station, ship_config, tmp_path):
+    """Break caught: while the Pi is offline every prompt on every docked machine stalls on a station call."""
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    rec = Recorder(fake)
+
+    def go(now, event='prompt'):
+        return hook.run(config_path, transport=rec, clock=lambda: now, event=event, session_id='s1',
+                        sessions_dir=tmp_path / 'sessions', messages=True)
+    fake.down = True
+    assert go(1000.0) == '' and len(rec.calls) == 1
+    marker = unreachable(tmp_path)
+    assert oct(marker.stat().st_mode & 0o777) == '0o600' and float(marker.read_text()) == 1000.0
+    fake.down = False
+    assert go(1059.0) == '' and go(1059.0, 'session-start') == '' and len(rec.calls) == 1  # fresh: no network call at all
+    text = go(1061.0)
+    assert 'v1' in text and len(rec.calls) > 1 and not marker.exists()  # expired: it calls, and the success clears it
+
+
+@pytest.mark.parametrize('content', ['not a time', '', 'nan', 'inf', '{"at": 1000}', '5000.0'])
+def test_a_damaged_marker_counts_as_absent(station, ship_config, tmp_path, content):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    law(fake, serenity, [('L1', 1, 'House rules', 'v1')])
+    marker = unreachable(tmp_path)
+    marker.parent.mkdir()
+    marker.write_text(content)  # 5000.0 is in the future: a clock that went back must not silence the hook
+    rec = Recorder(fake)
+    assert 'v1' in start(rec, config_path, 's1', tmp_path / 'sessions', clock=lambda: 1000.0)
+    assert rec.calls and not marker.exists()
+
+
+def test_a_station_error_is_not_unreachable_and_a_local_error_writes_no_marker(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    assert start(fake, config_path, 's1', tmp_path / 'sessions') == ''  # 403: an older station without the route
+    fake.keys.clear()
+    assert start(fake, config_path, 's1', tmp_path / 'sessions') == ''  # 401
+    assert not unreachable(tmp_path).exists()
+    config_path.chmod(0o000)
+    try:
+        assert start(fake, config_path, 's1', tmp_path / 'sessions') == ''
+    finally:
+        config_path.chmod(0o600)
+    assert not unreachable(tmp_path).exists()
+
+
+def test_the_machine_wide_path_also_marks_an_unreachable_station(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    run(fake, config_path, now=fake.clock)
+    fake.down = True
+    assert run(fake, config_path, now=3000.0) == ''
+    assert float((config_path.parent / 'sessions' / 'station-unreachable').read_text()) == 3000.0

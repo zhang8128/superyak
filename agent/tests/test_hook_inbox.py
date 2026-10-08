@@ -61,8 +61,8 @@ def test_when_advance_fails_nothing_is_printed_and_the_messages_stay_unread(stat
         if url.endswith('/api/ships/me/unread/advance'):
             raise OSError('connection dropped')
         return fake(method, url, headers, data)
-    assert hook.run(config_path, session_id='s1', transport=broken_advance) == ''
-    assert 'keep me' in run(fake, config_path, 's1')
+    assert hook.run(config_path, session_id='s1', transport=broken_advance, clock=lambda: 1000.0) == ''
+    assert 'keep me' in hook.run(config_path, session_id='s1', transport=fake, clock=lambda: 1061.0)  # after the unreachable minute
 
 
 def test_when_formatting_fails_the_cursor_never_moves(station, ship_config, tmp_path, monkeypatch):
@@ -92,9 +92,10 @@ def test_an_unreachable_station_prints_nothing_and_keeps_the_position(station, s
     room = fake.room('Ops', andy, serenity)
     fake.say(room, andy, 'while the station was down')
     fake.down = True
-    assert run(fake, config_path, 's1') == ''
+    assert hook.run(config_path, session_id='s1', transport=fake, clock=lambda: 1000.0) == ''
     fake.down = False
-    assert 'while the station was down' in run(fake, config_path, 's1')
+    assert hook.run(config_path, session_id='s1', transport=fake, clock=lambda: 1030.0) == ''  # it waits a minute to call again
+    assert 'while the station was down' in hook.run(config_path, session_id='s1', transport=fake, clock=lambda: 1061.0)
 
 
 def test_inside_a_watcher_run_the_hook_reads_nothing(station, ship_config, tmp_path, monkeypatch):
