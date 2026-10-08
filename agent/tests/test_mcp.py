@@ -1,3 +1,4 @@
+import re
 from superyak_agent.mcp import Tools, handle
 from superyak_agent.station import StationClient
 
@@ -163,7 +164,7 @@ def test_read_cuts_long_messages_visibly_and_names_the_call_that_shows_one_whole
     tools = tools_for(fake)
     text = call(tools, 'station_read', room='Promenade')['content'][0]['text']
     assert 'a' * 2000 in text and 'a' * 2001 not in text and 'END OF BRIEF' not in text
-    assert f'[cut at 2,000 of 6,002 characters; station_read room={room} message={long["id"]} shows all of it]' in text
+    assert f'[cut at 2,000 of 6,002 characters; `station_read room={room} message={long["id"]}` shows all of it]' in text
     whole = call(tools, 'station_read', room=room, message=long['id'])['content'][0]['text']
     assert 'a' * 5990 + 'END OF BRIEF' in whole and 'cut at' not in whole
 
@@ -208,7 +209,7 @@ def test_mentions_cut_long_messages_visibly_and_point_at_the_message(station):
     tools = tools_for(fake)
     text = call(tools, 'station_mentions')['content'][0]['text']
     assert 'last words' not in text
-    assert f'[cut at 2,000 of 4,521 characters; station_read room={room} message={asked["id"]} shows all of it]' in text
+    assert f'[cut at 2,000 of 4,521 characters; `station_read room={room} message={asked["id"]}` shows all of it]' in text
     assert 'last words' in call(tools, 'station_mentions', max_chars=20000)['content'][0]['text']
 
 
@@ -238,8 +239,8 @@ def test_one_result_stays_within_its_total_and_says_where_to_go_on(station):
     text = call(tools, 'station_read', room=room, start=sent[0]['id'], max_chars=20000)['content'][0]['text']
     assert len(text) <= 40000 + 21000
     shown = sum(f'\n{n} zzz' in text for n in range(30))
-    assert shown < 30 and text.rstrip().endswith(f'station_read room={room} start={sent[shown]["id"]} shows them]')
-    assert f'[{30 - shown} more messages not shown;' in text
+    assert shown < 30 and text.rstrip().endswith(f'`station_read room={room} start={sent[shown]["id"]}` shows them]')
+    assert f'[{30 - shown} more messages after these;' in text
 
 
 def test_mentions_stay_within_the_total_too(station):
@@ -248,7 +249,7 @@ def test_mentions_stay_within_the_total_too(station):
     for n in range(20):
         fake.say(room, andy, f'@serenity {n} ' + 'q' * 19000)
     text = call(tools_for(fake), 'station_mentions', max_chars=20000)['content'][0]['text']
-    assert len(text) <= 40000 + 21000 and 'more mentions not shown; station_mentions after=' in text
+    assert len(text) <= 40000 + 21000 and 'more mentions; `station_mentions after=' in text
 
 
 def test_an_id_that_is_not_plain_is_never_written_into_a_call(station):
@@ -267,4 +268,78 @@ def test_reading_the_newest_leaves_out_the_oldest_and_says_where_they_start(stat
     text = call(tools_for(fake), 'station_read', room=room, max_chars=20000)['content'][0]['text']
     shown = sum(f'\n{n} zzz' in text for n in range(30))
     assert '\n29 zzz' in text and '\n0 zzz' not in text and len(text) <= 40000 + 21000
-    assert f'[{30 - shown} earlier messages not shown; station_read room={room} start={sent[0]["id"]} shows them]' in text
+    assert f'[{30 - shown} earlier messages; `station_read room={room} oldest=true` reads from the first]' in text
+
+
+CALL = re.compile(r'`station_read ([^`]*)`')
+
+
+def follow_notes(tools, text, seen=None, budget=200):
+    """Read the room the way an agent would: follow every station_read call the notes name, and nothing else.
+    Returns the ids of every message shown whole or in part."""
+    seen = set() if seen is None else seen
+    seen.update(re.findall(r'^message (\S+)', text, re.M))
+    for call in CALL.findall(text):
+        args = dict(part.split('=', 1) for part in call.split())
+        if 'message' in args:
+            continue
+        args = {k: (v == 'true') if k == 'oldest' else v for k, v in args.items()}
+        key = tuple(sorted(args.items()))
+        if key in seen or budget <= 0:
+            continue
+        seen.add(key)
+        budget -= 1
+        follow_notes(tools, call_text(tools, args), seen, budget)
+    return {s for s in seen if isinstance(s, str)}
+
+
+def call_text(tools, args):
+    result = call(tools, 'station_read', **args)
+    assert result['isError'] is False, result
+    return result['content'][0]['text']
+
+
+def test_following_only_the_notes_reaches_every_message(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'{n} ' + ('w' * 19000 if n % 7 == 0 else 'short')) for n in range(130)]
+    tools = tools_for(fake)
+    for start in ({'room': room}, {'room': room, 'max_chars': 20000}, {'room': room, 'limit': 100}):
+        assert follow_notes(tools, call_text(tools, start)) >= {m['id'] for m in sent}, start
+
+
+def test_a_forward_read_that_fits_still_says_more_follow(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(60)]
+    tools = tools_for(fake)
+    text = call_text(tools, {'room': room, 'start': sent[0]['id'], 'limit': 30})
+    assert text.rstrip().endswith(f'[30 more messages after these; `station_read room={room} start={sent[30]["id"]}` shows them]')
+    assert 'more messages' not in call_text(tools, {'room': room, 'start': sent[30]['id'], 'limit': 30})
+
+
+def test_the_newest_view_says_how_to_read_from_the_first(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(45)]
+    tools = tools_for(fake)
+    text = call_text(tools, {'room': room})
+    assert text.split('\n\n')[1] == f'[15 earlier messages; `station_read room={room} oldest=true` reads from the first]'
+    oldest = call_text(tools, {'room': room, 'oldest': True, 'limit': 10})
+    assert 'note 0\n' in oldest and 'note 10\n' not in oldest and f'start={sent[10]["id"]}`' in oldest
+
+
+def test_an_odd_next_id_pages_on_with_after(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(5)]
+    fake.rooms[room]['messages'][2]['id'] = 'odd id'
+    text = call_text(tools_for(fake), {'room': room, 'start': sent[0]['id'], 'limit': 2})
+    assert f'`station_read room={room} after={sent[1]["id"]}` shows them]' in text
+
+
+def test_one_of_start_after_or_oldest(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(3)]
+    assert call(tools_for(fake), 'station_read', room=room, start=sent[0]['id'], oldest=True)['isError'] is True
