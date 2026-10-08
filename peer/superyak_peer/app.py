@@ -214,14 +214,18 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
             raise Problem(403, 'Only a ship key can revoke itself')
         return store.revoke_presented_key(key)
 
+    @app.get('/api/ships/me/instructions')
+    def ship_instructions(request: Request):
+        return store.ship_instructions(ship_member(request)['id'], app.state.federation.identity.peer_id)
+
     @app.post('/api/ships/me/tickets')
     async def ticket_issue(request: Request):
         who, data = ship_member(request)['id'], await body(request)
-        return store.issue_ticket(who, data.get('message_id'))
+        return store.issue_ticket(who, data.get('message_id'), app.state.federation.identity.peer_id)
 
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
-        return store.finish_ticket(ship_member(request)['id'], key)
+        return store.finish_ticket(ship_member(request)['id'], key, app.state.federation.identity.peer_id)
 
     @app.patch('/api/me')
     async def rename_me(request: Request):

@@ -24,6 +24,28 @@ def render_blocks(layers, station):
 
 
 class Instructions:
+    def _layers_for(self, db, pairs):
+        """The layers at exactly these (layer_id, revision) pairs, as _binding_layers returns them."""
+        found = []
+        for layer_id, revision in pairs:
+            row = db.execute('SELECT layer_revisions.snapshot, layer_revisions.created, layers.owner_id, users.name AS signer '
+                             'FROM layer_revisions JOIN layers ON layers.id=layer_revisions.layer_id '
+                             'JOIN users ON users.id=layers.owner_id WHERE layer_revisions.layer_id=? AND layer_revisions.revision=?',
+                             (layer_id, revision)).fetchone()
+            if row:
+                snap = json.loads(row['snapshot'])
+                found.append({'layer_id': layer_id, 'revision': revision, 'title': snap['title'], 'body': snap['body'],
+                              'signer_id': row['owner_id'], 'signer_name': row['signer'], 'created': row['created']})
+        return sorted(found, key=lambda l: (l['created'], l['layer_id']))
+
+    def ship_instructions(self, actor, station):
+        with self.transaction() as db:
+            layers = self._binding_layers(db, actor)
+        return {'instructions': [[l['layer_id'], l['revision']] for l in layers],
+                'layers': [{'layer_id': l['layer_id'], 'revision': l['revision'], 'title': safe_line(l['title'], 200),
+                            'signer_name': safe_line(l['signer_name']), 'block': render_one(l, station)} for l in layers],
+                'blocks': render_blocks(layers, station)}
+
     def _binding_layers(self, db, ship_id, replace=None):
         ship = require(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
         if ship['kind'] != 'ship' or not ship['owner_id']:
