@@ -1537,3 +1537,28 @@ def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
             page.reload()
             expect(page.get_by_text("builder run for Alex Patient")).to_be_visible()
             expect(page.get_by_text("no run ticket")).to_be_visible()
+
+
+def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(browser_peer):
+    """Break caught: instructions can't be written for ships, or a ship's draft looks like the person's own."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    other = store.confirm_docking(users["doctor"]["id"], *(lambda d: (d["id"], d["code"]))(store.start_docking("defiant", "lab")))
+    store.ship_draft(ship["id"], {"title": "Proposed by the ship", "body": "Write tests first."})
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            expect(page.get_by_text("Drafted by Serenity").first).to_be_visible()
+            page.get_by_role("button", name="New layer").click()
+            page.get_by_label("Kind").select_option("instructions")
+            expect(page.get_by_role("checkbox", name="Defiant")).to_have_count(0)
+            page.get_by_label("Layer title").fill("House rules")
+            page.get_by_label("What do you want to share?").fill("Run the tests first.")
+            page.get_by_role("checkbox", name="Serenity").check()
+            page.get_by_role("button", name="Save private draft").click()
+            expect(page.get_by_text("Saved version 2", exact=True)).to_be_visible()
+            page.get_by_role("button", name="Preview audience").click()
+            page.get_by_role("button", name="Turn on version 2").click()
+            expect(page.get_by_text("Active · version 2")).to_be_visible()
+    assert store.ship_instructions(ship["id"], "x")["instructions"]
