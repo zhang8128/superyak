@@ -93,25 +93,37 @@ def test_a_state_path_that_cannot_be_read_does_not_break_the_prompt(station, shi
     assert run(fake, config_path) == ''
 
 
-def test_a_long_message_is_cut_with_a_visible_note(station, ship_config, tmp_path):
+def test_a_long_message_is_cut_with_a_note_naming_the_call_that_shows_it(station, ship_config, tmp_path):
     fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
     room = fake.room('Promenade', andy, jenn, serenity)
     run(fake, config_path, now=fake.clock)
-    fake.say(room, jenn, 'e' * 1000 + ' the ending')
+    long = fake.say(room, jenn, 'e' * 1000 + ' the ending')
     text = run(fake, config_path)
-    assert 'the ending' not in text and '[cut at 800 of 1,011 characters; station_read with max_chars=20000 shows all of it]' in text
+    assert 'the ending' not in text
+    assert f'[cut at 800 of 1,011 characters; station_read room={room} message={long["id"]} shows all of it]' in text
 
 
-def test_messages_left_out_for_space_are_counted_with_their_rooms(station, ship_config, tmp_path):
+def test_messages_left_out_for_space_are_counted_with_where_to_resume(station, ship_config, tmp_path):
     fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
     room = fake.room('Promenade', andy, jenn, serenity)
+    anchor = fake.say(room, jenn, 'before the burst')
     run(fake, config_path, now=fake.clock)
     for n in range(25):
         fake.say(room, jenn, f'message {n} ' + 'x' * 400)
     text = run(fake, config_path)
     shown = text.count('Room Promenade, message ')
     assert len(text) <= 4000 and 'message 24' in text
-    assert f'{25 - shown} earlier messages not shown (Promenade); station_read shows them.' in text
+    assert f'{25 - shown} earlier messages not shown. Promenade: station_read room={room} after={anchor["id"]}' in text
+
+
+def test_left_out_messages_in_a_new_room_name_the_room(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    run(fake, config_path, now=fake.clock)
+    room = fake.room('Fresh', andy, jenn, serenity)
+    for n in range(25):
+        fake.say(room, jenn, f'message {n} ' + 'x' * 400)
+    text = run(fake, config_path)
+    assert f'earlier messages not shown. Fresh: station_read room={room} limit=100' in text
 
 
 def test_nothing_is_said_when_every_message_fits(station, ship_config, tmp_path):
@@ -120,3 +132,14 @@ def test_nothing_is_said_when_every_message_fits(station, ship_config, tmp_path)
     run(fake, config_path, now=fake.clock)
     fake.say(room, jenn, 'short')
     assert 'not shown' not in run(fake, config_path)
+
+
+def test_the_left_out_note_keeps_the_hook_within_its_budget_whatever_the_rooms(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity, config_path = setup(station, ship_config, tmp_path)
+    run(fake, config_path, now=fake.clock)
+    for r in range(6):
+        room = fake.room('T' * 300 + str(r), andy, jenn, serenity)
+        for n in range(8):
+            fake.say(room, jenn, f'message {r}.{n} ' + 'x' * 400)
+    text = run(fake, config_path)
+    assert len(text) <= 4000 and 'earlier messages not shown.' in text and 'more rooms.' in text

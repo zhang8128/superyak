@@ -11,7 +11,6 @@ from superyak_team.teamlib import fence_external
 
 HOME = Path.home() / '.superyak'
 MESSAGE_LIMIT = 20000  # the station's longest message
-READ_HINT = f'; station_read with max_chars={MESSAGE_LIMIT} shows all of it'
 CONFIG = HOME / 'station.json'
 
 
@@ -143,6 +142,11 @@ def label(text, limit=80):
 def describe(member):
     member = member or {'name': 'someone', 'username': 'unknown', 'kind': 'unknown'}
     return f'{label(member.get("name"))} (@{label(member.get("username"))}, {label(member.get("kind"))})'
+
+
+def read_hint(room_id, message_id):
+    """The cut note's way back to the whole message: one call that returns just that message."""
+    return f'; station_read room={label(room_id, 100)} message={label(message_id, 100)} shows all of it'
 
 
 def fence_message(member, body, limit, hint=''):

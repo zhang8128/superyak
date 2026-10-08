@@ -156,16 +156,39 @@ def test_a_hostile_room_title_stays_one_sanitized_line(station):
     assert text.count('Ops') == 1 and text.count('```') == 2
 
 
-def test_read_cuts_long_messages_visibly_and_max_chars_shows_all(station):
+def test_read_cuts_long_messages_visibly_and_names_the_call_that_shows_one_whole(station):
     fake, andy, jenn, serenity = station
     room = fake.room('Promenade', andy, jenn, serenity)
-    fake.say(room, jenn, 'a' * 5990 + 'END OF BRIEF')
+    long = fake.say(room, jenn, 'a' * 5990 + 'END OF BRIEF')
     tools = tools_for(fake)
     text = call(tools, 'station_read', room='Promenade')['content'][0]['text']
-    assert 'a' * 4000 in text and 'a' * 4001 not in text and 'END OF BRIEF' not in text
-    assert '[cut at 4,000 of 6,002 characters; station_read with max_chars=20000 shows all of it]' in text
-    full = call(tools, 'station_read', room='Promenade', max_chars=20000)['content'][0]['text']
-    assert 'END OF BRIEF' in full and 'cut at' not in full
+    assert 'a' * 2000 in text and 'a' * 2001 not in text and 'END OF BRIEF' not in text
+    assert f'[cut at 2,000 of 6,002 characters; station_read room={room} message={long["id"]} shows all of it]' in text
+    whole = call(tools, 'station_read', room=room, message=long['id'])['content'][0]['text']
+    assert 'a' * 5990 + 'END OF BRIEF' in whole and 'cut at' not in whole
+
+
+def test_reading_one_message_returns_only_that_message(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'first')
+    middle = fake.say(room, andy, 'middle')
+    fake.say(room, jenn, 'last')
+    tools = tools_for(fake)
+    text = call(tools, 'station_read', room=room, message=middle['id'])['content'][0]['text']
+    assert 'middle' in text and 'first' not in text and 'last' not in text
+    missing = call(tools, 'station_read', room=room, message='nope')
+    assert missing['isError'] is True and 'nope' in missing['content'][0]['text']
+
+
+def test_after_pages_forward_oldest_first_so_every_message_can_be_reached(station):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    sent = [fake.say(room, jenn, f'note {n}') for n in range(10)]
+    tools = tools_for(fake)
+    text = call(tools, 'station_read', room=room, after=sent[2]['id'], limit=3)['content'][0]['text']
+    assert [n for n in range(10) if f'note {n}' in text] == [3, 4, 5]
+    assert call(tools, 'station_read', room=room, after='nope')['isError'] is True
 
 
 def test_max_chars_is_clamped_to_the_station_message_limit(station):
@@ -178,19 +201,20 @@ def test_max_chars_is_clamped_to_the_station_message_limit(station):
     assert call(tools, 'station_read', room='Promenade', max_chars=10**9)['isError'] is False
 
 
-def test_mentions_cut_long_messages_visibly(station):
+def test_mentions_cut_long_messages_visibly_and_point_at_the_message(station):
     fake, andy, jenn, serenity = station
     room = fake.room('Ops', andy, serenity)
-    fake.say(room, andy, '@serenity ' + 'c' * 4500 + ' last words')
+    asked = fake.say(room, andy, '@serenity ' + 'c' * 4500 + ' last words')
     tools = tools_for(fake)
     text = call(tools, 'station_mentions')['content'][0]['text']
-    assert 'last words' not in text and '[cut at 4,000 of 4,521 characters' in text
+    assert 'last words' not in text
+    assert f'[cut at 2,000 of 4,521 characters; station_read room={room} message={asked["id"]} shows all of it]' in text
     assert 'last words' in call(tools, 'station_mentions', max_chars=20000)['content'][0]['text']
 
 
 def test_the_cut_note_sits_outside_the_quoted_fence(station):
     fake, andy, jenn, serenity = station
     room = fake.room('Promenade', andy, jenn, serenity)
-    fake.say(room, jenn, 'd' * 4100)
+    fake.say(room, jenn, 'd' * 2100)
     text = call(tools_for(fake), 'station_read', room='Promenade')['content'][0]['text']
-    assert text.rstrip().endswith('shows all of it]') and text.index('```\n[cut at') > text.index('d' * 4000)
+    assert text.rstrip().endswith('shows all of it]') and text.index('```\n[cut at') > text.index('d' * 2000)
