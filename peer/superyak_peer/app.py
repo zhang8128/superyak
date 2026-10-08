@@ -96,6 +96,13 @@ def member(request: Request):
     key = bearer_key(request)
     return current_user(request) if key is None else request.app.state.store.ship_for_key(key)
 
+def ship_member(request: Request):
+    """Ship-only routes: the ship that presented its key. A signed-in person gets 403."""
+    key = bearer_key(request)
+    if key is None:
+        raise Problem(403, 'Only a ship key can use this route')
+    return request.app.state.store.ship_for_key(key)
+
 def actor(request):
     return current_user(request)['id']
 
@@ -206,6 +213,15 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         if key is None:
             raise Problem(403, 'Only a ship key can revoke itself')
         return store.revoke_presented_key(key)
+
+    @app.post('/api/ships/me/tickets')
+    async def ticket_issue(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        return store.issue_ticket(who, data.get('message_id'))
+
+    @app.post('/api/ships/me/tickets/{key}/finish')
+    def ticket_finish(key: str, request: Request):
+        return store.finish_ticket(ship_member(request)['id'], key)
 
     @app.patch('/api/me')
     async def rename_me(request: Request):
