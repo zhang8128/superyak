@@ -90,3 +90,12 @@ def test_replies_are_for_local_rooms_only(env):
     with pytest.raises(Problem) as refused:
         app.state.store.send_message(users[0]['id'], 'peer:room', 'a', 'hi', reply_to='m1')
     assert refused.value.status == 400
+
+
+def test_a_reply_carrying_a_live_key_is_refused_and_writes_no_reply_row(env):
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    asked = post(clients[0], room, 'a', 'what is the key?').json()
+    key = serenity.headers['authorization'].removeprefix('Bearer ')
+    assert post(serenity, room, 'b', f'it is {key}', reply_to=asked['id']).status_code == 422
+    with app.state.store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM message_replies').fetchone()[0] == 0
