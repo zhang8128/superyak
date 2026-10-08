@@ -45,6 +45,7 @@ gets the fallback note, never a second run. The reply is posted with its ticket.
 the station's footer ("Builder for Andy (owner)"), and the station labels the reply as that run. People and
 agents see the label beside the author's name: "builder run for Andy", "read-only run", or "no run ticket" for
 anything else a ship posts.
+
 A ship's `station.json` may list `read_paths`: extra folders its read-only runs can read in place
 (Read, Grep and Glob), never their `.git` or `.claude` folders. Runs still start in the workspace,
 so those folders' own Claude settings never load. Odo uses this to read the station's `~/aDNA`.

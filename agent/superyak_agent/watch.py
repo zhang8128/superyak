@@ -108,12 +108,14 @@ class Watcher:
                     if error.status != 409:
                         raise
                     log.warning('mention %s: its ticket is finished but no reply is in the room', mid)
+                    self.state['failures'].pop(mid, None)
                     return True, self._reply(mention['room_id'], mid, FALLBACK)
                 self.state['tickets'][mid] = ticket['id']
                 self.save()
                 mode = 'read' if self.resident or ticket.get('mode') != 'build' else 'build'  # never above the ticket
                 result = self.runner.run(mode, build_prompt(room, mention, self.config['ship'], mode), mid)
-                reply = format_reply(result, ticket.get('footer', '') if mode == 'build' else '')
+                footer = label(ticket.get('footer'), 200).replace('@', '(at)') if mode == 'build' and ticket.get('footer') else ''
+                reply = format_reply(result, footer)
         except RunTimeout as error:
             log.warning('mention %s timed out: %s', mid, error)
             reply = TIMEOUT_NOTE

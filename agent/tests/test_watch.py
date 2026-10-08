@@ -325,8 +325,35 @@ def test_retries_reuse_one_ticket_so_the_decision_cannot_change(station, ship_co
     flaky = FakeRunner(error=RuntimeError('model unavailable'))
     w = watcher(fake, ship_config, tmp_path, flaky)
     assert w.cycle() == 0
-    w = watcher(fake, ship_config, tmp_path, FakeRunner())  # a restart between tries
+    second = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, second)  # a restart between tries
     assert w.cycle() == 1 and len(fake.tickets) == 1
+    assert [mode for mode, _, _ in second.calls] == ['build']
+    reply = [m for m in fake.rooms[room]['messages'] if m['author_id'] == serenity['id']][-1]
+    assert fake.sources[reply['id']] == 't1' and reply['body'].endswith('\n\nBuilder for Andy (owner)')
+
+
+def test_a_footer_from_the_station_is_one_line_without_mentions(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    fake.ticket_override[asked['id']] = (200, {'id': 'tx', 'mode': 'build', 'basis': 'owner', 'footer': 'Builder for @jenn\nx (owner)', 'status': 'running'})
+    watcher(fake, ship_config, tmp_path, FakeRunner()).cycle()
+    body = bodies(fake, room)[-1]
+    footer = body.rsplit('\n\n', 1)[-1]
+    assert footer.endswith('(owner)') and '(at)jenn' in footer and '@jenn' not in footer and '\n' not in footer
+
+
+def test_a_finished_ticket_clears_the_earlier_failure_count(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    mid = asked['id']
+    w = watcher(fake, ship_config, tmp_path, FakeRunner(error=RuntimeError('model unavailable')))
+    assert w.cycle() == 0 and mid in w.state['failures']
+    fake.ticket_override[mid] = (409, {'error': 'This message has already been answered'})
+    assert w.cycle() == 1 and bodies(fake, room)[-1] == FALLBACK
+    assert mid not in w.state['failures']
 
 
 def test_a_reply_whose_ticket_can_no_longer_label_is_posted_unlabelled(station, ship_config, tmp_path):
