@@ -87,11 +87,11 @@ def start_prepare(name, cwd, log_path):
                             stderr=subprocess.STDOUT, env=env, start_new_session=True)
 
 
-def worker_git(path, gitdir, *args, check=True, input=None):
+def worker_git(path, gitdir, *args, check=True, input=None, text=True):
     return subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
                           + HARDENED_GIT + _driver_overrides(gitdir) + list(args),
                           cwd=str(path), env=_isolated_git_env(), input=input,
-                          capture_output=True, text=True, check=check)
+                          capture_output=True, text=text, check=check)
 
 
 def _is_tool_state(rel):

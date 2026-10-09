@@ -60,8 +60,12 @@ on the Mac could put files in `/tmp/sy-lane-<uid>`. teamd never follows a link t
 the broker is, but whether to set Codex's `sandbox_workspace_write.exclude_slash_tmp` is Andy's call; Codex workers are
 unchanged.
 
-**Known limit: a process that leaves a lane's environment behind.** At the end of every browser turn, teamd ends any process whose environment still
-carries the lane's `CLAUDE_CODE_TMPDIR`, so a turn's background leftovers don't outlive it. When a lane ends, teamd ends the broker, every
-process with a file under the lane or a listener on its ports, and every process whose environment still carries the
-lane's `CLAUDE_CODE_TMPDIR`. A child that started a new session, cleared its own environment and holds nothing in the
-lane escapes all three, until the next listener check finds anything it listens on.
+**Known limit: a process that leaves a lane's environment behind.** At the end of every browser turn, teamd ends any
+process whose environment still carries the lane's `CLAUDE_CODE_TMPDIR`, so a turn's background leftovers don't
+outlive it. When a lane ends, teamd ends the broker, every process with a file under the lane or a listener on its
+ports, and every process whose environment still carries that variable. A child that started a new session, cleared
+its own environment and holds nothing in the lane escapes all three, until the next listener check finds anything it
+listens on.
+
+**Known limit: Bricks' specs need the Bricks change before they run in a lane.** They have to take their ports from
+the lane's block (`SUPERYAK_LANE_PORT_BASE`) instead of fixed ones; that change is the Bricks lead's to make.

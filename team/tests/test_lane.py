@@ -3632,7 +3632,8 @@ def test_a_branch_that_adds_lane_advisory_is_flagged_to_the_lead(env):
     spec.write_text("test('card widths @lane-advisory', async () => {});\ntest('cards load', async () => {});\n")
     team.worker_done("kaylee", "tidied", "ok")
     flags = [m["message"] for m in team.state["lead_inbox"] if "@lane-advisory ADDED" in m["message"]]
-    assert len(flags) == 1 and "tests/cards.spec.ts: test('card widths @lane-advisory'" in flags[0]
+    assert len(flags) == 1 and "tests/cards.spec.ts: 0 -> 1 occurrences" in flags[0]
+    assert "test('card widths @lane-advisory'" in flags[0]
     team.spawn("another", "claude")
     wash = team.state["workers"]["wash"]
     assert run_until(team, lambda: wash["state"] == "idle")
@@ -3716,8 +3717,10 @@ def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn(env, lanes
     team.spawn("check the login page", "claude", browser=True)
     assert lock_free[0] is True                                                 # spawn's call: teamd's lock was free
     refuse.append(True)
+    before = len(lock_free)
     with pytest.raises(lane.LaneRefused, match="no manifest hash is recorded"):
         team.spawn("check the signup page", "claude", browser=True)
+    assert lock_free[before:] == [True]                                         # and on the refusing call
     assert list(team.state["workers"]) == ["kaylee"]
 
 
@@ -3733,3 +3736,117 @@ def test_settings_that_widen_during_a_turn_stop_it_at_the_next_check(env, lanes,
     team.monitor_once()
     assert any("LANE STOPPED" in m["message"] and "now widen" in m["message"] for m in team.state["lead_inbox"])
     assert run_until(team, lambda: w["state"] == "failed", timeout=10)
+
+
+# ---------- Task 9, fix round 1: the advisory flag reads blobs, not diffs, and fails loud ----------
+
+def idle_builder(env):
+    team = lane_team(env)
+    team.spawn("tidy the cards spec", "claude")
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    return team, w
+
+
+def commit_files(w, files, message="work"):
+    for name, data in files.items():
+        f = Path(w["path"]) / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(data)
+    workers.worker_git(w["path"], w["gitdir"], "add", "-A")
+    workers.worker_git(w["path"], w["gitdir"], "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message)
+
+
+def advisory_flags(team):
+    return [m["message"] for m in team.state["lead_inbox"] if "@lane-advisory" in m["message"]]
+
+
+TAGGED = b"test('card widths @lane-advisory', async () => {});\n"
+
+
+def test_advisory_added_sees_a_tag_the_diff_would_hide(env):
+    team, w = idle_builder(env)
+    commit_files(w, {".gitattributes": b"*.spec.ts -diff\n", "a.spec.ts": TAGGED,
+                     "nul.spec.ts": b"\0" + TAGGED, "plus.txt": b"++ @lane-advisory\n"})
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    names = sorted(f.split(":")[0] for f in found)
+    assert names == ["a.spec.ts", "nul.spec.ts", "plus.txt"], found
+
+
+def test_a_tag_already_at_base_is_not_flagged_unless_the_count_goes_up(env):
+    team = lane_team(env)
+    (env["repo"] / "old.spec.ts").write_bytes(TAGGED)
+    subprocess.run(["git", "-C", str(env["repo"]), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(env["repo"]), "commit", "-qm", "tagged"], check=True)
+    team.spawn("tidy", "claude")
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    commit_files(w, {"other.ts": b"x\n", "old.spec.ts": TAGGED + b"test('more', () => {});\n"})
+    assert lane.advisory_added(w["path"], w["base"], w["gitdir"]) == []
+    commit_files(w, {"old.spec.ts": TAGGED + TAGGED})
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    assert len(found) == 1 and found[0].startswith("old.spec.ts: 1 -> 2")
+
+
+def test_a_git_failure_is_raised_and_told_to_the_lead(env, monkeypatch):
+    team, w = idle_builder(env)
+    real = workers.worker_git
+
+    def broken(path, gitdir, *args, **kw):
+        if "--raw" in args:
+            raise FileNotFoundError("git")
+        return real(path, gitdir, *args, **kw)
+    monkeypatch.setattr(lane.workers, "worker_git", broken)
+    with pytest.raises(RuntimeError, match="git could not run"):
+        lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    team.worker_done("kaylee", "tidied", "ok")
+    msgs = lead_messages(team, "@lane-advisory CHECK FAILED")
+    assert len(msgs) == 1 and "the advisory check failed" in msgs[0]
+    monkeypatch.undo()
+    with pytest.raises(RuntimeError, match="exited"):
+        lane.advisory_added(w["path"], "0" * 40, w["gitdir"])
+
+
+def test_a_tag_committed_earlier_is_flagged_when_done_commits_nothing(env):
+    team, w = idle_builder(env)
+    commit_files(w, {"tests/cards.spec.ts": TAGGED})
+    team.worker_done("kaylee", "already committed", "ok")
+    assert w["commit"] is None
+    flags = advisory_flags(team)
+    assert len(flags) == 1 and "tests/cards.spec.ts: 0 -> 1" in flags[0]
+
+
+def test_a_long_advisory_report_says_it_was_cut(env):
+    team, w = idle_builder(env)
+    long_line = b"x = '" + b"y" * 300 + b" @lane-advisory'\n"
+    files = {"f%02d.ts" % n: long_line for n in range(23)}
+    commit_files(w, files)
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    assert found[-1] == "… and 3 more" and len(found) == 21
+    assert "…" in found[0] and all(len(ln) < 200 for ln in found[0].split("\n"))
+
+
+def test_a_non_browser_prompt_is_what_it_was_without_a_lane_brief(env, mac, monkeypatch):
+    monkeypatch.setattr(teamd.Team, "_fill_slots", lambda self: None)
+    team = lane_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    team.spawn("write docs", "claude")
+    plain = team._initial_prompt("wash")
+    w = team.state["workers"]["wash"]
+    brief = (teamlib.package_dir() / "roles" / "worker.md").read_text()
+    assert plain == ("%s\n\n---\nTeam: %s\nYou are: wash\nTeam goal: %s\nYour worktree (cwd): %s\n"
+                     "Your branch: %s\nRepository (read for context): %s\nTeammates: kaylee (claude, build)\n\n"
+                     "YOUR TASK:\n%s\n\nContext from the lead:\n%s\n"
+                     % (brief, team.team_id, team.state["goal"], w["path"], w["branch"], team.repo, w["task"],
+                        w["context"] or "(none)"))
+
+
+def test_the_lead_hears_about_one_lane_at_a_time_and_the_brief_binds_explicitly():
+    lead = (teamlib.package_dir() / "roles" / "lead.md").read_text()
+    assert "lane_one_at_a_time" in lead and "idle browser worker holds that lane" in lead
+    assert "Never bind 0.0.0.0, ::" in (teamlib.package_dir() / "roles" / "browser-lane.md").read_text()
+
+
+def test_the_readme_lists_the_bricks_limit():
+    readme = (teamlib.package_dir().parent / "README.md").read_text()
+    assert "Bricks' specs need the Bricks change before they run in a lane" in readme

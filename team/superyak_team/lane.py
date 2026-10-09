@@ -1957,15 +1957,52 @@ def lost_turn(pid, cwd, started, now=None):
 
 # ---------- advisory results (spec: What the lane must allow) ----------
 
+ADVISORY_TAG = b"@lane-advisory"
+ADVISORY_MAX_FILES, ADVISORY_MAX_LINE = 20, 160
+
+
 def advisory_added(path, base, gitdir):
-    """Lines this branch adds that carry @lane-advisory. The advisory set is the base commit's, so the lead reviews
-    any tag a branch adds before merging. Through teamd's hardened git (no hooks, drivers or textconv)."""
-    out = workers.worker_git(path, gitdir, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", base,
-                             "HEAD", check=False).stdout
-    found, current = [], "?"
-    for line in out.splitlines():
-        if line.startswith("+++ "):
-            current = line[6:] if line.startswith("+++ b/") else line[4:]
-        elif line.startswith("+") and "@lane-advisory" in line:
-            found.append("%s: %s" % (current, line[1:].strip()[:160]))
+    """Files whose count of @lane-advisory went up between the base commit and HEAD, as "<file>: <was> -> <now>
+    occurrences" plus the new lines. The advisory set is the base commit's, so the lead reviews any tag a branch
+    adds. It reads blobs as bytes (never a diff, which .gitattributes `-diff`, a NUL byte or a line starting `++ `
+    can blind) through teamd's hardened git. Any git failure raises RuntimeError: the caller tells the lead."""
+    def git(*args, input=None):
+        try:
+            r = workers.worker_git(path, gitdir, *args, check=False, input=input, text=False)
+        except OSError as e:
+            raise RuntimeError("git could not run: %r" % e)
+        if r.returncode != 0:
+            raise RuntimeError("git %s exited %d: %s" % (args[0], r.returncode,
+                                                        r.stderr.decode("utf-8", "replace").strip()[:200]))
+        return r.stdout
+    raw = git("diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--abbrev=40", base, "HEAD")
+    fields = raw.split(b"\0")
+    changed, k = [], 0
+    while k + 1 < len(fields) and fields[k].startswith(b":"):
+        meta = fields[k][1:].split()
+        changed.append((meta[0], meta[1], meta[2], meta[3], fields[k + 1]))   # old mode, new mode, old sha, new sha
+        k += 2
+    if any(fields[k:]):
+        raise RuntimeError("git diff --raw output was not understood")
+
+    def blob(mode, sha):
+        if mode == b"160000" or set(sha) == {ord("0")}:                       # a submodule, or no such side
+            return b""
+        return git("cat-file", "blob", sha.decode("ascii"))
+    found = []
+    for old_mode, new_mode, old_sha, new_sha, name in changed:
+        before, after = blob(old_mode, old_sha), blob(new_mode, new_sha)
+        was, now = before.count(ADVISORY_TAG), after.count(ADVISORY_TAG)
+        if now <= was:
+            continue
+        old_lines = set(before.split(b"\n"))
+        new = [ln.strip() for ln in after.split(b"\n") if ADVISORY_TAG in ln and ln not in old_lines][:3]
+        lines = []
+        for ln in new:
+            text = ln.decode("utf-8", "replace")
+            lines.append(text[:ADVISORY_MAX_LINE] + ("…" if len(text) > ADVISORY_MAX_LINE else ""))
+        found.append("%s: %d -> %d occurrences%s" % (name.decode("utf-8", "replace"), was, now,
+                                                    "".join("\n    " + ln for ln in lines)))
+    if len(found) > ADVISORY_MAX_FILES:
+        found = found[:ADVISORY_MAX_FILES] + ["… and %d more" % (len(found) - ADVISORY_MAX_FILES)]
     return found

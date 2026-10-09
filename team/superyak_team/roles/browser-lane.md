@@ -10,6 +10,8 @@ full real-Chrome suite, run locally and in CI, stays the merge gate.
   ports; the last one is the lane's browser, so leave it alone. Never `listen(0)`: take a port from the block.
 - Nothing beyond the lane's ports is reachable: no internet, no DNS, no other service on this machine. A test that
   needs the network needs a fake.
+- Never bind 0.0.0.0, ::, or a bare `localhost` that resolves to ::1 only; some frameworks default to all
+  interfaces or IPv6, so pass the host (127.0.0.1) explicitly.
 
 ## The browser
 - Playwright connects to the lane's browser by itself (Playwright Test reads `PW_TEST_CONNECT_WS_ENDPOINT`). Never

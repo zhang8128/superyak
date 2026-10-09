@@ -778,10 +778,17 @@ class Team:
                     summary, (sha or "no changes")[:10], tests or "(not reported)")
             self.say(wid, msg, w["thread_ts"])
             self._to_lead(wid, "DONE:", summary)
-            tagged = lane.advisory_added(w["path"], w["base"], w["gitdir"]) if sha else []
-            if tagged:
-                self._to_lead(wid, "@lane-advisory ADDED:", "this branch tags tests as advisory, but lane runs take "
-                              "the advisory set from the base commit; review before merging:\n" + "\n".join(tagged[:20]))
+            if w.get("mode") != "collab" and w.get("base"):
+                try:
+                    tagged = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+                except Exception as e:
+                    self._to_lead(wid, "@lane-advisory CHECK FAILED:", "the advisory check failed: %s; review the "
+                                  "branch for added @lane-advisory tags by hand before merging" % e)
+                else:
+                    if tagged:
+                        self._to_lead(wid, "@lane-advisory ADDED:", "this branch tags tests as advisory, but lane "
+                                      "runs take the advisory set from the base commit; review before merging:\n"
+                                      + "\n".join(tagged))
             if w.get("browser"):
                 proc = self.procs.get(wid)
                 if proc is not None and proc.poll() is None:

@@ -55,5 +55,8 @@ network beyond its own loopback ports: `team_spawn(task, kind="claude", browser=
 - Lane runs catch logic and UI regressions; the full real-Chrome suite stays the merge gate. `@lane-advisory`
   failures are reported separately, and the advisory set comes from the base commit: a DONE that says a branch adds
   the tag needs your review before you merge.
+- Under `lane_one_at_a_time` (the person's fallback when the cross-lane secret check fails) only one browser worker
+  runs per machine, and an idle browser worker holds that lane until it is done or stopped: finish or stop one before
+  spawning the next.
 - If a lane waits, teamd tells you which listeners block it. Only a person can approve one (only macOS's own
   services, in `~/.superyak/team/lane-listeners.json`); otherwise the listener has to stop.
