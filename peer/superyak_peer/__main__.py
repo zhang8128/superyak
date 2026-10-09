@@ -22,6 +22,23 @@ def ago(seconds):
     return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
 
 
+def keys(count, kind):
+    return f'{count} {kind} key' + ('' if count == 1 else 's')
+
+
+def existing_warning(existing):
+    """Said after a docking whose ship name is already taken: a re-dock revokes every key the ship holds, which would
+    otherwise look like a routine new ship."""
+    if not existing:
+        return ''
+    if existing['kind'] != 'ship':
+        return '  NAME TAKEN by a person: approving fails'
+    if existing['owner'] is None:
+        return '  NAME TAKEN by a station ship: approving fails'
+    return (f'  RE-DOCK of the existing ship, owned by {safe_line(existing["owner"])}: approving revokes its '
+            f'{keys(existing["active_keys"], "active")}')
+
+
 def describe_pending(items, now):
     """One line per waiting item, keyed by a short id; requester text is flattened to one safe line."""
     if not items:
@@ -30,7 +47,8 @@ def describe_pending(items, now):
     for item in items:
         if item['kind'] == 'docking':
             lines.append(f'docking {item["id"][:6]}  {safe_line(item["ship_name"])} from {safe_line(item["machine"])}'
-                         f'  asked {ago(now - item["created"])} ago, expires in {ago(item["expires"] - now)}')
+                         f'  asked {ago(now - item["created"])} ago, expires in {ago(item["expires"] - now)}'
+                         + existing_warning(item.get('existing')))
         else:
             note = f'  note: {safe_line(item["note"], 200)}' if item['note'].strip() else ''
             lines.append(f'access  {item["id"][:6]}  {safe_line(item["name"])} <{safe_line(item["contact"])}>'
@@ -40,6 +58,11 @@ def describe_pending(items, now):
 
 def describe_decision(item, result, person, approve):
     if item['kind'] == 'docking':
+        existing = item.get('existing') or {}
+        if approve and existing.get('kind') == 'ship':
+            return (f'{result["name"]} is docked again for {person}; its {keys(existing["active_keys"], "earlier")} '
+                    f'{"is" if existing["active_keys"] == 1 else "are"} revoked. The machine picks up its new key on '
+                    f'its next check.')
         if approve:
             return f'{result["name"]} is docked for {person}. The machine picks up its key on its next check.'
         return f'Refused the docking of {safe_line(item["ship_name"])} from {safe_line(item["machine"])}.'

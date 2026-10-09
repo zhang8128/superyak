@@ -53,6 +53,52 @@ def test_approving_a_docking_makes_the_ship_yours_and_the_machine_collects_the_k
     assert store.ship_for_key(status['key'])['username'] == 'defiant'
 
 
+def docked(store, name, machine):
+    """A ship docked and approved for andy, as the machine sees it: (docking, its key)."""
+    docking = store.start_docking(name, machine)
+    store.station_decide('andy', docking['id'][:6], True)
+    return docking, store.docking_status(docking['id'], docking['secret'])['key']
+
+
+def test_pending_flags_a_redock_and_the_keys_approving_it_revokes(station, capsys):
+    """A docking for a ship that already exists is a re-dock: approving it revokes every key that ship holds, so the
+    list says so instead of looking like a new ship."""
+    store, andy, docking, request = station
+    docked(store, 'serenity', 'kairos-mac')
+    again = store.start_docking('serenity', 'other-mac')
+    lines = {line.split()[1]: line for line in run(capsys, store, 'station-pending').splitlines() if line.startswith('docking')}
+    assert 'RE-DOCK' in lines[again['id'][:6]] and 'revokes its 1 active key' in lines[again['id'][:6]]
+    assert 'owned by andy' in lines[again['id'][:6]]
+    assert 'RE-DOCK' not in lines[docking['id'][:6]]                      # defiant is a new ship
+
+
+def test_pending_says_when_a_docking_names_a_person(station, capsys):
+    store, andy, docking, request = station
+    clash = store.start_docking('andy', 'odd-machine')
+    line = next(l for l in run(capsys, store, 'station-pending').splitlines() if l.startswith(f'docking {clash["id"][:6]}'))
+    assert 'NAME TAKEN by a person: approving fails' in line and 'RE-DOCK' not in line
+
+
+def test_pending_says_when_a_docking_names_a_station_ship(station, capsys):
+    """Odo's home is outside ~/.superyak, so a machine's own collision check can't see it; the station can."""
+    store, andy, docking, request = station
+    store.create_station_ship('odo', 'Odo')
+    clash = store.start_docking('odo', 'kairos-mac')
+    line = next(l for l in run(capsys, store, 'station-pending').splitlines() if l.startswith(f'docking {clash["id"][:6]}'))
+    assert 'NAME TAKEN by a station ship: approving fails' in line
+
+
+def test_approving_a_redock_says_it_revoked_the_earlier_keys(station, capsys):
+    store, andy, docking, request = station
+    first, old_key = docked(store, 'serenity', 'kairos-mac')
+    again = store.start_docking('serenity', 'other-mac')
+    out = run(capsys, store, 'station-approve', '--id', again['id'][:6], '--as', 'andy')
+    assert 'Serenity is docked again for andy' in out and 'its 1 earlier key is revoked' in out
+    with pytest.raises(Problem):                                          # the earlier key is revoked
+        store.ship_for_key(old_key)
+    assert store.ship_for_key(store.docking_status(again['id'], again['secret'])['key'])['username'] == 'serenity'
+
+
 def test_approving_an_access_request_releases_the_invitation_once(station, capsys):
     store, andy, docking, request = station
     out = run(capsys, store, 'station-approve', '--id', request['id'][:6], '--as', 'andy')
