@@ -85,9 +85,10 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
     supplied-presentation and unavailable-actions) and the opt-in GTM pixel suite.
   - Bricks tags the individual geometry tests (not whole spec files) `@lane-advisory`. The acceptance run's step 6
     agrees eight of them by file and whole title, as Playwright reports them (`ADVISORY_SPECS`), and the pixel
-    suite's file as a whole (`ADVISORY_FILES`, skipped unless `GTM_SOURCE_VISUAL=1`). The tag is taken out of the
-    title, or read from Playwright's `{ tag }` option with or without its `@`, the same way in both. Any other tagged
-    failure, in an agreed file or not, is a FAIL there; `visual-recipes.spec.ts` stays out.
+    suite's file as a whole (`ADVISORY_FILES`, skipped unless `GTM_SOURCE_VISUAL=1`): any failure in that file is
+    advisory, tagged or not. The tag is taken out of the title, or read from Playwright's `{ tag }` option with or
+    without its `@`, the same way in both. Any other tagged failure, in an agreed file or not, is a FAIL there, and so
+    is an untagged failure in a file whose tests are agreed one by one; `visual-recipes.spec.ts` stays out.
   - The advisory set is taken from the base commit, and a diff that adds `@lane-advisory` is flagged to the lead. The
     check runs at `team_done` in teams with `browser_lane` only (final fix wave, I2: a team without lanes is
     unchanged); `git cat-file --batch-check` comes first, and a blob over 1 MB is never read: the lead hears which
@@ -381,9 +382,15 @@ leftover that cleared its environment, doesn't listen in the block and has nothi
 behind, never the broker and never ports or files. On macOS the environment match alone misses a turn's leftover that
 runs an Apple program: KERN_PROCARGS2 hides such a program's environment (a setsid child that execs `/bin/sleep` shows
 none). So two more kinds of evidence count. Both apply only to a process that is this uid's, isn't teamd or above it,
-isn't in the broker's family, and runs under the turn's Seatbelt profile. That last test is `sandbox_check`: the
-process is sandboxed, and its profile lets it write both the worker's worktree and `<lane>/tmp`. Andy's shell and what
-claude starts outside its sandbox fail it, and so do another app's sandbox and another lane's turn.
+isn't in the broker's family, and runs under the turn's Seatbelt profile. That last test is `sandbox_check`, asked
+about each path by its real path: the process is sandboxed, its profile lets it write both the worker's worktree and
+`<lane>/tmp`, and it may not read `<lane>/b` (the turn's profile denies the whole lane parent but tmp/ and
+npm-cache/; most other sandboxes allow that read). Andy's shell and what claude starts outside its sandbox fail it,
+and so do another lane's turn and a sandbox that may read b/. Acceptance step 2 (C1) checks the real profile against
+it: every sandboxed process under a turn passes, and claude and `run_team.py` don't. A gone pid (zombie, reaped or
+never used) answers 1 to every question on macOS 27, so it reads as denied and is not taken; any answer other than 0
+or 1 is "not taken" for a pid that has gone, so one gone pid never holds up a cleanup, and "can't say" for one still
+running.
 - **(b) The turn's tree.** On every monitor pass while the turn runs, teamd samples the descendants of the turn's
   claude, teamd's own child, as pid plus start time (`proc_pidinfo`, to the microsecond). At the end, a sampled
   process still running with the same start time counts.
@@ -394,7 +401,9 @@ claude starts outside its sandbox fail it, and so do another app's sandbox and a
 
 Each process found this way is signalled only while its start time is still the one found, checked again just before
 each signal, so a pid reused meanwhile is never signalled. If ps, lsof or `sandbox_check` can't say, nothing is
-signalled and the cleanup counts as unfinished. At a lane's end the same evidence joins the lane's cleanup.
+signalled and the cleanup counts as unfinished; so does a libSystem (or its `sandbox_check` or `proc_pidinfo`) that
+won't load on macOS, which is told by `platform.system()`, never taken for "not macOS". At a lane's end the same
+evidence joins the lane's cleanup.
 
 **Briefs.**
 - `team/superyak_team/roles/browser-lane.md` is a new file, appended to the initial prompt only for browser
@@ -465,10 +474,13 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   survives the turn and the lane's end. It still runs under the turn's Seatbelt profile, so it keeps that profile's
   limits (no egress, writes only where the turn could write), but it can go on using the lane's ports and the
   worker's worktree until it exits or Andy ends it.
-- **The profile test can't name the profile** (lane-mac-leftovers). `sandbox_check` shows that a process is sandboxed
-  and may write both the worktree and `<lane>/tmp`, not which profile it runs under, so another sandbox allowing both
-  would pass it. Only a lane turn is given `<lane>/tmp` to write, and the tree or orphan rule, the start time and the
-  cwd must still hold, so this is a narrow gap rather than an open door.
+- **The profile test can't name the profile** (lane-mac-leftovers). `sandbox_check` shows that a process is sandboxed,
+  may write both the worktree and `<lane>/tmp` and may not read `<lane>/b`, not which profile it runs under, so another
+  sandbox with those three answers would pass it. `<lane>/tmp` is no narrowing on its own: a sandbox that may write
+  all of /tmp (`(allow default)`, Codex's workspace-write) can write it too. What narrows it is the worktree, at
+  `<repo>-worktrees/<team>/<worker>` outside the repository, which few other sandboxes may write, together with the
+  denied read of b/, which most of them allow. The tree or orphan rule, the start time and the cwd must still hold
+  as well.
 - Lanes share localhost: with more than one lane, a lane's worker can connect to another lane's servers (the
   listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
