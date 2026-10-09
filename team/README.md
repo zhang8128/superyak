@@ -73,13 +73,23 @@ own file, `~/.superyak/team/teams/<team>/workers/<worker>/lane-preload.cjs`, nev
 `managed-settings.json` that defines hooks refuses lanes: Claude Code runs those even under `disableAllHooks`. So does
 any `sandbox` key in your `~/.claude/settings.json`, `settings.local.json` or the managed policy, at any depth, except
 an empty `network.allowedDomains`: those merge into the lane's sandbox (and `excludedCommands` run fully outside it).
-A `managed-mcp.json` refuses lanes, and so does a helper command (`apiKeyHelper`, `awsAuthRefresh`,
-`awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`, `proxyAuthHelper`, `processWrapper`) in your settings or
-the managed policy, a `policyHelper`/`policyHelpers` entry in the managed policy, and any plugin the managed policy
-turns on (`enabledPlugins` true): flag settings can't switch that one off. A settings file of yours or the worktree's
-that could name plugins but can't be fully read (not a regular file, over 1 MB, not JSON) refuses the turn, naming the
-file. When a lane ends, teamd ends the processes that listen in its block, have their cwd under it or hold a file under it open; a hard-linked file is never evidence, so a lane can't get another program killed by linking its open file in. A lane also denies writes to the worktree's `.claude/` and `.mcp.json`. Claude Code runs those helpers outside the sandbox with the lane's environment. A lane's own flag settings blank every
-helper, so one planted in the worktree's `.claude/` doesn't run either.
+A `managed-mcp.json` refuses lanes, and so does a `managed-settings.d/` folder or a server-managed `remote-settings.json`
+(in Claude's config folder), and a `CLAUDE_CODE_PROCESS_WRAPPER` in teamd's own environment (a lane's worker never
+inherits it). So does a helper command (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`,
+`otelHeadersHelper`, `proxyAuthHelper`, `processWrapper`) in your settings or the managed policy, a
+`policyHelper`/`policyHelpers` entry in the managed policy, and any plugin the managed policy turns on (an
+`enabledPlugins` value other than `false`, a version list included): flag settings can't switch that one off. Claude
+Code runs those helpers outside the sandbox with the lane's environment. A lane's own flag settings blank every helper,
+so one planted in the worktree's `.claude/` doesn't run either, and they turn off the plugins your settings name, the
+ones synced from claude.ai (`syncClaudeAiPlugins: false`) and those in the worktree's `.claude/`. A settings file of
+yours or the worktree's that could name plugins but can't be fully read (not a regular file, over 1 MB, not JSON)
+refuses the turn, naming the file. A lane also denies writes to the worktree's `.claude/` and `.mcp.json`.
+
+When a lane ends, teamd ends the processes in it, by three kinds of evidence only: a listening port in the lane's
+block; the lane's exact `CLAUDE_CODE_TMPDIR` in the environment; or a cwd or open file under `<lane>/b`, which the
+worker can't write (a regular file with one link whose device and inode match lsof's). A path under `tmp/` or
+`npm-cache/` is never evidence, and a hard-linked file never is. Known limit: a leftover that cleared its environment
+and holds only files in `tmp/` survives cleanup.
 
 The broker's stderr is kept in teamd's folder, `~/.superyak/team/<team>/workers/<worker>/broker-stderr.log`, never in
 the lane's folder.

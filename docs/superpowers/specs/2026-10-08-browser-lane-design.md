@@ -358,13 +358,20 @@ the Mac.
 `net.Server.prototype.listen` so that an unspecified host, `0.0.0.0` or `::` becomes `127.0.0.1`.
 
 **Process cleanup.** When a lane ends, teamd sends SIGTERM, then after 5 s SIGKILL, to the broker's group and to every
-process of this uid that either listens on a port in the lane's block or has its cwd or an open file under the lane
-(`lsof -nP -a -u <uid> -F pfitn`, matched by string prefix with a trailing `/`, never walking the lane folder), or whose
-environment holds the lane's exact `CLAUDE_CODE_TMPDIR`. This catches Playwright's detached webServer and dev servers, which `killpg` on the worker misses.
-A hard-linked file is never evidence: macOS lsof names a hard-linked file by the path the kernel looked up last, so a
-lane could link a stranger's open file into its folder and get the stranger killed. An open file under the lane counts
-only if `lstat` of its name shows no link, `st_nlink == 1` and the descriptor's inode; a cwd, a listening port in the
-block and the exact `CLAUDE_CODE_TMPDIR` still count.
+process of this uid that is in the lane by one of three kinds of evidence, and by nothing else:
+- it listens on a port in the lane's block;
+- its environment holds the lane's exact `CLAUDE_CODE_TMPDIR`;
+- its cwd or an open file is under `<lane>/b`, which the worker can't write. One `lsof -nP -a -u <uid> -F pfitDn`
+  gives the names; each is walked again from the lane, one component at a time with `O_NOFOLLOW|O_DIRECTORY` through
+  `dir_fd`, and the last is `stat`ed with `follow_symlinks=False`. A file counts only if it is regular with
+  `st_nlink == 1`, and its `st_dev` and `st_ino` both equal lsof's `D` and `i` fields; a cwd must be a folder with the
+  same dev and ino. A descriptor without an inode and device is never evidence.
+
+Paths under `<lane>/tmp` and `<lane>/npm-cache`, which the worker can write, are never evidence: the worker could swap a
+folder there for a link, rename one of its own folders in, or hard-link a stranger's open file (macOS lsof names a
+hard-linked file by the path the kernel looked up last). Membership there comes only from the environment or a port.
+This catches Playwright's detached webServer and dev servers, which `killpg` on the worker misses. Known limit: a
+leftover that cleared its environment and holds only files in `tmp/` survives cleanup.
 
 **Briefs.**
 - `team/superyak_team/roles/browser-lane.md` is a new file, appended to the initial prompt only for browser

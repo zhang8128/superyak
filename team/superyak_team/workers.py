@@ -348,6 +348,7 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
         # and a plugin set to false is off (its hooks, MCP and LSP servers, monitors): lane.lane_plugins names them.
         settings.update({key: "" for key in lanes.HELPER_KEYS})
         settings["enabledPlugins"] = {plugin: False for plugin in plugins_off}
+        settings["syncClaudeAiPlugins"] = False        # synced claude.ai plugins load without being named in a file
     return settings
 
 

@@ -628,7 +628,7 @@ def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
     assert fs["denyWrite"] == before["denyWrite"] + ["/r/wt/.claude", "/r/wt/.mcp.json"]      # H3
     assert path not in fs["allowWrite"] and path + "/b" not in fs["allowWrite"] and preload not in fs["allowWrite"]
     assert not any(p.startswith(path + "/b") for p in fs["allowWrite"] + fs["allowRead"])
-    assert set(laned) - set(plain) == {"disableAllHooks", "enabledPlugins", *lane.HELPER_KEYS}
+    assert set(laned) - set(plain) == {"disableAllHooks", "enabledPlugins", "syncClaudeAiPlugins", *lane.HELPER_KEYS}
     assert laned["disableAllHooks"] is True and laned["enabledPlugins"] == {}
     cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo", lane=path,
                                  preload=preload)
@@ -2465,7 +2465,9 @@ def qualified_node():
 
 
 NODE = qualified_node()
-NO_NODE = "no node outside $HOME for the broker; install one or set lane_node"
+NO_NODE = ("no node that the broker's profile accepts: none of /opt/homebrew/bin/node, /usr/local/bin/node and "
+           "/usr/bin/node exists and passes lane.node_prefix (these tests start that node under a fake sandbox-exec; "
+           "they do not read lane_node)")
 # Linux stand-in for sandbox-exec: record the inline profile ("-p <profile>") in a file of the test's, then run the
 # rest (without the PWD the shell adds). The broker's environment is built from nothing, so the path is in the script.
 FAKE_SANDBOX_EXEC = '#!/bin/sh\nprintf %%s "$2" > \'%s\'\nshift 2\nexec /usr/bin/env -u PWD "$@"\n'
@@ -2478,6 +2480,7 @@ const net = require('net'), fs = require('fs'), path = require('path'), { spawn 
 exports.chromium = { launchServer: async (o) => {
   const out = process.env.TMPDIR;
   fs.writeFileSync(path.join(out, 'env.json'), JSON.stringify(Object.keys(process.env).sort()));
+  fs.writeFileSync(path.join(out, 'env-values.json'), JSON.stringify(process.env));
   fs.writeFileSync(path.join(out, 'options.json'), JSON.stringify(o));
   if (fs.existsSync(path.join(__dirname, 'FAIL_AFTER_SPAWN'))) {   // a child (cwd = b/) is left behind
     const orphan = spawn('sleep', ['300'], { stdio: 'ignore', detached: true });
@@ -2582,6 +2585,8 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
         # The real broker is `sandbox-exec -p ... node -e ...` with no shell, so its environment is exactly the built
         # one. This test's stand-in sandbox-exec is a /bin/sh script, and a shell adds SHLVL, PWD and _ on macOS: those
         # (only) are ignored here.
+        values = json.loads((b / "env-values.json").read_text())
+        assert values.get("TMPDIR") == str(b) and values.get("MAC_CHROMIUM_TMPDIR") == str(b), "TMPDIR=<b> missing"
         assert [k for k in json.loads((b / "env.json").read_text()) if k not in ("SHLVL", "PWD", "_")] == sorted(
             ["PATH", "HOME", "TMPDIR", "MAC_CHROMIUM_TMPDIR", "PLAYWRIGHT_BROWSERS_PATH", "SUPERYAK_BROKER_PLAYWRIGHT"])
         options = json.loads((b / "options.json").read_text())
@@ -2729,15 +2734,16 @@ def test_cleanup_ends_the_lanes_listeners_and_users_and_nothing_else(env, tmp_ro
     base = lane.allocate_block("t1", "kaylee")
     server = spawn_python("import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', %d))\ns.listen()\n"
                           "time.sleep(60)" % (base + 3), env["tmp"])
-    worker_child = spawn_python("import time; time.sleep(60)", path / "tmp")
+    worker_child = spawn_python("import time; time.sleep(60)", path / "b")        # b/: the worker can't write it
+    in_tmp = spawn_python("import time; time.sleep(60)", path / "tmp")            # tmp/: a path there is no evidence
     bystander = spawn_python("import time; time.sleep(60)", env["tmp"])
     try:
         wait_listening(base + 3)
         assert lane.cleanup_processes(path, base) is True
         assert gone(server.pid) and gone(worker_child.pid)
-        assert bystander.poll() is None
+        assert bystander.poll() is None and in_tmp.poll() is None
     finally:
-        for proc in (server, worker_child, bystander):
+        for proc in (server, worker_child, in_tmp, bystander):
             proc.kill()
             proc.wait()
 
@@ -2843,9 +2849,7 @@ def test_prepare_broker_runs_for_real_without_deadlocking_on_the_install_lock(en
     again inside it (the plan's old teamlib.locked on the same file deadlocked)."""
     tarball = npm_tarball(PW_FILES)
     base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
-    if not NODE:
-        pytest.skip(NO_NODE)
-    node = Path(os.path.realpath(NODE))
+    node = Path(os.path.realpath(NODE or sys.executable))     # never run: a stand-in for check_lane_node's answer
     monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: node)
     monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
         fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
@@ -2974,9 +2978,10 @@ def test_a_full_lsof_listing_that_exits_1_fails_closed(env, tmp_root, monkeypatc
 
 def test_the_lane_prefix_match_needs_the_separator_and_teamd_is_never_taken(env, tmp_root, monkeypatch):
     path = lane.ensure_lane("t1", "kaylee")
-    (path / "tmp" / "f").write_text("x")
     (path / "b" / "f").write_text("x")
-    listing = "p111\nf3\nn%s/tmp/f\np222\nf3\nn%sd/f\np%d\nf3\nn%s/b/f\n" % (path, path, os.getpid(), path)
+    st = os.lstat(path / "b" / "f")
+    listing = (f_record(111, "3", "REG", st, "%s/b/f" % path) + f_record(222, "3", "REG", st, "%sd/b/f" % path)
+               + f_record(os.getpid(), "3", "REG", st, "%s/b/f" % path))
     lsof_stub(monkeypatch, listing, table="%d 1 %d %d\n" % (os.getpid(), os.getpid(), os.getuid()))
     assert lane.lane_pids(path, None) == {111}
 
@@ -2985,9 +2990,9 @@ def test_lane_pids_spares_teamds_whole_parent_chain(env, tmp_root, monkeypatch):
     path = lane.ensure_lane("t1", "kaylee")
     me, parent = os.getpid(), os.getppid()
     table = "%d %d %d %d\n%d 1 %d %d\n" % (me, parent, me, os.getuid(), parent, parent, os.getuid())
-    (path / "tmp" / "f").write_text("x")
-    (path / "tmp" / "g").write_text("x")
-    listing = "p%d\nf3\nn%s/tmp/f\np555\nf3\nn%s/tmp/g\n" % (parent, path, path)
+    (path / "b" / "f").write_text("x")
+    st = os.lstat(path / "b" / "f")
+    listing = f_record(parent, "3", "REG", st, "%s/b/f" % path) + f_record(555, "3", "REG", st, "%s/b/f" % path)
     lsof_stub(monkeypatch, listing, table=table)
     assert lane.lane_pids(path, None) == {555}
 
@@ -3773,10 +3778,10 @@ def test_a_turns_leftover_children_end_with_the_turn_but_the_broker_stays(env, l
             return None
     if REAL_PLATFORM != "darwin":
         monkeypatch.setattr(lane, "_environ", proc_environ)       # on a real Mac the real KERN_PROCARGS2 reader runs
-    # A new session without the `setsid` program (macOS has none), and a non-system process (python), whose
-    # environment KERN_PROCARGS2 reports; /bin/sleep is an Apple binary.
-    leftover = ("import os, sys, time; os.setsid(); f = open(sys.argv[1], 'w'); f.write(str(os.getpid())); f.close(); "
-                "time.sleep(60)")
+    # A new session without the `setsid` program (macOS has none), then exec of /bin/sleep, an Apple program: on a real
+    # Mac this proves KERN_PROCARGS2 shows an Apple program's environment (the pid stays the same across the exec).
+    leftover = ("import os, sys; os.setsid(); f = open(sys.argv[1], 'w'); f.write(str(os.getpid())); f.close(); "
+                "os.execv('/bin/sleep', ['sleep', '300'])")
     fake_claude(tmp_path, monkeypatch,
                 "'%s' -c \"%s\" \"$PWD/leftover.pid\" &\n"
                 "while [ ! -s \"$PWD/leftover.pid\" ]; do sleep 0.05; done\n"
@@ -4165,7 +4170,7 @@ def test_a_browser_worker_starts_with_strict_mcp_config_and_hooks_off(env, monke
     written = json.loads((wdir / "settings.json").read_text())
     assert written["disableAllHooks"] is True
     before = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
-    assert set(written) - set(before) == {"disableAllHooks", "enabledPlugins", *lane.HELPER_KEYS}
+    assert set(written) - set(before) == {"disableAllHooks", "enabledPlugins", "syncClaudeAiPlugins", *lane.HELPER_KEYS}
     assert "disableAllHooks" not in json.loads((teamlib.team_dir("t1") / "workers" / "wash" / "settings.json").read_text())
 
 
@@ -4704,9 +4709,7 @@ def test_a_waiting_worker_is_not_rehashed_every_retry(env, lanes):
 def test_prepare_without_verify_hashes_nothing_already_installed(env, manifests, unpack, monkeypatch):
     tarball = npm_tarball(PW_FILES)
     base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
-    if not NODE:
-        pytest.skip(NO_NODE)
-    node = Path(os.path.realpath(NODE))
+    node = Path(os.path.realpath(NODE or sys.executable))     # never run: a stand-in for check_lane_node's answer
     monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: node)
     monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
         fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
@@ -5372,80 +5375,198 @@ def test_h5_the_snapshot_keys_stay_in_sorted_order(env, tmp_path):
     assert list(lane.instruction_snapshot(wt)) == sorted(lane.instruction_snapshot(wt))
 
 
-# ---------- Lane hardening: a hard-linked file is never evidence that a process belongs to the lane ----------
+# ---------- Lane hardening round 2, items 1 and 2: path evidence counts only under <lane>/b ----------
 
-def f_record(pid, fd, kind, inode, name):
-    return "p%d\nf%s\nt%s\ni%d\nn%s\n" % (pid, fd, kind, inode, name)
+def f_record(pid, fd, kind, st, name):
+    return "p%d\nf%s\nt%s\ni%d\nD0x%x\nn%s\n" % (pid, fd, kind, st.st_ino, st.st_dev, name)
 
 
-def test_a_holder_of_a_hard_linked_file_is_not_in_the_kill_set(env, tmp_root, short_dir, monkeypatch):
-    """macOS lsof names a hard-linked file by the path the kernel looked up last, so a lane that links a stranger's open
-    file into its tmp/ (and looks it up last through the lane's path) would get the stranger killed. nlink 2 is
-    ambiguous: it never counts."""
+def table_of_self(monkeypatch):
+    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
+
+
+def test_h_a2_a_stranger_linked_in_and_then_swapped_for_a_link_is_not_evidence(env, tmp_root, short_dir, monkeypatch):
+    """Reviewer's probe A2: lsof names a stranger's file by the lane's path (macOS), then the lane drops its link and
+    swaps a parent folder for a symlink to the stranger's folder, so an lstat of the name lands on the stranger's file.
+    Under tmp/ a path is never evidence."""
     path = lane.ensure_lane("t1", "kaylee")
-    held = Path(short_dir) / "held.txt"
+    outside = Path(short_dir)
+    held = outside / "held.db"
     held.write_text("x")
-    linked = path / "tmp" / "linked.txt"
-    os.link(held, linked)
-    os.lstat(linked)                                              # looked up through the lane's path last
-    assert os.lstat(linked).st_nlink == 2
-    lsof_stub(monkeypatch, f_record(777, "3", "REG", os.lstat(linked).st_ino, str(linked)), table="")
-    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
-    assert lane.lane_pids(path, None) == set()
-
-
-def test_a_process_with_a_single_link_file_open_in_the_lane_is_in_the_kill_set(env, tmp_root, monkeypatch):
-    path = lane.ensure_lane("t1", "kaylee")
-    own = path / "tmp" / "own.txt"
-    own.write_text("x")
-    lsof_stub(monkeypatch, f_record(777, "4", "REG", os.lstat(own).st_ino, str(own)))
-    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
-    assert lane.lane_pids(path, None) == {777}
-    # the descriptor's inode must be the file's: a different inode under the same name is not this file
-    lsof_stub(monkeypatch, f_record(777, "4", "REG", os.lstat(own).st_ino + 1, str(own)))
-    assert lane.lane_pids(path, None) == set()
-
-
-def test_a_process_with_its_cwd_in_the_lane_is_in_the_kill_set(env, tmp_root, monkeypatch):
-    path = lane.ensure_lane("t1", "kaylee")
-    folder = path / "tmp"
-    lsof_stub(monkeypatch, f_record(778, "cwd", "DIR", os.lstat(folder).st_ino, str(folder)))
-    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
-    assert lane.lane_pids(path, None) == {778}
-
-
-def test_a_name_that_vanished_between_lsof_and_lstat_does_not_count(env, tmp_root, monkeypatch):
-    path = lane.ensure_lane("t1", "kaylee")
-    gone_file = path / "tmp" / "gone.txt"
-    lsof_stub(monkeypatch, f_record(779, "5", "REG", 12345, str(gone_file)))
-    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
-    assert lane.lane_pids(path, None) == set()
-    (path / "tmp" / "target").write_text("x")
-    os.symlink("target", path / "tmp" / "link")                    # a link is never followed or counted
-    lsof_stub(monkeypatch, f_record(779, "5", "REG", os.lstat(path / "tmp" / "target").st_ino, str(path / "tmp" / "link")))
+    st = os.lstat(held)
+    (path / "tmp" / "a").mkdir()
+    os.link(held, path / "tmp" / "a" / "held.db")
+    name = str(path / "tmp" / "a" / "held.db")
+    lsof_stub(monkeypatch, f_record(777, "3", "REG", st, name))
+    table_of_self(monkeypatch)
+    assert lane.lane_pids(path, None) == set()                       # state A: nlink 2
+    os.unlink(path / "tmp" / "a" / "held.db")
+    os.rmdir(path / "tmp" / "a")
+    os.symlink(str(outside), path / "tmp" / "a")                     # state B: lstat lands on the stranger's file
+    assert os.lstat(name).st_nlink == 1 and os.lstat(name).st_ino == st.st_ino
     assert lane.lane_pids(path, None) == set()
 
 
 @pytest.mark.skipif(not shutil.which("lsof"), reason="needs lsof")
-def test_the_real_lsof_and_a_real_hard_link_leave_the_holder_alone(env, tmp_root, short_dir):
-    """The acceptance hardlink-naming case through the real lane_pids and a real lsof: a stranger holds a file open,
-    another name for it is in the lane's tmp/, looked up last."""
+def test_h_b1_a_folder_renamed_into_tmp_does_not_put_its_users_in_the_kill_set(env, tmp_root, short_dir):
+    """Reviewer's probe B1: the worker renames a folder of its worktree into <lane>/tmp, and a stranger's cwd and open
+    file go with it. Not evidence."""
+    path = lane.ensure_lane("t1", "kaylee")
+    worktree = Path(short_dir) / "wt"
+    (worktree / "web").mkdir(parents=True)
+    (worktree / "web" / "dev.db").write_text("x")
+    stranger = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1]); print('ready', flush=True); "
+                                 "time.sleep(60)", str(worktree / "web" / "dev.db")], cwd=str(worktree / "web"),
+                                stdout=subprocess.PIPE, text=True)
+    try:
+        assert stranger.stdout.readline().strip() == "ready"
+        os.rename(worktree / "web", path / "tmp" / "web")
+        assert stranger.pid not in (lane.lane_pids(path, None) or set())
+    finally:
+        stranger.kill()
+        stranger.wait()
+        stranger.stdout.close()
+
+
+@pytest.mark.skipif(not shutil.which("lsof"), reason="needs lsof")
+def test_h_a_cwd_or_a_file_in_b_counts_with_the_real_lsof(env, tmp_root, short_dir):
     path = lane.ensure_lane("t1", "kaylee")
     held = Path(short_dir) / "held.txt"
     held.write_text("x")
-    holder = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1]); print('ready', flush=True); "
-                               "time.sleep(60)", str(held)], stdout=subprocess.PIPE, text=True, cwd=short_dir)
-    mine = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1], 'w'); print('ready', flush=True); "
-                             "time.sleep(60)", str(path / "tmp" / "own.txt")], stdout=subprocess.PIPE, text=True,
-                            cwd=short_dir)
+    code = "import sys, time; f = open(sys.argv[1], 'a'); print('ready', flush=True); time.sleep(60)"
+    in_cwd = subprocess.Popen([sys.executable, "-c", code, str(held)], cwd=str(path / "b"), stdout=subprocess.PIPE, text=True)
+    (path / "b" / "db").write_text("x")
+    with_file = subprocess.Popen([sys.executable, "-c", code, str(path / "b" / "db")], cwd=short_dir,
+                                 stdout=subprocess.PIPE, text=True)
+    linked = subprocess.Popen([sys.executable, "-c", code, str(held)], cwd=short_dir, stdout=subprocess.PIPE, text=True)
     try:
-        assert holder.stdout.readline().strip() == "ready" and mine.stdout.readline().strip() == "ready"
-        os.link(held, path / "tmp" / "linked.txt")
-        os.lstat(path / "tmp" / "linked.txt")
+        for proc in (in_cwd, with_file, linked):
+            assert proc.stdout.readline().strip() == "ready"
+        os.link(held, path / "b" / "linked.txt")                     # a stranger's file, linked into b/: nlink 2
+        os.lstat(path / "b" / "linked.txt")
         pids = lane.lane_pids(path, None)
-        assert holder.pid not in pids and mine.pid in pids, pids
+        assert in_cwd.pid in pids and with_file.pid in pids and linked.pid not in pids, pids
     finally:
-        for proc in (holder, mine):
+        for proc in (in_cwd, with_file, linked):
             proc.kill()
             proc.wait()
             proc.stdout.close()
+
+
+def test_h_b_files_need_a_matching_device_and_inode_and_one_link(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    own = path / "b" / "own.txt"
+    own.write_text("x")
+    st = os.lstat(own)
+    table_of_self(monkeypatch)
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", st, str(own)))
+    assert lane.lane_pids(path, None) == {777}
+    other = os.stat_result((st.st_mode, st.st_ino + 1, st.st_dev, 1, 0, 0, 0, 0, 0, 0))
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", other, str(own)))
+    assert lane.lane_pids(path, None) == set()                       # another inode
+    other = os.stat_result((st.st_mode, st.st_ino, st.st_dev + 1, 1, 0, 0, 0, 0, 0, 0))
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", other, str(own)))
+    assert lane.lane_pids(path, None) == set()                       # another device
+    lsof_stub(monkeypatch, "p777\nf4\ntREG\nn%s\n" % own)
+    assert lane.lane_pids(path, None) == set()                       # no inode or device: never evidence
+    os.link(own, path / "b" / "second.txt")
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", os.lstat(own), str(own)))
+    assert lane.lane_pids(path, None) == set()                       # nlink 2
+    os.unlink(path / "b" / "second.txt")
+    os.unlink(own)
+    assert lane.lane_pids(path, None) == set()                       # vanished
+    (path / "b" / "target").write_text("x")
+    os.symlink("target", own)
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", os.stat(own), str(own)))
+    assert lane.lane_pids(path, None) == set()                       # a link
+
+
+def test_h_b_a_b_folder_swapped_for_a_link_is_never_followed(env, tmp_root, short_dir, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    outside = Path(short_dir)
+    (outside / "f").write_text("x")
+    st = os.lstat(outside / "f")
+    shutil.rmtree(path / "b")
+    os.symlink(str(outside), path / "b")
+    table_of_self(monkeypatch)
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", st, str(path / "b" / "f")))
+    assert lane.lane_pids(path, None) == set()
+
+
+def test_h_a_cwd_in_b_counts_and_a_cwd_in_tmp_does_not(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    table_of_self(monkeypatch)
+    lsof_stub(monkeypatch, f_record(778, "cwd", "DIR", os.lstat(path / "b"), str(path / "b")))
+    assert lane.lane_pids(path, None) == {778}
+    lsof_stub(monkeypatch, f_record(778, "cwd", "DIR", os.lstat(path / "tmp"), str(path / "tmp")))
+    assert lane.lane_pids(path, None) == set()
+
+
+@pytest.mark.skipif(not os.path.exists("/proc/self/environ"), reason="reads /proc, as the Pi's tests do")
+def test_h_a_process_in_tmp_counts_only_through_the_lanes_environment(env, tmp_root, monkeypatch):
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 1)
+    path = lane.ensure_lane("t1", "kaylee")
+    value = str(path / "tmp")
+    code = "import time; time.sleep(60)"
+    carrier = subprocess.Popen([sys.executable, "-c", code], cwd=value, env=dict(os.environ, CLAUDE_CODE_TMPDIR=value),
+                               start_new_session=True)
+    bare = subprocess.Popen([sys.executable, "-c", code], cwd=value, start_new_session=True)
+    try:
+        time.sleep(0.3)
+        assert bare.pid not in (lane.lane_pids(path, None) or set())
+        assert lane.cleanup_processes(path, None, env=("CLAUDE_CODE_TMPDIR", value)) is True
+        assert gone(carrier.pid) and bare.poll() is None
+    finally:
+        for proc in (carrier, bare):
+            proc.kill()
+            proc.wait()
+
+
+# ---------- Lane hardening round 2, items 3, 6, 7, 8 ----------
+
+@pytest.mark.parametrize("value", [["^1.0.0"], "1.0.0", {"version": "1"}, True, 1, None])
+def test_r2_3_a_managed_plugin_entry_other_than_false_refuses_a_lane(env, value):
+    """The binary treats a plugin as on when its value is true or an array (a version list): only false is off."""
+    lane.MANAGED_SETTINGS.write_text(json.dumps({"enabledPlugins": {"forced@evil": value}}))
+    found = lane.settings_widenings()
+    assert len(found) == 1 and "enabledPlugins" in found[0], found
+    lane.MANAGED_SETTINGS.write_text(json.dumps({"enabledPlugins": {"forced@evil": False}}))
+    assert lane.settings_widenings() == []
+
+
+def test_r2_6_a_lanes_flag_settings_stop_the_claude_ai_plugin_sync(monkeypatch):
+    """Synced claude.ai plugins load without being named in any file; --settings turns the sync off for the invocation
+    (2.1.295's schema text for syncClaudeAiPlugins)."""
+    monkeypatch.setenv("HOME", "/home/u")
+    laned = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane="/tmp/sy-lane-1/0123456789",
+                                            preload="/h/p.cjs")
+    plain = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    assert laned["syncClaudeAiPlugins"] is False and "syncClaudeAiPlugins" not in plain
+
+
+def test_r2_7_managed_drop_ins_and_remote_settings_refuse_a_lane(env):
+    """Sources the settings check doesn't read: managed-settings.d/ next to the managed file, and the server-managed
+    remote-settings.json in Claude's config folder (paths from 2.1.295)."""
+    assert lane.settings_widenings() == []
+    dropin = lane.MANAGED_SETTINGS.with_name("managed-settings.d")
+    dropin.mkdir()
+    (dropin / "10.json").write_text(json.dumps({"processWrapper": "/x"}))
+    assert lane.settings_widenings() == ["%s exists: its settings are never read by this check and would apply to the "
+                                         "lane" % dropin]
+    shutil.rmtree(dropin)
+    remote = env["home"] / ".claude" / "remote-settings.json"
+    remote.parent.mkdir()
+    remote.write_text("{}")
+    assert lane.settings_widenings() == ["%s exists: its settings are never read by this check and would apply to the "
+                                         "lane" % remote]
+
+
+def test_r2_8_the_process_wrapper_variable_is_dropped_and_refuses_a_lane(env, monkeypatch):
+    assert "CLAUDE_CODE_PROCESS_WRAPPER" in lane.DROP_ENV
+    monkeypatch.delenv("CLAUDE_CODE_PROCESS_WRAPPER", raising=False)
+    assert lane.settings_widenings() == []
+    monkeypatch.setenv("CLAUDE_CODE_PROCESS_WRAPPER", "/usr/local/bin/wrap")
+    found = lane.settings_widenings()
+    assert len(found) == 1 and "CLAUDE_CODE_PROCESS_WRAPPER" in found[0]
+    monkeypatch.setenv("CLAUDE_CODE_PROCESS_WRAPPER", "")
+    assert lane.settings_widenings() == []

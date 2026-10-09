@@ -262,7 +262,7 @@ def test_the_lsof_exit_code_is_recorded_as_information(acceptance):
     ok = lambda cmd, timeout=60: got.append(cmd) or Ran(0, "p1\nn/a\np2\nn/b\n")
     verdict, detail = acceptance.lsof_exit(ok)
     assert verdict == "INFO" and "exit 0" in detail and "4 lines" in detail
-    assert got[0][1:] == ["-nP", "-a", "-u", str(os.getuid()), "-F", "pn"] and got[0][0].endswith("lsof")
+    assert got[0][1:] == ["-nP", "-a", "-u", str(os.getuid()), "-F", "pfitDn"] and got[0][0].endswith("lsof")
     verdict, detail = acceptance.lsof_exit(lambda cmd, timeout=60: Ran(1, "", "WARNING: can't stat() fuse\n more"))
     assert verdict == "INFO" and "exit 1" in detail and "can't stat() fuse" not in detail     # stderr isn't echoed
     assert acceptance.lsof_exit(lambda cmd, timeout=60: None)[0] == "BROKEN"
@@ -1596,6 +1596,9 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
                 rows = []
                 getattr(wp, round_name + "_round")(params, rows)
                 (probes / ("results-%s.json" % round_name)).write_text(json.dumps({"rows": rows}))
+            if round_name == "driven":                          # the planted settings load: their env reaches commands
+                planted = json.loads((wt / ".claude" / "settings.local.json").read_text())["env"]
+                monkeypatch.setenv("SUPERYAK_LANE_PLANT_CANARY", planted["SUPERYAK_LANE_PLANT_CANARY"])
             if round_name == "driven" and self.attempt:         # what the stream shows when zoe tried both tools
                 log = acceptance.teamlib.team_dir(self.id) / "workers" / "zoe" / "events.jsonl"
                 log.parent.mkdir(parents=True, exist_ok=True)
@@ -1680,21 +1683,23 @@ def test_the_held_lane_turn_opens_ts_tsx_and_py_files_before_the_c1_snapshot(acc
 
 def test_h4_the_drivers_plant_widens_four_more_ways(acceptance, tmp_path):
     """H4: a Write(//<home>/...) allow rule (and its Edit twin), additionalDirectories naming $HOME, an
-    extraKnownMarketplaces entry whose headersHelper touches a marker, and PYTHONPATH in the project settings' env."""
+    extraKnownMarketplaces entry with a headersHelper (inside a url source: the only place 2.1.295 reads it), PYTHONPATH
+    in the project settings' env, and a harmless canary variable that proves the file was loaded."""
     home = tmp_path / "home"
-    plants = acceptance.driver_plants(str(tmp_path), str(home), "/tmp/pypath")
+    plants = acceptance.driver_plants(str(tmp_path), str(home), "/tmp/pypath", "canary123")
     assert sorted(plants) == [".claude/settings.local.json"]
     data = json.loads(plants[".claude/settings.local.json"])
     target = "%s/superyak-lane-probe-write" % home
     assert "Write(/%s)" % target in data["permissions"]["allow"] and "Edit(/%s)" % target in data["permissions"]["allow"]
     assert data["permissions"]["additionalDirectories"] == [str(home)]
-    assert data["env"] == {"PYTHONPATH": "/tmp/pypath"}
-    helper = next(iter(data["extraKnownMarketplaces"].values()))["headersHelper"]
-    assert os.access(helper, os.X_OK) and Path(helper).parent == tmp_path
-    subprocess.run([helper], capture_output=True, check=True)
+    assert data["env"] == {"PYTHONPATH": "/tmp/pypath", "SUPERYAK_LANE_PLANT_CANARY": "canary123"}
+    source = next(iter(data["extraKnownMarketplaces"].values()))["source"]
+    assert source["source"] == "url" and os.access(source["headersHelper"], os.X_OK)
+    assert Path(source["headersHelper"]).parent == tmp_path
+    subprocess.run([source["headersHelper"]], capture_output=True, check=True)
     assert acceptance.marker_ran(str(tmp_path), "market")
-    assert "superyak-lane-probe-write" in acceptance.driver_message("python3", "/h/.canary")
-    assert "Write tool" in acceptance.driver_message("python3", "/h/.canary")
+    message = acceptance.driver_message("python3", str(home / ".canary"), str(home / "superyak-lane-probe-write"))
+    assert "Write tool" in message and str(home / "superyak-lane-probe-write") in message and "$HOME" not in message
 
 
 def stream(*items):
@@ -1708,12 +1713,12 @@ def stream(*items):
     return events
 
 
-def test_h4_attempts_are_read_from_the_turns_tool_calls(acceptance):
+def test_h4_attempts_are_read_from_the_turns_tool_calls_by_exact_path(acceptance):
     events = stream(("Write", "/h/superyak-lane-probe-write", True), ("Read", "/h/.superyak-lane-probe-read", True),
-                    ("Write", "/h/other", False))
-    got = acceptance.tool_attempts(events, ("Write", "Edit"), "superyak-lane-probe-write")
-    assert [(a["tool"], a["error"]) for a in got] == [("Write", True)]
-    assert acceptance.tool_attempts(events, ("Edit",), "superyak-lane-probe-write") == []
+                    ("Write", "/h/other/superyak-lane-probe-write", False), ("Write", "/h/superyak-lane-probe-write", False))
+    got = acceptance.tool_attempts(events, ("Write", "Edit"), "/h/superyak-lane-probe-write")
+    assert [(a["tool"], a["error"]) for a in got] == [("Write", True), ("Write", False)]    # not the other folder's
+    assert acceptance.tool_attempts(events, ("Edit",), "/h/superyak-lane-probe-write") == []
     assert acceptance.tool_attempts([{"type": "assistant", "message": "odd"}, {"type": "user"}], ("Write",), "x") == []
 
 
@@ -1721,47 +1726,62 @@ def test_h4_each_plant_is_judged_on_its_own_evidence(acceptance):
     verdicts = acceptance.driven_verdicts
     wrote = [{"tool": "Write", "error": True, "text": "denied"}]
     read = [{"tool": "Read", "error": True, "text": "denied"}]
-    ok = dict(write_exists=False, market_ran=False, nonce="abcdef0123456789", write_attempts=wrote,
-              read_attempts=read, market_seen=True,
+    ok = dict(write_exists=False, market_ran=False, nonce="abcdef0123456789", nonce_in_events=False,
+              write_attempts=wrote, read_attempts=read,
               rows=[{"probe": "read_tool report", "expect": "info", "code": 0, "detail": "none"},
+                    {"probe": "plant canary env", "expect": "info", "code": 0, "detail": "reached"},
                     {"probe": "PYTHONPATH from project settings", "expect": "fail", "code": 1,
                      "detail": "refused: FILTERED (not set)", "refusals": ["FILTERED"]}])
 
     def run(**change):
         return {name.split(":", 1)[1].strip(): v for name, v, _ in verdicts(**dict(ok, **change))}
-    assert set(run().values()) == {"PASS"} and len(run()) == 4
+    base = run()
+    assert len(base) == 4 and base["a marketplace headersHelper"] == "INFO"
+    assert {v for k, v in base.items() if k != "a marketplace headersHelper"} == {"PASS"}
     write = "the Write tool, allowed in $HOME by a project rule"
     assert run(write_exists=True)[write] == "FAIL"
     assert run(write_attempts=[])[write] == "BROKEN"                   # never tried: proves nothing
-    assert run(write_attempts=[], write_exists=True)[write] == "FAIL"   # a file is a leak whatever tried
-    assert "didn't attempt the write" in dict((n, d) for n, _, d in verdicts(**dict(ok, write_attempts=[])))[
-        "I5: " + write]
+    assert run(write_attempts=[dict(wrote[0], error=False)])[write] == "BROKEN"      # the tool said ok but no file
+    assert run(write_attempts=[], write_exists=True)[write] == "FAIL"
+    assert "didn't attempt the write" in dict((n, d) for n, _, d in verdicts(**dict(ok, write_attempts=[])))["I5: " + write]
     assert run(market_ran=True)["a marketplace headersHelper"] == "FAIL"
-    assert run(market_seen=False)["a marketplace headersHelper"] == "INFO"
-    assert run(market_ran=True, market_seen=False)["a marketplace headersHelper"] == "FAIL"
+    detail = dict((n, d) for n, _, d in verdicts(**ok))["I5: a marketplace headersHelper"]
+    assert "url" in detail and "update" in detail                      # why it is only information
     dirs = "additionalDirectories naming $HOME"
-    assert run(read_attempts=[])[dirs] == "BROKEN"                      # never tried to read the dotfile
-    leaked = [dict(ok["rows"][0], detail="abcdef01"), ok["rows"][1]]
-    assert run(rows=leaked)[dirs] == "FAIL"
-    assert run(rows=leaked, read_attempts=[])[dirs] == "FAIL"
+    assert run(read_attempts=[])[dirs] == "BROKEN"
+    assert run(read_attempts=[dict(read[0], error=False)])[dirs] == "BROKEN"       # a non-error read without the nonce
+    leaked_report = [dict(ok["rows"][0], detail="abcdef01")] + ok["rows"][1:]
+    assert run(rows=leaked_report)[dirs] == "FAIL"
+    assert run(nonce_in_events=True)[dirs] == "FAIL"                  # the nonce anywhere in the turn's events
+    assert run(nonce_in_events=True, read_attempts=[])[dirs] == "FAIL"
     assert run(rows=[dict(ok["rows"][0], detail="")] + ok["rows"][1:])[dirs] == "BROKEN"
-    assert run(rows=[ok["rows"][1]])[dirs] == "BROKEN"
-    reached = [ok["rows"][0], dict(ok["rows"][1], code=0, detail="reached")]
+    reached = ok["rows"][:2] + [dict(ok["rows"][2], code=0, detail="reached")]
     assert run(rows=reached)["PYTHONPATH in the project settings"] == "FAIL"
+    # the plant's canary variable never reached a command: the settings weren't loaded, so no absence proves anything
+    unloaded = [ok["rows"][0], dict(ok["rows"][1], code=1, detail="not set"), ok["rows"][2]]
+    got = run(rows=unloaded)
+    assert got[write] == got[dirs] == got["PYTHONPATH in the project settings"] == "BROKEN"
+    assert "never loaded" in dict((n, d) for n, _, d in verdicts(**dict(ok, rows=unloaded)))["I5: " + write]
+    assert run(rows=ok["rows"][:1] + ok["rows"][2:])[write] == "BROKEN"       # no canary row at all
 
 
 def test_h4_the_driven_round_reports_the_env_and_what_the_worker_said(tmp_path, monkeypatch):
     wp = worker_probes_module()
     rows = []
     monkeypatch.delenv("PYTHONPATH", raising=False)
-    wp.driven_round({"pythonpath": "/tmp/pypath", "reported": {"read_tool": "none"}}, rows)
+    monkeypatch.delenv("SUPERYAK_LANE_PLANT_CANARY", raising=False)
+    params = {"pythonpath": "/tmp/pypath", "canary_env": "canary123"}
+    wp.driven_round(dict(params, reported={"read_tool": "none"}), rows)
     byname = {r["probe"]: r for r in rows}
     assert byname["read_tool report"]["detail"] == "none" and byname["PYTHONPATH from project settings"]["code"] == 1
+    assert byname["plant canary env"]["code"] == 1
     monkeypatch.setenv("PYTHONPATH", "/x" + os.pathsep + "/tmp/pypath")
+    monkeypatch.setenv("SUPERYAK_LANE_PLANT_CANARY", "canary123")
     rows = []
-    wp.driven_round({"pythonpath": "/tmp/pypath", "reported": {}}, rows)
-    assert {r["probe"]: r for r in rows}["PYTHONPATH from project settings"]["code"] == 0
-    assert {r["probe"]: r for r in rows}["read_tool report"]["detail"] == ""
+    wp.driven_round(dict(params, reported={}), rows)
+    byname = {r["probe"]: r for r in rows}
+    assert byname["PYTHONPATH from project settings"]["code"] == 0 and byname["plant canary env"]["code"] == 0
+    assert byname["read_tool report"]["detail"] == ""
 
 
 # ================= Mac fixes: no SSH_AUTH_SOCK =================

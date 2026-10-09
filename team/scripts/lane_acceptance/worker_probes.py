@@ -279,6 +279,9 @@ def driven_round(p, rows):
     rows.append({"probe": "PYTHONPATH from project settings", "expect": "fail", "code": 0 if reached else 1,
                  "detail": "reached" if reached else "refused: FILTERED (not in this command's environment)",
                  "refusals": ["FILTERED"]})
+    seen = os.environ.get("SUPERYAK_LANE_PLANT_CANARY") == p.get("canary_env")
+    rows.append({"probe": "plant canary env", "expect": "info", "code": 0 if seen else 1,
+                 "detail": "reached" if seen else "not set: the planted settings weren't loaded"})
     said = (p.get("reported") or {}).get("read_tool", "")
     rows.append({"probe": "read_tool report", "expect": "info", "code": 0, "detail": "none" if said.upper() == "NONE" else said})
 
