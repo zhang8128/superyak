@@ -247,40 +247,43 @@ class ProjectDock:
         with claims.registry_lock():
             repo = self.checks()
             claims.claim(self.ship, repo.root, held=True)
-        undo = [lambda: claims.unclaim(self.home)]
+        undo = [('claim', lambda: claims.unclaim(self.home))]
+        self.undone = []
         try:
             before = append_excludes(repo)
-            undo.append(lambda: _restore(repo.common / 'info' / 'exclude', before))
+            undo.append(('info/exclude', lambda: _restore(repo.common / 'info' / 'exclude', before)))
             real_exclude_check(repo)
             argv = [sys.executable, str(install.RUN_AGENT), 'mcp', '--config', str(self.config)]
-            undo.append(lambda: subprocess.run(['claude', 'mcp', 'remove', '--scope', 'local', 'station'], cwd=str(repo.root),
-                                               capture_output=True))
+            undo.append(('local station', lambda: subprocess.run(['claude', 'mcp', 'remove', '--scope', 'local', 'station'],
+                                                                 cwd=str(repo.root), capture_output=True)))
             self._local_station(repo, argv)
             settings = repo.root / '.claude' / 'settings.local.json'
             backup = self.home / 'settings.local.json.bak-superyak'
             settings_before = settings.read_bytes() if settings.exists() else None
             backup_existed = backup.exists()
-            undo.append(lambda: (_restore(settings, settings_before),
-                                 None if backup_existed else backup.unlink(missing_ok=True)))
+            undo.append(('hooks', lambda: (_restore(settings, settings_before),
+                                           None if backup_existed else backup.unlink(missing_ok=True))))
             settings.parent.mkdir(exist_ok=True)
             install.install_hooks(settings, self.config, messages=hook, backup=backup)
             if install.shutil.which('codex') or (Path.home() / '.codex').exists():
                 profile = Path.home() / '.codex' / f'{self.ship}.config.toml'
                 profile_before = profile.read_bytes() if profile.exists() else None
-                undo.append(lambda: _restore(profile, profile_before))
+                undo.append(('Codex profile', lambda: _restore(profile, profile_before)))
                 write_codex_profile(profile, argv, self.config)
             run_mcp = self.home / 'run-mcp.json'
             run_mcp_before = run_mcp.read_bytes() if run_mcp.exists() else None
-            undo.append(lambda: _restore(run_mcp, run_mcp_before))
+            undo.append(('run-mcp.json', lambda: _restore(run_mcp, run_mcp_before)))
             write_private(run_mcp, install.run_mcp_config(self.config))
             if service and install.start_at_newest_mention(self.config, self.home / 'ship-state.json', client, self.out):
                 names = install.service_names(self.home)
-                undo.append(lambda: install.remove_service(names))
+                undo.append(('service', lambda: install.remove_service(names)))
                 install.install_service([sys.executable, str(install.RUN_AGENT), 'watch', '--config', str(self.config),
                                          '--state', str(self.home / 'ship-state.json'), '--mcp-config', str(run_mcp)],
                                         self.out, names=names)
-        except (Refused, OSError, ValueError, subprocess.SubprocessError) as error:
-            for step in reversed(undo):
+        except Exception as error:  # noqa: BLE001 - whatever breaks after the claim (a settings.local.json holding a
+            # list, a malformed hooks entry), every write this run made is undone, in reverse, the claim last
+            for name, step in reversed(undo):
+                self.undone.append(name)
                 try:
                     step()
                 except Exception:  # noqa: BLE001 - every undo step runs; the claim goes last

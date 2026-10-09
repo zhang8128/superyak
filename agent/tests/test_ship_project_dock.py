@@ -469,3 +469,51 @@ def test_status_names_a_registry_entry_without_its_claim_json(world, monkeypatch
         cli.main(['status', '--home', str(claims.machine_home())])
     out = capsys.readouterr().out
     assert f"{SHIP}'s registry entry" in out and 'claim.json' in out and f'dock {SHIP} again' in out, out
+
+
+def test_the_rollback_undoes_in_reverse_and_the_claim_last(monkeypatch, tmp_path, capsys):
+    """Review 487c070b, finding 3: the undo steps run in the reverse of the order they were written, the claim last.
+    The service is the last write, so its failure undoes every step."""
+    w = World(monkeypatch, tmp_path, capsys)
+    w.machine.fail = [('systemctl', '--user', 'restart')]
+    write_private(w.home / 'ship-state.json', {'mention_seq': 0})
+    made = []
+    real_init = project_dock.ProjectDock.__init__
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        made.append(self)
+    monkeypatch.setattr(project_dock.ProjectDock, '__init__', init)
+    assert cli.main(['dock', '--station', 'http://station.test', '--ship', SHIP, '--project', str(w.repo), '--hook']) == 2
+    capsys.readouterr()
+    (dock,) = made
+    assert dock.undone == ['service', 'run-mcp.json', 'Codex profile', 'hooks', 'local station', 'info/exclude', 'claim']
+    assert w.registry() == []
+
+
+@pytest.mark.parametrize('content', ['[]\n', '{"hooks": {"UserPromptSubmit": "not a list"}}\n',
+                                     '{"hooks": {"SessionStart": [{"hooks": "x"}]}}\n'])
+def test_a_malformed_settings_local_json_still_rolls_back(world, content):
+    """Review 487c070b, finding 6: a settings.local.json holding a list, or a malformed hooks entry, makes install_hooks
+    raise AttributeError or TypeError; the rollback still runs and the file is left as it was."""
+    settings = world.repo / '.claude' / 'settings.local.json'
+    settings.parent.mkdir()
+    settings.write_text(content)
+    code, out = world.dock()
+    assert code == 2 and 'rolled back' in out, out
+    assert world.registry() == [] and settings.read_text() == content and world.machine.local_station == {}
+    assert world.exclude() is None or b'settings.local.json' not in world.exclude()
+
+
+def test_an_unexpected_ls_files_exit_refuses(world, monkeypatch):
+    """Review 487c070b, finding 7: any ls-files answer but 0 (tracked) or 1 (untracked) refuses before the request."""
+    real = project_dock._git
+
+    def odd(repo, *args, **kw):
+        if args[:1] == ('ls-files',):
+            return subprocess.CompletedProcess(args, 128, stdout='', stderr='fatal: index file corrupt')
+        return real(repo, *args, **kw)
+    monkeypatch.setattr(project_dock, '_git', odd)
+    code, out = world.dock()
+    assert code == 2 and 'ls-files answered 128' in out and 'index file corrupt' in out, out
+    assert DockedAtOnce.made == [] and world.registry() == []
