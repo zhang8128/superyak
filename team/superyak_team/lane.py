@@ -40,7 +40,7 @@ from pathlib import Path, PurePosixPath
 from . import teamlib, workers
 
 MIN_CLAUDE = (2, 1, 285)
-DROP_ENV = ("SSH_AUTH_SOCK", "GPG_AGENT_INFO", "DOCKER_HOST")
+DROP_ENV = ("SSH_AUTH_SOCK", "GPG_AGENT_INFO", "DOCKER_HOST", "CLAUDE_CODE_PROCESS_WRAPPER")
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 MANAGED_SETTINGS = Path("/Library/Application Support/ClaudeCode/managed-settings.json")
@@ -50,6 +50,10 @@ MANAGED_MCP = Path("/Library/Application Support/ClaudeCode/managed-mcp.json")
 # otelHeadersHelper and proxyAuthHelper.
 HELPER_KEYS = ("apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "otelHeadersHelper",
                "proxyAuthHelper")
+# H1: keys read from the user's and the managed files that also run a command (processWrapper: managed, flag and user
+# settings only, confirmed in 2.1.295), and the managed-only policy helpers (both spellings the binary knows).
+USER_COMMAND_KEYS = ("processWrapper",)
+MANAGED_COMMAND_KEYS = ("policyHelper", "policyHelpers")
 LIVE_STATES = ("preparing", "queued", "running", "idle", "waiting")   # teamd.LIVE: a worker in one of these is alive
 
 
@@ -114,6 +118,14 @@ def settings_widenings():
     if os.path.lexists(MANAGED_MCP):
         found.append("%s exists: its MCP servers would run outside the sandbox with the lane's environment"
                      % MANAGED_MCP)
+    # Managed sources this check doesn't read (paths from the 2.1.295 binary): the drop-in folder beside the managed
+    # file, and the server-managed settings Claude Code caches in its config folder.
+    for unread in (MANAGED_SETTINGS.with_name("managed-settings.d"), _claude_dir() / "remote-settings.json"):
+        if os.path.lexists(unread):
+            found.append("%s exists: its settings are never read by this check and would apply to the lane" % unread)
+    if os.environ.get("CLAUDE_CODE_PROCESS_WRAPPER"):
+        found.append("teamd's environment sets CLAUDE_CODE_PROCESS_WRAPPER, a launcher Claude Code runs outside the "
+                     "sandbox")
     return found
 
 
@@ -136,7 +148,15 @@ def _widenings(data, managed):
     if any(rule == "WebFetch" or rule.startswith("WebFetch(") for rule in allow):
         out.append("allows WebFetch")
     out += ["sets %s, which Claude Code runs outside the sandbox with the lane's environment" % key
-            for key in HELPER_KEYS if data.get(key) not in (None, "")]
+            for key in HELPER_KEYS + USER_COMMAND_KEYS + (MANAGED_COMMAND_KEYS if managed else ())
+            if data.get(key) not in (None, "")]
+    if managed:
+        plugins = data.get("enabledPlugins")
+        if plugins is not None and not isinstance(plugins, dict):
+            out.append("can't be read (its enabledPlugins isn't an object)")
+        elif isinstance(plugins, dict) and any(value is not False for value in plugins.values()):   # true or a version list is on
+            out.append("forces a plugin on with enabledPlugins, whose LSP servers and monitors would run with the "
+                       "lane's environment")
     if managed and data.get("hooks"):
         out.append("defines hooks, which Claude Code runs outside the sandbox with the lane's environment even under "
                    "disableAllHooks")
@@ -160,25 +180,46 @@ PLUGIN_SETTINGS_MAX = 1 << 20
 
 
 def _plugins_named(path, follow):
-    """The plugin ids a settings file's enabledPlugins names, whatever their values; [] when it can't be read. Never
+    """The plugin ids a settings file's enabledPlugins names, whatever their values; [] when there is no such file.
+    A file that exists but can't be fully read (not a regular file, over 1 MB, not JSON, not an object, enabledPlugins
+    not an object, any other OSError) raises LaneRefused naming it: the plugins it enables would stay on (H2). Never
     waits on a FIFO and never reads past 1 MB. A user's file is read where it is; the worktree's are the worker's, so
     one that is a link is still read (Claude Code would follow it) but only as a plain file."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (0 if follow else os.O_NOFOLLOW))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError as e:
+        raise LaneRefused("%s can't be read (%s), so the plugins it enables can't be switched off"
+                          % (path, e.strerror or e.__class__.__name__))
+    try:
+        regular = stat.S_ISREG(os.fstat(fd).st_mode)
     except OSError:
-        return []
+        regular = False
+    if not regular:
+        os.close(fd)
+        raise LaneRefused("%s isn't a regular file, so the plugins it enables can't be switched off" % path)
     with os.fdopen(fd, "rb") as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            return []
-        raw = f.read(PLUGIN_SETTINGS_MAX + 1)
+        try:
+            raw = f.read(PLUGIN_SETTINGS_MAX + 1)
+        except OSError as e:
+            raise LaneRefused("%s can't be read (%s), so the plugins it enables can't be switched off"
+                              % (path, e.strerror or e.__class__.__name__))
     if len(raw) > PLUGIN_SETTINGS_MAX:
-        return []
+        raise LaneRefused("%s is over 1 MB, so the plugins it enables can't be switched off" % path)
     try:
         data = json.loads(raw)
     except ValueError:
+        raise LaneRefused("%s isn't valid JSON, so the plugins it enables can't be switched off" % path)
+    if not isinstance(data, dict):
+        raise LaneRefused("%s isn't a JSON object, so the plugins it enables can't be switched off" % path)
+    plugins = data.get("enabledPlugins")
+    if plugins is None:
         return []
-    plugins = data.get("enabledPlugins") if isinstance(data, dict) else None
-    return [str(key) for key in plugins] if isinstance(plugins, dict) else []
+    if not isinstance(plugins, dict):
+        raise LaneRefused("%s: its enabledPlugins isn't an object, so the plugins it enables can't be switched off"
+                          % path)
+    return [str(key) for key in plugins]
 
 
 def lane_plugins(worktree):
@@ -192,7 +233,7 @@ def lane_plugins(worktree):
         names.update(_plugins_named(path, follow=True))
     for name in ("settings.json", "settings.local.json"):
         names.update(_plugins_named(Path(worktree) / ".claude" / name, follow=True))
-    return sorted(names)[:500]
+    return sorted(names)
 
 
 def check_spawn(cfg, kind, mode):
@@ -1830,7 +1871,7 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
     denials (details)."""
     b = Path(path) / "b"
     b_text = lane_text(b)
-    if not cleanup_processes(b, None):
+    if not cleanup_processes(Path(path), None):
         raise LaneRefused("lsof can't say which processes still use %s, so the lane's browser doesn't start" % b)
     secret = secrets.token_hex(32)
     port = base + BLOCK - 1
@@ -1873,7 +1914,7 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
     pids |= family(proc.pid)[0]                         # before poll(), which may reap it and free its pid for reuse
     exited = proc.poll()
     stop_broker(broker)
-    cleanup_processes(b, None)                          # node is gone: what it started is found by its folder now
+    cleanup_processes(Path(path), None)                 # node is gone: what it started is found by b/ now (no env is passed here)
     denials = denials_for(stop_denial_stream(stream), pids)
     try:
         log = stderr_path.read_text(errors="replace").splitlines()
@@ -1969,10 +2010,86 @@ def _lane_prefixes(path):
     return {str(path), os.path.join(os.path.realpath(parent), *path.relative_to(parent).parts)}
 
 
+def _lsof_descriptors(text):
+    """`lsof -F pfitDn` output as (pid, fd, type, inode, device, name) for every descriptor that has a name. Fields of
+    one descriptor follow its `f` line, in any order."""
+    out, pid, current = [], None, None
+
+    def finish():
+        if current is not None and pid is not None and current.get("n") is not None:
+            out.append((pid, current.get("f"), current.get("t"), current.get("i"), current.get("D"), current["n"]))
+    for line in text.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            finish()
+            pid, current = int(line[1:]), None
+        elif line.startswith("f"):
+            finish()
+            current = {"f": line[1:]}
+        elif current is not None and line[:1] in ("t", "i", "D", "n"):
+            current[line[0]] = line[1:]
+    finish()
+    return out
+
+
+def _lstat_in_b(path, rel):
+    """lstat of <lane>/b/<rel...> without following any link: the lane's parent, then each component down to the
+    last, is opened with O_NOFOLLOW|O_DIRECTORY through the one before, and the last is stat'ed with dir_fd and
+    follow_symlinks=False. None if any step is missing or is a link. Nothing here is resolved by name."""
+    parent = _parent_path()
+    if any(part in (".", "..") for part in rel):          # a name that climbs out of b/ is not evidence
+        return None
+    try:
+        parts = list(Path(path).relative_to(parent).parts) + ["b"] + list(rel)
+    except ValueError:
+        return None
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fds = []
+    try:
+        fds.append(os.open(parent, flags))
+        for part in parts[:-1]:
+            fds.append(os.open(part, flags, dir_fd=fds[-1]))
+        return os.stat(parts[-1], dir_fd=fds[-1], follow_symlinks=False)
+    except OSError:
+        return None
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def _counts_as_the_lanes(path, prefixes, fd, kind, inode, device, name):
+    """Whether an open descriptor is evidence that its process belongs to the lane. Only names under <lane>/b count: the
+    worker can write tmp/ and npm-cache/ (it can swap folders for links, rename its own folders in, link a stranger's
+    file there), so paths in them are never evidence; membership there comes only from the exact CLAUDE_CODE_TMPDIR in
+    the environment or a listening port in the block. Under b/, the name is walked from the lane without following a
+    link, and the file must be a regular file with st_nlink == 1 (a cwd, a folder), and both its st_dev and st_ino must
+    equal lsof's D and i fields: macOS lsof names a hard-linked file by the path the kernel looked up last. A
+    descriptor without an inode and device is never evidence."""
+    for prefix in prefixes:
+        if name == prefix + "/b" or name.startswith(prefix + "/b/"):
+            rel = [x for x in name[len(prefix) + 3:].split("/") if x]
+            break
+    else:
+        return False
+    if not (inode or "").isdigit() or not device:
+        return False
+    try:
+        dev = int(device, 16) if device.lower().startswith("0x") else int(device)
+    except ValueError:
+        return False
+    st = _lstat_in_b(path, rel)
+    if st is None or (st.st_dev, st.st_ino) != (dev, int(inode)):
+        return False
+    if fd == "cwd":
+        return stat.S_ISDIR(st.st_mode)
+    return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+
+
 def lane_pids(path, base):
     """Processes of this uid that listen on a port in the lane's block (base None: no block was allocated), or have
-    their cwd or an open file under the lane. The files come from one `lsof -F pn` over all of this uid's open files,
-    matched by name: the lane folder is never walked. None when lsof or ps can't say."""
+    their cwd or an open file under <lane>/b. The files come from one `lsof -F pfitDn` over all of this uid's open
+    files; only names under b/, which the worker can't write, count, and each is re-checked without following a link
+    (_counts_as_the_lanes). Paths under tmp/ and npm-cache/ are never evidence; env_pids finds what lives there. The
+    lane folder is never walked. None when lsof or ps can't say."""
     lsof = shutil.which("lsof", path=SYSTEM_PATH)
     if not lsof:
         return None
@@ -1989,17 +2106,11 @@ def lane_pids(path, base):
     except (OSError, LaneRefused):
         return None
     if prefixes:
-        r = _run([lsof, "-nP", "-a", "-u", uid, "-F", "pn"])
+        r = _run([lsof, "-nP", "-a", "-u", uid, "-F", "pfitDn"])
         if r is None or r.returncode != 0:              # teamd always has open files: 1 means an error here
             return None
-        pid = None
-        for line in r.stdout.splitlines():
-            if line.startswith("p") and line[1:].isdigit():
-                pid = int(line[1:])
-            elif line.startswith("n") and pid is not None:
-                name = line[1:]
-                if any(name == prefix or name.startswith(prefix + "/") for prefix in prefixes):
-                    pids.add(pid)
+        pids |= {pid for pid, fd, kind, inode, device, name in _lsof_descriptors(r.stdout)
+                 if _counts_as_the_lanes(path, prefixes, fd, kind, inode, device, name)}
     rows = _process_table()
     if not rows:                                         # without ps, teamd's own parents can't be spared
         return None
@@ -2358,13 +2469,15 @@ def instruction_snapshot(path):
     def walk(dfd, rel, depth):
         if depth > INSTRUCTION_MAX_DEPTH:
             raise RuntimeError("the worktree is more than %d folders deep" % INSTRUCTION_MAX_DEPTH)
+        entries = []
         with os.scandir(dfd) as it:
-            entries = sorted(it, key=lambda e: e.name)
+            for entry in it:                             # counted as it is read: a huge folder hits the cap, not memory
+                counted[0] += 1
+                if counted[0] > INSTRUCTION_MAX_ENTRIES or time.monotonic() > deadline:
+                    raise RuntimeError("the worktree's walk took longer than %d s or %d entries"
+                                       % (INSTRUCTION_TIMEOUT_S, INSTRUCTION_MAX_ENTRIES))
+                entries.append(entry)
         for entry in entries:
-            counted[0] += 1
-            if counted[0] > INSTRUCTION_MAX_ENTRIES or time.monotonic() > deadline:
-                raise RuntimeError("the worktree's walk took longer than %d s or %d entries"
-                                   % (INSTRUCTION_TIMEOUT_S, INSTRUCTION_MAX_ENTRIES))
             name, child = entry.name, (rel + "/" + entry.name if rel else entry.name)
             if name == ".git":
                 continue
@@ -2401,7 +2514,7 @@ def instruction_snapshot(path):
         raise RuntimeError("the worktree can't be walked (%s)" % (e.strerror or e))
     finally:
         os.close(root)
-    return snapshot
+    return dict(sorted(snapshot.items()))            # the walk's order is the file system's; the result's is not
 
 
 def _instruction_content(dfd, name, st):

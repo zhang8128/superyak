@@ -4,7 +4,6 @@
   "allow": [
    "Read(//r/ws/**)",
    "Grep(//r/ws/**)",
-   "Glob(//r/ws/**)",
    "mcp__adna"
   ],
   "deny": [

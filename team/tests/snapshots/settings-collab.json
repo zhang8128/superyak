@@ -4,10 +4,8 @@
   "allow": [
    "Read(//r/repo/**)",
    "Grep(//r/repo/**)",
-   "Glob(//r/repo/**)",
    "Read(//r/room/**)",
    "Grep(//r/room/**)",
-   "Glob(//r/room/**)",
    "Bash",
    "mcp__team__team_post",
    "mcp__team__team_read",

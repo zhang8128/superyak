@@ -4,10 +4,8 @@
   "allow": [
    "Read(//r/repo/**)",
    "Grep(//r/repo/**)",
-   "Glob(//r/repo/**)",
    "Read(//r/wt/**)",
    "Grep(//r/wt/**)",
-   "Glob(//r/wt/**)",
    "Bash",
    "mcp__team__team_post",
    "mcp__team__team_read",
@@ -20,8 +18,7 @@
    "mcp__plugin_engram_engram__remember",
    "mcp__plugin_engram_engram__share",
    "mcp__plugin_engram_engram__shares",
-   "Edit(//r/wt/**)",
-   "Write(//r/wt/**)"
+   "Edit(//r/wt/**)"
   ],
   "deny": [
    "Read(//**/.env)",
@@ -35,9 +32,7 @@
    "Bash(*security *)",
    "WebSearch",
    "Edit(//r/wt/.git)",
-   "Write(//r/wt/.git)",
-   "Edit(//r/wt/.git/**)",
-   "Write(//r/wt/.git/**)"
+   "Edit(//r/wt/.git/**)"
   ]
  },
  "sandbox": {

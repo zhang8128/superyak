@@ -774,7 +774,7 @@ def test_daemon_git_ignores_worker_redirected_gitdir_and_hooks(env, tmp_path):
 def test_claude_builder_cannot_write_git_metadata():
     st = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
     assert st["sandbox"]["filesystem"]["denyWrite"] == ["/r/wt/.git"]
-    assert "Write(//r/wt/.git)" in st["permissions"]["deny"] and "Edit(//r/wt/.git/**)" in st["permissions"]["deny"]
+    assert "Edit(//r/wt/.git)" in st["permissions"]["deny"] and "Edit(//r/wt/.git/**)" in st["permissions"]["deny"]
 
 
 

@@ -8,7 +8,7 @@ use local plus shared engram memory. See [docs/team-mode.md](../docs/team-mode.m
 ```sh
 superyak-runtime team status          # CLI (any op: start, list, spawn, message, collect, end, ...)
 superyak-runtime team                 # MCP server over stdio (Claude Code and Codex use this)
-make check-team                       # tests (mock agents, no network)
+make check-team                       # tests (mock agents, no network); run it from the repo root: team/ has no Makefile
 ```
 
 ## Browser lanes (macOS)
@@ -46,6 +46,9 @@ A person turns lanes on; a lead can't:
   Terminal` (or, if the run stops before it gets there, `ANDY ACTION: stop it now (if you started it): ...`). Serenity passes each `ANDY ACTION:` line to Andy as soon as it appears. The script never signals that
   listener; if it is still there 10 minutes after the request, the row is BROKEN with `sudo kill <pid>` and the run
   stops. Andy's own terminal is needed only for this.
+  The ssh-agent wall is tested with `SSH_AUTH_SOCK`; when that is unset (no agent in Serenity's shell) the run tests
+  launchd's agent sockets, `/private/tmp/com.apple.launchd.*/Listeners`, and when there are none the row is INFO,
+  "no ssh-agent socket on this machine; nothing to protect".
 - `lane_one_at_a_time: true` in `config.json` lets only one lane run on the Mac at a time. Set it if the acceptance
   run shows that one lane's worker can read another lane's endpoint. An idle browser worker keeps its block, so under
   this setting it holds the Mac's only lane until it is done or stopped.
@@ -70,10 +73,23 @@ own file, `~/.superyak/team/teams/<team>/workers/<worker>/lane-preload.cjs`, nev
 `managed-settings.json` that defines hooks refuses lanes: Claude Code runs those even under `disableAllHooks`. So does
 any `sandbox` key in your `~/.claude/settings.json`, `settings.local.json` or the managed policy, at any depth, except
 an empty `network.allowedDomains`: those merge into the lane's sandbox (and `excludedCommands` run fully outside it).
-A `managed-mcp.json` refuses lanes, and so does a helper command (`apiKeyHelper`, `awsAuthRefresh`,
-`awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`, `proxyAuthHelper`) in your settings or the managed
-policy: Claude Code runs those outside the sandbox with the lane's environment. A lane's own flag settings blank every
-helper, so one planted in the worktree's `.claude/` doesn't run either.
+A `managed-mcp.json` refuses lanes, and so does a `managed-settings.d/` folder or a server-managed `remote-settings.json`
+(in Claude's config folder), and a `CLAUDE_CODE_PROCESS_WRAPPER` in teamd's own environment (a lane's worker never
+inherits it). So does a helper command (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh`,
+`otelHeadersHelper`, `proxyAuthHelper`, `processWrapper`) in your settings or the managed policy, a
+`policyHelper`/`policyHelpers` entry in the managed policy, and any plugin the managed policy turns on (an
+`enabledPlugins` value other than `false`, a version list included): flag settings can't switch that one off. Claude
+Code runs those helpers outside the sandbox with the lane's environment. A lane's own flag settings blank every helper,
+so one planted in the worktree's `.claude/` doesn't run either, and they turn off the plugins your settings name, the
+ones synced from claude.ai (`syncClaudeAiPlugins: false`) and those in the worktree's `.claude/`. A settings file of
+yours or the worktree's that could name plugins but can't be fully read (not a regular file, over 1 MB, not JSON)
+refuses the turn, naming the file. A lane also denies writes to the worktree's `.claude/` and `.mcp.json`.
+
+When a lane ends, teamd ends the processes in it, by three kinds of evidence only: a listening port in the lane's
+block; the lane's exact `CLAUDE_CODE_TMPDIR` in the environment; or a cwd or open file under `<lane>/b`, which the
+worker can't write (a regular file with one link whose device and inode match lsof's). A path under `tmp/` or
+`npm-cache/` is never evidence, and a hard-linked file never is. Known limit: a leftover that cleared its environment,
+doesn't listen in the block and has nothing under `b/` survives cleanup.
 
 The broker's stderr is kept in teamd's folder, `~/.superyak/team/<team>/workers/<worker>/broker-stderr.log`, never in
 the lane's folder.
@@ -97,9 +113,9 @@ unchanged.
 
 **Known limit: a process that leaves a lane's environment behind.** At the end of every browser turn, teamd ends any
 process whose environment still carries the lane's `CLAUDE_CODE_TMPDIR`, so a turn's background leftovers don't
-outlive it. When a lane ends, teamd ends the broker, every process with a file under the lane or a listener on its
+outlive it. When a lane ends, teamd ends the broker, every process with a cwd or file under `<lane>/b` or a listener on its
 ports, and every process whose environment still carries that variable. A child that started a new session, cleared
-its own environment and holds nothing in the lane escapes all three, until the next listener check finds anything it
+its own environment and holds nothing under `<lane>/b` escapes all three, until the next listener check finds anything it
 listens on.
 
 **Known limit: Claude Code's own transcripts.** teamd scrubs the lane's secret from everything it keeps and sends,

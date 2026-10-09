@@ -22,6 +22,7 @@ city of AI that runs with very little human involvement.
     is rechecked every turn, and a Node preload forces 127.0.0.1.
   - D10: while a lane runs, only macOS's own services may listen (from `/System`, `/usr/libexec` or `/usr/sbin`, each
     by executable and exact port). Dev servers, Ollama, Postgres and the Serena dashboards must be stopped.
+  - D11: Apple programs in sealed system folders are approved by path, on any port.
   - D7: one ship per team or role, and every act records a session label.
 - **Live on main and the Pi** (all merged under D3, each with a fresh reviewer's approval and both suites passing on
   the Pi):
@@ -43,26 +44,29 @@ city of AI that runs with very little human involvement.
     - Members read it. Agents read it fenced, as quoted data.
     - It can be carried into the next linked room, and `station-bridge` carries it too.
     - It never leaves the station.
+  - **layer-guards** (6e3317d): layers refuse live ship keys, and a layer switch can no longer file the old editor's
+    input under the new layer.
   - A browser-test race fix (1de4213).
   - **Database backups** in `~/.local/share/superyak/backups/`, one before each of October 8's deploys:
     `peer-20261008-131613-pre-tickets.sqlite3`, `peer-20261008-144519-pre-inbox.sqlite3`,
     `peer.sqlite3.pre-instruction-layers-20261008-163222` and `peer-20261008-180140-pre-room-brief.sqlite3`. Ships roll back with the station; each plan's Deploy section
     has the rollback.
-- **In flight:**
-  - **`layer-guards`:** layers refuse live ship keys, and a layer switch can no longer file the old editor's input
-    under the new layer.
-  - **Browser lane** for team-mode workers (branch `browser-lane`):
-    - The spec is approved after three review rounds (ae3cf02). Chrome runs in a per-lane **broker** outside the
-      worker's sandbox, under a teamd-owned deny-by-default Seatbelt profile.
-    - The lane's browser is Playwright's headless shell. The real-Chrome suite stays the Bricks merge gate.
-    - One reviewed exception to the never-list: Chromium's rendezvous service, by an anchored pattern.
-    - Spike 5 passed on the Mac (b20b868).
-    - An implementation plan is being written. Then Serenity runs the acceptance on the Mac, Andy records the first
-      manifest hash, and the Bricks lead makes the Bricks changes (lane ports, `@lane-advisory` tags).
+- **Browser lane** for team-mode workers: merged to main as 1b00eeb, not yet in use. It waits on three things:
+  - Serenity's acceptance run on the Mac;
+  - Andy recording the first manifest hash;
+  - Andy writing `lane-listeners.json`, his approved list of localhost listeners.
+  Until all three exist no lane preset should be created. The `lane-hardening` branch (refusals for more
+  command-running settings, `lane_plugins` failing closed, `.claude` and `.mcp.json` write denies, more I5 plants)
+  lands before Andy creates a lasting lane preset.
+  - Where the Mac sequence lives: room 39fd79 ("Superyak: city of AI"), message
+    7c304a587efd4bddbb721053bf4ac290, posted with the merge. It lists the steps in order, with the `ANDY ACTION:`
+    lines the script prints.
 - **Next:**
   - Spec A step 3 (grants, revision signatures). For step 3: bracket layer titles before "signed by" once other signers
     can bind a ship.
   - Spec B: reviews, merging, deploying and admitting under the charter.
+  - The D7 `serenity-bricks` ship, whenever Andy wants it.
+  - The first instructions layer, which is Andy's to write.
 - **Parked for spec step 3/5:** the station gives a build ticket for any owner mention, however old. Once acts spend
   build tickets, it must refuse old or already-answered messages. The Mac and the Legion Go show "no run ticket" until
   they pull main and restart `superyak-ship`.

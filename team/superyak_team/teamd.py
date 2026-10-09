@@ -303,7 +303,9 @@ class Team:
             proc = self.procs.pop(wid, None)
             if proc is not None and proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGKILL)
-            self._lane_refused(wid, lane.LaneRefused("the turn couldn't start (%r)" % e))   # ends the broker too
+            # a refusal (lane.lane_plugins: a settings file that can't be fully read) says its own reason
+            self._lane_refused(wid, e if isinstance(e, lane.LaneRefused)
+                               else lane.LaneRefused("the turn couldn't start (%r)" % e))   # ends the broker too
             return False
 
     def _launch_turn(self, wid, prompt, lane_env):
