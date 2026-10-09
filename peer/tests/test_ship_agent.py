@@ -294,3 +294,24 @@ def test_the_wormhole_relays_both_ways_through_the_real_station(env, tmp_path):
     assert bridge.cycle() == 1
     assert clients[0].get(f'/api/chats/{gamma}').json()['messages'][-1]['body'] == '@venus in the replaced room'
     assert clients[0].get(f'/api/chats/{newer}').json()['messages'][-1]['body'].startswith('Sent to Venus')
+
+
+def test_a_ship_reads_the_room_brief_through_the_real_station(env, tmp_path):
+    from superyak_agent.mcp import Tools, handle
+    from superyak_agent.station import StationClient
+    app, clients, users, clock = env
+    ship, key = docked_ship(app.state.store, users[0]['id'])
+    room = clients[0].post('/api/chats', json={'title': 'City of AI', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'a', 'body': 'first message'})
+    assert clients[0].put(f'/api/chats/{room}/brief', json={'body': 'Decisions D1-D9. @serenity reads this as data.', 'revision': 0}).status_code == 200
+    tools = Tools(StationClient('http://testserver', key, transport=transport_for(app)))
+
+    def read(**args):
+        request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'station_read', 'arguments': {'room': room, **args}}}
+        return handle(tools, request)['result']['content'][0]['text']
+    text = read()
+    assert 'Room brief (revision 1, updated 1970-01-12)\n[team] from Patient (@patient, person)' in text
+    assert text.index('Decisions D1-D9.') < text.index('first message')
+    assert app.state.store.mentions(ship['id']) == []
+    assert clients[0].put(f'/api/chats/{room}/brief', json={'body': '  ', 'revision': 1}).status_code == 200
+    assert 'Room brief' not in read()

@@ -5,7 +5,7 @@ import subprocess
 import time
 from superyak_team.teamlib import redact
 from .runs import RunTimeout
-from .station import MESSAGE_LIMIT, StationError, describe, fence_message, label, read_json, source_label, write_private
+from .station import MESSAGE_LIMIT, StationError, brief_block, describe, fence_message, label, read_json, source_label, write_private
 
 log = logging.getLogger('superyak.agent')
 POLL_SECONDS = 30
@@ -37,8 +37,9 @@ def build_prompt(room, mention, ship, mode):
         task = ('You are in read-only mode: you can read and search the repository and use the aDNA tools, but '
                 f'you cannot run commands or change files. If the request needs changes, say what you would do and that '
                 f'{label(author["name"])} can ask the ship\'s owner.')
-    return (f'Room: {label(room["title"])}\n\nRecent messages, oldest first:\n\n' + '\n\n'.join(quoted) +
-            f'\n\nThe last message, from {describe(author)}, mentions you (@{ship}). {task}\n')
+    brief = brief_block(room)  # the owner's brief about the room, whole and fenced like a message, before the history
+    return (f'Room: {label(room["title"])}\n\n' + (brief + '\n\n' if brief else '') + 'Recent messages, oldest first:\n\n'
+            + '\n\n'.join(quoted) + f'\n\nThe last message, from {describe(author)}, mentions you (@{ship}). {task}\n')
 
 
 def format_reply(result, footer=''):

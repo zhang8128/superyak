@@ -538,3 +538,14 @@ def test_a_refused_post_while_relaying_memos_in_loses_nothing_and_posts_nothing_
         w.cycle()
     assert w.cycle() == 2 and w.cycle() == 0 and make().cycle() == 0
     assert [b.splitlines()[0].rsplit(' ', 1)[1] for b in bodies(fake, gamma)] == ['a', 'b', 'c']
+
+
+def test_a_mention_in_the_room_brief_is_never_relayed(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.brief(gamma, andy, '@venus please read the whole brief\n@wormhole')
+    fake.say(gamma, andy, 'A message with no mention')
+    assert w.cycle() == 0
+    assert list((lattice(tmp_path) / OUTBOUND).glob('coord_*.md')) == []
+    assert bodies(fake, gamma) == ['A message with no mention']

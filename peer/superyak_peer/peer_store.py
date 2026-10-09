@@ -62,6 +62,8 @@ class PeerStore:
     def _remote_room(self, db, actor, key, *, messages=True):
         row, value = self._remote_inbox(db, actor, key, 'room')
         result = {**value, 'id':key, 'origin':row['origin'], 'epoch':row['revision']}
+        for key_name in ('brief', 'brief_revision'):  # briefs never cross stations: what a paired peer sends is dropped
+            result.pop(key_name, None)
         pending = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply' AND status!='withdrawn'", (row['resource_id'],row['origin'])).fetchall()
         for delivery in pending:
             meta = json.loads(delivery['metadata'])

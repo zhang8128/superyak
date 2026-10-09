@@ -301,7 +301,8 @@ that person owns by short id and marks those `bridged` (the `wormhole` ship is a
 `station-bridge --id … --as andy` adds the ship through the station's rule for new members, which
 makes a new linked room with the same title and members; `station-unbridge` removes it, also from the
 earlier rooms that room replaced (they keep their members, and the bridge must not take one of them as
-current again). The bridge itself only relays rooms owned by the people its `--owner` names. In the parent
+current again). The bridge itself only relays rooms owned by the people its `--owner` names. Bridging carries the room's brief into the new room, as ticking "Carry the room brief" does in the browser; Wormhole
+never relays a brief. Unbridging keeps the room and its brief. In the parent
 repository these are `make station-rooms`, `make station-bridge ID=…` and `make station-unbridge ID=…`.
 
 Create the resident ship, which has no owner and a private agent config holding its key:

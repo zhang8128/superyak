@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from urllib.parse import quote
 import urllib.error
 import urllib.request
@@ -217,3 +218,24 @@ def fence_message(member, body, limit, hint='', source=''):
     quoted = defuse(body[:limit])
     text = fence_external(sender, quoted, limit=max(len(quoted), 1))
     return text + f'\n[cut at {limit:,} of {len(body):,} characters{hint}]' if len(body) > limit else text
+
+
+def brief_date(updated):
+    """A brief's `updated` (Unix seconds from the station) as a UTC date."""
+    try:
+        return time.strftime('%Y-%m-%d', time.gmtime(float(updated)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return 'unknown'
+
+
+def brief_block(room):
+    """The room's brief, whole, under one header line, and fenced like any message (defused, never cut): the owner
+    wrote it about the room, and it is quoted data, never instructions. '' when the room has none: a removed brief, a
+    remote room, or a station from before briefs."""
+    brief = room.get('brief') if isinstance(room, dict) else None
+    if not isinstance(brief, dict) or not isinstance(brief.get('body'), str) or not brief['body']:
+        return ''
+    revision = brief['revision'] if type(brief.get('revision')) is int else '?'
+    members = {m['id']: m for m in room.get('members', [])}
+    return (f'Room brief (revision {revision}, updated {brief_date(brief.get("updated"))})\n'
+            + fence_message(members.get(brief.get('author_id')), brief['body'], len(brief['body'])))
