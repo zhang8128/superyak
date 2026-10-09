@@ -508,3 +508,218 @@ def worker_env(path, base, endpoint):
             # Bricks' shards run 20-35 minutes: one Bash call may take up to 40, within worker_timeout_s.
             "BASH_DEFAULT_TIMEOUT_MS": "600000",
             "BASH_MAX_TIMEOUT_MS": "2400000"}
+
+
+# ---------- the listener check, D9, D10 and D11 (spec: The listener check; Approved listeners) ----------
+
+CHECK_EVERY_S = 60
+APPROVED_DIRS = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/")
+WILDCARDS = ("*", "0.0.0.0", "::")
+INTERPRETER_RE = re.compile(r"(python|perl|ruby|php|node|deno|bun|lua|tclsh|wish|osascript|java|swift"
+                            r"|(ba|z|da|k|tc|c|fi)?sh)[0-9.]*")
+NETSTAT_HEAD = ["Proto", "Recv-Q", "Send-Q", "Local Address", "Foreign Address", "(state)"]
+
+
+def approved_path():
+    """Only the person edits this file; it is never a team key."""
+    return teamlib.team_home() / "lane-listeners.json"
+
+
+def load_approved():
+    """D10 and D11: the approved list holds executable paths only, each an Apple program in one of its SIP-protected
+    folders (/System, /usr/libexec, /usr/sbin, /sbin) and never an interpreter. It is approved on any port. A list
+    with any other entry is refused as a whole, so the check fails closed."""
+    path = approved_path()
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError) as e:
+        raise LaneWait("%s can't be read (%s)" % (path, e.__class__.__name__))
+    if not isinstance(data, list):
+        raise LaneWait("%s must be a list of executable paths" % path)
+    out = set()
+    for entry in data:
+        if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPROVED_DIRS):
+            raise LaneWait("%s: %r refused: only Apple programs in /System, /usr/libexec, /usr/sbin or /sbin may "
+                           "listen while a lane runs" % (path, entry))
+        if INTERPRETER_RE.fullmatch(os.path.basename(entry).lower()):
+            raise LaneWait("%s: %r refused: an interpreter is never approved" % (path, entry))
+        out.add(entry)
+    return out
+
+
+def _run(cmd, timeout=60):
+    """Every command lane.py runs outside the sandbox goes through here (the tests' seam). None when it can't run."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def parse_lsof(text):
+    """`lsof -F pn` output (or `-F pcn`): one dict per listening socket, {pid, command, host, port}. IPv6 hosts come
+    in brackets ([::1]:41000), a wildcard as *."""
+    out, pid, command = [], None, ""
+    for line in text.splitlines():
+        if not line:
+            continue
+        field, value = line[0], line[1:]
+        if field == "p":
+            pid, command = int(value), ""
+        elif field == "c":
+            command = value
+        elif field == "n" and pid is not None:
+            host, sep, port = value.rpartition(":")
+            if not sep or not port.isdigit():
+                continue
+            if host.startswith("[") and host.endswith("]"):
+                host = host[1:-1]
+            out.append({"pid": pid, "command": command, "host": host, "port": int(port)})
+    return out
+
+
+def parse_netstat(text):
+    """`netstat -anv -p tcp` (macOS): every listening TCP socket, whoever owns it, as {pid, command, host, port}.
+    Addresses end in .<port> (127.0.0.1.631, *.5000, ::1.631, fe80::1%lo0.631). The pid column is found from the
+    header: older macOS calls it `pid`, newer `process:pid` (values like rapportd:571). A header it doesn't
+    recognise, or a listening line it can't read, gives None, so the check fails closed."""
+    lines = text.splitlines()
+    header = next((line for line in lines if line.startswith("Proto")), None)
+    if header is None:
+        return None
+    columns = header.replace("Local Address", "Local\0Address").replace("Foreign Address", "Foreign\0Address").split()
+    columns = [c.replace("\0", " ") for c in columns]
+    if columns[:6] != NETSTAT_HEAD or ("pid" in columns) == ("process:pid" in columns):
+        return None
+    named = "process:pid" in columns
+    index = columns.index("process:pid" if named else "pid")
+    trailing = len(columns) - index - 1                 # the columns after it, counted from the header
+    out = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 6 or fields[0] not in ("tcp4", "tcp6", "tcp46") or fields[5] != "LISTEN":
+            continue
+        if len(fields) < index + 1 + trailing:
+            return None
+        host, sep, port = fields[3].rpartition(".")
+        if named:                                       # a process name may hold spaces: "Google Chrome He:4321"
+            found = re.fullmatch(r"(.*):([0-9]+)", " ".join(fields[index:len(fields) - trailing]))
+            command, pid = (found.group(1), found.group(2)) if found else ("", "")
+        else:
+            command, pid = "", fields[index]
+        if not sep or not host or not port.isdigit() or not pid.isdigit():
+            return None
+        out.append({"pid": int(pid), "command": command, "host": host, "port": int(port)})
+    return out
+
+
+def is_loopback(host):
+    """127.0.0.0/8 and ::1 only. A wildcard, ::, a link-local, LAN or tailnet address is not loopback, and neither is
+    an IPv4-mapped one."""
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if address.version == 4:
+        return address in ipaddress.ip_network("127.0.0.0/8")
+    return address == ipaddress.ip_address("::1")
+
+
+def reachable(host):
+    """Whether a lane could reach a socket bound to this address: loopback (an IPv4-mapped one too), a wildcard, or
+    anything scoped to lo0. An address it can't read counts, so the check fails closed."""
+    if host in WILDCARDS or is_loopback(host) or host.endswith("%lo0"):
+        return True
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return True
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped is not None and mapped in ipaddress.ip_network("127.0.0.0/8")
+
+
+def read_listeners():
+    """Every listening TCP socket on the machine, root's included (netstat sees them; lsof run as the user doesn't),
+    or None when netstat fails or prints something this check doesn't know."""
+    netstat = shutil.which("netstat", path=SYSTEM_PATH)
+    if not netstat:
+        return None
+    r = _run([netstat, "-anv", "-p", "tcp"])
+    if r is None or r.returncode != 0:
+        return None
+    return parse_netstat(r.stdout)
+
+
+def lsof_listeners():
+    """The cross-check: the user's own listening sockets as lsof sees them, as (pid, port) pairs, or None when lsof
+    fails (it exits 1, saying nothing, when it finds none)."""
+    lsof = shutil.which("lsof", path=SYSTEM_PATH)
+    if not lsof:
+        return None
+    r = _run([lsof, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])
+    if r is None or r.returncode not in (0, 1) or (r.returncode == 1 and (r.stdout.strip() or r.stderr.strip())):
+        return None
+    return {(item["pid"], item["port"]) for item in parse_lsof(r.stdout)}
+
+
+def pid_path(pid):
+    """A process's full executable path from proc_pidpath() (macOS), or None. Never `ps -o comm=`, which can give a
+    short name for root's processes (D11)."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    except OSError:
+        return None
+    buf = ctypes.create_string_buffer(4096)                  # PROC_PIDPATHINFO_MAXSIZE
+    n = libc.proc_pidpath(ctypes.c_int(int(pid)), buf, ctypes.c_uint32(len(buf)))
+    return buf.value.decode("utf-8", "replace") if n > 0 else None
+
+
+def listeners_ok():
+    """D9, with D11 and the reachability ruling. Every listening socket a lane can reach, on loopback or a wildcard,
+    must be in a live lane's block on loopback, or belong to an approved Apple program, by its full path, on any port.
+    A socket bound only to another specific address (the tailnet, say) is unreachable and doesn't count; a lane's
+    own port beyond loopback always fails. Any doubt fails too: netstat or lsof failing, a socket lsof sees that
+    netstat doesn't (in two rounds running), a process that can't be identified, an unreadable list or registry.
+    Returns (ok, problems).
+    The check is machine-wide, so it takes no team."""
+    try:
+        approved = load_approved()
+        blocks = live_blocks()
+    except LaneRefused as e:
+        return False, [str(e)]
+    missing, listeners = None, None
+    for attempt in range(2):                            # a socket that opened or closed between the two reads
+        listeners = read_listeners()                    # is gone from the second round
+        if listeners is None:
+            return False, ["netstat failed, or printed a header this check doesn't know, so the listener check "
+                           "fails closed"]
+        seen = lsof_listeners()
+        if seen is None:
+            return False, ["lsof failed, so the listener check fails closed"]
+        lacking = seen - {(item["pid"], item["port"]) for item in listeners}
+        missing = lacking if missing is None else missing & lacking
+        if not missing:
+            break
+    problems = ["lsof shows pid %d listening on port %d, which netstat doesn't list" % pair for pair in sorted(missing)]
+    paths = {}
+    for item in listeners:
+        port, host, pid = item["port"], item["host"], item["pid"]
+        in_lane = any(base <= port < base + BLOCK for base in blocks)
+        if not in_lane and not reachable(host):
+            continue                                    # bound to one other address: no lane can reach it
+        if pid not in paths:
+            paths[pid] = pid_path(pid)
+        exe = paths[pid]
+        name = "%s (pid %d)" % (item["command"] or (os.path.basename(exe) if exe else "?"), pid)
+        if exe is None:
+            problems.append("%s listens on %s port %d, and its program can't be identified" % (name, host, port))
+        elif in_lane:
+            if not is_loopback(host):
+                problems.append("%s listens on %s port %d, beyond loopback, in a lane's block (%s)"
+                                % (name, host, port, exe))
+        elif exe not in approved:
+            problems.append("%s listens on port %d (%s)" % (name, port, exe))
+    return not problems, sorted(set(problems))

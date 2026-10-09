@@ -626,3 +626,272 @@ def test_a_browser_workers_environment(env, monkeypatch, tmp_path):
     assert not {"SSH_AUTH_SOCK", "GPG_AGENT_INFO", "DOCKER_HOST"} & set(browser)
     assert {k: browser[k] for k in extra} == extra                        # NODE_OPTIONS is the preload, not teamd's
     assert plain == dict(os.environ, ENGRAM_PROJECT_ROOT="/r", VOICE_NOTIFY_MUTE="1", SUPERYAK_RUN="1")
+
+# ---------- Task 4: the listener check (D9, D10, D11) ----------
+
+CONTROL_CENTER = "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter"
+HEADER_PID = ("Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)      rhiwat  shiwat    pid   "
+              "epid state  options           gencnt    flags   flags1 usscnt rtncnt fltrs")
+HEADER_PROCESS = ("Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)      rxbytes      "
+                  "txbytes rhiwat  shiwat  process:pid  state  options           gencnt    flags   flags1 usscnt "
+                  "rtncnt fltrs")
+# The Mac's listeners: (proto, local address, state, pid, command). Root's cupsd and launchd (Remote Login, held by
+# pid 1) are here too: netstat sees them, which lsof run as the user can't.
+SOCKETS = [
+    ("tcp46", "*.7000", "LISTEN", 501, "ControlCenter"), ("tcp46", "*.5000", "LISTEN", 501, "ControlCenter"),
+    ("tcp4", "*.49152", "LISTEN", 612, "rapportd"), ("tcp6", "*.49153", "LISTEN", 612, "rapportd"),
+    ("tcp4", "127.0.0.1.631", "LISTEN", 220, "cupsd"), ("tcp6", "::1.631", "LISTEN", 220, "cupsd"),
+    ("tcp46", "*.22", "LISTEN", 1, "launchd"),
+    ("tcp4", "100.101.102.103.8080", "LISTEN", 333, "tailscaled"),       # bound to the tailnet only: unreachable
+    ("tcp4", "127.0.0.1.41000", "LISTEN", 900, "node"), ("tcp6", "::1.41001", "LISTEN", 901, "node"),
+    ("tcp4", "127.0.0.1.49500", "127.0.0.1.41000", 902, "node"),         # a connection, not a listener
+]
+EXE = {501: CONTROL_CENTER, 612: "/usr/libexec/rapportd", 220: "/usr/sbin/cupsd", 1: "/sbin/launchd",
+       333: "/opt/homebrew/bin/tailscaled", 900: "/opt/homebrew/bin/node", 901: "/opt/homebrew/bin/node",
+       777: "/opt/homebrew/bin/ollama"}
+APPROVED = [CONTROL_CENTER, "/usr/libexec/rapportd", "/usr/sbin/cupsd", "/sbin/launchd"]
+
+
+def netstat_text(sockets, header=HEADER_PID):
+    """netstat -anv -p tcp, in the old (pid column) or the new (process:pid column) format."""
+    named = "process:pid" in header
+    lines = ["Active Internet connections (including servers)", header]
+    for proto, local, state, pid, command in sockets:
+        foreign, state = ("*.*", state) if state == "LISTEN" else (state, "ESTABLISHED")
+        who = "%s:%d" % (command, pid) if named else "%d" % pid
+        extra = "    131072  131072  %s  0 0x0100 0x00000106 0x0000000000c5a1d 0x00000000 0x00000800 1 0 000001" % who
+        if named:
+            extra = "  1024  2048  131072  131072  %s  0x0100 0x00000106 0x0000000000c5a1d 0x00000000 0x00000800 1 0 000001" % who
+        lines.append("%-6s     0      0  %-22s %-22s %-12s%s" % (proto, local, foreign, state, extra))
+    return "\n".join(lines) + "\n"
+
+
+def lsof_text(pairs):
+    """lsof -nP -iTCP -sTCP:LISTEN -F pn for the user's own listeners."""
+    out = []
+    for pid, address in pairs:
+        out += ["p%d" % pid, "f20", "n%s" % address]
+    return "\n".join(out) + "\n"
+
+
+class Ran:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+@pytest.fixture
+def listeners(env, held, monkeypatch):
+    """A Mac's listeners: netstat prints `state["sockets"]` (in `state["header"]`'s format), lsof the user's own,
+    proc_pidpath maps pids to executables, and the block at 41000 is a live lane's (this test holds t1's lock)."""
+    state = {"sockets": list(SOCKETS), "header": HEADER_PID, "netstat_rc": 0, "netstat": None,
+             "lsof": [(900, "127.0.0.1:41000"), (901, "[::1]:41001")], "lsof_rc": 0, "exe": dict(EXE),
+             "lsof_rounds": []}                         # one-off lsof answers, used up first, round by round
+
+    def run(cmd, timeout=60):
+        if cmd[0].endswith("netstat"):
+            text = state["netstat"] if state["netstat"] is not None else netstat_text(state["sockets"], state["header"])
+            return Ran(state["netstat_rc"], text)
+        if cmd[0].endswith("lsof"):
+            pairs = state["lsof_rounds"].pop(0) if state["lsof_rounds"] else state["lsof"]
+            return Ran(state["lsof_rc"], lsof_text(pairs))
+        raise AssertionError(cmd)
+    monkeypatch.setattr(lane, "_run", run)
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/" + name)
+    monkeypatch.setattr(lane, "pid_path", lambda pid: state["exe"].get(pid))
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    held("t1")
+    assert lane.allocate_block("t1", "kaylee") == 41000
+    approve(APPROVED)
+    return state
+
+
+def approve(paths):
+    lane.approved_path().parent.mkdir(parents=True, exist_ok=True)
+    lane.approved_path().write_text(json.dumps(paths))
+
+
+@pytest.mark.parametrize("header", [HEADER_PID, HEADER_PROCESS])
+def test_lane_ports_and_approved_apple_programs_pass(listeners, header):
+    """Spec unit test 8: lane ports pass; an approved Apple program passes; in both of netstat's formats."""
+    listeners["header"] = header
+    assert lane.listeners_ok() == (True, [])
+
+
+def test_an_approved_program_passes_on_any_port(listeners):
+    """D11's test case: rapportd takes a new port each time it starts."""
+    listeners["sockets"] += [("tcp4", "*.51234", "LISTEN", 612, "rapportd"), ("tcp6", "*.61000", "LISTEN", 612, "rapportd")]
+    assert lane.listeners_ok() == (True, [])
+
+
+def test_a_program_not_on_the_list_fails_on_any_port_and_is_named(listeners):
+    """D11's test case and spec unit test 8: the lead's message names each one by command name and port."""
+    listeners["sockets"] += [("tcp4", "127.0.0.1.11434", "LISTEN", 777, "ollama"), ("tcp46", "*.11435", "LISTEN", 777, "ollama")]
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["ollama (pid 777) listens on port 11434 (/opt/homebrew/bin/ollama)",
+                                   "ollama (pid 777) listens on port 11435 (/opt/homebrew/bin/ollama)"]
+    approve(APPROVED[:1])
+    ok, problems = lane.listeners_ok()
+    assert any("rapportd (pid 612) listens on port 49152 (/usr/libexec/rapportd)" == p for p in problems)
+
+
+@pytest.mark.parametrize("address", ["*.41002", "192.168.1.20.41002", "::.41002", "fe80::1%lo0.41002",
+                                     "100.101.102.103.41002"])
+def test_a_lane_process_listening_beyond_loopback_fails(listeners, address):
+    """Spec unit test 8: on *, a LAN, link-local or tailnet address, a lane port fails, reachable or not."""
+    listeners["sockets"].append(("tcp46" if address.startswith("*") else "tcp4", address, "LISTEN", 900, "node"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and len(problems) == 1 and "port 41002, beyond loopback" in problems[0]
+
+
+@pytest.mark.parametrize("counted", ["*.9002", "::ffff:127.0.0.1.9003", "fe80::1%lo0.9004", "[weird].9005"])
+def test_a_listener_bound_to_one_other_address_does_not_count(listeners, counted):
+    """The reachability ruling: neither the worker nor the broker can reach a socket bound only to the tailnet or the
+    LAN, so it neither blocks a lane nor needs approval. A wildcard counts, and so do an IPv4-mapped loopback address,
+    anything scoped to lo0 and an address the check can't read (N8)."""
+    listeners["sockets"] += [("tcp4", "100.101.102.103.9000", "LISTEN", 777, "ollama"),
+                             ("tcp4", "192.168.1.20.9001", "LISTEN", 777, "ollama"),
+                             ("tcp6", "fe80::1%en0.9006", "LISTEN", 777, "ollama")]
+    assert lane.listeners_ok() == (True, [])
+    listeners["sockets"].append(("tcp6", counted, "LISTEN", 777, "ollama"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and len(problems) == 1 and "ollama (pid 777) listens on port 900" in problems[0]
+
+
+def test_a_listener_whose_program_cant_be_identified_fails(listeners):
+    """D11: a counted listener with no executable path fails, in a lane's block too."""
+    listeners["exe"].pop(612)
+    ok, problems = lane.listeners_ok()
+    assert not ok and "? (pid 612) listens on * port 49152, and its program can't be identified" in problems
+    listeners["header"] = HEADER_PROCESS                                    # the newer netstat names it
+    assert "rapportd (pid 612) listens on * port 49152, and its program can't be identified" in lane.listeners_ok()[1]
+    listeners["exe"][612] = "/usr/libexec/rapportd"
+    listeners["exe"].pop(900)
+    ok, problems = lane.listeners_ok()
+    assert problems == ["node (pid 900) listens on 127.0.0.1 port 41000, and its program can't be identified"]
+
+
+def test_a_root_listener_is_seen(listeners):
+    """The spec's reason for netstat: root's listeners count. cupsd on 631 passes only because it is approved."""
+    approve([p for p in APPROVED if p != "/usr/sbin/cupsd"])
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["cupsd (pid 220) listens on port 631 (/usr/sbin/cupsd)"]
+
+
+def test_netstat_or_lsof_failing_fails(listeners, monkeypatch):
+    """Spec unit test 8: an lsof failure fails, and so does a netstat failure."""
+    listeners["netstat_rc"] = 1
+    assert lane.listeners_ok()[0] is False
+    listeners["netstat_rc"] = 0
+    listeners["lsof_rc"] = 2
+    assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
+    listeners["lsof_rc"], listeners["lsof"] = 1, []                        # lsof found nothing of the user's: fine
+    assert lane.listeners_ok() == (True, [])
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: None)        # nothing could run at all
+    assert lane.listeners_ok()[0] is False
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: None)
+    assert lane.listeners_ok()[0] is False
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)      rhiwat  shiwat  epid\n",
+    "Proto Recv-Q  Local Address          Foreign Address        (state)  pid\n",
+    HEADER_PID + "\ntcp4       0      0  127.0.0.1.41000        *.*                    LISTEN\n",
+    HEADER_PID + "\ntcp4       0      0  127.0.0.1.41000        *.*                    LISTEN  131072  131072  -\n",
+    HEADER_PROCESS + "\ntcp4  0  0  127.0.0.1.41000  *.*  LISTEN  1  2  131072  131072  node:pid\n",
+])
+def test_a_netstat_it_doesnt_recognise_fails_closed(listeners, text):
+    listeners["netstat"] = text
+    ok, problems = lane.listeners_ok()
+    assert not ok and "netstat failed" in problems[0]
+
+
+def test_a_listener_lsof_sees_and_netstat_doesnt_fails(listeners):
+    """The cross-check: any (pid, port) of the user's own that netstat lacks, in both of two rounds, means the
+    enumeration can't be trusted."""
+    listeners["lsof"].append((905, "127.0.0.1:41003"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["lsof shows pid 905 listening on port 41003, which netstat doesn't list"]
+
+
+def test_a_socket_that_opens_between_netstat_and_lsof_doesnt_fail_the_check(listeners):
+    """Review (N2): a socket that appeared after netstat read the table is gone from the second round."""
+    listeners["lsof_rounds"] = [listeners["lsof"] + [(906, "127.0.0.1:41004")]]
+    assert lane.listeners_ok() == (True, [])
+
+
+def test_a_dead_teamds_block_is_not_a_lane(listeners, monkeypatch):
+    held_lock = lane._team_lock("t1")
+    monkeypatch.setattr(lane, "team_alive", lambda team_id: False)
+    ok, problems = lane.listeners_ok()
+    assert held_lock.exists() and not ok and len(problems) == 2
+    assert all("node (pid 90" in p and "(/opt/homebrew/bin/node)" in p for p in problems)
+
+
+@pytest.mark.parametrize("host, loopback", [
+    ("::1", True), ("127.0.0.1", True), ("127.0.0.2", True), ("127.255.255.254", True),
+    ("fe80::1", False), ("fe80::1%lo0", False), ("::", False), ("*", False), ("0.0.0.0", False),
+    ("100.101.102.103", False), ("fd7a:115c:a1e0::1", False), ("192.168.1.20", False), ("::ffff:127.0.0.1", False),
+])
+def test_only_127_8_and_ipv6_loopback_count_as_loopback(host, loopback):
+    """Spec unit test 8: ::1 and 127.0.0.2 count; fe80::1, :: and a tailnet address don't."""
+    assert lane.is_loopback(host) is loopback
+
+
+def test_a_process_name_with_spaces_or_colons_keeps_its_own_pid():
+    """Review (N1): the process:pid column is everything between the columns before and after it, and the pid is its
+    last :digits. A name with spaces parses, and a crafted "x:1 y:777" is pid 777, never 1."""
+    text = netstat_text([("tcp4", "127.0.0.1.9000", "LISTEN", 4321, "Google Chrome He"),
+                         ("tcp4", "127.0.0.1.9001", "LISTEN", 777, "x:1 y")], HEADER_PROCESS)
+    assert lane.parse_netstat(text) == [
+        {"pid": 4321, "command": "Google Chrome He", "host": "127.0.0.1", "port": 9000},
+        {"pid": 777, "command": "x:1 y", "host": "127.0.0.1", "port": 9001}]
+
+
+@pytest.mark.parametrize("header", [HEADER_PID, HEADER_PROCESS])
+def test_netstat_is_parsed_with_ipv6_in_both_formats(header):
+    """Addresses end in .<port>: 127.0.0.1.631, *.5000, ::1.631 and fe80::1%lo0.631, on tcp4, tcp6 and tcp46."""
+    got = lane.parse_netstat(netstat_text(SOCKETS + [("tcp6", "fe80::1%lo0.631", "LISTEN", 220, "cupsd")], header))
+    command = (lambda name: name) if header == HEADER_PROCESS else (lambda name: "")
+    assert got == [{"pid": pid, "command": command(name), "host": local.rpartition(".")[0], "port": int(local.rpartition(".")[2])}
+                   for proto, local, state, pid, name in SOCKETS + [("tcp6", "fe80::1%lo0.631", "LISTEN", 220, "cupsd")]
+                   if state == "LISTEN"]
+    assert {(g["host"], g["port"]) for g in got} >= {("127.0.0.1", 631), ("*", 5000), ("::1", 631), ("fe80::1%lo0", 631)}
+
+
+def test_lsof_output_is_parsed_with_ipv6():
+    assert lane.parse_lsof(lsof_text([(900, "127.0.0.1:41000"), (901, "[::1]:41001"), (501, "*:7000")])) == [
+        {"pid": 900, "command": "", "host": "127.0.0.1", "port": 41000},
+        {"pid": 901, "command": "", "host": "::1", "port": 41001},
+        {"pid": 501, "command": "", "host": "*", "port": 7000}]
+
+
+@pytest.mark.parametrize("entry, reason", [
+    ("/opt/homebrew/bin/ollama", "only Apple programs"),                              # D11's test case
+    ("/usr/bin/python3", "only Apple programs"),
+    ("/usr/libexec/../../opt/homebrew/bin/ollama", "only Apple programs"),
+    ("usr/libexec/rapportd", "only Apple programs"),
+    ("/System/Library/Frameworks/Python.framework/Versions/3.9/bin/python3.9", "an interpreter is never approved"),
+    ("/usr/libexec/perl5.30", "an interpreter is never approved"),
+    ("/usr/sbin/zsh", "an interpreter is never approved"),
+    ({"executable": "/usr/libexec/rapportd", "port": 49152}, "only Apple programs"),  # D10's old shape
+    (49152, "only Apple programs"),
+])
+def test_the_approved_list_holds_only_apple_program_paths(env, entry, reason):
+    """D10 and D11: a bad entry refuses the whole list when it is loaded, so the check fails closed."""
+    approve(["/usr/libexec/rapportd", entry])
+    with pytest.raises(lane.LaneWait, match=reason):
+        lane.load_approved()
+    ok, problems = lane.listeners_ok()
+    assert not ok and reason.split()[0] in problems[0]
+
+
+def test_the_approved_list_must_be_a_readable_list(env):
+    lane.approved_path().parent.mkdir(parents=True, exist_ok=True)
+    assert lane.load_approved() == set()                                              # no file: nothing approved
+    for text in ("{not json", json.dumps({"executable": "/usr/libexec/rapportd"})):
+        lane.approved_path().write_text(text)
+        with pytest.raises(lane.LaneWait):
+            lane.load_approved()
+    approve(["/usr/libexec/rapportd", "/sbin/launchd", CONTROL_CENTER, "/usr/sbin/sshd"])
+    assert lane.load_approved() == {"/usr/libexec/rapportd", "/sbin/launchd", CONTROL_CENTER, "/usr/sbin/sshd"}
