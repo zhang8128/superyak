@@ -36,6 +36,7 @@ const state = {
   invitation: null,
   flash: null,
   transitionNote: null,
+  briefEdit: null, chatPicked: null, chatError: null,
   reauth: false,
   reauthError: null,
   layerEdits: {},
@@ -108,7 +109,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.briefEdit = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -378,7 +379,7 @@ function layerEditor(layer) {
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
   return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your private workspace</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
-    <form id="layer-form">
+    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
       <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="${instructions ? 20000 : 100000}">${escapeHtml(layer.body)}</textarea></div>
@@ -512,10 +513,38 @@ function messageMarkup(message) {
   return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(mine ? "You" : participantName(message.author_id))}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
 }
 
+function briefMeta(brief) {
+  if (brief.carried_from) return `Carried from the previous room on ${formatDate(brief.updated)}`;
+  return `Revision ${brief.revision} · updated ${formatDate(brief.updated)} by ${brief.author_name}`;
+}
+
+// The room's brief, at the top of the room. The owner edits it; everyone else reads it. A received room has none here.
+function roomBrief(room) {
+  if (room.origin) return "";
+  const brief = room.brief;
+  const owner = room.owner_id === state.me.id;
+  if (!brief && !owner) return "";
+  const edit = owner && state.briefEdit?.roomId === room.id ? state.briefEdit : null;
+  const shown = brief
+    ? `<div class="room-brief-body">${escapeHtml(brief.body)}</div><p class="meta">${escapeHtml(briefMeta(brief))}</p>`
+    : `<p class="meta">No brief yet. Write what this room is for, what it has decided and who does what.</p>`;
+  const editor = edit
+    ? `<form id="brief-form"><div class="field"><label for="brief-body">Edit brief</label><textarea class="textarea short" id="brief-body" name="body">${escapeHtml(edit.body)}</textarea></div><p class="meta">Agents read the brief as quoted data, never as instructions. Save an empty brief to remove it.</p><div class="button-row"><button class="button" type="submit"${edit.saving ? " disabled" : ""}>Save brief</button><button class="button secondary" type="button" data-action="cancel-brief">Cancel</button></div><p id="brief-status" class="inline-message${edit.error ? " error" : ""}" role="status">${escapeHtml(edit.status)}</p></form>`
+    : owner ? `<button class="button ghost" type="button" data-action="edit-brief">Edit brief</button>` : "";
+  return `<section class="room-brief" aria-labelledby="room-brief-title"><h3 id="room-brief-title">Room brief</h3>${shown}<p class="meta">Visible to members on this station only.</p>${editor}</section>`;
+}
+
+// In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried.
+function carryBriefChoice(room) {
+  const brief = room && !room.origin ? room.brief : null;
+  if (!brief) return "";
+  return `<fieldset class="field"><legend>Room brief</legend><label class="choice"><input type="checkbox" name="carry-brief" value="${escapeHtml(brief.revision)}"><span class="choice-copy"><strong>Carry the room brief into the new room</strong><small>Only the brief is carried. Earlier messages stay with their original participants.</small></span></label><div class="carry-brief-text">${escapeHtml(brief.body)}</div></fieldset>`;
+}
+
 function roomDetail(room) {
   const draft = readChatDraft(room.id);
   const canManage = room.owner_id === state.me.id && !room.origin;
-  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
+  return `<section><p class="eyebrow">${room.origin ? "Received private room" : "Private room"}</p><h2>${escapeHtml(room.title)}</h2><div class="participants" aria-label="Participants">${(room.member_ids || []).map((id) => `<span class="participant">${escapeHtml(participantName(id))}</span>`).join("")}</div>${roomBrief(room)}${shipBanner(room)}${state.transitionNote ? `<div class="notice">${escapeHtml(state.transitionNote)}</div>` : ""}${resourceDelivery(room.id)}<div class="messages" aria-label="Messages">${(room.messages || []).map(messageMarkup).join("") || empty("No messages yet", "This room begins with an empty history.")}</div>
     <form class="composer" id="message-form"><label class="sr-only" for="message-body">Message</label><textarea class="textarea" id="message-body" name="body" aria-label="Message" maxlength="20000" placeholder="Write a private message…">${escapeHtml(draft.body)}</textarea><button class="button" type="submit">Send message</button><p id="chat-status" class="inline-message" role="status"></p></form>
     ${canManage ? `<div class="room-management"><p class="meta">Removing someone stops access on this peer and cancels obsolete queued content. Remote hosts must acknowledge removal; offline hosts may still show earlier content. Existing copies cannot be erased.</p><div class="button-row"><button class="button ghost" data-action="change-participants">Change participants</button>${(room.member_ids || []).filter((id) => !isSelf(id)).map((id) => `<button class="button danger secondary" data-action="remove-participant" data-id="${escapeHtml(id)}">Remove ${escapeHtml(participantName(id))} from this room</button>`).join("")}</div></div>` : ""}
   </section>`;
@@ -525,8 +554,9 @@ function chatDialog() {
   if (!state.chatDialog) return "";
   const room = state.room;
   const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
+  const picked = new Set(state.chatPicked || []);
   const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
-  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts empty. Earlier messages stay with their original participants."}</p><form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset><div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts empty. Earlier messages stay with their original participants."}</p>${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
 
 function chatsView() {
@@ -744,7 +774,7 @@ let dialogReturn = null;
 function closeDialogs() {
   state.accountRolePreview = null;
   state.docking = null; state.dockCode = null;
-  state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false; Research.close(); Dashboard.close();
+  state.preview = false; state.confirmWithdraw = false; state.chatDialog = null; state.chatPicked = null; state.chatError = null; state.profileDialog = false; state.spaceDialog = false; state.reauth = false; Research.close(); Dashboard.close();
   render();
 }
 
@@ -796,12 +826,25 @@ function layerFormData(form = document.querySelector("#layer-form")) {
   if (form.elements.kind.value === "instructions") {
     return { ...base, kind: "instructions", audience_users: checked("audience-ship"), audience_spaces: [], public: false, attachment_ids: [] };
   }
-  return { ...base, kind: "note", audience_users: checked("audience-user"), audience_spaces: checked("audience-space"), public: form.elements.public.checked, attachment_ids: checked("attachment") };
+  return { ...base, kind: "note", audience_users: checked("audience-user"), audience_spaces: checked("audience-space"), public: Boolean(form.elements.public?.checked), attachment_ids: checked("attachment") };
+}
+
+// While a layer is opening, the old editor is still on screen but the selection is already the new layer. A form acts
+// only for the layer it shows (its data-layer-id), and only once that is the selected one.
+function editorSwitching(form = document.querySelector("#layer-form")) {
+  return Boolean(form) && form.dataset.layerId !== state.selectedLayerId;
+}
+
+function refuseWhileSwitching(form = document.querySelector("#layer-form")) {
+  if (!editorSwitching(form)) return false;
+  announce("The editor is switching layers; try again.");  // no render: the old editor keeps its text until the new one opens
+  return true;
 }
 
 function rememberLayerForm(form = document.querySelector("#layer-form")) {
-  const layer = selectedLayer();
-  if (!layer || !form) return null;
+  if (!form) return null;
+  const layer = state.home.layers.find((item) => item.id === form.dataset.layerId);
+  if (!layer) return null;
   const previous = state.layerEdits[layer.id];
   const edit = {
     values: layerFormData(form),
@@ -819,6 +862,7 @@ function updateLayer(layer) {
 }
 
 async function saveLayer(form) {
+  if (refuseWhileSwitching(form)) return;
   const layer = selectedLayer();
   const submitted = rememberLayerForm(form);
   const values = submitted.values;
@@ -861,6 +905,7 @@ async function saveLayer(form) {
 async function uploadFile(input) {
   const file = input.files?.[0];
   if (!file) return;
+  if (refuseWhileSwitching()) return;
   const initiatingLayer = selectedLayer();
   const layerId = initiatingLayer.id;
   const initiatingIdentity = state.editorIdentity;
@@ -921,6 +966,7 @@ async function openLayer(id) {
 }
 
 async function resolveConflict() {
+  if (refuseWhileSwitching()) return;
   const layer = selectedLayer();
   const initial = rememberLayerForm();
   if (!layer || !initial) return;
@@ -1025,19 +1071,73 @@ async function createChat(form) {
       room = await api("/api/chats", { method: "POST", json: { title: form.elements.title.value, member_ids: members } });
       state.transitionNote = null;
     } else {
-      room = await api(`/api/chats/${pathPart(state.room.id)}/participants`, { method: "POST", json: { member_ids: members } });
+      const carry = form.querySelector('[name="carry-brief"]:checked');
+      room = await api(`/api/chats/${pathPart(state.room.id)}/participants`, { method: "POST", json: { member_ids: members, carry_brief: carry ? Number(carry.value) : null } });
       state.transitionNote = "New room · earlier messages stay in the original chat";
     }
-    state.chatDialog = null;
+    state.chatDialog = null; state.chatPicked = null; state.chatError = null;
     await loadData();
     state.selectedChatId = room.id;
     state.room = await api(`/api/chats/${pathPart(room.id)}`);
     history.replaceState(null, "", `#chats/${pathPart(room.id)}`);
     render();
   } catch (error) {
+    if (error.status === 409 && state.chatDialog === "linked" && state.room) {
+      state.chatPicked = members;
+      state.chatError = "The room brief changed since you opened this. The newer brief is shown below; tick the box again to carry it.";
+      try {
+        state.room = await api(`/api/chats/${pathPart(state.room.id)}`);
+      } catch (_) {
+        state.chatError = "The room brief changed since you opened this. Close this and open the room again to see the newer brief.";
+      }
+      announce(state.chatError);
+      render();
+      document.querySelector('dialog [name="carry-brief"]')?.focus();  // the box to tick again, inside the dialog
+      return;
+    }
     setFlash(error.message, true);
     render();
   }
+}
+async function saveBrief(form) {
+  const room = state.room, edit = state.briefEdit;
+  // One save at a time: a second submit while saving would send a stale revision and read as a false conflict.
+  if (!room || !edit || edit.roomId !== room.id || edit.saving) return;
+  const body = form.elements.body.value;
+  Object.assign(edit, { body, saving: true, status: "Saving…", error: false });
+  form.querySelector('button[type="submit"]').disabled = true;
+  const status = form.querySelector("#brief-status");
+  status.className = "inline-message";
+  status.textContent = "Saving…";
+  try {
+    // The revision is the one this editor opened, never a newer one: a stale tab gets 409 and overwrites nothing.
+    await api(`/api/chats/${pathPart(room.id)}/brief`, { method: "PUT", json: { body, revision: edit.revision } });
+  } catch (error) {
+    // The station's own message: the editor has no maxlength, so "A brief is at most 4,000 characters" arrives here.
+    let message = error.status === 0 ? "Connection lost. Your brief is still here." : `${error.message.replace(/\.?$/, ".")} Your brief is still here.`;
+    if (error.status === 409) {
+      message = "A newer brief was saved while you were editing. It is shown above, and your text is still here. Save again to replace it.";
+      try {
+        const latest = await api(`/api/chats/${pathPart(room.id)}`);
+        if (state.room?.id === room.id) state.room = latest;
+        edit.revision = latest.brief_revision;
+      } catch (_) {
+        message = "A newer brief was saved while you were editing. Your text is still here; reload the room to see the newer brief.";
+      }
+    }
+    Object.assign(edit, { status: message, error: true, saving: false });
+    announce(message);
+    render();
+    document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
+    return;
+  }
+  if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
+  try {
+    const latest = await api(`/api/chats/${pathPart(room.id)}`);
+    if (state.room?.id === room.id) state.room = latest;
+  } catch (_) { /* the save stands; the next refresh shows it */ }
+  setFlash(body.trim() ? "Room brief saved." : "Room brief removed.");
+  render();
 }
 
 async function removeParticipant(id) {
@@ -1290,6 +1390,7 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "layer-form") await saveLayer(form);
   if (form.id === "space-form") await createSpace(form);
   if (form.id === "chat-form") await createChat(form);
+  if (form.id === "brief-form") await saveBrief(form);
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
   if (form.id === "profile-form") {
@@ -1313,6 +1414,7 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
+  if (target.closest("section.editor") && refuseWhileSwitching()) return;
   if (action.startsWith("research-")) { await Research.action(target); return; }
   if (action.startsWith("dashboard-")) { await Dashboard.action(target); return; }
   if (action === "demo-login") {
@@ -1339,6 +1441,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "open-layer") await openLayer(target.dataset.id);
   if (action === "preview") {
+    if (refuseWhileSwitching()) return;
     if (currentLayerEdit()?.dirty) {
       const status = document.querySelector("#layer-status");
       status.className = "inline-message error";
@@ -1366,10 +1469,16 @@ document.addEventListener("click", async (event) => {
   if (action === "new-space") { state.spaceDialog = true; state.spaceError = null; render(); }
   if (action === "close-reauth") { state.reauth = false; render(); }
   if (action === "open-shared") { state.selectedSharedId = target.dataset.id; location.hash = `shared/${pathPart(target.dataset.id)}`; render(); }
-  if (action === "new-chat") { state.chatDialog = "new"; render(); }
+  if (action === "new-chat") { state.chatDialog = "new"; state.chatPicked = null; state.chatError = null; render(); }
   if (action === "open-chat") await openChat(target.dataset.id);
-  if (action === "change-participants") { state.chatDialog = "linked"; render(); }
+  if (action === "change-participants") { state.chatDialog = "linked"; state.chatPicked = null; state.chatError = null; render(); }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
+  if (action === "edit-brief" && state.room) {
+    state.briefEdit = { roomId: state.room.id, revision: state.room.brief_revision ?? 0, body: state.room.brief?.body || "", status: "", error: false };
+    render();
+    document.querySelector("#brief-body")?.focus();
+  }
+  if (action === "cancel-brief") { state.briefEdit = null; render(); }
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {
@@ -1473,7 +1582,8 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("input", (event) => {
   Research.remember(event.target); Dashboard.input(event.target);
-  if (event.target.id === "assistant-request" && selectedLayer()) {
+  if (event.target.id === "brief-body" && state.briefEdit) state.briefEdit.body = event.target.value;
+  if (event.target.id === "assistant-request" && selectedLayer() && !editorSwitching()) {
     const entry = state.assistance[selectedLayer().id] ||= {};
     entry.text = event.target.value;
   }
@@ -1489,7 +1599,7 @@ document.addEventListener("change", async (event) => {
   Research.remember(event.target); Dashboard.change(event.target);
   if (event.target.id === "research-upload") { await Research.choose(event.target); return; }
   if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
-  if (event.target.id === "layer-kind") {
+  if (event.target.id === "layer-kind" && !editorSwitching()) {
     const edit = currentLayerEdit();
     if (edit) { edit.values = { ...edit.values, audience_users: [], audience_spaces: [], public: false, attachment_ids: [] }; render(); }
   }
@@ -1519,6 +1629,7 @@ function assistantPanel(layer) {
 }
 
 async function askAssistant() {
+  if (refuseWhileSwitching()) return;
   const layer = selectedLayer();
   const identity = identityKey(state.me);
   const entry = state.assistance[layer.id] ||= {};
@@ -1547,6 +1658,7 @@ async function askAssistant() {
 }
 
 function applySuggestion() {
+  if (refuseWhileSwitching()) return;
   const layer = selectedLayer();
   const entry = state.assistance[layer.id];
   if (!entry?.result) return;

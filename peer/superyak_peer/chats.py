@@ -38,6 +38,7 @@ class Chats:
             for message in room.get('messages', []):
                 message['source'] = None  # a paired peer's payload is passed through: a label in it is never ours
                 message['reply_to'] = None
+            room['brief'], room['brief_revision'] = None, 0  # briefs never cross stations
             return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
@@ -50,6 +51,7 @@ class Chats:
             room['members'] = [dict(r) for r in db.execute(
                 'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
                 (key,))]
+            room['brief'], room['brief_revision'] = self._room_brief(db, key)
             return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):
@@ -84,12 +86,18 @@ class Chats:
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
             return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
 
-    def add_participants(self, actor, key, member_ids):
+    def add_participants(self, actor, key, member_ids, carry_brief=None):
+        if carry_brief is not None and type(carry_brief) is not int:
+            raise Problem(400, 'carry_brief is the revision of the brief you saw, or null')
         with self.transaction() as db:
             room = self._room(db, actor, key)
             if room['owner_id'] != actor:
                 raise Problem(403, 'Room owner required')
-            return self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
+            carried = self._brief_to_carry(db, key, carry_brief)
+            new = self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
+            if carried is not None:  # only the brief: the old room's messages stay with their participants
+                self._write_brief(db, new['id'], carried, 1, actor, carried_from=key)
+            return new
 
     def remove_participant(self, actor, key, user_id):
         text(user_id, 'user ID', 100)

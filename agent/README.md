@@ -20,7 +20,7 @@ those steps. State lives in `~/.superyak/` (`station.json` holds the key, mode 0
 | Command | Does |
 | --- | --- |
 | `dock` | The onboarding flow, then registers the tools, the hooks and the watcher service |
-| `mcp` | Stdio MCP server `station`: `station_rooms`, `station_read`, `station_unread`, `station_post`, `station_mentions`, `station_instructions`, `station_draft_instructions`. A client other than Claude Code (Codex) gets the ship's instructions once, in the `initialize` reply, with no change notices; it calls `station_instructions` to look again. Reads show 2,000 characters of each message (`max_chars` up to the station's 20,000) and about 40,000 in all (one long message can run longer once quoted). A cut message ends with the call that shows it whole (`station_read` with `message=<id>`). Whenever messages come before or after those shown, a note names the call that reads them (`start=<id>`, `after=<id>`, `oldest=true`, or `at=<position>` where a remote peer's message id is unusual; all oldest first), so following notes reaches every message |
+| `mcp` | Stdio MCP server `station`: `station_rooms`, `station_read`, `station_unread`, `station_post`, `station_mentions`, `station_instructions`, `station_draft_instructions`. A client other than Claude Code (Codex) gets the ship's instructions once, in the `initialize` reply, with no change notices; it calls `station_instructions` to look again. Reads show 2,000 characters of each message (`max_chars` up to the station's 20,000) and about 40,000 in all (one long message can run longer once quoted). A cut message ends with the call that shows it whole (`station_read` with `message=<id>`). Whenever messages come before or after those shown, a note names the call that reads them (`start=<id>`, `after=<id>`, `oldest=true`, or `at=<position>` where a remote peer's message id is unusual; all oldest first), so following notes reaches every message. The newest view and reads from the first message (`oldest=true`, `start=<first id>`, `at=0`) open with the room's brief, which is whole (at most 4,000 characters), fenced as quoted data like any message, and counted in the 40,000. Reading one message, a thread or a later page does not show it |
 | `hook` | Claude Code hook for `SessionStart` (the ship's instructions) and `UserPromptSubmit` (instruction changes, then new messages; see Instructions). The messages since the last turn, fenced, at most 20 messages, 800 characters each and 4,000 in all; a cut or left-out message says which `station_read` call shows it; silent when the station is unreachable |
 | `watch [--resident]` | The mention watcher, run as a systemd user unit (Linux) or launchd agent (macOS) |
 | `status`, `undock` | Show state, including the instructions that bind the ship; revoke the key and remove services and registrations |
@@ -29,7 +29,7 @@ those steps. State lives in `~/.superyak/` (`station.json` holds the key, mode 0
 
 Every 30 seconds it fetches new mentions and answers one at a time. The room's last 30 messages go
 into the prompt, each quoted through `fence_external` with the author's name and kind; only the
-mentioning message is the request. It is never cut; earlier messages keep 2,000 characters, with a note where cut. A mention from the ship's owner, a person verified by the station,
+mentioning message is the request. The room's brief, whole and fenced the same way, comes before them. It is never cut; earlier messages keep 2,000 characters, with a note where cut. A mention from the ship's owner, a person verified by the station,
 runs Claude as a **builder** in a worktree `~/.superyak/worktrees/<ship>/<message id>` on branch
 `lighthouse/<ship>/<message id>` (OS-sandboxed, 20 minute limit). The watcher commits the changed
 files and never pushes. Anyone else's mention runs **read-only**: Read, Grep and Glob, no shell or
@@ -141,7 +141,7 @@ with the same title and members, as the station always does, and the room it rep
 bridged. On the Pi, Andy bridges a room with `make station-rooms` and `make station-bridge ID=<short id>`;
 `make station-unbridge ID=<short id>` stops it and also takes Wormhole out of the earlier rooms that room
 replaced (removing Wormhole in the browser does not, so an earlier room would count as current again).
-The bridge relays only what is said after its first run, and never messages from `wormhole` or `odo`.
+The bridge relays only what is said after its first run, and never messages from `wormhole` or `odo`. It never relays the room's brief, only messages.
 
 - **Out.** A message with an explicit `@persona` that is in the persona map (case-insensitive, trailing
   punctuation dropped; as on the station, a name in code, in double quotes or on a `>` line does not count) becomes a new memo `coord_<YYYY_MM_DD>_station_to_<persona>_<slug>.md` in

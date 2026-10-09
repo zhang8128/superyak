@@ -65,8 +65,9 @@ def describe_bridge(room, changed, bridge):
     if not changed:
         return f'The {where} is already bridged. Nothing changed.' if bridge else f'The {where} is not bridged. Nothing changed.'
     if bridge:
+        brief = "The room's brief came along." if room.get('brief_carried') else 'The room had no brief to carry.'
         return (f'Bridged. Wormhole is in a new {where} with the same members; the room it replaces, {room["linked_room_id"][:6]}, '
-                'stays as it was but is no longer the current room.')
+                f'stays as it was but is no longer the current room. {brief}')
     return f'Unbridged. Wormhole left the {where}.'
 
 

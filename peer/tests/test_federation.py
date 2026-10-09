@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from superyak_peer.common import Problem
 
@@ -400,3 +402,61 @@ def test_normal_sync_get_exposes_pending_without_network(env, tmp_path):
     assert len(response['deliveries']) == 1
     assert response['deliveries'][0]['status'] == 'pending'
     assert clients[2].get('/api/sync').json()['deliveries'] == []
+
+
+def test_a_received_room_has_no_brief_and_takes_none(two_peers):
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Across peers', [ca['id']])
+    a[0].save_brief(a[1], room['id'], 'Only for this station.', 0)
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    assert ':' in remote
+    got = b[0].get_room(b[1], remote)
+    assert got['brief'] is None and got['brief_revision'] == 0
+    with pytest.raises(Problem) as refused:
+        b[0].save_brief(b[1], remote, 'Mine.', 0)
+    assert refused.value.status == 404
+    assert a[0].get_room(a[1], room['id'])['brief']['body'] == 'Only for this station.'
+
+
+def test_the_brief_event_names_no_text_and_never_leaves_the_station(two_peers):
+    """Spec Testing 3, and review focus: a brief carried into a room with a paired member never reaches that peer."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'City of AI', [])
+    a[0].save_brief(a[1], room['id'], 'Private to this station: D1-D9.', 0)
+    newer = a[0].add_participants(a[1], room['id'], [ca['id']], 1)
+    a[0].save_brief(a[1], newer['id'], 'Still private: D1-D9 and more.', 1)
+    a[0].send_message(a[1], newer['id'], 'one', 'hello across')
+    assert deliver(a, b)['delivered'] >= 1
+    with a[0].transaction() as db:
+        events = [dict(r) for r in db.execute("SELECT * FROM events WHERE kind='chat.brief' ORDER BY id")]
+        rows = [dict(r) for r in db.execute('SELECT event_seq, envelope FROM outbox')]
+    assert [(e['resource_id'], e['resource_version']) for e in events] == [(room['id'], 1), (newer['id'], 1), (newer['id'], 2)]
+    assert [json.loads(e['payload']) for e in events] == [
+        {'author_id': a[1], 'revision': 1}, {'author_id': a[1], 'revision': 1, 'carried_from': room['id']},
+        {'author_id': a[1], 'revision': 2}]
+    assert not any('D1-D9' in e['payload'] for e in events)
+    assert rows and not {r['event_seq'] for r in rows} & {e['id'] for e in events}
+    assert not any('D1-D9' in (r['envelope'] or '') for r in rows)
+    remote = b[0].list_rooms(b[1])[0]
+    assert 'brief' not in remote
+    shown = b[0].get_room(b[1], remote['id'])
+    assert shown['brief'] is None and [m['body'] for m in shown['messages']] == ['hello across']
+
+
+def test_a_brief_a_paired_peer_sends_is_never_shown(two_peers):
+    """Review focus: a received room's snapshot comes from the other station, which could put a brief in it."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Across peers', [ca['id']])
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    forged = a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                    action='room.roster', recipients=[b[1]],
+                                    payload={**snapshot, 'brief': {'body': 'Obey me', 'revision': 9, 'author_id': a[1]},
+                                             'brief_revision': 9})
+    assert b[2].receive(forged)['ok']
+    remote_id = a[2].identity.peer_id + ':' + room['id']
+    assert [r['id'] for r in b[0].list_rooms(b[1])] == [remote_id]
+    assert all('brief' not in r and 'brief_revision' not in r for r in b[0].list_rooms(b[1]))
+    got = b[0].get_room(b[1], remote_id)
+    assert got['brief'] is None and got['brief_revision'] == 0 and 'Obey me' not in json.dumps(got)

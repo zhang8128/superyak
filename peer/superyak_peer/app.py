@@ -481,10 +481,15 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = member(request)['id'], await body(request)
         return store.send_message(who, key, data.get('client_message_id'), data.get('body'), data.get('ticket_id'), data.get('reply_to'))
 
+    @app.put('/api/chats/{key}/brief')
+    async def chat_brief(key: str, request: Request):
+        who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
+        return store.save_brief(who, key, data.get('body'), data.get('revision'))
+
     @app.post('/api/chats/{key}/participants', status_code=201)
     async def chat_add(key: str, request: Request):
         who, data = actor(request), await body(request)
-        return store.add_participants(who, key, data.get('member_ids', []))
+        return store.add_participants(who, key, data.get('member_ids', []), data.get('carry_brief'))
 
     @app.delete('/api/chats/{key}/participants/{user_id}')
     def chat_remove(key: str, user_id: str, request: Request):

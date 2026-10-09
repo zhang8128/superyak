@@ -11,6 +11,7 @@ class FakeStation:
         self.clock, self.counter, self.down = 1000.0, 0, False
         self.tickets, self.sources, self.ticket_override, self.label_refusals = {}, {}, {}, set()
         self.blocks, self.instruction_state, self.drafts = {}, {}, []
+        self.briefs = {}  # room id -> the brief as GET /api/chats/{id} shows it, or None
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
@@ -45,11 +46,17 @@ class FakeStation:
                 self.mention_rows.append({'seq': len(self.mention_rows) + 1, 'message_id': message['id'], 'room_id': room_id, 'user_id': target['id']})
         return message
 
+    def brief(self, room_id, author, body, revision=1, carried_from=None):
+        """A room's brief as the station shows it; a blank body removes it, and GET then says null."""
+        self.clock += 1
+        self.briefs[room_id] = ({'body': body, 'revision': revision, 'author_id': author['id'], 'author_name': author['name'],
+                                 'updated': self.clock, 'carried_from': carried_from} if body.strip() else None)
+
     def view(self, room):
         last = max([m['created'] for m in room['messages']], default=0.0)
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
-                'members': [self.users[i] for i in room['member_ids'] if i in self.users],
+                'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'brief': self.briefs.get(room['id']),
                 'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']]}
 
     def source_of(self, message):
@@ -77,7 +84,7 @@ class FakeStation:
         if method == 'GET' and path == '/api/me':
             return ok(self.users[me])
         if method == 'GET' and path == '/api/chats':
-            return ok([{k: v for k, v in self.view(r).items() if k != 'messages'} for r in self.rooms.values() if me in r['member_ids']])
+            return ok([{k: v for k, v in self.view(r).items() if k not in ('messages', 'brief')} for r in self.rooms.values() if me in r['member_ids']])
         if segments[:2] == ['api', 'chats'] and len(segments) >= 3:
             room = self.rooms.get(segments[2])
             if room is None or me not in room['member_ids']:
