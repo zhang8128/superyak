@@ -4161,7 +4161,7 @@ git commit -m "team: the broker's deny-default profile from a pinned template, a
     `broker_root`;
   - from Task 6, `lane.render_profile`;
   - from Tasks 2 and 4, `lane.lane_text`, `_new_fd`, `_parent_path`, `_write_text` and `_run`;
-  - `teamlib.locked` and `teamlib.load_config()["lane_node"]`.
+  - `lane.install_lock` and `teamlib.load_config()["lane_node"]`.
 - Produces:
   - `lane.START_TIMEOUT_S = 90` and `lane.KILL_GRACE_S = 5`.
   - `class lane.Broker(proc, port, secret)`, with `.endpoint` (`ws://127.0.0.1:<port>/<secret>`) and `.alive()`.
