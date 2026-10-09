@@ -1727,9 +1727,12 @@ mention starts a watcher run.
    from superyak_agent.station import client_for, load_config
    client = client_for(load_config())
    rooms = [r for r in client.rooms() if ':' not in r['id']]
-   room = client.room(rooms[0]['id'])
    print('summaries carry no brief:', all('brief' not in r for r in rooms))
-   print('the room has brief and brief_revision:', 'brief' in room and 'brief_revision' in room)
+   if rooms:
+       room = client.room(rooms[0]['id'])
+       print('the room has brief and brief_revision:', 'brief' in room and 'brief_revision' in room)
+   else:
+       print('no local room to check')
    EOF
    ```
    **Expected:** both `True`. Then ask Andy to open a room he owns in the browser. It should show the "Room brief"

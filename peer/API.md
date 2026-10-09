@@ -304,7 +304,7 @@ activity until a new message arrives. Empty members creates a
 personal room; one additional member a direct room; more members a group.
 Creator is always a member. Account/organization admin status gives no read/send
 permission. The first slice reserves audience changes to the room creator, who
-cannot remove themselves. Adding participants creates a linked, empty room with
+cannot remove themselves. Adding participants creates a linked, message-free room with
 old and added participants; old room/messages stay unchanged. `linked_room_id`
 may refer to an inaccessible room; it grants no ability to fetch it.
 
@@ -335,6 +335,7 @@ does what.
   - Every save, a removal included, writes revision n+1 on the same row, so a stale tab never overwrites a later
     brief. A removal is a body that is empty or only whitespace, stored as `''`.
   - A member who isn't the owner gets 403, and so does a ship key. A non-member and a received room get 404.
+  - A brief that contains a live ship key gets 422 and is not saved, as a message does; a revoked key saves.
   - Saving records no mentions and posts no message.
 - **Audit and federation.**
   - The event log records `chat.brief` with the revision and author, never the text.
