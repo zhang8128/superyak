@@ -273,3 +273,16 @@ def registry_line(error):
     """status's line for an unreadable registry (R16): the file, why, and what it means."""
     return (f"Superyak: {registry_path()} can't be read ({error}), so the station hooks on this machine are off and "
             'every station tool refuses. Fix or remove it (remove only with no ships/*/claim.json left), then dock again.')
+
+
+def match(entry, root):
+    """S6: 'full' when the claim's root and (dev, ino) both equal the session root's, 'partial' when exactly one does
+    (a moved repository, a re-clone at the same path, a remount), None otherwise. Claude Code keys local tools by path
+    (M7), so path and inode must agree for the hooks and the tools to stay on one ship."""
+    try:
+        st = os.stat(root)
+    except OSError:
+        return None
+    path_ok = entry['root'] == str(Path(os.path.realpath(root)))
+    inode_ok = (entry['dev'], entry['ino']) == (st.st_dev, st.st_ino)
+    return 'full' if path_ok and inode_ok else 'partial' if path_ok or inode_ok else None

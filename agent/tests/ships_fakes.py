@@ -11,6 +11,8 @@ from types import SimpleNamespace
 from superyak_agent import install
 from superyak_agent.station import write_private
 
+REAL_RUN = subprocess.run      # git runs for real even while a FakeMachine stands in for everything else
+
 
 def isolate_git(monkeypatch, tmp_path):
     """R11: no global or system git config, so a machine's global ignore can't make a test pass."""
@@ -27,7 +29,7 @@ def isolate_git(monkeypatch, tmp_path):
 def git(*args, cwd):
     env = {**os.environ, 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.com', 'GIT_COMMITTER_NAME': 't',
            'GIT_COMMITTER_EMAIL': 't@example.com'}
-    return subprocess.run(['git', *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout
+    return REAL_RUN(['git', *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout
 
 
 def make_repo(path, worktree=None):
@@ -49,7 +51,7 @@ class FakeMachine:
     entries per project root, so `get` answers for the directory it runs in, as Claude Code does (M2)."""
 
     def __init__(self, monkeypatch, tmp_path, system='Linux', tools=('claude', 'codex'), fail=()):
-        self.calls, self.fail, self.out = [], fail, []
+        self.calls, self.fail, self.out, self.git_calls = [], fail, [], []
         self.home = tmp_path / 'home'
         self.home.mkdir(exist_ok=True)
         monkeypatch.setenv('HOME', str(self.home))
@@ -74,6 +76,9 @@ class FakeMachine:
     def run(self, argv, **kwargs):
         argv = [str(a) for a in argv]
         cwd = kwargs.get('cwd')
+        if Path(argv[0]).name == 'git':
+            self.git_calls.append((argv, None if cwd is None else str(cwd), dict(kwargs.get('env') or {})))
+            return REAL_RUN(argv, **kwargs)
         self.calls.append((argv, None if cwd is None else str(cwd)))
         name = Path(argv[0]).name
         if any(name == f[0] and argv[1:len(f)] == list(f[1:]) for f in self.fail):

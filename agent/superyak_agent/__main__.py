@@ -87,6 +87,36 @@ def _hook(parser, argv):
     return 0
 
 
+def _dock_project(args, fields):
+    """A project ship (D7, S9): the checks before the request; Dock runs them again before each poll; install runs them
+    once more inside the lock hold that writes the claim. Any refusal after the station has the ship says how to clean
+    up."""
+    from .claims import Refused
+    from .dock import Dock
+    from .project_dock import ProjectDock
+    project = ProjectDock(args.ship, args.project)
+    try:
+        repo = project.checks()
+    except Refused as error:
+        print(f'dock: {error}', file=sys.stderr)
+        return 2
+    workspace = args.workspace or str(repo.root)
+    try:
+        code = Dock(args.station, door=args.door, ship=args.ship, workspace=workspace, home=project.home,
+                    check=project.checks).run(fields, wait=args.wait)
+    except Refused as error:
+        print(project.cleanup(error), file=sys.stderr)
+        return 2
+    if code != 0:
+        return code
+    try:
+        project.install(hook=args.hook, service=not args.no_service)
+    except Refused as error:
+        print(project.cleanup(error, rolled_back=getattr(error, 'rolled_back', False)), file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv=None):
     parser = build_parser()
     if argv is None:
@@ -137,8 +167,7 @@ def main(argv=None):
             print(f'dock: {error}', file=sys.stderr)
             return 2
         if kind == 'project':
-            print('dock: project ships come in a later build step of D7.', file=sys.stderr)
-            return 2
+            return _dock_project(args, fields)
         workspace = args.workspace or str(Path(__file__).resolve().parents[2])
         code = Dock(args.station, door=args.door, ship=args.ship, workspace=workspace, home=home).run(fields, wait=args.wait)
         if code == 0:

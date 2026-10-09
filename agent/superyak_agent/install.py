@@ -107,9 +107,11 @@ def _same_hook(command, wanted):
     return command == wanted or kind(command) == kind(wanted)
 
 
-def install_hooks(settings_path, config_path, messages):
+def install_hooks(settings_path, config_path, messages, backup=None):
     """Install the station's SessionStart (instructions) and UserPromptSubmit hooks. Returns the list of what
-    changed: 'SessionStart', 'UserPromptSubmit' and, when a messages-on prompt hook was replaced, 'messages-off'."""
+    changed: 'SessionStart', 'UserPromptSubmit' and, when a messages-on prompt hook was replaced, 'messages-off'.
+    The first time it changes an existing file it copies it to `backup` (default: beside it; a project ship's goes to
+    its home, never into the repository, R6)."""
     settings_path = Path(settings_path)
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     changes = []
@@ -129,8 +131,9 @@ def install_hooks(settings_path, config_path, messages):
         settings['hooks'][event] = kept
         changes.append(event)
     if changes:
-        backup = settings_path.with_name(settings_path.name + '.bak-superyak')
+        backup = Path(backup) if backup is not None else settings_path.with_name(settings_path.name + '.bak-superyak')
         if settings_path.exists() and not backup.exists():
+            backup.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copy2(settings_path, backup)
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         _write_settings(settings_path, settings)
@@ -219,11 +222,15 @@ def remove_codex(config_path, name):
     return True
 
 
-def register_claude(name, argv, out):
+def register_claude(name, argv, out, cwd=None):
+    """User-scope tools. `claude mcp get` answers for its working directory, so the machine ship's calls run in
+    ~/.superyak, outside every claimed project, where a local station would hide the user one (R7)."""
+    cwd = str(cwd) if cwd is not None else None
     try:
-        if subprocess.run(['claude', 'mcp', 'get', name], capture_output=True).returncode == 0:
+        if subprocess.run(['claude', 'mcp', 'get', name], capture_output=True, cwd=cwd).returncode == 0:
             return
-        subprocess.run(['claude', 'mcp', 'add', '--scope', 'user', name, '--', *[str(a) for a in argv]], check=True, capture_output=True)
+        subprocess.run(['claude', 'mcp', 'add', '--scope', 'user', name, '--', *[str(a) for a in argv]], check=True,
+                       capture_output=True, cwd=cwd)
     except (subprocess.SubprocessError, OSError) as error:
         out(f'Could not register the {name} tools with Claude Code ({_reason(error)}). Run make dock again to retry.')
         return
@@ -302,6 +309,19 @@ def install_service(argv, out, system=None, names=None):
     out('The watcher is running; it answers mentions within about 30 seconds.')
 
 
+def remove_service(names, system=None):
+    """Stop and remove one ship's watcher service, by its names (S4), and nothing else."""
+    label, unit_name, _ = names
+    system = system or platform.system()
+    if system == 'Linux':
+        subprocess.run(['systemctl', '--user', 'disable', '--now', unit_name], capture_output=True)
+        (Path.home() / '.config' / 'systemd' / 'user' / unit_name).unlink(missing_ok=True)
+        subprocess.run(['systemctl', '--user', 'daemon-reload'], capture_output=True)
+    elif system == 'Darwin':
+        subprocess.run(['launchctl', 'bootout', f'gui/{os.getuid()}/{label}'], capture_output=True)
+        (Path.home() / 'Library' / 'LaunchAgents' / f'{label}.plist').unlink(missing_ok=True)
+
+
 def hook_command(config_path):
     return shlex.join([sys.executable, str(RUN_AGENT), 'hook', '--config', str(config_path)])
 
@@ -342,7 +362,7 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print, 
     home, mcp_argv = config_path.parent, [sys.executable, str(RUN_AGENT), 'mcp', '--config', str(config_path)]
     write_private(home / 'run-mcp.json', run_mcp_config(config_path))
     if shutil.which('claude'):
-        register_claude('station', mcp_argv, out)
+        register_claude('station', mcp_argv, out, cwd=home)
     else:
         out('Claude Code not found; skipped registering the station tools for it.')
     codex = Path.home() / '.codex' / 'config.toml'
@@ -368,7 +388,7 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print, 
         write_private(home / 'run-mcp.json', run_mcp_config(config_path, adna_dist))
         out('Added the aDNA tools to the watcher.')
         if shutil.which('claude'):
-            register_claude('adna', [shutil.which('node'), adna_dist], out)
+            register_claude('adna', [shutil.which('node'), adna_dist], out, cwd=home)
 
 
 def uninstall_all(config_path, out=print):
