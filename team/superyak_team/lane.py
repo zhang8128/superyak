@@ -954,16 +954,27 @@ def is_loopback(host):
     return address == ipaddress.ip_address("::1")
 
 
+GETIFADDRS_FAILED = ("getifaddrs() failed, so the loopback interface's addresses can't be listed and the listener check "
+                     "fails closed")
+
+
 def _loopback_names():
-    """The names of the interfaces flagged IFF_LOOPBACK (lo0 on macOS, lo on Linux)."""
-    return {name for _, _, _, name in _loopback_addresses() or []}
+    """The names of the interfaces flagged IFF_LOOPBACK (lo0 on macOS, lo on Linux), read now. No silent fallback
+    (re-review 91a90fa3): when getifaddrs fails this refuses (LaneRefused), never an empty set that would read a row
+    on fe80::1%lo0 as unreachable. The check itself reads the names once (_loopback_view) and passes them on."""
+    found = _loopback_addresses()
+    if found is None:
+        raise LaneRefused(GETIFADDRS_FAILED)
+    return {name for _, _, _, name in found}
 
 
-def reachable(host):
+def reachable(host, names=None):
     """Whether a lane could reach a socket bound to this address: loopback (an IPv4-mapped one too), a wildcard, or
-    anything scoped to a loopback interface (by its real name). An address it can't read counts, so the check fails
-    closed."""
-    if host in WILDCARDS or is_loopback(host) or ("%" in host and host.split("%", 1)[1] in _loopback_names()):
+    anything scoped to a loopback interface, by its real name: `names`, the check's one reading of them, or read now
+    (and refused if they can't be). An address it can't read counts, so the check fails closed."""
+    if host in WILDCARDS or is_loopback(host):
+        return True
+    if "%" in host and host.split("%", 1)[1] in (_loopback_names() if names is None else names):
         return True
     try:
         address = ipaddress.ip_address(host.split("%", 1)[0])
@@ -1090,14 +1101,20 @@ def _loopback_addresses():
 
 
 def loopback_targets():
-    """(targets, notes, refusals) for the scan. targets are [(family, address, scope_id, label)]: every address the
-    loopback interface holds by itself, 127.0.0.1, ::1 and fe80::1 scoped to it. Any other address there (an alias such
-    as 127.0.0.2) is a refusal that names it: a listener there would be outside what the scan was measured on. ::1
-    missing is a note, and the scan skips it; 127.0.0.1 missing, or getifaddrs failing, is a refusal."""
+    """(targets, notes, refusals) for the scan: _loopback_view without the interface names."""
+    return _loopback_view()[:3]
+
+
+def _loopback_view():
+    """(targets, notes, refusals, names), from ONE reading of getifaddrs: the scan's targets are [(family, address,
+    scope_id, label)], every address the loopback interface holds by itself, 127.0.0.1, ::1 and fe80::1 scoped to it.
+    Any other address there (an alias such as 127.0.0.2) is a refusal that names it: a listener there would be outside
+    what the scan was measured on. ::1 missing is a note, and the scan skips it; 127.0.0.1 missing, or getifaddrs
+    failing, is a refusal. names are the loopback interfaces' names, which the check passes on instead of reading them
+    again (re-review 91a90fa3)."""
     found = _loopback_addresses()
     if found is None:
-        return [], [], ["getifaddrs() failed, so the loopback interface's addresses can't be listed and the listener "
-                        "check fails closed"]
+        return [], [], [GETIFADDRS_FAILED], set()
     targets, refusals = [], []
     for family, address, scope, name in found:
         label = "%s%%%s" % (address, name) if address.startswith("fe80:") else address
@@ -1110,7 +1127,7 @@ def loopback_targets():
     notes = [] if "::1" in labels else ["::1 isn't configured on the loopback interface, so the scan skips it"]
     if "127.0.0.1" not in labels:
         refusals.append("127.0.0.1 isn't on the loopback interface, so the listener check fails closed")
-    return targets, notes, refusals
+    return targets, notes, refusals, {name for _, _, _, name in found}
 
 
 def _maxfiles(hard):
@@ -1147,6 +1164,8 @@ def _raised_nofile():
             except (ValueError, OSError) as e:
                 print("superyak-team: couldn't restore RLIMIT_NOFILE to %s after the scan: %r" % (original, e),
                       file=sys.stderr)
+                raise LaneRefused("RLIMIT_NOFILE couldn't be restored to %s after the scan, so the listener check "
+                                  "refuses rather than let a worker inherit it" % original) from e
 
 
 def scan_loopback(targets, ports=None, batch_s=SCAN_BATCH_S, deadline_s=SCAN_DEADLINE_S):
@@ -1388,12 +1407,12 @@ def _unnamed_problems(unnamed, targets, sockets):
     return problems
 
 
-def _disagreeing(rows, targets, found):
+def _disagreeing(rows, targets, found, names=None):
     """{(label, port): [rows]} for each scanned address a named Listen row covers, on a loopback address or a wildcard,
     that the scan found closed: the scan and the naming disagree there."""
     out = {}
     for item in rows:
-        if not reachable(item["host"]):
+        if not reachable(item["host"], names):
             continue
         for target in targets:
             key = (target[3], item["port"])
@@ -1431,7 +1450,7 @@ def _scan_with_canaries(targets):
         return {key: how for key, how in found.items() if canaries.get(key[0]) != key[1]}, []
 
 
-def _judge(rows, approved, lanes):
+def _judge(rows, approved, lanes, names=None):
     """The rules on every named row a lane could reach (D10, D11, I3, I4): this uid's rows anywhere (I3 beyond
     loopback while a lane is live), another uid's unless it is on a specific non-loopback address. Returns problems."""
     tmps = [str(_parent_path() / key / "tmp") for _, key in lanes]
@@ -1439,7 +1458,7 @@ def _judge(rows, approved, lanes):
     unique = {(item["pid"], item["host"], item["port"]): item for item in rows}
     for item in sorted(unique.values(), key=lambda item: (item["port"], item["pid"], item["host"])):
         port, host, pid = item["port"], item["host"], item["pid"]
-        can_reach = reachable(host)
+        can_reach = reachable(host, names)
         if item["uid"] != me and not can_reach:         # another uid's on one specific address beyond loopback
             continue
         block = next((key for base, key in lanes if base <= port < base + BLOCK), None)
@@ -1491,13 +1510,13 @@ def _check(approved, lanes):
     (address, port) passes only when a named row covers it and every covering row passes."""
     end = time.monotonic() + CHECK_DEADLINE_S
     late = ["the listener check ran past its %d s deadline, so it fails closed" % CHECK_DEADLINE_S]
-    targets, notes, refusals = loopback_targets()
+    targets, notes, refusals, names = _loopback_view()  # getifaddrs read once; its names passed on
     if refusals:
         return False, refusals
     rows, sockets, problems = _named()
     if problems:
         return False, problems
-    problems = _judge(rows, approved, lanes)
+    problems = _judge(rows, approved, lanes, names)
     if problems:                                        # name first: a waiting lane doesn't scan Andy's services
         return False, problems + notes
     with _scan_lock() as held:
@@ -1509,7 +1528,7 @@ def _check(approved, lanes):
             return False, problems
         if time.monotonic() > end:
             return False, late
-        disagree = _disagreeing(rows, targets, found)
+        disagree = _disagreeing(rows, targets, found, names)
         suspect = ({key for key, how in found.items() if how != "accepted"} | set(_unnamed(found, targets, rows))
                    | set(disagree))
         if len(suspect) > REPROBE_MOST:                 # 2 s each, one at a time, under teamd's lock: never
@@ -1524,15 +1543,15 @@ def _check(approved, lanes):
             rows, sockets, problems = _named()
             if problems:
                 return False, problems
-            problems = _judge(rows, approved, lanes)
+            problems = _judge(rows, approved, lanes, names)
             if problems:
                 return False, problems
-            disagree = {key: items for key, items in _disagreeing(rows, targets, found).items() if key in disagree}
+            disagree = {key: items for key, items in _disagreeing(rows, targets, found, names).items() if key in disagree}
     if _unplaced(sockets, targets, found):              # name once more; still unplaced, it refuses
         rows, sockets, problems = _named()
         if problems:
             return False, problems
-        problems = _judge(rows, approved, lanes)
+        problems = _judge(rows, approved, lanes, names)
         if problems:
             return False, problems
         ghosts = _unplaced(sockets, targets, found)
@@ -1545,7 +1564,7 @@ def _check(approved, lanes):
         return False, ["lsof failed, so the listener check fails closed"]
     known = {(item["pid"], item["host"], item["port"]) for item in rows}
     fresh = [dict(item, uid=os.getuid()) for item in after if (item["pid"], item["host"], item["port"]) not in known]
-    problems = _judge(fresh, approved, lanes) if fresh else []
+    problems = _judge(fresh, approved, lanes, names) if fresh else []
     if problems:
         return False, problems + notes
     if time.monotonic() > end:

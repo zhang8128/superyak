@@ -786,6 +786,8 @@ def listeners(env, held, monkeypatch):
              "lsof": None, "lsof_rc": 0, "lsof_rounds": [], "lsof_stderr": "",   # None: this user's sockets
              "lsof_text": None, "lsof_calls": 0, "lsof_sleeps": [],      # seconds to take on each lsof run
              "scan_sleep": 0, "reprobe_sleep": 0,
+             "lsof_script": [],         # per lsof run, in turn: None (as usual), "fail", "timeout" or "unreadable"
+             "getifaddrs_calls": 0, "getifaddrs_fails_after": None,       # getifaddrs fails after this many calls
              "nettop": None, "nettop_rc": 0, "nettop_rounds": [], "no_nettop": False, "nettop_calls": 0,
              "nettop_texts": [],
              "scan": None, "scan_extra": {}, "scan_rounds": [], "scanned": [],     # None: what the sockets make
@@ -800,6 +802,13 @@ def listeners(env, held, monkeypatch):
     def run(cmd, timeout=60):
         if cmd[0].endswith("lsof"):
             state["lsof_calls"] += 1
+            action = state["lsof_script"].pop(0) if state["lsof_script"] else None
+            if action == "fail":
+                return Ran(2, "", "lsof: something went wrong")
+            if action == "timeout":
+                return None
+            if action == "unreadable":
+                return Ran(0, "p501\nf3\ntIPv4\nn127.0.0.1:\n")
             if state["lsof_sleeps"]:
                 time.sleep(state["lsof_sleeps"].pop(0))
             if state["lsof_text"] is not None:
@@ -858,7 +867,13 @@ def listeners(env, held, monkeypatch):
                         lambda name, path=None: None if name == "nettop" and state["no_nettop"] else "/usr/sbin/" + name)
     monkeypatch.setattr(lane, "scan_loopback", scan)
     monkeypatch.setattr(lane, "_canaries", canaries)
-    monkeypatch.setattr(lane, "_loopback_addresses", lambda: [(f, a, sc, "lo0") for f, a, sc, _ in state["addresses"]])
+    def getifaddrs():
+        state["getifaddrs_calls"] += 1
+        limit = state["getifaddrs_fails_after"]
+        if limit is not None and state["getifaddrs_calls"] > limit:
+            return None
+        return [(f, a, sc, "lo0") for f, a, sc, _ in state["addresses"]]
+    monkeypatch.setattr(lane, "_loopback_addresses", getifaddrs)
     monkeypatch.setattr(lane, "pid_path", lambda pid: state["exe"].get(pid))
     monkeypatch.setattr(lane, "_environ", lambda pid: state["environ"].get(pid))
     monkeypatch.setattr(lane, "port_free", lambda port: True)
@@ -1389,8 +1404,54 @@ def test_a_missing_ipv6_loopback_is_said_in_the_checks_own_result(listeners):
     assert lane.listeners_ok() == (True, ["::1 isn't configured on the loopback interface, so the scan skips it"])
 
 
+@pytest.mark.parametrize("after", [1, 2, 3, 5, 10])
+def test_getifaddrs_failing_partway_through_a_check_refuses(listeners, after):
+    """Re-review (91a90fa3), the fail-open: another user's unapproved listener on fe80::1%lo0:9004 is refused while
+    getifaddrs works. getifaddrs failing after its first call (or any later one) must refuse too, never read that row
+    as unreachable: the check reads the interface names once and passes them on."""
+    listeners["sockets"].append(("tcp6", "fe80::1%lo0.9004", "LISTEN", 4646, "elsewhere"))
+    listeners["uids"][4646] = os.getuid() + 1
+    listeners["exe"][4646] = "/opt/example/bin/elsewhere"
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["elsewhere (pid 4646) listens on port 9004 (/opt/example/bin/elsewhere)"]
+    listeners["getifaddrs_calls"], listeners["getifaddrs_fails_after"] = 0, after
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems
+
+
+def test_a_link_local_row_the_scan_finds_closed_disagrees(listeners):
+    """The check's one reading of the interface names reaches _disagreeing too: root's approved cupsd named on
+    fe80::1%lo0:9005, found closed by the scan and alone, refuses."""
+    listeners["sockets"].append(("tcp6", "fe80::1%lo0.9005", "LISTEN", 220, "cupsd"))
+    full = {key: "accepted" for proto, local, st, pid, name in listeners["sockets"] if st == "LISTEN"
+            for key in scan_keys(proto, local)}
+    listeners["scan"] = {key: how for key, how in full.items() if key != ("fe80::1%lo0", 9005)}
+    listeners["reprobe"] = {("fe80::1%lo0", 9005): None}
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["scan and naming disagree: nettop says cupsd (pid 220) listens on fe80::1%lo0 port "
+                                   "9005, but the scan finds it closed twice"]
+
+
+def test_the_loopback_names_are_never_an_empty_set_by_default(monkeypatch):
+    """No silent fallback: reachable() that has to read the names itself, and can't, refuses."""
+    monkeypatch.setattr(lane, "_loopback_addresses", lambda: None)
+    assert lane.reachable("127.0.0.1") and lane.reachable("*")                    # no names needed for these
+    with pytest.raises(lane.LaneRefused, match="getifaddrs"):
+        lane.reachable("fe80::1%lo0")
+
+
+@pytest.mark.parametrize("how", ["fail", "timeout", "unreadable"])
+def test_the_lsof_read_after_the_scan_that_fails_refuses(listeners, how):
+    """Re-review (91a90fa3): the second lsof (after the scan) failing, timing out or printing a row it can't read is
+    never "nothing new": the check refuses."""
+    listeners["lsof_script"] = [None, how]
+    assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
+    assert listeners["scanned"] == [None] and listeners["lsof_calls"] == 2
+
+
 def test_a_failed_rlimit_restore_is_logged(monkeypatch, capsys):
-    """Review item 8: never swallowed."""
+    """Review item 8: never swallowed. Re-review (91a90fa3): and it raises, so the check refuses and no worker
+    inherits the raised limit."""
     limits = [(256, 4096)]
 
     def setrlimit(which, value):
@@ -1400,8 +1461,9 @@ def test_a_failed_rlimit_restore_is_logged(monkeypatch, capsys):
     monkeypatch.setattr(lane.resource, "getrlimit", lambda which: limits[0])
     monkeypatch.setattr(lane.resource, "setrlimit", setrlimit)
     monkeypatch.setattr(lane, "_maxfiles", lambda hard: 2048)
-    with lane._raised_nofile():
-        pass
+    with pytest.raises(lane.LaneRefused, match="RLIMIT_NOFILE"):
+        with lane._raised_nofile():
+            pass
     assert "superyak-team: couldn't restore RLIMIT_NOFILE to 256" in capsys.readouterr().err
 
 
