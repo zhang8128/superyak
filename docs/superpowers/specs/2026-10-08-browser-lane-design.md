@@ -357,6 +357,9 @@ the Mac.
     (measured on macOS 27). The scope is moved out to the interface's name.
   - Each owner is identified by `proc_pidpath(pid)`, never by nettop's name field, and D10, D11, I3 and I4 apply as
     before.
+  - The loopback interfaces' names (for rows scoped like `fe80::1%lo0`) come from the check's one reading of
+    getifaddrs, the same one the scan's targets come from. Nothing reads them again with an empty-set fallback;
+    anything that must read them on its own and can't, refuses (re-review 91a90fa3).
 - **2. Judge the named rows, and refuse without scanning when one fails,** so a waiting lane doesn't scan Andy's
   running services every 30 s for hours.
   - Every lsof row on an address a lane can reach (loopback, a wildcard, the loopback interface's link-local address,
@@ -571,9 +574,9 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   (Linux binds 127.0.0.2 with no alias, but Linux runs no lanes; its tests use a getifaddrs fixture.) nettop's format
   is a private tool's output: a macOS update that changes its header makes the check refuse every lane until the parser
   is measured again, which fails closed, not open. A port opened between the scan and a turn's start is reachable until
-  the next check, at most 60 s later, as before. There is also a window between the second lsof and the scan's own
-  connects: a same-uid listener that binds beside an approved wildcard inside it is covered by the wildcard until the
-  next check.
+  the next check, at most 60 s later, as before. lsof is read again after the scan, so what remains is a bind after
+  that second lsof: a same-uid listener that binds beside an approved wildcard then is covered by the wildcard until
+  the next check.
 - **A check holds teamd's lock while it runs** (amendment): the scan, any probes again (2 s each, at most 64) and the
   naming, up to the 90 s deadline. The lead's stop requests and the SIGKILL of a turn that ignored SIGTERM wait
   meanwhile. Moving the check out from under the lock is a separate item.
