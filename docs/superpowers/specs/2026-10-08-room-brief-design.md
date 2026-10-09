@@ -7,6 +7,16 @@ them are folded in here.
 Base: build on main **after** the instruction-layers branch merges, because the brief reuses its `defuse()` in
 `fence_message`.
 
+Built on branch `room-brief` (plan `docs/superpowers/plans/2026-10-08-room-brief.md`). Two build decisions the spec
+left open:
+- `GET /api/chats/{id}` also returns `brief_revision` (0 with no row, and 0 for a received room), so an owner can
+  write a brief again after removing one.
+- A save clears `carried_from`, because "Carried from the previous room on <date>" dates the carried revision.
+
+And one departure, from the plan's review: the brief editor has no `maxlength`. A browser's `maxlength` counts UTF-16
+units and would stop 4,000 emoji at 2,000, so the editor shows the station's 400 ("A brief is at most 4,000
+characters") instead.
+
 ## Why
 
 Adding a member to a room creates a new, empty linked room. The old room's messages stay with the people who were

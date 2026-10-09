@@ -1587,3 +1587,192 @@ def test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed(browser_pe
             page.get_by_role("button", name="Close").click()
             expect(editor.get_by_label("What do you want to share?")).to_have_value("!Hello.")
             expect(editor.get_by_text("Unsaved changes", exact=True)).to_be_visible()  # the absence above is not vacuous
+
+
+def test_the_owner_writes_a_brief_and_carries_it_into_a_new_linked_chat(browser_peer):
+    """Break caught: the owner cannot write a brief, it is carried without being chosen, or old messages come with it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    store.send_message(users["patient"]["id"], room["id"], "old", "An old message for the first audience.")
+    brief = "Purpose: a city of AI.\nD1–D9 are decided; Rio Grande builds the brief."
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            expect(panel.get_by_role("heading", name="Room brief")).to_be_visible()
+            expect(panel.get_by_text("Visible to members on this station only.")).to_be_visible()
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill(brief)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".notice", has_text="Room brief saved.")).to_be_visible()  # the announcer repeats it, hidden
+            expect(panel.locator(".room-brief-body")).to_have_text(brief)
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            carry = dialog.get_by_role("checkbox", name="Carry the room brief into the new room")
+            expect(carry).not_to_be_checked()
+            expect(dialog.locator(".carry-brief-text")).to_have_text(brief)
+            expect(dialog.get_by_text("Only the brief is carried. Earlier messages stay with their original participants.")).to_be_visible()
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            carry.check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(page.get_by_text("New room · earlier messages stay in the original chat")).to_be_visible()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text(brief)
+            expect(page.locator(".room-brief")).to_contain_text("Carried from the previous room on")
+            expect(page.get_by_text("An old message for the first audience.")).to_have_count(0)
+    rooms = store.list_rooms(users["doctor"]["id"])
+    assert len(rooms) == 1
+    carried = store.get_room(users["doctor"]["id"], rooms[0]["id"])["brief"]
+    assert (carried["body"], carried["revision"], carried["carried_from"]) == (brief, 1, room["id"])
+
+
+def test_without_a_brief_the_carry_box_is_hidden(browser_peer):
+    """Break caught: a missing or removed brief still offers to carry something, or a removed one can't be written again."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    quiet = store.create_room(patient, "Quiet room", [users["family"]["id"]])
+    removed = store.create_room(patient, "Removed brief", [users["family"]["id"]])
+    store.save_brief(patient, removed["id"], "Soon gone.", 0)
+    store.save_brief(patient, removed["id"], "", 1)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            for target in (quiet, removed):
+                page.goto(f"{base}/#chats/{target['id']}")
+                page.reload()
+                expect(page.locator(".room-brief")).to_contain_text("No brief yet.")
+                page.get_by_role("button", name="Change participants").click()
+                expect(page.locator("dialog").get_by_role("checkbox", name="Dr. Morgan")).to_be_visible()
+                expect(page.get_by_role("checkbox", name="Carry the room brief")).to_have_count(0)
+                page.locator("dialog").get_by_role("button", name="Cancel").click()
+            page.locator(".room-brief").get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("Back again.")
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Back again.")
+    assert store.get_room(patient, removed["id"])["brief"]["revision"] == 3
+
+
+def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
+    """Break caught: a member who is not the owner can change the brief, or cannot see it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    store.save_brief(users["patient"]["id"], room["id"], "Rio Grande builds the brief.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Rio Grande builds the brief.")
+            expect(page.locator(".room-brief")).to_contain_text("Visible to members on this station only.")
+            expect(page.get_by_role("button", name="Edit brief")).to_have_count(0)
+            expect(page.get_by_label("Edit brief")).to_have_count(0)
+            expect(page.get_by_role("button", name="Save brief")).to_have_count(0)
+
+
+def test_brief_text_is_shown_literally(browser_peer):
+    """Break caught: a brief's text is read as markup in the panel or the dialog."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    hostile = '<b>bold?</b> <img src=x onerror="document.title=\'pwned\'">'
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    store.save_brief(users["patient"]["id"], room["id"], hostile, 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text(hostile)
+            expect(page.locator(".room-brief b, .room-brief img")).to_have_count(0)
+            page.get_by_role("button", name="Change participants").click()
+            expect(page.locator("dialog .carry-brief-text")).to_have_text(hostile)
+            expect(page.locator("dialog b, dialog img")).to_have_count(0)
+            assert page.title() != "pwned"
+
+
+def test_a_save_from_a_stale_tab_keeps_the_text_and_shows_the_newer_brief(browser_peer):
+    """Review focus: another tab saved first. Nothing is overwritten unseen, and the typed text is not lost."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First brief.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("My edit from this tab.")
+            store.save_brief(patient, room["id"], "Saved in another tab.", 1)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status")).to_contain_text("A newer brief was saved while you were editing")
+            expect(page.get_by_label("Edit brief")).to_have_value("My edit from this tab.")
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Saved in another tab.")
+            assert store.get_room(patient, room["id"])["brief"]["body"] == "Saved in another tab."
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("My edit from this tab.")
+    assert store.get_room(patient, room["id"])["brief"]["revision"] == 3
+
+
+def test_a_carry_refused_for_a_newer_brief_shows_it_and_carries_it_on_a_second_tick(browser_peer):
+    """Review: after a 409 the dialog must show the newer brief, unticked, or the owner is stuck on the old revision."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "Plan for everyone.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.locator(".carry-brief-text")).to_have_text("Plan for everyone.")
+            store.save_brief(patient, room["id"], "Plan for everyone, revised.", 1)  # another tab
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(dialog.get_by_role("alert")).to_contain_text("The room brief changed since you opened this.")
+            expect(dialog.locator(".carry-brief-text")).to_have_text("Plan for everyone, revised.")
+            expect(dialog.get_by_role("checkbox", name="Carry the room brief")).not_to_be_checked()
+            expect(dialog.get_by_role("checkbox", name="Dr. Morgan")).to_be_checked()
+            assert store.list_rooms(doctor) == []
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Plan for everyone, revised.")
+    rooms = store.list_rooms(doctor)
+    assert len(rooms) == 1 and store.get_room(doctor, rooms[0]["id"])["brief"]["body"] == "Plan for everyone, revised."
+
+
+def test_the_brief_editor_saves_4000_emoji_and_shows_the_limit_past_it(browser_peer):
+    """Review focus: a browser's maxlength counts UTF-16 units, so the editor has none and shows the station's limit."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("😀" * 4001)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status")).to_have_text("A brief is at most 4,000 characters. Your brief is still here.")
+            expect(page.get_by_label("Edit brief")).to_have_value("😀" * 4001)
+            page.get_by_label("Edit brief").fill("😀" * 4000)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("😀" * 4000)
+    assert store.get_room(patient, room["id"])["brief"]["body"] == "😀" * 4000
+
+
+def test_a_double_click_on_save_brief_saves_once(browser_peer):
+    """Review: a second submit while the first is saving would read as a false "newer brief" conflict."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First brief.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            puts = []
+            page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("Saved once.")
+            page.get_by_role("button", name="Save brief").dblclick()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Saved once.")
+            expect(page.get_by_text("A newer brief was saved")).to_have_count(0)
+            assert len(puts) == 1
+    assert store.get_room(patient, room["id"])["brief"]["revision"] == 2
