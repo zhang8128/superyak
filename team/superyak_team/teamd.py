@@ -542,7 +542,10 @@ class Team:
 
     def _turn_leftovers(self, wid):
         """lane.turn_leftovers for this worker's last turn, as a function for the cleanup's two looks: what its tree was
-        seen to hold, and this uid's orphans in its worktree or lane folder since it began. Never the broker."""
+        seen to hold, and this uid's orphans in its worktree or lane folder since it began. Never the broker: at a
+        turn's end its family is spared by pid; at a lane's end the broker has been taken out of self.brokers and is
+        stopped before the cleanup looks, so nothing is spared there by pid, and its profile, which writes only b/ and
+        reads it, fails the sandbox gate whatever is left of it."""
         w = self.state["workers"][wid]
         seen = dict(self.turn_seen.get(wid, {}))
         path = lane.lane_path(self.team_id, wid)
@@ -551,7 +554,7 @@ class Team:
         def find():
             spared = lane.family(broker.proc.pid)[0] if broker is not None else set()
             return lane.turn_leftovers(seen, (w["path"], path), w.get("turn_started"), (w["path"], path / "tmp"),
-                                       spared)
+                                       spared=spared, unreadable=(path / "b",))
         return find
 
     def _lane_env_cleanup(self, wid):
@@ -587,7 +590,7 @@ class Team:
         try:
             finished = lane.cleanup_processes(path, base, broker, env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")),
                                               extra=self._turn_leftovers(wid))
-        except OSError as e:
+        except Exception as e:                          # a broken libSystem's AttributeError included: unfinished
             finished = False
             self.log("cleaning up %s's lane processes: %r" % (wid, e))
         self.turn_seen.pop(wid, None)

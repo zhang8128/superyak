@@ -2157,29 +2157,48 @@ def env_pids(name, value):
 # (a) this uid's orphans (ppid 1) started since the turn began whose cwd is in its worktree or lane folder.
 # Spec, Known limits: what chdirs out and orphans between two samples is missed.
 PROC_PIDTBSDINFO, PROC_BSDINFO_SIZE = 3, 136          # struct proc_bsdinfo; its start time is at 120 (s) and 128 (us)
+# libsystem_sandbox exports SANDBOX_CHECK_NO_REPORT as a symbol: 0x40000000 on macOS 27 (read with ctypes, 2026-10-09).
 SANDBOX_FILTER_NONE, SANDBOX_FILTER_PATH, SANDBOX_CHECK_NO_REPORT = 0, 1, 0x40000000
+_LIBSYSTEM = {}                     # {"lib": libSystem, loaded once; or None when it or a symbol couldn't load}
+
+
+def _on_macos():
+    """Whether this is macOS, from the system itself: the tests' mac fixture says "darwin" through sys.platform, and
+    that must not decide whether there is a Seatbelt to ask."""
+    return platform.system() == "Darwin"
 
 
 def _libsystem():
-    """macOS's libSystem with proc_pidinfo and sandbox_check typed, or None where there is none (not macOS)."""
-    try:
-        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
-    except OSError:
+    """macOS's libSystem with proc_pidinfo and sandbox_check typed, loaded once. None off macOS; on macOS, None when
+    it or either symbol can't load, and the callers then say they can't tell (_turn_sandboxed, turn_leftovers),
+    never that this isn't macOS."""
+    if not _on_macos():
         return None
-    libc.proc_pidinfo.restype = ctypes.c_int
-    libc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
-    libc.sandbox_check.restype = ctypes.c_int
-    libc.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]   # then a path, variadic
-    return libc
+    if "lib" not in _LIBSYSTEM:
+        try:
+            libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+            libc.proc_pidinfo.restype = ctypes.c_int
+            libc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+            libc.sandbox_check.restype = ctypes.c_int
+            libc.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]   # then a path, variadic
+        except (OSError, AttributeError):
+            libc = None
+        _LIBSYSTEM["lib"] = libc
+    return _LIBSYSTEM["lib"]
 
 
 def _started(pid):
     """When pid started, as a time.time() value, or None when it is gone or can't be read: proc_pidinfo on macOS (to
-    the microsecond), /proc elsewhere (to the clock tick). It asks what the system has rather than sys.platform."""
-    libc = _libsystem()
-    if libc is not None:
+    the microsecond, None when libSystem is broken), /proc elsewhere (to the clock tick)."""
+    if _on_macos():
+        libc = _libsystem()
+        if libc is None:
+            return None
         buf = ctypes.create_string_buffer(PROC_BSDINFO_SIZE)
-        if libc.proc_pidinfo(int(pid), PROC_PIDTBSDINFO, 0, buf, PROC_BSDINFO_SIZE) != PROC_BSDINFO_SIZE:
+        try:
+            if libc.proc_pidinfo(int(pid), PROC_PIDTBSDINFO, 0, buf, PROC_BSDINFO_SIZE) != PROC_BSDINFO_SIZE:
+                return None
+        except (AttributeError, ctypes.ArgumentError, OSError):
             return None
         sec, usec = struct.unpack_from("QQ", buf.raw, 120)
         return sec + usec / 1e6
@@ -2206,7 +2225,7 @@ def started_clock():
     btime, whole seconds, plus clock ticks since boot, up to 1 s off the wall clock: so btime plus CLOCK_BOOTTIME (what
     starttime counts) cut to whole ticks. No tolerance, which would let a process from before the turn count. When /proc
     can't say, the wall clock: a later start only drops orphans, never takes one."""
-    if _libsystem() is not None:
+    if _on_macos():
         return time.time()
     try:
         hz = _ticks_per_second()
@@ -2215,26 +2234,35 @@ def started_clock():
         return time.time()
 
 
-def _turn_sandboxed(pid, writable):
-    """Whether pid runs under a Seatbelt profile that lets it write every folder in `writable` (the turn's: its
-    worktree and its lane's tmp/). Andy's shell and what claude starts outside its sandbox (its MCP servers) aren't
-    sandboxed; another app's sandbox, or another lane's turn, can't write this lane's tmp/; a gone pid reads as denied.
-    False where there is no Seatbelt (not macOS); None when sandbox_check answers something else."""
+def _turn_sandboxed(pid, writable, unreadable=()):
+    """Whether pid runs under the turn's Seatbelt profile, as far as sandbox_check can tell: it is sandboxed, may write
+    every folder in `writable` (the turn's worktree and its lane's tmp/) and may read none in `unreadable` (its lane's
+    b/, which the turn's profile denies and most other sandboxes allow). Andy's shell and what claude starts outside
+    its sandbox (its MCP servers) aren't sandboxed. Each path is asked about by its real path; a missing one answers
+    1. A gone pid (zombie, reaped or never used) answers 1 to everything on macOS 27 (measured 2026-10-09), so it reads
+    as denied: False. Any answer but 0 or 1 is False for a pid that is gone, so one gone pid never holds up a whole
+    cleanup, and None (can't say) for one still running. False off macOS; None on macOS when libSystem is broken."""
+    if not _on_macos():
+        return False
     libc = _libsystem()
     if libc is None:
-        return False
-    answer = libc.sandbox_check(int(pid), None, SANDBOX_FILTER_NONE)
-    if answer not in (0, 1):
         return None
-    if answer == 0:
-        return False
-    for folder in writable:
-        answer = libc.sandbox_check(int(pid), b"file-write-data", SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT,
-                                    ctypes.c_char_p(os.fsencode(os.path.realpath(folder))))
-        if answer not in (0, 1):
+    asks = [(None, None)] + [(b"file-write-data", f) for f in writable] + [(b"file-read-data", f) for f in unreadable]
+    for operation, folder in asks:
+        try:
+            if folder is None:
+                answer = libc.sandbox_check(int(pid), None, SANDBOX_FILTER_NONE)
+            else:
+                answer = libc.sandbox_check(int(pid), operation, SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT,
+                                            ctypes.c_char_p(os.fsencode(os.path.realpath(folder))))
+        except (AttributeError, ctypes.ArgumentError, OSError):
             return None
-        if answer == 1:
-            return False
+        if answer not in (0, 1):
+            return None if _alive(pid) else False
+        denied = answer == 1
+        if (folder is None and not denied) or (operation == b"file-write-data" and denied) or (
+                operation == b"file-read-data" and not denied):
+            return False                # not sandboxed, may not write the turn's folders, or may read b/
     return True
 
 
@@ -2299,11 +2327,14 @@ def _orphans_in(folders, began, mine):
             if fd == "cwd" and pid in candidates and _cwd_in(folders, inode, device, name)}
 
 
-def turn_leftovers(seen, folders, began, writable, spared=()):
+def turn_leftovers(seen, folders, began, writable, spared=(), unreadable=()):
     """What a turn left that its environment can't show, as {pid: start}: (b) a process seen in its tree (`seen`,
     {pid: start}) still running with the same start time, so a reused pid is spared, and (a) _orphans_in its
-    `folders` since `began`. Only this uid's, only under the turn's profile (_turn_sandboxed with `writable`), never
-    teamd or a process above it, never `spared` (the broker's). None when ps, lsof or the sandbox can't say."""
+    `folders` since `began`. Only this uid's, only under the turn's profile (_turn_sandboxed with `writable` and
+    `unreadable`), never teamd or a process above it, never `spared` (the broker's). None when ps, lsof or the sandbox
+    can't say, and on macOS when libSystem is broken, even with nothing to ask about."""
+    if _on_macos() and _libsystem() is None:
+        return None
     rows = _process_table()
     if not rows:
         return None
@@ -2316,7 +2347,7 @@ def turn_leftovers(seen, folders, began, writable, spared=()):
     found.update(orphans)
     out = {}
     for pid, start in found.items():
-        sandboxed = _turn_sandboxed(pid, writable)
+        sandboxed = _turn_sandboxed(pid, writable, unreadable)
         if sandboxed is None:
             return None
         if sandboxed:
