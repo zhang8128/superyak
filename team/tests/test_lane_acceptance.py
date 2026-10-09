@@ -399,7 +399,9 @@ def driven(acceptance, world, monkeypatch):
     real_run = subprocess.run
     monkeypatch.setattr(acceptance.subprocess, "run",
                         lambda cmd, **k: Ran(0, "") if "start" in cmd else real_run(cmd, **k))
-    return SimpleNamespace(args=SimpleNamespace(bricks=bricks, python="python3", prepare="npm-ci"), world=FakeTeam.world)
+    args = SimpleNamespace(bricks=bricks, python="python3", prepare="npm-ci",
+                           root_plan={"kind": None, "reason": "none in the test"})
+    return SimpleNamespace(args=args, world=FakeTeam.world)
 
 
 def run_steps(acceptance, driven):
@@ -438,15 +440,24 @@ def test_an_approved_list_that_cannot_be_read_is_never_touched(acceptance, drive
 # ---- Critical 2: the download row ----
 
 def test_the_download_row_needs_a_control_and_a_download_that_began(acceptance):
-    ok = json.dumps({"control": {"began": True, "states": ["completed"]}, "home": {"began": True, "states": ["canceled"]}})
+    ok = json.dumps({"control": {"set": 2, "began": True, "states": ["completed"]},
+                     "home": {"set": 2, "began": True, "states": ["canceled"]}})
     assert acceptance.download_verdict(0, ok, [], True, [])[0] == "PASS"
-    verdict, detail = acceptance.download_verdict(0, ok, [".zsh_history", "superyak-x.txt"], True, [])
-    assert verdict == "FAIL" and ".zsh_history" in detail and "superyak-x.txt" in detail
+    verdict, detail = acceptance.download_verdict(0, ok, ["Unconfirmed 12345.crdownload", acceptance.WRITE_PROBE], True, [])
+    assert verdict == "FAIL" and "Unconfirmed 12345.crdownload" in detail and acceptance.WRITE_PROBE in detail
     assert acceptance.download_verdict(0, ok, [], False, [])[0] == "BROKEN"                       # the control never landed
-    never = json.dumps({"control": {"began": True, "states": []}, "home": {"began": False, "states": []}})
+    never = json.dumps({"control": {"set": 1, "began": True, "states": []}, "home": {"set": 1, "began": False, "states": []}})
     assert acceptance.download_verdict(0, never, [], True, [])[0] == "BROKEN"                      # nothing was tried
     assert acceptance.download_verdict(0, ok, [], True, ["/home/x/superyak-lane-acceptance-download.txt"])[0] == "BROKEN"
     assert acceptance.download_verdict(2, "broken: no cdp", [], True, [])[0] == "BROKEN"
+    # N6: unrelated new names in $HOME are not download-shaped and do not fail the row
+    assert acceptance.download_verdict(0, ok, [".zsh_history", "notes.txt", ".DS_Store"], True, [])[0] == "PASS"
+    stem, ext = os.path.splitext(acceptance.WRITE_PROBE)
+    assert acceptance.download_verdict(0, ok, ["%s (1)%s" % (stem, ext)], True, [])[0] == "FAIL"
+    # N7: a $HOME download that set no behaviour, or landed in b/, proves nothing
+    unset = json.dumps({"control": {"set": 2, "began": True, "states": []}, "home": {"set": 0, "began": True, "states": []}})
+    assert acceptance.download_verdict(0, unset, [], True, [])[0] == "BROKEN"
+    assert acceptance.download_verdict(0, ok, [], True, [], home_in_b=True)[0] == "BROKEN"
     assert acceptance.download_verdict(1, "not json", [], True, [])[0] == "BROKEN"
 
 
@@ -600,19 +611,6 @@ PS = """  900   1 /usr/bin/sudo -n /usr/bin/nc -l 127.0.0.1 5555
 """
 
 
-def test_only_the_nc_child_of_our_sudo_is_ever_signalled(acceptance):
-    assert acceptance.nc_child(PS, 900) == 901
-    assert acceptance.nc_child(PS, 1) is None                                  # not by port, not another nc
-    assert acceptance.nc_child("  900   1 /usr/bin/sleep 9\n", 900) is None
-
-
-def test_stopping_the_root_listener_reports_a_stuck_sudo(acceptance):
-    killed, said = [], []
-    root = SimpleNamespace(pid=900, wait=lambda timeout=None: (_ for _ in ()).throw(sp.TimeoutExpired("sudo", 1)))
-    acceptance.stop_root_listener(root, ps=lambda: PS, kill=lambda pid: killed.append(pid), say=said.append)
-    assert killed == [901] and any("900" in line and "by hand" in line for line in said)
-
-
 def test_a_root_listener_must_be_root_owned_and_invisible_to_lsof(acceptance, monkeypatch):
     monkeypatch.setattr(lane, "lsof_listeners", lambda: {(901, 5555)})
     verdict, detail = acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0)
@@ -630,7 +628,7 @@ def test_sudo_is_refreshed_while_the_run_lasts(acceptance):
     keeper.stop()
     n = len(calls)
     time.sleep(0.2)
-    assert n >= 3 and len(calls) == n and calls[0] == ["/usr/bin/sudo", "-v"] and calls[-1] == ["/usr/bin/sudo", "-n", "-v"]
+    assert n >= 3 and len(calls) == n and calls[0] == ["/usr/bin/sudo", "-n", "-v"] and calls[-1] == ["/usr/bin/sudo", "-n", "-v"]
     assert acceptance.SudoKeeper(run=lambda cmd, **k: Ran(1)).start() is False
 
 
@@ -767,7 +765,7 @@ def test_a_report_spec_fails_a_missing_report_and_untagged_advisories(acceptance
     spec = lambda f, tags: {"title": "t", "file": f, "line": 1, "tags": tags, "tests": [dict(status="unexpected", **msg)]}
     (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"errors": [], "suites": [{"title": "s", "specs": [
         {"title": "ok", "file": "tests/a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]},
-        spec("tests/four-up-school.spec.ts", ["@lane-advisory"]), spec("tests/a.spec.ts", ["@lane-advisory"])]}]}))
+        spec("tests/gtm/four-up-school.spec.ts", ["@lane-advisory"]), spec("tests/a.spec.ts", ["@lane-advisory"])]}]}))
     report = acceptance.Report()
     acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
     by = {r[1]: r for r in report.rows}
@@ -838,3 +836,266 @@ def test_both_ran_at_the_same_time_needs_a_server_in_each_block(acceptance):
     assert acceptance.both_serving({"kaylee": "running", "wash": "running"}, {"kaylee": {5, 9}, "wash": {6, 8}}, {"kaylee": {5}, "wash": {6}}) is True
     assert acceptance.both_serving({"kaylee": "running", "wash": "running"}, {"kaylee": {5}, "wash": {6, 8}}, {"kaylee": {5}, "wash": {6}}) is False
     assert acceptance.both_serving({"kaylee": "running", "wash": "idle"}, {"kaylee": {5, 9}, "wash": {6, 8}}, {"kaylee": {5}, "wash": {6}}) is False
+
+
+# ================= Fix round 2 =================
+
+# ---- N1: the download override targets the page's own browser context ----
+
+def test_the_download_override_targets_the_pages_own_context():
+    """Playwright gives browser.newPage() a NEW context with its own download behaviour; an override sent for the
+    contexts listed before the page existed never reaches it. The module is run by node with fake CDP sessions."""
+    script = r"""
+const { overrideDownloads } = require(process.argv[1]);
+const calls = [];
+const cdp = { send: async (m, p) => { calls.push([m, p]); return {}; } };
+const page = { send: async (m) => m === 'Target.getTargetInfo' ? { targetInfo: { browserContextId: 'CTX-OF-THE-PAGE' } } : {} };
+(async () => {
+  const set = await overrideDownloads(cdp, page, '/lane/b');
+  const none = await overrideDownloads(cdp, { send: async () => ({ targetInfo: {} }) }, '/lane/b');
+  console.log(JSON.stringify({ set, none, calls }));
+})();
+"""
+    r = subprocess.run(["node", "-e", script, str(SCRIPTS / "lane_acceptance" / "download_override.js")],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    got = json.loads(r.stdout)
+    assert got["set"] == 1 and got["none"] == 0
+    assert got["calls"] == [["Browser.setDownloadBehavior", {"behavior": "allow", "downloadPath": "/lane/b",
+                                                             "eventsEnabled": True, "browserContextId": "CTX-OF-THE-PAGE"}]]
+
+
+def test_the_client_uses_that_module_and_not_the_contexts_listed_before_the_page():
+    text = (SCRIPTS / "lane_acceptance" / "broker_client.js").read_text()
+    assert "download_override" in text and "Target.getBrowserContexts" not in text
+
+
+# ---- N2: a link the sandbox refuses to create is a refusal ----
+
+def test_a_link_the_sandbox_refuses_to_make_passes_and_other_failures_do_not(acceptance):
+    import errno as errno_
+    wp = worker_probes_module()
+    for code in (errno_.EPERM, errno_.EACCES):
+        result, refusals = wp.link_failure(OSError(code, "x"))
+        row = {"probe": "hard link", "expect": "fail", "code": result[0], "detail": result[1], "refusals": refusals}
+        assert acceptance.judge_row(row) == "PASS" and "sandbox refused the link" in result[1]
+    result, refusals = wp.link_failure(OSError(errno_.EXDEV, "x"))
+    row = {"probe": "hard link", "expect": "fail", "code": result[0], "detail": result[1], "refusals": refusals}
+    assert acceptance.judge_row(row) == "BROKEN"
+    result, refusals = wp.link_failure(OSError(errno_.ENOENT, "x"))
+    assert acceptance.judge_row({"probe": "p", "expect": "fail", "code": result[0], "detail": result[1], "refusals": refusals}) == "BROKEN"
+
+
+# ---- N3: the root nc is stopped even under a sudo pty ----
+
+PTY_TREE = ("  900     1 /usr/bin/sudo -n /usr/bin/nc -l 127.0.0.1 5555\n"
+            "  901   900 /usr/bin/sudo -n /usr/bin/nc -l 127.0.0.1 5555\n"       # sudo's monitor (use_pty)
+            "  902   901 /usr/bin/nc -l 127.0.0.1 5555\n"
+            "  950     1 /usr/bin/nc -l 127.0.0.1 6666\n")
+
+
+def test_nc_is_found_in_sudos_descendants_whatever_the_depth(acceptance):
+    assert acceptance.nc_descendants(PTY_TREE, 900, 5555) == [902]
+    flat = "  900   1 /usr/bin/sudo -n /usr/bin/nc -l 127.0.0.1 5555\n  901 900 /usr/bin/nc -l 127.0.0.1 5555\n"
+    assert acceptance.nc_descendants(flat, 900, 5555) == [901]
+    assert acceptance.nc_descendants(PTY_TREE, 900, 6666) == []                    # not another nc, not another port
+    assert acceptance.nc_descendants(PTY_TREE, 1, 5555) == []
+
+
+def test_stopping_the_root_listener_signals_sudo_then_the_nc_and_checks_the_port(acceptance):
+    killed, said = [], []
+    state = {"up": True}
+
+    def kill(pid):
+        killed.append(pid)
+        if pid == 902:
+            state["up"] = False
+    root = SimpleNamespace(pid=900, wait=lambda timeout=None: 0)
+    acceptance.stop_root_listener(root, 5555, ps=lambda: PTY_TREE, kill=kill, listening=lambda port: state["up"], say=said.append)
+    assert killed == [900, 902] and said == []
+    # still listening after everything: say loudly how to stop it by hand
+    said.clear()
+    acceptance.stop_root_listener(root, 5555, ps=lambda: PTY_TREE, kill=lambda pid: None, listening=lambda port: True,
+                                  say=said.append)
+    assert any("STILL LISTENING" in line and "5555" in line and "sudo kill" in line and "902" in line for line in said)
+
+
+def test_stopping_a_sudo_that_will_not_exit_is_reported(acceptance):
+    said = []
+    root = SimpleNamespace(pid=900, wait=lambda timeout=None: (_ for _ in ()).throw(sp.TimeoutExpired("sudo", 1)))
+    acceptance.stop_root_listener(root, 5555, ps=lambda: PTY_TREE, kill=lambda pid: None, listening=lambda port: False,
+                                  say=said.append)
+    assert any("900" in line and "by hand" in line for line in said)
+
+
+# ---- N4: an existing root-owned listener first; sudo only if there is none ----
+
+ROOT_LISTENERS = [{"pid": 1, "command": "", "host": "*", "port": 22}, {"pid": 612, "command": "", "host": "*", "port": 49152},
+                  {"pid": 300, "command": "", "host": "::1", "port": 631}, {"pid": 700, "command": "", "host": "127.0.0.1", "port": 8000}]
+
+
+def test_an_existing_root_owned_reachable_listener_is_used_without_sudo(acceptance):
+    sudo_calls = []
+    plan = acceptance.choose_root_listener(
+        read=lambda: ROOT_LISTENERS, owner=lambda pid: {1: 0, 612: 501, 300: 0, 700: 501}[pid],
+        path_of={1: "/sbin/launchd", 300: "/usr/sbin/cupsd"}.get, run=lambda cmd, **k: sudo_calls.append(cmd) or Ran(1))
+    assert plan["kind"] == "existing" and (plan["pid"], plan["port"], plan["exe"]) == (1, 22, "/sbin/launchd")
+    assert sudo_calls == []
+
+
+def test_without_an_existing_root_listener_sudo_n_decides(acceptance):
+    user_only = [item for item in ROOT_LISTENERS if item["pid"] in (612, 700)]
+    calls = []
+    plan = acceptance.choose_root_listener(read=lambda: user_only, owner=lambda pid: 501, path_of=lambda pid: "/x",
+                                           run=lambda cmd, **k: calls.append(cmd) or Ran(0))
+    assert plan == {"kind": "sudo"} and calls == [["/usr/bin/sudo", "-n", "-v"]]
+
+
+def test_with_neither_the_root_rows_say_what_to_do(acceptance):
+    plan = acceptance.choose_root_listener(read=lambda: [], owner=lambda pid: 501, path_of=lambda pid: "/x",
+                                           run=lambda cmd, **k: Ran(1))
+    assert plan["kind"] is None
+    assert "no root-owned listener to observe; run this once from Andy's own terminal (sudo)" in plan["reason"]
+    # a netstat that fails is not "none exist": the same BROKEN reason, never a crash
+    assert acceptance.choose_root_listener(read=lambda: None, owner=lambda pid: 0, path_of=lambda pid: "/x",
+                                           run=lambda cmd, **k: Ran(1))["kind"] is None
+
+
+def test_an_unreachable_or_unidentified_root_listener_does_not_count(acceptance):
+    odd = [{"pid": 5, "command": "", "host": "100.101.102.103", "port": 9}, {"pid": 6, "command": "", "host": "*", "port": 10}]
+    plan = acceptance.choose_root_listener(read=lambda: odd, owner=lambda pid: 0, path_of=lambda pid: None,
+                                           run=lambda cmd, **k: Ran(1))
+    assert plan["kind"] is None
+
+
+def test_step_4_without_a_root_listener_reports_the_reason_broken(acceptance, driven, monkeypatch):
+    """The fake team stops step 4 before the root rows, so test the rows through their own function."""
+    report = acceptance.Report()
+    acceptance.root_rows_unavailable(report, "no root-owned listener to observe; run this once from Andy's own terminal (sudo)")
+    assert [(r[1], r[2]) for r in report.rows] == [("a root-owned listener is seen", "BROKEN"),
+                                                    ("it holds the lane, named by its path", "BROKEN")]
+    assert "Andy's own terminal" in report.rows[0][3]
+
+
+def test_the_docs_say_who_runs_it_and_when_a_terminal_is_needed(acceptance):
+    text = (SCRIPTS / "lane_acceptance.py").read_text().split('"""')[1]
+    readme = (SCRIPTS.parent / "README.md").read_text()
+    for doc in (text, readme):
+        assert "Serenity" in doc and "root-owned listener" in doc and "Andy's own terminal" in doc
+
+
+# ---- the advisory set (from the Bricks lead) ----
+
+def test_the_advisory_set_is_the_agreed_files(acceptance, tmp_path):
+    assert acceptance.ADVISORY_SPECS == ("tests/gtm/approval-anatomy.spec.ts", "tests/gtm/four-up-school.spec.ts",
+                                         "tests/gtm/content-recipes-cards.spec.ts", "tests/gtm/supplied-presentation.spec.ts",
+                                         "tests/gtm/visual.spec.ts")
+    source = (SCRIPTS / "lane_acceptance.py").read_text()
+    assert "visual-recipes" in source and "pending" in source                     # the comment about what is still open
+    wt = tmp_path / "wt"
+    (wt / acceptance.PROBE_DIR).mkdir(parents=True)
+    spec = lambda f: {"title": "t", "file": f, "line": 1, "tags": ["@lane-advisory"],
+                      "tests": [{"status": "unexpected", "results": [{"error": {"message": "m"}}]}]}
+    files = ["tests/gtm/approval-anatomy.spec.ts", "gtm/visual.spec.ts", "tests/gtm/visual-recipes.spec.ts", "tests/a.spec.ts"]
+    (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"errors": [], "suites": [{"title": "s", "specs":
+        [{"title": "ok", "file": "tests/a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]}] + [spec(f) for f in files]}]}))
+    report = acceptance.Report()
+    acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
+    assert [r[2] for r in report.rows if "reported separately" in r[1]] == ["INFO", "INFO"]
+    assert [r[2] for r in report.rows if "outside the agreed set" in r[1]] == ["FAIL", "FAIL"]
+
+
+# ---- N5: only this run's team socket ----
+
+def test_only_this_runs_team_socket_is_a_candidate(acceptance, tmp_path, monkeypatch):
+    mine, other = tmp_path / "mine.sock", tmp_path / "other.sock"
+    for f in (mine, other):
+        f.write_text("")
+    monkeypatch.setattr(acceptance.teamlib, "sock_path", lambda team_id: mine if team_id == "t1" else other)
+    got = acceptance.socket_candidates("t1", {"SSH_AUTH_SOCK": "/tmp/agent.sock"}, tmp_path / "nohome")
+    assert got[0] == "/tmp/agent.sock" and str(mine) in got and str(other) not in got
+
+
+# ---- N8: preflight the probes' own targets ----
+
+def test_preflight_tries_the_targets_the_probes_use(acceptance):
+    tried = []
+    ok = acceptance.reach_targets(connect=lambda addr, timeout=3: tried.append(addr) or SimpleNamespace(close=lambda: None),
+                                  resolve=lambda host, port: tried.append(("resolve", host)) or [1])
+    assert ok == [] and ("1.1.1.1", 80) in tried and ("resolve", "example.com") in tried
+    failed = acceptance.reach_targets(connect=lambda addr, timeout=3: (_ for _ in ()).throw(OSError("no route")),
+                                      resolve=lambda host, port: [1])
+    assert any("1.1.1.1:80" in f for f in failed)
+
+
+# ---- N9: exec denials by program path and time window ----
+
+def test_a_refused_exec_is_matched_by_program_and_time_when_the_pid_is_unknown(acceptance, capsys):
+    lines = ["2026-10-09 12:00:05.100 Df kernel[0:1] Sandbox: node(901) deny(1) process-exec /usr/bin/open",
+             "2026-10-09 12:00:05.200 Df kernel[0:1] Sandbox: node(902) deny(1) process-exec /usr/bin/osascript",
+             "2026-10-09 12:30:00.000 Df kernel[0:1] Sandbox: node(903) deny(1) process-exec /usr/bin/open",
+             "2026-10-09 12:00:05.300 Df kernel[0:1] Sandbox: node(904) deny(1) file-read-data /etc/hosts"]
+    start = time.mktime(time.strptime("2026-10-09 12:00:04", "%Y-%m-%d %H:%M:%S"))
+    got = acceptance.exec_denials(lines, "/usr/bin/open", start, start + 3)
+    assert got == ["node(901): process-exec /usr/bin/open"]
+    recorder = acceptance.PidRecorder()
+    recorder.pids = [("exec_open_calculator", False, 800)]
+    recorder.windows = [("exec_open_calculator", False, start, start + 3)]
+    report = acceptance.Report()
+    acceptance.report_profile_rows(report, [("exec_open_calculator", "BROKEN", "refused: nocode")], recorder, lines)
+    assert "node(901): process-exec /usr/bin/open" in capsys.readouterr().out
+
+
+# ---- N10: presets are restored before the team ends, and an error ending it is caught ----
+
+def test_presets_are_back_before_the_team_is_ended(acceptance, driven, monkeypatch):
+    from superyak_team import teamlib
+    seen = {}
+    original = FakeTeam.call
+
+    def call(self, *a, **k):
+        if a and a[0] == "end":
+            seen["presets_exist"] = teamlib.presets_path().exists()
+            raise ValueError("end blew up")
+        return original(self, *a, **k)
+    monkeypatch.setattr(FakeTeam, "call", call)
+    run_steps(acceptance, driven)                                               # nothing escapes the finally
+    assert seen == {"presets_exist": False}
+
+
+# ---- N11: a proxy is easy to see ----
+
+def test_curl_exits_22_and_56_say_proxy(acceptance):
+    wp = worker_probes_module()
+    for rc in (22, 56):
+        code, text = wp.curl_result(rc, "x")
+        assert code == 2 and "proxy?" in text
+
+
+# ---- N12: only claude and the probe process are peer targets ----
+
+def test_peer_targets_are_claude_and_the_probe_process_only(acceptance):
+    env = {10: ["PW_TEST_CONNECT_WS_ENDPOINT=x"], 11: ["PW_TEST_CONNECT_WS_ENDPOINT=x"], 12: ["PW_TEST_CONNECT_WS_ENDPOINT=x"]}
+    commands = {10: "claude --print", 11: "python3 node_modules/.superyak-lane-acceptance/worker_probes.py lane",
+                12: "/bin/bash -c sleep 100"}
+    holders, others = acceptance.peer_targets([10, 11, 12], env.get, command=commands.get)
+    assert holders == [10, 11] and others == [12]
+
+
+# ---- N13: brokers are identified by their port ----
+
+def test_a_broker_is_every_process_on_its_port_not_the_first(acceptance, monkeypatch):
+    ps = "  800     1 /usr/bin/node broker\n  801   800 /x/chrome-headless-shell --headless\n"
+    report = acceptance.Report()
+    assert acceptance.broker_and_browser_pids(report, ps, {799, 800}) == 801 and report.rows == []
+    monkeypatch.setattr(lane, "read_listeners", lambda: [])
+    monkeypatch.setattr(lane, "lane_pids", lambda path, base: set())
+    monkeypatch.setattr(lane, "env_pids", lambda name, value: set())
+    monkeypatch.setattr(acceptance, "alive", lambda pid: False)
+    w = {"lane": {"base": 41000, "path": "/nonexistent/lane"}}
+    report = acceptance.Report()                                           # a webServer pid (9000) besides every broker pid
+    acceptance.check_cleanup(report, "x", w, {799, 800, 801, 9000}, {799, 800, 801})
+    assert [r[2] for r in report.rows if "webServer" in r[1]] == ["PASS"]
+    report = acceptance.Report()                                           # only broker pids: nothing about the web server
+    acceptance.check_cleanup(report, "x", w, {799, 800}, {799, 800})
+    assert [r[2] for r in report.rows if "webServer" in r[1]] == ["BROKEN"]

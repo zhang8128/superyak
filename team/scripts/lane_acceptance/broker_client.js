@@ -10,7 +10,7 @@
 //   external      a public page loads (must be blocked by the network wall)
 //   file          the dotfile the driver checked (non-empty, exists) opens as file:// (must be ERR_ACCESS_DENIED)
 //   canary        a server on a port outside this lane's block answers (must be blocked)
-//   write         two downloads through CDP: into the lane's b/ (the control: the broker may write there) and into the
+//   write         two downloads through CDP (the override goes to the page's own context: download_override.js): into the lane's b/ (the control: the broker may write there) and into the
 //                 home folder. It reports Browser.downloadWillBegin / downloadProgress for each as JSON and exits 0;
 //                 the driver decides, from outside, by comparing $HOME's top-level names and looking for the control.
 //   getusermedia  a page granted camera and microphone: only a rejection of the getUserMedia promise counts, and its
@@ -20,6 +20,7 @@
 // It reads the endpoint from PW_TEST_CONNECT_WS_ENDPOINT, as Playwright Test does, and every line it prints goes
 // through redact(): Playwright's errors quote the endpoint, secret and all.
 const { chromium } = require(require.resolve('playwright-core', { paths: [process.cwd()] }));
+const { overrideDownloads } = require('./download_override.js');
 const what = process.argv[2], p = JSON.parse(process.argv[3]);
 const endpoint = process.env.PW_TEST_CONNECT_WS_ENDPOINT;
 const secret = endpoint ? new URL(endpoint).pathname : '/';
@@ -109,16 +110,14 @@ const NET_REFUSED = new Set(['ERR_NAME_NOT_RESOLVED', 'ERR_ACCESS_DENIED', 'ERR_
     const events = [];
     cdp.on('Browser.downloadWillBegin', e => events.push({ k: 'begin' }));
     cdp.on('Browser.downloadProgress', e => events.push({ k: 'progress', s: e.state }));
-    const { browserContextIds } = await cdp.send('Target.getBrowserContexts');
     const result = {};
     const page = await browser.newPage();
+    const pageSession = await page.context().newCDPSession(page);
     await page.goto(`http://127.0.0.1:${p.base + 6}/`, { timeout: 15000 });
     for (const [label, dir, link] of [['control', p.control_dir, '#c'], ['home', p.home, '#h']]) {
       let set = 0;
-      for (const id of [undefined, ...browserContextIds]) {
-        try { await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dir, eventsEnabled: true, browserContextId: id }); set++; }
-        catch (e) { /* counted by `set` */ }
-      }
+      try { set = await overrideDownloads(cdp, pageSession, dir); }
+      catch (e) { /* counted by `set`: the driver treats 0 as BROKEN */ }
       const before = events.length;
       await page.click(link).catch(() => {});
       await new Promise(resolve => setTimeout(resolve, 4000));

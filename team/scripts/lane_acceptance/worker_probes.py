@@ -72,7 +72,18 @@ def curl_result(rc, text):
         return 0, "succeeded"
     if rc in (6, 7):
         return 1, "refused: curl-%d (%s)" % (rc, text[:120])
+    if rc in (22, 56):                      # an HTTP error or a failed receive: a proxy answering, not the sandbox
+        return 2, "broken: curl exit %d (proxy?) (%s)" % (rc, text[:120])
     return 2, "broken: curl exit %d (%s)" % (rc, text[:120])
+
+
+def link_failure(e):
+    """Making the link itself failed: ((code, text), accepted refusal codes). A deny-default sandbox refusing link()
+    (EPERM or EACCES) IS the wall holding; EXDEV (another volume) or anything else says nothing about the wall."""
+    name = errno.errorcode.get(e.errno, "nocode")
+    if name in ("EPERM", "EACCES"):
+        return (1, "refused: %s (the sandbox refused the link)" % name), ("EPERM", "EACCES")
+    return (1, "refused: %s (can't make the link: not the sandbox's wall)" % name), ()
 
 
 def libsystem():
@@ -163,8 +174,8 @@ def lane_round(p, rows):
             try:
                 make(sock, link)
             except OSError as e:
-                add("%s to %s" % (kind, sock), "fail", (1, "refused: %s (can't make it)" % errno.errorcode.get(e.errno, "nocode")),
-                    ())                                          # making the link failed: not a test of the socket wall
+                result, accepted = link_failure(e)
+                add("%s to %s" % (kind, sock), "fail", result, accepted)
                 continue
             try:
                 add("%s to %s" % (kind, sock), "fail", classify(*node(CONNECT, str(link))), SOCKET_REFUSALS)

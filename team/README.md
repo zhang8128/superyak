@@ -32,6 +32,12 @@ A person turns lanes on; a lead can't:
   Postgres and everything else while a lane runs: a lane's turn waits until they are gone. A listener bound only to a
   specific address that isn't loopback (the tailnet's, say) can't be reached from a lane and doesn't count, but a
   lane's own process listening on any address beyond loopback (`*`, a LAN or tailnet address) always fails the check.
+- The acceptance run is normally started by Serenity (an agent), and needs no password. Step 4 observes a
+  root-owned listener: the run first looks for one that already exists (launchd's `*:22` with Remote Login on, or
+  cupsd's 631) and uses it. Only if the Mac has none does it try `sudo -n -v`, which an agent's Bash tool can't do
+  (macOS caches sudo credentials per terminal). Then the two root rows of step 4 are BROKEN with "no root-owned
+  listener to observe; run this once from Andy's own terminal (sudo)", and Andy runs it once from his own terminal
+  after `sudo -v`.
 - `lane_one_at_a_time: true` in `config.json` lets only one lane run on the Mac at a time. Set it if the acceptance
   run shows that one lane's worker can read another lane's endpoint. An idle browser worker keeps its block, so under
   this setting it holds the Mac's only lane until it is done or stopped.
