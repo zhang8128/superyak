@@ -395,6 +395,13 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 - Claude Code's own session transcript (under `~/.claude/projects/`) may hold a lane's endpoint, from a failing test's
   output; teamd doesn't scrub it. The secret is dead once the lane ends: each broker has its own, and it stops with
   the lane.
+- **A compromised turn can persist instructions for the next turn** (final fix wave, additions). Page content that
+  takes over a turn can write `CLAUDE.md`, `AGENTS.md` (at any depth) or files under `.claude/` (agents, commands,
+  skills, settings), which the next turn reads at startup. teamd snapshots those paths with git as each browser turn
+  starts and ends (HEAD's and every untracked one, ignored ones included, by content hash; nothing followed through a
+  link), and tells the lead, fenced and scrubbed: `INSTRUCTION FILES CHANGED by <worker> this turn: <paths>; the next
+  turn reads them at startup — check them before continuing`. It never blocks, since a task may edit them on
+  purpose: the lead reviews them. A check that fails is told to the lead too.
 - Lanes share localhost: with more than one lane, a lane's worker can connect to another lane's servers (the
   listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is

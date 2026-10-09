@@ -2271,3 +2271,100 @@ def advisory_added(path, base, gitdir):
     if len(too_big) > ADVISORY_MAX_SKIPPED:
         found.append("… and %d more files over 1 MB" % (len(too_big) - ADVISORY_MAX_SKIPPED))
     return found
+
+
+# ---------- instruction files a browser turn changed (final fix wave, additions) ----------
+
+INSTRUCTION_NAMES = ("claude.md", "claude.local.md", "agents.md")
+INSTRUCTION_SPECS = (":(glob,icase)**/CLAUDE.md", ":(glob,icase)**/CLAUDE.local.md", ":(glob,icase)**/AGENTS.md",
+                     ":(glob,icase)**/.claude/**")
+INSTRUCTION_TIMEOUT_S = 60
+
+
+def is_instruction_path(rel):
+    """CLAUDE.md, CLAUDE.local.md and AGENTS.md at any depth, and anything under a .claude folder at any depth (agents,
+    commands, skills, settings): what Claude Code may read as instructions when a turn starts. Case-insensitive, as the
+    Mac's file system is."""
+    parts = rel.split("/")
+    return parts[-1].lower() in INSTRUCTION_NAMES or any(part.lower() == ".claude" for part in parts[:-1])
+
+
+def instruction_snapshot(path, gitdir):
+    """A worktree's instruction-bearing paths as they are right now: HEAD's (git ls-tree) and every untracked one,
+    ignored ones included (git ls-files --others, no excludes), each as its kind and git's hash of its content (git
+    hash-object --no-filters) or its link's target. Nothing is followed and nothing but a plain file is read: a path
+    under a folder that is a symlink is recorded by that link's target, a FIFO or device by its kind. {path: text}. One
+    deadline, through teamd's hardened git; a git failure or timeout raises RuntimeError."""
+    deadline = time.monotonic() + INSTRUCTION_TIMEOUT_S
+    try:
+        argv = workers.worker_git_argv(path, gitdir, "--no-replace-objects")
+        env = workers._isolated_git_env()
+    except OSError as e:
+        raise RuntimeError("git could not run: %r" % e)
+
+    def git(*args, input=None):
+        try:
+            r = subprocess.run(argv + list(args), cwd=str(path), env=env, input=input, capture_output=True,
+                               timeout=max(1.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("git %s timed out" % args[0])
+        except OSError as e:
+            raise RuntimeError("git could not run: %r" % e)
+        if r.returncode != 0:
+            raise RuntimeError("git %s exited %d: %s" % (args[0], r.returncode,
+                                                        r.stderr.decode("utf-8", "replace").strip()[:200]))
+        return r.stdout
+    names = {os.fsdecode(n) for n in git("ls-tree", "-r", "-z", "--name-only", "HEAD").split(b"\0") if n}
+    names |= {os.fsdecode(n) for n in git("ls-files", "-z", "--others", "--", *INSTRUCTION_SPECS).split(b"\0") if n}
+    snapshot, plain = {}, []
+    for rel in sorted(n for n in names if is_instruction_path(n)):
+        kind = _instruction_kind(path, rel)
+        if kind == "plain":
+            plain.append(rel)
+        elif kind is not None:
+            snapshot[rel] = kind
+    if plain:
+        out = git("hash-object", "--no-filters", "--stdin-paths",
+                  input=("\n".join(os.path.join(str(path), rel) for rel in plain) + "\n").encode())
+        hashes = out.decode("ascii", "replace").split()
+        if len(hashes) != len(plain):
+            raise RuntimeError("git hash-object output was not understood")
+        snapshot.update({rel: "f " + sha for rel, sha in zip(plain, hashes)})
+    return snapshot
+
+
+def _instruction_kind(root, rel):
+    """"plain" for a regular file to hash, None when the path isn't there, else how it is recorded instead of read."""
+    if "\n" in rel:
+        return "x a name with a line break"
+    current = str(root)
+    parts = rel.split("/")
+    for i, part in enumerate(parts[:-1]):
+        current = os.path.join(current, part)
+        try:
+            st = os.lstat(current)
+        except FileNotFoundError:
+            return None
+        except OSError as e:
+            return "x %s" % (e.strerror or e.__class__.__name__)
+        if stat.S_ISLNK(st.st_mode):
+            return "x under %s, a link to %s" % ("/".join(parts[:i + 1]), os.readlink(current))
+        if not stat.S_ISDIR(st.st_mode):
+            return None
+    full = os.path.join(current, parts[-1])
+    try:
+        st = os.lstat(full)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return "x %s" % (e.strerror or e.__class__.__name__)
+    if stat.S_ISLNK(st.st_mode):
+        return "l " + os.readlink(full)
+    if stat.S_ISREG(st.st_mode):
+        return "plain"
+    return "x mode %o" % st.st_mode
+
+
+def instruction_changes(before, after):
+    """The paths added, removed or changed between two snapshots, sorted."""
+    return sorted(rel for rel in set(before) | set(after) if before.get(rel) != after.get(rel))

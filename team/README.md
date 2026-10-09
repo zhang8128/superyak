@@ -102,6 +102,11 @@ but a worker's Claude Code session transcript (under `~/.claude/projects/`) may 
 failing test's output. The secret dies with the lane: each broker gets a new one, and the broker stops when the lane
 ends.
 
+**Known limit: a compromised turn can persist instructions for the next one.** A browser turn taken over by page
+content could write `CLAUDE.md`, `AGENTS.md` or files under `.claude/`, which the next turn reads at startup. teamd
+compares those paths at the start and end of every browser turn and tells the lead, as `INSTRUCTION FILES CHANGED by
+<worker> this turn: ...`; it doesn't block, since a task may change them on purpose. The lead reviews them.
+
 **Known limit: lanes share localhost.** With more than one lane, a lane's worker can connect to another lane's
 servers; `lane_one_at_a_time` avoids it.
 

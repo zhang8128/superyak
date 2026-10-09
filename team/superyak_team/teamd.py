@@ -38,6 +38,7 @@ class Team:
         # Browser lanes (lane.py). Brokers and their secrets live only in memory: a secret is never written to disk.
         self.brokers, self.lane_secrets, self.lane_checked = {}, set(), {}
         self.lane_stopped_at = {}
+        self.turn_instructions = {}         # wid -> its instruction files as its browser turn started (or the error)
         self.clock = time.time
         if not teamlib.get_token(team_id, "lead"):
             teamlib.issue_token(team_id, "lead")
@@ -320,6 +321,7 @@ class Team:
             env = self._engram_env(w)
         if lane_env:
             env.update(lane_env)
+            self._instructions_at_start(wid)
             self.procs[wid] = workers.launch(cmd, w["path"], wdir, env, drop_env=lane.DROP_ENV)
         else:
             self.procs[wid] = workers.launch(cmd, w["path"], wdir, env)
@@ -495,6 +497,37 @@ class Team:
                  w["thread_ts"])
         self.save()
 
+    def _instructions_at_start(self, wid):
+        """A browser turn's instruction-bearing files (CLAUDE.md, AGENTS.md, .claude/) as it starts. Never raises: a
+        snapshot that fails is told to the lead when the turn ends."""
+        w = self.state["workers"][wid]
+        try:
+            self.turn_instructions[wid] = lane.instruction_snapshot(w["path"], w["gitdir"])
+        except Exception as e:
+            self.turn_instructions[wid] = RuntimeError("at the turn's start: %s" % e)
+
+    def _instructions_at_end(self, wid):
+        """A turn page content took over can leave instructions for the next turn, which reads them at startup. The
+        lead hears which instruction-bearing paths the turn changed, fenced as data and scrubbed; nothing is blocked,
+        since a task may edit them on purpose. Never raises."""
+        w = self.state["workers"][wid]
+        before = self.turn_instructions.pop(wid, None)
+        try:
+            if before is None:
+                raise RuntimeError("no snapshot was taken as the turn started")
+            if isinstance(before, Exception):
+                raise before
+            changed = lane.instruction_changes(before, lane.instruction_snapshot(w["path"], w["gitdir"]))
+        except Exception as e:
+            self._to_lead(wid, "INSTRUCTION FILE CHECK FAILED for %s:" % wid,
+                          "%s; check CLAUDE.md, AGENTS.md and .claude/ by hand in its worktree before continuing" % e)
+            return
+        if changed:
+            listed = [rel[:160] for rel in changed[:20]] + (["… and %d more" % (len(changed) - 20)]
+                                                          if len(changed) > 20 else [])
+            self._to_lead(wid, "INSTRUCTION FILES CHANGED by %s this turn:" % wid,
+                          "%s; the next turn reads them at startup — check them before continuing" % ", ".join(listed))
+
     def _lane_env_cleanup(self, wid):
         """Whatever carries this lane's CLAUDE_CODE_TMPDIR (a turn's setsid leftovers), never ports or files, so never
         the broker. Logged, never raised."""
@@ -659,6 +692,7 @@ class Team:
                 if w.get("browser"):
                     self._lane_env_cleanup(wid)       # before the scrub: the turn's leftovers may still be writing
                     self._scrub_files(wid)
+                    self._instructions_at_end(wid)
                 last = self._scrub(last)
                 if last and last != w["last_message"]:
                     w["last_message"] = last
