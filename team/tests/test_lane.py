@@ -5,7 +5,9 @@ team/scripts/lane_acceptance.py.
 Run: make check-team (from the superyak root)
 """
 import base64
+import fcntl
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -19,6 +21,7 @@ import tarfile
 import threading
 import time
 import tomllib
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -1125,7 +1128,8 @@ def npm_tarball(members):
         for name, data in members.items():
             info = tarfile.TarInfo(name)
             if isinstance(data, tuple):
-                info.type, info.linkname = tarfile.SYMTYPE, data[1]
+                info.type = {"symlink": tarfile.SYMTYPE, "hardlink": tarfile.LNKTYPE, "chr": tarfile.CHRTYPE}[data[0]]
+                info.linkname = data[1]
                 tar.addfile(info)
             else:
                 info.size = len(data)
@@ -1217,15 +1221,24 @@ def test_an_integrity_mismatch_refuses_the_lane_and_installs_nothing(env, unpack
     assert not (lane.broker_root() / "playwright-core-1.55.0").exists()
 
 
-def test_the_pinned_playwright_is_fetched_once_stamped_and_kept_outside_every_worktree(env, unpack):
+def test_the_pinned_playwright_is_fetched_once_stamped_and_kept_outside_every_worktree(env, unpack, monkeypatch):
     tarball = npm_tarball(PW_FILES)
     base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
     fetch = Registry(tarball)
+    seen = []
+    real_rename = os.rename
+
+    def rename(src, dst, *a, **k):
+        seen.append(((Path(src) / lane.STAMP).read_text(), (Path(src) / lane.STAMP_MANIFEST).is_file()))
+        return real_rename(src, dst, *a, **k)
+    monkeypatch.setattr(lane.os, "rename", rename)
     dest = lane.pinned_playwright(env["repo"], base, fetch)
+    monkeypatch.setattr(lane.os, "rename", real_rename)
+    assert seen == [(sri(tarball) + "\n", True)]                           # the stamps are inside before the rename
     assert dest == teamlib.team_home() / "broker" / "playwright-core-1.55.0"
     assert (dest / "index.js").read_text() == "module.exports = {};\n" and lane.shell_revision(dest) == "1243"
     assert (dest / lane.STAMP).read_text() == sri(tarball) + "\n"            # inside: written before the rename
-    assert sorted(p.name for p in dest.parent.iterdir()) == ["playwright-core-1.55.0"]
+    assert sorted(p.name for p in dest.parent.iterdir() if p.name != ".install.lock") == ["playwright-core-1.55.0"]
     assert lane.pinned_playwright(env["repo"], base, fetch) == dest and len(fetch.calls) == 2   # no second fetch
     (dest / lane.STAMP).write_text(sri(b"other") + "\n")
     with pytest.raises(lane.LaneRefused, match="isn't stamped with the integrity hash"):
@@ -1245,6 +1258,7 @@ def test_an_unstamped_folder_is_refused_with_how_to_recover(env):
 @pytest.mark.parametrize("name, data", [
     ("package/../../escaped.txt", b"x"), ("/tmp/absolute.txt", b"x"), ("other/index.js", b"x"),
     ("package/link", ("symlink", "/etc/passwd")), ("package/../package/ok.js", b"x"),
+    ("package/hard", ("hardlink", "package/index.js")), ("package/dev", ("chr", "")),
 ])
 def test_extraction_rejects_members_that_escape_the_package_folder(env, tmp_path, name, data):
     """Spec unit test 10."""
@@ -1420,7 +1434,7 @@ def test_the_checked_in_manifest_file_is_well_formed():
     data = json.loads((teamlib.package_dir() / "lane" / "browsers.json").read_text())
     assert isinstance(data["chromium-headless-shell"], dict)
     for revision, platforms in data["chromium-headless-shell"].items():
-        assert revision.isdigit() and all(len(h) == 64 for h in platforms.values())
+        assert revision.isdigit() and all(re.fullmatch(r"[0-9a-f]{64}", h) for h in platforms.values())
 
 
 def test_lane_node_is_an_owned_absolute_binary_outside_home_and_worktrees(env, tmp_path):
@@ -1447,6 +1461,296 @@ def test_lane_node_is_an_owned_absolute_binary_outside_home_and_worktrees(env, t
     loose.chmod(0o777)
     with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
         lane.check_lane_node(str(loose), [])
+    open_dir = tmp_path / "opt2"
+    open_dir.mkdir()
+    fine = open_dir / "node"
+    fine.write_text("#!/bin/sh\n")
+    fine.chmod(0o755)
+    open_dir.chmod(0o777)                                               # the binary is fine; the folder above is not
+    try:
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(fine), [])
+    finally:
+        open_dir.chmod(0o700)
     system_node = "/usr/bin/node"
     if os.path.isfile(system_node):
         assert lane.check_lane_node(system_node, [str(worktree)]) == Path(os.path.realpath(system_node))
+
+
+# ---------- Task 5, fix round 1 ----------
+
+def test_a_symlinked_browser_folder_or_browsers_root_is_refused(env, manifests, tmp_path):
+    """Review: _check_owner lets a symlink through, and a link hashes its target, whose ancestors nobody checked."""
+    real = tmp_path / "elsewhere" / "chromium_headless_shell-1243"
+    fake_shell(real)
+    record(manifests, "1243", lane.manifest_hash(real))
+    link = lane.browsers_root() / "chromium_headless_shell-1243"
+    os.symlink(real, link)
+    with pytest.raises(lane.LaneRefused, match="isn't a plain folder"):
+        lane.check_manifest(link, "1243")
+    link.unlink()
+    shutil.rmtree(lane.browsers_root())
+    os.symlink(real.parent, lane.broker_root() / "browsers")
+    with pytest.raises(lane.LaneRefused, match="isn't a plain folder"):
+        lane.check_manifest(real, "1243")
+
+
+def test_the_browser_folder_must_be_directly_in_the_browsers_root(env, manifests, tmp_path):
+    folder = tmp_path / "chromium_headless_shell-1243"          # a real folder, but not in browsers_root
+    fake_shell(folder)
+    record(manifests, "1243", lane.manifest_hash(folder))
+    with pytest.raises(lane.LaneRefused, match="isn't directly in"):
+        lane.check_manifest(folder, "1243")
+
+
+class FakeOpener:
+    def __init__(self, chunks=(), error=None, final="https://registry.npmjs.org/x"):
+        self.chunks, self.error, self.final = list(chunks), error, final
+
+    def open(self, url, timeout=None):
+        if self.error:
+            raise self.error
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, n=-1):
+        return self.chunks.pop(0) if self.chunks else b""
+
+    def geturl(self):
+        return self.final
+
+
+@pytest.mark.parametrize("error", [http.client.InvalidURL("bad"), http.client.IncompleteRead(b"ab", 5),
+                                   http.client.BadStatusLine("x"), ValueError("odd"), TimeoutError("slow")])
+def test_a_download_that_fails_any_way_is_a_refusal(monkeypatch, error):
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: FakeOpener(error=error))
+    with pytest.raises(lane.LaneRefused, match="can't be downloaded"):
+        lane.https_get("https://registry.npmjs.org/x")
+
+
+def test_a_download_must_be_https_all_the_way_and_finish_in_time(monkeypatch):
+    with pytest.raises(lane.LaneRefused, match="isn't https"):
+        lane.https_get("http://registry.npmjs.org/x")
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: FakeOpener([b"ab"], final="http://evil/x"))
+    with pytest.raises(lane.LaneRefused, match="isn't https"):
+        lane.https_get("https://registry.npmjs.org/x")
+    with pytest.raises(lane.LaneRefused, match="isn't https"):                          # a redirect to http
+        lane._HttpsOnly().redirect_request(urllib.request.Request("https://a/"), None, 302, "Found", {}, "http://b/")
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: FakeOpener([b"ab"] * 5))
+    ticks = iter([0, 1, 2, 1000, 1001, 1002])
+    monkeypatch.setattr(lane.time, "monotonic", lambda: next(ticks))
+    with pytest.raises(lane.LaneRefused, match="took longer than"):
+        lane.https_get("https://registry.npmjs.org/x")
+    monkeypatch.undo()
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: FakeOpener([b"abcd", b"efgh"]))
+    with pytest.raises(lane.LaneRefused, match="larger than"):
+        lane.https_get("https://registry.npmjs.org/x", limit=5)
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: FakeOpener([b"abcd", b"efgh"]))
+    assert lane.https_get("https://registry.npmjs.org/x") == b"abcdefgh"
+
+
+def test_the_tarball_url_is_built_here_and_the_registry_cant_name_another(env, unpack):
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    fetch = Registry(tarball)
+    lane.pinned_playwright(env["repo"], base, fetch)
+    assert fetch.calls == ["https://registry.npmjs.org/playwright-core/1.55.0",
+                           "https://registry.npmjs.org/playwright-core/-/playwright-core-1.55.0.tgz"]
+    shutil.rmtree(lane.broker_root() / "playwright-core-1.55.0")
+    other = Registry(tarball, url="https://registry.npmjs.org/playwright-core/-/../../evil/-/e.tgz")
+    with pytest.raises(lane.LaneRefused, match="isn't on"):
+        lane.pinned_playwright(env["repo"], base, other)
+    assert other.calls == ["https://registry.npmjs.org/playwright-core/1.55.0"]
+
+
+def test_a_bad_base_commit_or_a_lockfile_git_cant_decode_refuses_the_lane(env):
+    for bad in ("HEAD", "abc", "--output=x", "g" * 40, "A" * 40, None):
+        with pytest.raises(lane.LaneRefused, match="isn't a 40-character hex"):
+            lane.lock_entry(env["repo"], bad)
+    (env["repo"] / "package-lock.json").write_bytes(b'{"packages": {"\xff": 1}}')
+    subprocess.run(["git", "-C", str(env["repo"]), "add", "package-lock.json"], check=True)
+    subprocess.run(["git", "-C", str(env["repo"]), "commit", "-qm", "latin1"], check=True)
+    head = subprocess.run(["git", "-C", str(env["repo"]), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    with pytest.raises(lane.LaneRefused, match="can't be read"):
+        lane.lock_entry(env["repo"], head)
+
+
+def test_a_replace_ref_cant_swap_the_base_commits_lockfile(env):
+    good = {"version": "1.55.0", "integrity": sri(b"good")}
+    base = commit_lockfile(env["repo"], good)
+    blob = subprocess.run(["git", "-C", str(env["repo"]), "rev-parse", base + ":package-lock.json"],
+                          capture_output=True, text=True).stdout.strip()
+    evil = subprocess.run(["git", "-C", str(env["repo"]), "hash-object", "-w", "--stdin"], capture_output=True, text=True,
+                          input=json.dumps({"packages": {"node_modules/playwright-core": {
+                              "version": "9.9.9", "integrity": sri(b"evil")}}})).stdout.strip()
+    subprocess.run(["git", "-C", str(env["repo"]), "replace", blob, evil], check=True)
+    assert lane.lock_entry(env["repo"], base) == ("1.55.0", sri(b"good"))
+
+
+def test_a_damaged_manifest_record_or_browsers_json_is_a_refusal_not_a_crash(env, manifests, tmp_path):
+    for text in ("not json", "[]", '"x"', '{"chromium-headless-shell": []}', '{"chromium-headless-shell": {"1243": 5}}',
+                 '\xff'):
+        manifests.write_text(text)
+        with pytest.raises(lane.LaneRefused, match="can't be read"):
+            lane.recorded_manifest("1243")
+    manifests.write_bytes(b"\xff\xfe")
+    with pytest.raises(lane.LaneRefused, match="can't be read"):
+        lane.recorded_manifest("1243")
+    pw = tmp_path / "pw"
+    pw.mkdir()
+    for text in ("[]", "5", '{"browsers": 5}', '{"browsers": [5, null, {"name": 1}]}', "not json"):
+        (pw / "browsers.json").write_text(text)
+        with pytest.raises(lane.LaneRefused, match="names no chromium-headless-shell revision"):
+            lane.shell_revision(pw)
+    (pw / "browsers.json").write_bytes(b"\xff")
+    with pytest.raises(lane.LaneRefused, match="names no chromium-headless-shell revision"):
+        lane.shell_revision(pw)
+
+
+def test_the_manifest_hashes_names_that_are_not_utf8(env, tmp_path):
+    folder = tmp_path / "chromium_headless_shell-1243"
+    fake_shell(folder)
+    before = lane.manifest_hash(folder)
+    fd = os.open(os.fsencode(folder) + b"/caf\xe9", os.O_CREAT | os.O_WRONLY, 0o644)
+    os.close(fd)
+    os.symlink(b"caf\xe9", os.fsencode(folder) + b"/lnk\xff")
+    assert lane.manifest_hash(folder) != before
+
+
+def test_the_manifest_refuses_a_folder_it_cant_read_and_a_link_given_as_the_folder(env, tmp_path):
+    folder = tmp_path / "chromium_headless_shell-1243"
+    fake_shell(folder)
+    sealed = folder / "sealed"
+    sealed.mkdir()
+    sealed.chmod(0)
+    try:
+        if os.access(sealed, os.R_OK):
+            pytest.skip("running as a user who can read anything")
+        with pytest.raises(lane.LaneRefused, match="can't be read"):
+            lane.manifest_hash(folder)
+    finally:
+        sealed.chmod(0o700)
+    sealed.rmdir()
+    link = tmp_path / "link"
+    os.symlink(folder, link)
+    with pytest.raises(lane.LaneRefused, match="isn't a plain folder"):
+        lane.manifest_hash(link)
+
+
+def test_every_property_the_manifest_covers_changes_or_refuses(env, tmp_path, monkeypatch):
+    """Review: relative-only links, folder modes, hidden files, the marker at the top only, the top folder's own mode
+    and owner."""
+    folder = tmp_path / "chromium_headless_shell-1243"
+    fake_shell(folder)
+    inner = folder / "chrome-headless-shell-mac-arm64"
+    shell = inner / "chrome-headless-shell"
+    base = lane.manifest_hash(folder)
+    os.symlink(str(shell), inner / "abs")                                # absolute, though it points inside
+    with pytest.raises(lane.LaneRefused, match="links outside the browser's folder"):
+        lane.manifest_hash(folder)
+    (inner / "abs").unlink()
+    os.chmod(inner, 0o700)                                               # a folder's mode
+    assert lane.manifest_hash(folder) != base
+    os.chmod(inner, 0o755)
+    assert lane.manifest_hash(folder) == base
+    (inner / ".hidden").write_bytes(b"")                                 # a hidden file
+    assert lane.manifest_hash(folder) != base
+    (inner / ".hidden").unlink()
+    (inner / "DEPENDENCIES_VALIDATED").write_text("")                    # the marker only counts at the top
+    assert lane.manifest_hash(folder) != base
+    (inner / "DEPENDENCIES_VALIDATED").unlink()
+    (folder / "DEPENDENCIES_VALIDATED").mkdir()                          # nor as a folder
+    assert lane.manifest_hash(folder) != base
+    (folder / "DEPENDENCIES_VALIDATED").rmdir()
+    os.chmod(folder, 0o775)                                              # the top folder's own mode
+    with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+        lane.manifest_hash(folder)
+    os.chmod(folder, 0o755)
+    if os.getuid() != 0:
+        real_uid = os.getuid()
+        monkeypatch.setattr(lane.os, "getuid", lambda: real_uid + 1)     # its owner
+        with pytest.raises(lane.LaneRefused, match="belongs to another user"):
+            lane.manifest_hash(folder)
+
+
+def test_the_pinned_playwright_folder_is_checked_again_when_it_is_reused(env, unpack):
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    dest = lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    assert stat_mode(os.lstat(dest)) == 0o755
+    assert lane.pinned_playwright(env["repo"], base, Registry(tarball)) == dest
+    (dest / "index.js").write_text("require('child_process').exec('curl evil')\n")      # changed after the install
+    with pytest.raises(lane.LaneRefused, match="has changed since it was installed"):
+        lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    (dest / "index.js").write_text("module.exports = {};\n")
+    (dest / "extra.js").write_text("")
+    with pytest.raises(lane.LaneRefused, match="has changed since it was installed"):
+        lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    (dest / "extra.js").unlink()
+    os.chmod(dest, 0o777)
+    with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+        lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    os.chmod(dest, 0o755)
+    above = dest.parent.parent                                          # broker_root() resets its own mode
+    os.chmod(above, 0o777)
+    try:
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    finally:
+        os.chmod(above, 0o700)
+    assert lane.pinned_playwright(env["repo"], base, Registry(tarball)) == dest
+
+
+def test_unpack_leftovers_are_swept_before_a_new_unpack(env, unpack):
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    old = lane.broker_root() / ".unpack-dead"
+    (old / "package").mkdir(parents=True)
+    (old / "package" / "x").write_text("x")
+    os.symlink("/nonexistent", lane.broker_root() / ".unpack-link")
+    lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    assert sorted(p.name for p in lane.broker_root().iterdir() if p.name != ".install.lock") == ["playwright-core-1.55.0"]
+
+
+def holding(path):
+    f = open(path, "a+")
+    fcntl.flock(f, fcntl.LOCK_EX)
+    return f
+
+
+def blocked_until_released(call, path):
+    """Run call() in a thread while another file holds the lock; it must wait, then finish once released."""
+    f = holding(path)
+    result = []
+    t = threading.Thread(target=lambda: result.append(call()))
+    t.start()
+    t.join(0.5)
+    waited = t.is_alive()
+    fcntl.flock(f, fcntl.LOCK_UN)
+    f.close()
+    t.join(10)
+    return waited, result
+
+
+def test_the_install_lock_is_taken_by_the_installers_themselves_and_nests(env, unpack, monkeypatch):
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    path = lane.broker_root() / ".install.lock"
+    assert lane.install_lock_path() == path
+    waited, result = blocked_until_released(lambda: lane.pinned_playwright(env["repo"], base, Registry(tarball)), path)
+    assert waited and result == [lane.broker_root() / "playwright-core-1.55.0"]
+    pw = env["tmp"] / "pw"
+    pw.mkdir()
+    (pw / "browsers.json").write_text(PW_FILES["package/browsers.json"].decode())
+    monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
+        fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
+    waited, result = blocked_until_released(lambda: lane.install_headless_shell("/opt/homebrew/bin/node", pw), path)
+    assert waited and len(result) == 1
+    with lane.install_lock():                                           # prepare_broker's own hold: no deadlock
+        assert lane.pinned_playwright(env["repo"], base, Registry(tarball))
+        assert lane.install_headless_shell("/opt/homebrew/bin/node", pw)

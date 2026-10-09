@@ -14,6 +14,7 @@ import ctypes
 import errno
 import fcntl
 import hashlib
+import http.client
 import io
 import ipaddress
 import json
@@ -843,6 +844,7 @@ SHELL = "chromium-headless-shell"
 MANIFESTS = teamlib.package_dir() / "lane" / "browsers.json"
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 STAMP = ".superyak-integrity"
+STAMP_MANIFEST = ".superyak-manifest"          # the manifest hash of the unpacked package, written beside the stamp
 DEPENDENCIES_MARKER = "DEPENDENCIES_VALIDATED"
 
 
@@ -862,10 +864,44 @@ def browsers_root():
     return root
 
 
+def install_lock_path():
+    return broker_root() / ".install.lock"
+
+
+_INSTALL_MUTEX = threading.RLock()
+_install_depth = 0
+
+
+@contextmanager
+def install_lock():
+    """One teamd installs at a time (Task 7 and Task 10 take this too). The installers take it themselves, and it
+    nests: a caller that already holds it (prepare_broker) can call them without waiting on itself."""
+    global _install_depth
+    with _INSTALL_MUTEX:
+        if _install_depth:
+            yield
+            return
+        try:
+            with teamlib.locked(install_lock_path()):
+                _install_depth = 1
+                try:
+                    yield
+                finally:
+                    _install_depth = 0
+        except OSError as e:
+            raise LaneRefused("the install lock can't be taken (%s)" % (e.strerror or e))
+
+
 def lock_entry(repo, base):
     """playwright-core's version and integrity from the lockfile at the worker's base commit (the lead's, fixed at
-    spawn), never from the worktree, which the worker can write."""
-    r = workers.git(repo, "cat-file", "blob", "%s:package-lock.json" % base, check=False)
+    spawn), never from the worktree, which the worker can write. base must be a full SHA, and replace refs are off."""
+    if not isinstance(base, str) or not re.fullmatch(r"[0-9a-f]{40}", base):
+        raise LaneRefused("the base commit %r isn't a 40-character hex SHA" % (base,))
+    try:
+        r = workers.git(repo, *workers.HARDENED_GIT, "--no-replace-objects", "cat-file", "blob",
+                        "%s:package-lock.json" % base, check=False)
+    except (OSError, ValueError):                     # git missing, or a lockfile that isn't UTF-8
+        raise LaneRefused("the base commit's package-lock.json can't be read")
     if r.returncode != 0:
         raise LaneRefused("the base commit %s has no package-lock.json, so the broker's Playwright can't be pinned"
                           % base[:12])
@@ -884,14 +920,39 @@ def lock_entry(repo, base):
     return version, integrity
 
 
-def https_get(url, limit=64 * 2 ** 20):
-    """teamd's own download, with no proxy: the integrity check, not the transport, is what the pin rests on."""
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(url, timeout=120) as response:
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise LaneRefused("%s is larger than %d bytes" % (url, limit))
-    return data
+class _HttpsOnly(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.lower().startswith("https://"):
+            raise LaneRefused("%s redirects to %s, which isn't https" % (req.full_url, newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def https_get(url, limit=64 * 2 ** 20, deadline=300):
+    """teamd's own download, with no proxy, https all the way, within `deadline` seconds in all: the integrity check,
+    not the transport, is what the pin rests on. Anything that goes wrong is a LaneRefused."""
+    if not url.lower().startswith("https://"):
+        raise LaneRefused("%s isn't https" % url)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _HttpsOnly)
+    start, chunks, size = time.monotonic(), [], 0
+    try:
+        with opener.open(url, timeout=60) as response:
+            if not str(response.geturl()).lower().startswith("https://"):
+                raise LaneRefused("%s ended on %s, which isn't https" % (url, response.geturl()))
+            while True:
+                if time.monotonic() - start > deadline:
+                    raise LaneRefused("downloading %s took longer than %d seconds" % (url, deadline))
+                chunk = response.read(1 << 16)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > limit:
+                    raise LaneRefused("%s is larger than %d bytes" % (url, limit))
+                chunks.append(chunk)
+    except LaneRefused:
+        raise
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        raise LaneRefused("%s can't be downloaded (%s)" % (url, e))
+    return b"".join(chunks)
 
 
 def _extract(tar, members, where):
@@ -921,6 +982,9 @@ def extract_package(data, dest, stamp):
         tmp = Path(tempfile.mkdtemp(prefix=".unpack-", dir=dest.parent))
         try:
             _extract(tar, members, tmp)
+            os.chmod(tmp / "package", 0o755)             # the implicit folder: not whatever the umask made it
+            recorded = manifest_hash(tmp / "package")
+            _write_text(tmp / "package" / STAMP_MANIFEST, recorded + "\n", 0o600)
             _write_text(tmp / "package" / STAMP, stamp + "\n", 0o600)
             os.rename(tmp / "package", dest)
         except OSError as e:
@@ -929,36 +993,67 @@ def extract_package(data, dest, stamp):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _sweep_unpacks(root):
+    for old in Path(root).glob(".unpack-*"):
+        if old.is_symlink() or not old.is_dir():
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        else:
+            shutil.rmtree(old, ignore_errors=True)
+
+
 def pinned_playwright(repo, base, fetch=None):
     """~/.superyak/team/broker/playwright-core-<version>/, fetched from the npm registry the first time. The tarball is
     checked against the integrity hash in the base commit's lockfile, never the registry's own claim. A mismatch
-    anywhere refuses the lane."""
+    anywhere refuses the lane. Its cli.js runs unsandboxed as the installer, so a reused folder is checked again: owner
+    and mode (it and every folder above), the stamp, and the manifest hash recorded at unpack time."""
     version, integrity = lock_entry(repo, base)
-    dest = broker_root() / ("playwright-core-" + version)
-    if dest.is_dir():
-        stamp = dest / STAMP
-        if not stamp.is_file() or stamp.read_text().strip() != integrity:
-            raise LaneRefused("%s isn't stamped with the integrity hash the base commit names; remove it and the next "
-                              "lane fetches it again" % dest)
+    with install_lock():
+        dest = broker_root() / ("playwright-core-" + version)
+        if os.path.lexists(dest):
+            _plain_folder(dest)
+            _check_owner(dest, os.lstat(dest))
+            _check_ancestors(dest)
+            stamp, recorded = dest / STAMP, dest / STAMP_MANIFEST
+            if not stamp.is_file() or not recorded.is_file():
+                raise LaneRefused("%s isn't stamped with the integrity hash the base commit names; remove it and the "
+                                  "next lane fetches it again" % dest)
+            try:
+                stamped, was = stamp.read_text().strip(), recorded.read_text().strip()
+            except (OSError, ValueError):
+                raise LaneRefused("%s's stamps can't be read; remove it and the next lane fetches it again" % dest)
+            if stamped != integrity:
+                raise LaneRefused("%s isn't stamped with the integrity hash the base commit names; remove it and the "
+                                  "next lane fetches it again" % dest)
+            if manifest_hash(dest, ignore=(STAMP, STAMP_MANIFEST)) != was:
+                raise LaneRefused("%s has changed since it was installed; remove it and the next lane fetches it "
+                                  "again" % dest)
+            return dest
+        fetch = fetch or https_get
+        tarball = REGISTRY + "playwright-core/-/playwright-core-%s.tgz" % version
+        try:
+            meta = json.loads(fetch(REGISTRY + "playwright-core/" + version))
+        except LaneRefused:
+            raise
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            raise LaneRefused("the npm registry's metadata for playwright-core %s can't be read (%s)" % (version, e))
+        dist = meta.get("dist") if isinstance(meta, dict) and isinstance(meta.get("dist"), dict) else {}
+        if dist.get("tarball") != tarball:               # the URL is ours; the registry may only agree with it
+            raise LaneRefused("playwright-core %s's tarball isn't on %s" % (version, tarball))
+        try:
+            data = fetch(tarball)
+        except LaneRefused:
+            raise
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            raise LaneRefused("playwright-core %s's tarball can't be downloaded (%s)" % (version, e))
+        if "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode() != integrity:
+            raise LaneRefused("playwright-core %s's tarball doesn't match the integrity hash in the base commit's "
+                              "lockfile" % version)
+        _sweep_unpacks(dest.parent)
+        extract_package(data, dest, integrity)
         return dest
-    fetch = fetch or https_get
-    try:
-        meta = json.loads(fetch(REGISTRY + "playwright-core/" + version))
-    except (OSError, ValueError) as e:
-        raise LaneRefused("the npm registry's metadata for playwright-core %s can't be read (%s)" % (version, e))
-    dist = meta.get("dist") if isinstance(meta, dict) and isinstance(meta.get("dist"), dict) else {}
-    tarball = dist.get("tarball")
-    if not isinstance(tarball, str) or not tarball.startswith(REGISTRY + "playwright-core/-/"):
-        raise LaneRefused("playwright-core %s's tarball isn't on %s" % (version, REGISTRY))
-    try:
-        data = fetch(tarball)
-    except OSError as e:
-        raise LaneRefused("playwright-core %s's tarball can't be downloaded (%s)" % (version, e))
-    if "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode() != integrity:
-        raise LaneRefused("playwright-core %s's tarball doesn't match the integrity hash in the base commit's "
-                          "lockfile" % version)
-    extract_package(data, dest, integrity)
-    return dest
 
 
 def shell_revision(pw_dir):
@@ -967,7 +1062,8 @@ def shell_revision(pw_dir):
         data = json.loads((Path(pw_dir) / "browsers.json").read_text())
     except (OSError, ValueError):
         data = {}
-    for browser in data.get("browsers") or []:
+    browsers = data.get("browsers") if isinstance(data, dict) else None
+    for browser in browsers if isinstance(browsers, list) else []:
         if isinstance(browser, dict) and browser.get("name") == SHELL:
             revision = browser.get("revision")
             if isinstance(revision, str) and re.fullmatch(r"[0-9]+", revision):
@@ -980,17 +1076,18 @@ def install_headless_shell(node_bin, pw_dir):
     every sandbox, with an environment built from nothing (no download host, proxy or TLS override can reach it).
     The installer only downloads; only sandboxed brokers ever launch from this folder. Returns (folder, revision).
     The manifest is checked separately (check_manifest)."""
-    revision = shell_revision(pw_dir)
-    folder = browsers_root() / ("chromium_headless_shell-" + revision)
-    if not (folder / "INSTALLATION_COMPLETE").is_file():
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "PLAYWRIGHT_BROWSERS_PATH": str(browsers_root()),
-               "PLAYWRIGHT_SKIP_BROWSER_GC": "1"}
-        r = _run_env([str(node_bin), str(Path(pw_dir) / "cli.js"), "install", SHELL], env, cwd=browsers_root())
-        if r is None or r.returncode != 0 or not (folder / "INSTALLATION_COMPLETE").is_file():
-            tail = teamlib.redact(((r.stdout + r.stderr) if r is not None else "")[-600:])
-            raise LaneRefused("installing %s %s failed (exit %s): %s"
-                              % (SHELL, revision, r.returncode if r is not None else "none", tail))
-    return folder, revision
+    with install_lock():
+        revision = shell_revision(pw_dir)
+        folder = browsers_root() / ("chromium_headless_shell-" + revision)
+        if not (folder / "INSTALLATION_COMPLETE").is_file():
+            env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "PLAYWRIGHT_BROWSERS_PATH": str(browsers_root()),
+                   "PLAYWRIGHT_SKIP_BROWSER_GC": "1"}
+            r = _run_env([str(node_bin), str(Path(pw_dir) / "cli.js"), "install", SHELL], env, cwd=browsers_root())
+            if r is None or r.returncode != 0 or not (folder / "INSTALLATION_COMPLETE").is_file():
+                tail = teamlib.redact(((r.stdout + r.stderr) if r is not None else "")[-600:])
+                raise LaneRefused("installing %s %s failed (exit %s): %s"
+                                  % (SHELL, revision, r.returncode if r is not None else "none", tail))
+        return folder, revision
 
 
 def _run_env(cmd, env, cwd, timeout=900):
@@ -1014,41 +1111,66 @@ def _check_owner(path, st, sticky_ok=False):
 
 
 def _check_ancestors(path):
-    for parent in Path(os.path.realpath(path)).parents:
-        _check_owner(parent, os.stat(parent), sticky_ok=True)
+    try:
+        for parent in Path(os.path.realpath(path)).parents:
+            _check_owner(parent, os.stat(parent), sticky_ok=True)
+    except OSError as e:
+        raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
 
 
-def manifest_hash(folder):
+def _plain_folder(path):
+    """A real folder, not a link to one: _check_owner lets links through, and a link hashes its target."""
+    try:
+        ok = stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError as e:
+        raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
+    if not ok:
+        raise LaneRefused("%s isn't a plain folder" % path)
+
+
+def manifest_hash(folder, ignore=()):
     """sha256 over every entry under folder, sorted: its path, kind, mode, and its symlink target or its content's
-    sha256. Every entry must be owned by this user and writable by nobody else, and a symlink must stay inside the
-    folder (relative, never escaping). An empty DEPENDENCIES_VALIDATED at the top, the marker Playwright writes when
-    an unsandboxed process launches the browser, carries no code and is left out (the broker can't write it)."""
+    sha256 (all as bytes, so a name that isn't UTF-8 hashes too). The folder must be a real one, and every entry owned
+    by this user and writable by nobody else, and a symlink must stay inside the folder (relative, never escaping).
+    An empty DEPENDENCIES_VALIDATED at the top, the marker Playwright writes when an unsandboxed process launches the
+    browser, carries no code and is left out (the broker can't write it); so are the top-level names in `ignore`.
+    Anything unreadable refuses."""
     folder = Path(folder)
+    _plain_folder(folder)
     _check_owner(folder, os.lstat(folder))
     root = os.path.realpath(folder)
     digest = hashlib.sha256()
-    for top, dirs, files in os.walk(folder, followlinks=False):
-        dirs.sort()
-        for name in sorted(dirs + files):
-            full = Path(top) / name
-            st = os.lstat(full)
-            _check_owner(full, st)
-            rel = full.relative_to(folder).as_posix()
-            if rel == DEPENDENCIES_MARKER and stat.S_ISREG(st.st_mode) and st.st_size == 0:
-                continue
-            if stat.S_ISLNK(st.st_mode):
-                target = os.readlink(full)
-                resolved = os.path.realpath(full)       # through every link in a chain, not just this one
-                if os.path.isabs(target) or not (resolved == root or resolved.startswith(root + os.sep)):
-                    raise LaneRefused("%s links outside the browser's folder (to %s)" % (full, target))
-                kind, extra = "l", target
-            elif stat.S_ISDIR(st.st_mode):
-                kind, extra = "d", ""
-            elif stat.S_ISREG(st.st_mode):
-                kind, extra = "f", _file_sha256(full)
-            else:
-                raise LaneRefused("%s is neither a file, a folder nor a symlink" % full)
-            digest.update(("%s\0%s\0%o\0%s\n" % (rel, kind, stat.S_IMODE(st.st_mode), extra)).encode())
+
+    def fail(e):
+        raise e
+    try:
+        for top, dirs, files in os.walk(folder, followlinks=False, onerror=fail):
+            dirs.sort()
+            for name in sorted(dirs + files):
+                full = Path(top) / name
+                st = os.lstat(full)
+                _check_owner(full, st)
+                rel = full.relative_to(folder).as_posix()
+                if rel in ignore:
+                    continue
+                if rel == DEPENDENCIES_MARKER and stat.S_ISREG(st.st_mode) and st.st_size == 0:
+                    continue
+                if stat.S_ISLNK(st.st_mode):
+                    target = os.readlink(full)
+                    resolved = os.path.realpath(full)       # through every link in a chain, not just this one
+                    if os.path.isabs(target) or not (resolved == root or resolved.startswith(root + os.sep)):
+                        raise LaneRefused("%s links outside the browser's folder (to %s)" % (full, target))
+                    kind, extra = "l", os.fsencode(target)
+                elif stat.S_ISDIR(st.st_mode):
+                    kind, extra = "d", b""
+                elif stat.S_ISREG(st.st_mode):
+                    kind, extra = "f", _file_sha256(full).encode()
+                else:
+                    raise LaneRefused("%s is neither a file, a folder nor a symlink" % full)
+                digest.update(os.fsencode(rel) + b"\0" + kind.encode() + b"\0" + b"%o" % stat.S_IMODE(st.st_mode)
+                              + b"\0" + extra + b"\n")
+    except OSError as e:
+        raise LaneRefused("%s can't be read (%s)" % (folder, e.strerror or e))
     return digest.hexdigest()
 
 
@@ -1065,8 +1187,26 @@ def platform_key():
 
 
 def recorded_manifest(revision):
-    data = json.loads(MANIFESTS.read_text())
-    return ((data.get(SHELL) or {}).get(revision) or {}).get(platform_key())
+    try:
+        data = json.loads(MANIFESTS.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("not an object")
+        shell = data.get(SHELL)
+        if shell is None:
+            return None
+        revisions = shell.get(revision) if isinstance(shell, dict) else ValueError("not an object")
+        if isinstance(revisions, ValueError):
+            raise revisions
+        if revisions is None:
+            return None
+        if not isinstance(revisions, dict):
+            raise ValueError("not an object")
+        value = revisions.get(platform_key())
+        if value is not None and not isinstance(value, str):
+            raise ValueError("not a string")
+        return value
+    except (OSError, ValueError) as e:
+        raise LaneRefused("%s can't be read (%s)" % (MANIFESTS, e))
 
 
 def check_manifest(folder, revision):
@@ -1074,8 +1214,12 @@ def check_manifest(folder, revision):
     every folder above it must be safe as lane_node's are. Run after every install and at every broker start.
     Returns the hash."""
     root = browsers_root()
+    _plain_folder(root)
     _check_owner(root, os.lstat(root))
-    _check_ancestors(root)
+    _plain_folder(folder)
+    if Path(os.path.realpath(folder)).parent != Path(os.path.realpath(root)):
+        raise LaneRefused("%s isn't directly in %s" % (folder, root))
+    _check_ancestors(folder)                          # the folder's real path: root and everything above it
     actual = manifest_hash(folder)
     recorded = recorded_manifest(revision)
     if recorded is None:
