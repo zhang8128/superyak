@@ -48,11 +48,13 @@ LIVE_STATES = ("preparing", "queued", "running", "idle", "waiting")   # teamd.LI
 
 
 class LaneRefused(teamlib.RejectedMessage):
-    """The lane can't run. teamd fails the worker and tells the lead why; `details` (sandbox denials) stay local."""
+    """The lane can't run. teamd fails the worker and tells the lead why; `details` (sandbox denials) stay local, and
+    `log` (what only Andy should act on, such as a manifest hash to record) goes to teamd.log, never to the lead."""
 
-    def __init__(self, message, details=None):
+    def __init__(self, message, details=None, log=None):
         super().__init__(message)
         self.details = list(details or [])
+        self.log = log
 
 
 class LaneWait(LaneRefused):
@@ -1173,9 +1175,9 @@ def extract_package(data, dest, stamp):
 
 
 def _read_plain(path):
-    """A regular file's text, read without following a link."""
+    """A regular file's text, read without following a link, and without waiting on a FIFO planted in its place."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         raise LaneRefused("%s isn't a plain file; remove its folder and the next lane fetches it again" % path)
     with os.fdopen(fd, "rb") as f:
@@ -1198,11 +1200,12 @@ def _sweep_unpacks(root):
             shutil.rmtree(old, ignore_errors=True)
 
 
-def pinned_playwright(repo, base, fetch=None):
+def pinned_playwright(repo, base, fetch=None, verify=True):
     """~/.superyak/team/broker/playwright-core-<version>/, fetched from the npm registry the first time. The tarball is
     checked against the integrity hash in the base commit's lockfile, never the registry's own claim. A mismatch
     anywhere refuses the lane. Its cli.js runs unsandboxed as the installer, so a reused folder is checked again: owner
-    and mode (it and every folder above), the stamp, and the manifest hash recorded at unpack time."""
+    and mode (it and every folder above), the stamp, and (unless `verify` is False: a waiting lane's retry, whose
+    broker won't start yet) the manifest hash recorded at unpack time."""
     version, integrity = lock_entry(repo, base)
     with install_lock():
         dest = broker_root() / ("playwright-core-" + version)
@@ -1218,7 +1221,7 @@ def pinned_playwright(repo, base, fetch=None):
             if stamped != integrity:
                 raise LaneRefused("%s isn't stamped with the integrity hash the base commit names; remove it and the "
                                   "next lane fetches it again" % dest)
-            if manifest_hash(dest, ignore=(STAMP, STAMP_MANIFEST)) != was:
+            if verify and manifest_hash(dest, ignore=(STAMP, STAMP_MANIFEST)) != was:
                 raise LaneRefused("%s has changed since it was installed; remove it and the next lane fetches it "
                                   "again" % dest)
             return dest
@@ -1414,13 +1417,16 @@ def check_manifest(folder, revision):
     actual = manifest_hash(folder)
     recorded = recorded_manifest(revision)
     if recorded is None:
-        raise LaneRefused("no manifest hash is recorded for %s %s on %s. Once lane_acceptance.py --self-check-only "
-                          "passes, Andy records this one in team/superyak_team/lane/browsers.json: %s"
-                          % (SHELL, revision, platform_key(), actual))
+        raise LaneRefused("no manifest hash is recorded for %s %s on %s: a person records the browser's manifest "
+                          "after `lane_acceptance.py --self-check-only` passes" % (SHELL, revision, platform_key()),
+                          log="the manifest hash of %s %s on %s, for Andy to record in "
+                              "team/superyak_team/lane/browsers.json once lane_acceptance.py --self-check-only passes: "
+                              "%s" % (SHELL, revision, platform_key(), actual))
     if recorded != actual:
-        raise LaneRefused("%s doesn't match the manifest hash recorded for %s %s on %s (recorded %s, found %s). "
-                          "If nobody changed it, remove that folder and the next lane installs it again"
-                          % (folder, SHELL, revision, platform_key(), recorded, actual))
+        raise LaneRefused("%s doesn't match the manifest hash recorded for %s %s on %s. If nobody changed it, remove "
+                          "that folder and the next lane installs it again" % (folder, SHELL, revision, platform_key()),
+                          log="%s %s on %s: recorded manifest hash %s, found %s" % (SHELL, revision, platform_key(),
+                                                                                 recorded, actual))
     return actual
 
 
@@ -1721,14 +1727,17 @@ def broker_env(b_dir, pw_dir):
             "PLAYWRIGHT_BROWSERS_PATH": str(browsers_root()), "SUPERYAK_BROKER_PLAYWRIGHT": str(pw_dir)}
 
 
-def prepare_broker(repo, base_commit, worktrees, fetch=None):
+def prepare_broker(repo, base_commit, worktrees, fetch=None, verify=True):
     """Everything a broker needs before it starts: lane_node, the pinned Playwright and the checked headless shell.
-    One teamd installs at a time. Returns (node_bin, pw_dir, shell_dir)."""
+    One teamd installs at a time. With verify=False (before a lane's listener check, which may make it wait and retry
+    every 30 s) an install that is already there is made sure of without hashing it; the hashing runs with
+    verify=True, once the check has passed and just before the broker starts. Returns (node_bin, pw_dir, shell_dir)."""
     node_bin = check_lane_node(teamlib.load_config().get("lane_node"), worktrees)
     with install_lock():  # Task 5 fix round: reentrant; teamlib.locked on the same file would deadlock
-        pw_dir = pinned_playwright(repo, base_commit, fetch)
+        pw_dir = pinned_playwright(repo, base_commit, fetch, verify=verify)
         shell_dir, revision = install_headless_shell(node_bin, pw_dir)
-        check_manifest(shell_dir, revision)
+        if verify:
+            check_manifest(shell_dir, revision)
     return node_bin, pw_dir, shell_dir
 
 
@@ -1788,8 +1797,8 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
     if first == "ENDPOINT " + broker.endpoint:
         stop_denial_stream(stream)
         return broker
+    pids |= family(proc.pid)[0]                         # before poll(), which may reap it and free its pid for reuse
     exited = proc.poll()
-    pids |= family(proc.pid)[0]
     stop_broker(broker)
     cleanup_processes(b, None)                          # node is gone: what it started is found by its folder now
     denials = denials_for(stop_denial_stream(stream), pids)
@@ -1890,7 +1899,7 @@ def _lane_prefixes(path):
 def lane_pids(path, base):
     """Processes of this uid that listen on a port in the lane's block (base None: no block was allocated), or have
     their cwd or an open file under the lane. The files come from one `lsof -F pn` over all of this uid's open files,
-    matched by name: the lane folder is never walked. None when lsof can't say."""
+    matched by name: the lane folder is never walked. None when lsof or ps can't say."""
     lsof = shutil.which("lsof", path=SYSTEM_PATH)
     if not lsof:
         return None
@@ -1918,7 +1927,10 @@ def lane_pids(path, base):
                 name = line[1:]
                 if any(name == prefix or name.startswith(prefix + "/") for prefix in prefixes):
                     pids.add(pid)
-    return pids - _spared(_process_table())
+    rows = _process_table()
+    if not rows:                                         # without ps, teamd's own parents can't be spared
+        return None
+    return pids - _spared(rows)
 
 
 def _spared(rows):

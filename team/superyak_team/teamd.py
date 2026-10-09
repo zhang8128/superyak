@@ -120,9 +120,17 @@ class Team:
             raise teamlib.RejectedMessage("mode must be 'build' or 'collab'")
         if browser:
             lane.check_spawn(self.cfg, kind, mode)
+            # The base is resolved once: the commit the broker's Playwright is pinned from is the commit the worktree
+            # is made from, even if the branch the lead named moves meanwhile.
+            base = workers.resolve_base(self.repo, base)
             # The install and the manifest check, before teamd's lock: a first install can take minutes, and it has
             # its own lock (.install.lock). The lane's first turn checks them again, quickly.
-            lane.prepare_broker(self.repo, workers.resolve_base(self.repo, base), self._worktrees())
+            try:
+                lane.prepare_broker(self.repo, base, self._worktrees())
+            except lane.LaneRefused as e:
+                if e.log:
+                    self.log(e.log)
+                raise
         with self.lock:
             wid = self._new_worker_id()
             if mode == "build":
@@ -361,18 +369,20 @@ class Team:
         self.save()
         broker = self.brokers.get(wid)
         prepared = None
-        if broker is None or not broker.alive():       # the install and manifest check come before the listener check
-            prepared = lane.prepare_broker(self.repo, w["base"], self._worktrees())
+        if broker is None or not broker.alive():       # the install comes before the listener check, unhashed: a
+            prepared = lane.prepare_broker(self.repo, w["base"], self._worktrees(), verify=False)   # wait retries it
+        checked = self.clock()                         # the next 60 s are counted from when the check began
         try:
             ok, problems = lane.listeners_ok()
         except lane.LaneRefused:
             raise
         except Exception as e:
             raise lane.LaneRefused("the listener check failed (%r)" % e)
-        checked = self.clock()                         # the next 60 s are counted from the check, not the start
         if not ok:
             raise lane.LaneWait("; ".join(problems))
         if prepared is not None:
+            # The manifest hashes run once the check has passed, just before the broker starts.
+            prepared = lane.prepare_broker(self.repo, w["base"], self._worktrees())
             if broker is not None:
                 lane.stop_broker(self.brokers.pop(wid))
             node_bin, pw_dir, shell_dir = prepared
@@ -405,6 +415,8 @@ class Team:
         w = self.state["workers"][wid]
         w["state"] = "failed"
         w.pop("lane_wait", None)
+        if getattr(error, "log", None):              # for Andy (a manifest hash to record), never the lead
+            self.log("%s: %s" % (wid, error.log))
         if error.details:
             log = self.dir / "workers" / wid / "lane-diagnostics.log"
             try:
@@ -429,8 +441,10 @@ class Team:
             try:
                 ok, problems = lane.listeners_ok()
                 widened = lane.settings_widenings()
+                what = [name for name, failed in (("listener", not ok), ("settings", widened)) if failed]
             except Exception as e:                       # fails closed: a check that errs has failed
                 ok, problems, widened = False, ["the listener or settings check failed (%r)" % e], []
+                what = ["listener", "settings"]
             if widened:
                 ok, problems = False, problems + ["settings outside the lane now widen its sandbox: "
                                                   + "; ".join(widened)]
@@ -438,7 +452,7 @@ class Team:
                 self.lane_checked[wid] = now
                 if not ok:
                     try:
-                        self._lane_stop_turn(wid, problems)
+                        self._lane_stop_turn(wid, problems, what)
                     except Exception as e:
                         self.log("stopping %s's lane turn: %r" % (wid, e))
         for wid, at in list(self.lane_stopped_at.items()):       # a stopped turn that ignored SIGTERM
@@ -461,8 +475,9 @@ class Team:
                 except Exception as e:
                     self.log("retrying %s's lane: %r" % (wid, e))
 
-    def _lane_stop_turn(self, wid, problems):
-        """The turn counts as failed however claude exits, and the lead hears once while it exits."""
+    def _lane_stop_turn(self, wid, problems, what=("listener",)):
+        """The turn counts as failed however claude exits, and the lead hears once while it exits. `what` names the
+        checks that failed ("listener", "settings"); Slack is told which, never by reading the problems' text."""
         w = self.state["workers"][wid]
         w["lane_stopped"] = True
         self.lane_stopped_at[wid] = self.clock()
@@ -474,11 +489,9 @@ class Team:
             lane.stop_broker(broker)
         self._to_lead("teamd", "LANE STOPPED:", "%s's turn and its browser were stopped because the lane's check "
                                                "failed: %s" % (wid, "; ".join(problems)))
-        settings = any("settings" in p for p in problems)
-        listeners = any("settings" not in p for p in problems)
-        what = ("listener and settings checks" if settings and listeners else
-                "settings check" if settings else "listener check")
-        self.say(wid, ":no_entry: lane turn stopped: the %s failed (the lead has the details)." % what,
+        which = ("listener and settings checks" if set(what) >= {"listener", "settings"} else
+                 "settings check" if "settings" in what else "listener check")
+        self.say(wid, ":no_entry: lane turn stopped: the %s failed (the lead has the details)." % which,
                  w["thread_ts"])
         self.save()
 
@@ -903,6 +916,18 @@ class Team:
                                       for k, v in self.state["workers"].items() if k != caller}}
         raise teamlib.RejectedMessage("op %r not allowed for %s" % (op, caller))
 
+    def respond(self, line):
+        """One request line in, one JSON answer out (serve's handler). A request that raised is answered with the
+        error, scrubbed of a lane's secret like everything else teamd sends."""
+        try:
+            resp = {"ok": True, "result": self.handle(json.loads(line))}
+        except teamlib.RejectedMessage as e:
+            resp = {"ok": False, "error": self._scrub(str(e))}
+        except Exception as e:  # never kill the daemon on one bad request
+            self.log("error: %r\n%s" % (e, traceback.format_exc()))
+            resp = {"ok": False, "error": self._scrub("teamd error: %r" % e)}
+        return json.dumps(resp) + "\n"
+
     def status(self):
         with self.lock:
             unread = self.state["lead_inbox"][self.state["lead_cursor"]:]
@@ -976,15 +1001,7 @@ def serve(team):
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
-            line = self.rfile.readline()
-            try:
-                resp = {"ok": True, "result": team.handle(json.loads(line))}
-            except teamlib.RejectedMessage as e:
-                resp = {"ok": False, "error": str(e)}
-            except Exception as e:  # never kill the daemon on one bad request
-                team.log("error: %r\n%s" % (e, traceback.format_exc()))
-                resp = {"ok": False, "error": "teamd error: %r" % e}
-            self.wfile.write((json.dumps(resp) + "\n").encode())
+            self.wfile.write(team.respond(self.rfile.readline()).encode())
 
     server = socketserver.ThreadingUnixStreamServer(str(sock_path), Handler)
     os.chmod(sock_path, 0o600)

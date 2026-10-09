@@ -19,7 +19,8 @@ in a broker beside the worker, outside its sandbox, under a deny-default Seatbel
 its known limits are in [the spec](../docs/superpowers/specs/2026-10-08-browser-lane-design.md).
 
 A person turns lanes on; a lead can't:
-- `browser_lane: true` in `~/.superyak/team/config.json` or a preset (never in `team_start`'s config). Don't make a
+- `browser_lane: true` in a preset, never in `~/.superyak/team/config.json` (which every team started on this Mac
+  would take) and never in `team_start`'s config (refused). Don't make a
   preset with it until the Mac acceptance run has passed; the run makes its own, and removes it.
 - `lane_node` in `config.json`: the absolute path of the node binary the broker runs, outside your home folder and
   every worktree, for example `/opt/homebrew/bin/node`.
@@ -46,6 +47,14 @@ A person turns lanes on; a lead can't:
 - `lane_one_at_a_time: true` in `config.json` lets only one lane run on the Mac at a time. Set it if the acceptance
   run shows that one lane's worker can read another lane's endpoint. An idle browser worker keeps its block, so under
   this setting it holds the Mac's only lane until it is done or stopped.
+
+While lanes run, the loopback ports 41000–48999 are theirs: lanes take blocks of 32 from that pool, and anything else
+listening there waits for the lane or fails its check. Lead calls that can start or end a lane (`team_spawn`,
+`team_message`, `team_stop`, `team_end`) wait up to 15 minutes for teamd, since a first install or a lane's cleanup
+runs inside them; a teamd that hangs holds the lead that long. Every teamd, lanes or not, holds
+`~/.superyak/team/lane-teams/<team>.lock` for its whole life (a second teamd for the same team refuses to start), and
+one that restarts with workers reads the lane registry, which creates `~/.superyak/team/lane-ports.lock` and makes
+`~/.superyak/team` 0700.
 
 The profile self-check runs 17 negative probes (each action must be refused by the profile) and
 3 positive ones (the lane's own port, its own folder and `node` must work, so the refusals are the profile's doing).
@@ -83,6 +92,11 @@ outlive it. When a lane ends, teamd ends the broker, every process with a file u
 ports, and every process whose environment still carries that variable. A child that started a new session, cleared
 its own environment and holds nothing in the lane escapes all three, until the next listener check finds anything it
 listens on.
+
+**Known limit: Claude Code's own transcripts.** teamd scrubs the lane's secret from everything it keeps and sends,
+but a worker's Claude Code session transcript (under `~/.claude/projects/`) may hold the lane's endpoint, from a
+failing test's output. The secret dies with the lane: each broker gets a new one, and the broker stops when the lane
+ends.
 
 **Known limit: lanes share localhost.** With more than one lane, a lane's worker can connect to another lane's
 servers; `lane_one_at_a_time` avoids it.

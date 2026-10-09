@@ -61,7 +61,37 @@ def mac(monkeypatch):
     monkeypatch.setattr(lane, "claude_version", lambda: (2, 1, 290))
     monkeypatch.setattr(lane, "python_ok", lambda: True)
     # From Task 8, spawn installs and checks the broker's Playwright and browser before taking teamd's lock.
-    monkeypatch.setattr(lane, "prepare_broker", lambda repo, base, worktrees: None, raising=False)
+    monkeypatch.setattr(lane, "prepare_broker", lambda repo, base, worktrees, **kw: None, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def end_every_turn(monkeypatch):
+    """T8: no test leaves a mock turn or a prepare running. Every process workers.launch or start_prepare starts (each in
+    its own session) is ended, with its whole group, when the test ends, whatever the test did."""
+    started = []
+    real_launch, real_prepare = workers.launch, workers.start_prepare
+
+    def launch(*a, **kw):
+        started.append(real_launch(*a, **kw))
+        return started[-1]
+
+    def start_prepare(*a, **kw):
+        started.append(real_prepare(*a, **kw))
+        return started[-1]
+    monkeypatch.setattr(workers, "launch", launch)
+    monkeypatch.setattr(workers, "start_prepare", start_prepare)
+    yield
+    for proc in started:
+        if getattr(proc, "poll", None) is None or not hasattr(proc, "pid"):
+            continue
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except (subprocess.TimeoutExpired, AttributeError, TypeError):
+            pass
 
 
 def lane_team(env, team_id="t1", **cfg_over):
@@ -1522,10 +1552,14 @@ def test_the_manifest_must_be_recorded_and_match(env, manifests):
         lane.check_manifest(folder, "1243")
     message = str(unrecorded.value)
     assert "no manifest hash is recorded for chromium-headless-shell 1243 on " + lane.platform_key() in message
-    assert actual in message and "team/superyak_team/lane/browsers.json" in message
+    assert "a person records the browser's manifest after `lane_acceptance.py --self-check-only` passes" in message
+    assert actual not in message                                    # final fix wave: never the lead's to record
+    assert actual in unrecorded.value.log and "team/superyak_team/lane/browsers.json" in unrecorded.value.log
     record(manifests, "1243", "0" * 64)
-    with pytest.raises(lane.LaneRefused, match="doesn't match the manifest hash"):
+    with pytest.raises(lane.LaneRefused, match="doesn't match the manifest hash") as mismatch:
         lane.check_manifest(folder, "1243")
+    assert actual not in str(mismatch.value) and "0" * 64 not in str(mismatch.value)
+    assert actual in mismatch.value.log and "0" * 64 in mismatch.value.log
     record(manifests, "1243", actual)
     assert lane.check_manifest(folder, "1243") == actual
 
@@ -2472,13 +2506,35 @@ def start(parts):
     return lane.start_broker(parts["path"], parts["base"], parts["node"], parts["pw"], parts["shell"], parts["stderr"])
 
 
+def running(pid):
+    """The tests' own liveness check (T7: never lane._alive, the code under test): a zombie counts as gone."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    r = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return r.returncode == 0 and not r.stdout.strip().startswith("Z")
+
+
 def gone(pid, timeout=5):
     end = time.time() + timeout
     while time.time() < end:
-        if not lane._alive(pid):                    # a zombie the test hasn't waited for yet counts as gone
+        if not running(pid):
             return True
         time.sleep(0.05)
     return False
+
+
+def kill_quietly(*pids):
+    """T7: a test that read a child's pid ends that child itself, whatever the code under test did."""
+    for pid in pids:
+        if pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
 
 def test_the_brokers_environment_holds_exactly_the_listed_keys(env, monkeypatch):
@@ -2497,6 +2553,7 @@ def test_the_brokers_environment_holds_exactly_the_listed_keys(env, monkeypatch)
 def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts):
     broker = start(broker_parts)
     b, base = broker_parts["path"] / "b", broker_parts["base"]
+    child = None
     try:
         assert re.fullmatch(r"[0-9a-f]{64}", broker.secret) is not None and broker.port == base + 31, "secret shape"
         assert broker.endpoint == "ws://127.0.0.1:%d/%s" % (base + 31, broker.secret), "endpoint shape"   # no repr
@@ -2515,7 +2572,9 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
             assert broker.secret.encode() not in Path("/proc/%d/environ" % pid).read_bytes(), "secret in environment"
     finally:
         lane.stop_broker(broker)
-    assert broker.proc.poll() is not None and gone(child)
+        stopped = gone(child) if child else True
+        kill_quietly(child)
+    assert broker.proc.poll() is not None and stopped
     assert lane.port_free(base + 31)
 
 
@@ -2568,15 +2627,18 @@ def test_stopping_a_broker_reaches_a_browser_in_its_own_group(broker_parts):
     (broker_parts["pw"] / "STUBBORN").write_text("")
     broker = start(broker_parts)
     child = int((broker_parts["path"] / "b" / "child.pid").read_text())
-    lane.stop_broker(broker)
-    assert gone(child)
+    try:
+        lane.stop_broker(broker)
+        assert gone(child)
+    finally:
+        kill_quietly(child)
 
 
 def test_the_broker_exits_when_its_browser_dies(broker_parts):
     """Review: a broker whose browser is gone exits, so teamd sees it dead and starts a new one at the next turn."""
     broker = start(broker_parts)
     try:
-        os.kill(int((broker_parts["path"] / "b" / "child.pid").read_text()), signal.SIGKILL)
+        os.kill(int((broker_parts["path"] / "b" / "child.pid").read_text()), signal.SIGKILL)   # the test ends it
         end = time.time() + 10
         while time.time() < end and broker.alive():
             time.sleep(0.05)
@@ -2852,7 +2914,10 @@ def test_a_refused_start_after_the_child_spawned_ends_what_uses_the_folder(broke
     with pytest.raises(lane.LaneRefused):
         start(broker_parts)
     child = int((broker_parts["path"] / "b" / "child.pid").read_text())
-    assert gone(child), "a process using b/ outlived the refused start"
+    try:
+        assert gone(child), "a process using b/ outlived the refused start"
+    finally:
+        kill_quietly(child)
 
 
 def test_a_secret_cut_by_the_truncation_cant_survive_the_scrub(broker_parts):
@@ -2881,7 +2946,7 @@ def test_a_full_lsof_listing_that_exits_1_fails_closed(env, tmp_root, monkeypatc
 def test_the_lane_prefix_match_needs_the_separator_and_teamd_is_never_taken(env, tmp_root, monkeypatch):
     path = lane.ensure_lane("t1", "kaylee")
     listing = "p111\nn%s/tmp/f\np222\nn%sd/f\np%d\nn%s/b\n" % (path, path, os.getpid(), path)
-    lsof_stub(monkeypatch, listing)
+    lsof_stub(monkeypatch, listing, table="%d 1 %d %d\n" % (os.getpid(), os.getpid(), os.getuid()))
     assert lane.lane_pids(path, None) == {111}
 
 
@@ -2979,7 +3044,11 @@ def lanes(env, mac, tmp_root, monkeypatch):
             stop_broker(broker)
         return state["cleanup_finishes"]
     monkeypatch.setattr(lane, "listeners_ok", listeners_ok)
-    monkeypatch.setattr(lane, "prepare_broker", lambda repo, base, worktrees: ("/opt/homebrew/bin/node", "/pw", "/shell"))
+    def prepare_broker(repo, base, worktrees, verify=True):
+        calls["prepare"].append(verify)
+        return "/opt/homebrew/bin/node", "/pw", "/shell"
+    calls["prepare"] = []
+    monkeypatch.setattr(lane, "prepare_broker", prepare_broker)
     monkeypatch.setattr(lane, "start_broker", start_broker)
     monkeypatch.setattr(lane, "stop_broker", stop_broker)
     monkeypatch.setattr(lane, "cleanup_processes", cleanup_processes)
@@ -3156,23 +3225,24 @@ def test_a_refused_lane_fails_the_worker_and_tells_the_lead_why(env, lanes, monk
     slack = FakeSlack()
     team, now = browser_team(env)
     team.slack = slack
-    message = ("no manifest hash is recorded for chromium-headless-shell 1250 on darwin-arm64. Once "
-               "lane_acceptance.py --self-check-only passes, Andy records this one in "
-               "team/superyak_team/lane/browsers.json: " + "ab" * 32)
+    message = ("no manifest hash is recorded for chromium-headless-shell 1250 on darwin-arm64: a person records the "
+               "browser's manifest after `lane_acceptance.py --self-check-only` passes")
 
     calls = []
 
-    def refuse(repo, base, worktrees):
+    def refuse(repo, base, worktrees, verify=True):
         calls.append(base)
         if len(calls) == 1:                                                     # spawn's check
             return "/opt/homebrew/bin/node", "/pw", "/shell"
-        raise lane.LaneRefused(message, details=["chrome-headless-sh(5001): mach-lookup com.apple.x"])
+        raise lane.LaneRefused(message, details=["chrome-headless-sh(5001): mach-lookup com.apple.x"],
+                               log="the hash to record: " + "ab" * 32)
     monkeypatch.setattr(lane, "prepare_broker", refuse)
     team.spawn("check the login page", "claude", browser=True)
     w = team.state["workers"]["kaylee"]
     assert w["state"] == "failed" and "kaylee" not in team.procs
-    assert any("LANE REFUSED" in m["message"] and "1250" in m["message"] and "ab" * 32 in m["message"]
-               for m in team.state["lead_inbox"])
+    assert any("LANE REFUSED" in m["message"] and "1250" in m["message"] for m in team.state["lead_inbox"])
+    assert "ab" * 32 not in json.dumps(team.state["lead_inbox"])                 # the hash is for Andy, in teamd.log
+    assert "the hash to record: " + "ab" * 32 in (team.dir / "teamd.log").read_text()
     assert not any("1250" in p for p in slack.posts)
     assert "mach-lookup" in (team.dir / "workers" / "kaylee" / "lane-diagnostics.log").read_text()
     assert not lane.lane_path("t1", "kaylee").exists() and lane.block_of("t1", "kaylee") is None
@@ -3425,10 +3495,10 @@ def test_the_prepare_runs_before_the_listener_check(env, lanes, monkeypatch):
     team, now = browser_team(env)
     real = lane.listeners_ok
     monkeypatch.setattr(lane, "listeners_ok", lambda: (order.append("check"), real())[1])
-    monkeypatch.setattr(lane, "prepare_broker", lambda repo, base, wt: (order.append("prepare"),
-                                                                       ("/n", "/pw", "/shell"))[1])
+    monkeypatch.setattr(lane, "prepare_broker", lambda repo, base, wt, verify=True: (
+        order.append("prepare" if not verify else "verify"), ("/n", "/pw", "/shell"))[1])
     team.spawn("check the login page", "claude", browser=True)
-    assert order[-2:] == ["prepare", "check"], order
+    assert order[-3:] == ["prepare", "check", "verify"], order
 
 
 def test_a_sweep_ends_a_lane_by_its_registry_block_not_state_jsons(env, lanes, monkeypatch):
@@ -3805,7 +3875,7 @@ def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn(env, lanes
     team, now = browser_team(env)
     lock_free, refuse = [], []
 
-    def prepare(repo, base, worktrees):
+    def prepare(repo, base, worktrees, verify=True):
         free = []
         probe = threading.Thread(target=lambda: free.append(team.lock.acquire(blocking=False)
                                                             and (team.lock.release() or True)))
@@ -4368,3 +4438,247 @@ def test_worker_git_and_the_advisory_check_share_one_hardened_argv(env, monkeypa
     assert hardened[0] == expected + ["status"]
     assert all(argv[:len(expected) + 1] == expected + ["--no-replace-objects"] for argv in hardened[1:])
     assert len(hardened) >= 3
+
+
+# ---------- Final fix wave: T3, T5, T7, T8 ----------
+
+def test_the_lanes_deny_read_root_comes_from_tmp_root(env, tmp_root):
+    """T3: /tmp/sy-lane-<uid> comes from lane.TMP_ROOT, never from the lane path it was handed."""
+    settings = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo",
+                                               lane="/elsewhere/sy-lane-x/0123456789", preload="/h/p.cjs")
+    deny = settings["sandbox"]["filesystem"]["denyRead"]
+    assert str(tmp_root / ("sy-lane-%d" % os.getuid())) in deny and "/elsewhere/sy-lane-x" not in deny
+
+
+def test_drop_env_comes_before_env_extra(env, monkeypatch, tmp_path):
+    """T3: a variable env_extra sets is the agent's even when drop_env names it."""
+    seen = []
+    monkeypatch.setattr(workers.subprocess, "Popen", lambda cmd, **kw: seen.append(kw["env"]))
+    monkeypatch.setenv("NODE_OPTIONS", "--require /teamd/own.cjs")
+    workers.launch(["claude"], tmp_path, tmp_path / "w", {"NODE_OPTIONS": "--require /lane.cjs"},
+                   drop_env=("NODE_OPTIONS",))
+    assert seen[0]["NODE_OPTIONS"] == "--require /lane.cjs"
+
+
+def test_the_broker_root_under_a_shared_temp_folder_is_refused_with_the_real_unsafe_roots(env, monkeypatch, tmp_path):
+    """T5: with the real UNSAFE_ROOTS, a team home in the system's temp folder is refused, and so is one reached through
+    a symlink (a relative SUPERYAK_TEAM_HOME whose literal path names no temp folder at all)."""
+    roots = ("/private/tmp", "/tmp", "/private/var/folders")
+    real = os.path.realpath(tmp_path)
+    if not any(real == r or real.startswith(r + os.sep) for r in roots):
+        pytest.skip("this machine's test folders aren't under a shared temp folder")
+    monkeypatch.setattr(lane, "UNSAFE_ROOTS", roots)
+    with pytest.raises(lane.LaneRefused, match="under the shared temp folder"):
+        lane.broker_root()
+    (tmp_path / "real-home").mkdir()
+    os.symlink(tmp_path / "real-home", tmp_path / "linked-home")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SUPERYAK_TEAM_HOME", "linked-home")
+    assert not str(teamlib.team_home()).startswith(roots)
+    with pytest.raises(lane.LaneRefused, match="under the shared temp folder"):
+        lane.broker_root()
+
+
+def test_a_stamp_that_is_a_fifo_is_refused_without_blocking(env, unpack):
+    """T5: the stamps are opened O_NONBLOCK, so a FIFO planted as one can't hang teamd's install lock."""
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    dest = lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    stamp = dest / lane.STAMP
+    stamp.unlink()
+    os.mkfifo(stamp, 0o600)
+    errors = []
+
+    def run():
+        try:
+            lane.pinned_playwright(env["repo"], base, Registry(tarball))
+        except Exception as e:
+            errors.append(e)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(5)
+    blocked = t.is_alive()
+    if blocked:                                                         # release the reader the old code left waiting
+        os.close(os.open(stamp, os.O_WRONLY | os.O_NONBLOCK))
+        t.join(5)
+    assert not blocked, "reading a FIFO stamp blocked"
+    assert len(errors) == 1 and "isn't a plain file" in str(errors[0])
+
+
+class StartFails:
+    """A Popen for start_broker whose broker prints nothing and exits; it records when it is polled."""
+    order = []
+
+    def __init__(self, cmd, **kw):
+        self.pid, self.stdin, self.stdout = 2 ** 22 + 4321, io.StringIO(), io.StringIO("")
+
+    def poll(self):
+        StartFails.order.append("poll")
+        return 1
+
+
+def test_a_failed_start_walks_the_brokers_family_before_it_polls(broker_parts, monkeypatch):
+    """T7: poll() can reap the broker, and its pid may then be reused: its family is taken first."""
+    StartFails.order = []
+    monkeypatch.setattr(lane.subprocess, "Popen", StartFails)
+    monkeypatch.setattr(lane, "family", lambda pid: (StartFails.order.append("family"), (set(), set()))[1])
+    monkeypatch.setattr(lane, "stop_broker", lambda broker: None)
+    monkeypatch.setattr(lane, "cleanup_processes", lambda path, base, broker=None, env=None: True)
+    with pytest.raises(lane.LaneRefused, match="exited"):
+        start(broker_parts)
+    assert StartFails.order[:2] == ["family", "poll"], StartFails.order
+
+
+@pytest.mark.parametrize("table, rc", [("", 0), ("%d 1 %d %d\n" % (os.getpid(), os.getpid(), os.getuid()), 1)])
+def test_lane_pids_cant_say_when_ps_cant(env, tmp_root, monkeypatch, table, rc):
+    """T7: without ps, teamd's own parents can't be spared, so the cleanup can't say what to end."""
+    path = lane.ensure_lane("t1", "kaylee")
+
+    def run(cmd, timeout=60):
+        if cmd[0] == "/bin/ps":
+            return Ran(rc, table)
+        return Ran(0, "p111\nn%s/tmp/f\n" % path)
+    monkeypatch.setattr(lane, "_run", run)
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/lsof")
+    assert lane.lane_pids(path, None) is None
+
+
+def test_the_next_check_is_counted_from_when_the_check_began(env, lanes, monkeypatch):
+    """T8: the clock is read before listeners_ok, so a slow check never stretches the 60 s that follow it."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    real = lane.listeners_ok
+
+    def slow_check():
+        now[0] += 30
+        return real()
+    monkeypatch.setattr(lane, "listeners_ok", slow_check)
+    team.spawn("check the login page", "claude", browser=True)
+    assert team.lane_checked["kaylee"] == 1000.0
+    now[0] = 1000.0 + lane.CHECK_EVERY_S
+    team.monitor_once()
+    assert lanes["calls"]["listeners"] == 2
+
+
+def test_a_turn_that_started_and_then_failed_is_killed(env, lanes, monkeypatch):
+    """T8 (the reviewer's probe): _launch_turn started claude, then failed; the started process is killed, never left
+    running unwatched, and the lane is refused."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    started, real_launch = [], teamd.workers.launch
+
+    def launch(*a, **kw):
+        started.append(real_launch(*a, **kw))
+        return started[-1]
+    monkeypatch.setattr(teamd.workers, "launch", launch)
+    real_log = team.log
+    monkeypatch.setattr(team, "log", lambda msg: (_ for _ in ()).throw(OSError(28, "No space left on device"))
+                        if "started pid" in msg else real_log(msg))
+    team.spawn("check the login page", "claude", browser=True)
+    try:
+        assert started and started[0].wait(timeout=5) == -signal.SIGKILL
+    finally:
+        if started and started[0].poll() is None:
+            os.killpg(started[0].pid, signal.SIGKILL)
+    assert team.state["workers"]["kaylee"]["state"] == "failed" and "kaylee" not in team.procs
+    assert any("couldn't start" in m for m in lead_messages(team, "LANE REFUSED"))
+
+
+def test_slack_names_the_check_that_failed_without_reading_the_problems(env, lanes, monkeypatch):
+    """T8: a listener whose name holds "settings" is the listener check's failure, never the settings check's."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    team.slack = FakeSlack()
+    team.spawn("check the login page", "claude", browser=True)
+    lanes["state"].update(ok=False, problems=["settings-sync (pid 9) listens on port 8000 (/opt/x/settings-sync)"])
+    now[0] += 60
+    team.monitor_once()
+    stopped = [p for p in team.slack.posts if "lane turn stopped" in p]
+    assert len(stopped) == 1 and "the listener check failed" in stopped[0], stopped
+
+
+# ---------- Final fix wave: the smaller items ----------
+
+def test_an_rpc_error_never_carries_the_lanes_secret(env, lanes):
+    """Minor: teamd's answer to a request that raised is scrubbed like everything else it sends."""
+    team, now = browser_team(env)
+    team.lane_secrets.add(SECRET)
+
+    def boom(req):
+        raise RuntimeError("failed at ws://127.0.0.1:41031/" + SECRET)
+    team.handle = boom
+    resp = json.loads(team.respond(b'{"op": "status"}'))
+    assert resp["ok"] is False and SECRET not in json.dumps(resp) and "[lane secret]" in resp["error"]
+    assert SECRET not in (team.dir / "teamd.log").read_text()
+
+
+def test_a_spawn_refused_for_an_unrecorded_manifest_logs_the_hash_for_andy(env, lanes, monkeypatch):
+    """Minor: the lead hears that a person records the manifest; the hash itself goes to teamd.log."""
+    team, now = browser_team(env)
+
+    def refuse(repo, base, worktrees, verify=True):
+        raise lane.LaneRefused("no manifest hash is recorded for chromium-headless-shell 1250 on darwin-arm64: a person "
+                               "records the browser's manifest after `lane_acceptance.py --self-check-only` passes",
+                               log="record " + "cd" * 32)
+    monkeypatch.setattr(lane, "prepare_broker", refuse)
+    with pytest.raises(lane.LaneRefused) as refused:
+        team.spawn("check the login page", "claude", browser=True)
+    assert "cd" * 32 not in str(refused.value) and "record " + "cd" * 32 in (team.dir / "teamd.log").read_text()
+
+
+def test_a_waiting_worker_is_not_rehashed_every_retry(env, lanes):
+    """Minor: before the listener check the install is only made sure of (verify=False: no manifest hashing); the hash
+    runs once the check has passed, just before the broker starts."""
+    team, now = browser_team(env)
+    lanes["state"].update(ok=False, problems=["x (pid 1) listens on port 5000"])
+    team.spawn("check the login page", "claude", browser=True)
+    for _ in range(3):
+        now[0] += teamd.LANE_RETRY_S
+        team.monitor_once()
+    assert lanes["calls"]["prepare"] == [True, False, False, False, False]        # spawn's own, then each retry
+    lanes["state"].update(ok=True, problems=[])
+    now[0] += teamd.LANE_RETRY_S
+    team.monitor_once()
+    assert lanes["calls"]["prepare"][-2:] == [False, True] and len(lanes["calls"]["started"]) == 1
+
+
+def test_prepare_without_verify_hashes_nothing_already_installed(env, manifests, unpack, monkeypatch):
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    node = Path(os.path.realpath(NODE or sys.executable))
+    monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: node)
+    monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
+        fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
+    probe = env["tmp"] / "shellprobe"
+    fake_shell(probe)
+    record(manifests, "1243", lane.manifest_hash(probe))
+    lane.prepare_broker(env["repo"], base, [], fetch=Registry(tarball))            # the first install, verified
+    hashed, real = [], lane.manifest_hash
+    monkeypatch.setattr(lane, "manifest_hash", lambda folder, ignore=(): (hashed.append(Path(folder).name),
+                                                                          real(folder, ignore=ignore))[1])
+    assert lane.prepare_broker(env["repo"], base, [], verify=False)[1] == lane.broker_root() / "playwright-core-1.55.0"
+    assert hashed == []
+    lane.prepare_broker(env["repo"], base, [])
+    assert sorted(hashed) == ["chromium_headless_shell-1243", "playwright-core-1.55.0"]
+
+
+def test_spawn_resolves_the_base_once_and_the_worktree_gets_that_commit(env, lanes, monkeypatch):
+    """Minor: the commit the broker's Playwright was pinned from is the commit the worktree is made from, even if the
+    branch the lead named moves in between."""
+    team, now = browser_team(env)
+    head = subprocess.run(["git", "-C", str(env["repo"]), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    prepared, created, real_create = [], [], teamd.workers.create_worktree
+
+    def prepare_broker(repo, base, worktrees, verify=True):
+        prepared.append(base)
+        (env["repo"] / "moved.txt").write_text("the branch moves on")          # main moves after the pin
+        subprocess.run(["git", "-C", str(env["repo"]), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(env["repo"]), "commit", "-qm", "moved"], check=True)
+        return "/opt/homebrew/bin/node", "/pw", "/shell"
+    monkeypatch.setattr(lane, "prepare_broker", prepare_broker)
+    monkeypatch.setattr(teamd.workers, "create_worktree", lambda root, team_id, wid, base=None: (
+        created.append(base), real_create(root, team_id, wid, base))[1])
+    branch = subprocess.run(["git", "-C", str(env["repo"]), "branch", "--show-current"], capture_output=True,
+                            text=True).stdout.strip()
+    team.spawn("check the login page", "claude", base=branch, browser=True)
+    assert prepared[0] == head and created == [head] and team.state["workers"]["kaylee"]["base"] == head
