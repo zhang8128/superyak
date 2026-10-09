@@ -1,7 +1,9 @@
+import errno
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import pytest
 from superyak_agent.vault import AUTHOR, INBOX, OUTBOUND, RECEIPTS, Vault, VaultError, install_gate
 
@@ -550,7 +552,11 @@ def test_files_and_read_survive_symlink_loops_and_odd_names(vault, tmp_path):
     (inbox / 'coord_ok.md').write_text('ok')
     os.symlink('coord_self.md', inbox / 'coord_self.md')
     for name in (b'coord_\xff.md', b'coord_new\nline.md', 'coord_\u202eevil.md'.encode()):
-        (inbox / os.fsdecode(name)).write_bytes(b'x')
+        try:
+            (inbox / os.fsdecode(name)).write_bytes(b'x')
+        except OSError as e:  # APFS refuses names that aren't valid UTF-8, so no clone there can hold one either
+            if not (e.errno == errno.EILSEQ and sys.platform == 'darwin'):
+                raise
     assert vault.files(INBOX) == ['coord_ok.md']
     assert vault.read(INBOX, 'coord_self.md') == ''
     shutil.rmtree(inbox)
