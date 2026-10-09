@@ -4302,7 +4302,7 @@ def test_managed_hooks_refuse_a_lane(env, mac):
     ("managed", {"sandbox": {"network": {"allowAllUnixSockets": True}}}, "adds sandbox.network.allowAllUnixSockets"),
     ("settings.json", {"sandbox": {"network": {"httpProxyPort": 8080}}}, "adds sandbox.network.httpProxyPort"),
     ("settings.json", {"sandbox": {"network": {"allowedDomains": ["github.com"]}}}, "adds sandbox.network.allowedDomains"),
-    ("settings.json", {"sandbox": {"network": {"a key\nthat names\nlines": 1}}}, "adds a sandbox.network key this check doesn't know"),
+    ("settings.json", {"sandbox": {"network": {"a key\nthat names\nlines": 1}}}, "adds a sandbox key this check doesn't know"),
     ("settings.json", {"sandbox": "on"}, "can't be read (its sandbox isn't an object)"),
     ("settings.json", {"sandbox": {"network": ["allowAllUnixSockets"]}}, "can't be read (its sandbox.network isn't an object)"),
     ("settings.json", {"permissions": "WebFetch"}, "can't be read (its permissions isn't an object)"),
@@ -4312,8 +4312,11 @@ def test_managed_hooks_refuse_a_lane(env, mac):
     ("settings.json", {"permissions": {"allow": ["WebFetch(https://example.com/*)"]}}, "allows WebFetch"),
     ("settings.local.json", {"permissions": {"allow": ["WebFetch(domain:example.com)"]}}, "allows WebFetch"),
     ("settings.json", {"sandbox": {"network": {"allowedDomains": []}}}, None),
-    ("settings.json", {"sandbox": {"network": {"allowLocalBinding": False, "allowedDomains": []}}}, None),
-    ("settings.json", {"sandbox": {"enabled": True}, "permissions": {"allow": ["Bash(npm test)", "WebSearch"]}}, None),
+    ("settings.json", {"sandbox": {"network": {"allowLocalBinding": False, "allowedDomains": []}}},
+     "adds sandbox.network.allowLocalBinding"),
+    ("settings.json", {"sandbox": {"enabled": True}, "permissions": {"allow": ["Bash(npm test)", "WebSearch"]}},
+     "adds sandbox.enabled"),
+    ("settings.json", {"sandbox": {}, "permissions": {"allow": ["Bash(npm test)", "WebSearch"]}}, None),
 ])
 def test_settings_that_could_widen_a_lane_refuse_it(env, name, data, refused):
     """I1: any non-empty sandbox.network key in user or managed settings refuses (allowUnixSockets, allowAllUnixSockets
@@ -4757,3 +4760,36 @@ def test_an_approved_apple_program_of_this_user_passes_on_a_link_local_address(l
                                    "loopback, as this user while a lane runs (/usr/libexec/sharingd)"]
     approve(APPROVED + [sharingd])
     assert lane.listeners_ok() == (True, [])
+
+
+
+# ---------- Final fix wave, additions: the settings gate covers the whole sandbox block ----------
+
+@pytest.mark.parametrize("name, sandbox, refused", [
+    ("settings.json", {"filesystem": {"allowWrite": ["~"]}}, "adds sandbox.filesystem.allowWrite"),
+    ("settings.local.json", {"excludedCommands": ["npm"]}, "adds sandbox.excludedCommands"),
+    ("settings.json", {"allowUnsandboxedCommands": True}, "adds sandbox.allowUnsandboxedCommands"),
+    ("managed", {"aFutureKey": {"deeper": {"still": 1}}}, "adds sandbox.aFutureKey.deeper.still"),
+    ("settings.json", {"filesystem": {}}, "adds sandbox.filesystem"),
+    ("settings.json", {"network": {"allowedDomains": None}}, "adds sandbox.network.allowedDomains"),
+    ("settings.json", {"filesystem": {"deny Write\n": ["/"]}}, "adds a sandbox key this check doesn't know"),
+    ("settings.json", {"network": {"allowedDomains": []}}, None),
+])
+def test_any_sandbox_key_but_an_empty_allowed_domains_refuses_a_lane(env, name, sandbox, refused):
+    """Addition 1 (ruling): user and managed sandbox keys merge into the worker's sandbox, and excludedCommands run
+    fully outside it, so for a lane any key at any depth refuses, except an empty network.allowedDomains. A key path
+    is quoted back only when every part is a plain word."""
+    path = lane.MANAGED_SETTINGS if name == "managed" else env["home"] / ".claude" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"sandbox": sandbox}))
+    found = lane.settings_widenings()
+    assert found == ([] if refused is None else ["%s %s" % (path, refused)])
+
+
+def test_a_non_lane_workers_sandbox_is_still_what_it_was(env, monkeypatch):
+    """Addition 1: the gate is a lane's only; a worker without a lane is spawned and set up as before."""
+    (env["home"] / ".claude").mkdir()
+    (env["home"] / ".claude" / "settings.json").write_text(json.dumps({"sandbox": {"excludedCommands": ["npm"]}}))
+    monkeypatch.setattr(teamd.Team, "_fill_slots", lambda self: None)
+    team = lane_team(env)
+    assert team.spawn("write docs", "claude")["worker"] == "kaylee"

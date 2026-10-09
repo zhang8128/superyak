@@ -133,10 +133,11 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
   - `mode == "build"`;
   - `sys.platform == "darwin"`;
   - the Claude Code version is at least 2.1.285;
-  - `~/.claude/settings.json`, `settings.local.json` and the managed policy pass an allowlist (final fix wave, I1):
-    no `sandbox.network` key with a value except an empty `allowedDomains` (so no `allowedDomains`,
-    `allowUnixSockets`, `allowAllUnixSockets`, `allowMachLookup`, proxy or later key), and no `WebFetch` allow rule
-    of any form. These merge into the lane's sandbox. (teamd's `allowUnsandboxedCommands: false` makes Claude Code
+  - `~/.claude/settings.json`, `settings.local.json` and the managed policy pass an allowlist (final fix wave, I1,
+    widened by the coordinator's ruling): no `sandbox` key at any depth except an empty `network.allowedDomains` (so
+    no `allowedDomains`, `allowUnixSockets`, `allowAllUnixSockets`, `allowMachLookup`, `filesystem.allowWrite`,
+    `excludedCommands` (which run fully outside the sandbox), `allowUnsandboxedCommands` or later key), and no
+    `WebFetch` allow rule of any form. These merge into the lane's sandbox. Workers without a lane are unchanged. (teamd's `allowUnsandboxedCommands: false` makes Claude Code
     ignore `allowMachLookup` from project and local settings.)
   - A file that exists but can't be read, isn't a JSON object, or holds a `sandbox`, `network` or `permissions` that
     isn't an object, or an `allow` that isn't a list of strings, refuses: the check fails closed.
@@ -323,8 +324,9 @@ the Mac.
     non-loopback address fails, whether or not it carries a lane's environment: a lane process that cleared its
     environment (`env -i`) looks like any other. Another uid's listener there (Tailscale, a root service) stays
     skipped as unreachable. A pid `ps` can't place fails closed. D10 already requires Andy's own services to be
-    stopped while lanes run. An approved Apple program passes there as it does on any port (D11): Apple's per-user
-    agents run as Andy (sharingd keeps AirDrop on a link-local `awdl0` address), and no lane process can be one.
+    stopped while lanes run. **Exception (ruling, kept):** an approved Apple program owned by this uid passes there,
+    as it does on any port (D11): Apple's per-user agents run as Andy (sharingd keeps AirDrop on a link-local `awdl0`
+    address), and a sealed Apple binary can't be a hidden lane process.
   - **I4 (final fix wave ruling):** a listener in lane X's block must carry X's exact `CLAUDE_CODE_TMPDIR`, or be X's
     broker, whose environment holds `TMPDIR=<X>/b`. Anything else fails: another lane's process or broker, a process
     with no lane's environment, one whose environment can't be read.

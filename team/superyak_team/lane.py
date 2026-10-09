@@ -84,9 +84,10 @@ def _claude_dir():
 
 def settings_widenings():
     """What settings outside the lane would merge into its sandbox. The check is an allowlist: in the user's files and
-    the managed one, any sandbox.network key with a value refuses (allowedDomains, allowUnixSockets,
-    allowAllUnixSockets, allowMachLookup, proxies, any key Claude Code adds later), except an empty allowedDomains; any
-    WebFetch allow rule widens the lane's network too. A managed policy's hooks run outside the sandbox with the lane's
+    the managed one, any sandbox key at any depth refuses (network keys, filesystem.allowWrite, excludedCommands, which
+    run fully outside the sandbox, allowUnsandboxedCommands, any key Claude Code adds later), except an empty
+    network.allowedDomains; any WebFetch allow rule widens the lane's network too. Workers without a lane never call
+    it. A managed policy's hooks run outside the sandbox with the lane's
     environment even under disableAllHooks. A file that exists but can't be read, or holds a sandbox, network,
     permissions or allow list of the wrong shape, counts as a widening: the check fails closed. Only plain-word key
     names are quoted back (this text reaches the lead)."""
@@ -120,18 +121,27 @@ def _widenings(data, managed):
         return ["can't be read (its permissions.allow isn't a list)"]
     if not all(isinstance(rule, str) for rule in allow):
         return ["can't be read (its permissions.allow holds a rule that isn't a string)"]
-    out = []
-    for key, value in network.items():
-        if not value:                                   # an empty list, an empty object, false or null widens nothing
-            continue
-        out.append("adds sandbox.network.%s" % key if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", key)
-                   else "adds a sandbox.network key this check doesn't know")
+    out = ["adds sandbox.%s" % ".".join(keys) if all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", k) for k in keys)
+           else "adds a sandbox key this check doesn't know" for keys in _sandbox_keys(sandbox)]
     if any(rule == "WebFetch" or rule.startswith("WebFetch(") for rule in allow):
         out.append("allows WebFetch")
     if managed and data.get("hooks"):
         out.append("defines hooks, which Claude Code runs outside the sandbox with the lane's environment even under "
                    "disableAllHooks")
     return out
+
+
+def _sandbox_keys(sandbox, above=()):
+    """Every key path in a sandbox block, down to its leaves (an empty object is a leaf), except the one a lane allows:
+    network.allowedDomains holding an empty list."""
+    for key, value in sandbox.items():
+        keys = above + (str(key),)
+        if keys == ("network", "allowedDomains") and value == []:
+            continue
+        if isinstance(value, dict) and value:
+            yield from _sandbox_keys(value, keys)
+        else:
+            yield keys
 
 
 def check_spawn(cfg, kind, mode):
