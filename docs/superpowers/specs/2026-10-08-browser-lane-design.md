@@ -325,15 +325,52 @@ unfiltered error path printed other apps' denials, including file names from Mai
 the Mac.
 
 **The listener check (D9)** (`lane.listeners_ok(team)`, run by teamd outside every sandbox):
-- **What it reads:** every listening TCP socket on the machine, whoever owns it. Run as the user, `lsof` only sees the
-  user's own processes, which would leave root's listeners invisible. So the check enumerates with
-  `netstat -anv -p tcp`, which lists every listening socket with its pid, and identifies each pid by its full
-  executable path with `proc_pidpath()` (D11).
-  - `lsof -nP -iTCP -sTCP:LISTEN` is only a cross-check for the user's own processes.
-  - A listening socket whose process can't be identified fails the check.
-  - When either command fails, the result is "not ok".
-  - Acceptance step 4 also shows that a root-owned listener is seen; for example, Printer Sharing's port 631, if it is
-    on, or a listener the run starts with `sudo`.
+- **Amendment (2026-10-09, Rio Grande's ruling on macOS 27; it replaces netstat as the source).** Measured on macOS
+  27.0.1 (26A434) as uid 501: `netstat -anv -p tcp` prints nothing and exits 0, `netstat -an` has no Internet section,
+  and `sysctl net.inet.tcp.pcblist_n` is empty while `net.inet.tcp.pcbcount` is 621. The kernel no longer shows a
+  user any TCP socket list, so netstat can't be the source, and its empty output must never read as "nothing
+  listens". `nettop -L 1 -n -m tcp` still lists every process's sockets, root's included (launchd, pid 1, on
+  `::1.8021` and `127.0.0.1:8021`). **The scan decides what is reachable; lsof and nettop only name owners.
+  Nothing that only names an owner can ever make a port safe.** One code path on macOS: netstat is gone, with no
+  fallback branch.
+- **What is reachable: the loopback scan** (teamd, unsandboxed, TCP).
+  - **Addresses:** every address `getifaddrs()` reports on the loopback interface (lo0). Today that's `127.0.0.1`,
+    `::1` and `fe80::1%lo0` (measured). Any other address there, an alias such as `127.0.0.2`, refuses the check
+    and is named: a listener there would be outside what the scan covers. If `::1` isn't configured, it's skipped,
+    with the reason shown. Any other errno refuses.
+  - **Ports:** all of 1–65535 on each address, with non-blocking connects in batches and a short deadline per batch.
+    The scan first raises `RLIMIT_NOFILE`'s soft limit up to the hard limit, since a launchd process gets 256. Each
+    socket is closed at once, and nothing is sent. The scan also has an overall deadline; a scan that doesn't
+    finish refuses. Measured: 127.0.0.1 and ::1 in 2.1 s, finding exactly the 26 reachable ports nettop listed.
+  - **Verdicts:** only `ECONNREFUSED` means closed. A completed connect is a listener. A connect still pending at
+    the batch deadline, or any other error, also counts as a listener and refuses unless it's named. So a worker
+    that fills a backlog to drop SYNs can't hide.
+    - **Measured:** macOS drops a SYN to a port that is bound but not listening (no RST, unlike Linux). Such a socket
+      therefore reads as a listener and refuses unless it's named. The full scan found none on this Mac. Ruling
+      requested: name it or let it refuse.
+    - A listener whose backlog is never accepted (`listen(0)`) still completed six connects here. Either outcome
+      counts.
+  - **The lane's own ports** are scanned like any other, the broker's included, and attributed as before by
+    environment and broker family (I4).
+- **Who owns each reachable port: naming.**
+  - **This uid:** `lsof -nP -iTCP -sTCP:LISTEN` is authoritative for this uid's listeners, with their addresses.
+    The I3 rule stays: while a lane is live, this uid listening on any specific non-loopback address fails.
+  - **Other uids:** `nettop -L 1 -n -m tcp`, Listen rows only. The parser is strict and fails closed:
+    - it needs the exact header recorded for the macOS build it was measured on;
+    - each process line is `<name>.<pid>`, with the pid as the trailing digits, since names hold dots, spaces and
+      even commas;
+    - each socket row follows its process line.
+    
+    An unknown header, a row in a listen section it can't read completely, or a pid it can't place leaves the ports it
+    would have named unnamed. nettop's name field is never trusted for anything.
+  - **Paths:** each owner is identified by `proc_pidpath(pid)`, never by a name, and D10 and D11 apply as before:
+    an Apple program in `/System`, `/usr/libexec`, `/usr/sbin` or `/sbin` on the approved list passes on any port.
+  - **A reachable port that neither source names** is "can't be identified" and refuses the lane. That includes an
+    owner whose path `proc_pidpath` can't give.
+  - **A port nettop lists that the scan couldn't reach** is skipped. That's root's, or another uid's, on a specific
+    non-loopback address, as before.
+  - Acceptance step 4 shows root's listener three ways: reachable by the scan, named by nettop with uid 0, and absent
+    from the user's lsof. The person flow (`sudo nc`) is unchanged and now proves both the scan and nettop.
 - **What passes:** a listener passes when its port is in a live lane's block, or when it matches an entry on the
   approved list, `~/.superyak/team/lane-listeners.json`. Only the person edits that file; it is never a team key.
   Under D10 and D11, an entry is an Apple program's executable path, in `/System`, `/usr/libexec`, `/usr/sbin` or
@@ -485,6 +522,11 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
   only as good as the approved list.
+- **The scan covers lo0's own addresses only** (amendment, 2026-10-09). A listener on another 127/8 address needs an
+  alias on lo0 first, which only root can add. The check then refuses because of the alias, before anything listens
+  there. nettop's format is a private tool's output: a macOS update that changes its header makes the check refuse
+  every lane until the parser is measured again, which fails closed, not open. A port opened in the moment between the
+  scan and a turn's start is reachable until the next check, at most 60 s later, as before.
 - The preload is advisory: a worker can start a child without `NODE_OPTIONS`. Binding beyond loopback is caught only
   by the next check (at most 60 s later). The README therefore tells people running lanes to keep the macOS firewall's
   "Block all incoming connections" on.
@@ -618,7 +660,13 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
    - The sweep removes only this team's dead lanes, by exact hash (team `bricks` never touches `bricks-ux`).
 7. **Ports.** Blocks never overlap and lie within 41000–48999. A block is freed only after its lane's cleanup has
    finished, and a block that something else already uses is skipped.
-8. **Listener check** (lsof output fixtures):
+8. **Listener check** (lsof and nettop output fixtures with made-up process names, and the scan against real
+   listeners opened by the test on 127.0.0.1 and ::1; on the Pi nettop is a fixture):
+   - a reachable port nobody names refuses, and so does an lo0 alias; a connect that times out or errs counts as a
+     listener; only `ECONNREFUSED` is closed;
+   - the nettop parser fails closed on an unknown header, a socket row before its process, an unknown tcp row and a
+     process field without its pid; names with dots, spaces and commas keep their trailing pid;
+   - a port nettop names for another uid is judged by `proc_pidpath`, never by its name field;
    - lane ports pass;
    - an approved Apple program passes on any port, and a program that isn't on the list fails;
    - an unknown listener fails, and so does a lane process listening on `*` or on a LAN address;
@@ -698,6 +746,13 @@ The run:
      the first lane's processes. If it can, the build falls back to one browser lane per machine at a time, and the
      spec records it. Workers outside a lane can't connect to localhost, so they don't matter here.
 4. **D9.** Start an unapproved listener: the next lane turn is refused and names it. Approve it, and the turn runs.
+   - **Amendment rows (2026-10-09).**
+     - Root's listener is reachable by the scan, named by nettop with uid 0, and absent from the user's lsof.
+     - A listener whose backlog is full is refused, not missed.
+     - An lo0 alias is refused and named. It needs `sudo ifconfig lo0 alias 127.0.0.2`, which Andy runs and then
+       removes.
+     - Removing a nettop row from the naming (a stubbed nettop) leaves that reachable port unnamed, so the check
+       refuses.
 5. **Two browser workers at once,** on different port blocks, each run Bricks spec 1.
 6. **The Bricks smoke specs,** in order, with the Bricks change:
    - `tests/auth-pages.spec.ts`;
