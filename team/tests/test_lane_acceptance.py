@@ -1587,6 +1587,7 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
             round_name = re_.search(r"worker_probes\.py (\w+)", text).group(1)
             probes = wt / acceptance.PROBE_DIR
             params = json.loads((probes / "params.json").read_text())
+            params["reported"] = dict(re_.findall(r"(\w+)=(\S+)", text.split("worker_probes.py")[-1]))
 
             def go():
                 rows = []
@@ -1612,6 +1613,13 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
     assert ports and not any(lane.PORT_FIRST <= port <= lane.PORT_LAST for port in ports)    # R1: beyond every block
     assert not (wt / ".claude" / "settings.json").exists() and not (wt / ".mcp.json").exists()
     assert not (world["home"] / "superyak-lane-acceptance-widen.txt").exists()
+    # H4: the driver's four plants are judged, and everything it made (settings file, .claude folder, canary) is gone
+    assert {n: v for n, (v, _) in rows.items() if n.startswith("I5: ") and "Write tool" in n or "headersHelper" in n
+            or "additionalDirectories" in n or "PYTHONPATH" in n} == {
+        "I5: the Write tool, allowed in $HOME by a project rule": "PASS", "I5: additionalDirectories naming $HOME": "PASS",
+        "I5: a marketplace headersHelper": "PASS", "I5: PYTHONPATH in the project settings": "PASS"}
+    assert not (wt / ".claude" / "settings.local.json").exists() and not list(world["home"].glob(".superyak-lane-probe-*"))
+    assert not (world["home"] / "superyak-lane-probe-write").exists()
     assert ("stop", "worker=zoe") in team.calls and not any(t.is_alive() for t in threads)
     assert "127.0.0.1" not in json.dumps(report.rows)                         # the address is never printed
 
@@ -1656,3 +1664,58 @@ def test_the_held_lane_turn_opens_ts_tsx_and_py_files_before_the_c1_snapshot(acc
     for ext in (".ts", ".tsx", ".py"):
         path = probes / ("lsp-probe" + ext)
         assert path.is_file() and str(path) in text and text.index(str(path)) < text.index("Run exactly")
+
+
+# ================= Lane hardening H4: the driver's own plants (more widening, written from outside the worker) =================
+
+def test_h4_the_drivers_plant_widens_four_more_ways(acceptance, tmp_path):
+    """H4: a Write(//<home>/...) allow rule (and its Edit twin), additionalDirectories naming $HOME, an
+    extraKnownMarketplaces entry whose headersHelper touches a marker, and PYTHONPATH in the project settings' env."""
+    home = tmp_path / "home"
+    plants = acceptance.driver_plants(str(tmp_path), str(home), "/tmp/pypath")
+    assert sorted(plants) == [".claude/settings.local.json"]
+    data = json.loads(plants[".claude/settings.local.json"])
+    target = "%s/superyak-lane-probe-write" % home
+    assert "Write(/%s)" % target in data["permissions"]["allow"] and "Edit(/%s)" % target in data["permissions"]["allow"]
+    assert data["permissions"]["additionalDirectories"] == [str(home)]
+    assert data["env"] == {"PYTHONPATH": "/tmp/pypath"}
+    helper = next(iter(data["extraKnownMarketplaces"].values()))["headersHelper"]
+    assert os.access(helper, os.X_OK) and Path(helper).parent == tmp_path
+    subprocess.run([helper], capture_output=True, check=True)
+    assert acceptance.marker_ran(str(tmp_path), "market")
+    assert "superyak-lane-probe-write" in acceptance.driver_message("python3", "/h/.canary")
+    assert "Write tool" in acceptance.driver_message("python3", "/h/.canary")
+
+
+def test_h4_each_plant_is_judged_on_its_own_evidence(acceptance):
+    verdicts = acceptance.driven_verdicts
+    ok = dict(write_exists=False, market_ran=False, nonce="abcdef0123456789",
+              rows=[{"probe": "read_tool report", "expect": "info", "code": 0, "detail": "none"},
+                    {"probe": "PYTHONPATH from project settings", "expect": "fail", "code": 1,
+                     "detail": "refused: FILTERED (not set)", "refusals": ["FILTERED"]}])
+
+    def run(**change):
+        return {name.split(":", 1)[1].strip(): v for name, v, _ in verdicts(**dict(ok, **change))}
+    assert set(run().values()) == {"PASS"} and len(run()) == 4
+    assert run(write_exists=True)["the Write tool, allowed in $HOME by a project rule"] == "FAIL"
+    assert run(market_ran=True)["a marketplace headersHelper"] == "FAIL"
+    leaked = [dict(ok["rows"][0], detail="abcdef01"), ok["rows"][1]]
+    assert run(rows=leaked)["additionalDirectories naming $HOME"] == "FAIL"
+    assert run(rows=[dict(ok["rows"][0], detail="")] + ok["rows"][1:])["additionalDirectories naming $HOME"] == "BROKEN"
+    assert run(rows=[ok["rows"][1]])["additionalDirectories naming $HOME"] == "BROKEN"
+    reached = [ok["rows"][0], dict(ok["rows"][1], code=0, detail="reached")]
+    assert run(rows=reached)["PYTHONPATH in the project settings"] == "FAIL"
+
+
+def test_h4_the_driven_round_reports_the_env_and_what_the_worker_said(tmp_path, monkeypatch):
+    wp = worker_probes_module()
+    rows = []
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    wp.driven_round({"pythonpath": "/tmp/pypath", "reported": {"read_tool": "none"}}, rows)
+    byname = {r["probe"]: r for r in rows}
+    assert byname["read_tool report"]["detail"] == "none" and byname["PYTHONPATH from project settings"]["code"] == 1
+    monkeypatch.setenv("PYTHONPATH", "/x" + os.pathsep + "/tmp/pypath")
+    rows = []
+    wp.driven_round({"pythonpath": "/tmp/pypath", "reported": {}}, rows)
+    assert {r["probe"]: r for r in rows}["PYTHONPATH from project settings"]["code"] == 0
+    assert {r["probe"]: r for r in rows}["read_tool report"]["detail"] == ""
