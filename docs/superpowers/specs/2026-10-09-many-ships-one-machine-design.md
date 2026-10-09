@@ -159,8 +159,12 @@ Each fact below was checked in a throwaway repository with a git worktree and a 
 - **S10. The Andy step is one docking approval.** The Bricks lead runs, from its own session:
 
   ```
-  make -C ~/Projects/superyak dock DOCK_ARGS='--ship serenity-bricks --project ~/Projects/work/hyper/hyper-bricks --hook'
+  make -C ~/Projects/superyak dock DOCK_ARGS='--ship serenity-bricks --project ~/Projects/work/hyper/hyper-bricks --hook --no-service'
   ```
+
+  `--no-service` (Serenity's ruling): serenity-bricks starts without a watcher. Its sessions get the tools and hooks;
+  owner mentions don't start builder runs in hyper-bricks, a shared GitLab repository, until Andy adds the watcher
+  deliberately by docking again without `--no-service`. S4 still defines its service for that day.
 
   The home defaults to `~/.superyak/ships/serenity-bricks`. Andy approves the docking on the Pi with
   `make station-approve ID=<short id>`, or in the browser after checking the code. Then he chooses its rooms, as for
