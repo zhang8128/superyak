@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 import time
+from . import claims
 from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
@@ -31,15 +32,22 @@ UNREACHABLE = 'station-unreachable'  # in the sessions folder; holds the time th
 UNREACHABLE_SECONDS = 60
 
 
-def session_from_stdin(stdin):
-    """The Claude Code session id from the hook's stdin JSON, or None. The one reader of stdin (it can be read once);
-    it must never break the prompt."""
+def hook_input(stdin):
+    """(session id, cwd) from the hook's stdin JSON, each None when absent or odd. The one reader of stdin (it can be
+    read once, R12); it must never break the prompt."""
     try:
         value = json.loads(stdin.read() or 'null')
     except (ValueError, OSError, RecursionError):
-        return None
-    session = value.get('session_id') if isinstance(value, dict) else None
-    return session if isinstance(session, str) and session else None
+        return None, None
+    if not isinstance(value, dict):
+        return None, None
+    session, cwd = value.get('session_id'), value.get('cwd')
+    return (session if isinstance(session, str) and session else None, cwd if isinstance(cwd, str) and cwd else None)
+
+
+def session_from_stdin(stdin):
+    """The Claude Code session id from the hook's stdin JSON, or None (hook_input's first half)."""
+    return hook_input(stdin)[0]
 
 
 TOTAL_CHARS = 9500  # Claude Code caps hook output at 10,000
@@ -96,7 +104,7 @@ def _note_reachability(marker, link, now):
 
 
 def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None,
-        event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic):
+        event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic, cwd=None):
     """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on).
     With a Claude Code session id the messages use that session's cursor on the station (station inbox spec, I8);
     without one they keep the machine-wide time cursor and no instruction notices are given.
@@ -105,8 +113,15 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
     UNREACHABLE_SECONDS after it could not be reached."""
     if os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook'):
         return ''  # inside a watcher run: the messages and the cursor belong to the person's own sessions
-    started = monotonic()
     config_path = Path(config_path)
+    # D7, first: the ship this session started as. Standing down makes no station call, moves no cursor and touches no
+    # session file or unreachable marker (R13); an unreadable registry says so once, at session start (R16).
+    acts, _ = claims.verdict(config_path.parent, claims.session_project(cwd))
+    if acts == 'unreadable':
+        return claims.LOUD if event == 'session-start' else ''
+    if acts != 'act':
+        return ''
+    started = monotonic()
     marker = Path(sessions_dir or config_path.parent / 'sessions') / UNREACHABLE
     if _recently_unreachable(marker, clock()):
         _forget_unless(False, config_path, event, session_id, sessions_dir)

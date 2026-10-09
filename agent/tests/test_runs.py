@@ -307,7 +307,7 @@ SNAPSHOTS = Path(__file__).resolve().parent / 'snapshots'
 
 def test_run_settings_are_what_they_were_before_browser_lanes(monkeypatch):
     """Browser-lane spec, unit test 1: the builder settings and the station's answer settings are byte for byte what
-    they were before lanes existed (snapshots taken with HOME=/home/u)."""
+    they were before lanes existed, plus D7's Read and Grep denies on ~/.superyak (R19) (snapshots taken with HOME=/home/u)."""
     from superyak_agent.runs import builder_settings, read_only_settings
     monkeypatch.setenv('HOME', '/home/u')
     assert json.dumps(builder_settings('/r/wt', '/r/repo'), indent=1) + '\n' == (SNAPSHOTS / 'builder-settings.json').read_text()

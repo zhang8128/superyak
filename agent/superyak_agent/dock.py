@@ -24,7 +24,8 @@ def open_browser(url):
 
 class Dock:
     def __init__(self, station, door=None, ship=None, workspace=None, home=HOME, transport=None, clock=time.time,
-                 sleep=time.sleep, out=functools.partial(print, flush=True), machine=None, open_url=open_browser):
+                 sleep=time.sleep, out=functools.partial(print, flush=True), machine=None, open_url=open_browser, check=None):
+        self.check = check  # a project ship's checks (D7, R9): run again before each poll of a pending docking
         self.station, self.door = station.rstrip('/'), (door or station).rstrip('/')
         self.ship, self.workspace = ship, workspace
         self.transport, self.clock, self.sleep, self.out, self.open_url = transport, clock, sleep, out, open_url
@@ -117,6 +118,8 @@ class Dock:
         client = self._client(self.station)
         pending = read_json(self.docking_path)
         if pending:
+            if self.check is not None:
+                self.check()                # raises claims.Refused, which stops dock before this poll
             status = client.request('GET', f'/api/dockings/{quote(pending["id"])}?secret={quote(pending["secret"])}')
             if status.get('key'):
                 ship = status['ship']

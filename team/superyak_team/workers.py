@@ -308,6 +308,15 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
     deny = ["Read(//**/.env)", "Read(//**/.env.*)", "WebFetch",
             "Bash(git push*)", "Bash(git commit*)", "Bash(git reset*)", "Bash(git rebase*)",
             "Bash(security*)", "Bash(*security *)"]
+    # D7 (S8, S11, R19): workers never use a ship's station tools, even where a claimed project's settings.local.json
+    # (the lead's approvals) allows them, and never read what holds a ship's keys through the file tools: only those
+    # files, never all of ~/.superyak, where the watcher's runs and teamd's rooms work (a deny beats every allow and
+    # reaches the OS sandbox). `//` is absolute.
+    superyak = os.path.join(home, ".superyak")
+    keys = [os.path.join(superyak, name) for name in ("station.json", "docking.json", "access-request.json", "invitation.txt")]
+    keys += [os.path.join(superyak, "ships", "**"), os.path.join(superyak, "*.bak-superyak"),
+             os.path.join(home, ".claude", "*.bak-superyak")]
+    deny += ["mcp__station"] + ["%s(/%s)" % (tool, path) for path in keys for tool in ("Read", "Grep")]
     if mode == "collab":
         deny += ["Edit", "Write", "NotebookEdit"]
         allow_write = []

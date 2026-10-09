@@ -242,6 +242,9 @@ class Machine:
         monkeypatch.setattr(install, 'platform', SimpleNamespace(system=lambda: 'Linux'))
         self.config = self.home / '.superyak' / 'station.json'
         write_private(self.config, {'station': 'http://station', 'key': 'k', 'ship': 'serenity'})
+        # a ship that already has a mention cursor, as every docked ship had before R22: the service installs with no
+        # station call (test_ship_homes covers the first install)
+        write_private(self.config.parent / 'ship-state.json', {'mention_seq': 0})
 
     def run(self, argv, **kwargs):
         argv = [str(a) for a in argv]

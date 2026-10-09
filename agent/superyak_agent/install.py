@@ -31,8 +31,8 @@ def systemd_unit(argv, path_env):
         '[Install]', 'WantedBy=default.target', ''])
 
 
-def launchd_plist(argv, path_env, log_path):
-    return plistlib.dumps({'Label': LABEL, 'ProgramArguments': [str(a) for a in argv], 'EnvironmentVariables': {'PATH': path_env},
+def launchd_plist(argv, path_env, log_path, label=LABEL):
+    return plistlib.dumps({'Label': label, 'ProgramArguments': [str(a) for a in argv], 'EnvironmentVariables': {'PATH': path_env},
                            'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 10,
                            'StandardOutPath': str(log_path), 'StandardErrorPath': str(log_path)})
 
@@ -107,9 +107,11 @@ def _same_hook(command, wanted):
     return command == wanted or kind(command) == kind(wanted)
 
 
-def install_hooks(settings_path, config_path, messages):
+def install_hooks(settings_path, config_path, messages, backup=None):
     """Install the station's SessionStart (instructions) and UserPromptSubmit hooks. Returns the list of what
-    changed: 'SessionStart', 'UserPromptSubmit' and, when a messages-on prompt hook was replaced, 'messages-off'."""
+    changed: 'SessionStart', 'UserPromptSubmit' and, when a messages-on prompt hook was replaced, 'messages-off'.
+    The first time it changes an existing file it copies it to `backup` (default: beside it; a project ship's goes to
+    its home, never into the repository, R6)."""
     settings_path = Path(settings_path)
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     changes = []
@@ -129,8 +131,9 @@ def install_hooks(settings_path, config_path, messages):
         settings['hooks'][event] = kept
         changes.append(event)
     if changes:
-        backup = settings_path.with_name(settings_path.name + '.bak-superyak')
+        backup = Path(backup) if backup is not None else settings_path.with_name(settings_path.name + '.bak-superyak')
         if settings_path.exists() and not backup.exists():
+            backup.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copy2(settings_path, backup)
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         _write_settings(settings_path, settings)
@@ -219,11 +222,15 @@ def remove_codex(config_path, name):
     return True
 
 
-def register_claude(name, argv, out):
+def register_claude(name, argv, out, cwd=None):
+    """User-scope tools. `claude mcp get` answers for its working directory, so the machine ship's calls run in
+    ~/.superyak, outside every claimed project, where a local station would hide the user one (R7)."""
+    cwd = str(cwd) if cwd is not None else None
     try:
-        if subprocess.run(['claude', 'mcp', 'get', name], capture_output=True).returncode == 0:
+        if subprocess.run(['claude', 'mcp', 'get', name], capture_output=True, cwd=cwd).returncode == 0:
             return
-        subprocess.run(['claude', 'mcp', 'add', '--scope', 'user', name, '--', *[str(a) for a in argv]], check=True, capture_output=True)
+        subprocess.run(['claude', 'mcp', 'add', '--scope', 'user', name, '--', *[str(a) for a in argv]], check=True,
+                       capture_output=True, cwd=cwd)
     except (subprocess.SubprocessError, OSError) as error:
         out(f'Could not register the {name} tools with Claude Code ({_reason(error)}). Run make dock again to retry.')
         return
@@ -266,24 +273,35 @@ def _setup_adna(root):
     return dist
 
 
-def install_service(argv, out, system=None):
+def service_names(home):
+    """S4: (launchd label, systemd unit, log) of the ship whose home this is. The machine ship's are today's; a project
+    ship's come from its name, so two ships' watchers never share a label, a unit or a log."""
+    from .claims import kind_of
+    home = Path(home)
+    if kind_of(home) == 'project':
+        return f'{LABEL}.{home.name}', f'superyak-ship-{home.name}.service', home / 'ship.log'
+    return LABEL, UNIT, Path.home() / '.superyak' / 'ship.log'
+
+
+def install_service(argv, out, system=None, names=None):
     system = system or platform.system()
+    label, unit_name, log = names or (LABEL, UNIT, Path.home() / '.superyak' / 'ship.log')
     path_env = os.environ.get('PATH', '/usr/bin:/bin')
     if system == 'Linux':
-        unit = Path.home() / '.config' / 'systemd' / 'user' / UNIT
+        unit = Path.home() / '.config' / 'systemd' / 'user' / unit_name
         unit.parent.mkdir(parents=True, exist_ok=True)
         unit.write_text(systemd_unit(argv, path_env))
         subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
-        subprocess.run(['systemctl', '--user', 'enable', UNIT], check=True, capture_output=True)
-        subprocess.run(['systemctl', '--user', 'restart', UNIT], check=True)
+        subprocess.run(['systemctl', '--user', 'enable', unit_name], check=True, capture_output=True)
+        subprocess.run(['systemctl', '--user', 'restart', unit_name], check=True)
         if subprocess.run(['loginctl', 'enable-linger'], capture_output=True).returncode:
             out('Could not enable linger; the watcher runs only while you are logged in.')
     elif system == 'Darwin':
-        plist = Path.home() / 'Library' / 'LaunchAgents' / f'{LABEL}.plist'
+        plist = Path.home() / 'Library' / 'LaunchAgents' / f'{label}.plist'
         plist.parent.mkdir(parents=True, exist_ok=True)
-        plist.write_bytes(launchd_plist(argv, path_env, Path.home() / '.superyak' / 'ship.log'))
+        plist.write_bytes(launchd_plist(argv, path_env, log, label=label))
         domain = f'gui/{os.getuid()}'
-        subprocess.run(['launchctl', 'bootout', f'{domain}/{LABEL}'], capture_output=True)
+        subprocess.run(['launchctl', 'bootout', f'{domain}/{label}'], capture_output=True)
         subprocess.run(['launchctl', 'bootstrap', domain, str(plist)], check=True)
     else:
         out(f'Start the watcher yourself: {shlex.join(str(a) for a in argv)}')
@@ -291,11 +309,51 @@ def install_service(argv, out, system=None):
     out('The watcher is running; it answers mentions within about 30 seconds.')
 
 
+def remove_service(names, system=None):
+    """Stop and remove one ship's watcher service, by its names (S4), and nothing else."""
+    label, unit_name, _ = names
+    system = system or platform.system()
+    if system == 'Linux':
+        subprocess.run(['systemctl', '--user', 'disable', '--now', unit_name], capture_output=True)
+        (Path.home() / '.config' / 'systemd' / 'user' / unit_name).unlink(missing_ok=True)
+        subprocess.run(['systemctl', '--user', 'daemon-reload'], capture_output=True)
+    elif system == 'Darwin':
+        subprocess.run(['launchctl', 'bootout', f'gui/{os.getuid()}/{label}'], capture_output=True)
+        (Path.home() / 'Library' / 'LaunchAgents' / f'{label}.plist').unlink(missing_ok=True)
+
+
 def hook_command(config_path):
     return shlex.join([sys.executable, str(RUN_AGENT), 'hook', '--config', str(config_path)])
 
 
-def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
+def start_at_newest_mention(config_path, state_path, client, out):
+    """R22: a ship whose watcher state has no mention cursor would answer every mention since docking (the cursor
+    starts at 0), so the first service install reads the mentions to the end and stores the newest. A ship that has a
+    cursor is left alone. True when the watcher may be installed."""
+    try:
+        state = read_json(state_path, {}) or {}
+        if not isinstance(state, dict):
+            raise ValueError('ship-state.json is not an object')
+        if 'mention_seq' in state:
+            return True
+        client = client or client_for(read_json(config_path))
+        newest = 0
+        while True:
+            rows = client.mentions(newest)
+            seqs = [int(row['seq']) for row in rows or []]
+            if not seqs or max(seqs) <= newest:
+                break
+            newest = max(seqs)
+    except (StationError, OSError, ValueError, KeyError, TypeError) as error:
+        out(f"Could not read this ship's mentions on the station ({_reason(error)}), so the watcher was not installed: "
+            'it would have answered every mention since docking. Run make dock again.')
+        return False
+    write_private(state_path, {**state, 'mention_seq': newest})
+    out(f"The watcher starts after mention {newest}; earlier mentions won't be answered.")
+    return True
+
+
+def install_all(config_path, *, hook=False, adna=True, service=True, out=print, client=None):
     """The required steps come first so that nothing optional can hold them up: the watcher's tool config
     (without aDNA), the station tools for Claude Code and Codex, the hook, the watcher service. Then the
     optional aDNA tools; if they install, the watcher's tool config is rewritten to include them (each run
@@ -304,7 +362,7 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
     home, mcp_argv = config_path.parent, [sys.executable, str(RUN_AGENT), 'mcp', '--config', str(config_path)]
     write_private(home / 'run-mcp.json', run_mcp_config(config_path))
     if shutil.which('claude'):
-        register_claude('station', mcp_argv, out)
+        register_claude('station', mcp_argv, out, cwd=home)
     else:
         out('Claude Code not found; skipped registering the station tools for it.')
     codex = Path.home() / '.codex' / 'config.toml'
@@ -321,19 +379,23 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
             out('Room messages will no longer appear in Claude Code sessions (instructions still load).')
         elif changes:
             out('Added the station hooks: instructions load at the start of each Claude Code session.')
-    if service:
+    if service and start_at_newest_mention(config_path, home / 'ship-state.json', client, out):
         install_service([sys.executable, str(RUN_AGENT), 'watch', '--config', str(config_path),
-                         '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out)
+                         '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out,
+                        names=service_names(home))
     adna_dist = setup_adna(out) if adna else None
     if adna_dist:
         write_private(home / 'run-mcp.json', run_mcp_config(config_path, adna_dist))
         out('Added the aDNA tools to the watcher.')
         if shutil.which('claude'):
-            register_claude('adna', [shutil.which('node'), adna_dist], out)
+            register_claude('adna', [shutil.which('node'), adna_dist], out, cwd=home)
 
 
 def uninstall_all(config_path, out=print):
+    from .claims import kind_of
     config_path = Path(config_path)
+    if kind_of(config_path.parent) == 'project':
+        return uninstall_project(config_path.parent, out)
     config = read_json(config_path)
     revoked = None  # None: there was no key to revoke
     if config and config.get('key'):
@@ -353,7 +415,9 @@ def uninstall_all(config_path, out=print):
         subprocess.run(['launchctl', 'bootout', f'gui/{os.getuid()}/{LABEL}'], capture_output=True)
         (Path.home() / 'Library' / 'LaunchAgents' / f'{LABEL}.plist').unlink(missing_ok=True)
     if shutil.which('claude'):
-        subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True)
+        # from ~/.superyak, outside every claim (R7); from HOME when that folder is already gone (review 487c070b)
+        cwd = config_path.parent if config_path.parent.is_dir() else Path.home()
+        subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True, cwd=str(cwd))
     remove_codex(Path.home() / '.codex' / 'config.toml', 'station')
     local = 'watcher stopped, station tools and hook removed'
     try:
@@ -369,3 +433,69 @@ def uninstall_all(config_path, out=print):
         out(f'Undocked on this machine ({local}), but the key was NOT revoked on the station: ask an admin to revoke it.')
     else:
         out(f'Undocked: {"key revoked, " if revoked else ""}{local}.')
+
+
+def _revoke(config, out):
+    """None when there was no key, True when it's revoked (or the station already refuses it), False otherwise."""
+    if not (config and config.get('key')):
+        return None
+    try:
+        client_for(config).revoke_key()
+        return True
+    except (StationError, OSError) as error:
+        if isinstance(error, StationError) and error.status == 401:
+            return True
+        out(f'Could not revoke the key on the station ({error}); ask an admin to revoke it under Connections → Ships.')
+        return False
+
+
+def uninstall_project(home, out=print):
+    """S10, R21: a project ship's undock touches only its own: its key, its service, its local station (from its
+    project root), its hooks in the project's settings.local.json, the station table of its Codex profile (the file
+    only when then empty), its home's files, and last its claim, in one lock hold. It finds the project in
+    <home>/claim.json, so it works with the registry unreadable and with no claim at all."""
+    from . import claims
+    home = Path(home)
+    config = read_json(home / 'station.json') if (home / 'station.json').exists() else None
+    claim = claims.read_json_quiet(home / 'claim.json')
+    root = Path(claim['root']) if isinstance(claim, dict) and isinstance(claim.get('root'), str) else None
+    revoked = _revoke(config, out)
+    remove_service(service_names(home))
+    notes = []
+    if root is not None and root.is_dir():
+        if shutil.which('claude'):
+            subprocess.run(['claude', 'mcp', 'remove', '--scope', 'local', 'station'], capture_output=True, cwd=str(root))
+        try:
+            settings = root / '.claude' / 'settings.local.json'
+            if settings.exists():
+                remove_hooks(settings)
+        except (OSError, ValueError, AttributeError, TypeError) as error:
+            notes.append(f'its hooks stay in {root}/.claude/settings.local.json ({_reason(error)}); remove the entries '
+                         'that run run_agent.py hook')
+    elif root is not None:
+        notes.append(f'its project {root} is gone, so its local station tools and hooks there were not touched')
+    profile = Path.home() / '.codex' / f'{home.name}.config.toml'
+    if remove_codex(profile, 'station') and not profile.read_text().strip():
+        profile.unlink()
+    for path in sorted(home.rglob('*'), reverse=True):
+        if path.name == 'claim.json' and path.parent == home:
+            continue
+        if path.is_dir() and not path.is_symlink():
+            path.rmdir()
+        else:
+            path.unlink()
+    try:
+        claims.unclaim(home)
+    except claims.Unreadable as error:
+        notes.append(f'{error}: its entry there stays until the file is fixed; its claim.json is gone')
+    try:
+        home.rmdir()
+    except OSError:
+        pass
+    local = 'service, station tools, hooks, Codex profile and claim removed'
+    tail = ''.join(f' Note: {note}.' for note in notes)
+    if revoked is False:
+        out(f'Undocked {home.name} on this machine ({local}), but the key was NOT revoked on the station: ask an admin '
+            f'to revoke it.{tail}')
+    else:
+        out(f'Undocked {home.name}: {"key revoked, " if revoked else ""}{local}.{tail}')
