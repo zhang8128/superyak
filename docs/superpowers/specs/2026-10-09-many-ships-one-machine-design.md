@@ -51,7 +51,9 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
   there answered "No MCP server named station". So a claim matched by inode alone would give a moved repository the
   project ship's hooks with the machine ship's tools.
 - **M8. What an MCP server knows.** Claude Code starts MCP servers with cwd set to the session's start directory and
-  passes `CLAUDE_PROJECT_DIR` and the caller's `SUPERYAK_RUN`. Codex's server cwd is not yet measured (Mac acceptance).
+  passes `CLAUDE_PROJECT_DIR` and the caller's `SUPERYAK_RUN`. Codex 0.160.0 starts MCP servers with cwd set to the
+  session's directory: the shell's cwd, or `-C <dir>` when given (measured 2026-10-09 with a server that records its
+  `pwd`, one run each way).
 - **M9. The settings backup lands in the repository.** `install_hooks` on an existing `<repo>/.claude/settings.local.json`
   writes `settings.local.json.bak-superyak` beside it (install.py:132-134). With only `/.claude/settings.local.json`
   excluded and git's user config isolated, `git status --porcelain` showed `?? .claude/`. The backup can hold `env`
@@ -139,8 +141,8 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
     never beside the file in the repository (M9).
   - **Codex (M6):** dock writes the `[mcp_servers.station]` table for this home into `~/.codex/<name>.config.toml`.
     If that file exists, dock changes only that table and keeps the rest; it refuses if the file's `station` table
-    points at another home. The project ship's Codex sessions run `codex -p <name>`; plain `codex` stays the machine
-    ship. Dock prints this.
+    points at another home. The project ship's Codex sessions run `codex -p <name>`; plain `codex` is the machine ship,
+    which refuses inside a claimed project and says to use `-p` (S7). Dock prints this.
   - **The only files dock writes inside a repository's work tree** are `.claude/settings.local.json` and, while it is
     being written, its temporary file; both are excluded before they're written. `info/exclude` is inside `.git`.
   - **aDNA** is machine-wide and unchanged.
@@ -193,12 +195,10 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
   - Both ships' tools are named `station`. In a claimed project the local entry wins (M2) and only one is connected,
     so a Claude Code session never sees both ships. The refusal is what keeps a moved repository (M7) from splitting
     hooks and tools.
-  - **Codex** depends on where it starts MCP servers, measured in Mac acceptance before build step 5:
-    - (a) in the session's directory: the same rules apply to Codex.
-    - (b) elsewhere: the project ship's Codex profile sets `env = { SUPERYAK_SHIP_CHOSEN = "1" }` for its server.
-      With that variable, the project ship's server skips rule 4, because `codex -p <name>` is the person's explicit
-      choice; rules 1 and 2 still apply. The machine ship's server can't tell where a Codex session is, so plain
-      `codex` anywhere stays the machine ship (Known limits).
+  - **Codex** starts MCP servers in the session's directory (M8), so the same rules apply to Codex: plain `codex` in a
+    claimed project is refused by rule 3 and told to run `codex -p <ship>`, and `codex -p <ship>` outside its claim is
+    refused by rule 4. Mac acceptance re-checks M8 on the Codex version present before build step 5; if a later Codex
+    starts servers elsewhere, the build stops there and the spec is revised.
 - **S8. teamd workers (corrected by M1).**
   - Worktrees don't copy untracked files, but Claude Code reads the *main checkout's* `settings.local.json` from a
     worktree (M1). So a teamd Claude worker in a hyper-bricks worktree loads serenity-bricks's hooks and its local
@@ -408,8 +408,9 @@ backlog. These change on that day and must be settled first:
 
 ## Known limits
 
-- **Codex chooses its ship per invocation** (`codex -p serenity-bricks`). Under S7 (b), a plain `codex` session in
-  hyper-bricks acts as Serenity and nothing refuses it.
+- **Codex chooses its ship per invocation** (`codex -p serenity-bricks`), not by where it starts. A plain `codex` in
+  hyper-bricks gets the machine ship's server, which refuses every call there (S7 rule 3) rather than acting as
+  Serenity; the person has to restart with `-p`. This rests on M8, re-checked per Codex version.
 - **A session's ship is fixed by where it started.** A session started outside hyper-bricks acts as Serenity even while
   it edits hyper-bricks files. Mac acceptance records what `/cd` does.
 - **Claims are per clone.** A second clone of hyper-bricks elsewhere is unclaimed until it's docked too. Worktrees of
