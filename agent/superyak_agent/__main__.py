@@ -74,10 +74,10 @@ def _hook(parser, argv):
     """Claude Code hook: unknown flags are ignored and nothing may break the prompt, so it always exits 0."""
     try:
         import os
-        from .hook import run, session_from_stdin
+        from . import hook
         args, _ = parser.parse_known_args(argv)
-        session_id = None if sys.stdin.isatty() else session_from_stdin(sys.stdin)
-        text = run(args.config, session_id=session_id,
+        session_id, cwd = (None, None) if sys.stdin.isatty() else hook.hook_input(sys.stdin)
+        text = hook.run(args.config, session_id=session_id, cwd=cwd,
                    event='session-start' if os.environ.get('SUPERYAK_HOOK_EVENT') == 'session-start' else 'prompt',
                    messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
         if text:
@@ -181,13 +181,18 @@ def main(argv=None):
     if args.command in ('status', 'undock') and args.home is not None:
         args.config = args.home / 'station.json'
     if args.command == 'status':
-        from .claims import Unreadable, read_registry, registry_line
-        from .station import StationError, client_for, label, load_config
+        from .claims import Unreadable, read_registry, registry_line, stale_claims
+        from . import station as station_module
+        from .station import StationError, client_for, label
         try:
-            read_registry()                     # R16: named before the config is read or the station is called
+            entries = read_registry()           # R16: named before the config is read or the station is called
         except Unreadable as error:
             print(registry_line(error))
-        config = load_config(args.config)
+            entries = []
+        for entry, why in stale_claims(entries):   # R15
+            print(f"Superyak: {entry['ship']}'s claim on {entry['root']} is stale: {why}. Both ships stay quiet there; "
+                  f"dock {entry['ship']} again (with --project at the repository's new place) to refresh it.")
+        config = station_module.load_config(args.config)
         client = client_for(config)
         me = client.me()
         print(f'{me["name"]} (@{me["username"]}) is docked at {config["station"]}; workspace {config["workspace"]}.')

@@ -90,6 +90,11 @@ def check_mode(ship, home, project):
                 raise Refused(f'The home {home} is a project ship\'s, so it needs --project <repo>.')
             raise Refused(f'Without --project, the home must be {machine} (the machine ship); {ships_root()}/<ship> needs --project.')
         home, kind = machine, 'machine'
+    try:
+        read_registry()         # R16: every dock refuses an unreadable registry, naming it
+    except Unreadable as error:
+        raise Refused(f'{error}. Every station hook on this machine is off until it is fixed; fix or remove it (remove '
+                      'only with no ships/*/claim.json left), then dock again.') from None
     if ship:
         for other, config in local_ships():
             held = config.get('ship')
@@ -286,3 +291,55 @@ def match(entry, root):
     path_ok = entry['root'] == str(Path(os.path.realpath(root)))
     inode_ok = (entry['dev'], entry['ino']) == (st.st_dev, st.st_ino)
     return 'full' if path_ok and inode_ok else 'partial' if path_ok or inode_ok else None
+
+
+LOUD = ("Superyak: ~/.superyak/projects.json can't be read, so the station hooks on this machine are off. "
+        "Run `make dock` for your ship to see why.")
+
+
+def session_project(cwd=None):
+    """The session's project directory: CLAUDE_PROJECT_DIR (where it started, M4, M8), else the cwd given (the
+    hook's stdin cwd, or the MCP server's own)."""
+    return os.environ.get('CLAUDE_PROJECT_DIR') or cwd
+
+
+def verdict(home, project_dir):
+    """Whether the ship whose home this is acts in a session started in `project_dir` (S6, R14, R15, R16):
+    ('act', claim or None), ('claimed', claim) for the machine ship in another ship's project, ('stale', claim) for a
+    partial match, ('elsewhere', claim) for a project ship outside its claim, ('unclaimed', None) for a project ship
+    whose claim.json isn't also, equal, in the registry, or ('unreadable', reason). Never runs git."""
+    try:
+        entries = read_registry()
+    except Unreadable as error:
+        return 'unreadable', str(error)
+    repo = project_root(project_dir) if project_dir else None
+    if kind_of(home) != 'project':
+        for entry in entries if repo is not None else []:
+            found = match(entry, repo.root)
+            if found == 'full':
+                return 'claimed', entry
+            if found == 'partial':
+                return 'stale', entry
+        return 'act', None
+    own = read_json_quiet(Path(home) / 'claim.json')
+    if not isinstance(own, dict) or own not in entries:
+        return 'unclaimed', None
+    found = match(own, repo.root) if repo is not None else None
+    if found == 'full':
+        return 'act', own
+    return ('stale', own) if found == 'partial' else ('elsewhere', own)
+
+
+def stale_claims(entries):
+    """Claims whose root is gone or now holds another folder (a moved repository, a re-clone at the same path, a
+    remount), with why. Both ships go quiet there until the project ship docks again (R15)."""
+    stale = []
+    for entry in entries:
+        try:
+            st = os.stat(entry['root'])
+        except OSError:
+            stale.append((entry, 'its root is gone (moved or removed)'))
+            continue
+        if (st.st_dev, st.st_ino) != (entry['dev'], entry['ino']):
+            stale.append((entry, 'its root now holds another folder (re-cloned or remounted)'))
+    return stale
