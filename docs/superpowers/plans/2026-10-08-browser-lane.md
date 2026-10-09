@@ -4617,7 +4617,7 @@ def prepare_broker(repo, base_commit, worktrees, fetch=None):
     """Everything a broker needs before it starts: lane_node, the pinned Playwright and the checked headless shell.
     One teamd installs at a time. Returns (node_bin, pw_dir, shell_dir)."""
     node_bin = check_lane_node(teamlib.load_config().get("lane_node"), worktrees)
-    with teamlib.locked(broker_root() / ".install.lock"):
+    with install_lock():  # Task 5 fix round: reentrant; teamlib.locked on the same file would deadlock
         pw_dir = pinned_playwright(repo, base_commit, fetch)
         shell_dir, revision = install_headless_shell(node_bin, pw_dir)
         check_manifest(shell_dir, revision)
