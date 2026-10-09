@@ -1824,3 +1824,91 @@ def test_a_carry_conflict_returns_focus_into_the_dialog(browser_peer):
             expect(dialog.get_by_role("alert")).to_contain_text("room brief changed")
             assert page.evaluate("document.activeElement.closest('dialog') !== null")
             assert page.evaluate("document.activeElement.name") == "carry-brief"
+
+
+def two_layers(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    first = store.create_layer(owner, {"title": "Alpha layer", "body": "Alpha body."})
+    second = store.create_layer(owner, {"title": "Beta layer", "body": "Beta body."})
+    return first, second
+
+
+def hold_revisions(page, layer_id):
+    """Hold back the revisions fetch of one layer, so the old editor stays on screen while that layer is opening."""
+    held = []
+    page.route(f"**/api/layers/{layer_id}/revisions", lambda route: held.append(route))
+    return held
+
+
+def test_typing_in_the_old_editor_while_another_layer_opens_stays_with_the_old_layer(browser_peer):
+    """Break caught: while a layer's revisions load the old editor is still on screen but the selection is already the
+    new layer, so the old form's text was filed as the new layer's unsaved edit."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")  # the old editor, still on screen
+            page.get_by_label("Layer title").fill("Alpha typed")
+            assert held
+            for route in held:
+                route.continue_()
+            title = page.get_by_label("Layer title")
+            expect(title).to_have_value("Beta layer")
+            expect(page.locator("section.editor").get_by_text("Unsaved changes")).to_have_count(0)
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha typed")
+            expect(page.locator("section.editor").get_by_text("Unsaved changes", exact=True)).to_be_visible()
+
+
+def test_save_clicked_while_another_layer_opens_sends_nothing_to_the_new_layer(browser_peer):
+    """Break caught: Save in the switching window PUT the old form's values to the layer being opened."""
+    first, second = two_layers(browser_peer)
+    puts = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            page.get_by_label("Layer title").fill("Alpha typed")
+            page.get_by_role("button", name="Save private draft").click()
+            page.wait_for_timeout(300)
+            for route in held:
+                route.continue_()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            page.wait_for_timeout(300)
+    assert not [url for url in puts if second["id"] in url], puts
+    assert browser_peer["app"].state.store.get_layer(browser_peer["users"]["patient"]["id"], second["id"])["title"] == "Beta layer"
+
+
+def test_new_layer_has_the_same_window_closed(browser_peer):
+    """Break caught: the same switch window exists for "New layer", whose editor opens after one fetch."""
+    first, _ = two_layers(browser_peer)
+    puts = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = []
+            page.route("**/api/layers/*/revisions", lambda route: held.append(route))
+            page.get_by_role("button", name="New layer").click()
+            page.wait_for_url(lambda url: "#layers/" in url and first["id"] not in url)
+            page.get_by_label("Layer title").fill("Alpha typed")
+            page.get_by_role("button", name="Save private draft").click()
+            page.wait_for_timeout(300)
+            for route in held:
+                route.continue_()
+            expect(page.get_by_label("Layer title")).to_have_value("Untitled")
+            expect(page.locator("section.editor").get_by_text("Unsaved changes")).to_have_count(0)
+            page.wait_for_timeout(300)
+    assert puts == [], puts
