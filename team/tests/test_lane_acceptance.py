@@ -298,43 +298,47 @@ def test_the_browsers_folder_is_listed_with_anything_besides_the_shell(acceptanc
         [".links (file)", "ffmpeg-1011 (folder)", "link (symlink)"]
 
 
-NETSTAT = """Active Internet connections (including servers)
-Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)      rxbytes   txbytes  rhiwat shiwat    pid   epid state    options           gencnt    flags   flags1 usscnt rtncnt fltrs
-tcp4       0      0  127.0.0.1.8080         *.*                    LISTEN            0         0  131072 131072   4001   4001 00180081 00000006 000000000000a001 00000900 00000001      0      0 000000
-tcp46      0      0  *.49152                *.*                    LISTEN            0         0  131072 131072    612    612 00180081 00000006 000000000000a002 00000900 00000001      0      0 000000
-tcp4       0      0  127.0.0.1.5000         127.0.0.1.50000        ESTABLISHED       0         0  131072 131072    777    777 00180081 00000006 000000000000a003 00000900 00000001      0      0 000000
-tcp6       0      0  ::1.631                *.*                    LISTEN            0         0  131072 131072    300    300 00180081 00000006 000000000000a004 00000900 00000001      0      0 000000
-tcp4       0      0  *.9000                 *.*                    LISTEN            0         0  131072 131072    999    999 00180081 00000006 000000000000a005 00000900 00000001      0      0 000000
-"""
-NETSTAT_NAMED = NETSTAT.replace("(state)      rxbytes", "(state)      rxbytes").replace(
-    "  pid   epid state", " process:pid   epid state").replace("   4001   4001", " Google Chrome He:4001   4001").replace(
-    "    612    612", " rapportd:612    612").replace("    300    300", " cupsd:300    300").replace(
-    "    999    999", " my-secret-app:999    999")
+NETTOP_HEAD = ("time,,interface,state,bytes_in,bytes_out,rx_dupe,rx_ooo,re-tx,rtt_avg,rcvsize,tx_win,tc_class,tc_mgt,"
+               "cc_algo,P,C,R,W,arch,")
 
 
-def test_the_netstat_fixture_keeps_apple_names_and_redacts_the_rest(acceptance):
-    paths = {612: "/usr/libexec/rapportd", 300: "/usr/sbin/cupsd", 4001: "/Applications/Google Chrome.app/x",
+def nt_process(name, pid):
+    return "09:51:18.309299,%s.%d,,,0,0,0,0,0,,,,,,,,,,,," % (name, pid)
+
+
+def nt_socket(proto, local, state="Listen", foreign=None):
+    foreign = foreign or ("*:*" if proto == "tcp4" else "*.*")
+    return "09:51:18.244171,%s %s<->%s,lo0,%s,,,,,,,,,,-,cubic,-,-,-,-,so," % (proto, local, foreign, state)
+
+
+# Made-up processes in nettop's measured shape: an Apple one, a browser helper, root's cupsd and a private app.
+NETTOP = "\n".join([NETTOP_HEAD,
+                    nt_process("Example Browser Helper", 4001), nt_socket("tcp4", "127.0.0.1:8080"),
+                    nt_process("rapportd", 612), nt_socket("tcp4", "*:49152"), nt_socket("tcp6", "*.49152"),
+                    nt_process("dbsvc", 777), nt_socket("tcp4", "127.0.0.1:5000", "Established", "127.0.0.1:50000"),
+                    nt_process("cupsd", 300), nt_socket("tcp6", "::1.631"),
+                    nt_process("my-secret-app", 999), nt_socket("tcp4", "*:9000")]) + "\n"
+
+
+def test_the_nettop_fixture_keeps_apple_names_and_redacts_the_rest(acceptance):
+    paths = {612: "/usr/libexec/rapportd", 300: "/usr/sbin/cupsd", 4001: "/Applications/Example Browser.app/x",
              999: "/Users/me/bin/my-secret-app"}
-    lines = acceptance.netstat_fixture(NETSTAT_NAMED, paths.get)
-    assert lines[0].startswith("Proto Recv-Q Send-Q  Local Address") and "process:pid" in lines[0]
-    assert len(lines) == 4                                                   # the header and three LISTEN rows
+    lines = acceptance.nettop_fixture(NETTOP, paths.get)
+    assert lines[0] == NETTOP_HEAD and len(lines) == 7                     # the header and three rows, each after its process
     text = "\n".join(lines)
-    assert "rapportd:612" in text and "cupsd:300" in text
-    assert "Google" not in text and "my-secret-app" not in text and "ESTABLISHED" not in text
-    assert "<name>:4001" in text and "999" not in text                       # one row of each address kind first
-    # the plain `pid` format has no names: nothing to redact, rows kept as they are
-    plain = acceptance.netstat_fixture(NETSTAT, paths.get)
-    assert len(plain) == 4 and "4001" in plain[1]
-    assert acceptance.netstat_fixture("no header here\n", paths.get) is None
+    assert "rapportd.612" in text and "Example" not in text and "my-secret-app" not in text and "Established" not in text
+    assert "<name>.4001" in text                                            # one row of each address kind first
+    assert acceptance.lane.parse_nettop(text) is not None                   # still a fixture the parser reads
+    assert acceptance.nettop_fixture("no header here\n", paths.get) is None
 
 
-def test_the_netstat_capture_writes_a_file_and_names_it(acceptance, tmp_path):
-    dest = tmp_path / "out" / "netstat.txt"
-    verdict, detail = acceptance.capture_netstat(lambda cmd, timeout=60: Ran(0, NETSTAT_NAMED), lambda pid: None, dest)
+def test_the_nettop_capture_writes_a_file_and_names_it(acceptance, tmp_path):
+    dest = tmp_path / "out" / "nettop.txt"
+    verdict, detail = acceptance.capture_nettop(lambda cmd, timeout=60: Ran(0, NETTOP), lambda pid: None, dest)
     assert verdict == "INFO" and str(dest) in detail
-    assert "my-secret-app" not in dest.read_text() and dest.read_text().count("LISTEN") == 3
-    assert acceptance.capture_netstat(lambda cmd, timeout=60: Ran(1, ""), lambda pid: None, dest)[0] == "BROKEN"
-    assert acceptance.capture_netstat(lambda cmd, timeout=60: Ran(0, "garbage\n"), lambda pid: None, dest)[0] == "BROKEN"
+    assert "my-secret-app" not in dest.read_text() and dest.read_text().count(",Listen,") == 3
+    assert acceptance.capture_nettop(lambda cmd, timeout=60: Ran(1, ""), lambda pid: None, dest)[0] == "BROKEN"
+    assert acceptance.capture_nettop(lambda cmd, timeout=60: Ran(0, "garbage\n"), lambda pid: None, dest)[0] == "BROKEN"
 
 
 # ================= Fix round 1: no row passes without proving its property =================
@@ -616,13 +620,24 @@ PS = """  900   1 /usr/bin/sudo -n /usr/bin/nc -l 127.0.0.1 5555
 """
 
 
-def test_a_root_listener_must_be_root_owned_and_invisible_to_lsof(acceptance, monkeypatch):
+def test_a_root_listener_is_reachable_named_by_nettop_and_invisible_to_lsof(acceptance, monkeypatch):
+    """The amendment's three ways: the scan reaches it, nettop names it (uid 0, by ps), the user's lsof can't see it."""
+    named = ([{"pid": 901, "command": "nc", "host": "127.0.0.1", "port": 5555, "family": 4, "state": "Listen"}], "")
+    monkeypatch.setattr(lane, "nettop_sockets", lambda: named)
     monkeypatch.setattr(lane, "lsof_listeners", lambda: {(901, 5555)})
-    verdict, detail = acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0)
-    assert verdict == "BROKEN" and "lsof" in detail                            # lsof sees it: netstat isn't what saw it
+    reach = lambda port: ["127.0.0.1: accepted"]
+    verdict, detail = acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0, reach=reach)
+    assert verdict == "BROKEN" and "lsof" in detail                            # lsof sees it: nettop isn't what named it
     monkeypatch.setattr(lane, "lsof_listeners", lambda: set())
-    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 501)[0] == "BROKEN"
-    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0)[0] == "PASS"
+    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 501, reach=reach)[0] == "BROKEN"
+    verdict, detail = acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0, reach=reach)
+    assert verdict == "PASS" and "the scan reaches it (127.0.0.1: accepted), nettop names it" in detail
+    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0, reach=lambda port: [])[0] == "FAIL"
+    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0, reach=lambda port: None)[0] == "BROKEN"
+    monkeypatch.setattr(lane, "nettop_sockets", lambda: ([], ""))
+    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0, reach=reach)[0] == "FAIL"
+    monkeypatch.setattr(lane, "nettop_sockets", lambda: (None, "header"))
+    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0, reach=reach)[0] == "BROKEN"
 
 
 def test_sudo_is_refreshed_while_the_run_lasts(acceptance):
@@ -653,7 +668,7 @@ def test_cleanup_rows_need_evidence_and_fail_on_leftovers(acceptance, world, mon
     report = acceptance.Report()
     acceptance.check_cleanup(report, "x", w, {5000}, {5000})
     assert [r[2] for r in report.rows if "webServer" in r[1]] == ["BROKEN"]
-    # netstat or lsof unable to say is BROKEN, and a leftover is FAIL
+    # the naming or the scan unable to say is BROKEN, and a leftover is FAIL
     monkeypatch.setattr(lane, "read_listeners", lambda: None)
     monkeypatch.setattr(lane, "lane_pids", lambda path, base: None)
     report = acceptance.Report()
@@ -668,21 +683,18 @@ def test_cleanup_rows_need_evidence_and_fail_on_leftovers(acceptance, world, mon
     assert got["nothing listens on the lane's ports"] == "FAIL" and got["no lane process is left"] == "FAIL"
 
 
-# ---- Important 7: the netstat fixture keeps no private address ----
+# ---- Important 7: the nettop fixture keeps no private address ----
 
-def test_the_netstat_fixture_redacts_lan_and_tailnet_addresses(acceptance):
-    hdr = NETSTAT_NAMED.split("\n")[1]
-    row = lambda addr, name: ("tcp4       0      0  %-22s *.*                    LISTEN            0         0  131072 131072 %s   612 "
-                              "00180081 00000006 000000000000a001 00000900 00000001      0      0 000000" % (addr, name))
-    text = "\n".join(["Active Internet connections (including servers)", hdr,
-                      row("100.101.102.103.8080", "tailscaled:333"), row("192.168.1.23.5000", "rapportd:612"),
-                      row("fe80::1c2b:3aff:fe4d:5e6f%en0.7000", "rapportd:612"), row("127.0.0.1.631", "rapportd:612"),
-                      row("*.49152", "rapportd:612")]) + "\n"
-    lines = acceptance.netstat_fixture(text, lambda pid: "/usr/libexec/rapportd", rows=5)
+def test_the_nettop_fixture_redacts_lan_and_tailnet_addresses(acceptance):
+    text = "\n".join([NETTOP_HEAD, nt_process("meshd", 333), nt_socket("tcp4", "100.101.102.103:8080"),
+                      nt_process("rapportd", 612), nt_socket("tcp4", "192.168.1.23:5000"),
+                      nt_socket("tcp6", "fe80::1c2b:3aff:fe4d:5e6f%en0.7000"), nt_socket("tcp4", "127.0.0.1:631"),
+                      nt_socket("tcp4", "*:49152")]) + "\n"
+    lines = acceptance.nettop_fixture(text, lambda pid: "/usr/libexec/rapportd", rows=5)
     joined = "\n".join(lines)
     for private in ("100.101.102", "192.168.1", "fe80", "5e6f"):
         assert private not in joined
-    assert "<addr>.8080" in joined and "127.0.0.1.631" in joined and "*.49152" in joined
+    assert "<addr>:8080" in joined and "127.0.0.1:631" in joined and "*:49152" in joined
 
 
 # ---- Important 8: --list-listeners and load_approved agree ----
@@ -781,17 +793,25 @@ def test_a_report_spec_fails_a_missing_report_and_untagged_advisories(acceptance
     assert [r[2] for r in report.rows if "outside the agreed set" in r[1]] == ["FAIL"]
 
 
-def test_list_listeners_survives_a_broken_approved_list_and_shows_the_cross_check(acceptance, world, monkeypatch, capsys):
+def test_list_listeners_survives_a_broken_approved_list_and_shows_what_nobody_names(acceptance, world, monkeypatch,
+                                                                                    capsys):
     lane.approved_path().parent.mkdir(parents=True, exist_ok=True)
     lane.approved_path().write_text("{not json")
-    monkeypatch.setattr(lane, "read_listeners", lambda: [{"pid": 612, "command": "", "host": "*", "port": 49152}])
-    monkeypatch.setattr(lane, "pid_path", lambda pid: "/usr/libexec/rapportd")
-    monkeypatch.setattr(lane, "lsof_listeners", lambda: {(612, 49152), (999, 7000)})
+    me = os.getuid()
+    rows = [{"pid": 612, "command": "rapportd", "host": "*", "port": 49152, "family": 4, "uid": me},
+            {"pid": 613, "command": "helper", "host": "192.168.1.5", "port": 7001, "family": 4, "uid": me}]
+    closed = [{"pid": 999, "command": "my-app", "host": "127.0.0.1", "port": 7000, "family": 4, "state": "Closed"}]
+    monkeypatch.setattr(lane, "_named", lambda: (rows, closed, []))
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: {
+        ("127.0.0.1", 49152): "accepted", ("127.0.0.1", 7000): "timed out"})
+    monkeypatch.setattr(lane, "pid_path", lambda pid: {612: "/usr/libexec/rapportd", 999: "/Users/me/my-app"}.get(pid))
     monkeypatch.setattr(lane, "live_lanes", lambda: [(41000, "abc123")])
     acceptance.list_listeners()
     out = capsys.readouterr().out
-    assert "rapportd" in out and "approved list is broken" in out and "approvable" in out
-    assert "41000" in out and "999" in out and "7000" in out
+    assert "rapportd" in out and "approved list is broken" in out and "approvable" in out and "41000" in out
+    assert "192.168.1.5:7001" in out and "beyond loopback" in out                  # this user's, beyond loopback (I3)
+    assert "port 7000 on 127.0.0.1 doesn't answer a connect (it timed out)" in out
+    assert "my-app (pid 999, /Users/me/my-app) holds it in nettop's Closed state" in out
 
 
 def test_a_lane_run_skipped_says_why(acceptance, capsys):
@@ -961,7 +981,7 @@ def test_with_neither_the_root_rows_say_what_to_do(acceptance):
     plan = acceptance.choose_root_listener(read=lambda: [], owner=lambda pid: 501, path_of=lambda pid: "/x",
                                            run=lambda cmd, **k: Ran(1))
     assert plan == {"kind": "person"}                                           # Andy starts one in his own terminal
-    # a netstat that fails is not "none exist": the same plan, never a crash
+    # a naming that fails is not "none exist": the same plan, never a crash
     assert acceptance.choose_root_listener(read=lambda: None, owner=lambda pid: 0, path_of=lambda pid: "/x",
                                            run=lambda cmd, **k: Ran(1))["kind"] == "person"
 
@@ -1198,7 +1218,7 @@ def test_a_broker_is_every_process_on_its_port_not_the_first(acceptance, monkeyp
 # ---- 1. the person plan ----
 
 class PersonWorld:
-    """A fake clock, listener table and owner for the person flow. `script` decides what netstat shows at time t."""
+    """A fake clock, listener table and owner for the person flow: what is named, and reached, at time t."""
 
     def __init__(self, appear_at=None, owner=0, gone_after_stop=None, port=55555):
         self.t, self.port, self.owner = 0.0, port, owner
@@ -1226,6 +1246,9 @@ class PersonWorld:
     def read(self):
         return [{"pid": 4321, "command": "", "host": "127.0.0.1", "port": self.port}] if self.listening() else []
 
+    def reach(self, port):
+        return ["127.0.0.1: accepted"] if self.listening() else []
+
     # the team
     def message(self, wid, text):
         self.inbox.append("LANE WAITING: kaylee waits ...: nc (pid 4321) listens on port %d (/usr/bin/nc)" % self.port)
@@ -1235,14 +1258,15 @@ class PersonWorld:
 
 
 def run_person(acceptance, monkeypatch, world, **kw):
-    monkeypatch.setattr(acceptance, "root_listener_proof", lambda pid, port: ("PASS", "pid %d (uid 0) on port %d" % (pid, port)))
+    monkeypatch.setattr(acceptance, "root_listener_proof", lambda pid, port, **k: ("PASS", "pid %d (uid 0) on port %d" % (pid, port)))
     world.team = SimpleNamespace(message=world.message, wait=world.wait, inbox=world.inbox)
     report = acceptance.Report()
     error = None
     try:
         acceptance.person_root_rows(report, world.team, read=world.read, path_of=lambda pid: "/usr/bin/nc",
                                     owner=lambda pid: world.owner, clock=world.clock, sleep=world.sleep, say=world.say,
-                                    pick_port=lambda: world.port, port_free=lambda port: True, **kw)
+                                    pick_port=lambda: world.port, port_free=lambda port: True,
+                                    reach=kw.pop("reach", world.reach), **kw)
     except RuntimeError as e:
         error = e
     return report, error
@@ -1423,8 +1447,8 @@ def test_listeners_on_a_specific_address_are_listed_by_whose_they_are(acceptance
 
 # ---- T10: the person flow ----
 
-class NetstatGlitch(PersonWorld):
-    """netstat fails (None) for a while after the stop request, then shows the port free."""
+class NamingGlitch(PersonWorld):
+    """The naming fails (None) for a while after the stop request, then shows the port free."""
     def __init__(self, fail_for, **kw):
         super().__init__(**kw)
         self.fail_for = fail_for
@@ -1435,22 +1459,31 @@ class NetstatGlitch(PersonWorld):
         return super().read()
 
 
-def test_person_plan_a_failed_netstat_read_is_not_gone(acceptance, monkeypatch):
-    """T10 (a): a netstat that can't be read says nothing about the listener: the run keeps polling."""
-    world = NetstatGlitch(fail_for=30, appear_at=10, owner=0, gone_after_stop=20)
+def test_person_plan_a_failed_naming_read_is_not_gone(acceptance, monkeypatch):
+    """T10 (a): a naming that can't be read says nothing about the listener: the run keeps polling."""
+    world = NamingGlitch(fail_for=30, appear_at=10, owner=0, gone_after_stop=20)
     never_signals(monkeypatch, acceptance)
     report, error = run_person(acceptance, monkeypatch, world)
     gone = [r for r in report.rows if r[1] == "the root-owned listener is gone"]
     assert error is None and [r[2] for r in gone] == ["PASS"] and world.t >= world.stopped_at + 30
 
 
-def test_person_plan_a_netstat_that_never_reads_again_is_broken_not_gone(acceptance, monkeypatch):
-    world = NetstatGlitch(fail_for=10 ** 6, appear_at=10, owner=0, gone_after_stop=0)
+def test_person_plan_a_naming_that_never_reads_again_is_broken_not_gone(acceptance, monkeypatch):
+    world = NamingGlitch(fail_for=10 ** 6, appear_at=10, owner=0, gone_after_stop=0)
     never_signals(monkeypatch, acceptance)
     report, error = run_person(acceptance, monkeypatch, world)
     last = report.rows[-1]
-    assert last[1] == "the root-owned listener is gone" and last[2] == "BROKEN" and "netstat" in last[3]
+    assert last[1] == "the root-owned listener is gone" and last[2] == "BROKEN" and "couldn't be read" in last[3]
     assert isinstance(error, RuntimeError)
+
+
+def test_person_plan_a_port_the_scan_still_reaches_is_not_gone(acceptance, monkeypatch):
+    """Nothing named any more, but the scan still reaches the port: it isn't gone (the scan decides what is reachable)."""
+    world = PersonWorld(appear_at=10, owner=0, gone_after_stop=0)
+    never_signals(monkeypatch, acceptance)
+    report, error = run_person(acceptance, monkeypatch, world, reach=lambda port: ["127.0.0.1: accepted"])
+    last = report.rows[-1]
+    assert last[1] == "the root-owned listener is gone" and last[2] == "BROKEN" and isinstance(error, RuntimeError)
 
 
 @pytest.mark.parametrize("when", ["waiting for it", "while it is named"])
@@ -1477,7 +1510,7 @@ def test_person_plan_says_stop_after_an_error(acceptance, monkeypatch):
     world = PersonWorld(appear_at=10, owner=0, gone_after_stop=5)
     never_signals(monkeypatch, acceptance)
 
-    def broken(pid, port):
+    def broken(pid, port, **k):
         raise ValueError("lsof printed something odd")
     monkeypatch.setattr(acceptance, "root_listener_proof", broken)
     world.team = SimpleNamespace(message=world.message, wait=world.wait, inbox=world.inbox)
@@ -1988,3 +2021,201 @@ def test_the_ssh_agent_row_says_what_was_tested_or_that_there_is_nothing_to_prot
     verdict, detail = row({}, ["/private/tmp/com.apple.launchd.x/Listeners"])
     assert verdict == "INFO" and "SSH_AUTH_SOCK isn't set" in detail and "launchd" in detail
     assert acceptance.launchd_agent_sockets(Path(short_dir) / "missing") == []
+
+
+# ================= The listener check amendment (2026-10-09): scan, naming, alias, backlog =================
+
+class AliasWorld:
+    """A fake clock and lo0 for the alias rows: the alias appears at `appear_at` and goes `gone_after` seconds after
+    the remove line (None: never)."""
+
+    def __init__(self, appear_at=30, gone_after=20):
+        self.t, self.appear_at, self.gone_after, self.removed_at = 0.0, appear_at, gone_after, None
+        self.said, self.inbox = [], []
+        self.team = SimpleNamespace(message=self.message, wait=lambda wid, states, timeout=900, patient=False: states[0],
+                                    inbox=self.inbox)
+
+    def clock(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+    def say(self, line):
+        self.said.append(line)
+        if "remove it now" in line:
+            self.removed_at = self.t
+
+    def present(self):
+        if self.appear_at is None or self.t < self.appear_at:
+            return False
+        return not (self.removed_at is not None and self.gone_after is not None and self.t >= self.removed_at + self.gone_after)
+
+    def targets(self):
+        refusal = ("the loopback interface lo0 also holds 127.0.0.2 (an alias): a listener there is outside what the "
+                   "loopback scan covers, so the listener check refuses")
+        return [], [], [refusal] if self.present() else []
+
+    def check(self):
+        return (False, [self.targets()[2][0]]) if self.present() else (True, [])
+
+    def message(self, wid, text):
+        self.inbox.append("LANE WAITING: kaylee waits: " + self.targets()[2][0])
+
+    def run(self, acceptance):
+        report = acceptance.Report()
+        error = None
+        try:
+            acceptance.alias_rows(report, self.team, targets=self.targets, check=self.check, clock=self.clock,
+                                  sleep=self.sleep, say=self.say)
+        except RuntimeError as e:
+            error = e
+        return report, error
+
+
+def test_an_lo0_alias_is_refused_by_name_holds_the_lane_and_is_removed(acceptance):
+    world = AliasWorld()
+    report, error = world.run(acceptance)
+    assert error is None and [(r[1], r[2]) for r in report.rows] == [
+        ("an lo0 alias is refused, named", "PASS"), ("it holds the lane, named", "PASS"), ("the lo0 alias is gone", "PASS")]
+    assert world.said[0] == "ANDY ACTION: in your own Terminal run: sudo /sbin/ifconfig lo0 alias 127.0.0.2 up"
+    assert "ANDY ACTION: remove it now: sudo /sbin/ifconfig lo0 -alias 127.0.0.2" in world.said
+
+
+def test_an_alias_that_never_appears_is_broken_and_still_asked_to_go(acceptance):
+    world = AliasWorld(appear_at=None)
+    report, error = world.run(acceptance)
+    assert error is None and report.rows[0][2] == "BROKEN" and world.said[-1].startswith("ANDY ACTION: remove it now")
+
+
+def test_an_alias_never_removed_stops_the_run(acceptance):
+    world = AliasWorld(gone_after=None)
+    report, error = world.run(acceptance)
+    assert isinstance(error, RuntimeError) and report.rows[-1][1:3] == ("the lo0 alias is gone", "BROKEN")
+
+
+def test_the_remove_line_follows_an_interrupt(acceptance):
+    world = AliasWorld()
+
+    def check():
+        raise KeyboardInterrupt
+    world.check = check
+    with pytest.raises(KeyboardInterrupt):
+        world.run(acceptance)
+    assert [line for line in world.said if "remove it now" in line] == [
+        "ANDY ACTION: remove it now: sudo /sbin/ifconfig lo0 -alias 127.0.0.2"]
+
+
+def test_a_full_backlog_is_shown_pending_then_read_as_a_listener(acceptance, monkeypatch):
+    """Ruling 4db21a5e (8): first a direct connect is shown to stay pending, then the scan's own verdict on that port
+    is the evidence (a listener), not lsof's refusal of this user's listener."""
+    answers = iter([True, True, False])
+    monkeypatch.setattr(acceptance.select, "select", lambda r, w, x, t: ([], w if next(answers) else [], []))
+    verdict, detail = acceptance.full_backlog_row(scan=lambda port: {("127.0.0.1", port): "timed out"})
+    assert verdict == "PASS" and "stayed pending after 3" in detail and "timed out" in detail
+    answers = iter([False])
+    assert acceptance.full_backlog_row(scan=lambda port: {})[0] == "FAIL"           # read as closed
+    monkeypatch.setattr(acceptance.select, "select", lambda r, w, x, t: ([], w, []))
+    assert acceptance.full_backlog_row(scan=lambda port: {}, most=3)[0] == "BROKEN"  # never filled
+
+
+def test_a_socket_bound_but_not_listening_row(acceptance, monkeypatch):
+    monkeypatch.setattr(lane, "_on_macos", lambda: True)
+    ports = []
+
+    def check():
+        import gc
+        bound = [o for o in gc.get_objects() if isinstance(o, socket.socket) and o.fileno() != -1
+                 and o.getsockname()[0] == "127.0.0.1"]
+        ports.append(bound[-1].getsockname()[1])
+        return False, ["port %d on 127.0.0.1 doesn't answer a connect (it timed out), and ..." % ports[-1]]
+    assert acceptance.bound_not_listening_row(check=check)[0] == "PASS"
+    assert acceptance.bound_not_listening_row(check=lambda: (True, []))[0] == "FAIL"
+    monkeypatch.setattr(lane, "_on_macos", lambda: False)
+    assert acceptance.bound_not_listening_row()[0] == "INFO"
+
+
+def test_a_listener_beside_an_approved_wildcard_row(acceptance, world, monkeypatch):
+    lane.approved_path().parent.mkdir(parents=True, exist_ok=True)
+    lane.approved_path().write_text(json.dumps(["/usr/libexec/rapportd"]))
+    probe = socket.socket()
+    probe.bind(("0.0.0.0", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    rows = [{"pid": 612, "command": "rapportd", "host": "*", "port": port, "family": 4, "uid": os.getuid()}]
+    monkeypatch.setattr(lane, "pid_path", lambda pid: "/usr/libexec/rapportd")
+    named = lambda: (False, ["python3 (pid %d) listens on port %d (/usr/bin/python3)" % (os.getpid(), port)])
+    verdict, detail = acceptance.beside_a_wildcard_row(check=named, rows=rows)
+    assert verdict in ("PASS", "INFO") and str(port) in detail
+    if verdict == "PASS":
+        assert acceptance.beside_a_wildcard_row(check=lambda: (True, []), rows=rows)[0] == "FAIL"
+    assert acceptance.beside_a_wildcard_row(check=named, rows=[])[0] == "BROKEN"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="lo0's fe80::1 is the Mac's")
+def test_a_link_local_only_listener_row(acceptance, monkeypatch):
+    class Everything(dict):
+        def __contains__(self, key):
+            return True
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: Everything())
+    verdict, detail = acceptance.link_local_row(check=lambda: (False, ["port %d" % p for p in range(1, 65536)]))
+    assert verdict == "PASS" and "reached by the scan" in detail and "Local Network prompt" in detail
+
+
+def test_the_canary_and_nettop_missing_rows(acceptance):
+    assert acceptance.canary_row(check=lambda: (False, ["the scan can't see: it didn't reach ..."]))[0] == "PASS"
+    assert acceptance.canary_row(check=lambda: (True, []))[0] == "FAIL"
+    refused = (False, ["nettop couldn't be read (run), so the listener check fails closed"])
+    assert acceptance.nettop_missing_row(check=lambda: refused)[0] == "PASS"
+    assert acceptance.nettop_missing_row(check=lambda: (True, []))[0] == "FAIL"
+
+
+def test_the_repeat_row_finds_a_phantom(acceptance, monkeypatch):
+    monkeypatch.setattr(lane, "_loopback_addresses", lambda: [(socket.AF_INET, "127.0.0.1", 0, "lo0")])
+    scans = iter([{("127.0.0.1", 631): "accepted"}] * 19 + [{("127.0.0.1", 631): "accepted", ("127.0.0.1", 9): "accepted"}])
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: next(scans))
+    verdict, detail = acceptance.repeat_scan_row(firewall=lambda: "block all: on; stealth: on")
+    assert verdict == "FAIL" and "127.0.0.1:9" in detail and "stealth" in detail
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: {("127.0.0.1", 631): "accepted"})
+    assert acceptance.repeat_scan_row(firewall=lambda: "x")[0] == "PASS"
+
+
+def test_taking_a_nettop_row_away_must_leave_its_port_unidentified(acceptance, monkeypatch):
+    me = os.getuid()
+    rows = [{"pid": 1, "command": "launchd", "host": "::1", "port": 8021, "family": 6, "uid": 0}]
+    sockets = [dict({k: v for k, v in rows[0].items() if k != "uid"}, state="Listen")]
+    monkeypatch.setattr(lane, "_loopback_addresses", lambda: [(socket.AF_INET, "127.0.0.1", 0, "lo0"),
+                                                              (socket.AF_INET6, "::1", 0, "lo0")])
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: {("::1", 8021): "accepted"})
+    monkeypatch.setattr(lane, "_named", lambda: (rows, sockets, []))
+    verdict, detail = acceptance.nettop_row_removed(check=lambda: (False, [
+        "port 8021 on ::1 accepts connections, and no listener there is named (lsof for this user, nettop for "
+        "others), so it can't be identified"]))
+    assert verdict == "PASS" and "pid 1" in detail
+    assert acceptance.nettop_row_removed(check=lambda: (True, []))[0] == "FAIL"
+    rows[0]["uid"] = me                                                        # only this user's: nothing to take away
+    assert acceptance.nettop_row_removed(check=lambda: (True, []))[0] == "BROKEN"
+
+
+def test_the_scan_info_row_says_what_it_scanned(acceptance, monkeypatch):
+    monkeypatch.setattr(lane, "_loopback_addresses", lambda: [(socket.AF_INET, "127.0.0.1", 0, "lo0")])
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: {("127.0.0.1", 631): "accepted"})
+    monkeypatch.setattr(lane, "nettop_sockets", lambda: ([], ""))
+    ticks = iter([0.0, 2.5])
+    verdict, detail = acceptance.listener_scan_info(clock=lambda: next(ticks))
+    assert verdict == "INFO" and "scanned 127.0.0.1 in 2.5 s: 1 reachable; nettop read" in detail and "::1" in detail
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: None)
+    assert acceptance.listener_scan_info()[0] == "BROKEN"
+
+
+def test_cleanup_fails_while_the_scan_reaches_a_lane_port(acceptance, world, monkeypatch):
+    w = {"lane": {"base": 41000, "path": str(world["tmp"] / "gone")}}
+    monkeypatch.setattr(lane, "lane_pids", lambda path, base: set())
+    monkeypatch.setattr(lane, "env_pids", lambda name, value: set())
+    monkeypatch.setattr(lane, "read_listeners", lambda: [])
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: {("127.0.0.1", 41007): "timed out"})
+    report = acceptance.Report()
+    acceptance.check_cleanup(report, "x", w, {5000, 5001}, {5000})
+    row = [r for r in report.rows if "nothing listens" in r[1]][0]
+    assert row[2] == "FAIL" and "127.0.0.1:41007" in str(row[3])
+
