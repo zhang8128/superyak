@@ -359,8 +359,12 @@ the Mac.
 
 **Process cleanup.** When a lane ends, teamd sends SIGTERM, then after 5 s SIGKILL, to the broker's group and to every
 process of this uid that either listens on a port in the lane's block or has its cwd or an open file under the lane
-(`lsof -nP -a -u <uid> -F pn`, matched by string prefix with a trailing `/`, never walking the lane folder), or whose
+(`lsof -nP -a -u <uid> -F pfitn`, matched by string prefix with a trailing `/`, never walking the lane folder), or whose
 environment holds the lane's exact `CLAUDE_CODE_TMPDIR`. This catches Playwright's detached webServer and dev servers, which `killpg` on the worker misses.
+A hard-linked file is never evidence: macOS lsof names a hard-linked file by the path the kernel looked up last, so a
+lane could link a stranger's open file into its folder and get the stranger killed. An open file under the lane counts
+only if `lstat` of its name shows no link, `st_nlink == 1` and the descriptor's inode; a cwd, a listening port in the
+block and the exact `CLAUDE_CODE_TMPDIR` still count.
 
 **Briefs.**
 - `team/superyak_team/roles/browser-lane.md` is a new file, appended to the initial prompt only for browser

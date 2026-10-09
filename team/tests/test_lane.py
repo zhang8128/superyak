@@ -2974,7 +2974,9 @@ def test_a_full_lsof_listing_that_exits_1_fails_closed(env, tmp_root, monkeypatc
 
 def test_the_lane_prefix_match_needs_the_separator_and_teamd_is_never_taken(env, tmp_root, monkeypatch):
     path = lane.ensure_lane("t1", "kaylee")
-    listing = "p111\nn%s/tmp/f\np222\nn%sd/f\np%d\nn%s/b\n" % (path, path, os.getpid(), path)
+    (path / "tmp" / "f").write_text("x")
+    (path / "b" / "f").write_text("x")
+    listing = "p111\nf3\nn%s/tmp/f\np222\nf3\nn%sd/f\np%d\nf3\nn%s/b/f\n" % (path, path, os.getpid(), path)
     lsof_stub(monkeypatch, listing, table="%d 1 %d %d\n" % (os.getpid(), os.getpid(), os.getuid()))
     assert lane.lane_pids(path, None) == {111}
 
@@ -2983,7 +2985,9 @@ def test_lane_pids_spares_teamds_whole_parent_chain(env, tmp_root, monkeypatch):
     path = lane.ensure_lane("t1", "kaylee")
     me, parent = os.getpid(), os.getppid()
     table = "%d %d %d %d\n%d 1 %d %d\n" % (me, parent, me, os.getuid(), parent, parent, os.getuid())
-    listing = "p%d\nn%s/tmp/f\np555\nn%s/tmp/g\n" % (parent, path, path)
+    (path / "tmp" / "f").write_text("x")
+    (path / "tmp" / "g").write_text("x")
+    listing = "p%d\nf3\nn%s/tmp/f\np555\nf3\nn%s/tmp/g\n" % (parent, path, path)
     lsof_stub(monkeypatch, listing, table=table)
     assert lane.lane_pids(path, None) == {555}
 
@@ -5366,3 +5370,82 @@ def test_h5_the_snapshot_keys_stay_in_sorted_order(env, tmp_path):
     for name in ("b/CLAUDE.md", "a/CLAUDE.md", "CLAUDE.md", "AGENTS.md"):
         (wt / name).write_text(name)
     assert list(lane.instruction_snapshot(wt)) == sorted(lane.instruction_snapshot(wt))
+
+
+# ---------- Lane hardening: a hard-linked file is never evidence that a process belongs to the lane ----------
+
+def f_record(pid, fd, kind, inode, name):
+    return "p%d\nf%s\nt%s\ni%d\nn%s\n" % (pid, fd, kind, inode, name)
+
+
+def test_a_holder_of_a_hard_linked_file_is_not_in_the_kill_set(env, tmp_root, short_dir, monkeypatch):
+    """macOS lsof names a hard-linked file by the path the kernel looked up last, so a lane that links a stranger's open
+    file into its tmp/ (and looks it up last through the lane's path) would get the stranger killed. nlink 2 is
+    ambiguous: it never counts."""
+    path = lane.ensure_lane("t1", "kaylee")
+    held = Path(short_dir) / "held.txt"
+    held.write_text("x")
+    linked = path / "tmp" / "linked.txt"
+    os.link(held, linked)
+    os.lstat(linked)                                              # looked up through the lane's path last
+    assert os.lstat(linked).st_nlink == 2
+    lsof_stub(monkeypatch, f_record(777, "3", "REG", os.lstat(linked).st_ino, str(linked)), table="")
+    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
+    assert lane.lane_pids(path, None) == set()
+
+
+def test_a_process_with_a_single_link_file_open_in_the_lane_is_in_the_kill_set(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    own = path / "tmp" / "own.txt"
+    own.write_text("x")
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", os.lstat(own).st_ino, str(own)))
+    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
+    assert lane.lane_pids(path, None) == {777}
+    # the descriptor's inode must be the file's: a different inode under the same name is not this file
+    lsof_stub(monkeypatch, f_record(777, "4", "REG", os.lstat(own).st_ino + 1, str(own)))
+    assert lane.lane_pids(path, None) == set()
+
+
+def test_a_process_with_its_cwd_in_the_lane_is_in_the_kill_set(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    folder = path / "tmp"
+    lsof_stub(monkeypatch, f_record(778, "cwd", "DIR", os.lstat(folder).st_ino, str(folder)))
+    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
+    assert lane.lane_pids(path, None) == {778}
+
+
+def test_a_name_that_vanished_between_lsof_and_lstat_does_not_count(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    gone_file = path / "tmp" / "gone.txt"
+    lsof_stub(monkeypatch, f_record(779, "5", "REG", 12345, str(gone_file)))
+    monkeypatch.setattr(lane, "_process_table", lambda: [(1, 0, 1, os.getuid())])
+    assert lane.lane_pids(path, None) == set()
+    (path / "tmp" / "target").write_text("x")
+    os.symlink("target", path / "tmp" / "link")                    # a link is never followed or counted
+    lsof_stub(monkeypatch, f_record(779, "5", "REG", os.lstat(path / "tmp" / "target").st_ino, str(path / "tmp" / "link")))
+    assert lane.lane_pids(path, None) == set()
+
+
+@pytest.mark.skipif(not shutil.which("lsof"), reason="needs lsof")
+def test_the_real_lsof_and_a_real_hard_link_leave_the_holder_alone(env, tmp_root, short_dir):
+    """The acceptance hardlink-naming case through the real lane_pids and a real lsof: a stranger holds a file open,
+    another name for it is in the lane's tmp/, looked up last."""
+    path = lane.ensure_lane("t1", "kaylee")
+    held = Path(short_dir) / "held.txt"
+    held.write_text("x")
+    holder = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1]); print('ready', flush=True); "
+                               "time.sleep(60)", str(held)], stdout=subprocess.PIPE, text=True, cwd=short_dir)
+    mine = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1], 'w'); print('ready', flush=True); "
+                             "time.sleep(60)", str(path / "tmp" / "own.txt")], stdout=subprocess.PIPE, text=True,
+                            cwd=short_dir)
+    try:
+        assert holder.stdout.readline().strip() == "ready" and mine.stdout.readline().strip() == "ready"
+        os.link(held, path / "tmp" / "linked.txt")
+        os.lstat(path / "tmp" / "linked.txt")
+        pids = lane.lane_pids(path, None)
+        assert holder.pid not in pids and mine.pid in pids, pids
+    finally:
+        for proc in (holder, mine):
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()

@@ -78,7 +78,7 @@ A `managed-mcp.json` refuses lanes, and so does a helper command (`apiKeyHelper`
 the managed policy, a `policyHelper`/`policyHelpers` entry in the managed policy, and any plugin the managed policy
 turns on (`enabledPlugins` true): flag settings can't switch that one off. A settings file of yours or the worktree's
 that could name plugins but can't be fully read (not a regular file, over 1 MB, not JSON) refuses the turn, naming the
-file. A lane also denies writes to the worktree's `.claude/` and `.mcp.json`. Claude Code runs those helpers outside the sandbox with the lane's environment. A lane's own flag settings blank every
+file. When a lane ends, teamd ends the processes that listen in its block, have their cwd under it or hold a file under it open; a hard-linked file is never evidence, so a lane can't get another program killed by linking its open file in. A lane also denies writes to the worktree's `.claude/` and `.mcp.json`. Claude Code runs those helpers outside the sandbox with the lane's environment. A lane's own flag settings blank every
 helper, so one planted in the worktree's `.claude/` doesn't run either.
 
 The broker's stderr is kept in teamd's folder, `~/.superyak/team/<team>/workers/<worker>/broker-stderr.log`, never in

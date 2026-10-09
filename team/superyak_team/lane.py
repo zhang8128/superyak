@@ -2002,10 +2002,48 @@ def _lane_prefixes(path):
     return {str(path), os.path.join(os.path.realpath(parent), *path.relative_to(parent).parts)}
 
 
+def _lsof_descriptors(text):
+    """`lsof -F pfitn` output as (pid, fd, type, inode, name) for every descriptor that has a name. Fields of one
+    descriptor follow its `f` line, in any order."""
+    out, pid, current = [], None, None
+
+    def finish():
+        if current is not None and pid is not None and current.get("n") is not None:
+            out.append((pid, current.get("f"), current.get("t"), current.get("i"), current["n"]))
+    for line in text.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            finish()
+            pid, current = int(line[1:]), None
+        elif line.startswith("f"):
+            finish()
+            current = {"f": line[1:]}
+        elif current is not None and line[:1] in ("t", "i", "n"):
+            current[line[0]] = line[1:]
+    finish()
+    return out
+
+
+def _counts_as_the_lanes(fd, kind, inode, name):
+    """Whether an open descriptor whose name is under the lane is evidence the process belongs to it. A cwd counts
+    (a folder can't be hard-linked). Anything else counts only if its name is, right now, not a link and not a hard
+    link (st_nlink == 1, or a folder), and its inode is the descriptor's when lsof gave one: macOS lsof names a
+    hard-linked file by the path the kernel looked up last, so a lane could otherwise link a stranger's open file
+    into its folder and get the stranger killed. A name that has vanished doesn't count."""
+    if fd == "cwd":
+        return True
+    try:
+        st = os.lstat(name)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode) or (not stat.S_ISDIR(st.st_mode) and st.st_nlink != 1):
+        return False
+    return inode is None or not inode.isdigit() or int(inode) == st.st_ino
+
+
 def lane_pids(path, base):
     """Processes of this uid that listen on a port in the lane's block (base None: no block was allocated), or have
-    their cwd or an open file under the lane. The files come from one `lsof -F pn` over all of this uid's open files,
-    matched by name: the lane folder is never walked. None when lsof or ps can't say."""
+    their cwd or an open file under the lane. The files come from one `lsof -F pfitn` over all of this uid's open files,
+    matched by name, and a file counts only if it is not hard-linked (_counts_as_the_lanes): the lane folder is never walked. None when lsof or ps can't say."""
     lsof = shutil.which("lsof", path=SYSTEM_PATH)
     if not lsof:
         return None
@@ -2022,17 +2060,12 @@ def lane_pids(path, base):
     except (OSError, LaneRefused):
         return None
     if prefixes:
-        r = _run([lsof, "-nP", "-a", "-u", uid, "-F", "pn"])
+        r = _run([lsof, "-nP", "-a", "-u", uid, "-F", "pfitn"])
         if r is None or r.returncode != 0:              # teamd always has open files: 1 means an error here
             return None
-        pid = None
-        for line in r.stdout.splitlines():
-            if line.startswith("p") and line[1:].isdigit():
-                pid = int(line[1:])
-            elif line.startswith("n") and pid is not None:
-                name = line[1:]
-                if any(name == prefix or name.startswith(prefix + "/") for prefix in prefixes):
-                    pids.add(pid)
+        pids |= {pid for pid, fd, kind, inode, name in _lsof_descriptors(r.stdout)
+                 if any(name == prefix or name.startswith(prefix + "/") for prefix in prefixes)
+                 and _counts_as_the_lanes(fd, kind, inode, name)}
     rows = _process_table()
     if not rows:                                         # without ps, teamd's own parents can't be spared
         return None
