@@ -1959,16 +1959,44 @@ def lost_turn(pid, cwd, started, now=None):
 
 ADVISORY_TAG = b"@lane-advisory"
 ADVISORY_MAX_FILES, ADVISORY_MAX_LINE = 20, 160
+ADVISORY_MAX_CHANGED, ADVISORY_TIMEOUT_S = 500, 60
+
+
+def _cat_file_batch(read, shas):
+    """Parse `git cat-file --batch` output (`<sha> <type> <size>\\n<content>\\n` per object) into {sha: bytes}."""
+    blobs, pos = {}, 0
+    for sha in shas:
+        end = read.find(b"\n", pos)
+        header = read[pos:end].split()
+        if end < 0 or len(header) != 3 or header[0].decode("ascii", "replace") != sha or header[1] != b"blob":
+            raise RuntimeError("git cat-file output was not understood for %s" % sha)
+        size = int(header[2])
+        blobs[sha] = read[end + 1:end + 1 + size]
+        pos = end + 1 + size + 1
+    return blobs
 
 
 def advisory_added(path, base, gitdir):
-    """Files whose count of @lane-advisory went up between the base commit and HEAD, as "<file>: <was> -> <now>
-    occurrences" plus the new lines. The advisory set is the base commit's, so the lead reviews any tag a branch
-    adds. It reads blobs as bytes (never a diff, which .gitattributes `-diff`, a NUL byte or a line starting `++ `
-    can blind) through teamd's hardened git. Any git failure raises RuntimeError: the caller tells the lead."""
+    """Files whose @lane-advisory tags changed between the base commit and HEAD: more of them, or tagged lines that
+    weren't tagged at base (a tag moved), as "<file>: <was> -> <now> occurrences" plus the new lines. The advisory
+    set is the base commit's, so the lead reviews any tag a branch adds or moves. It reads blobs as bytes (never a
+    diff, which .gitattributes `-diff`, a NUL byte or a line starting `++ ` can blind), all in one `git cat-file
+    --batch`, through teamd's hardened git without replace refs, under one 60 s deadline and a cap of 500 files.
+    Any git failure or timeout raises RuntimeError: the caller tells the lead."""
+    deadline = time.monotonic() + ADVISORY_TIMEOUT_S
+    try:
+        argv = (["git", "--git-dir", str(gitdir), "--work-tree", str(path)] + workers.HARDENED_GIT
+                + workers._driver_overrides(gitdir) + ["--no-replace-objects"])
+        env = workers._isolated_git_env()
+    except OSError as e:
+        raise RuntimeError("git could not run: %r" % e)
+
     def git(*args, input=None):
         try:
-            r = workers.worker_git(path, gitdir, *args, check=False, input=input, text=False)
+            r = subprocess.run(argv + list(args), cwd=str(path), env=env, input=input, capture_output=True,
+                               timeout=max(1.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("git %s timed out" % args[0])
         except OSError as e:
             raise RuntimeError("git could not run: %r" % e)
         if r.returncode != 0:
@@ -1984,25 +2012,31 @@ def advisory_added(path, base, gitdir):
         k += 2
     if any(fields[k:]):
         raise RuntimeError("git diff --raw output was not understood")
+    skipped = max(0, len(changed) - ADVISORY_MAX_CHANGED)
+    changed = changed[:ADVISORY_MAX_CHANGED]
 
-    def blob(mode, sha):
-        if mode == b"160000" or set(sha) == {ord("0")}:                       # a submodule, or no such side
-            return b""
-        return git("cat-file", "blob", sha.decode("ascii"))
+    def wanted(mode, sha):                       # a submodule, or no such side, has no blob
+        return None if mode == b"160000" or set(sha) == {ord("0")} else sha.decode("ascii")
+    sides = [(wanted(a, c), wanted(b, d), name) for a, b, c, d, name in changed]
+    shas = sorted({x for before, after, _ in sides for x in (before, after) if x})
+    blobs = _cat_file_batch(git("cat-file", "--batch", input=("\n".join(shas) + "\n").encode()) if shas else b"",
+                            shas)
     found = []
-    for old_mode, new_mode, old_sha, new_sha, name in changed:
-        before, after = blob(old_mode, old_sha), blob(new_mode, new_sha)
+    for before_sha, after_sha, name in sides:
+        before, after = blobs.get(before_sha, b""), blobs.get(after_sha, b"")
         was, now = before.count(ADVISORY_TAG), after.count(ADVISORY_TAG)
-        if now <= was:
-            continue
         old_lines = set(before.split(b"\n"))
-        new = [ln.strip() for ln in after.split(b"\n") if ADVISORY_TAG in ln and ln not in old_lines][:3]
+        new = [ln.strip() for ln in after.split(b"\n") if ADVISORY_TAG in ln and ln not in old_lines]
+        if now <= was and not new:
+            continue
         lines = []
-        for ln in new:
+        for ln in new[:3]:
             text = ln.decode("utf-8", "replace")
             lines.append(text[:ADVISORY_MAX_LINE] + ("…" if len(text) > ADVISORY_MAX_LINE else ""))
         found.append("%s: %d -> %d occurrences%s" % (name.decode("utf-8", "replace"), was, now,
                                                     "".join("\n    " + ln for ln in lines)))
     if len(found) > ADVISORY_MAX_FILES:
         found = found[:ADVISORY_MAX_FILES] + ["… and %d more" % (len(found) - ADVISORY_MAX_FILES)]
+    if skipped:
+        found.append("the advisory check skipped %d files (too many changes); review the tags by hand" % skipped)
     return found

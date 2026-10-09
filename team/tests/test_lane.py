@@ -3790,13 +3790,13 @@ def test_a_tag_already_at_base_is_not_flagged_unless_the_count_goes_up(env):
 
 def test_a_git_failure_is_raised_and_told_to_the_lead(env, monkeypatch):
     team, w = idle_builder(env)
-    real = workers.worker_git
+    real = subprocess.run
 
-    def broken(path, gitdir, *args, **kw):
-        if "--raw" in args:
+    def broken(argv, *a, **kw):
+        if isinstance(argv, list) and "--raw" in argv:
             raise FileNotFoundError("git")
-        return real(path, gitdir, *args, **kw)
-    monkeypatch.setattr(lane.workers, "worker_git", broken)
+        return real(argv, *a, **kw)
+    monkeypatch.setattr(subprocess, "run", broken)
     with pytest.raises(RuntimeError, match="git could not run"):
         lane.advisory_added(w["path"], w["base"], w["gitdir"])
     team.worker_done("kaylee", "tidied", "ok")
@@ -3850,3 +3850,80 @@ def test_the_lead_hears_about_one_lane_at_a_time_and_the_brief_binds_explicitly(
 def test_the_readme_lists_the_bricks_limit():
     readme = (teamlib.package_dir().parent / "README.md").read_text()
     assert "Bricks' specs need the Bricks change before they run in a lane" in readme
+
+
+# ---------- Task 9, fix round 2: moved tags, one bounded batch, no replace refs ----------
+
+def test_a_tag_moved_within_one_file_is_flagged(env):
+    team = lane_team(env)
+    (env["repo"] / "m.spec.ts").write_bytes(b"test('a @lane-advisory', () => {});\ntest('b', () => {});\n")
+    subprocess.run(["git", "-C", str(env["repo"]), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(env["repo"]), "commit", "-qm", "tagged"], check=True)
+    team.spawn("tidy", "claude")
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    commit_files(w, {"m.spec.ts": b"test('a', () => {});\ntest('b @lane-advisory', () => {});\n"})
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    assert len(found) == 1 and found[0].startswith("m.spec.ts: 1 -> 1") and "test('b @lane-advisory'" in found[0]
+
+
+def count_git(monkeypatch):
+    calls = {"cat-file": 0, "config": 0, "all": 0}
+    real = subprocess.run
+
+    def run(argv, *a, **kw):
+        if isinstance(argv, list) and argv and argv[0] == "git":
+            calls["all"] += 1
+            for key in ("cat-file", "config"):
+                if key in argv:
+                    calls[key] += 1
+        return real(argv, *a, **kw)
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls
+
+
+def test_many_changed_files_are_read_by_one_cat_file(env, monkeypatch):
+    team, w = idle_builder(env)
+    commit_files(w, {"f%02d.ts" % n: TAGGED for n in range(30)})
+    calls = count_git(monkeypatch)
+    assert len(lane.advisory_added(w["path"], w["base"], w["gitdir"])) == 21     # 20 files and "… and 10 more"
+    assert calls["cat-file"] == 1 and calls["config"] == 1 and calls["all"] <= 4, calls
+
+
+def test_a_branch_with_too_many_changes_is_flagged_not_skipped_silently(env, monkeypatch):
+    team, w = idle_builder(env)
+    monkeypatch.setattr(lane, "ADVISORY_MAX_CHANGED", 5)
+    commit_files(w, {"f%02d.ts" % n: b"x\n" for n in range(8)})
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    total = len(workers.worker_git(w["path"], w["gitdir"], "diff", "--name-only", w["base"], "HEAD").stdout.split())
+    assert total >= 8
+    note = "the advisory check skipped %d files (too many changes); review the tags by hand" % (total - 5)
+    assert found == [note]
+    team.worker_done("kaylee", "many", "ok")
+    assert any(note in m for m in advisory_flags(team))
+
+
+def test_an_advisory_check_that_times_out_fails_loud(env, monkeypatch):
+    team, w = idle_builder(env)
+    commit_files(w, {"a.ts": TAGGED})
+    real = subprocess.run
+
+    def run(argv, *a, **kw):
+        if isinstance(argv, list) and "cat-file" in argv:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return real(argv, *a, **kw)
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="timed out"):
+        lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    team.worker_done("kaylee", "slow", "ok")
+    assert len(lead_messages(team, "@lane-advisory CHECK FAILED")) == 1
+
+
+def test_a_replace_ref_cannot_hide_a_tag(env):
+    team, w = idle_builder(env)
+    commit_files(w, {"a.spec.ts": TAGGED, "plain.txt": b"nothing here\n"})
+    blobs = {n: workers.worker_git(w["path"], w["gitdir"], "rev-parse", "HEAD:" + n).stdout.strip()
+             for n in ("a.spec.ts", "plain.txt")}
+    workers.worker_git(w["path"], w["gitdir"], "replace", blobs["a.spec.ts"], blobs["plain.txt"])
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    assert [f.split(":")[0] for f in found] == ["a.spec.ts"]
