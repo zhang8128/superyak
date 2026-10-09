@@ -1776,3 +1776,40 @@ def test_a_double_click_on_save_brief_saves_once(browser_peer):
             expect(page.get_by_text("A newer brief was saved")).to_have_count(0)
             assert len(puts) == 1
     assert store.get_room(patient, room["id"])["brief"]["revision"] == 2
+
+
+def test_a_failed_brief_save_returns_focus_to_the_editor(browser_peer):
+    """Break caught: the 4,000 limit is learned only from the error, and the rerender drops focus to the page."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.locator(".room-brief").get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("x" * 4001)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status.error")).to_contain_text("4,000")
+            assert page.evaluate("document.activeElement.id") == "brief-body"
+    assert store.get_room(users["patient"]["id"], room["id"])["brief"] is None
+
+
+def test_a_carry_conflict_returns_focus_into_the_dialog(browser_peer):
+    """Break caught: after the 409 the dialog rerenders and focus falls out of it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief into the new room").check()
+            store.save_brief(patient, room["id"], "Second.", 1)  # saved after the dialog opened
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(dialog.get_by_role("alert")).to_contain_text("room brief changed")
+            assert page.evaluate("document.activeElement.closest('dialog') !== null")
+            assert page.evaluate("document.activeElement.name") == "carry-brief"

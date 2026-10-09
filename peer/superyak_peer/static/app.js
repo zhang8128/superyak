@@ -1076,6 +1076,7 @@ async function createChat(form) {
       }
       announce(state.chatError);
       render();
+      document.querySelector('dialog [name="carry-brief"]')?.focus();  // the box to tick again, inside the dialog
       return;
     }
     setFlash(error.message, true);
@@ -1111,6 +1112,7 @@ async function saveBrief(form) {
     Object.assign(edit, { status: message, error: true, saving: false });
     announce(message);
     render();
+    document.querySelector("#brief-body")?.focus();  // render() drops focus when no dialog is open; the error is about this box
     return;
   }
   if (state.briefEdit === edit) state.briefEdit = null;  // only this editor closes: one opened since then stays
