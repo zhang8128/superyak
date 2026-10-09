@@ -1,0 +1,31 @@
+{
+ "permissions": {
+  "defaultMode": "dontAsk",
+  "allow": [
+   "Read(//r/ws/**)",
+   "Grep(//r/ws/**)",
+   "Glob(//r/ws/**)",
+   "mcp__adna"
+  ],
+  "deny": [
+   "Bash",
+   "Bash(*security *)",
+   "Bash(git commit*)",
+   "Bash(git push*)",
+   "Bash(git rebase*)",
+   "Bash(git reset*)",
+   "Bash(security*)",
+   "Edit",
+   "NotebookEdit",
+   "Read(//**/.env)",
+   "Read(//**/.env.*)",
+   "WebFetch",
+   "WebSearch",
+   "Write",
+   "mcp__station"
+  ]
+ },
+ "sandbox": {
+  "enabled": false
+ }
+}

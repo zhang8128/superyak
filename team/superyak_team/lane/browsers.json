@@ -1,0 +1,4 @@
+{
+ "_comment": "Manifest hashes of the lane's browser, Playwright's chromium-headless-shell, by revision and platform (lane.manifest_hash: sorted paths, modes, symlink targets and each file's sha256). Playwright's downloader checks only the byte count, so teamd refuses a lane whose installed browser doesn't match. Andy records a revision's hash after its first install passes team/scripts/lane_acceptance.py --self-check-only.",
+ "chromium-headless-shell": {}
+}

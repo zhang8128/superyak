@@ -87,11 +87,17 @@ def start_prepare(name, cwd, log_path):
                             stderr=subprocess.STDOUT, env=env, start_new_session=True)
 
 
-def worker_git(path, gitdir, *args, check=True, input=None):
-    return subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
-                          + HARDENED_GIT + _driver_overrides(gitdir) + list(args),
+def worker_git_argv(path, gitdir, *args):
+    """git for a worker's folder, the only way teamd builds it: the git dir recorded at spawn (never the folder's
+    .git), the hardening flags and every driver the repo's config defines blanked. Run it with _isolated_git_env()."""
+    return (["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
+            + HARDENED_GIT + _driver_overrides(gitdir) + list(args))
+
+
+def worker_git(path, gitdir, *args, check=True, input=None, text=True):
+    return subprocess.run(worker_git_argv(path, gitdir, *args),
                           cwd=str(path), env=_isolated_git_env(), input=input,
-                          capture_output=True, text=True, check=check)
+                          capture_output=True, text=text, check=check)
 
 
 def _is_tool_state(rel):
@@ -273,7 +279,7 @@ def _home(p):
 
 
 def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
-                            engram_prefix="mcp__plugin_engram_engram__"):
+                            engram_prefix="mcp__plugin_engram_engram__", lane=None, preload=None, plugins_off=()):
     """Allowlist, not denylist, for Claude workers (all verified live 2026-10-02):
     - permissions run in dontAsk mode: any tool call not explicitly allowed is refused, which
       also shuts out the user's other plugins/MCP servers (Slack, browser, ...) as egress paths;
@@ -282,7 +288,14 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
     - the OS sandbox denies reading $HOME except the worker folder, the repo and tool paths,
       and .env files anywhere (deny globs win over allowRead);
     - writes: the worktree for builders, nothing for collaborators; no WebFetch; WebSearch only
-      for collaborators when the team enables it."""
+      for collaborators when the team enables it.
+
+    With `lane` (a browser lane's folder, see lane.py), the worker also gets loopback and the lane's own Unix sockets
+    and nothing else on the network, writes in the lane's tmp/ and npm-cache/ only (never the lane root or b/, so it
+    can't swap them for symlinks), reads of those and of `preload` (teamd's own copy, outside /tmp), and no reads of
+    any lane (/tmp/sy-lane-<uid>, from lane.TMP_ROOT) or of other sessions' scratch. No hooks run
+    (disableAllHooks): whatever claude starts outside its sandbox inherits the lane's environment. Without a lane the
+    result is exactly what it was before lanes existed."""
     cwd, repo = str(cwd), str(repo or cwd)
     home = str(Path.home())
     scopes = sorted({cwd, repo})
@@ -307,7 +320,7 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
         deny += ["WebSearch", "Edit(/%s/.git)" % cwd, "Write(/%s/.git)" % cwd,
                  "Edit(/%s/.git/**)" % cwd, "Write(/%s/.git/**)" % cwd]
         allow_write = [cwd]
-    return {
+    settings = {
         "permissions": {"defaultMode": "dontAsk", "allow": allow, "deny": deny},
         "sandbox": {"enabled": True, "failIfUnavailable": True,
                     "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
@@ -316,9 +329,29 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
                                    "denyRead": [home, "**/.env", "**/.env.*"],
                                    "allowRead": scopes + [_home(p) for p in TOOL_READ_PATHS]}},
     }
+    if lane is not None:
+        from . import lane as lanes                     # lane.py imports this module: imported here, not at the top
+        lane = str(lane)
+        tmp, cache = os.path.join(lane, "tmp"), os.path.join(lane, "npm-cache")
+        settings["sandbox"]["network"] = {"allowedDomains": [], "strictAllowlist": True, "allowLocalBinding": True,
+                                          "allowUnixSockets": [tmp]}
+        fs = settings["sandbox"]["filesystem"]
+        fs["allowWrite"] = fs["allowWrite"] + [tmp, cache]
+        fs["allowRead"] = fs["allowRead"] + [tmp, cache] + ([str(preload)] if preload is not None else [])
+        fs["denyRead"] = fs["denyRead"] + [str(lanes.TMP_ROOT / ("sy-lane-%d" % os.getuid())),
+                                           "/private/tmp/claude-%d" % os.getuid()]
+        settings["disableAllHooks"] = True
+        # Flag settings outrank the project's and the local ones the worker could write: an empty helper is no helper,
+        # and a plugin set to false is off (its hooks, MCP and LSP servers, monitors): lane.lane_plugins names them.
+        settings.update({key: "" for key in lanes.HELPER_KEYS})
+        settings["enabledPlugins"] = {plugin: False for plugin in plugins_off}
+    return settings
 
 
-def claude_command(cfg, team_id, worker, cwd, prompt, session_id=None, mode="build", repo=None):
+def claude_command(cfg, team_id, worker, cwd, prompt, session_id=None, mode="build", repo=None, lane=None,
+                   preload=None, plugins_off=()):
+    """A browser worker (`lane`) also gets --strict-mcp-config, so claude loads no MCP server but teamd's own: the
+    user's, the project's .mcp.json and plugins' would run outside the sandbox with the lane's environment."""
     wdir = teamlib.team_dir(team_id) / "workers" / worker
     wdir.mkdir(parents=True, exist_ok=True)
     mcp_cfg, settings = wdir / "mcp.json", wdir / "settings.json"
@@ -328,21 +361,27 @@ def claude_command(cfg, team_id, worker, cwd, prompt, session_id=None, mode="bui
         "env": mcp_env(team_id, worker)}}}))
     web = mode == "collab" and bool(cfg.get("collab_web_search", True))
     settings.write_text(json.dumps(claude_sandbox_settings(
-        cwd, mode, web, repo, cfg.get("engram_tool_prefix", "mcp__plugin_engram_engram__"))))
+        cwd, mode, web, repo, cfg.get("engram_tool_prefix", "mcp__plugin_engram_engram__"), lane, preload,
+        plugins_off)))
     # The permission mode is set here too: a CLI --permission-mode overrides the settings file.
     cmd = ["claude", "-p", safe_prompt(prompt), "--output-format", "stream-json", "--verbose",
            "--model", cfg["claude_model"], "--permission-mode", "dontAsk",
            "--settings", str(settings), "--mcp-config", str(mcp_cfg)]
+    if lane is not None:
+        cmd += ["--strict-mcp-config"]
     if session_id:
         cmd += ["--resume", session_id]
     return cmd
 
 
-def launch(cmd, cwd, worker_dir, env_extra=None):
-    """Start an agent turn; stdout (JSON events) appends to events.jsonl."""
+def launch(cmd, cwd, worker_dir, env_extra=None, drop_env=()):
+    """Start an agent turn; stdout (JSON events) appends to events.jsonl. `drop_env` names variables of teamd's own
+    environment the agent must not inherit (a browser lane drops the ssh-agent, gpg-agent and Docker sockets). The
+    order is fixed: drop_env first removes from teamd's environment, then env_extra is laid over what is left, so a
+    variable env_extra sets is always the agent's, even one drop_env names."""
     worker_dir = Path(worker_dir)
     worker_dir.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if k not in drop_env}
     env.update(env_extra or {})
     env["VOICE_NOTIFY_MUTE"] = "1"   # background agents don't ring the human's bell
     env["SUPERYAK_RUN"] = "1"        # nor read the person's station messages (the station hook stays quiet)

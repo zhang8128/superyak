@@ -36,10 +36,18 @@ run in one repo). Worker tools: `team_post`, `team_read`, `team_message`, `team_
 
 ### Presets and per-team config
 Presets `build`, `research`, `review`, `mixed`, plus custom ones in
-`~/.superyak/team/presets.json`. Per-team overrides (validated, see `teamlib.TEAM_KEYS`):
+`~/.superyak/team/presets.json`. Per-team overrides (validated, see `teamlib.OVERRIDE_KEYS`):
 `max_workers`, `default_mode`, `default_kind`, `codex_model`, `codex_effort`, `claude_model`,
 `collab_max_turns`, `peer_limit_build`, `peer_limit_collab`, `collab_web_search`,
-`slack_channel`, `engram_tool_prefix`.
+`slack_channel`, `engram_tool_prefix`. A person sets `browser_lane` in a preset
+(`teamlib.PRESET_KEYS`), never in `config.json`, which every team would take; `team_start` never can.
+
+### Browser lanes (macOS)
+A Claude builder spawned with `browser=true` runs and tests the app it builds in Playwright's
+headless shell, with no network beyond its own block of 32 loopback ports. The browser runs in a
+broker beside the worker, under a deny-default Seatbelt profile teamd owns. Setup, the listener
+rule and the firewall note are in [team/README.md](../team/README.md#browser-lanes-macos); the
+design is [the browser-lane spec](superpowers/specs/2026-10-08-browser-lane-design.md).
 
 ### Slack
 Create the app from `team/superyak_team/slack-manifest.yml` (Superyak Team), invite
@@ -70,6 +78,8 @@ in), so nothing is written to the repo. Durable learnings are shared with
 - **Claude workers:** `--permission-mode dontAsk` with explicit allow rules; OS sandbox denies
   reading `$HOME` except the worker folder, repo and dev-tool paths, and `**/.env*` everywhere;
   no WebFetch.
+- **One teamd per team:** `lane.hold_team` holds the team's lock for teamd's whole life, so a second teamd for the
+  same team refuses to start. Browser lanes rely on it: a lane's port block is live exactly while its teamd holds that lock.
 - **Messages:** everything external reaches agents fenced as quoted data; outbound text is
   secret-redacted; builder peer messages are pull-only; per-pair loop guards escalate to the lead.
 

@@ -300,3 +300,15 @@ def test_a_nul_never_reaches_the_command_line(tmp_path):
         assert not any('\x00' in str(arg) for arg in command)
     assert command[command.index('--append-system-prompt') + 1].endswith('\n\n=== Instructions: X ===\nRun tests.')
     assert 'You are Serenity' in command[command.index('--append-system-prompt') + 1]
+
+
+SNAPSHOTS = Path(__file__).resolve().parent / 'snapshots'
+
+
+def test_run_settings_are_what_they_were_before_browser_lanes(monkeypatch):
+    """Browser-lane spec, unit test 1: the builder settings and the station's answer settings are byte for byte what
+    they were before lanes existed (snapshots taken with HOME=/home/u)."""
+    from superyak_agent.runs import builder_settings, read_only_settings
+    monkeypatch.setenv('HOME', '/home/u')
+    assert json.dumps(builder_settings('/r/wt', '/r/repo'), indent=1) + '\n' == (SNAPSHOTS / 'builder-settings.json').read_text()
+    assert json.dumps(read_only_settings('/r/ws'), indent=1) + '\n' == (SNAPSHOTS / 'answer-settings.json').read_text()
