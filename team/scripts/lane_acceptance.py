@@ -1229,11 +1229,16 @@ def _check_now():
     return lane._check(lane.load_approved(), lane.live_lanes())
 
 
-def full_backlog_row(scan=None, most=512, wait_s=0.5):
+FULL_BACKLOG_CONNECTS = 256      # the full-backlog row's cap (ruling 2b6e272b): none pending by then is BROKEN
+
+
+def full_backlog_row(scan=None, wait_s=0.5):
     """Review row `full-backlog`: a listener whose backlog is full is refused, not missed. One on 127.0.0.1 never
-    accepts; connects are added until a direct connect stays pending (shown and logged); then the scan's own verdict on
-    that port must be a listener ("timed out" or "accepted"), never closed. lsof would refuse this user's listener
-    anyway, so the scan's verdict, not the refusal, is the evidence."""
+    accepts; connects are added, at most FULL_BACKLOG_CONNECTS, until a direct connect stays pending (shown and logged);
+    then the scan's own verdict on that port must be a listener ("timed out" or "accepted"), never closed. None pending
+    by the cap is BROKEN with the count, never a PASS. lsof would refuse this user's listener anyway, so the scan's
+    verdict, not the refusal, is the evidence."""
+    most = FULL_BACKLOG_CONNECTS
     scan = scan or (lambda port: lane.scan_loopback([(socket.AF_INET, "127.0.0.1", 0, "127.0.0.1")], ports=[port]))
     server, held = socket.socket(), []
     try:

@@ -847,7 +847,7 @@ def _run(cmd, timeout=60):
 def parse_lsof(text):
     """`lsof -F pn` output (or `-F pctn`): one dict per listening socket, {pid, command, host, port}, plus "family"
     (4 or 6) when lsof gave the socket's type (`tIPv4`, `tIPv6`). IPv6 hosts come in brackets ([::1]:41000), a
-    wildcard as *."""
+    wildcard as *. A * without its type is a row it can't read (ruling 2b6e272b): None, and the check refuses."""
     out, pid, command, family = [], None, "", None
     for line in text.split("\n"):
         if not line:
@@ -867,6 +867,8 @@ def parse_lsof(text):
                 continue
             if host.startswith("[") and host.endswith("]"):
                 host = host[1:-1]
+            if host == "*" and family is None:              # which family's wildcard can't be told
+                return None
             row = {"pid": pid, "command": command, "host": host, "port": int(port)}
             if family is not None:
                 row["family"] = family
@@ -948,7 +950,7 @@ def reachable(host):
 
 def lsof_rows():
     """This uid's listening TCP sockets as lsof sees them, authoritative for this uid (spec: naming), or None when lsof
-    fails (it exits 1, saying nothing, when it finds none)."""
+    fails (it exits 1, saying nothing, when it finds none) or prints a row parse_lsof can't read."""
     lsof = shutil.which("lsof", path=SYSTEM_PATH)
     if not lsof:
         return None
@@ -994,6 +996,8 @@ def _named():
     owners = _owners() if listening else {}
     if listening and not owners:
         return None, None, ["ps failed, so nettop's listeners can't be placed and the listener check fails closed"]
+    for item in listening:                              # a pid ps can't place names nothing (see _unplaced)
+        item["placed"] = owners.get(item["pid"]) is not None
     others = [dict({k: v for k, v in item.items() if k != "state"}, uid=owners[item["pid"]]) for item in listening
               if owners.get(item["pid"]) not in (None, me)]
     return [dict(item, uid=me) for item in mine] + others, sockets, []
@@ -1248,12 +1252,12 @@ def _covers(item, target):
     """Whether a named Listen row covers this scanned (family, address, scope_id, label): a row on that address, on
     its family's wildcard (* or 0.0.0.0 for IPv4, * or :: for IPv6), or, for 127.0.0.1, on its IPv4-mapped form. Never
     the other family's wildcard: a dual-stack socket (tcp6 *) doesn't cover 127.0.0.1 (spec, Known limits). A row on
-    the loopback interface's link-local address covers it only by its scoped label. A * whose family lsof didn't give
-    covers both."""
+    the loopback interface's link-local address covers it only by its scoped label. A * without its family covers
+    nothing: parse_lsof refuses one (ruling 2b6e272b)."""
     family, address, scope, label = target
     host, kind, four = item["host"], item.get("family"), family == socket.AF_INET
     if host == "*":
-        return kind is None or kind == (4 if four else 6)
+        return kind == (4 if four else 6)
     if host in ("0.0.0.0", "::"):
         return four == (host == "0.0.0.0")
     if "%" in host:
@@ -1361,6 +1365,14 @@ def _disagreeing(rows, targets, found):
             if _covers(item, target) and key not in found:
                 out.setdefault(key, []).append(item)
     return out
+
+
+def _unplaced(sockets, targets, found):
+    """nettop's Listen rows whose pid ps couldn't place, covering a reachable (address, port): an owner that vanished,
+    or one ps can't see, must never slip past because another row covers the same address (ruling 2b6e272b)."""
+    by_label = {target[3]: target for target in targets}
+    return [item for item in sockets or [] if item.get("state") == "Listen" and item.get("placed") is False
+            and any(port == item["port"] and _covers(item, by_label[label]) for label, port in found)]
 
 
 def _scan_with_canaries(targets):
@@ -1472,6 +1484,18 @@ def _check(approved, lanes):
             if problems:
                 return False, problems
             disagree = {key: items for key, items in _disagreeing(rows, targets, found).items() if key in disagree}
+    if _unplaced(sockets, targets, found):              # name once more; still unplaced, it refuses
+        rows, sockets, problems = _named()
+        if problems:
+            return False, problems
+        problems = _judge(rows, approved, lanes)
+        if problems:
+            return False, problems
+        ghosts = _unplaced(sockets, targets, found)
+        if ghosts:
+            return False, sorted({"nettop shows pid %d (%s) listening on %s port %d, which a lane can reach, but ps "
+                                  "can't place it, so the listener check fails closed"
+                                  % (item["pid"], item["command"] or "?", item["host"], item["port"]) for item in ghosts})
     problems = ["the scan is incomplete at %s port %d (%s), so the listener check fails closed" % (label, port, how)
                 for (label, port), how in sorted(found.items(), key=lambda kv: (kv[0][1], kv[0][0]))
                 if how in ("self", "incomplete")]

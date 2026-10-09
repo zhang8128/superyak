@@ -2116,7 +2116,8 @@ def test_a_full_backlog_is_shown_pending_then_read_as_a_listener(acceptance, mon
     answers = iter([False])
     assert acceptance.full_backlog_row(scan=lambda port: {})[0] == "FAIL"           # read as closed
     monkeypatch.setattr(acceptance.select, "select", lambda r, w, x, t: ([], w, []))
-    assert acceptance.full_backlog_row(scan=lambda port: {}, most=3)[0] == "BROKEN"  # never filled
+    verdict, detail = acceptance.full_backlog_row(scan=lambda port: {("127.0.0.1", port): "timed out"})
+    assert verdict == "BROKEN" and "accepted 256 connects" in detail               # capped at 256, never a PASS
 
 
 def test_a_socket_bound_but_not_listening_row(acceptance, monkeypatch):

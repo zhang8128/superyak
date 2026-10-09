@@ -756,10 +756,16 @@ def lsof_of(sockets):
 
 
 def lsof_text(pairs):
-    """lsof -nP -iTCP -sTCP:LISTEN -F pn for the user's own listeners."""
+    """lsof -nP -iTCP -sTCP:LISTEN -F pctn for the user's own listeners: (pid, address) or (pid, address, type). Every
+    socket carries its type, as real lsof prints it: [v6] is IPv6 and a specific IPv4 address is IPv4; a wildcard
+    must say which (ruling 2b6e272b: a * without one is a row the parser can't read)."""
     out = []
-    for pid, address in pairs:
-        out += ["p%d" % pid, "f20", "n%s" % address]
+    for entry in pairs:
+        pid, address = entry[:2]
+        kind = entry[2] if len(entry) > 2 else ("IPv6" if address.startswith("[") else None if address.startswith("*")
+                                                 else "IPv4")
+        assert kind, "a wildcard fixture must carry its type: %r" % (entry,)
+        out += ["p%d" % pid, "f20", "t%s" % kind, "n%s" % address]
     return "\n".join(out) + "\n"
 
 
@@ -778,6 +784,7 @@ def listeners(env, held, monkeypatch):
     kaylee = ["HOME=/h", "CLAUDE_CODE_TMPDIR=" + str(lane._parent_path() / lane.lane_hash("t1", "kaylee") / "tmp")]
     state = {"sockets": list(SOCKETS), "exe": dict(EXE),
              "lsof": None, "lsof_rc": 0, "lsof_rounds": [], "lsof_stderr": "",   # None: this user's sockets
+             "lsof_text": None,
              "nettop": None, "nettop_rc": 0, "nettop_rounds": [], "no_nettop": False, "nettop_calls": 0,
              "scan": None, "scan_extra": {}, "scan_rounds": [], "scanned": [],     # None: what the sockets make
              "scan_fails": False, "reprobe": {},    # (label, port) -> how on a probe alone (None: closed)
@@ -790,7 +797,9 @@ def listeners(env, held, monkeypatch):
 
     def run(cmd, timeout=60):
         if cmd[0].endswith("lsof"):
-            if state["lsof_rounds"]:
+            if state["lsof_text"] is not None:
+                text = state["lsof_text"]
+            elif state["lsof_rounds"]:
                 text = lsof_text(state["lsof_rounds"].pop(0))
             elif state["lsof"] is not None:
                 text = lsof_text(state["lsof"])
@@ -937,8 +946,8 @@ def test_a_listener_lsof_names_is_judged_even_when_the_scan_missed_it(listeners)
     """This user's listener on loopback that lsof names counts whether or not the scan reached it (it may have
     opened just after): in a lane's block it must be that lane's."""
     listeners["lsof"] = [(900, "127.0.0.1:41000"), (901, "[::1]:41001"), (905, "127.0.0.1:41003")] + [
-        (pid, "%s:%s" % (local.rpartition(".")[0], local.rpartition(".")[2])) for proto, local, st, pid, name in SOCKETS
-        if pid in (501, 612) and st == "LISTEN"]
+        (pid, "%s:%s" % (local.rpartition(".")[0], local.rpartition(".")[2]), "IPv4" if proto == "tcp4" else "IPv6")
+        for proto, local, st, pid, name in SOCKETS if pid in (501, 612) and st == "LISTEN"]
     listeners["exe"][905] = "/opt/homebrew/bin/node"
     ok, problems = lane.listeners_ok()
     assert not ok and problems == ["node (pid 905) listens on 127.0.0.1 port 41003, in lane %s's block, but isn't that "
@@ -973,10 +982,20 @@ def test_lsof_gives_each_sockets_family():
 
 
 def test_lsof_output_is_parsed_with_ipv6():
-    assert lane.parse_lsof(lsof_text([(900, "127.0.0.1:41000"), (901, "[::1]:41001"), (501, "*:7000")])) == [
-        {"pid": 900, "command": "", "host": "127.0.0.1", "port": 41000},
-        {"pid": 901, "command": "", "host": "::1", "port": 41001},
-        {"pid": 501, "command": "", "host": "*", "port": 7000}]
+    assert lane.parse_lsof(lsof_text([(900, "127.0.0.1:41000"), (901, "[::1]:41001"), (501, "*:7000", "IPv4")])) == [
+        {"pid": 900, "command": "", "host": "127.0.0.1", "port": 41000, "family": 4},
+        {"pid": 901, "command": "", "host": "::1", "port": 41001, "family": 6},
+        {"pid": 501, "command": "", "host": "*", "port": 7000, "family": 4}]
+
+
+def test_an_lsof_wildcard_without_its_type_is_a_row_the_parser_cant_read(listeners):
+    """Ruling 2b6e272b (5): a * whose family lsof didn't give never covers both families: the parser can't read it,
+    and the check refuses."""
+    assert lane.parse_lsof("p501\ncControlCenter\nf9\nn*:7000\n") is None
+    assert lane.parse_lsof("p501\nf9\ntIPv4\nn*:7000\nf10\nn127.0.0.1:7001\n") is not None   # specific: fine
+    assert not any(lane._covers({"host": "*", "port": 7000}, target) for target in LOOPBACK)
+    listeners["lsof_text"] = "p501\ncControlCenter\nf9\nn*:7000\n"
+    assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
 
 
 @pytest.mark.parametrize("entry, reason", [
@@ -1185,6 +1204,25 @@ def test_any_naming_failure_refuses_the_whole_check(listeners, how, why):
         listeners["nettop"] = nettop_text([("launchd", 1, [("tcp4", "garbage", "Listen")])])
     assert lane.listeners_ok() == (False, ["nettop couldn't be read (%s), so the listener check fails closed" % why])
     assert listeners["scanned"] == []
+
+
+def test_a_pid_ps_cant_place_on_a_reachable_address_is_named_again_then_refused(listeners):
+    """Ruling 2b6e272b (2): a vanished owner must never slip past while another row covers the same address. A
+    nettop row whose pid ps can't place, covering a reachable (address, port) that rapportd covers too, makes the naming
+    run once more; still unplaced, the check refuses. Gone from the second naming, it passes."""
+    listeners["sockets"].append(("tcp4", "*.49152", "LISTEN", 4444, "ghost"))         # 4444: ps doesn't list it
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["nettop shows pid 4444 (ghost) listening on * port 49152, which a lane can reach, "
+                                   "but ps can't place it, so the listener check fails closed"]
+    assert listeners["nettop_calls"] == 2
+    listeners["nettop_calls"] = 0
+    listeners["nettop_rounds"] = [list(listeners["sockets"]), list(SOCKETS)]       # gone the second time
+    assert lane.listeners_ok() == (True, []) and listeners["nettop_calls"] == 2
+
+
+def test_a_pid_ps_cant_place_beyond_loopback_is_left_alone(listeners):
+    listeners["sockets"].append(("tcp4", "100.101.102.104.9000", "LISTEN", 4444, "ghost"))
+    assert lane.listeners_ok() == (True, []) and listeners["nettop_calls"] == 1
 
 
 def test_ps_unable_to_place_nettops_listeners_refuses(listeners):
@@ -1690,18 +1728,17 @@ def test_another_users_listener_on_a_lan_address_is_still_skipped(listeners):
 
 def test_whose_listener_it_is_must_be_known_or_the_check_fails(listeners):
     """lsof is authoritative for this user, so a nettop row ps can't place isn't this user's: beyond loopback it is
-    skipped as unreachable, but on a port the scan reaches it names nothing, and the port can't be identified (its
-    nettop row is shown). ps failing is a naming failure and refuses. With no live lane, this user's listener beyond
+    skipped as unreachable, but on a port the scan reaches the naming runs once more and, still unplaced, it refuses
+    (ruling 2b6e272b). ps failing is a naming failure and refuses. With no live lane, this user's listener beyond
     loopback doesn't count."""
     listeners["sockets"].append(("tcp4", "192.168.1.20.9100", "LISTEN", 778, "ollama"))
     listeners["exe"][778] = "/opt/homebrew/bin/ollama"
     assert lane.listeners_ok() == (True, [])
     listeners["sockets"].append(("tcp4", "127.0.0.1.9101", "LISTEN", 778, "ollama"))
     ok, problems = lane.listeners_ok()
-    assert not ok and problems == [
-        "port 9101 on 127.0.0.1 accepts connections, and no listener there is named (lsof for this user, nettop for "
-        "others), so it can't be identified; ollama (pid 778, /opt/homebrew/bin/ollama) holds it in nettop's Listen "
-        "state"]
+    assert not ok and problems == [                                             # named again first (2b6e272b)
+        "nettop shows pid 778 (ollama) listening on 127.0.0.1 port 9101, which a lane can reach, but ps can't place "
+        "it, so the listener check fails closed"]
     listeners["sockets"].pop()
     listeners["ps_rc"] = 1                                                      # ps itself fails: a naming failure
     assert lane.listeners_ok() == (False, ["ps failed, so nettop's listeners can't be placed and the listener check "
