@@ -20,7 +20,7 @@ Prerequisites (the spec's, plus this script's):
 - the Bricks checkout on the branch with the Bricks change (lane ports in the Playwright config and fixtures);
 - the worktree prepared, so npx needs no registry: the workers are spawned with --prepare (npm-ci by default);
 - the headless shell's manifest hash recorded for this revision (--self-check-only prints it the first time);
-- a root-owned listener to observe in step 4. Before step 1 the run looks for one that already exists (netstat plus
+- a root-owned listener to observe in step 4. Before step 1 the run looks for one that already exists (nettop plus
   `ps -o uid=` equal to 0, on loopback or a wildcard: launchd's *:22 with Remote Login on, or cupsd's 631) and needs no
   sudo for it. If there is none it tries `sudo -n -v` (an agent's Bash tool can't sudo: macOS caches credentials per
   terminal). If that fails too, the run uses a PERSON: inside step 4, after the D9/D10/D11 rows, it prints
@@ -32,8 +32,11 @@ Prerequisites (the spec's, plus this script's):
   doesn't get that far (no listener by the deadline, an error, an interrupt), it prints `ANDY ACTION: stop it now (if
   you started it): press Ctrl-C in that Terminal` instead. Serenity runs the script in the background and passes each
   `ANDY ACTION:` line to Andy as soon as it appears; Andy's own terminal is needed only for this. The script never
-  signals that listener (no sudo, no kill): if it isn't gone 10 minutes after the stop request (a netstat that can't
-  be read doesn't count as gone), the row is BROKEN with its pid and `sudo kill <pid>`, and the run stops.
+  signals that listener (no sudo, no kill): if it isn't gone 10 minutes after the stop request (a scan or a naming
+  that can't be read doesn't count as gone), the row is BROKEN with its pid and `sudo kill <pid>`, and the run stops.
+  Then the lo0 alias row (amendment of 2026-10-09): `ANDY ACTION: in your own Terminal run: sudo /sbin/ifconfig lo0
+  alias 127.0.0.2 up`, the check must refuse it by name, and `ANDY ACTION: remove it now: sudo /sbin/ifconfig lo0
+  -alias 127.0.0.2` always follows; if it isn't gone 10 minutes later the run stops, since every lane would wait.
 
 It starts its own team in the Bricks checkout (two browser workers, kaylee and wash), drives them as their lead
 through `run_team.py`, and ends the team and deletes its branches when it is done. Step 2 also spawns a third browser
@@ -52,6 +55,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import signal
 import socket
@@ -84,6 +88,7 @@ NEVER_LIST = ["com.apple.SecurityServer", "com.apple.securityd.xpc", "com.apple.
 READY_TASK = ("Browser-lane acceptance worker. Reply with only the word ready. Do not run any command, and do not "
               "call team_done until a message asks you to.")
 NETCAT = "/usr/bin/nc"
+IFCONFIG, ALIAS = "/sbin/ifconfig", "127.0.0.2"     # the lo0 alias row: Andy adds it, the check refuses it
 HOLDER_POLLS, HOLDER_POLL_S = 30, 2     # how long to look for a first-lane process that carries the endpoint
 NOT_READ = object()          # the approved list existed but couldn't be read: it is never touched
 # A list entry the approved-list rules refuse for one specific reason (D10), without needing the file to exist.
@@ -117,7 +122,8 @@ ADVISORY_TAG = "lane-advisory"
 NO_ROOT = "no root-owned listener to observe; run this once from Andy's own terminal (sudo)"
 # What the lead's inbox may be reduced to in a transcript: reason codes, never the messages (they name programs).
 REASONS = ("LANE WAITING", "LANE REFUSED", "only Apple programs", "an interpreter is never approved",
-           "sealed system volume", "can't be identified", "beyond loopback", "lsof failed", "netstat failed",
+           "sealed system volume", "can't be identified", "beyond loopback", "lsof failed", "couldn't finish",
+           "(an alias)", "nettop couldn't be read",
            "settings outside the lane", "one browser lane per machine", "manifest")
 
 
@@ -798,19 +804,40 @@ def missing_probe_rows(rows):
     return sorted(set(lane.SELF_CHECK_PROBES + lane.SELF_CHECK_POSITIVE) - got)
 
 
-def root_listener_proof(pid, port, owner=None):
-    """Step 4's root listener: it must be owned by uid 0 (`ps -o uid=`), and the user's own lsof must NOT show it, which is
-    what proves the netstat path is the one that sees it. Returns (verdict, detail)."""
+def _scan_port(port):
+    """Where the loopback scan reaches `port` now, as ["<label>: <how>"], or None when it can't say."""
+    targets, _, _ = lane.loopback_targets()
+    if not targets:
+        return None
+    found = lane.scan_loopback(targets, ports=[port])
+    return None if found is None else ["%s: %s" % (label, how) for (label, _), how in sorted(found.items())]
+
+
+def root_listener_proof(pid, port, owner=None, reach=None):
+    """Step 4's root listener, shown three ways: it is owned by uid 0 (`ps -o uid=`), the loopback scan reaches it,
+    nettop names it, and the user's own lsof can't see it. Returns (verdict, detail)."""
     owner = owner or (lambda p: _owner_uid(p))
+    reach = reach or _scan_port
     uid = owner(pid)
     if uid != 0:
         return "BROKEN", "pid %d on port %d is owned by uid %s, not root, so it doesn't show that root's sockets are seen" % (pid, port, uid)
+    reached = reach(port)
+    if reached is None:
+        return "BROKEN", "the loopback scan couldn't say whether port %d is reachable" % port
+    if not reached:
+        return "FAIL", "the loopback scan doesn't reach port %d, so the listener check would never see it" % port
+    sockets, why = lane.nettop_sockets()
+    if sockets is None:
+        return "BROKEN", "nettop couldn't be read (%s), so it can't be shown naming root's listener" % why
+    if not any(item["pid"] == pid and item["port"] == port and item["state"] == "Listen" for item in sockets):
+        return "FAIL", "nettop doesn't name pid %d on port %d, so the check couldn't identify it" % (pid, port)
     seen = lane.lsof_listeners()
     if seen is None:
         return "BROKEN", "lsof failed, so the cross-check couldn't be made"
     if (pid, port) in seen:
-        return "BROKEN", "the user's lsof also shows pid %d on port %d, so netstat isn't what proves root's listeners are seen" % (pid, port)
-    return "PASS", "pid %d (uid 0) on port %d is in netstat and not in the user's lsof" % (pid, port)
+        return "BROKEN", "the user's lsof also shows pid %d on port %d, so nettop isn't what proves root's listeners are named" % (pid, port)
+    return "PASS", "pid %d (uid 0) on port %d: the scan reaches it (%s), nettop names it, the user's lsof doesn't" % (
+        pid, port, ", ".join(reached))
 
 
 def _owner_uid(pid):
@@ -1125,62 +1152,275 @@ def extra_browser_folders(browsers, shell):
     return out
 
 
-def netstat_fixture(text, path_of, rows=3):
-    """The real `netstat -anv -p tcp` header line and three sample LISTEN rows (varied by address kind where it can),
-    for test fixtures. A listening address that is neither a wildcard nor loopback becomes `<addr>.<port>`. Process names that aren't Apple's (by proc_pidpath, in the folders the approved list allows)
-    become `<name>`. None when the header isn't one the listener check knows (nothing is written then)."""
-    lines = text.split("\n")
-    header = next((line for line in lines if line.startswith("Proto")), None)
-    if header is None or lane._netstat_rows(text)[0] is None:
+def nettop_fixture(text, path_of, rows=3):
+    """The real `nettop -L 1 -n -m tcp` header and up to `rows` Listen rows, each after its process line (one of each
+    address kind first, where it can), for a local test fixture that never goes into the repository. A process that
+    isn't Apple's (by proc_pidpath, in the folders the approved list allows) becomes `<name>`; an address that is
+    neither a wildcard nor loopback becomes `<addr>`. None when nettop's output can't be read (nothing is written
+    then)."""
+    if lane._nettop_sockets(text)[0] is None:
         return None
-    columns = [c.replace("\0", " ") for c in header.replace("Local Address", "Local\0Address")
-               .replace("Foreign Address", "Foreign\0Address").split()]
-    named = "process:pid" in columns
-    index = columns.index("process:pid" if named else "pid")
-    trailing = len(columns) - index - 1
-    listening = [line for line in lines if len(line.split()) >= 6 and line.split()[5] == "LISTEN"
-                 and line.split()[0].startswith("tcp")]
-
-    def kind(line):
-        host = line.split()[3].rpartition(".")[0]
-        return "wildcard" if host in lane.WILDCARDS else "loopback" if lane.is_loopback(host) else "other"
+    lines = [line for line in text.split("\n") if line]
+    picked, process = [], None
+    for line in lines[1:]:
+        fields = line.split(",")
+        if "<->" not in fields[1]:
+            name = ",".join(fields[1:len(fields) - lane.NETTOP_TAIL])
+            pid = int(name.rpartition(".")[2])
+            exe = path_of(pid)
+            keep = exe and exe.startswith(lane.APPROVED_DIRS)
+            process = line if keep else line.replace(name, "<name>.%d" % pid, 1)
+            continue
+        if fields[3] != "Listen":
+            continue
+        local = fields[1].split(" ", 1)[1].split("<->")[0]
+        host, _, port = local.rpartition(":" if fields[1].startswith("tcp4") else ".")
+        kind = "wildcard" if host in lane.WILDCARDS else "loopback" if lane.is_loopback(host) else "other"
+        if kind == "other":
+            line = line.replace(local, "<addr>%s%s" % (":" if fields[1].startswith("tcp4") else ".", port), 1)
+        picked.append((kind, process, line))
     chosen, seen = [], set()
-    for line in listening:                                  # one of each address kind first, then the rest in order
-        if kind(line) not in seen:
-            seen.add(kind(line))
-            chosen.append(line)
-    chosen += [line for line in listening if line not in chosen]
-    out = [header]
-    for line in chosen[:rows]:
-        address = line.split()[3]
-        host, _, port = address.rpartition(".")
-        keep = host in lane.WILDCARDS or lane.is_loopback(host) or host.endswith("%lo0")
-        if named:
-            fields = line.split()
-            segment = " ".join(fields[index:len(fields) - trailing])
-            found = re.fullmatch(r"(.*):([0-9]+)", segment)
-            exe = path_of(int(found.group(2))) if found else None
-            if not (exe and exe.startswith(lane.APPROVED_DIRS)) and segment in line:
-                line = line.replace(segment, "<name>:%s" % (found.group(2) if found else "0"), 1)
-        if not keep:                                        # a LAN or tailnet address identifies the machine
-            line = line.replace(address, "<addr>." + port, 1)
-        out.append(line)
+    for item in picked:                                       # one of each address kind first, then the rest in order
+        if item[0] not in seen:
+            seen.add(item[0])
+            chosen.append(item)
+    chosen += [item for item in picked if item not in chosen]
+    out = [lines[0]]
+    for _, process, line in chosen[:rows]:
+        out += [process, line]
     return out
 
 
-def capture_netstat(run, path_of, dest):
-    """Review row `netstat-capture`: save the redacted header and sample rows to `dest`. Returns (verdict, detail)."""
-    netstat = shutil.which("netstat", path=lane.SYSTEM_PATH)
-    r = run([netstat or "/usr/sbin/netstat", "-anv", "-p", "tcp"])
+def capture_nettop(run, path_of, dest):
+    """Review row `nettop-capture`: save the redacted header and sample rows to `dest`, outside the repository.
+    Returns (verdict, detail)."""
+    nettop = shutil.which("nettop", path=lane.SYSTEM_PATH)
+    r = run([nettop or "/usr/bin/nettop", "-L", "1", "-n", "-m", "tcp"])
     if r is None or r.returncode != 0:
-        return "BROKEN", "netstat failed"
-    lines = netstat_fixture(r.stdout, path_of)
-    if lines is None or len(lines) < 2:
-        return "BROKEN", "netstat printed a header the listener check doesn't know, or no listening row; nothing written"
+        return "BROKEN", "nettop failed"
+    lines = nettop_fixture(r.stdout, path_of)
+    if lines is None or len(lines) < 3:
+        return "BROKEN", "nettop printed a header the listener check doesn't know, or no listening row; nothing written"
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("\n".join(lines) + "\n")
-    return "INFO", "header and %d rows, non-Apple process names redacted, written to %s" % (len(lines) - 1, dest)
+    return "INFO", "header and %d rows, non-Apple process names redacted, written to %s" % ((len(lines) - 1) // 2, dest)
+
+
+def listener_scan_info(clock=None):
+    """Review row `listener-scan`: the loopback scan as it runs here (its targets, notes, how long it takes and what it
+    reaches) and whether nettop's header is the one the check knows. Returns (verdict, detail)."""
+    clock = clock or time.monotonic
+    targets, notes, refusals = lane.loopback_targets()
+    if refusals:
+        return "FAIL", "; ".join(refusals)
+    start = clock()
+    found = lane.scan_loopback(targets)
+    took = clock() - start
+    if found is None:
+        return "BROKEN", "the loopback scan couldn't finish"
+    sockets, why = lane.nettop_sockets()
+    return "INFO", "scanned %s in %.1f s: %d reachable; nettop %s%s" % (
+        ", ".join(t[3] for t in targets), took, len(found), "read" if sockets is not None else "unreadable (%s)" % why,
+        ("; " + "; ".join(notes)) if notes else "")
+
+
+def _check_now():
+    return lane._check(lane.load_approved(), lane.live_lanes())
+
+
+FULL_BACKLOG_CONNECTS = 256      # the full-backlog row's cap (ruling 2b6e272b): none pending by then is BROKEN
+
+
+def full_backlog_row(scan=None, wait_s=0.5):
+    """Review row `full-backlog`: a listener whose backlog is full is refused, not missed. One on 127.0.0.1 never
+    accepts; connects are added, at most FULL_BACKLOG_CONNECTS, until a direct connect stays pending (shown and logged);
+    then the scan's own verdict on that port must be a listener ("timed out" or "accepted"), never closed. None pending
+    by the cap is BROKEN with the count, never a PASS. lsof would refuse this user's listener anyway, so the scan's
+    verdict, not the refusal, is the evidence."""
+    most = FULL_BACKLOG_CONNECTS
+    scan = scan or (lambda port: lane.scan_loopback([(socket.AF_INET, "127.0.0.1", 0, "127.0.0.1")], ports=[port]))
+    server, held = socket.socket(), []
+    try:
+        server.bind(("127.0.0.1", 0))
+        server.listen(0)
+        port, pending = server.getsockname()[1], False
+        while len(held) < most and not pending:
+            c = socket.socket()
+            c.setblocking(False)
+            c.connect_ex(("127.0.0.1", port))
+            held.append(c)
+            _, writable, _ = select.select([], [c], [], wait_s)
+            pending = not writable
+        if not pending:
+            return "BROKEN", "port %d accepted %d connects without one staying pending, so its backlog never filled" % (
+                port, len(held))
+        found = scan(port)
+    finally:
+        for c in held + [server]:
+            c.close()
+    if found is None:
+        return "BROKEN", "the scan couldn't say"
+    how = found.get(("127.0.0.1", port))
+    if how == "timed out":                              # only a timeout proves the backlog was full (review item 7)
+        return "PASS", "port %d: a direct connect stayed pending after %d; the scan's verdict: %s (a listener)" % (
+            port, len(held), how)
+    if how is not None:
+        return "BROKEN", "port %d: the scan's connect was %s, so the backlog wasn't full when it probed" % (port, how)
+    return "FAIL", "port %d, a full backlog, read as closed by the scan" % port
+
+
+def bound_not_listening_row(check=None):
+    """Review row `bound-not-listening` (Mac only; Linux answers with RST): a socket bound on 127.0.0.1 but not
+    listening drops the SYN, so the scan reads a listener there, nobody names it, and the check refuses (ruling
+    4db21a5e). The refusal quotes nettop's Closed row."""
+    if not lane._on_macos():
+        return "INFO", "Linux answers a connect there with RST: nothing to show"
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        ok, problems = (check or _check_now)()
+    finally:
+        sock.close()
+    hit = [p for p in problems if p.startswith("port %d on 127.0.0.1" % port)]
+    return ("PASS", hit[0]) if not ok and hit else ("FAIL", "port %d wasn't refused (%s)" % (port, "; ".join(problems[:3]) or "the check passed"))
+
+
+def beside_a_wildcard_row(check=None, rows=None):
+    """Review row `beside-a-wildcard`: 127.0.0.1:P bound beside an approved wildcard *:P of this user's (macOS allows
+    it with SO_REUSEADDR, and the specific socket wins the connections) is judged on its own and refused."""
+    rows = rows if rows is not None else (lane._named()[0] or [])
+    try:
+        approved = lane.load_approved()
+    except lane.LaneRefused as e:
+        return "BROKEN", "the approved list is broken: %s" % e
+    beside = next((item for item in sorted(rows, key=lambda r: r["port"]) if item["uid"] == os.getuid()
+                   and item["host"] == "*" and item.get("family", 4) == 4 and lane.pid_path(item["pid"]) in approved), None)
+    if beside is None:
+        return "BROKEN", "no approved wildcard listener of this user's to stand beside"
+    sock = socket.socket()
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", beside["port"]))
+        except OSError as e:
+            return "INFO", "127.0.0.1:%d can't be bound beside *:%d here (%s)" % (beside["port"], beside["port"], e)
+        sock.listen(4)
+        ok, problems = (check or _check_now)()
+    finally:
+        sock.close()
+    hit = [p for p in problems if "(pid %d)" % os.getpid() in p and "port %d" % beside["port"] in p]
+    return ("PASS", hit[0]) if not ok and hit else ("FAIL", "127.0.0.1:%d beside %s's *:%d wasn't refused (%s)" % (
+        beside["port"], beside["command"], beside["port"], "; ".join(problems[:3]) or "the check passed"))
+
+
+def link_local_row(check=None, clock=None):
+    """Review row `link-local`: a listener only on the loopback interface's fe80::1 is reached by the scan and refused.
+    The fe80 scan is timed; a Local Network prompt, if one appears, is for the person to record."""
+    clock = clock or time.monotonic
+    targets = [t for t in lane.loopback_targets()[0] if t[1] == "fe80::1"]
+    if not targets:
+        return "BROKEN", "the loopback interface has no fe80::1 here"
+    family, address, scope, label = targets[0]
+    sock = socket.socket(socket.AF_INET6)
+    try:
+        sock.bind((address, 0, 0, scope))
+        sock.listen(4)
+        port = sock.getsockname()[1]
+        start = clock()
+        found = lane.scan_loopback(targets)
+        took = clock() - start
+        ok, problems = (check or _check_now)()
+    finally:
+        sock.close()
+    reached = found is not None and (label, port) in found
+    hit = [p for p in problems if "port %d" % port in p]
+    verdict = "PASS" if reached and not ok and hit else "FAIL"
+    return verdict, "%s port %d %s by the scan (%s in %.1f s), %s; note any Local Network prompt" % (
+        label, port, "reached" if reached else "NOT reached", label, took, hit[0] if hit else "not refused")
+
+
+def canary_row(check=None):
+    """Review row `canary`: a scan that misses its canary (stubbed, as a filter answering with RST would) refuses."""
+    real = lane.scan_loopback
+
+    def blind(targets, ports=None, **kwargs):
+        return {} if ports is None else real(targets, ports=ports, **kwargs)
+    lane.scan_loopback = blind
+    try:
+        ok, problems = (check or _check_now)()
+    finally:
+        lane.scan_loopback = real
+    hit = [p for p in problems if p.startswith("the scan can't see")]
+    return ("PASS", hit[0]) if not ok and hit else ("FAIL", "; ".join(problems[:3]) or "the check passed")
+
+
+def nettop_missing_row(check=None):
+    """Review row `nettop-missing`: with nettop gone from the path, the check refuses outright."""
+    real = lane.shutil.which
+    lane.shutil.which = lambda name, path=None: None if name == "nettop" else real(name, path=path)
+    try:
+        ok, problems = (check or _check_now)()
+    finally:
+        lane.shutil.which = real
+    return ("PASS", problems[0]) if not ok and problems and problems[0].startswith("nettop couldn't be read") else (
+        "FAIL", "; ".join(problems[:3]) or "the check passed")
+
+
+def repeat_scan_row(times=20, firewall=None):
+    """Review row `scan-repeat`: twenty scans in a row find the same ports, with no phantom; the firewall's "Block all
+    incoming" and stealth state are recorded, so a run with them on can be compared with one without."""
+    targets = lane.loopback_targets()[0]
+    sets = []
+    for _ in range(times):
+        found = lane.scan_loopback(targets)
+        if found is None:
+            return "BROKEN", "a scan couldn't finish"
+        sets.append(frozenset((key, how) for key, how in found.items() if how != "self"))   # every verdict but self
+    state = (firewall or _firewall_state)()
+    if all(item == sets[0] for item in sets):
+        return "PASS", "%d scans, the same %d (address, port)s each time; %s" % (times, len(sets[0]), state)
+    extra = sorted(set().union(*sets) - frozenset.intersection(*sets))
+    return "FAIL", "the scans differ on %s; %s" % (", ".join("%s:%d (%s)" % (key + (how,)) for key, how in extra[:10]),
+                                                   state)
+
+
+def _firewall_state():
+    tool = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+    out = []
+    for flag in ("--getblockall", "--getstealthmode"):
+        r = lane._run([tool, flag], timeout=10)
+        out.append(" ".join(r.stdout.split()) if r is not None and r.returncode == 0 else "%s unreadable" % flag)
+    return "; ".join(out)
+
+
+def nettop_row_removed(check=None):
+    """Review row `nettop-row-removed`: take one other user's listener out of nettop's naming (a stub) and the check
+    must refuse its reachable port as unidentified: the scan, not the naming, decides what is reachable."""
+    targets, _, refusals = lane.loopback_targets()
+    reach = lane.scan_loopback(targets) if not refusals else None
+    rows, sockets, failed = lane._named()
+    if reach is None or failed:
+        return "BROKEN", "the scan or the naming couldn't be read here"
+    by_label = {t[3]: t for t in targets}
+    others = sorted((item for item in rows if item["uid"] != os.getuid() and any(
+        item["port"] == port and lane._covers(item, by_label[label]) for label, port in reach)),
+        key=lambda item: (item["port"], item["pid"]))
+    if not others:
+        return "BROKEN", "no other user's listener is reachable here, so there is no nettop row to take away"
+    pick = others[0]
+    real = lane.nettop_sockets
+    lane.nettop_sockets = lambda: ([item for item in sockets if item["pid"] != pick["pid"]], "")
+    try:
+        ok, problems = (check or (lambda: lane._check(lane.load_approved(), lane.live_lanes())))()
+    finally:
+        lane.nettop_sockets = real
+    hit = [p for p in problems if p.startswith("port %d on " % pick["port"]) and "can't be identified" in p]
+    if hit:
+        return "PASS", "without pid %d's nettop rows: %s" % (pick["pid"], hit[0])
+    return "FAIL", "port %d stayed unremarked with pid %d's nettop rows taken away (%s)" % (pick["port"], pick["pid"],
+                                                                                         "; ".join(problems[:3]))
 
 
 # ---------- the run ----------
@@ -1417,11 +1657,19 @@ def step1(args, report):
     result = guarded(report, 1, "lsof-exit", lsof_exit)
     if result:
         report.add(1, "lsof-exit", result[0], result[1], full=True)
-    # netstat-capture: the real header and sample rows, for test fixtures
-    dest = Path.home() / ".superyak" / ("lane-netstat-fixture-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
-    result = guarded(report, 1, "netstat-capture", lambda: capture_netstat(lane._run, lane.pid_path, dest))
+    # nettop-capture: the real header and sample rows, for local test fixtures (never the repository)
+    dest = Path.home() / ".superyak" / ("lane-nettop-fixture-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
+    result = guarded(report, 1, "nettop-capture", lambda: capture_nettop(lane._run, lane.pid_path, dest))
     if result:
-        report.add(1, "netstat-capture", result[0], result[1], full=True)
+        report.add(1, "nettop-capture", result[0], result[1], full=True)
+    # the listener check's own pieces, measured here (spec amendment of 2026-10-09)
+    for name, fn in (("listener-scan", listener_scan_info), ("full-backlog", full_backlog_row),
+                     ("bound-not-listening", bound_not_listening_row), ("beside-a-wildcard", beside_a_wildcard_row),
+                     ("link-local", link_local_row), ("canary", canary_row), ("nettop-missing", nettop_missing_row),
+                     ("nettop-row-removed", nettop_row_removed), ("scan-repeat", repeat_scan_row)):
+        result = guarded(report, 1, name, fn)
+        if result:
+            report.add(1, name, result[0], result[1], full=True)
     # hardlink-naming: a stranger's open file, hard-linked into a lane, isn't the lane's
     result = guarded(report, 1, "hardlink-naming", hardlink_naming)
     if result:
@@ -1505,7 +1753,7 @@ def stop_root_listener(root, port, ps=None, kill=None, listening=None, say=print
 
 
 def choose_root_listener(read=None, owner=None, path_of=None, run=None):
-    """Before step 1: the root-owned listener step 4 will observe. First an EXISTING one (netstat, owner uid 0 by
+    """Before step 1: the root-owned listener step 4 will observe. First an EXISTING one (named by nettop, owner uid 0 by
     `ps -o uid=`, reachable: loopback or a wildcard, program identified), which needs no sudo. Only if there is none,
     `sudo -n -v` (an agent's Bash tool can't sudo: macOS caches credentials per terminal). Otherwise a PERSON starts
     one in step 4 (person_root_rows). Returns {"kind": "existing", pid, port, host, exe} | {"kind": "sudo"} |
@@ -1911,7 +2159,7 @@ def steps2to7(args, report):
                         report.add(4, "a root-owned listener is seen", verdict, "%s: %s" % (detail, exe))
                     else:
                         report.add(4, "a root-owned listener is seen", "FAIL",
-                                   "netstat didn't show it, or its program couldn't be identified")
+                                   "nettop didn't name it, or its program couldn't be identified")
                     team.message("kaylee", "Reply with only the word done. Do not run anything.")
                     team.wait("kaylee", ("waiting",), timeout=60)
                     named = any("LANE WAITING" in m and "port %d" % root_port in m and NETCAT in m for m in team.inbox)
@@ -1919,6 +2167,7 @@ def steps2to7(args, report):
                 finally:
                     stop_root_listener(root, root_port)
                 team.wait("kaylee", ("idle",), timeout=180, patient=True)
+        alias_rows(report, team)
 
         # ---- step 5: two browser workers at once, each running Bricks spec 1 ----
         servers, broker_seen = {"kaylee": set(), "wash": set()}, {"kaylee": set(), "wash": set()}
@@ -2151,7 +2400,7 @@ def zoe_rows(args, report, team):
 
 
 def existing_root_rows(report, team, plan, al):
-    """Step 4 with a root-owned listener that was already there (launchd's *:22, cupsd's 631): netstat sees it and the
+    """Step 4 with a root-owned listener that was already there (launchd's *:22, cupsd's 631): nettop names it and the
     user's lsof doesn't. To see it NAMED, its program is taken off the approved list for a moment (it must be on it, or
     the lanes would have been waiting all along); `al` (an ApprovedList) puts the list back."""
     pid, port, exe = plan["pid"], plan["port"], plan["exe"]
@@ -2181,15 +2430,17 @@ def existing_root_rows(report, team, plan, al):
 
 
 def person_root_rows(report, team, read=None, path_of=None, owner=None, clock=None, sleep=None, say=None,
-                     pick_port=None, port_free=None, appear_s=900, gone_s=600):
+                     pick_port=None, port_free=None, appear_s=900, gone_s=600, reach=None):
     """Step 4 when no root-owned listener exists and sudo -n fails: a PERSON starts `sudo /usr/bin/nc -lk` on a port
     this run names, in his own Terminal. Runs after the D9/D10/D11 rows, with kaylee idle (an unapproved root nc
     makes every lane turn wait). The script NEVER signals that listener: it asks the person to stop it and waits.
     Once the start line is printed, the stop line always follows, whatever happens (an interrupt, an error, the
-    deadline): "(if you started it)" when the run didn't get as far as asking. A netstat that can't be read says
-    nothing about whether the listener is gone. Raises RuntimeError (after a BROKEN row) when it is still listening,
-    or netstat can't say, 10 minutes after the request, since steps 5-7 would only wait."""
+    deadline): "(if you started it)" when the run didn't get as far as asking. Gone means the scan no longer reaches
+    the port and nothing names it; a scan or a naming that can't be read says nothing. Raises RuntimeError (after a
+    BROKEN row) when it is still listening, or that can't be said, 10 minutes after the request, since steps 5-7 would
+    only wait."""
     read, path_of, owner = read or lane.read_listeners, path_of or lane.pid_path, owner or _owner_uid
+    reach = reach or _scan_port
     clock, sleep = clock or time.monotonic, sleep or time.sleep
     say = say or (lambda line: print(line, flush=True))
     pick_port, port_free = pick_port or free_port, port_free or lane.port_free
@@ -2200,13 +2451,13 @@ def person_root_rows(report, team, read=None, path_of=None, owner=None, clock=No
     say("(leave it running; this run waits up to 15 minutes)")
     asked = []
     try:
-        _person_listener(report, team, port, read, path_of, owner, clock, sleep, say, asked, appear_s, gone_s)
+        _person_listener(report, team, port, read, path_of, owner, clock, sleep, say, asked, appear_s, gone_s, reach)
     finally:
         if not asked:
             say("ANDY ACTION: stop it now (if you started it): press Ctrl-C in that Terminal")
 
 
-def _person_listener(report, team, port, read, path_of, owner, clock, sleep, say, asked, appear_s, gone_s):
+def _person_listener(report, team, port, read, path_of, owner, clock, sleep, say, asked, appear_s, gone_s, reach):
     def on_port():
         return [item for item in read() or [] if item["port"] == port]
     found, deadline = None, clock() + appear_s
@@ -2224,7 +2475,7 @@ def _person_listener(report, team, port, read, path_of, owner, clock, sleep, say
     if owner(pid) != 0:
         root_rows_unavailable(report, "pid %d on port %d is not root-owned: started without sudo" % (pid, port))
     else:
-        verdict, detail = root_listener_proof(pid, port)
+        verdict, detail = root_listener_proof(pid, port, owner=owner, reach=reach)
         report.add(4, "a root-owned listener is seen", verdict, "%s: %s" % (detail, NETCAT))
         try:
             team.message("kaylee", "Reply with only the word done. Do not run anything.")
@@ -2237,20 +2488,22 @@ def _person_listener(report, team, port, read, path_of, owner, clock, sleep, say
     say("ANDY ACTION: stop it now: press Ctrl-C in that Terminal")
     deadline, left = clock() + gone_s, None
     while clock() < deadline:
-        listening = read()
-        if listening is not None:                        # None: netstat couldn't be read, which says nothing
+        listening, reached = read(), reach(port)
+        if listening is not None and reached is not None:    # None: that can't be read, which says nothing
             left = [item for item in listening if item["port"] == port]
-            if not left:
+            if not left and not reached:
                 report.add(4, "the root-owned listener is gone", "PASS", "nothing listens on port %d" % port)
                 team.wait("kaylee", ("idle",), timeout=180, patient=True)
                 return
+            left = left or [{"pid": pid, "port": port}]
         sleep(2)
     if left is None:
         report.add(4, "the root-owned listener is gone", "BROKEN",
-                   "netstat couldn't be read for ten minutes after the request, so whether pid %d still listens on "
-                   "port %d is unknown: check it, and stop it with `sudo kill %d`" % (pid, port, pid))
-        raise RuntimeError("netstat couldn't say whether the root-owned nc (pid %d, port %d) stopped: steps 5-7 would "
-                           "only wait. Check it, stop it with `sudo kill %d`, and run again" % (pid, port, pid))
+                   "the scan or the naming couldn't be read for ten minutes after the request, so whether pid %d "
+                   "still listens on port %d is unknown: check it, and stop it with `sudo kill %d`" % (pid, port, pid))
+        raise RuntimeError("the scan or the naming couldn't say whether the root-owned nc (pid %d, port %d) stopped: "
+                           "steps 5-7 would only wait. Check it, stop it with `sudo kill %d`, and run again"
+                           % (pid, port, pid))
     pid = left[0]["pid"]
     report.add(4, "the root-owned listener is gone", "BROKEN",
                "pid %d still listens on port %d ten minutes after the request: stop it with `sudo kill %d`" % (pid, port, pid))
@@ -2311,16 +2564,67 @@ def report_spec(report, step, wid, worktree, specs):
                            "%s is tagged @lane-advisory but isn't one of the agreed tests: %s" % (name, message))
 
 
+def alias_rows(report, team, targets=None, check=None, clock=None, sleep=None, say=None, appear_s=900, gone_s=600):
+    """Step 4's lo0 alias (amendment of 2026-10-09): a PERSON adds 127.0.0.2 to lo0 in his own Terminal; the listener
+    check must refuse it by name, and the lane must wait naming it. Once the add line is printed, the remove line
+    always follows, whatever happens. Raises RuntimeError (after a BROKEN row) when the alias is still there 10
+    minutes after the request, since every lane would wait."""
+    targets, check = targets or lane.loopback_targets, check or lane.listeners_ok
+    clock, sleep = clock or time.monotonic, sleep or time.sleep
+    say = say or (lambda line: print(line, flush=True))
+
+    def present():
+        return any("also holds %s (an alias)" % ALIAS in r for r in targets()[2])
+    say("ANDY ACTION: in your own Terminal run: sudo %s lo0 alias %s up" % (IFCONFIG, ALIAS))
+    say("(this run waits up to 15 minutes, then asks you to remove it)")
+    try:
+        deadline = clock() + appear_s
+        while clock() < deadline and not present():
+            sleep(2)
+        if not present():
+            report.add(4, "an lo0 alias is refused, named", "BROKEN", "no alias appeared on lo0 within 15 minutes")
+        else:
+            ok, problems = check()
+            named = [p for p in problems if "also holds %s (an alias)" % ALIAS in p]
+            report.add(4, "an lo0 alias is refused, named", "PASS" if not ok and named else "FAIL",
+                       named[0] if named else "; ".join(problems[:3]) or "the check passed")
+            try:
+                team.message("kaylee", "Reply with only the word done. Do not run anything.")
+                team.wait("kaylee", ("waiting",), timeout=60)
+                held = any("LANE WAITING" in m and ALIAS in m for m in team.inbox)
+                report.add(4, "it holds the lane, named", "PASS" if held else "FAIL", ALIAS)
+            except RuntimeError as e:                    # the person must still be asked to remove it
+                report.add(4, "it holds the lane, named", "FAIL", str(e))
+    finally:
+        say("ANDY ACTION: remove it now: sudo %s lo0 -alias %s" % (IFCONFIG, ALIAS))
+    deadline = clock() + gone_s
+    while clock() < deadline:
+        if not present():
+            report.add(4, "the lo0 alias is gone", "PASS", "lo0 holds only its own addresses")
+            team.wait("kaylee", ("idle",), timeout=180, patient=True)
+            return
+        sleep(2)
+    report.add(4, "the lo0 alias is gone", "BROKEN", "lo0 still holds %s ten minutes after the request: remove it with "
+               "`sudo %s lo0 -alias %s`" % (ALIAS, IFCONFIG, ALIAS))
+    raise RuntimeError("the lo0 alias %s is still there, so every lane would wait: remove it with `sudo %s lo0 -alias "
+                       "%s` and run again" % (ALIAS, IFCONFIG, ALIAS))
+
+
 def check_cleanup(report, when, w, pids, broker_pids):
-    """Step 7's rows, each with its evidence. netstat (root's sockets included) lists the lane's ports; lane_pids and
-    env_pids are the cleanup's own matchers and must come back empty; "gone" counts only if a pid besides the broker's
-    was recorded while the lane ran. A matcher that can't say is BROKEN, never a pass."""
+    """Step 7's rows, each with its evidence. The loopback scan of the lane's ports must reach none, and nothing named
+    (lsof for this user, nettop for others) may listen there; lane_pids and env_pids are the cleanup's own matchers and
+    must come back empty; "gone" counts only if a pid besides the broker's was recorded while the lane ran. A matcher
+    that can't say is BROKEN, never a pass."""
     base, path = w["lane"]["base"], w["lane"]["path"]
     listening = lane.read_listeners()
-    if listening is None:
-        report.add(7, "%s: nothing listens on the lane's ports" % when, "BROKEN", "netstat failed or printed an unknown format")
+    targets = lane.loopback_targets()[0]
+    reached = lane.scan_loopback(targets, ports=range(base, base + lane.BLOCK)) if targets else None
+    if listening is None or reached is None:
+        report.add(7, "%s: nothing listens on the lane's ports" % when, "BROKEN",
+                   "lsof failed, or the loopback scan couldn't finish")
     else:
         left = sorted(item["pid"] for item in listening if base <= item["port"] < base + lane.BLOCK)
+        left += sorted("%s:%d" % key for key in reached)
         report.add(7, "%s: nothing listens on the lane's ports" % when, "FAIL" if left else "PASS", left or "")
     recorded = sorted(p for p in pids if p)
     others = [p for p in recorded if p not in {x for x in broker_pids if x}]
@@ -2340,18 +2644,35 @@ def check_cleanup(report, when, w, pids, broker_pids):
 
 
 def list_listeners():
-    """Every listener, from the listener check's own enumeration (netstat, root's included, and proc_pidpath), the live
-    lane blocks, and the lsof cross-check. A broken approved list is shown as broken, and the rows still print."""
-    found = lane.read_listeners()
-    if found is None:
-        sys.exit("netstat failed, or printed a header the listener check doesn't know")
+    """What a lane could reach and who holds it, as the listener check sees it: the loopback scan of lo0's own
+    addresses; each reachable port's owners named by lsof (this user) or nettop (others), identified by proc_pidpath;
+    this user's listeners beyond loopback (I3); the live lane blocks; and every reachable port nobody names. A broken
+    approved list is shown as broken, and the rows still print."""
+    targets, notes, refusals = lane.loopback_targets()
+    for line in notes + refusals:
+        print(line)
+    if not targets:
+        sys.exit("the loopback interface's addresses can't be listed")
+    reach = lane.scan_loopback(targets)
+    if reach is None:
+        sys.exit("the loopback scan couldn't finish")
+    rows, sockets, failed = lane._named()
+    if failed:
+        sys.exit("; ".join(failed))
     try:
         approved = lane.load_approved()
     except lane.LaneRefused as e:
         approved = set()
         print("The approved list is broken, so every listener below counts as unapproved: %s\n" % e)
-    rows = listener_rows(found, lane.pid_path, approved, owner=lane._owners().get)
-    for pid, address, exe, verdict in rows:
+    by_label = {t[3]: t for t in targets}
+    served = [item for item in rows if any(item["port"] == port and lane._covers(item, by_label[label])
+                                           for label, port in reach)]
+    beyond = [item for item in rows if item["uid"] == os.getuid() and item not in served]
+    uid_of = {item["pid"]: item["uid"] for item in rows}
+    print("The scan reaches %d port(s) on %s.\n" % (len({port for _, port in reach}), ", ".join(by_label)))
+    found = listener_rows(served, lane.pid_path, approved) + listener_rows(beyond, lane.pid_path, approved,
+                                                                         owner=uid_of.get)
+    for pid, address, exe, verdict in found:
         print("pid %-7d %-26s %s  (%s)" % (pid, address, exe, verdict))
     try:
         lanes = lane.live_lanes()
@@ -2360,14 +2681,9 @@ def list_listeners():
         print("\nThe lane registry can't be read: %s" % e)
     for base, key in lanes or []:
         print("\nlive lane block %d-%d (lane %s): listeners there are expected" % (base, base + lane.BLOCK - 1, key))
-    seen = lane.lsof_listeners()
-    if seen is None:
-        print("\nlsof failed, so the listener check would fail closed")
-    else:
-        for pid, port in sorted(seen - {(item["pid"], item["port"]) for item in found}):
-            print("\nlsof shows pid %d listening on port %d, which netstat doesn't list: the check fails until only "
-                  "one process holds it" % (pid, port))
-    approvable = sorted({exe for _, _, exe, verdict in rows if verdict.startswith(("approved", "approvable"))})
+    for problem in lane._unnamed_problems(lane._unnamed(reach, targets, rows), targets, sockets):
+        print("\n" + problem)
+    approvable = sorted({exe for _, _, exe, verdict in found if verdict.startswith(("approved", "approvable"))})
     print("\nThe approvable ones, for %s:\n%s" % (lane.approved_path(), json.dumps(approvable, indent=1)))
 
 

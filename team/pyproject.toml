@@ -45,3 +45,4 @@ only-include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["real_scan: runs the real loopback scan instead of the empty one every other test gets"]
