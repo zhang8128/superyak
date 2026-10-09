@@ -206,7 +206,7 @@ def test_read_only_run_sees_a_throwaway_worktree_of_head_not_the_private_files_i
     assert call['secret_visible'] is False and '.engram' not in call['files'] and '.envrc' not in call['files']
     assert 'README.md' in call['files'] and '.gitignore' in call['files']
     allow = call['settings']['permissions']['allow']
-    assert f'Read(/{snapshot}/**)' in allow and f'Grep(/{snapshot}/**)' in allow and f'Glob(/{snapshot}/**)' in allow
+    assert f'Read(/{snapshot}/**)' in allow and f'Grep(/{snapshot}/**)' in allow and not any(r.startswith('Glob(') for r in allow)
     assert not any(str(repo) in rule for rule in allow)
     # Always removed afterwards, leaving the workspace untouched: no worktree, no branch, the private files still there.
     assert not snapshot.exists() and worktrees(repo) == [str(repo)] and branches(repo) == []

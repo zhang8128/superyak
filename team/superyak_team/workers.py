@@ -301,7 +301,7 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
     scopes = sorted({cwd, repo})
     allow = []
     for scope in scopes:
-        for tool in ("Read", "Grep", "Glob"):
+        for tool in ("Read", "Grep"):               # Glob(...) and Write(...) rules aren't matched (2.1.295): H6
             allow.append("%s(/%s/**)" % (tool, scope))
     allow += ["Bash"] + ["mcp__team__%s" % t for t in TEAM_TOOLS] + \
              [engram_prefix + t for t in ENGRAM_TOOLS]
@@ -316,9 +316,8 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
         else:
             deny.append("WebSearch")
     else:
-        allow += ["Edit(/%s/**)" % cwd, "Write(/%s/**)" % cwd]
-        deny += ["WebSearch", "Edit(/%s/.git)" % cwd, "Write(/%s/.git)" % cwd,
-                 "Edit(/%s/.git/**)" % cwd, "Write(/%s/.git/**)" % cwd]
+        allow += ["Edit(/%s/**)" % cwd]
+        deny += ["WebSearch", "Edit(/%s/.git)" % cwd, "Edit(/%s/.git/**)" % cwd]
         allow_write = [cwd]
     settings = {
         "permissions": {"defaultMode": "dontAsk", "allow": allow, "deny": deny},
@@ -340,6 +339,10 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
         fs["allowRead"] = fs["allowRead"] + [tmp, cache] + ([str(preload)] if preload is not None else [])
         fs["denyRead"] = fs["denyRead"] + [str(lanes.TMP_ROOT / ("sy-lane-%d" % os.getuid())),
                                            "/private/tmp/claude-%d" % os.getuid()]
+        # H3: a second layer under the sandbox's and dontAsk's refusals: nothing writes the worktree's .claude or
+        # .mcp.json (Claude Code matches Edit(...) for every editing tool).
+        fs["denyWrite"] = fs["denyWrite"] + [os.path.join(cwd, ".claude"), os.path.join(cwd, ".mcp.json")]
+        deny += ["Edit(/%s/.claude/**)" % cwd, "Edit(/%s/.mcp.json)" % cwd]
         settings["disableAllHooks"] = True
         # Flag settings outrank the project's and the local ones the worker could write: an empty helper is no helper,
         # and a plugin set to false is off (its hooks, MCP and LSP servers, monitors): lane.lane_plugins names them.

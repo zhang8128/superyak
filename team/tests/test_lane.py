@@ -614,7 +614,7 @@ def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
     preload = "/home/u/.superyak/team/teams/t1/workers/kaylee/lane-preload.cjs"
     plain = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
     laned = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane=path, preload=preload)
-    assert laned["permissions"] == plain["permissions"]
+    assert laned["permissions"]["allow"] == plain["permissions"]["allow"]       # H3 adds two deny rules, below
     assert {k: v for k, v in laned["sandbox"].items() if k not in ("network", "filesystem")} == \
         {k: v for k, v in plain["sandbox"].items() if k != "filesystem"}
     assert laned["sandbox"]["network"] == {"allowedDomains": [], "strictAllowlist": True, "allowLocalBinding": True,
@@ -623,7 +623,7 @@ def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
     assert fs["allowWrite"] == before["allowWrite"] + [path + "/tmp", path + "/npm-cache"]
     assert fs["allowRead"] == before["allowRead"] + [path + "/tmp", path + "/npm-cache", preload]
     assert fs["denyRead"] == before["denyRead"] + ["/tmp/sy-lane-%d" % uid, "/private/tmp/claude-%d" % uid]
-    assert fs["denyWrite"] == before["denyWrite"]
+    assert fs["denyWrite"] == before["denyWrite"] + ["/r/wt/.claude", "/r/wt/.mcp.json"]      # H3
     assert path not in fs["allowWrite"] and path + "/b" not in fs["allowWrite"] and preload not in fs["allowWrite"]
     assert not any(p.startswith(path + "/b") for p in fs["allowWrite"] + fs["allowRead"])
     assert set(laned) - set(plain) == {"disableAllHooks", "enabledPlugins", *lane.HELPER_KEYS}
@@ -5234,3 +5234,40 @@ def test_h1_a_plugin_forced_on_by_managed_policy_refuses_a_lane(env):
                                          "would run with the lane's environment" % lane.MANAGED_SETTINGS]
     lane.MANAGED_SETTINGS.write_text(json.dumps({"enabledPlugins": ["a@b"]}))
     assert len(lane.settings_widenings()) == 1                      # the wrong shape fails closed
+
+
+# ---------- Lane hardening H3: a lane denies writes to <wt>/.claude and <wt>/.mcp.json twice over ----------
+
+def test_h3_a_lane_denies_writes_to_the_worktrees_claude_folder_and_mcp_json(env, monkeypatch):
+    """H3: the sandbox already refused Bash writes there and dontAsk refused the Write tool (Pi test); this is the second
+    layer: denyWrite for the sandbox and Edit(...) deny rules (Claude Code matches Edit(...) for every editing tool).
+    Non-lane settings are unchanged (the snapshots)."""
+    monkeypatch.setenv("HOME", "/home/u")
+    plain = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    laned = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane="/tmp/sy-lane-1/0123456789",
+                                            preload="/h/p.cjs")
+    assert laned["sandbox"]["filesystem"]["denyWrite"] == plain["sandbox"]["filesystem"]["denyWrite"] + [
+        "/r/wt/.claude", "/r/wt/.mcp.json"]
+    assert laned["permissions"]["deny"] == plain["permissions"]["deny"] + ["Edit(//r/wt/.claude/**)",
+                                                                            "Edit(//r/wt/.mcp.json)"]
+    assert laned["permissions"]["allow"] == plain["permissions"]["allow"]
+
+
+# ---------- Lane hardening H6: no permission rule Claude Code ignores ----------
+
+def rules_of(settings):
+    return settings["permissions"]["allow"] + settings["permissions"]["deny"]
+
+
+def test_h6_a_workers_permission_rules_hold_none_that_claude_code_ignores(env, monkeypatch):
+    """H6: Claude Code 2.1.295 matches Edit(...) and Read(...) for the file tools and warns that Write(...) and
+    Glob(...) rules aren't matched. They're dropped; the Edit(...) .git denies and the Read(...) allows stay."""
+    monkeypatch.setenv("HOME", "/home/u")
+    for mode, web, cwd in (("build", False, "/r/wt"), ("collab", True, "/r/room"), ("collab", False, "/r/room")):
+        st = workers.claude_sandbox_settings(cwd, mode, web, repo="/r/repo")
+        assert not [r for r in rules_of(st) if r.startswith(("Write(", "Glob("))], mode
+        assert "Read(/%s/**)" % cwd in st["permissions"]["allow"]
+    build = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    assert "Edit(//r/wt/**)" in build["permissions"]["allow"]
+    assert {"Edit(//r/wt/.git)", "Edit(//r/wt/.git/**)"} <= set(build["permissions"]["deny"])
+    assert "Write" in workers.claude_sandbox_settings("/r/room", "collab", False, repo="/r/repo")["permissions"]["deny"]

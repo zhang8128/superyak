@@ -4,13 +4,10 @@
   "allow": [
    "Read(//r/repo/**)",
    "Grep(//r/repo/**)",
-   "Glob(//r/repo/**)",
    "Read(//r/wt/**)",
    "Grep(//r/wt/**)",
-   "Glob(//r/wt/**)",
    "Bash",
    "Edit(//r/wt/**)",
-   "Write(//r/wt/**)",
    "mcp__adna"
   ],
   "deny": [
@@ -26,8 +23,6 @@
    "Read(//**/.env.*)",
    "WebFetch",
    "WebSearch",
-   "Write(//r/wt/.git)",
-   "Write(//r/wt/.git/**)",
    "mcp__station"
   ]
  },
