@@ -834,3 +834,278 @@ def _environ(pid):
     if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
         return None
     return _parse_procargs2(ctypes.string_at(buf, size.value))
+
+
+# ---------- the broker's code and browser (spec: The broker; Decisions: the lane's browser, the broker's code) ----------
+
+REGISTRY = "https://registry.npmjs.org/"
+SHELL = "chromium-headless-shell"
+MANIFESTS = teamlib.package_dir() / "lane" / "browsers.json"
+VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+STAMP = ".superyak-integrity"
+DEPENDENCIES_MARKER = "DEPENDENCIES_VALIDATED"
+
+
+def broker_root():
+    """~/.superyak/team/broker: teamd's own copies of Playwright and its browser, outside every worktree."""
+    root = teamlib.team_home() / "broker"
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    return root
+
+
+def browsers_root():
+    """PLAYWRIGHT_BROWSERS_PATH for the installer and the broker: never the user's own browsers folder."""
+    root = broker_root() / "browsers"
+    root.mkdir(exist_ok=True)
+    os.chmod(root, 0o700)
+    return root
+
+
+def lock_entry(repo, base):
+    """playwright-core's version and integrity from the lockfile at the worker's base commit (the lead's, fixed at
+    spawn), never from the worktree, which the worker can write."""
+    r = workers.git(repo, "cat-file", "blob", "%s:package-lock.json" % base, check=False)
+    if r.returncode != 0:
+        raise LaneRefused("the base commit %s has no package-lock.json, so the broker's Playwright can't be pinned"
+                          % base[:12])
+    try:
+        packages = json.loads(r.stdout).get("packages") or {}
+    except (ValueError, AttributeError):
+        raise LaneRefused("the base commit's package-lock.json can't be read")
+    entry = packages.get("node_modules/playwright-core") if isinstance(packages, dict) else None
+    if not isinstance(entry, dict):
+        raise LaneRefused("the base commit's package-lock.json has no node_modules/playwright-core entry")
+    version, integrity = entry.get("version"), entry.get("integrity")
+    if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
+        raise LaneRefused("playwright-core's version %r in the base commit's lockfile isn't x.y.z" % (version,))
+    if not isinstance(integrity, str) or not re.fullmatch(r"sha512-[A-Za-z0-9+/]+={0,2}", integrity):
+        raise LaneRefused("playwright-core %s has no sha512 integrity in the base commit's lockfile" % version)
+    return version, integrity
+
+
+def https_get(url, limit=64 * 2 ** 20):
+    """teamd's own download, with no proxy: the integrity check, not the transport, is what the pin rests on."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(url, timeout=120) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise LaneRefused("%s is larger than %d bytes" % (url, limit))
+    return data
+
+
+def _extract(tar, members, where):
+    """tarfile's data filter, or no unpacking at all."""
+    if not python_ok():
+        raise LaneRefused("teamd's Python has no tarfile data filter (it needs 3.11.4 or later), so the "
+                          "broker's Playwright can't be unpacked safely")
+    tar.extractall(where, members=members, filter="data")
+
+
+def extract_package(data, dest, stamp):
+    """Unpack an npm tarball's package/ folder into dest: every member checked first, then tarfile's data filter, into
+    a temporary folder. The stamp (the integrity hash the bytes matched) goes inside before the folder is renamed into
+    place, so the folder is either complete and stamped or not there at all."""
+    dest = Path(dest)
+    try:
+        tar = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
+    except (tarfile.TarError, OSError) as e:
+        raise LaneRefused("playwright-core's tarball can't be opened (%s)" % e)
+    with tar:
+        members = tar.getmembers()
+        for m in members:
+            parts = PurePosixPath(m.name).parts
+            if (m.name.startswith("/") or not parts or parts[0] != "package" or ".." in parts
+                    or not (m.isfile() or m.isdir())):
+                raise LaneRefused("playwright-core's tarball has a member outside its package folder: %r" % m.name)
+        tmp = Path(tempfile.mkdtemp(prefix=".unpack-", dir=dest.parent))
+        try:
+            _extract(tar, members, tmp)
+            _write_text(tmp / "package" / STAMP, stamp + "\n", 0o600)
+            os.rename(tmp / "package", dest)
+        except OSError as e:
+            raise LaneRefused("playwright-core can't be unpacked into %s (%s)" % (dest, e.strerror or e))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def pinned_playwright(repo, base, fetch=None):
+    """~/.superyak/team/broker/playwright-core-<version>/, fetched from the npm registry the first time. The tarball is
+    checked against the integrity hash in the base commit's lockfile, never the registry's own claim. A mismatch
+    anywhere refuses the lane."""
+    version, integrity = lock_entry(repo, base)
+    dest = broker_root() / ("playwright-core-" + version)
+    if dest.is_dir():
+        stamp = dest / STAMP
+        if not stamp.is_file() or stamp.read_text().strip() != integrity:
+            raise LaneRefused("%s isn't stamped with the integrity hash the base commit names; remove it and the next "
+                              "lane fetches it again" % dest)
+        return dest
+    fetch = fetch or https_get
+    try:
+        meta = json.loads(fetch(REGISTRY + "playwright-core/" + version))
+    except (OSError, ValueError) as e:
+        raise LaneRefused("the npm registry's metadata for playwright-core %s can't be read (%s)" % (version, e))
+    dist = meta.get("dist") if isinstance(meta, dict) and isinstance(meta.get("dist"), dict) else {}
+    tarball = dist.get("tarball")
+    if not isinstance(tarball, str) or not tarball.startswith(REGISTRY + "playwright-core/-/"):
+        raise LaneRefused("playwright-core %s's tarball isn't on %s" % (version, REGISTRY))
+    try:
+        data = fetch(tarball)
+    except OSError as e:
+        raise LaneRefused("playwright-core %s's tarball can't be downloaded (%s)" % (version, e))
+    if "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode() != integrity:
+        raise LaneRefused("playwright-core %s's tarball doesn't match the integrity hash in the base commit's "
+                          "lockfile" % version)
+    extract_package(data, dest, integrity)
+    return dest
+
+
+def shell_revision(pw_dir):
+    """The headless shell's revision, as the pinned Playwright names it in its browsers.json."""
+    try:
+        data = json.loads((Path(pw_dir) / "browsers.json").read_text())
+    except (OSError, ValueError):
+        data = {}
+    for browser in data.get("browsers") or []:
+        if isinstance(browser, dict) and browser.get("name") == SHELL:
+            revision = browser.get("revision")
+            if isinstance(revision, str) and re.fullmatch(r"[0-9]+", revision):
+                return revision
+    raise LaneRefused("the Playwright at %s names no %s revision" % (pw_dir, SHELL))
+
+
+def install_headless_shell(node_bin, pw_dir):
+    """The headless shell at the pinned Playwright's revision, installed by that Playwright's own installer, outside
+    every sandbox, with an environment built from nothing (no download host, proxy or TLS override can reach it).
+    The installer only downloads; only sandboxed brokers ever launch from this folder. Returns (folder, revision).
+    The manifest is checked separately (check_manifest)."""
+    revision = shell_revision(pw_dir)
+    folder = browsers_root() / ("chromium_headless_shell-" + revision)
+    if not (folder / "INSTALLATION_COMPLETE").is_file():
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "PLAYWRIGHT_BROWSERS_PATH": str(browsers_root()),
+               "PLAYWRIGHT_SKIP_BROWSER_GC": "1"}
+        r = _run_env([str(node_bin), str(Path(pw_dir) / "cli.js"), "install", SHELL], env, cwd=browsers_root())
+        if r is None or r.returncode != 0 or not (folder / "INSTALLATION_COMPLETE").is_file():
+            tail = teamlib.redact(((r.stdout + r.stderr) if r is not None else "")[-600:])
+            raise LaneRefused("installing %s %s failed (exit %s): %s"
+                              % (SHELL, revision, r.returncode if r is not None else "none", tail))
+    return folder, revision
+
+
+def _run_env(cmd, env, cwd, timeout=900):
+    """The installer's run: a fixed umask, so the modes in the manifest don't depend on teamd's."""
+    try:
+        return subprocess.run(cmd, env=env, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+                              umask=0o022)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _check_owner(path, st, sticky_ok=False):
+    """Owned by this user (or root) and writable by nobody else. A sticky folder (like /tmp) may be writable by all,
+    since nobody else can rename or remove what this user owns in it; that is allowed only for folders above."""
+    if st.st_uid not in (os.getuid(), 0):
+        raise LaneRefused("%s belongs to another user" % path)
+    if stat.S_ISLNK(st.st_mode) or not st.st_mode & 0o022:
+        return
+    if not (sticky_ok and stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX):
+        raise LaneRefused("%s is writable by someone other than its owner" % path)
+
+
+def _check_ancestors(path):
+    for parent in Path(os.path.realpath(path)).parents:
+        _check_owner(parent, os.stat(parent), sticky_ok=True)
+
+
+def manifest_hash(folder):
+    """sha256 over every entry under folder, sorted: its path, kind, mode, and its symlink target or its content's
+    sha256. Every entry must be owned by this user and writable by nobody else, and a symlink must stay inside the
+    folder (relative, never escaping). An empty DEPENDENCIES_VALIDATED at the top, the marker Playwright writes when
+    an unsandboxed process launches the browser, carries no code and is left out (the broker can't write it)."""
+    folder = Path(folder)
+    _check_owner(folder, os.lstat(folder))
+    root = os.path.realpath(folder)
+    digest = hashlib.sha256()
+    for top, dirs, files in os.walk(folder, followlinks=False):
+        dirs.sort()
+        for name in sorted(dirs + files):
+            full = Path(top) / name
+            st = os.lstat(full)
+            _check_owner(full, st)
+            rel = full.relative_to(folder).as_posix()
+            if rel == DEPENDENCIES_MARKER and stat.S_ISREG(st.st_mode) and st.st_size == 0:
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                target = os.readlink(full)
+                resolved = os.path.realpath(full)       # through every link in a chain, not just this one
+                if os.path.isabs(target) or not (resolved == root or resolved.startswith(root + os.sep)):
+                    raise LaneRefused("%s links outside the browser's folder (to %s)" % (full, target))
+                kind, extra = "l", target
+            elif stat.S_ISDIR(st.st_mode):
+                kind, extra = "d", ""
+            elif stat.S_ISREG(st.st_mode):
+                kind, extra = "f", _file_sha256(full)
+            else:
+                raise LaneRefused("%s is neither a file, a folder nor a symlink" % full)
+            digest.update(("%s\0%s\0%o\0%s\n" % (rel, kind, stat.S_IMODE(st.st_mode), extra)).encode())
+    return digest.hexdigest()
+
+
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def platform_key():
+    return "%s-%s" % (sys.platform, platform.machine())
+
+
+def recorded_manifest(revision):
+    data = json.loads(MANIFESTS.read_text())
+    return ((data.get(SHELL) or {}).get(revision) or {}).get(platform_key())
+
+
+def check_manifest(folder, revision):
+    """The installed browser must match the hash the repo records for its revision and platform, and its folder and
+    every folder above it must be safe as lane_node's are. Run after every install and at every broker start.
+    Returns the hash."""
+    root = browsers_root()
+    _check_owner(root, os.lstat(root))
+    _check_ancestors(root)
+    actual = manifest_hash(folder)
+    recorded = recorded_manifest(revision)
+    if recorded is None:
+        raise LaneRefused("no manifest hash is recorded for %s %s on %s. Once lane_acceptance.py --self-check-only "
+                          "passes, Andy records this one in team/superyak_team/lane/browsers.json: %s"
+                          % (SHELL, revision, platform_key(), actual))
+    if recorded != actual:
+        raise LaneRefused("%s doesn't match the manifest hash recorded for %s %s on %s (recorded %s, found %s). "
+                          "If nobody changed it, remove that folder and the next lane installs it again"
+                          % (folder, SHELL, revision, platform_key(), recorded, actual))
+    return actual
+
+
+def check_lane_node(value, worktrees):
+    """The broker's node: an absolute path in the person's config.json (`lane_node`), never `which node`. Refused
+    under a worktree, under $HOME (the broker's profile reads nothing there but the pinned Playwright and browsers),
+    or writable by anyone but its owner, itself or any folder above it. Returns the resolved binary."""
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise LaneRefused("set lane_node in ~/.superyak/team/config.json to the absolute path of the node binary the "
+                          "lane's broker runs (for example /opt/homebrew/bin/node)")
+    real = Path(os.path.realpath(value))
+    if not real.is_file() or not os.access(real, os.X_OK):
+        raise LaneRefused("lane_node %s isn't an executable file" % value)
+    home = Path(os.path.realpath(Path.home()))
+    if real == home or home in real.parents:
+        raise LaneRefused("lane_node %s lies under your home folder, which the broker's profile never reads" % real)
+    for tree in worktrees:
+        tree = Path(os.path.realpath(tree))
+        if real == tree or tree in real.parents:
+            raise LaneRefused("lane_node %s lies under the worktree %s" % (real, tree))
+    _check_owner(real, os.stat(real))
+    _check_ancestors(real)
+    return real
