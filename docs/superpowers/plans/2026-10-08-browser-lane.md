@@ -17,23 +17,25 @@ beyond the lane's own 32 loopback ports.
     program; `lsof` cross-checks; only listeners a lane can reach count;
   - the broker's pinned Playwright, its headless shell and that shell's manifest hash;
   - the broker's profile, generated from the checked-in template `lane/broker.sb.tmpl` and passed inline;
-  - the broker's start and stop, the lane's process cleanup (by name, never walking the lane), and denial diagnostics
-    by pid;
+  - the broker's start and stop (its whole process family, Chrome's own group included), the lane's process cleanup
+    (by name, never walking the lane, plus whatever still carries the lane's environment), and denial diagnostics by
+    pid;
   - the secret's scrub.
 
   macOS-only calls (sandbox-exec, `log stream`, `proc_pidpath`, `netstat`, `ps`, `lsof`) go through seams, so the
   Pi's tests cover the logic.
 - **Nothing in `/tmp/sy-lane-<uid>` decides what the broker is.** Hostile processes can write there: the broker's own
   renderer, or a Codex worker anywhere on the Mac. So the profile goes to `sandbox-exec -p` and the script to
-  `node -e`, both from teamd's package; the broker's stderr goes to teamd's own folder; and teamd never follows a link
-  under the lane.
+  `node -e`, both from teamd's package; the secret goes on the broker's stdin; the broker's stderr goes to teamd's own
+  folder; and teamd never follows a link under the lane.
 - **`workers.py`** gains `lane` for the worker's sandbox settings and `drop_env` for `launch`. **`teamlib.py`** splits
   `TEAM_KEYS` into `PRESET_KEYS` and `OVERRIDE_KEYS`. **`mcp.py`** gives the lead calls that can start or end a lane a
   900 s timeout.
-- **`teamd.py`** checks the spawn, and starts each browser turn through `_lane_turn`: the settings again, the folder,
-  the block, the listener check, and then the broker. It re-checks every 60 s during a turn, makes the worker wait (or
-  fails it) with the lead told why, ends the lane in the four places the spec names, sweeps when it starts, and scrubs
-  the secret from everything it forwards or stores.
+- **`teamd.py`** checks the spawn and, before its lock, installs and checks the broker's code and browser. It starts
+  each browser turn through `_lane_turn`: the settings again, the folder, the block, the listener check, and then the
+  broker. It re-checks the listeners and the settings every 60 s during a turn, makes the worker wait (or fails it)
+  with the lead told why, ends the lane in the four places the spec names, sweeps when it starts, and scrubs the
+  secret from everything it forwards or stores. No OSError from a lane escapes a turn or `monitor_once`.
 - **The broker** is `lane_broker.js` (spike 4's script), run as
   `sandbox-exec -p <profile> <lane_node> -e <its source> <port>` with an environment built from nothing.
 - **The Mac acceptance** is `team/scripts/lane_acceptance.py`, with `lane_acceptance/worker_probes.py` and
@@ -45,12 +47,13 @@ the broker, the probes); Playwright's `playwright-core`, pinned by the base comm
 `chromium-headless-shell`; macOS Seatbelt (`sandbox-exec`), `netstat`, `lsof`, `ps`, `proc_pidpath` and `log stream`.
 
 **Spec:** [`docs/superpowers/specs/2026-10-08-browser-lane-design.md`](../specs/2026-10-08-browser-lane-design.md)
-at 73a0500, which carries the coordinator's rulings from planning (1a6662d, cad046b), Andy's D11 and the ruling on
-which listeners count. Every line is a requirement. Its eleven unit tests map to named tests and its seven Mac
+at 38e5d67, which carries the coordinator's rulings from planning (1a6662d, cad046b), Andy's D11, the ruling on which
+listeners count (73a0500), and `proc_pidpath` in the listener check with Codex's `/tmp` as a known limit (38e5d67). Every line is a requirement. Its eleven unit tests map to named tests and its seven Mac
 acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 
-**Review:** a fresh reviewer asked for changes: 6 must-fix and 14 should-fix items. All are folded in (see
-"Decisions" and the tasks).
+**Review:** a fresh reviewer asked for changes: 6 must-fix and 14 should-fix items. All are folded in. The re-review
+approved with changes (an M5 gap, N1–N11, and the coordinator's rulings); those are folded in too (see "Decisions"
+and the tasks).
 
 **Out of scope (from the spec):**
 - live screen sharing (spec C), and screenshot "show" posts;
@@ -64,14 +67,15 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 
 1. **"The output starts with `(deny default)`."** SBPL needs `(version 1)` as its first form. So the template's first
    two rules are `(version 1)` and `(deny default)`, after a comment header, and test 9 checks those two.
-2. **A process is identified by `proc_pidpath`, never by `ps -o comm=`.** The spec's "What it reads" still says
-   `ps -p <pid> -o comm=`; its D11 section, written later, says `proc_pidpath()` and never `ps -o comm=`. The plan
-   follows D11.
+2. **A process is identified by `proc_pidpath`, never by `ps -o comm=`** (D11; the spec's "What it reads" says so too
+   since 38e5d67). It runs through ctypes behind the `lane.pid_path` seam, and returns None off macOS.
 3. **netstat's two formats are reconstructed, not captured.** Older macOS prints a `pid` column and newer a
    `process:pid` one (values like `rapportd:571`). The fixtures follow that, with the columns around them as macOS
    prints them. The parser finds the column from the header and fails closed on any header or listening line it can't
-   read, so a format it doesn't know stops lanes rather than letting one through. Acceptance step 4 and
-   `--list-listeners` run the same parser on the Mac's real output.
+   read, so a format it doesn't know stops lanes rather than letting one through. A process name may hold spaces
+   ("Google Chrome He:4321"), so the `process:pid` value is everything between the columns before it and the ones
+   after it (counted from the header), and the pid is its last `:digits`. Acceptance step 4 and `--list-listeners` run
+   the same parser on the Mac's real output.
 4. **The listener check is machine-wide, so `lane.listeners_ok()` takes no team.**
    - The spec writes `listeners_ok(team)`.
    - "A live lane's block" comes from a registry every team shares, `~/.superyak/team/lane-ports.json`, under the lock
@@ -95,6 +99,9 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
    - A refusal that won't fix itself fails the worker instead, with the lead told why: an integrity or manifest
      mismatch, a bad `lane_node`, an unsafe folder, settings that widen the sandbox after the spawn.
    - A turn the listener check stopped counts as failed even if claude exits 0, and the lead hears once.
+   - Any OSError while a lane turn is set up (a parent removed from `/tmp`, the registry's disk, a manifest or stamp
+     read) refuses the lane, as `LaneRefused` does; `_lane_watch` logs and survives whatever it meets, so
+     `monitor_once` always reaches `_fill_slots()` and `save()`.
 9. **After a teamd restart:**
    - a browser turn the old teamd was running fails, and its lane ends, because the 60 s check can no longer watch it.
      Its process is killed only if it still leads its own group, runs claude, works in the worker's folder and started
@@ -102,9 +109,11 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
    - an idle lane keeps its folder and its block, but whatever the old teamd left running in it ends.
 10. **`worker_done` ends the lane once the turn exits.** The worker calls `team_done` from inside its turn, so ending
     the lane at once would kill the process that is waiting for the answer.
-11. **Lead calls that can start or end a lane wait up to 900 s.** A first install, a broker start or a lane's cleanup
-    runs inside `spawn`, `message`, `stop` and `end`. Other calls keep 30 s, and may time out while an install holds
-    teamd's lock; `--self-check-only` installs each revision before any team runs, so that is rare.
+11. **Lead calls that can start or end a lane wait up to 900 s, and the install doesn't hold teamd's lock.** `spawn`
+    runs `lane.prepare_broker` (the download, the install and the manifest check) before it takes teamd's lock; that
+    has its own `.install.lock`. A broker start (up to 90 s) and a lane's cleanup (about 30 s) still run under teamd's
+    lock, inside `spawn`, `message`, `stop` and `end`, so those wait up to 900 s; other calls keep 30 s and may time
+    out while a broker starts, for up to about 2 minutes.
 12. **Acceptance step 4 vs D10 and D11.**
     - Step 4 says "Approve it, and the turn runs". D10 and D11 approve only Apple programs, never an interpreter.
     - So the script shows that approving its own listener (a Python) is refused when the list is loaded: the turn keeps
@@ -138,9 +147,44 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 19. **The pinned Playwright's stamp** (the lockfile's integrity hash) is written inside the package folder before the
     rename, so a crash can't leave a folder that refuses lanes for good. The registry's own integrity claim is never
     used.
-20. **Codex workers can write `/tmp`.** They could put files under `/tmp/sy-lane-<uid>`. teamd never follows a link
-    there, and nothing there decides what the broker is. The README records this as a known limit, with Codex's
-    `sandbox_workspace_write.exclude_slash_tmp` as Andy's call; Codex workers are unchanged.
+20. **The listener check's details.**
+    - Reachable means loopback (an IPv4-mapped `::ffff:127.x` too), a wildcard, anything scoped to `lo0`, or an
+      address the check can't read (fail closed). A lane's own port still needs strict loopback (127.0.0.0/8, `::1`).
+    - The netstat/lsof cross-check reads both twice when they disagree, and fails only on a (pid, port) missing from
+      netstat in both rounds, so a socket opening between the two reads doesn't stop lanes.
+    - `port_free` binds `::1` as well as 127.0.0.1, so a block that something holds on IPv6 loopback is skipped.
+    - `hold_team` retries for about a second, so a restart doesn't fail on a teamd that is just exiting.
+21. **The broker's process family.** Playwright launches Chrome detached, in its own process group, so the broker's
+    group alone misses it. `lane.family(pid)` is the broker's descendants by ppid plus every process in a group one of
+    them leads. Diagnostics keep the denials of those pids, and `stop_broker` signals those groups, the family taken
+    before node exits (after that, Chrome's parent is launchd).
+22. **The secret goes on the broker's stdin, not its environment** (the coordinator adopted this hardening). Chrome
+    inherits node's environment; with the secret on stdin, neither Chrome nor `ps -E` of the broker ever shows it. The
+    spec's broker environment lists "the secret"; the plan leaves it out.
+23. **Ending a lane also ends what carries its environment.** At `_lane_end` (and in the sweep), teamd also ends this
+    uid's processes whose environment holds exactly `CLAUDE_CODE_TMPDIR=<lane>/tmp`: a turn's setsid child that holds
+    no file in the lane. The environment comes from KERN_PROCARGS2 on macOS (from `/proc` on Linux), behind a seam,
+    and teamd and every process above it are never matched. A child that also clears its environment escapes; the
+    README records that as a known limit.
+24. **A probe whose target doesn't exist is BROKEN, not a pass.** ENOENT is no refusal.
+    - The self-check finds each probe's target outside the sandbox first (a dotfile, an rc file, LaunchAgents,
+      Claude's tmp, the user temp folder, `/Users/Shared`, the programs), passes the exact path in, and gives a
+      missing one a BROKEN row instead of running it. `open_rc_for_write` opens the found file with `r+`, which never
+      creates one.
+    - Acceptance step 2's reads are checked the same way by the driver.
+25. **`node_prefix` uses the resolved binary,** and also refuses `/private` and anything under `/private/var/folders`.
+    So the profile tests name a node path that is never run (`/opt/lane-test-node/...`), which works on the Pi and on
+    the Mac alike.
+26. **Codex workers can write `/tmp`** (a known limit in the spec since 38e5d67). They could put files under
+    `/tmp/sy-lane-<uid>`, or read what a lane leaves there. teamd never follows a link there, and nothing there decides
+    what the broker is. The README records it too, with Codex's `sandbox_workspace_write.exclude_slash_tmp` as Andy's
+    call; Codex workers are unchanged.
+27. **The rest of the re-review's notes.** The manifest checks link containment by realpath, through a chain, not
+    lexically. `render_profile` never resolves `b_text`, not even for its ancestors. "LANE TURN LOST" says whether the
+    old turn's process was stopped or couldn't be confirmed. The acceptance's decoy is written without following
+    links. `--list-listeners` marks pid-1 rows, and the README says approving `/sbin/launchd` covers every
+    socket-activated job until that job's program first accepts. It also says an idle browser worker keeps its block,
+    so under `lane_one_at_a_time` it holds the machine until it is done or stopped.
 
 ## Dry run
 
@@ -150,7 +194,7 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
   - The whole team suite passed after each task.
   - The replayed tree was byte for byte the written one.
 - **Results on the Pi.**
-  - Team: 221 passed.
+  - Team: 241 passed.
   - Agent: `tests/test_runs.py` 19 passed.
 - **One intermittent failure.** In one replay of the first version of this plan, the whole suite failed once after
   Task 9, and the run didn't record which test. It passed in 20 reruns and in every replay since. The likeliest cause
@@ -166,6 +210,12 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
   - the stopped-turn flag (failure, and no repeat), the settings re-check, and `lost_turn`'s folder check;
   - the 900 s timeouts, the BROKEN second-lane rows, the lockfile-only integrity, the manifest's link rule and its
     ancestors check;
+  - from the re-review: `private_parent`'s OSError, `_start_turn`'s OSError, the joined `process:pid` column, the
+    second cross-check round, `stop_broker` reaching a detached browser's group, the environment match and its
+    sparing of teamd, `prepare_broker` before the lock, the pre-start cleanup of `b/`, BROKEN for a missing probe
+    target, the `lo0` reachability, `hold_team`'s retry, realpath link containment, the settings re-check in the 60 s
+    check, `node_prefix`'s realpath and its `/private/var/folders` refusal, the secret kept out of the broker's
+    environment, the pid-1 mark, and `port_free` on `::1`;
   - from the first version: teamd's scrub of text and of a turn's last message, the lane's end in `stop_worker`, the
     60 s interval, the once-per-reason lead message, releasing a block only after cleanup, the sweep's skip of live
     workers, the parent's mode check, and `worker_done` waiting for the turn to exit.
@@ -173,7 +223,7 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 ## Base and sequencing
 
 - **Main was merged into browser-lane at bc5d0f5** (a merge, no conflicts). It brings instruction layers (ac76d85)
-  and the hook follow-up (ef37be7). The spec then moved to 73a0500 on the branch; no code moved. All code here is
+  and the hook follow-up (ef37be7). The spec then moved to 38e5d67 on the branch; no code moved. All code here is
   written against that tree.
 - **The code this plan builds on, confirmed:**
   - `teamd.Team`: `spawn(task, kind, context, mode, base, prepare)`, `_start_turn(wid, prompt)`, `_initial_prompt`,
@@ -234,7 +284,7 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 ## Global Constraints
 
 - **Base:** branch `browser-lane` in `/home/andy/superyak/.worktrees/browser-lane` (main merged in at bc5d0f5, the
-  spec at 73a0500). If main moves, merge it in again; never rebase. Never edit `/home/andy/superyak` before the Deploy
+  spec at 38e5d67). If main moves, merge it in again; never rebase. Never edit `/home/andy/superyak` before the Deploy
   section.
 - **Tests.** Run once per shell: `CAP='systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0'`.
   - Team: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider <files>`.
@@ -253,7 +303,8 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
   - `sys.platform`, `lane.claude_version`, `lane.python_ok`, `lane.MANAGED_SETTINGS`, `lane.TMP_ROOT` and
     `lane.port_free`;
   - `lane._run` (netstat, lsof, ps, getconf), `lane._run_env` (the installer), `lane._extract` (tarfile's filter),
-    `lane.pid_path` (proc_pidpath), `lane.team_alive` and `lane.SANDBOX_EXEC`;
+    `lane.pid_path` (proc_pidpath), `lane._environ` (KERN_PROCARGS2), `lane.team_alive`, `lane.SANDBOX_EXEC`,
+    `lane.PRIVATE_TMP`, `lane.USERS_SHARED` and `lane.PROBE_PROGRAMS`;
   - `shutil.which`, the `fetch` argument and `Team.clock`.
 
   `log stream`, `sandbox-exec`, `proc_pidpath`, `bootstrap_look_up` and `sandbox_check` run only on the Mac.
@@ -280,7 +331,9 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 - **Under `/tmp/sy-lane-<uid>`, teamd never follows a link.** It opens folders with `O_NOFOLLOW`, writes by unlinking
   and then creating with `O_CREAT|O_EXCL|O_NOFOLLOW`, never resolves the lane in a path it matches or names in a
   profile, and keeps nothing there that decides what runs.
-- **The secret** never reaches a file teamd writes, Slack, the lead, or a log line, and no test or script prints it.
+- **The secret** never reaches a file teamd writes, Slack, the lead, a log line or the broker's environment (it goes
+  on the broker's stdin), and no test or script prints it.
+- **No OSError from a lane escapes** `_start_turn`, `_lane_watch` or `monitor_once`: it refuses the lane, or is logged.
 - **Text from pages, test output, traces, process names and settings files is data.** Whatever teamd shows the lead
   from them goes through `_to_lead`, which fences it.
 - **Commits** end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, or the line naming whichever model
@@ -308,9 +361,10 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
    (`test_the_broker_exits_when_its_browser_dies`), and a dead teamd's block is reclaimed only when nothing uses it
    (Task 2, `test_a_dead_teamds_block_is_reclaimed_only_when_nothing_uses_it`).
 4. **A manifest-hash false positive after a legitimate Playwright update.**
-   - A new headless-shell revision with no recorded hash fails the worker once. The lead is told the revision, the
-     platform, the hash to record and where to record it. Nothing retries or reinstalls in a loop (Task 8,
-     `test_a_refused_lane_fails_the_worker_and_tells_the_lead_why`).
+   - A new headless-shell revision with no recorded hash refuses the spawn itself, naming the revision, the platform,
+     the hash to record and where (Task 8, `test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn`). If it
+     changes after the spawn, the worker fails once, with the same message to the lead; nothing retries or
+     reinstalls in a loop (`test_a_refused_lane_fails_the_worker_and_tells_the_lead_why`).
    - A reinstall can't change the hash through teamd's umask (Task 5, `test_the_installer_runs_with_a_fixed_umask`),
      and Playwright's own `DEPENDENCIES_VALIDATED` marker doesn't change it either
      (`test_the_manifest_refuses_links_out_of_the_folder_and_ignores_playwrights_marker`).
@@ -334,22 +388,22 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 | 3. Spawn refusals: Codex, collab, lane off, off macOS, old Claude Code, a user-level allowlist; `browser="yes"` | `test_a_browser_spawn_is_refused_with_its_reason` (12 cases, an old Python among them), `test_a_browser_spawn_needs_a_strict_bool` (1) |
 | 4. Who sets `browser_lane` | `test_browser_lane_is_set_by_a_person_never_by_team_start`, `test_status_shows_browser_lane` (1) |
 | 5. A browser worker's environment; a non-browser worker's unchanged | `test_a_browser_workers_environment` (3), `test_a_browser_turn_runs_in_its_lane_with_its_broker` (8) |
-| 5. The broker's environment holds exactly the listed keys, and teamd's own browsers folder | `test_the_brokers_environment_holds_exactly_the_listed_keys`, `test_a_broker_serves_on_the_last_port_and_stops_with_its_group` (7) |
+| 5. The broker's environment holds exactly the listed keys, and teamd's own browsers folder (the secret on stdin, Decision 22) | `test_the_brokers_environment_holds_exactly_the_listed_keys`, `test_a_broker_serves_on_the_last_port_and_stops_with_its_group` (7) |
 | 5. The scrub | `test_the_secret_never_leaves_teamd` (8); `test_a_broker_that_fails_is_refused_without_its_secret`, `test_the_secret_is_scrubbed_from_text_and_files` (7) |
-| 6. The parent: 0700; refused with another owner, another mode, or as a symlink | `test_the_lane_parent_is_private_or_refused` (2) |
+| 6. The parent: 0700; refused with another owner, another mode, or as a symlink | `test_the_lane_parent_is_private_or_refused`, `test_a_parent_that_vanishes_is_refused_not_raised` (2); `test_a_lane_parent_that_vanishes_fails_the_worker_and_never_raises`, `test_an_oserror_in_a_retried_lane_turn_never_stops_monitor_once` (8) |
 | 6. The lane refused as a symlink at turn time | `test_a_lane_has_its_folders_and_the_preload_and_is_refused_as_a_symlink`, `test_teamd_never_writes_through_a_planted_link` (2) |
 | 6. Removal fd-safe; refused without `avoids_symlink_attacks` | `test_removal_is_fd_safe_and_refused_without_symlink_protection` (2) |
 | 6. The sweep: only this team's dead lanes, by exact hash | `test_leftovers_are_this_teams_dead_workers_by_exact_hash` (2), `test_a_restarted_teamd_sweeps_dead_lanes_and_ends_a_lost_turn` (8) |
-| 7. Ports | `test_blocks_never_overlap_and_lie_in_the_pool`, `test_a_block_something_else_uses_is_skipped`, `test_port_free_sees_a_real_listener`, `test_a_team_is_alive_while_its_teamd_holds_the_lock`, `test_only_blocks_of_a_running_teamd_count_as_live`, `test_a_dead_teamds_block_is_reclaimed_only_when_nothing_uses_it`, `test_a_damaged_registry_refuses_lanes`, `test_one_lane_per_machine_when_the_person_asks_for_it` (2); `test_a_block_is_freed_only_after_the_cleanup_has_finished` (8) |
+| 7. Ports | `test_blocks_never_overlap_and_lie_in_the_pool`, `test_a_block_something_else_uses_is_skipped`, `test_port_free_sees_a_real_listener_on_either_loopback`, `test_a_team_is_alive_while_its_teamd_holds_the_lock`, `test_only_blocks_of_a_running_teamd_count_as_live`, `test_a_dead_teamds_block_is_reclaimed_only_when_nothing_uses_it`, `test_a_damaged_registry_refuses_lanes`, `test_one_lane_per_machine_when_the_person_asks_for_it` (2); `test_a_block_is_freed_only_after_the_cleanup_has_finished` (8) |
 | 8. Lane ports pass; an approved Apple program passes on any port, and one not on the list fails | `test_lane_ports_and_approved_apple_programs_pass` (both netstat formats), `test_an_approved_program_passes_on_any_port`, `test_a_program_not_on_the_list_fails_on_any_port_and_is_named` (4) |
 | 8. An unknown listener fails, and so does a lane process on `*` or a LAN address | `test_a_program_not_on_the_list_fails_on_any_port_and_is_named`, `test_a_lane_process_listening_beyond_loopback_fails` (5 cases), `test_a_listener_whose_program_cant_be_identified_fails` (4) |
-| 8. An lsof failure fails (and a netstat one, a header it doesn't know, and a listener lsof sees and netstat doesn't) | `test_netstat_or_lsof_failing_fails`, `test_a_netstat_it_doesnt_recognise_fails_closed` (6 cases), `test_a_listener_lsof_sees_and_netstat_doesnt_fails` (4) |
-| 8. `::1` and `127.0.0.2` are loopback; `fe80::1`, `::` and a tailnet address aren't; IPv6 parsed | `test_only_127_8_and_ipv6_loopback_count_as_loopback` (13 cases), `test_netstat_is_parsed_with_ipv6_in_both_formats`, `test_lsof_output_is_parsed_with_ipv6` (4) |
-| 8. During a turn, a failed check stops the turn and the broker (fake clock) | `test_a_listener_that_appears_during_a_turn_stops_the_turn_and_the_broker`, `test_a_stopped_turn_fails_even_when_claude_exits_0_and_the_lead_hears_once` (8) |
-| Ruling: only reachable listeners count; root's are seen | `test_a_listener_bound_to_one_other_address_does_not_count`, `test_a_root_listener_is_seen`, `test_a_dead_teamds_block_is_not_a_lane` (4) |
+| 8. An lsof failure fails (and a netstat one, a header it doesn't know, and a listener lsof sees and netstat doesn't, in two rounds) | `test_netstat_or_lsof_failing_fails`, `test_a_netstat_it_doesnt_recognise_fails_closed` (6 cases), `test_a_listener_lsof_sees_and_netstat_doesnt_fails`, `test_a_socket_that_opens_between_netstat_and_lsof_doesnt_fail_the_check` (4) |
+| 8. `::1` and `127.0.0.2` are loopback; `fe80::1`, `::` and a tailnet address aren't; IPv6 parsed | `test_only_127_8_and_ipv6_loopback_count_as_loopback` (13 cases), `test_netstat_is_parsed_with_ipv6_in_both_formats`, `test_a_process_name_with_spaces_or_colons_keeps_its_own_pid`, `test_lsof_output_is_parsed_with_ipv6` (4) |
+| 8. During a turn, a failed check stops the turn and the broker (fake clock) | `test_a_listener_that_appears_during_a_turn_stops_the_turn_and_the_broker`, `test_a_stopped_turn_fails_even_when_claude_exits_0_and_the_lead_hears_once`, `test_settings_that_widen_during_a_turn_stop_it_at_the_next_check` (8) |
+| Ruling: only reachable listeners count; root's are seen | `test_a_listener_bound_to_one_other_address_does_not_count` (4 cases: a wildcard, `::ffff:127.0.0.1`, `fe80::1%lo0` and an unreadable address all count), `test_a_root_listener_is_seen`, `test_a_dead_teamds_block_is_not_a_lane` (4) |
 | D10, D11: Ollama refused at load; rapportd on two ports; a non-Apple program fails on any port | `test_the_approved_list_holds_only_apple_program_paths` (9 cases), `test_the_approved_list_must_be_a_readable_list`, `test_an_approved_program_passes_on_any_port`, `test_a_program_not_on_the_list_fails_on_any_port_and_is_named` (4) |
 | 9. `(deny default)`, one rule per lane port, no `(allow default)` or `appleevent-send` | `test_the_profile_denies_by_default_with_one_rule_per_lane_port` (6) |
-| 9. Under `$HOME` only the pinned folders' reads, the shell's exec, and ancestor metadata literals | `test_under_home_the_profile_only_reads_the_pinned_folders`, `test_a_node_prefix_that_reads_too_much_is_refused` (6 cases), `test_a_profile_never_names_the_target_of_a_planted_link` (6) |
+| 9. Under `$HOME` only the pinned folders' reads, the shell's exec, and ancestor metadata literals | `test_under_home_the_profile_only_reads_the_pinned_folders`, `test_a_node_prefix_that_reads_too_much_is_refused` (8 cases, each also through a symlink), `test_a_profile_never_names_the_target_of_a_planted_link` (6) |
 | 9. Quotes and backslashes refused | `test_paths_a_profile_cannot_quote_are_refused` (6) |
 | 9. The template as an allowlist, byte for byte; no other pattern rule | `test_the_template_is_exactly_the_reviewed_rules` (6) |
 | 9. Optional: `sandbox_check` on the live browser | `lane_acceptance.py` step 3, its `sandbox_check …` rows (information, or FAIL if a never-list service shows allowed) |
@@ -361,8 +415,8 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
 | Spec | The script |
 |---|---|
 | Prerequisites | The docstring; `--list-listeners` (for the approved list, from the check's own enumeration), `--prepare` (the worktree prepared), the run's own preset |
-| 1. Before any worker | `step1`: the `manifest …` row, then one `profile:<probe>` row per probe of `lane.self_check` (spike 5's fifteen plus `exec_open_calculator`, and the three positive controls with `exec_node`) |
-| 2. Inside a browser worker | `worker_probes.lane_round`, with `planted_settings` in the worktree's `.claude/settings.json`. Rows: tmpdir; curl and node for each domain of the effective settings and an IP; a listen on a lane port and `listen(0)`; `npx tsx -e 1`; an npm cache write; each socket directly and through a symlink and a hard link; reads of `~/.zshrc`, a decoy lane, the other lane's real folder and `/private/tmp/claude-<uid>` |
+| 1. Before any worker | `step1`: the `manifest …` row, then one `profile:<probe>` row per probe of `lane.self_check` (spike 5's fifteen plus `exec_open_calculator`, and the three positive controls with `exec_node`); a probe whose target doesn't exist is BROKEN |
+| 2. Inside a browser worker | `worker_probes.lane_round`, with `planted_settings` in the worktree's `.claude/settings.json`. Rows: tmpdir; curl and node for each domain of the effective settings and an IP; a listen on a lane port and `listen(0)`; `npx tsx -e 1`; an npm cache write; each socket directly and through a symlink and a hard link; reads of a dotfile, a decoy lane, the other lane's real folder and `/private/tmp/claude-<uid>`, each first checked to exist (BROKEN if not) |
 | 3. Through the broker | `broker_client.js` rows: page, wrongsecret, external, file, canary (on the second lane's block), write, getusermedia (with the error's name). Then `browser download into $HOME`, `rendezvous positive control (teamd)` and `rendezvous lookup` (1100, or a deny line for the probe's pid; 1102 is BROKEN), the `sandbox_check` rows (camera and microphone services among them), and the `second lane: ps -E …` and `KERN_PROCARGS2 …` rows (BROKEN unless the target lived throughout) |
 | Build order 0, "for information only": does `PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>` reach the worker's loopback through the connection? | The `browser exposenetwork` INFO row in step 3 |
 | 4. D9 | `an unapproved listener makes the turn wait`, `approving an interpreter is refused (D10)`, `once it is gone, the turn runs` (Decision 12), `a root-owned listener is seen`, `it holds the lane, named by its path` |
@@ -406,7 +460,8 @@ acceptance steps to steps of `lane_acceptance.py` (see "Testing map").
   - In `test_lane.py`:
     - fixture `env`, giving `{"repo", "tmp", "home"}`, with `HOME`, `SUPERYAK_TEAM_*` and the mock bin patched and
       `lane.MANAGED_SETTINGS` moved into tmp;
-    - fixture `mac`, setting `sys.platform` to `"darwin"`, Claude Code to 2.1.290 and `python_ok` to True;
+    - fixture `mac`, setting `sys.platform` to `"darwin"`, Claude Code to 2.1.290 and `python_ok` to True, and
+      stubbing `lane.prepare_broker` (it doesn't exist until Task 7; from Task 8 on, spawn calls it);
     - `lane_team(env, team_id="t1", **cfg) -> Team`, with `browser_lane` on and `max_workers=4`;
     - `lead(team, op, args)`.
 
@@ -443,6 +498,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -482,6 +538,8 @@ def mac(monkeypatch):
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     monkeypatch.setattr(lane, "claude_version", lambda: (2, 1, 290))
     monkeypatch.setattr(lane, "python_ok", lambda: True)
+    # From Task 8, spawn installs and checks the broker's Playwright and browser before taking teamd's lock.
+    monkeypatch.setattr(lane, "prepare_broker", lambda repo, base, worktrees: None, raising=False)
 
 
 def lane_team(env, team_id="t1", **cfg_over):
@@ -713,6 +771,7 @@ broker is.
 """
 import base64
 import ctypes
+import errno
 import fcntl
 import hashlib
 import io
@@ -1019,7 +1078,9 @@ git commit -m "team: browser_lane is a person's key, and a browser spawn is refu
     (the profile's name for a folder in a lane: the parent resolved, the rest checked as real folders) and
     `lane.remove_lane(path) -> bool`.
   - `lane.leftover_lanes(team_id, workers: dict, live_states) -> list[tuple[str, Path]]`.
-  - The ports: `lane.PORT_FIRST = 41000`, `lane.PORT_LAST = 48999`, `lane.BLOCK = 32`, `lane.port_free(port) -> bool`,
+  - `lane.private_parent()` raises `LaneRefused`, never a raw OSError.
+  - The ports: `lane.PORT_FIRST = 41000`, `lane.PORT_LAST = 48999`, `lane.BLOCK = 32`, `lane.port_free(port) -> bool`
+    (127.0.0.1 and `::1`),
     `lane.allocate_block(team_id, worker_id) -> int` (raises `LaneWait` under `lane_one_at_a_time`, `LaneRefused` when
     the pool is full or the registry damaged), `lane.release_block(team_id, worker_id) -> None`,
     `lane.block_of(team_id, worker_id) -> int | None`, `lane.live_blocks() -> list[int]`.
@@ -1027,8 +1088,8 @@ git commit -m "team: browser_lane is a person's key, and a browser spawn is refu
     `lane._registry_lock()` (a context on `lane-ports.lock`), `lane._read_registry() -> dict`,
     `lane._write_registry(data)` (temp file, then `os.replace`), `lane._worker_live(team_id, worker_id) -> bool` and
     `lane._reclaimable(entry) -> bool`.
-  - Liveness: `lane._team_lock(team_id) -> Path`, `lane.hold_team(team_id)` (returns the open, locked file; raises
-    `LaneRefused` when another teamd holds it) and `lane.team_alive(team_id) -> bool`.
+  - Liveness: `lane._team_lock(team_id) -> Path`, `lane.hold_team(team_id)` (returns the open, locked file; retries
+    for about a second, then raises `LaneRefused` when another teamd holds it) and `lane.team_alive(team_id) -> bool`.
   - In `test_lane.py`: fixtures `tmp_root` (stands in for `/tmp`) and `held` (`held(team_id)` holds that team's lock
     for the test), and `stat_mode(st)`.
 
@@ -1085,6 +1146,23 @@ def test_the_lane_parent_is_private_or_refused(env, tmp_root, monkeypatch):
     monkeypatch.setattr(lane.os, "getuid", lambda: real_uid + 1)   # the folder is ours, the "user" is someone else
     with pytest.raises(lane.LaneRefused, match="not a directory you own"):
         lane.private_parent()
+
+
+def test_a_parent_that_vanishes_is_refused_not_raised(env, tmp_root, monkeypatch):
+    """Review (M5): a process that can write /tmp may remove the parent between mkdir and lstat; teamd must get
+    LaneRefused, never a raw OSError."""
+    parent = tmp_root / ("sy-lane-%d" % os.getuid())
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if str(path) == str(parent):
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return real_lstat(path, *args, **kwargs)
+    monkeypatch.setattr(lane.os, "lstat", lstat)
+    with pytest.raises(lane.LaneRefused, match="unsafe lane folder .*No such file"):
+        lane.private_parent()
+    with pytest.raises(lane.LaneRefused):
+        lane.ensure_lane("t1", "kaylee")
 
 
 def test_a_lane_has_its_folders_and_the_preload_and_is_refused_as_a_symlink(env, tmp_root):
@@ -1194,7 +1272,8 @@ def test_a_block_something_else_uses_is_skipped(env, held, monkeypatch):
         lane.allocate_block("t1", "wash")
 
 
-def test_port_free_sees_a_real_listener():
+def test_port_free_sees_a_real_listener_on_either_loopback():
+    """Review (N9): a server on ::1 alone holds the port too."""
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     s.listen()
@@ -1202,16 +1281,30 @@ def test_port_free_sees_a_real_listener():
         assert lane.port_free(s.getsockname()[1]) is False
     finally:
         s.close()
+    try:
+        s6 = socket.socket(socket.AF_INET6)
+        s6.bind(("::1", 0))
+    except OSError:
+        pytest.skip("no IPv6 loopback here")
+    s6.listen()
+    try:
+        assert lane.port_free(s6.getsockname()[1]) is False
+    finally:
+        s6.close()
 
 
 def test_a_team_is_alive_while_its_teamd_holds_the_lock(env):
-    """Review: liveness is a lock teamd holds for its whole life, never a pid that could be reused."""
+    """Review: liveness is a lock teamd holds for its whole life, never a pid that could be reused. A teamd that is
+    just exiting gets about a second to let go (N11)."""
     assert lane.team_alive("t1") is False
     f = lane.hold_team("t1")
     assert lane.team_alive("t1") is True
+    started = time.monotonic()
     with pytest.raises(lane.LaneRefused, match="another teamd already runs team t1"):
         lane.hold_team("t1")
-    f.close()
+    assert time.monotonic() - started >= 0.9
+    threading.Timer(0.3, f.close).start()                                  # the old teamd exits meanwhile
+    lane.hold_team("t1").close()
     assert lane.team_alive("t1") is False
 
 
@@ -1307,7 +1400,7 @@ def test_the_preload_binds_unspecified_addresses_to_loopback(tmp_path):
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `8 failed, 17 passed, 6 errors`. The new tests fail with
+**Expected:** `8 failed, 17 passed, 7 errors`. The new tests fail with
 `AttributeError: module 'superyak_team.lane' has no attribute …` (`private_parent`, `port_free`, `hold_team`, …), and
 the preload test with node's `Cannot find module …/lane/preload.cjs`.
 
@@ -1372,10 +1465,13 @@ def private_parent():
     the checks of teamlib.private_sock_dir, except that a wrong mode is refused, never repaired."""
     parent = _parent_path()
     try:
-        os.mkdir(parent, 0o700)
-    except FileExistsError:
-        pass
-    st = os.lstat(parent)
+        try:
+            os.mkdir(parent, 0o700)
+        except FileExistsError:
+            pass
+        st = os.lstat(parent)                           # a process that can write /tmp may have removed it meanwhile
+    except OSError as e:
+        raise LaneRefused("unsafe lane folder %s (%s)" % (parent, e.strerror or e))
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
         raise LaneRefused("unsafe lane folder %s (not a directory you own)" % parent)
     if stat.S_IMODE(st.st_mode) != 0o700:
@@ -1549,12 +1645,14 @@ def hold_team(team_id):
     path = _team_lock(team_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     f = open(path, "a")
-    try:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        f.close()
-        raise LaneRefused("another teamd already runs team %s" % team_id)
-    return f
+    for attempt in range(10):                           # about a second: a teamd that is just exiting lets go
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except BlockingIOError:
+            time.sleep(0.1)
+    f.close()
+    raise LaneRefused("another teamd already runs team %s" % team_id)
 
 
 def team_alive(team_id):
@@ -1573,15 +1671,21 @@ def team_alive(team_id):
 
 
 def port_free(port):
-    """Nothing else holds this loopback port right now."""
-    s = socket.socket()
-    try:
-        s.bind(("127.0.0.1", port))
-        return True
-    except OSError:
-        return False
-    finally:
-        s.close()
+    """Nothing else holds this loopback port right now, on 127.0.0.1 or on ::1 (where the machine has IPv6)."""
+    for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            s = socket.socket(family)
+        except OSError:
+            continue                                    # no IPv6 here
+        try:
+            s.bind((host, port))
+        except OSError as e:
+            if family == socket.AF_INET6 and e.errno == errno.EADDRNOTAVAIL:
+                continue                                # IPv6, but no ::1
+            return False
+        finally:
+            s.close()
+    return True
 
 
 def _worker_live(team_id, worker_id):
@@ -1674,7 +1778,7 @@ with
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `94 passed`.
+**Expected:** `95 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -2063,7 +2167,7 @@ def test_run_settings_are_what_they_were_before_browser_lanes(monkeypatch):
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `3 failed, 31 passed`: `TypeError: claude_sandbox_settings() got an unexpected keyword argument 'lane'`,
+**Expected:** `3 failed, 32 passed`: `TypeError: claude_sandbox_settings() got an unexpected keyword argument 'lane'`,
 and `AttributeError: … has no attribute 'worker_env'`.
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/agent && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_runs.py`
@@ -2216,7 +2320,7 @@ def worker_env(path, base, endpoint):
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `97 passed`.
+**Expected:** `98 passed`.
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/agent && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_runs.py`
 
@@ -2254,15 +2358,16 @@ git commit -m "team: a browser worker's sandbox and environment; without a lane 
   - `lane._run(cmd, timeout=60) -> CompletedProcess | None`, the seam for every netstat, lsof, ps and getconf.
   - `lane.parse_lsof(text) -> list[dict]` and `lane.parse_netstat(text) -> list[dict] | None`, with keys `pid`,
     `command` (`""` when the format has none), `host`, `port`.
-  - `lane.is_loopback(host) -> bool`, `lane.read_listeners() -> list[dict] | None` (netstat),
+  - `lane.is_loopback(host) -> bool` (strict: 127.0.0.0/8 and `::1`), `lane.reachable(host) -> bool` (what counts),
+    `lane.read_listeners() -> list[dict] | None` (netstat),
     `lane.lsof_listeners() -> set[tuple[int, int]] | None` (the cross-check) and `lane.pid_path(pid) -> str | None`
     (proc_pidpath; None off macOS).
   - `lane.listeners_ok() -> tuple[bool, list[str]]`. Each problem names the command (or the program's basename, or
     `?`), pid, port and, when known, the executable, e.g.
     `"ollama (pid 777) listens on port 11434 (/opt/homebrew/bin/ollama)"`.
   - In `test_lane.py`: `Ran(returncode, stdout, stderr="")`, `CONTROL_CENTER`, `HEADER_PID`, `HEADER_PROCESS`,
-    `SOCKETS`, `EXE`, `APPROVED`, `netstat_text(sockets, header)`, `lsof_text(pairs)`, fixture `listeners` and
-    `approve(paths)`.
+    `SOCKETS`, `EXE`, `APPROVED`, `netstat_text(sockets, header)`, `lsof_text(pairs)`, fixture `listeners` (its
+    `lsof_rounds` gives one-off lsof answers, round by round) and `approve(paths)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2303,7 +2408,7 @@ def netstat_text(sockets, header=HEADER_PID):
         who = "%s:%d" % (command, pid) if named else "%d" % pid
         extra = "    131072  131072  %s  0 0x0100 0x00000106 0x0000000000c5a1d 0x00000000 0x00000800 1 0 000001" % who
         if named:
-            extra = "  1024  2048  131072  131072  %s  00000 0x0100 0x00000106 0x0000000000c5a1d 0x00000000 0x00000800 1 0 000001" % who
+            extra = "  1024  2048  131072  131072  %s  0x0100 0x00000106 0x0000000000c5a1d 0x00000000 0x00000800 1 0 000001" % who
         lines.append("%-6s     0      0  %-22s %-22s %-12s%s" % (proto, local, foreign, state, extra))
     return "\n".join(lines) + "\n"
 
@@ -2326,14 +2431,16 @@ def listeners(env, held, monkeypatch):
     """A Mac's listeners: netstat prints `state["sockets"]` (in `state["header"]`'s format), lsof the user's own,
     proc_pidpath maps pids to executables, and the block at 41000 is a live lane's (this test holds t1's lock)."""
     state = {"sockets": list(SOCKETS), "header": HEADER_PID, "netstat_rc": 0, "netstat": None,
-             "lsof": [(900, "127.0.0.1:41000"), (901, "[::1]:41001")], "lsof_rc": 0, "exe": dict(EXE)}
+             "lsof": [(900, "127.0.0.1:41000"), (901, "[::1]:41001")], "lsof_rc": 0, "exe": dict(EXE),
+             "lsof_rounds": []}                         # one-off lsof answers, used up first, round by round
 
     def run(cmd, timeout=60):
         if cmd[0].endswith("netstat"):
             text = state["netstat"] if state["netstat"] is not None else netstat_text(state["sockets"], state["header"])
             return Ran(state["netstat_rc"], text)
         if cmd[0].endswith("lsof"):
-            return Ran(state["lsof_rc"], lsof_text(state["lsof"]))
+            pairs = state["lsof_rounds"].pop(0) if state["lsof_rounds"] else state["lsof"]
+            return Ran(state["lsof_rc"], lsof_text(pairs))
         raise AssertionError(cmd)
     monkeypatch.setattr(lane, "_run", run)
     monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/" + name)
@@ -2383,14 +2490,18 @@ def test_a_lane_process_listening_beyond_loopback_fails(listeners, address):
     assert not ok and len(problems) == 1 and "port 41002, beyond loopback" in problems[0]
 
 
-def test_a_listener_bound_to_one_other_address_does_not_count(listeners):
+@pytest.mark.parametrize("counted", ["*.9002", "::ffff:127.0.0.1.9003", "fe80::1%lo0.9004", "[weird].9005"])
+def test_a_listener_bound_to_one_other_address_does_not_count(listeners, counted):
     """The reachability ruling: neither the worker nor the broker can reach a socket bound only to the tailnet or the
-    LAN, so it neither blocks a lane nor needs approval. A wildcard does count."""
+    LAN, so it neither blocks a lane nor needs approval. A wildcard counts, and so do an IPv4-mapped loopback address,
+    anything scoped to lo0 and an address the check can't read (N8)."""
     listeners["sockets"] += [("tcp4", "100.101.102.103.9000", "LISTEN", 777, "ollama"),
-                             ("tcp4", "192.168.1.20.9001", "LISTEN", 777, "ollama")]
+                             ("tcp4", "192.168.1.20.9001", "LISTEN", 777, "ollama"),
+                             ("tcp6", "fe80::1%en0.9006", "LISTEN", 777, "ollama")]
     assert lane.listeners_ok() == (True, [])
-    listeners["sockets"].append(("tcp4", "*.9002", "LISTEN", 777, "ollama"))
-    assert lane.listeners_ok()[0] is False
+    listeners["sockets"].append(("tcp6", counted, "LISTEN", 777, "ollama"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and len(problems) == 1 and "ollama (pid 777) listens on port 900" in problems[0]
 
 
 def test_a_listener_whose_program_cant_be_identified_fails(listeners):
@@ -2443,10 +2554,17 @@ def test_a_netstat_it_doesnt_recognise_fails_closed(listeners, text):
 
 
 def test_a_listener_lsof_sees_and_netstat_doesnt_fails(listeners):
-    """The cross-check: any (pid, port) of the user's own that netstat lacks means the enumeration can't be trusted."""
+    """The cross-check: any (pid, port) of the user's own that netstat lacks, in both of two rounds, means the
+    enumeration can't be trusted."""
     listeners["lsof"].append((905, "127.0.0.1:41003"))
     ok, problems = lane.listeners_ok()
     assert not ok and problems == ["lsof shows pid 905 listening on port 41003, which netstat doesn't list"]
+
+
+def test_a_socket_that_opens_between_netstat_and_lsof_doesnt_fail_the_check(listeners):
+    """Review (N2): a socket that appeared after netstat read the table is gone from the second round."""
+    listeners["lsof_rounds"] = [listeners["lsof"] + [(906, "127.0.0.1:41004")]]
+    assert lane.listeners_ok() == (True, [])
 
 
 def test_a_dead_teamds_block_is_not_a_lane(listeners, monkeypatch):
@@ -2465,6 +2583,16 @@ def test_a_dead_teamds_block_is_not_a_lane(listeners, monkeypatch):
 def test_only_127_8_and_ipv6_loopback_count_as_loopback(host, loopback):
     """Spec unit test 8: ::1 and 127.0.0.2 count; fe80::1, :: and a tailnet address don't."""
     assert lane.is_loopback(host) is loopback
+
+
+def test_a_process_name_with_spaces_or_colons_keeps_its_own_pid():
+    """Review (N1): the process:pid column is everything between the columns before and after it, and the pid is its
+    last :digits. A name with spaces parses, and a crafted "x:1 y:777" is pid 777, never 1."""
+    text = netstat_text([("tcp4", "127.0.0.1.9000", "LISTEN", 4321, "Google Chrome He"),
+                         ("tcp4", "127.0.0.1.9001", "LISTEN", 777, "x:1 y")], HEADER_PROCESS)
+    assert lane.parse_netstat(text) == [
+        {"pid": 4321, "command": "Google Chrome He", "host": "127.0.0.1", "port": 9000},
+        {"pid": 777, "command": "x:1 y", "host": "127.0.0.1", "port": 9001}]
 
 
 @pytest.mark.parametrize("header", [HEADER_PID, HEADER_PROCESS])
@@ -2520,7 +2648,7 @@ def test_the_approved_list_must_be_a_readable_list(env):
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `26 failed, 34 passed, 21 errors`, each with `AttributeError: … has no attribute …` (`is_loopback`,
+**Expected:** `27 failed, 35 passed, 25 errors`, each with `AttributeError: … has no attribute …` (`is_loopback`,
 `_run`, `pid_path`, `parse_netstat`, `approved_path`, …).
 
 - [ ] **Step 3: Implement**
@@ -2612,15 +2740,20 @@ def parse_netstat(text):
         return None
     named = "process:pid" in columns
     index = columns.index("process:pid" if named else "pid")
+    trailing = len(columns) - index - 1                 # the columns after it, counted from the header
     out = []
     for line in lines:
         fields = line.split()
         if len(fields) < 6 or fields[0] not in ("tcp4", "tcp6", "tcp46") or fields[5] != "LISTEN":
             continue
-        if len(fields) <= index:
+        if len(fields) < index + 1 + trailing:
             return None
         host, sep, port = fields[3].rpartition(".")
-        command, _, pid = fields[index].rpartition(":") if named else ("", "", fields[index])
+        if named:                                       # a process name may hold spaces: "Google Chrome He:4321"
+            found = re.fullmatch(r"(.*):([0-9]+)", " ".join(fields[index:len(fields) - trailing]))
+            command, pid = (found.group(1), found.group(2)) if found else ("", "")
+        else:
+            command, pid = "", fields[index]
         if not sep or not host or not port.isdigit() or not pid.isdigit():
             return None
         out.append({"pid": int(pid), "command": command, "host": host, "port": int(port)})
@@ -2637,6 +2770,19 @@ def is_loopback(host):
     if address.version == 4:
         return address in ipaddress.ip_network("127.0.0.0/8")
     return address == ipaddress.ip_address("::1")
+
+
+def reachable(host):
+    """Whether a lane could reach a socket bound to this address: loopback (an IPv4-mapped one too), a wildcard, or
+    anything scoped to lo0. An address it can't read counts, so the check fails closed."""
+    if host in WILDCARDS or is_loopback(host) or host.endswith("%lo0"):
+        return True
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return True
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped is not None and mapped in ipaddress.ip_network("127.0.0.0/8")
 
 
 def read_listeners():
@@ -2682,26 +2828,33 @@ def listeners_ok():
     must be in a live lane's block on loopback, or belong to an approved Apple program, by its full path, on any port.
     A socket bound only to another specific address (the tailnet, say) is unreachable and doesn't count; a lane's
     own port beyond loopback always fails. Any doubt fails too: netstat or lsof failing, a socket lsof sees that
-    netstat doesn't, a process that can't be identified, an unreadable list or registry. Returns (ok, problems).
+    netstat doesn't (in two rounds running), a process that can't be identified, an unreadable list or registry.
+    Returns (ok, problems).
     The check is machine-wide, so it takes no team."""
     try:
         approved = load_approved()
         blocks = live_blocks()
     except LaneRefused as e:
         return False, [str(e)]
-    listeners = read_listeners()
-    if listeners is None:
-        return False, ["netstat failed, or printed a header this check doesn't know, so the listener check fails closed"]
-    seen = lsof_listeners()
-    if seen is None:
-        return False, ["lsof failed, so the listener check fails closed"]
-    problems = ["lsof shows pid %d listening on port %d, which netstat doesn't list" % pair
-                for pair in sorted(seen - {(item["pid"], item["port"]) for item in listeners})]
+    missing, listeners = None, None
+    for attempt in range(2):                            # a socket that opened or closed between the two reads
+        listeners = read_listeners()                    # is gone from the second round
+        if listeners is None:
+            return False, ["netstat failed, or printed a header this check doesn't know, so the listener check "
+                           "fails closed"]
+        seen = lsof_listeners()
+        if seen is None:
+            return False, ["lsof failed, so the listener check fails closed"]
+        lacking = seen - {(item["pid"], item["port"]) for item in listeners}
+        missing = lacking if missing is None else missing & lacking
+        if not missing:
+            break
+    problems = ["lsof shows pid %d listening on port %d, which netstat doesn't list" % pair for pair in sorted(missing)]
     paths = {}
     for item in listeners:
         port, host, pid = item["port"], item["host"], item["pid"]
         in_lane = any(base <= port < base + BLOCK for base in blocks)
-        if not in_lane and host not in WILDCARDS and not is_loopback(host):
+        if not in_lane and not reachable(host):
             continue                                    # bound to one other address: no lane can reach it
         if pid not in paths:
             paths[pid] = pid_path(pid)
@@ -2722,7 +2875,7 @@ def listeners_ok():
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `144 passed`.
+**Expected:** `150 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -2987,6 +3140,13 @@ def test_the_manifest_refuses_links_out_of_the_folder_and_ignores_playwrights_ma
         with pytest.raises(lane.LaneRefused, match="links outside the browser's folder"):
             lane.manifest_hash(folder)
     link.unlink()
+    deep = folder / "x" / "y"
+    deep.mkdir(parents=True)
+    os.symlink("../..", deep / "top")                                  # x/y/top is the folder itself: inside
+    os.symlink("top/../outside", deep / "out")                         # lexically x/y/outside; really ../outside
+    with pytest.raises(lane.LaneRefused, match="links outside the browser's folder"):
+        lane.manifest_hash(folder)
+    shutil.rmtree(folder / "x")
     os.symlink("chrome-headless-shell", folder / "chrome-headless-shell-mac-arm64" / "lib")   # inside: fine
     assert lane.manifest_hash(folder) != before
 
@@ -3113,7 +3273,7 @@ def test_lane_node_is_an_owned_absolute_binary_outside_home_and_worktrees(env, t
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `14 failed, 81 passed, 8 errors`, each with `AttributeError: … has no attribute …` (`lock_entry`,
+**Expected:** `14 failed, 87 passed, 8 errors`, each with `AttributeError: … has no attribute …` (`lock_entry`,
 `extract_package`, `manifest_hash`, `broker_root`, …).
 
 - [ ] **Step 3: Implement**
@@ -3319,6 +3479,7 @@ def manifest_hash(folder):
     an unsandboxed process launches the browser, carries no code and is left out (the broker can't write it)."""
     folder = Path(folder)
     _check_owner(folder, os.lstat(folder))
+    root = os.path.realpath(folder)
     digest = hashlib.sha256()
     for top, dirs, files in os.walk(folder, followlinks=False):
         dirs.sort()
@@ -3331,8 +3492,8 @@ def manifest_hash(folder):
                 continue
             if stat.S_ISLNK(st.st_mode):
                 target = os.readlink(full)
-                inside = os.path.normpath(os.path.join(os.path.dirname(rel), target))
-                if os.path.isabs(target) or inside == ".." or inside.startswith("../"):
+                resolved = os.path.realpath(full)       # through every link in a chain, not just this one
+                if os.path.isabs(target) or not (resolved == root or resolved.startswith(root + os.sep)):
                     raise LaneRefused("%s links outside the browser's folder (to %s)" % (full, target))
                 kind, extra = "l", target
             elif stat.S_ISDIR(st.st_mode):
@@ -3421,7 +3582,7 @@ with
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `166 passed`. On the Pi, unpacking goes through the `unpack` fixture's stand-in (Decision 15); on
+**Expected:** `172 passed`. On the Pi, unpacking goes through the `unpack` fixture's stand-in (Decision 15); on
 Python 3.11.4 or later it is tarfile's own data filter.
 
 - [ ] **Step 5: Commit**
@@ -3452,14 +3613,19 @@ git commit -m "team: the broker's Playwright pinned by the base lockfile, and it
   - `lane.TEMPLATE`.
   - `lane.sb_quote(path) -> str` (resolved, and refused if it holds `"` or `\`), and `lane._sb_literal(path) -> str`
     (as given).
-  - `lane.node_prefix(node_bin) -> Path`, refused when too wide.
+  - `lane.node_prefix(node_bin) -> Path` (of the resolved binary), refused when too wide.
   - `lane.render_profile(b_text, pw_dir, browsers_dir, shell_dir, node_bin, base) -> str`, where `b_text` comes from
     `lane.lane_text` and is never resolved here.
   - `lane.SELF_CHECK_PROBES` (16 of them) and `lane.SELF_CHECK_POSITIVE = ("lane_port", "write_own_folder", "exec_node")`.
+  - `lane.PRIVATE_TMP`, `lane.USERS_SHARED`, `lane.PROBE_PROGRAMS` (seams) and
+    `lane.probe_targets(user_temp) -> dict[str, tuple[str | None, Path | None]]` (each probe's variable and its target,
+    None when the target doesn't exist).
   - `lane.judge_probe(name, returncode) -> bool`.
-  - `lane.self_check(node_bin, pw_dir, shell_dir, run=None) -> list[tuple[str, bool, str]]`, where `run` is the
-    `subprocess.run` seam. It runs `sandbox-exec -p <profile> <node> -e <probe source> <probe>`, under its own team
-    lock, and cleans its lane, block and lock up.
+  - `lane.self_check(node_bin, pw_dir, shell_dir, run=None) -> list[tuple[str, str, str]]`, rows of
+    `(probe, verdict, detail)` with the verdict PASS, FAIL or BROKEN; `run` is the `subprocess.run` seam. It runs
+    `sandbox-exec -p <profile> <node> -e <probe source> <probe>`, under its own team lock, and cleans its lane, block
+    and lock up.
+  - In `test_lane.py`: fixture `probe_world` (the probes' targets, made to exist).
   - In `test_lane.py`: `TEMPLATE_RULES` and `rules(text)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3508,10 +3674,9 @@ def profile_paths(env, tmp_root):
     broker = env["home"] / ".superyak" / "team" / "broker"
     pw = broker / "playwright-core-1.55.0"
     shell = broker / "browsers" / "chromium_headless_shell-1243"
-    node = env["tmp"] / "opt" / "node" / "22.9.0" / "bin" / "node"
-    for folder in (pw, shell, node.parent):
+    node = Path("/opt/lane-test-node/22.9.0/bin/node")                  # only named, never run
+    for folder in (pw, shell):
         folder.mkdir(parents=True)
-    node.write_text("")
     b = lane.ensure_lane("t1", "kaylee") / "b"
     return {"b": b, "b_text": lane.lane_text(b), "pw": pw, "browsers": broker / "browsers", "shell": shell, "node": node}
 
@@ -3582,15 +3747,23 @@ def test_a_profile_never_names_the_target_of_a_planted_link(profile_paths, env):
         lane.lane_text(b)
 
 
-@pytest.mark.parametrize("where", ["root", "home", "above home", "/Users", "/Volumes", "/private/tmp"])
+@pytest.mark.parametrize("where", ["root", "home", "above home", "/Users", "/Volumes", "/private", "/private/tmp",
+                                   "/private/var/folders"])
 def test_a_node_prefix_that_reads_too_much_is_refused(env, where):
-    """Review: the broker reads node's prefix whole, so /, $HOME and above, /Users, /Volumes and /private/tmp are out."""
+    """Review: the broker reads node's prefix (of the resolved binary) whole, so /, /private, $HOME and above, and
+    anything under /Users, /Volumes, /private/tmp or /private/var/folders are out."""
     home = Path(os.path.realpath(env["home"]))
-    node = {"root": Path("/bin/node"), "home": home / "bin" / "node", "above home": home.parent / "bin" / "node",
+    node = {"root": Path("/nodebin/node"), "home": home / "bin" / "node", "above home": home.parent / "bin" / "node",
             "/Users": Path("/Users/me/node/bin/node"), "/Volumes": Path("/Volumes/usb/node/bin/node"),
-            "/private/tmp": Path("/private/tmp/node/bin/node")}[where]
+            "/private": Path("/private/bin/node"), "/private/tmp": Path("/private/tmp/node/bin/node"),
+            "/private/var/folders": Path("/private/var/folders/xy/T/node/bin/node")}[where]
     with pytest.raises(lane.LaneRefused, match="too wide"):
         lane.node_prefix(node)
+    link = env["tmp"] / "opt" / "node" / "bin" / "node"                  # a tidy-looking link to a too-wide one
+    link.parent.mkdir(parents=True)
+    os.symlink(node, link)
+    with pytest.raises(lane.LaneRefused, match="too wide"):
+        lane.node_prefix(link)
     assert lane.node_prefix(Path("/opt/homebrew/Cellar/node/22.9.0/bin/node")) == Path("/opt/homebrew/Cellar/node/22.9.0")
 
 
@@ -3604,10 +3777,25 @@ def test_paths_a_profile_cannot_quote_are_refused(profile_paths, env, bad):
                             profile_paths["node"], 41000)
 
 
-def test_the_self_check_judges_every_probe_and_cleans_up(profile_paths, env, monkeypatch):
+@pytest.fixture
+def probe_world(env, monkeypatch):
+    """What the self-check's probes act on, made to exist here: dotfiles, LaunchAgents, Claude's tmp, /Users/Shared,
+    the user temp folder, and the programs (any real file stands in)."""
+    (env["home"] / ".zshrc").write_text("export X=1\n")
+    (env["home"] / "Library" / "LaunchAgents").mkdir(parents=True)
+    private_tmp, shared, user_temp = env["tmp"] / "private-tmp", env["tmp"] / "Shared", env["tmp"] / "T"
+    for folder in (private_tmp / ("claude-%d" % os.getuid()), shared, user_temp):
+        folder.mkdir(parents=True)
+    monkeypatch.setattr(lane, "PRIVATE_TMP", private_tmp)
+    monkeypatch.setattr(lane, "USERS_SHARED", shared)
+    monkeypatch.setattr(lane, "PROBE_PROGRAMS", {name: sys.executable for name in lane.PROBE_PROGRAMS})
+    return {"user_temp": user_temp}
+
+
+def test_the_self_check_judges_every_probe_and_cleans_up(profile_paths, probe_world, env, monkeypatch):
     """Acceptance step 1's logic, with a fake sandbox-exec: every probe must be refused, the three positive controls
-    (exec_node among them) must succeed, the profile and the probe go inline, and whatever a probe created is removed
-    with the scratch lane."""
+    (exec_node among them) must succeed, the profile and the probe go inline, each probe gets its target's exact
+    path, and whatever a probe created is removed with the scratch lane."""
     monkeypatch.setattr(lane, "port_free", lambda port: True)
     seen = []
 
@@ -3619,31 +3807,51 @@ def test_the_self_check_judges_every_probe_and_cleans_up(profile_paths, env, mon
             return Ran(0, "succeeded")
         positive = name in lane.SELF_CHECK_POSITIVE
         return Ran(0 if positive else 1, "succeeded" if positive else "refused: EPERM")
-    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, "/var/folders/xy/T/\n"))
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, str(probe_world["user_temp"]) + "\n"))
     rows = lane.self_check(profile_paths["node"], profile_paths["pw"], profile_paths["shell"], run=sandbox)
-    verdicts = {name: passed for name, passed, _ in rows}
+    verdicts = {name: verdict for name, verdict, _ in rows}
     assert set(verdicts) == set(lane.SELF_CHECK_PROBES) | set(lane.SELF_CHECK_POSITIVE) | {"leftover"}
     assert len(lane.SELF_CHECK_PROBES) == 16 and "exec_open_calculator" in lane.SELF_CHECK_PROBES
     assert lane.SELF_CHECK_POSITIVE == ("lane_port", "write_own_folder", "exec_node")
-    assert verdicts["write_home"] is False and verdicts["leftover"] is False
-    assert all(passed for name, passed in verdicts.items() if name not in ("write_home", "leftover"))
+    assert verdicts["write_home"] == "FAIL" and verdicts["leftover"] == "FAIL"
+    assert all(v == "PASS" for name, v in verdicts.items() if name not in ("write_home", "leftover"))
     assert not (env["home"] / "superyak-lane-probe.txt").exists()
     cmd, probe_env = seen[0]
     assert cmd[:2] == [lane.SANDBOX_EXEC, "-p"] and cmd[2].startswith(";") and "(deny default)" in cmd[2]
     assert cmd[3:5] == [str(profile_paths["node"]), "-e"] and "const probes" in cmd[5]
     assert set(probe_env) == {"PATH", "HOME", "TMPDIR", "PROBE_CANARY_PORT", "PROBE_LANE_PORT", "PROBE_CLAUDE_TMP",
-                              "PROBE_USER_TEMP"}
+                              "PROBE_USER_TEMP", "PROBE_DOTFILE", "PROBE_RC", "PROBE_LAUNCHAGENTS", "PROBE_USERS_SHARED"}
+    assert probe_env["PROBE_DOTFILE"] == probe_env["PROBE_RC"] == str(env["home"] / ".zshrc")
     team_id = "superyak-self-check-%d" % os.getpid()
     assert not lane.lane_path(team_id, "check").exists() and lane.block_of(team_id, "check") is None
     assert not lane._team_lock(team_id).exists()
+
+
+def test_a_probe_whose_target_is_missing_is_broken_not_passed(profile_paths, probe_world, env, monkeypatch):
+    """Review (N7): ENOENT is no refusal. With no rc file, no dotfile and no LaunchAgents folder, those probes don't
+    run at all, and nothing is created for them."""
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    (env["home"] / ".zshrc").unlink()
+    (env["home"] / "Library" / "LaunchAgents").rmdir()
+    ran = []
+
+    def sandbox(cmd, env=None, cwd=None, **kw):
+        ran.append(cmd[-1])
+        return Ran(0 if cmd[-1] in lane.SELF_CHECK_POSITIVE else 1, "refused: EPERM")
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, str(probe_world["user_temp"]) + "\n"))
+    verdicts = {name: verdict for name, verdict, _ in
+                lane.self_check(profile_paths["node"], profile_paths["pw"], profile_paths["shell"], run=sandbox)}
+    for name in ("read_dotfile", "open_rc_for_write", "write_launchagents"):
+        assert verdicts[name] == "BROKEN" and name not in ran
+    assert not (env["home"] / ".zshrc").exists() and not (env["home"] / "Library" / "LaunchAgents").exists()
 ```
 
 - [ ] **Step 2: Run them and see them fail**
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `13 failed, 104 passed`: `FileNotFoundError: …/lane/broker.sb.tmpl`, and
-`AttributeError: … has no attribute …` (`render_profile`, `node_prefix`, `self_check`).
+**Expected:** `14 failed, 110 passed, 2 errors`: `FileNotFoundError: …/lane/broker.sb.tmpl`, and
+`AttributeError: … has no attribute …` (`render_profile`, `node_prefix`, `self_check`, `PRIVATE_TMP`).
 
 - [ ] **Step 3: Implement**
 
@@ -3707,9 +3915,10 @@ Create `team/superyak_team/lane/profile_probe.js`:
 ```javascript
 // Browser-lane self-check (lane.self_check): run directly under the broker's profile, as code that took over the
 // browser would run: `sandbox-exec -p <profile> <node> -e <this file's text> <probe>`. Exit 0 means the action
-// SUCCEEDED. Every probe but the positive controls (lane_port, write_own_folder, exec_node) must fail. It never prints
-// a file's contents; lane.self_check removes anything a probe managed to create. Adapted from
-// team/scripts/lane_profile_probe.js (spike 5).
+// SUCCEEDED. Every probe but the positive controls (lane_port, write_own_folder, exec_node) must fail. Each probe acts
+// on the exact target lane.self_check found outside the sandbox (PROBE_* variables), so a refusal can't be a missing
+// file. It never prints a file's contents and never creates an rc file; lane.self_check removes anything a probe
+// managed to create. Adapted from team/scripts/lane_profile_probe.js (spike 5).
 const fs = require('fs'), net = require('net'), path = require('path'), { execFileSync } = require('child_process');
 const home = process.env.HOME, probe = process.argv[1], marker = 'superyak-lane-probe';
 const run = (file, args) => execFileSync(file, args, { stdio: 'pipe', timeout: 8000 });
@@ -3728,14 +3937,14 @@ const probes = {
   net_ip: () => connect(80, '1.1.1.1'),
   net_canary: () => connect(+process.env.PROBE_CANARY_PORT, '127.0.0.1'),
   lane_port: () => connect(+process.env.PROBE_LANE_PORT, '127.0.0.1'),
-  read_dotfile: () => { for (const f of ['.zshrc', '.bashrc', '.profile', '.gitconfig']) { try { fs.readFileSync(path.join(home, f)); return; } catch (e) {} } throw new Error('none'); },
+  read_dotfile: () => fs.readFileSync(process.env.PROBE_DOTFILE),
   read_claude_tmp: () => fs.readdirSync(process.env.PROBE_CLAUDE_TMP),
   read_user_temp: () => fs.readdirSync(process.env.PROBE_USER_TEMP),
   write_home: () => fs.writeFileSync(path.join(home, marker + '.txt'), 'x'),
-  write_launchagents: () => fs.writeFileSync(path.join(home, 'Library/LaunchAgents', marker + '.plist'), 'x'),
-  // Opens an EXISTING rc file for writing and closes it without writing: never creates or changes one.
-  open_rc_for_write: () => { for (const f of ['.zshrc', '.bashrc', '.profile']) { const p = path.join(home, f); if (fs.existsSync(p)) { fs.closeSync(fs.openSync(p, 'r+')); return; } } throw new Error('no rc file to try'); },
-  write_users_shared: () => fs.writeFileSync('/Users/Shared/' + marker, 'x'),
+  write_launchagents: () => fs.writeFileSync(path.join(process.env.PROBE_LAUNCHAGENTS, marker + '.plist'), 'x'),
+  // Opens the EXISTING rc file for writing ('r+' never creates) and closes it without writing a byte.
+  open_rc_for_write: () => fs.closeSync(fs.openSync(process.env.PROBE_RC, 'r+')),
+  write_users_shared: () => fs.writeFileSync(path.join(process.env.PROBE_USERS_SHARED, marker), 'x'),
   write_own_folder: () => fs.writeFileSync(path.join(process.env.TMPDIR, marker), 'x'),
   // Starting node itself must work (fork, then exec of the one allowed binary): without it, every exec_* probe above
   // would be refused for the wrong reason.
@@ -3769,13 +3978,15 @@ def _sb_literal(path):
 
 
 def node_prefix(node_bin):
-    """node's own folder (bin/node's grandparent), which the broker reads whole. Refused when it is /, $HOME or a
-    folder above it, or lies under /Users, /Volumes or /private/tmp: the profile would read far more than node."""
-    prefix = Path(node_bin).parents[1]
+    """node's own folder (the resolved binary's grandparent), which the broker reads whole. Refused when it is /,
+    /private, $HOME or a folder above it, or lies under /Users, /Volumes, /private/tmp or /private/var/folders: the
+    profile would read far more than node."""
+    prefix = Path(os.path.realpath(node_bin)).parents[1]
     home = Path(os.path.realpath(Path.home()))
     text = str(prefix)
-    if (prefix == Path("/") or prefix == home or prefix in home.parents
-            or any(text == top or text.startswith(top + "/") for top in ("/Users", "/Volumes", "/private/tmp"))):
+    if (prefix in (Path("/"), Path("/private"), home) or prefix in home.parents
+            or any(text == top or text.startswith(top + "/")
+                   for top in ("/Users", "/Volumes", "/private/tmp", "/private/var/folders"))):
         raise LaneRefused("lane_node's folder %s is too wide for the broker to read; install node somewhere like "
                           "/opt/homebrew" % prefix)
     return prefix
@@ -3788,8 +3999,9 @@ def render_profile(b_text, pw_dir, browsers_dir, shell_dir, node_bin, base):
     one rule per lane port apart from the broker's, and the broker's port for bind and inbound only."""
     node_bin = Path(node_bin)
     prefix = node_prefix(node_bin)
-    paths = [Path(b_text), Path(pw_dir), Path(browsers_dir), Path(shell_dir), prefix, node_bin]
-    ancestors = sorted({str(parent) for p in paths for q in (p, Path(os.path.realpath(p))) for parent in q.parents})
+    paths = [Path(pw_dir), Path(browsers_dir), Path(shell_dir), prefix, node_bin]
+    ancestors = {str(parent) for p in paths for q in (p, Path(os.path.realpath(p))) for parent in q.parents}
+    ancestors = sorted(ancestors | {str(parent) for parent in Path(b_text).parents})   # b_text as given
     values = {
         "B_DIR": _sb_literal(b_text), "PLAYWRIGHT_DIR": sb_quote(pw_dir), "BROWSERS_DIR": sb_quote(browsers_dir),
         "NODE_PREFIX": sb_quote(prefix), "NODE_BIN": sb_quote(node_bin), "SHELL_DIR": sb_quote(shell_dir),
@@ -3814,9 +4026,33 @@ SELF_CHECK_PROBES = ("exec_osascript", "exec_launchctl", "exec_security", "exec_
 SELF_CHECK_POSITIVE = ("lane_port", "write_own_folder", "exec_node")
 
 
+PRIVATE_TMP = Path("/private/tmp")
+USERS_SHARED = Path("/Users/Shared")
+PROBE_PROGRAMS = {"exec_osascript": "/usr/bin/osascript", "exec_launchctl": "/bin/launchctl",
+                  "exec_security": "/usr/bin/security", "exec_pbpaste": "/usr/bin/pbpaste",
+                  "exec_open_calculator": "/usr/bin/open", "exec_curl": "/usr/bin/curl"}
+
+
 def _probe_leftovers():
     return [Path.home() / "superyak-lane-probe.txt", Path.home() / "Library/LaunchAgents/superyak-lane-probe.plist",
-            Path("/Users/Shared/superyak-lane-probe")]
+            USERS_SHARED / "superyak-lane-probe"]
+
+
+def probe_targets(user_temp):
+    """What each probe acts on, checked outside the sandbox: a probe whose target doesn't exist would be "refused"
+    with ENOENT, which proves nothing, so its row is BROKEN. {probe: (variable for the probe or None, path or None)}."""
+    home = Path.home()
+    first = lambda names: next((home / n for n in names if (home / n).is_file()), None)
+    folder = lambda path: path if path and Path(path).is_dir() else None
+    targets = {name: (None, Path(path) if os.path.isfile(path) else None) for name, path in PROBE_PROGRAMS.items()}
+    return {**targets,
+            "read_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"))),
+            "open_rc_for_write": ("PROBE_RC", first((".zshrc", ".bashrc", ".profile"))),
+            "read_claude_tmp": ("PROBE_CLAUDE_TMP", folder(PRIVATE_TMP / ("claude-%d" % os.getuid()))),
+            "read_user_temp": ("PROBE_USER_TEMP", folder(user_temp)),
+            "write_home": (None, folder(home)),
+            "write_launchagents": ("PROBE_LAUNCHAGENTS", folder(home / "Library" / "LaunchAgents")),
+            "write_users_shared": ("PROBE_USERS_SHARED", folder(USERS_SHARED))}
 
 
 def judge_probe(name, returncode):
@@ -3829,7 +4065,8 @@ def self_check(node_bin, pw_dir, shell_dir, run=None):
     """Spec acceptance step 1 (and whenever the pinned revision changes): every spike 5 probe, plus `open -a
     Calculator`, run directly under a freshly generated profile, as code that took over the browser would run. The
     profile goes inline (sandbox-exec -p) and the probe as node -e, so nothing in the scratch lane decides what runs.
-    Returns [(probe, passed, detail)]. macOS only; `run` is the seam the tests use."""
+    Each probe's target is checked outside the sandbox first. Returns [(probe, verdict, detail)], the verdict PASS,
+    FAIL or BROKEN (its target doesn't exist here). macOS only; `run` is the seam the tests use."""
     run = run or subprocess.run
     team_id, worker_id = "superyak-self-check-%d" % os.getpid(), "check"
     held = hold_team(team_id)
@@ -3847,22 +4084,25 @@ def self_check(node_bin, pw_dir, shell_dir, run=None):
         profile = render_profile(b_text, pw_dir, browsers_root(), shell_dir, node_bin, base)
         source = (teamlib.package_dir() / "lane" / "profile_probe.js").read_text()
         user_temp = _run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], timeout=10)
+        targets = probe_targets(user_temp.stdout.strip() if user_temp and user_temp.returncode == 0 else None)
         env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "TMPDIR": b_text,
-               "PROBE_CANARY_PORT": str(canary.getsockname()[1]), "PROBE_LANE_PORT": str(base + 2),
-               "PROBE_CLAUDE_TMP": "/private/tmp/claude-%d" % os.getuid(),
-               "PROBE_USER_TEMP": (user_temp.stdout.strip() if user_temp and user_temp.returncode == 0 else "")
-               or "/nonexistent"}
+               "PROBE_CANARY_PORT": str(canary.getsockname()[1]), "PROBE_LANE_PORT": str(base + 2)}
+        env.update({var: str(path) for var, path in targets.values() if var and path})
         for name in SELF_CHECK_PROBES + SELF_CHECK_POSITIVE:
+            if name in targets and targets[name][1] is None:
+                rows.append((name, "BROKEN", "its target doesn't exist here, so a refusal would prove nothing"))
+                continue
             r = run([SANDBOX_EXEC, "-p", profile, str(node_bin), "-e", source, name],
                     env=env, cwd=b_text, capture_output=True, text=True, timeout=60)
-            rows.append((name, judge_probe(name, r.returncode), (r.stdout or r.stderr or "").strip()[:160]))
+            rows.append((name, "PASS" if judge_probe(name, r.returncode) else "FAIL",
+                         (r.stdout or r.stderr or "").strip()[:160]))
     finally:
         canary.close()
         listener.close()
         for target in _probe_leftovers():
             if target.exists():
                 target.unlink()
-                rows.append(("leftover", False, "removed %s, which a probe created" % target))
+                rows.append(("leftover", "FAIL", "removed %s, which a probe created" % target))
         remove_lane(path)
         release_block(team_id, worker_id)
         held.close()
@@ -3890,7 +4130,7 @@ with
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `180 passed`.
+**Expected:** `189 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -3925,15 +4165,20 @@ git commit -m "team: the broker's deny-default profile from a pinned template, a
 - Produces:
   - `lane.START_TIMEOUT_S = 90` and `lane.KILL_GRACE_S = 5`.
   - `class lane.Broker(proc, port, secret)`, with `.endpoint` (`ws://127.0.0.1:<port>/<secret>`) and `.alive()`.
-  - `lane.broker_env(b_dir, pw_dir, secret) -> dict`.
+  - `lane.broker_env(b_dir, pw_dir) -> dict` (no secret: it goes on the broker's stdin's first line).
   - `lane.prepare_broker(repo, base_commit, worktrees, fetch=None) -> tuple[Path, Path, Path]`, giving
     `(node_bin, pw_dir, shell_dir)`.
   - `lane.start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path) -> Broker`, where `stderr_path` is in
     teamd's own folder. It ends whatever still uses `<lane>/b` first, and raises `LaneRefused`, with `details` (the
     denials), when the broker doesn't start.
-  - `lane.stop_broker(broker)`, `lane.group_pids(pgid) -> set[int]`, `lane._lane_prefixes(path) -> set[str]` and
+  - `lane._process_table() -> list[tuple[int, int, int, int]]` (pid, ppid, pgid, uid), and
+    `lane.family(pid) -> tuple[set[int], set[int]]` (the pids and the groups they lead).
+  - `lane.stop_broker(broker)` (signals the whole family), `lane._lane_prefixes(path) -> set[str]` and
     `lane.lane_pids(path, base) -> set[int] | None` (`base` may be None).
-  - `lane.cleanup_processes(path, base, broker=None) -> bool`, which is True once finished.
+  - `lane._parse_procargs2(raw) -> list[str]`, `lane._environ(pid) -> list[str] | None` (the seam) and
+    `lane.env_pids(name, value) -> set[int] | None`.
+  - `lane.cleanup_processes(path, base, broker=None, env=None) -> bool`, which is True once finished; `env` is a
+    `(name, value)` pair for `env_pids`.
   - `lane.start_denial_stream()`, `lane.stop_denial_stream(stream) -> list[str]` and
     `lane.denials_for(lines, pids) -> list[str]`.
   - `lane.scrub(text, secrets) -> str` and `lane.scrub_file(path, secrets)`.
@@ -3950,8 +4195,9 @@ NODE = shutil.which("node")
 # rest (without the PWD the shell adds). The broker's environment is built from nothing, so the path is in the script.
 FAKE_SANDBOX_EXEC = '#!/bin/sh\nprintf %%s "$2" > \'%s\'\nshift 2\nexec /usr/bin/env -u PWD "$@"\n'
 # A stand-in for playwright-core: launchServer listens where it is told, records what it was given, and starts a
-# child in the broker's process group, as Chrome would; server.process() is that child. A FAIL file makes it fail
-# the way Playwright does, quoting the endpoint, secret and all.
+# child DETACHED, in its own process group, as Playwright starts Chrome (processLauncher: detached on every platform
+# but Windows); server.process() is that child. A FAIL file makes it fail the way Playwright does, quoting the
+# endpoint, secret and all.
 FAKE_PLAYWRIGHT = r"""
 const net = require('net'), fs = require('fs'), path = require('path'), { spawn } = require('child_process');
 exports.chromium = { launchServer: async (o) => {
@@ -3959,12 +4205,13 @@ exports.chromium = { launchServer: async (o) => {
   fs.writeFileSync(path.join(out, 'env.json'), JSON.stringify(Object.keys(process.env).sort()));
   fs.writeFileSync(path.join(out, 'options.json'), JSON.stringify(o));
   if (fs.existsSync(path.join(__dirname, 'FAIL'))) throw new Error('launchServer failed at ws://' + o.host + ':' + o.port + o.wsPath);
-  const child = spawn('sleep', ['300'], { stdio: 'ignore' });
+  const child = spawn('sleep', ['300'], { stdio: 'ignore', detached: true });
   fs.writeFileSync(path.join(out, 'child.pid'), String(child.pid));
   const srv = net.createServer().listen(o.port, o.host);
   await new Promise(resolve => srv.on('listening', resolve));
+  const stubborn = fs.existsSync(path.join(__dirname, 'STUBBORN'));   // a browser that ignores the close
   return { wsEndpoint: () => 'ws://' + o.host + ':' + o.port + o.wsPath, process: () => child,
-           close: () => new Promise(r => { child.kill(); srv.close(r); }) };
+           close: () => stubborn ? new Promise(() => {}) : new Promise(r => { child.kill(); srv.close(r); }) };
 } };
 """
 
@@ -4015,11 +4262,11 @@ def test_the_brokers_environment_holds_exactly_the_listed_keys(env, monkeypatch)
     monkeypatch.setenv("NODE_OPTIONS", "--require /evil.cjs")
     monkeypatch.setenv("PW_TEST_CONNECT_WS_ENDPOINT", "ws://evil")
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "/Users/me/Library/Caches/ms-playwright")
-    got = lane.broker_env("/tmp/sy-lane-501/0123456789/b", "/pw", "ab" * 32)
+    got = lane.broker_env("/tmp/sy-lane-501/0123456789/b", "/pw")
     assert got == {"PATH": "/usr/bin:/bin", "HOME": str(env["home"]), "TMPDIR": "/tmp/sy-lane-501/0123456789/b",
                    "MAC_CHROMIUM_TMPDIR": "/tmp/sy-lane-501/0123456789/b",
                    "PLAYWRIGHT_BROWSERS_PATH": str(teamlib.team_home() / "broker" / "browsers"),
-                   "SUPERYAK_BROKER_PLAYWRIGHT": "/pw", "SUPERYAK_BROKER_SECRET": "ab" * 32}
+                   "SUPERYAK_BROKER_PLAYWRIGHT": "/pw"}                    # the secret goes on stdin
 
 
 def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts):
@@ -4029,19 +4276,51 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
         assert re.fullmatch(r"[0-9a-f]{64}", broker.secret) and broker.port == base + 31
         assert broker.endpoint == "ws://127.0.0.1:%d/%s" % (base + 31, broker.secret)
         assert json.loads((b / "env.json").read_text()) == sorted(
-            ["PATH", "HOME", "TMPDIR", "MAC_CHROMIUM_TMPDIR", "PLAYWRIGHT_BROWSERS_PATH", "SUPERYAK_BROKER_PLAYWRIGHT",
-             "SUPERYAK_BROKER_SECRET"])
+            ["PATH", "HOME", "TMPDIR", "MAC_CHROMIUM_TMPDIR", "PLAYWRIGHT_BROWSERS_PATH", "SUPERYAK_BROKER_PLAYWRIGHT"])
         assert json.loads((b / "options.json").read_text()) == {
             "headless": True, "host": "127.0.0.1", "port": base + 31, "wsPath": "/" + broker.secret,
             "chromiumSandbox": False}
         socket.create_connection(("127.0.0.1", base + 31), timeout=5).close()
         assert os.getpgid(broker.proc.pid) == broker.proc.pid                   # its own process group
         child = int((b / "child.pid").read_text())
-        assert os.getpgid(child) == broker.proc.pid
+        assert os.getpgid(child) == child                                       # the "browser" leads another one
+        pids, groups = lane.family(broker.proc.pid)
+        assert child in pids and groups == {broker.proc.pid, child}
+        for pid in (broker.proc.pid, child):                                    # Chrome inherits no secret
+            assert broker.secret.encode() not in Path("/proc/%d/environ" % pid).read_bytes()
     finally:
         lane.stop_broker(broker)
     assert broker.proc.poll() is not None and gone(child)
     assert lane.port_free(base + 31)
+
+
+def test_starting_a_broker_ends_what_still_uses_its_folder(broker_parts):
+    """Review (N6): a process left in b/ (an old broker's helper, or something that wrote there) ends before a new
+    broker starts there."""
+    b = broker_parts["path"] / "b"
+    squatter = spawn_python("import time; time.sleep(60)", b)
+    try:
+        time.sleep(0.3)
+        broker = start(broker_parts)
+        lane.stop_broker(broker)
+        assert gone(squatter.pid)
+    finally:
+        squatter.kill()
+        squatter.wait()
+
+
+def test_the_brokers_family_is_its_descendants_and_the_groups_they_lead(monkeypatch):
+    """Review (N3): Chrome is node's child but leads its own group; a helper orphaned to launchd stays in Chrome's
+    group. A group that no family member leads is never touched."""
+    table = ("  700     1   700  501\n"      # the broker (node), its own group
+             "  701   700   701  501\n"      # Chrome, detached
+             "  702   701   701  501\n"      # a renderer
+             "  703     1   701  501\n"      # a helper whose parent died: still in Chrome's group
+             "  704   700   900  501\n"      # a child that joined someone else's group: itself, not that group
+             "  900     1   900  501\n"      # that someone else
+             "  801     1   801  501\n")     # unrelated
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, table))
+    assert lane.family(700) == ({700, 701, 702, 703, 704}, {700, 701})
 
 
 def test_nothing_in_the_lane_decides_what_the_broker_is(broker_parts):
@@ -4056,6 +4335,16 @@ def test_nothing_in_the_lane_decides_what_the_broker_is(broker_parts):
                                               broker_parts["shell"], broker_parts["node"], broker_parts["base"])
     finally:
         lane.stop_broker(broker)
+
+
+def test_stopping_a_broker_reaches_a_browser_in_its_own_group(broker_parts):
+    """Review (N3): Playwright starts Chrome detached, so killing node's group alone would leave a browser that
+    ignores the close. stop_broker ends every group its family leads."""
+    (broker_parts["pw"] / "STUBBORN").write_text("")
+    broker = start(broker_parts)
+    child = int((broker_parts["path"] / "b" / "child.pid").read_text())
+    lane.stop_broker(broker)
+    assert gone(child)
 
 
 def test_the_broker_exits_when_its_browser_dies(broker_parts):
@@ -4167,6 +4456,44 @@ def test_a_lane_swapped_for_a_link_to_home_mid_cleanup_kills_nothing_there(env, 
         in_home.wait()
 
 
+@pytest.mark.skipif(not os.path.exists("/proc/self/environ"), reason="reads /proc, as the Pi's tests do")
+def test_cleanup_ends_what_still_carries_the_lanes_environment(env, tmp_root, monkeypatch):
+    """Review (N4): a turn's setsid child holds nothing in the lane, but its environment still names the lane's
+    CLAUDE_CODE_TMPDIR. Only the exact value matches."""
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 1)
+    path = lane.ensure_lane("t1", "kaylee")
+    value = str(path / "tmp")
+
+    def started(with_value):
+        return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=str(env["tmp"]),
+                                env=dict(os.environ, CLAUDE_CODE_TMPDIR=with_value), start_new_session=True)
+    orphan, neighbour = started(value), started(value + "x")
+    try:
+        time.sleep(0.3)
+        assert lane.cleanup_processes(path, None, env=("CLAUDE_CODE_TMPDIR", value)) is True
+        assert gone(orphan.pid) and neighbour.poll() is None
+    finally:
+        for proc in (orphan, neighbour):
+            proc.kill()
+            proc.wait()
+
+
+def test_the_environment_match_never_takes_teamd_or_its_parents(monkeypatch):
+    """Review (N4): even if teamd's own environment carried the value, it and every process above it are spared."""
+    me, parent = os.getpid(), os.getppid()
+    table = "%d %d %d %d\n%d 1 %d %d\n4242 1 4242 %d\n4243 1 4243 %d\n" % (
+        me, parent, me, os.getuid(), parent, parent, os.getuid(), os.getuid(), os.getuid() + 1)
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, table))
+    monkeypatch.setattr(lane, "_environ", lambda pid: ["HOME=/h", "CLAUDE_CODE_TMPDIR=/tmp/sy-lane-1/abc/tmp"])
+    assert lane.env_pids("CLAUDE_CODE_TMPDIR", "/tmp/sy-lane-1/abc/tmp") == {4242}      # 4243 is another user's
+
+
+def test_kern_procargs2_is_read_past_argv_to_the_environment():
+    raw = (2).to_bytes(4, sys.byteorder) + b"/opt/homebrew/bin/node\0\0\0node\0-e\0A=1\0CLAUDE_CODE_TMPDIR=/x\0\0junk"
+    assert lane._parse_procargs2(raw) == ["A=1", "CLAUDE_CODE_TMPDIR=/x"]
+    assert lane._parse_procargs2(b"\0") == []
+
+
 def test_cleanup_is_unfinished_when_lsof_cannot_say(env, tmp_root, monkeypatch):
     path = lane.ensure_lane("t1", "kaylee")
     monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: None)
@@ -4205,8 +4532,8 @@ def test_the_secret_is_scrubbed_from_text_and_files(tmp_path):
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `6 failed, 117 passed, 5 errors`, each with `AttributeError: … has no attribute …` (`broker_env`,
-`cleanup_processes`, `denials_for`, `scrub`, `KILL_GRACE_S`).
+**Expected:** `10 failed, 126 passed, 7 errors`, each with `AttributeError: … has no attribute …` (`broker_env`,
+`cleanup_processes`, `family`, `env_pids`, `_parse_procargs2`, `denials_for`, `scrub`, `KILL_GRACE_S`).
 
 - [ ] **Step 3: Implement**
 
@@ -4216,27 +4543,42 @@ Create `team/superyak_team/lane_broker.js`:
 // Superyak browser-lane broker (spike 4's script, docs/superpowers/specs/2026-10-08-browser-lane-design.md). teamd
 // runs it OUTSIDE the worker's sandbox, from its own package, never from a file in the lane:
 //   sandbox-exec -p <profile> <lane_node> -e <this file's text> <port>
-// It serves Playwright's headless shell (launchServer with no channel) on 127.0.0.1:<port>, the lane's last port,
-// behind the secret path, prints "ENDPOINT <ws url>" once, and stops when teamd closes its stdin. If the browser
-// dies, so does the broker, and teamd starts a new one at the next turn. Its environment is built from nothing by
-// teamd: the pinned Playwright's folder, the secret, PLAYWRIGHT_BROWSERS_PATH, PATH, HOME and TMPDIR.
+// teamd writes the secret on its stdin's first line, not in its environment, which Chrome inherits. It serves
+// Playwright's headless shell (launchServer with no channel) on 127.0.0.1:<port>, the lane's last port, behind the
+// secret path, prints "ENDPOINT <ws url>" once, and stops when teamd closes its stdin. If the browser dies, so does
+// the broker, and teamd starts a new one at the next turn. Its environment is built from nothing by teamd: the pinned
+// Playwright's folder, PLAYWRIGHT_BROWSERS_PATH, PATH, HOME and TMPDIR.
 const { chromium } = require(process.env.SUPERYAK_BROKER_PLAYWRIGHT);
-let closing = false;
-(async () => {
-  const server = await chromium.launchServer({
-    headless: true, host: '127.0.0.1', port: Number(process.argv[1]),
-    wsPath: '/' + process.env.SUPERYAK_BROKER_SECRET,
+let server = null, closing = false, secret = null, buffered = '';
+const start = async () => {
+  server = await chromium.launchServer({
+    headless: true, host: '127.0.0.1', port: Number(process.argv[1]), wsPath: '/' + secret,
     chromiumSandbox: false,  // macOS forbids a second sandbox inside the profile (forbidden-sandbox-reinit)
   });
   server.process().on('exit', () => process.exit(closing ? 0 : 1));
+  if (closing) return server.close().then(() => process.exit(0));
   console.log('ENDPOINT ' + server.wsEndpoint());
-  process.stdin.on('end', () => { closing = true; server.close().then(() => process.exit(0)); });
-  process.stdin.resume();
-})().catch(e => {  // the whole error to stderr (teamd's own folder, never posted); one line to stdout for teamd
+};
+const fail = e => {  // the whole error to stderr (teamd's own folder, never posted); one line to stdout for teamd
   console.error(String(e && e.stack || e));
   console.log('ERROR ' + String(e).split('\n')[0].slice(0, 300));
   process.exit(1);
+};
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  if (secret !== null) return;
+  buffered += chunk;
+  const end = buffered.indexOf('\n');
+  if (end < 0) return;
+  secret = buffered.slice(0, end).trim();
+  start().catch(fail);
 });
+process.stdin.on('end', () => {
+  closing = true;
+  if (server) server.close().then(() => process.exit(0));
+  else if (secret === null) process.exit(0);
+});
+process.stdin.resume();
 ```
 
 Append to `team/superyak_team/lane.py`:
@@ -4263,12 +4605,12 @@ class Broker:
         return self.proc.poll() is None
 
 
-def broker_env(b_dir, pw_dir, secret):
-    """Built from nothing, never inherited, so no NODE_OPTIONS, PLAYWRIGHT_* or PW_* of teamd's can reach the broker."""
+def broker_env(b_dir, pw_dir):
+    """Built from nothing, never inherited, so no NODE_OPTIONS, PLAYWRIGHT_* or PW_* of teamd's can reach the broker.
+    The secret isn't here: it goes on the broker's stdin, so Chrome, which inherits this environment, never has it."""
     b = str(b_dir)
     return {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "TMPDIR": b, "MAC_CHROMIUM_TMPDIR": b,
-            "PLAYWRIGHT_BROWSERS_PATH": str(browsers_root()), "SUPERYAK_BROKER_PLAYWRIGHT": str(pw_dir),
-            "SUPERYAK_BROKER_SECRET": secret}
+            "PLAYWRIGHT_BROWSERS_PATH": str(browsers_root()), "SUPERYAK_BROKER_PLAYWRIGHT": str(pw_dir)}
 
 
 def prepare_broker(repo, base_commit, worktrees, fetch=None):
@@ -4311,10 +4653,15 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
         err = _new_fd(str(stderr_path), 0o600)
         try:
             proc = subprocess.Popen([SANDBOX_EXEC, "-p", profile, str(node_bin), "-e", source, str(port)],
-                                    cwd=b_text, env=broker_env(b_text, pw_dir, secret), stdin=subprocess.PIPE,
+                                    cwd=b_text, env=broker_env(b_text, pw_dir), stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=err, text=True, start_new_session=True)
         finally:
             os.close(err)
+        try:
+            proc.stdin.write(secret + "\n")
+            proc.stdin.flush()
+        except OSError:
+            pass                                        # it died already: the endpoint check below says so
     except OSError as e:
         stop_denial_stream(stream)
         raise LaneRefused("the lane's browser can't start (%s)" % (e.strerror or e))
@@ -4326,12 +4673,12 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
         try:
             first = lines.get(timeout=0.5).strip()
         except queue.Empty:
-            pids |= group_pids(proc.pid)
+            pids |= family(proc.pid)[0]
     if first == "ENDPOINT " + broker.endpoint:
         stop_denial_stream(stream)
         return broker
     exited = proc.poll()
-    pids |= group_pids(proc.pid)
+    pids |= family(proc.pid)[0]
     stop_broker(broker)
     denials = denials_for(stop_denial_stream(stream), pids)
     log = stderr_path.read_text(errors="replace").splitlines()
@@ -4351,8 +4698,11 @@ def _killpg(pgid, sig):
 
 
 def stop_broker(broker):
-    """Close its stdin (it closes the browser and exits), then SIGTERM its group, then after KILL_GRACE_S SIGKILL."""
+    """Close its stdin (it closes the browser and exits), then SIGTERM every group and process of its family, then
+    after KILL_GRACE_S SIGKILL. The family is taken first, while node lives: once node exits, Chrome's parent is
+    launchd, and Chrome was never in node's group (Playwright launches it detached)."""
     proc = broker.proc
+    pids, groups = family(proc.pid)
     try:
         proc.stdin.close()
     except (OSError, ValueError):
@@ -4361,27 +4711,48 @@ def stop_broker(broker):
         proc.wait(timeout=KILL_GRACE_S)
     except subprocess.TimeoutExpired:
         pass
-    _killpg(proc.pid, signal.SIGTERM)
-    try:
-        proc.wait(timeout=KILL_GRACE_S)
-    except subprocess.TimeoutExpired:
-        pass
-    _killpg(proc.pid, signal.SIGKILL)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for group in groups:
+            _killpg(group, sig)
+        for pid in pids:
+            if _alive(pid):
+                _kill(pid, sig)
+        deadline = time.monotonic() + KILL_GRACE_S
+        while sig == signal.SIGTERM and time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+            time.sleep(0.1)
     try:
         proc.wait(timeout=KILL_GRACE_S)
     except subprocess.TimeoutExpired:
         pass
 
 
-def group_pids(pgid):
-    """The processes now in a process group (the broker's: node and every Chrome process it started)."""
-    r = _run(["/bin/ps", "-A", "-o", "pid=,pgid="], timeout=10)
-    pids = set()
+def _process_table():
+    """(pid, ppid, pgid, uid) for every process, from ps; [] when ps can't say."""
+    r = _run(["/bin/ps", "-A", "-o", "pid=,ppid=,pgid=,uid="], timeout=10)
+    rows = []
     for line in (r.stdout if r is not None and r.returncode == 0 else "").splitlines():
         fields = line.split()
-        if len(fields) == 2 and fields[0].isdigit() and fields[1] == str(pgid):
-            pids.add(int(fields[0]))
-    return pids
+        if len(fields) == 4 and all(f.isdigit() for f in fields):
+            rows.append(tuple(int(f) for f in fields))
+    return rows
+
+
+def family(root):
+    """The broker's processes: root, its descendants by ppid, and every process in a group one of them leads (Chrome
+    and its helpers: Playwright launches the browser detached, in its own group). Returns (pids, groups), the groups
+    being only those a member of the family leads."""
+    rows = _process_table()
+    children = {}
+    for pid, ppid, pgid, uid in rows:
+        children.setdefault(ppid, []).append(pid)
+    tree, stack = {root}, [root]
+    while stack:
+        for child in children.get(stack.pop(), []):
+            if child not in tree:
+                tree.add(child)
+                stack.append(child)
+    groups = {root} | {pgid for pid, ppid, pgid, uid in rows if pid in tree and pgid in tree}
+    return tree | {pid for pid, ppid, pgid, uid in rows if pgid in groups}, groups
 
 
 def _lane_prefixes(path):
@@ -4430,6 +4801,60 @@ def lane_pids(path, base):
     return pids
 
 
+def _parse_procargs2(raw):
+    """KERN_PROCARGS2's buffer: argc, the executable's path, padding, argc arguments, then the environment."""
+    if len(raw) < 4:
+        return []
+    argc = int.from_bytes(raw[:4], sys.byteorder)
+    parts = raw[4:].split(b"\0")
+    i = 1
+    while i < len(parts) and parts[i] == b"":
+        i += 1
+    env = []
+    for part in parts[i + argc:]:
+        if not part:
+            break
+        env.append(part.decode("utf-8", "replace"))
+    return env
+
+
+def _environ(pid):
+    """A process's environment as NAME=value strings, or None: KERN_PROCARGS2 on macOS, /proc on Linux."""
+    if sys.platform != "darwin":
+        try:
+            data = Path("/proc/%d/environ" % pid).read_bytes()
+        except OSError:
+            return None
+        return [s.decode("utf-8", "replace") for s in data.split(b"\0") if s]
+    try:
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    except OSError:
+        return None
+    mib = (ctypes.c_int * 3)(1, 49, int(pid))           # CTL_KERN, KERN_PROCARGS2
+    size = ctypes.c_size_t(1 << 20)
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
+        return None
+    return _parse_procargs2(buf.raw[:size.value])
+
+
+def env_pids(name, value):
+    """This uid's processes whose environment holds exactly name=value: the lane's CLAUDE_CODE_TMPDIR finds what a
+    turn left behind in a new session (a setsid child), which neither the worker's group nor lsof's files would.
+    Never teamd itself or any process above it. None when ps can't say."""
+    rows = _process_table()
+    if not rows:
+        return None
+    parent = {pid: ppid for pid, ppid, pgid, uid in rows}
+    spared, pid = set(), os.getpid()
+    while pid and pid not in spared:
+        spared.add(pid)
+        pid = parent.get(pid, 0)
+    wanted = "%s=%s" % (name, value)
+    return {pid for pid, ppid, pgid, uid in rows
+            if uid == os.getuid() and pid not in spared and wanted in (_environ(pid) or [])}
+
+
 def _alive(pid):
     try:
         done, _ = os.waitpid(pid, os.WNOHANG)            # reaps it if it is teamd's own child
@@ -4453,14 +4878,19 @@ def _kill(pid, sig):
         pass
 
 
-def cleanup_processes(path, base, broker=None):
+def cleanup_processes(path, base, broker=None, env=None):
     """When a lane ends (and before a broker starts in its b/): the broker, then every process found by lane_pids
-    (Playwright's detached webServer and dev servers, which killing the worker's group misses), SIGTERM and after
-    KILL_GRACE_S SIGKILL, then a second look for anything started meanwhile. True once finished; False when lsof
-    couldn't say, so the block stays held."""
+    (Playwright's detached webServer and dev servers, which killing the worker's group misses) and, with env as
+    (name, value), by env_pids. SIGTERM and after KILL_GRACE_S SIGKILL, then a second look for anything started
+    meanwhile. True once finished; False when lsof or ps couldn't say, so the block stays held."""
     if broker is not None:
         stop_broker(broker)
-    pids = lane_pids(path, base)
+
+    def found():
+        pids = lane_pids(path, base)
+        extra = env_pids(*env) if env else set()
+        return None if pids is None or extra is None else pids | extra
+    pids = found()
     if pids is None:
         return False
     for pid in pids:
@@ -4471,7 +4901,7 @@ def cleanup_processes(path, base, broker=None):
     for pid in pids:
         if _alive(pid):
             _kill(pid, signal.SIGKILL)
-    again = lane_pids(path, base)
+    again = found()
     if again is None:
         return False
     for pid in again:
@@ -4561,7 +4991,7 @@ with
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `191 passed`.
+**Expected:** `206 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -4579,7 +5009,7 @@ git commit -m "team: the broker starts from teamd's own code, stops, and cleans 
 **Files:**
 - Modify: `team/superyak_team/lane.py`: append "a turn the last teamd started" (`lost_turn`).
 - Modify: `team/superyak_team/teamd.py`:
-  - `LIVE`, `LANE_RETRY_S` and `__init__`;
+  - `spawn` (`prepare_broker` before the lock), `LIVE`, `LANE_RETRY_S` and `__init__`;
   - `log`, `say`, `_start_turn` and the new lane methods after it;
   - `deliver`, `monitor_once`, `_to_lead`, `publish_plan`, `worker_done`, `stop_worker` and `main`.
 - Modify: `team/superyak_team/mcp.py`: `SLOW_OPS` and `call`'s timeout.
@@ -4668,8 +5098,8 @@ def lanes(env, mac, tmp_root, monkeypatch):
         broker.proc.code = -15
         calls["stopped"].append(broker)
 
-    def cleanup_processes(path, base, broker=None):
-        calls["cleanup"].append((path, base, broker, lane.block_of("t1", "kaylee")))
+    def cleanup_processes(path, base, broker=None, env=None):
+        calls["cleanup"].append((path, base, broker, lane.block_of("t1", "kaylee"), env))
         if broker is not None:
             stop_broker(broker)
         return state["cleanup_finishes"]
@@ -4782,9 +5212,10 @@ def test_a_listener_that_appears_during_a_turn_stops_the_turn_and_the_broker(env
 
 
 def ends_lane(lanes, team, wid="kaylee"):
+    """The lane's folder and block are gone, and its cleanup also looked for its environment (review N4)."""
     path = lane.lane_path("t1", wid)
     return (not path.exists() and lane.block_of("t1", wid) is None and team.state["workers"][wid]["lane"] is None
-            and any(c[0] == path for c in lanes["calls"]["cleanup"]))
+            and any(c[0] == path and c[4] == ("CLAUDE_CODE_TMPDIR", str(path / "tmp")) for c in lanes["calls"]["cleanup"]))
 
 
 def test_worker_done_ends_the_lane_once_its_turn_has_exited(env, lanes, monkeypatch):
@@ -4842,7 +5273,8 @@ def test_a_block_is_freed_only_after_the_cleanup_has_finished(env, lanes, monkey
 
 def test_a_refused_lane_fails_the_worker_and_tells_the_lead_why(env, lanes, monkeypatch):
     """Review focus: a legitimate Playwright update whose headless-shell revision has no recorded manifest hash. The
-    lead hears the revision and the hash to record; the worker fails instead of retrying; nothing is left."""
+    spawn checked it once (here it passed); the lane's first turn checks again and is refused. The lead hears the
+    revision and the hash to record; the worker fails instead of retrying; nothing is left."""
     slack = FakeSlack()
     team, now = browser_team(env)
     team.slack = slack
@@ -4850,7 +5282,12 @@ def test_a_refused_lane_fails_the_worker_and_tells_the_lead_why(env, lanes, monk
                "lane_acceptance.py --self-check-only passes, Andy records this one in "
                "team/superyak_team/lane/browsers.json: " + "ab" * 32)
 
+    calls = []
+
     def refuse(repo, base, worktrees):
+        calls.append(base)
+        if len(calls) == 1:                                                     # spawn's check
+            return "/opt/homebrew/bin/node", "/pw", "/shell"
         raise lane.LaneRefused(message, details=["chrome-headless-sh(5001): mach-lookup com.apple.x"])
     monkeypatch.setattr(lane, "prepare_broker", refuse)
     team.spawn("check the login page", "claude", browser=True)
@@ -4937,6 +5374,8 @@ def test_a_restarted_teamd_sweeps_dead_lanes_and_ends_a_lost_turn(env, lanes, mo
     assert lane.lane_path("t1", "wash").is_dir() and lane.block_of("t1", "wash") == 41032   # alive: kept
     assert any(c[0] == lane.lane_path("t1", "wash") and c[2] is None for c in lanes["calls"]["cleanup"])
     assert other.is_dir() and lane.block_of("t1-ux", "kaylee") is not None
+    lost = [m["message"] for m in again.state["lead_inbox"] if "LANE TURN LOST" in m["message"]]
+    assert "couldn't be confirmed as that turn" in lost[0]                  # pid 999999 isn't that claude
 
 
 def test_a_stopped_turn_fails_even_when_claude_exits_0_and_the_lead_hears_once(env, lanes, tmp_path, monkeypatch):
@@ -5020,7 +5459,7 @@ def test_lead_calls_that_can_start_or_end_a_lane_wait_long_enough(env, monkeypat
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `15 failed, 128 passed`. The turns run without a lane, so the failures are `KeyError: 'lane'`,
+**Expected:** `15 failed, 143 passed`. The turns run without a lane, so the failures are `KeyError: 'lane'`,
 `AttributeError: … has no attribute 'lost_turn'`, and assertions such as a `running` state where `waiting` is
 expected, a 30 s timeout where 900 s is expected, or the secret still in what teamd stores.
 
@@ -5092,6 +5531,25 @@ with
     def log(self, msg):
         with open(self.dir / "teamd.log", "a") as f:
             f.write("%s %s\n" % (time.strftime("%H:%M:%S"), self._scrub(msg)))
+```
+
+In `team/superyak_team/teamd.py`: `spawn` installs and checks the broker's code and browser before teamd's lock. Replace
+
+```python
+        if browser:
+            lane.check_spawn(self.cfg, kind, mode)
+        with self.lock:
+```
+
+with
+
+```python
+        if browser:
+            lane.check_spawn(self.cfg, kind, mode)
+            # The install and the manifest check, before teamd's lock: a first install can take minutes, and it has
+            # its own lock (.install.lock). The lane's first turn checks them again, quickly.
+            lane.prepare_broker(self.repo, workers.resolve_base(self.repo, base), self._worktrees())
+        with self.lock:
 ```
 
 In `team/superyak_team/teamd.py`: `Team.__init__`. Replace
@@ -5167,6 +5625,9 @@ with
                 return False
             except lane.LaneRefused as e:
                 self._lane_refused(wid, e)
+                return False
+            except OSError as e:                         # the registry, the broker's folders, a manifest, a stamp
+                self._lane_refused(wid, lane.LaneRefused("the lane's setup failed (%s)" % e))
                 return False
         if w["kind"] == "codex":
             cmd = workers.codex_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
@@ -5254,22 +5715,36 @@ with
         self.save()
 
     def _lane_watch(self):
-        """Every CHECK_EVERY_S during a browser turn, the listener check again: a failure stops the turn and the
-        broker (the turn then fails and its lane ends). Waiting workers are tried again every LANE_RETRY_S."""
+        """Every CHECK_EVERY_S during a browser turn, the listener check and the settings check again: a failure
+        stops the turn and the broker (the turn then fails and its lane ends). Waiting workers are tried again every
+        LANE_RETRY_S. Nothing here may stop monitor_once: an error is logged, and a check that errs has failed."""
         now = self.clock()
         due = [wid for wid in self.procs if self.state["workers"][wid].get("browser")
                and not self.state["workers"][wid].get("lane_stopped")
                and now - self.lane_checked.get(wid, 0) >= lane.CHECK_EVERY_S]
         if due:
-            ok, problems = lane.listeners_ok()
+            try:
+                ok, problems = lane.listeners_ok()
+                widened = lane.settings_widenings()
+            except (lane.LaneRefused, OSError) as e:
+                ok, problems, widened = False, ["the listener check failed (%s)" % e], []
+            if widened:
+                ok, problems = False, problems + ["settings outside the lane now widen its sandbox: "
+                                                  + "; ".join(widened)]
             for wid in due:
                 self.lane_checked[wid] = now
                 if not ok:
-                    self._lane_stop_turn(wid, problems)
+                    try:
+                        self._lane_stop_turn(wid, problems)
+                    except (lane.LaneRefused, OSError) as e:
+                        self.log("stopping %s's lane turn: %r" % (wid, e))
         for wid, w in self.state["workers"].items():
             if (w["state"] == "waiting" and now - w["lane_wait"]["at"] >= LANE_RETRY_S
                     and self._running_count() < int(self.cfg["max_workers"])):
-                self._start_turn(wid, w["lane_wait"]["prompt"])
+                try:
+                    self._start_turn(wid, w["lane_wait"]["prompt"])
+                except (lane.LaneRefused, OSError) as e:
+                    self.log("retrying %s's lane: %r" % (wid, e))
 
     def _lane_stop_turn(self, wid, problems):
         """The turn counts as failed however claude exits, and the lead hears once while it exits."""
@@ -5281,7 +5756,7 @@ with
         broker = self.brokers.pop(wid, None)
         if broker is not None:
             lane.stop_broker(broker)
-        self._to_lead("teamd", "LANE STOPPED:", "%s's turn and its browser were stopped because the listener check "
+        self._to_lead("teamd", "LANE STOPPED:", "%s's turn and its browser were stopped because the lane's check "
                                                "failed: %s" % (wid, "; ".join(problems)))
         self.say(wid, ":no_entry: lane turn stopped: the listener check failed (the lead has the details).",
                  w["thread_ts"])
@@ -5300,7 +5775,9 @@ with
             base = lane.block_of(self.team_id, wid)
         if broker is None and base is None and not os.path.lexists(path):
             return
-        finished = lane.cleanup_processes(path, base, broker)
+        # Also whatever still carries this lane's CLAUDE_CODE_TMPDIR: a turn's setsid child, which neither the
+        # worker's group nor the lane's files would find.
+        finished = lane.cleanup_processes(path, base, broker, env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")))
         for name in ("events.jsonl", "stderr.log"):
             lane.scrub_file(self.dir / "workers" / wid / name, self.lane_secrets)
         try:
@@ -5308,21 +5785,28 @@ with
         except lane.LaneRefused as e:
             self._to_lead("teamd", "LANE LEFT BEHIND:", "%s: %s" % (wid, e))
         if finished:
-            lane.release_block(self.team_id, wid)
-            w["lane"] = None
-        else:
-            self._to_lead("teamd", "LANE CLEANUP UNFINISHED:", "%s: lsof couldn't list the lane's processes, so its "
-                                                               "ports stay held until the next cleanup" % wid)
+            try:
+                lane.release_block(self.team_id, wid)
+                w["lane"] = None
+            except (lane.LaneRefused, OSError) as e:
+                finished = False
+                self.log("releasing %s's block: %r" % (wid, e))
+        if not finished:
+            self._to_lead("teamd", "LANE CLEANUP UNFINISHED:", "%s: lsof or ps couldn't list the lane's processes, "
+                                                               "so its ports stay held until the next cleanup" % wid)
         self.lane_checked.pop(wid, None)
         self.save()
 
     def _kill_lost_turn(self, w):
-        """A turn the previous teamd started, only if that process is still the claude it launched (lane.lost_turn)."""
+        """A turn the previous teamd started, only if that process is still the claude it launched (lane.lost_turn).
+        Returns whether it was stopped."""
         if lane.lost_turn(w.get("pid"), w["path"], w.get("turn_started")):
             try:
                 os.killpg(w["pid"], signal.SIGTERM)
+                return True
             except OSError:
                 pass
+        return False
 
     def sweep_lanes(self):
         """When teamd starts. Lanes of this team's workers that state.json shows as not alive are ended (by exact
@@ -5331,15 +5815,18 @@ with
         in it (its broker, servers) ends; its next turn starts a new broker."""
         for wid, w in self.state["workers"].items():
             if w.get("browser") and w["state"] == "running":
-                self._kill_lost_turn(w)
+                stopped = self._kill_lost_turn(w)
                 w["state"] = "failed"
-                self._to_lead("teamd", "LANE TURN LOST:", "teamd restarted during %s's browser-lane turn; the turn "
-                                                          "was stopped and its lane removed" % wid)
+                self._to_lead("teamd", "LANE TURN LOST:", "teamd restarted during %s's browser-lane turn; %s, and its "
+                              "lane was removed" % (wid, "the turn was stopped" if stopped else
+                                                    "its process couldn't be confirmed as that turn, so only what "
+                                                    "carries the lane's environment or files was stopped"))
         for wid, _ in lane.leftover_lanes(self.team_id, self.state["workers"], LIVE):
             self._lane_end(wid)
         for wid, w in self.state["workers"].items():
             if w.get("browser") and w["state"] in LIVE and w.get("lane"):
-                lane.cleanup_processes(lane.lane_path(self.team_id, wid), w["lane"]["base"])
+                path = lane.lane_path(self.team_id, wid)
+                lane.cleanup_processes(path, w["lane"]["base"], env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")))
         self.save()
 ```
 
@@ -5560,7 +6047,7 @@ with
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `206 passed`.
+**Expected:** `221 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -5657,13 +6144,91 @@ def test_the_release_inventory_lists_every_lane_file():
                  "superyak_team/lane/profile_probe.js", "superyak_team/roles/browser-lane.md"):
         assert name in listed and (team_dir / name).is_file(), name
     assert all((team_dir / name).is_file() for name in listed)
+
+
+def test_a_lane_parent_that_vanishes_fails_the_worker_and_never_raises(env, lanes, tmp_root, monkeypatch):
+    """Review (M5): an OSError anywhere in a lane turn's setup refuses the lane; it never escapes _start_turn, spawn
+    or monitor_once."""
+    parent = tmp_root / ("sy-lane-%d" % os.getuid())
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if str(path) == str(parent):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_lstat(path, *args, **kwargs)
+    monkeypatch.setattr(lane.os, "lstat", lstat)
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert w["state"] == "failed" and "kaylee" not in team.procs
+    assert any("LANE REFUSED" in m["message"] and "Permission denied" in m["message"] for m in team.state["lead_inbox"])
+
+
+def test_an_oserror_in_a_retried_lane_turn_never_stops_monitor_once(env, lanes, monkeypatch):
+    """Review (M5): a waiting worker's retry that hits an OSError (here, the registry's disk) fails that worker;
+    monitor_once still fills the slots and saves."""
+    team, now = browser_team(env)
+    lanes["state"].update(ok=False, problems=["Python (pid 9) listens on port 8000"])
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert w["state"] == "waiting"
+
+    def broken(team_id, worker_id):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(lane, "allocate_block", broken)
+    lanes["state"].update(ok=True, problems=[])
+    saved = []
+    monkeypatch.setattr(team, "save", lambda: saved.append(True))
+    now[0] += teamd.LANE_RETRY_S
+    team.monitor_once()                                                         # must not raise
+    assert w["state"] == "failed" and saved
+    assert any("LANE REFUSED" in m["message"] and "No space left" in m["message"] for m in team.state["lead_inbox"])
+
+
+def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn(env, lanes, monkeypatch):
+    """Review (N5): prepare_broker, which may download for minutes, runs in spawn before teamd's lock is taken; a
+    refusal there refuses the spawn, and nothing is created."""
+    team, now = browser_team(env)
+    lock_free, refuse = [], []
+
+    def prepare(repo, base, worktrees):
+        free = []
+        probe = threading.Thread(target=lambda: free.append(team.lock.acquire(blocking=False)
+                                                            and (team.lock.release() or True)))
+        probe.start()
+        probe.join()
+        lock_free.append(free[0])
+        if refuse:
+            raise lane.LaneRefused("no manifest hash is recorded for chromium-headless-shell 1250 on darwin-arm64")
+        return "/opt/homebrew/bin/node", "/pw", "/shell"
+    monkeypatch.setattr(lane, "prepare_broker", prepare)
+    team.spawn("check the login page", "claude", browser=True)
+    assert lock_free[0] is True                                                 # spawn's call: teamd's lock was free
+    refuse.append(True)
+    with pytest.raises(lane.LaneRefused, match="no manifest hash is recorded"):
+        team.spawn("check the signup page", "claude", browser=True)
+    assert list(team.state["workers"]) == ["kaylee"]
+
+
+def test_settings_that_widen_during_a_turn_stop_it_at_the_next_check(env, lanes, monkeypatch):
+    """Review: settings_widenings runs in the 60 s check too, not only when a turn starts."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    (env["home"] / ".claude").mkdir()
+    (env["home"] / ".claude" / "settings.json").write_text(json.dumps({"permissions": {"allow": ["WebFetch(domain:x.com)"]}}))
+    now[0] += 60
+    team.monitor_once()
+    assert any("LANE STOPPED" in m["message"] and "now widen" in m["message"] for m in team.state["lead_inbox"])
+    assert run_until(team, lambda: w["state"] == "failed", timeout=10)
 ```
 
 - [ ] **Step 2: Run them and see them fail**
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane.py`
 
-**Expected:** `5 failed, 143 passed`: no `# Browser lane` in the prompt, no lane section in `lead.md` or the README,
+**Expected:** `5 failed, 162 passed`: no `# Browser lane` in the prompt, no lane section in `lead.md` or the README,
 no `@lane-advisory ADDED` message, and `roles/browser-lane.md` missing from the inventory.
 
 - [ ] **Step 3: Implement**
@@ -5809,12 +6374,15 @@ A person turns lanes on; a lead can't:
   every worktree, for example `/opt/homebrew/bin/node`.
 - `~/.superyak/team/lane-listeners.json`: the programs that may keep listening while a lane runs. Only Apple's own
   programs, by executable path, in `/System`, `/usr/libexec`, `/usr/sbin` or `/sbin`, never an interpreter; each is
-  approved on any port. For example `["/usr/libexec/rapportd", "/sbin/launchd"]`.
+  approved on any port. For example `["/usr/libexec/rapportd", "/sbin/launchd"]`. Approving `/sbin/launchd` (pid 1)
+  covers every socket-activated job, such as Remote Login's `*:22`, until that job's own program first accepts a
+  connection; from then on the listener is that program's, and it needs its own entry.
   `python3 team/scripts/lane_acceptance.py --list-listeners` prints what is listening now. Stop dev servers, Ollama,
   Postgres and everything else while a lane runs: a lane's turn waits until they are gone. A listener bound only to a
   specific address that isn't loopback (the tailnet's, say) can't be reached from a lane and doesn't count.
 - `lane_one_at_a_time: true` in `config.json` lets only one lane run on the Mac at a time. Set it if the acceptance
-  run shows that one lane's worker can read another lane's endpoint.
+  run shows that one lane's worker can read another lane's endpoint. An idle browser worker keeps its block, so under
+  this setting it holds the Mac's only lane until it is done or stopped.
 
 Team mode needs Python 3.11.4 or later for lanes (tarfile's data filter): `cd team && uv sync --locked --python 3.13`
 sets one up.
@@ -5832,6 +6400,11 @@ another Playwright at `~/.superyak/team/broker/browsers`: only sandboxed brokers
 on the Mac could put files in `/tmp/sy-lane-<uid>`. teamd never follows a link there and nothing there decides what
 the broker is, but whether to set Codex's `sandbox_workspace_write.exclude_slash_tmp` is Andy's call; Codex workers are
 unchanged.
+
+**Known limit: a process that leaves a lane's environment behind.** When a lane ends, teamd ends the broker, every
+process with a file under the lane or a listener on its ports, and every process whose environment still carries the
+lane's `CLAUDE_CODE_TMPDIR`. A child that started a new session, cleared its own environment and holds nothing in the
+lane escapes all three, until the next listener check finds anything it listens on.
 ```
 
 In `docs/team-mode.md`: a pointer from the guide. Replace
@@ -5872,7 +6445,7 @@ with
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `211 passed`.
+**Expected:** `230 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -5914,7 +6487,8 @@ git commit -m "team: the browser-lane briefs, the @lane-advisory flag, and the f
     the workers), `--self-check-only` and `--list-listeners`. It refuses to run without Python 3.11.4 or later, makes
     its own preset for the run and removes it, and exits 1 when any row is FAIL or BROKEN.
   - Pure helpers: `judge`, `classify_lookup`, `peer_verdict`, `rendezvous_pid`, `summarize`, `effective_domains`,
-    `denied_lookup`, `planted_settings` and `listener_rows`.
+    `denied_lookup`, `planted_settings`, `listener_rows` (pid 1 marked) and `read_targets` (step 2's reads that
+    exist, and the ones that don't).
   - `worker_probes.py <lane|peer|spec>` reads `params.json` and writes `results-<round>.json`, as rows of
     `{probe, expect, code, detail}` (peer rows add `pid`). It also offers `bootstrap_look_up(name) -> int`,
     `procargs(pid)`, `can_read(path)` and `leaked(text)`.
@@ -5978,14 +6552,15 @@ def test_listeners_are_listed_as_the_check_sees_them(acceptance):
     paths = {612: "/usr/libexec/rapportd", 1: "/sbin/launchd", 777: "/opt/homebrew/bin/ollama",
              333: "/opt/homebrew/bin/tailscaled"}
     assert acceptance.listener_rows(listeners, paths.get, {"/usr/libexec/rapportd"}) == [
-        (612, "*:49152", "/usr/libexec/rapportd", "approved"), (1, "*:22", "/sbin/launchd", "approvable"),
+        (612, "*:49152", "/usr/libexec/rapportd", "approved"),
+        (1, "*:22", "/sbin/launchd", "approvable; launchd holds it for a socket-activated job"),
         (777, "127.0.0.1:11434", "/opt/homebrew/bin/ollama", "stop it while a lane runs"),
         (333, "100.101.102.103:8080", "/opt/homebrew/bin/tailscaled", "doesn't count: a lane can't reach it"),
         (999, "::1:9000", "?", "can't be identified: a lane waits")]
 
 
 def test_the_rendezvous_name_carries_the_browsers_pid_not_nodes(acceptance):
-    ps = ("  700     1 /opt/homebrew/bin/node /tmp/sy-lane-501/0123456789/b/lane_broker.js 41031\n"
+    ps = ("  700     1 /opt/homebrew/bin/node -e // Superyak browser-lane broker (spike 4's script, ... 41031\n"
           "  712   700 /Users/me/.superyak/team/broker/browsers/chromium_headless_shell-1243/chrome-headless-shell --type=zygote\n"
           "  711   700 /Users/me/.superyak/team/broker/browsers/chromium_headless_shell-1243/chrome-headless-shell --headless --remote-debugging-pipe\n"
           "  713   711 /Users/me/.superyak/team/broker/browsers/chromium_headless_shell-1243/chrome-headless-shell --type=renderer\n")
@@ -6017,6 +6592,18 @@ def test_the_domains_to_try_are_every_one_the_settings_name(acceptance, tmp_path
     broken.write_text("{")
     assert acceptance.effective_domains([user, broken, tmp_path / "missing.json"]) == \
         ["example.com", "github.com", "registry.npmjs.org"]
+
+
+def test_step_2_reads_only_what_exists_outside_the_sandbox(acceptance, tmp_path):
+    """Review (N7): a read of something that isn't there proves nothing, so it is BROKEN before it runs."""
+    home, other, decoy = tmp_path / "home", tmp_path / "wash-lane", tmp_path / "decoy"
+    for folder in (home, other, decoy):
+        folder.mkdir()
+    (home / ".bashrc").write_text("x\n")
+    present, missing = acceptance.read_targets(other, decoy, 424242, home=home)
+    assert present == {"a dotfile in $HOME": str(home / ".bashrc"), "a decoy lane's folder": str(decoy),
+                       "the other lane's real folder": str(other)}
+    assert missing == ["/private/tmp/claude-<uid>"]
 
 
 def test_the_planted_project_settings_keep_what_was_there(acceptance):
@@ -6054,7 +6641,7 @@ def test_the_scripts_start_and_refuse_to_run_off_the_mac():
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider tests/test_lane_acceptance.py`
 
-**Expected:** `1 failed, 9 errors`: `FileNotFoundError: …/scripts/lane_acceptance.py`.
+**Expected:** `1 failed, 10 errors`: `FileNotFoundError: …/scripts/lane_acceptance.py`.
 
 - [ ] **Step 3: Implement**
 
@@ -6183,9 +6770,7 @@ def lane_round(p, rows):
                 add("%s to %s" % (kind, sock), "fail", node(CONNECT, str(link)))
             finally:
                 link.unlink()
-    for name, path in (("~/.zshrc", str(Path.home() / ".zshrc")), ("a decoy lane's folder", p["decoy"]),
-                       ("the other lane's real folder", p["other_lane"]),
-                       ("/private/tmp/claude-<uid>", "/private/tmp/claude-%d" % uid)):
+    for name, path in sorted(p["reads"].items()):       # only targets the driver saw exist, outside the sandbox
         add("read %s" % name, "fail", can_read(path))
     rc = bootstrap_look_up(p["rendezvous"])
     rows.append({"probe": "rendezvous lookup", "expect": "denied", "code": rc, "detail": p["rendezvous"]})
@@ -6502,12 +7087,14 @@ def planted_settings(existing):
 
 
 def listener_rows(listeners, path_of, approved):
-    """--list-listeners and step 4, from the listener check's own enumeration: (pid, address, executable, verdict)."""
+    """--list-listeners, from the listener check's own enumeration and rules: (pid, address, executable, verdict).
+    Pid 1 is launchd holding a socket-activated job's socket; approving /sbin/launchd covers every such job until the
+    job's own program first accepts a connection (then it is that program's)."""
     rows = []
     for item in listeners:
         exe = path_of(item["pid"])
         address = "%s:%d" % (item["host"], item["port"])
-        if item["host"] not in lane.WILDCARDS and not lane.is_loopback(item["host"]):
+        if not lane.reachable(item["host"]):
             verdict = "doesn't count: a lane can't reach it"
         elif exe is None:
             verdict = "can't be identified: a lane waits"
@@ -6517,8 +7104,22 @@ def listener_rows(listeners, path_of, approved):
             verdict = "approvable"
         else:
             verdict = "stop it while a lane runs"
+        if item["pid"] == 1:
+            verdict += "; launchd holds it for a socket-activated job"
         rows.append((item["pid"], address, exe or "?", verdict))
     return rows
+
+
+def read_targets(other_lane, decoy, uid, home=None):
+    """Step 2's reads, each checked outside the sandbox first: ({name: path} that exist, [names that don't]). A read
+    of something that isn't there would be "refused" with ENOENT, which proves nothing."""
+    home = Path(home or Path.home())
+    dotfile = next((home / n for n in (".zshrc", ".bashrc", ".profile", ".gitconfig") if (home / n).is_file()), None)
+    wanted = {"a dotfile in $HOME": dotfile, "a decoy lane's folder": Path(decoy),
+              "the other lane's real folder": Path(other_lane),
+              "/private/tmp/claude-<uid>": Path("/private/tmp/claude-%d" % uid)}
+    present = {name: str(path) for name, path in wanted.items() if path is not None and path.exists()}
+    return present, sorted(set(wanted) - set(present))
 
 
 # ---------- the run ----------
@@ -6682,8 +7283,8 @@ def step1(args, report):
               '  "chromium-headless-shell": {"%s": {"%s": "%s"}}\n' % (revision, lane.platform_key(), actual))
     else:
         report.add(1, name, "FAIL", "recorded %s, found %s" % (recorded, actual))
-    for probe, passed, detail in lane.self_check(node, pw, shell):
-        report.add(1, "profile:" + probe, "PASS" if passed else "FAIL", detail)
+    for probe, verdict, detail in lane.self_check(node, pw, shell):
+        report.add(1, "profile:" + probe, verdict, detail)
 
 
 def root_listener(port):
@@ -6733,7 +7334,8 @@ def steps2to7(args, report):
         settings_file.parent.mkdir(exist_ok=True)
         settings_file.write_text(json.dumps(planted_settings(json.loads(settings_before) if settings_before else {})))
         decoy.mkdir(mode=0o700, exist_ok=True)
-        (decoy / "secret.txt").write_text("decoy\n")
+        lane.check_lane(decoy)                           # never through a link someone planted in /tmp
+        lane._write_text(decoy / "secret.txt", "decoy\n", 0o600)
         canary_port = b["lane"]["base"] + 10
         canary = serve_canary(canary_port)
         broker_pid = min(lsof_pids("-iTCP:%d" % (a["lane"]["base"] + 31), "-sTCP:LISTEN") or {0})
@@ -6754,10 +7356,12 @@ def steps2to7(args, report):
         claude_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
         domains = effective_domains([claude_dir / "settings.json", claude_dir / "settings.local.json",
                                      lane.MANAGED_SETTINGS, settings_file, settings_file.with_name("settings.local.json")])
+        reads, missing = read_targets(b["lane"]["path"], decoy, uid)
+        for target in missing:
+            report.add(2, "read %s" % target, "BROKEN", "it doesn't exist here, so a refusal would prove nothing")
         install_probes(a["path"], {"lane": a["lane"]["path"], "base": a["lane"]["base"], "worktree": a["path"],
-                                   "domains": domains, "sockets": sockets, "decoy": str(decoy),
-                                   "other_lane": b["lane"]["path"], "rendezvous": name, "canary_port": canary_port,
-                                   "write_probe": WRITE_PROBE})
+                                   "domains": domains, "sockets": sockets, "reads": reads,
+                                   "rendezvous": name, "canary_port": canary_port, "write_probe": WRITE_PROBE})
         stream = lane.start_denial_stream()
         team.message("kaylee", probe_message(args.python, "lane"))
         team.wait("kaylee", ("running",), timeout=120)
@@ -6962,7 +7566,7 @@ def list_listeners():
     rows = listener_rows(found, lane.pid_path, approved)
     for pid, address, exe, verdict in rows:
         print("pid %-7d %-26s %s  (%s)" % (pid, address, exe, verdict))
-    approvable = sorted({exe for _, _, exe, verdict in rows if verdict in ("approved", "approvable")})
+    approvable = sorted({exe for _, _, exe, verdict in rows if verdict.startswith(("approved", "approvable"))})
     print("\nThe approvable ones, for %s:\n%s" % (lane.approved_path(), json.dumps(approvable, indent=1)))
 
 
@@ -7005,7 +7609,7 @@ if __name__ == "__main__":
 
 Run: `cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`
 
-**Expected:** `221 passed`. Then run the full agent suite:
+**Expected:** `241 passed`. Then run the full agent suite:
 `cd /home/andy/superyak/.worktrees/browser-lane/agent && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider`.
 **Expected:** all pass.
 
@@ -7040,7 +7644,7 @@ macOS.
    cd /home/andy/superyak/.worktrees/browser-lane/team && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider
    cd /home/andy/superyak/.worktrees/browser-lane/agent && $CAP uv run --locked --extra dev python -m pytest -q -p no:cacheprovider
    ```
-   **Expected:** team `221 passed`; agent all passed.
+   **Expected:** team `241 passed`; agent all passed.
 2. **Check the main checkout, then merge into main locally.** `/home/andy/superyak` must be on main, clean, and not
    behind origin/main, so that the push in step 4 is a fast-forward:
    ```bash
