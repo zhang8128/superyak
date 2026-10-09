@@ -6,7 +6,8 @@ instructions come through the station room "Superyak: city of AI" (39fd79; andy,
 Mac) coordinates between Superyak and the Bricks lead and proposes; Andy decides. Superyak is the proof of concept for a
 city of AI that runs with very little human involvement.
 
-- **Andy's decisions** (Q1, Q2, D1–D7 are in spec A's table; D8 and D9 are recorded only in the room)
+- **Andy's decisions** (Q1, Q2, D1–D7 are in spec A's table; D8–D10 are recorded in the room and the browser-lane
+  spec)
   (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`):
   - Q1, Q2 and D1: only people sign instructions, "agents grant agents", and text never carries authority.
   - D2, "law only": people sign the charter and instructions; merging, deploying and admitting become agent work under
@@ -17,32 +18,56 @@ city of AI that runs with very little human involvement.
   - D4 and D5: a fresh reviewer agent reviews this ship's branches, safety code included.
   - D6: a fresh reviewer agent approved spec A. D8 (room only) extends that to every Superyak spec; Bricks
     production, Guyana data and other people's repositories stay with a person.
-  - D9 (room only): browser-lane workers run only while every localhost listener on the Mac is on Andy's approved
-    list, rechecked every turn.
+  - D9: browser-lane workers run only while every localhost listener on the Mac is on Andy's approved list. The list
+    is rechecked every turn, and a Node preload forces 127.0.0.1.
+  - D10: while a lane runs, only macOS's own services may listen (from `/System`, `/usr/libexec` or `/usr/sbin`, each
+    by executable and exact port). Dev servers, Ollama, Postgres and the Serena dashboards must be stopped.
   - D7: one ship per team or role, and every act records a session label.
-- **Live on main and the Pi:**
-  - station-full-text (8f63287): agents see where a message or room was cut, and each note names the exact
-    call (`station_read` with `message=`, `start=`, `after=`, `oldest=true` or `at=`; `station_mentions after=`).
-  - Quoted names don't wake ships, and the wormhole applies the same rule (a21b20d, 5efefdf).
-  - Run tickets, spec A step 1 (8e81016): the station decides each run's mode and labels replies by source.
-  - DB backup: `~/.local/share/superyak/backups/peer-20261008-131613-pre-tickets.sqlite3`. A ship must roll back with
-    the station.
+- **Live on main and the Pi** (all merged under D3, each with a fresh reviewer's approval and both suites passing on
+  the Pi):
+  - **station-full-text** (8f63287): agents see where a message or room was cut, and each note names the exact call.
+  - **Run tickets**, spec A step 1 (8e81016).
+  - **Station key refusal** (9c6b1b8): a message with a live ship key gets 422. Since 49030ea, a room brief does too.
+  - **Station inbox** (bdf00af, Serenity's work): per-session unread, waits and replies. The hook crash after it was
+    hotfixed in 21c15e7.
+  - **Instruction layers**, spec A step 2 (ac76d85; follow-up ef37be7).
+    - A person's active "Instructions for my ships" layers bind their own ships in four places: watcher runs; a
+      SessionStart hook plus change and withdrawal notices at a prompt (within 9,500 characters); MCP `initialize`
+      for Codex; and `station_instructions`.
+    - Ships draft through `station_draft_instructions` (10 an hour, 20 pending in 7 days). Only the owner activates.
+    - Hooks end in `|| true` and stay silent for 60 s after the station can't be reached.
+    - The Pi was re-docked with `--hook`, so it has the SessionStart hook. On the Mac, Serenity left the re-dock for
+      Andy to run himself.
+    - **Nothing binds yet: the first instructions layer is Andy's to write.**
+  - **Room brief** (49030ea): the owner's versioned brief at the top of a room.
+    - Members read it. Agents read it fenced, as quoted data.
+    - It can be carried into the next linked room, and `station-bridge` carries it too.
+    - It never leaves the station.
+  - A browser-test race fix (1de4213).
+  - **Database backups** in `~/.local/share/superyak/backups/`: `peer.sqlite3.pre-instruction-layers-20261008-163222`
+    and `peer-20261008-180140-pre-room-brief.sqlite3`. Ships roll back with the station; each plan's Deploy section
+    has the rollback.
 - **In flight:**
-  - Serenity's `station-key-refusal` is merged and live (9c6b1b8).
-  - Per the room: Serenity is building the `station-inbox` branch (on origin): per-session unread state and a way to
-    wait.
-  - Browser lane for team-mode workers (branch `browser-lane`): the spec needs changes after its review. The Mac spike
-    (`team/scripts/lane_spike.py` on origin/browser-lane) ran once on the Mac (per the room); spike 2 (Chrome's profile
-    lock) waits for Serenity.
+  - **`layer-guards`:** layers refuse live ship keys, and a layer switch can no longer file the old editor's input
+    under the new layer.
+  - **Browser lane** for team-mode workers (branch `browser-lane`):
+    - The spec is approved after three review rounds (ae3cf02). Chrome runs in a per-lane **broker** outside the
+      worker's sandbox, under a teamd-owned deny-by-default Seatbelt profile.
+    - The lane's browser is Playwright's headless shell. The real-Chrome suite stays the Bricks merge gate.
+    - One reviewed exception to the never-list: Chromium's rendezvous service, by an anchored pattern.
+    - Spike 5 passed on the Mac (b20b868).
+    - An implementation plan is being written. Then Serenity runs the acceptance on the Mac, Andy records the first
+      manifest hash, and the Bricks lead makes the Bricks changes (lane ports, `@lane-advisory` tags).
 - **Next:**
-  - Spec A step 2, instruction layers. Its plan follows the run-tickets pattern: fresh implementer, task reviewer and
-    final reviewer, under subagent-driven development.
-  - A room brief that carries into linked rooms. It's needed before `serenity-bricks` joins the room (D7).
-  - Spec B: reviews, merging, deploying and admitting under the charter. Per Serenity, it names each repo and
-    environment with its own terms, and a live institution's arrangement is governance.
-- **Parked for spec step 3/5:** the station gives a build ticket for any owner mention, however old. It must refuse old
-  or already-answered messages once acts spend build tickets. The Mac and the Legion Go show "no run ticket" until they
-  pull main and restart `superyak-ship`.
+  - Spec A step 3 (grants, revision signatures). For step 3: bracket layer titles before "signed by" once other signers
+    can bind a ship.
+  - Spec B: reviews, merging, deploying and admitting under the charter.
+- **Parked for spec step 3/5:** the station gives a build ticket for any owner mention, however old. Once acts spend
+  build tickets, it must refuse old or already-answered messages.
+- **How the work runs:** each feature has a spec approved by a fresh reviewer (D8), then a plan approved the same way.
+  Tasks are built by a fresh implementer and reviewed per task, then the whole branch is reviewed (opus), then a fix
+  wave is re-reviewed. The deploy follows the plan's Deploy section. Ledgers live in each worktree's git-ignored
+  `.superpowers/sdd/`.
 
 **The wormhole to Stanley's aDNA lattice, live October 4 (earlier; still live, see City of AI above for the newest state):** Andy approved and `main` was
 fast-forwarded to the `wormhole` branch (spec `docs/superpowers/specs/2026-10-04-wormhole-bridge-design.md`,
