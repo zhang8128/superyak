@@ -285,15 +285,15 @@ the Mac.
     on, or a listener the run starts with `sudo`.
 - **What passes:** a listener passes when its port is in a live lane's block, or when it matches an entry on the
   approved list, `~/.superyak/team/lane-listeners.json`. Only the person edits that file; it is never a team key.
-  Under D10, an entry is a macOS service's executable (in `/System`, `/usr/libexec` or `/usr/sbin`) plus an exact
-  port, and both must match.
+  Under D10 and D11, an entry is an Apple program's executable path, in `/System`, `/usr/libexec`, `/usr/sbin` or
+  `/sbin`. It matches on any port.
 - **What fails:** a lane process listening on a non-loopback address fails the check. `127.0.0.0/8` and `::1` count
   as loopback, and every other address, IPv6 included, does not. lsof's IPv6 output is parsed, not just IPv4.
 - **UDP is not checked.** Egress is already closed, DNS included, and the browser's profile allows TCP only to the
   lane's ports. A local UDP service that does something dangerous on request is accepted as a known limit.
 - **Matching is a convenience, not a boundary.** A process can change directory after it starts listening, and an
-  approved executable would approve every port it opens. D10 therefore approves only Apple's own services, each on
-  its exact port.
+  approved executable would approve every port it opens. D10 and D11 therefore approve only Apple's own programs, in its
+  SIP-protected folders.
 - **On failure:** the lane's turn doesn't start. The worker waits, and the lead gets a message naming each unapproved
   listener by command name and port.
 
@@ -345,16 +345,38 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 - Bricks' specs need the Bricks change before they run in a lane.
 - Linux and Codex workers get no lane.
 
-## Approved listeners (Andy's decision D10, 2026-10-08)
+## Approved listeners (Andy's decisions D10 and D11, 2026-10-08)
 
-Only macOS's own services stay up while a lane runs: AirPlay, rapportd and the like, from `/System`, `/usr/libexec`
-or `/usr/sbin`, each approved by executable and exact port.
-- Dev servers, Ollama, Postgres, Serena dashboards and every other service must be stopped while a lane runs.
-- The approved list (`~/.superyak/team/lane-listeners.json`) refuses any entry whose executable lies outside those
-  three folders, and any entry without an exact port.
-- There is no working-directory matching, because interpreters are never approved.
-- Test 8 adds two cases: an entry for `/opt/homebrew/bin/ollama` is refused when the list is loaded, and so is a
-  `/System` entry without a port.
+**D10:** only macOS's own services stay up while a lane runs. Dev servers, Ollama, Postgres, Serena dashboards and
+every other service must be stopped. No interpreter is ever approved.
+
+**D11 (it amends D10's exact-port rule):** an Apple program is approved by its executable path, **on any port**, when
+it lies in one of Apple's SIP-protected system folders:
+- `/System`;
+- `/usr/libexec`;
+- `/usr/sbin`;
+- `/sbin` (for example launchd, which holds Remote Login's `*:22`).
+
+Some Apple services, rapportd among them, take a new port each time they start. With exact ports, lanes would stop
+after every reboot until Andy approved the new one.
+- **The list's format:** the approved list (`~/.superyak/team/lane-listeners.json`) holds executable paths only.
+- **What the list refuses:** any path outside those four folders, and any interpreter.
+- **How the path is found:** the full executable path comes from `proc_pidpath()` through ctypes, never from
+  `ps -o comm=`, which can give a short name for root's processes.
+- **What counts as unidentified:** a listener whose executable path can't be found, or isn't on the list.
+- **Test 8 cases:**
+  - an entry for `/opt/homebrew/bin/ollama` is refused when the list is loaded;
+  - rapportd passes on two different ports;
+  - a non-Apple program fails on any port.
+
+**Which listeners count (ruling, Rio Grande):** only listeners a lane can reach, meaning those bound to a loopback
+address (`127.0.0.0/8`, `::1`) or to a wildcard (`*`, `0.0.0.0`, `::`).
+- A listener bound only to a specific non-loopback address, such as Tailscale's tailnet address, is unreachable:
+  - the worker's sandbox connects only to localhost;
+  - the broker's profile allows only the lane's ports.
+- So such a listener neither blocks a lane nor needs approval.
+- The non-loopback rule for *lane* processes (see "The listener check") is unchanged: a lane process listening on any
+  non-loopback address fails the check.
 
 ## Build order
 
@@ -442,7 +464,7 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
    finished, and a block that something else already uses is skipped.
 8. **Listener check** (lsof output fixtures):
    - lane ports pass;
-   - an approved Apple service passes on its port, and fails on any other port;
+   - an approved Apple program passes on any port, and a program that isn't on the list fails;
    - an unknown listener fails, and so does a lane process listening on `*` or on a LAN address;
    - an lsof failure fails;
    - `::1` and `127.0.0.2` count as loopback, and `fe80::1`, `::` and a tailnet address don't;
