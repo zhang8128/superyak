@@ -209,6 +209,10 @@ def listener_rows(listeners, path_of, approved, owner=None):
         uid = owner(item["pid"]) if owner is not None and not lane.reachable(item["host"]) else None
         if not lane.reachable(item["host"]) and owner is not None and uid is None:
             verdict = "stop it while a lane runs: whose it is can't be told"
+        elif not lane.reachable(item["host"]) and uid == os.getuid() and exe in approved:
+            verdict = "approved"
+        elif not lane.reachable(item["host"]) and uid == os.getuid() and exe and not lane.approval_problem(exe):
+            verdict = "approvable (yours, beyond loopback: it counts while a lane runs)"
         elif not lane.reachable(item["host"]) and uid == os.getuid():
             verdict = "stop it while a lane runs: it is yours, beyond loopback"
         elif not lane.reachable(item["host"]):

@@ -4742,3 +4742,18 @@ def test_the_link_probe_counts_the_link_even_when_removing_it_fails(tmp_path):
         assert (r.returncode, r.stdout.strip()) == (0, "succeeded"), (r.stdout, r.stderr)
     finally:
         (tmp_path / "superyak-lane-probe-link").unlink(missing_ok=True)
+
+
+def test_an_approved_apple_program_of_this_user_passes_on_a_link_local_address(listeners):
+    """I3, with D11 (a deviation the report names): Apple's per-user agents (sharingd keeps AirDrop on awdl0) listen as
+    this user on specific link-local addresses. An approved one passes there as it does on any port; it can't be a lane
+    process that cleared its environment. An unapproved one of this user's still fails."""
+    sharingd = "/usr/libexec/sharingd"
+    listeners["exe"][640] = sharingd
+    listeners["uids"][640] = os.getuid()
+    listeners["sockets"].append(("tcp6", "fe80::1c2d:3eff:fe4f:5a6b%awdl0.8770", "LISTEN", 640, "sharingd"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["sharingd (pid 640) listens on fe80::1c2d:3eff:fe4f:5a6b%awdl0 port 8770, beyond "
+                                   "loopback, as this user while a lane runs (/usr/libexec/sharingd)"]
+    approve(APPROVED + [sharingd])
+    assert lane.listeners_ok() == (True, [])

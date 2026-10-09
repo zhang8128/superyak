@@ -1322,6 +1322,12 @@ def test_listeners_on_a_specific_address_are_listed_by_whose_they_are(acceptance
         (333, "100.101.102.103:8080", "/opt/homebrew/bin/tailscaled", "doesn't count: a lane can't reach it"),
         (777, "192.168.1.20:11434", "/opt/homebrew/bin/ollama", "stop it while a lane runs: it is yours, beyond loopback"),
         (778, "192.168.1.20:11435", "/opt/homebrew/bin/x", "stop it while a lane runs: whose it is can't be told")]
+    sharingd = [{"pid": 640, "command": "", "host": "fe80::1%awdl0", "port": 8770}]
+    mine = {640: os.getuid()}.get
+    assert acceptance.listener_rows(sharingd, {640: "/usr/libexec/sharingd"}.get, set(), owner=mine)[0][3] == \
+        "approvable (yours, beyond loopback: it counts while a lane runs)"
+    assert acceptance.listener_rows(sharingd, {640: "/usr/libexec/sharingd"}.get, {"/usr/libexec/sharingd"},
+                                    owner=mine)[0][3] == "approved"
 
 
 

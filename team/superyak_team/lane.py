@@ -930,7 +930,8 @@ def _check(approved, lanes):
             is_lane = lane_pids[pid]
         if not in_lane and not is_lane and not reachable(host):
             # Bound to one other address: no lane can reach it. Another user's (Tailscale, a root service) doesn't
-            # count; while a lane is live, this user's does, whatever its environment (I3).
+            # count; while a lane is live, this user's does, whatever its environment (I3), unless it is an approved
+            # Apple program (sharingd keeps AirDrop on awdl0 as the user), which no lane process can be.
             if not lanes:
                 continue
             if owners is None:
@@ -947,6 +948,8 @@ def _check(approved, lanes):
         name = "%s (pid %d)" % (item["command"] or (os.path.basename(exe) if exe else "?"), pid)
         launchd = ", launchd holds it for a socket-activated job" if pid == 1 else ""
         if beyond:
+            if exe is not None and exe in approved:     # an approved Apple program passes on any address it uses (D11)
+                continue
             problems.append("%s listens on %s port %d, beyond loopback, %s (%s)" % (name, host, port, beyond, exe or "?"))
             continue
         if exe is None:

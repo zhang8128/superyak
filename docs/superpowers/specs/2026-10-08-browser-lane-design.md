@@ -323,7 +323,8 @@ the Mac.
     non-loopback address fails, whether or not it carries a lane's environment: a lane process that cleared its
     environment (`env -i`) looks like any other. Another uid's listener there (Tailscale, a root service) stays
     skipped as unreachable. A pid `ps` can't place fails closed. D10 already requires Andy's own services to be
-    stopped while lanes run.
+    stopped while lanes run. An approved Apple program passes there as it does on any port (D11): Apple's per-user
+    agents run as Andy (sharingd keeps AirDrop on a link-local `awdl0` address), and no lane process can be one.
   - **I4 (final fix wave ruling):** a listener in lane X's block must carry X's exact `CLAUDE_CODE_TMPDIR`, or be X's
     broker, whose environment holds `TMPDIR=<X>/b`. Anything else fails: another lane's process or broker, a process
     with no lane's environment, one whose environment can't be read.

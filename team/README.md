@@ -32,7 +32,8 @@ A person turns lanes on; a lead can't:
   `python3 team/scripts/lane_acceptance.py --list-listeners` prints what is listening now. Stop dev servers, Ollama,
   Postgres and everything else while a lane runs: a lane's turn waits until they are gone. Another user's listener
   bound only to a specific address that isn't loopback (Tailscale's tailnet address, a root service's) can't be
-  reached from a lane and doesn't count; one of yours there fails the check while any lane runs, and a lane's own
+  reached from a lane and doesn't count; one of yours there fails the check while any lane runs (unless it is an
+  approved Apple program, such as sharingd on AirDrop's link-local address), and a lane's own
   process listening on any address beyond loopback (`*`, a LAN or tailnet address) always fails it. A listener in a
   lane's port block must be that lane's own (it carries the lane's `CLAUDE_CODE_TMPDIR`) or its broker's.
 - The acceptance run is normally started by Serenity (an agent), in the background, and needs no password. Step 4
