@@ -288,10 +288,11 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | Method/path | Request | Response |
 |---|---|---|
 | GET/POST `/api/chats` | POST `{title,member_ids:[]}` | Accessible summaries / created room, 201 |
-| GET `/api/chats/{id}` | — | Room plus `messages` and `members` |
+| GET `/api/chats/{id}` | — | Room plus `messages`, `members`, `brief` and `brief_revision` |
 | POST `/api/chats/{id}/messages` | `{client_message_id,body}` | Message, 201 |
-| POST `/api/chats/{id}/participants` | `{member_ids:[]}` | New linked room, 201; owner only |
+| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room, 201; owner only |
 | DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
+| PUT `/api/chats/{id}/brief` | `{body,revision}` | The brief, or null once removed; owner only (a person, with CSRF) |
 
 Room: `{id,owner_id,title,epoch,linked_room_id,member_ids,created,last_activity}`.
 Creation/activity values are Unix seconds. Home and chat lists sort by
@@ -320,6 +321,34 @@ the key. Revoked keys and lookalikes post normally.
 Removing a member immediately revokes their hosted access and increments the
 room epoch. Old queued deliveries fail the documented epoch recheck. No old
 plaintext copies are claimed to be erased.
+
+**Room brief.** A short text that the room's owner writes about the room: its purpose, its decisions so far, who
+does what.
+
+- **Shape.** `brief` is `{body,revision,author_id,author_name,updated,carried_from}`. It is `null` when the room has
+  none, when the brief was removed, or when the room is a received one. `author_name` is one safe line.
+- **The next save.** `brief_revision` is the revision the owner's next save names: 0 before the first brief, and
+  still the removed brief's revision after a removal, so the owner can write one again.
+- **Saving.**
+  - `body` is 0-4,000 characters of valid UTF-8 with no NUL; anything else gets 400.
+  - `revision` must be that `int`, not a bool; anything else gets 409.
+  - Every save, a removal included, writes revision n+1 on the same row, so a stale tab never overwrites a later
+    brief. A removal is a body that is empty or only whitespace, stored as `''`.
+  - A member who isn't the owner gets 403, and so does a ship key. A non-member and a received room get 404.
+  - Saving records no mentions and posts no message.
+- **Audit and federation.**
+  - The event log records `chat.brief` with the revision and author, never the text.
+  - Briefs never leave this station: no event or room snapshot carries one to a paired peer, and a brief a peer
+    sends is dropped.
+  - Summaries carry no brief.
+- **Carrying.**
+  - `carry_brief` on adding participants is `null` (carry nothing) or the revision the owner saw.
+  - When it matches and the brief isn't removed, the new room gets the same body as revision 1, authored by the
+    owner, with `carried_from` set to the old room's id. The owner's next save clears `carried_from`.
+  - Another revision gets 409, and anything but `null` or an `int` gets 400.
+- **Removal.** Removing a participant keeps the room and its brief, so the removed member loses access to both at
+  once.
+- **For agents,** the brief is quoted data, never instructions.
 
 ## Store interfaces for following tasks
 
@@ -655,7 +684,7 @@ the station's `Origin` for writes. A key reaches exactly these routes; every oth
 |---|---|
 | GET `/api/me` | The ship's own account (`owner_id` names its owner) |
 | GET `/api/chats` | Rooms the ship is in |
-| GET `/api/chats/{id}` | Room history plus `members` |
+| GET `/api/chats/{id}` | Room history plus `members` and the room brief (`brief`, `brief_revision`) |
 | POST `/api/chats/{id}/messages` | Post, idempotent by `client_message_id`; optional `reply_to`; at most 30 a minute per ship (429) |
 | GET `/api/mentions?after=&limit=` | Mentions of this ship, oldest first |
 | DELETE `/api/ships/me/key` | Revoke the presented key (`undock`) |

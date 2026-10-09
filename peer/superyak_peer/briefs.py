@@ -40,11 +40,15 @@ class Briefs:
                 row['revision'])
 
     def _write_brief(self, db, room_id, body, revision, author_id, carried_from=None):
-        """The room's one row. A save passes no carried_from: the carried note dates the carried revision only."""
+        """The room's one row. A save passes no carried_from: the carried note dates the carried revision only. The
+        audit event names the revision and author, never the text; federation sends no event of this kind and no
+        room snapshot holds a brief, so a brief never leaves this station."""
         db.execute('INSERT INTO room_briefs VALUES(?,?,?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET body=excluded.body, '
                    'revision=excluded.revision, author_id=excluded.author_id, updated=excluded.updated, '
                    'carried_from=excluded.carried_from',
                    (room_id, body, revision, author_id, self.clock(), carried_from))
+        self.emit(db, 'chat.brief', room_id, revision,
+                  {'author_id': author_id, 'revision': revision, **({'carried_from': carried_from} if carried_from else {})})
 
     def _brief_to_carry(self, db, room_id, carry):
         """The body to copy into the next room. None without carry_brief (the default: carrying is always a choice) or
