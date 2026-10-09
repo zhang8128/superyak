@@ -29,9 +29,11 @@ A person turns lanes on; a lead can't:
   covers every socket-activated job, such as Remote Login's `*:22`, until that job's own program first accepts a
   connection; from then on the listener is that program's, and it needs its own entry.
   `python3 team/scripts/lane_acceptance.py --list-listeners` prints what is listening now. Stop dev servers, Ollama,
-  Postgres and everything else while a lane runs: a lane's turn waits until they are gone. A listener bound only to a
-  specific address that isn't loopback (the tailnet's, say) can't be reached from a lane and doesn't count, but a
-  lane's own process listening on any address beyond loopback (`*`, a LAN or tailnet address) always fails the check.
+  Postgres and everything else while a lane runs: a lane's turn waits until they are gone. Another user's listener
+  bound only to a specific address that isn't loopback (Tailscale's tailnet address, a root service's) can't be
+  reached from a lane and doesn't count; one of yours there fails the check while any lane runs, and a lane's own
+  process listening on any address beyond loopback (`*`, a LAN or tailnet address) always fails it. A listener in a
+  lane's port block must be that lane's own (it carries the lane's `CLAUDE_CODE_TMPDIR`) or its broker's.
 - The acceptance run is normally started by Serenity (an agent), in the background, and needs no password. Step 4
   observes a root-owned listener: the run first looks for one that already exists (launchd's `*:22` with Remote Login
   on, or cupsd's 631) and uses it; otherwise it tries `sudo -n -v`, which an agent's Bash tool can't do (macOS caches
@@ -81,6 +83,9 @@ outlive it. When a lane ends, teamd ends the broker, every process with a file u
 ports, and every process whose environment still carries that variable. A child that started a new session, cleared
 its own environment and holds nothing in the lane escapes all three, until the next listener check finds anything it
 listens on.
+
+**Known limit: lanes share localhost.** With more than one lane, a lane's worker can connect to another lane's
+servers; `lane_one_at_a_time` avoids it.
 
 **Known limit: Bricks' specs need the Bricks change before they run in a lane.** They have to take their ports from
 the lane's block (`SUPERYAK_LANE_PORT_BASE`) instead of fixed ones; that change is the Bricks lead's to make.

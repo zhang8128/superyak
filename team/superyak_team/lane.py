@@ -853,10 +853,12 @@ def pid_path(pid):
 def listeners_ok():
     """D9, with D11 and the reachability ruling. Every listening socket a lane can reach, on loopback or a wildcard,
     must be in a live lane's block on loopback, or belong to an approved Apple program, by its full path, on any port.
-    A socket bound only to another specific address (the tailnet, say) is unreachable and doesn't count; a lane's
-    own port beyond loopback always fails. Any doubt fails too: netstat or lsof failing, a socket lsof sees that
-    netstat doesn't (in two rounds running), a process that can't be identified, an unreadable list or registry.
-    Returns (ok, problems).
+    A socket bound only to another specific address (the tailnet, say) is unreachable, so another user's doesn't
+    count; while a lane is live, this user's does (I3: a lane process that cleared its environment looks like any
+    other). A lane's own port beyond loopback always fails, and a listener in a lane's block must be that lane's (its
+    CLAUDE_CODE_TMPDIR) or its broker's (TMPDIR=<lane>/b) (I4: lanes share localhost). Any doubt fails too: netstat,
+    lsof or ps failing, a socket lsof sees that netstat doesn't (in two rounds running), a process that can't be
+    identified, an unreadable list or registry, any error at all. Returns (ok, problems).
     The check is machine-wide, so it takes no team."""
     try:
         return _check(load_approved(), live_lanes())
@@ -865,6 +867,8 @@ def listeners_ok():
     except ValueError as e:                             # anything unreadable fails closed, never raises
         return False, ["the listener check could not read what it was given (%s), so it fails closed"
                        % e.__class__.__name__]
+    except Exception as e:                              # deep JSON, a lock that errs, a bug: closed, never raised
+        return False, ["the listener check failed (%s), so it fails closed" % e.__class__.__name__]
 
 
 def _lane_process(pid, tmps):
@@ -873,9 +877,26 @@ def _lane_process(pid, tmps):
     return any("CLAUDE_CODE_TMPDIR=" + tmp in env for tmp in tmps)
 
 
+def _lanes_own(pid, key):
+    """I4: whether this pid belongs in lane `key`'s block: its environment holds exactly that lane's
+    CLAUDE_CODE_TMPDIR (the worker's servers), or exactly TMPDIR=<that lane>/b (its broker, whose b/ is named with the
+    parent resolved, as lane_text names it). An environment that can't be read belongs to no lane."""
+    parent = _parent_path()
+    env = _environ(pid) or []
+    wanted = {"CLAUDE_CODE_TMPDIR=" + str(parent / key / "tmp"), "TMPDIR=" + str(parent / key / "b"),
+              "TMPDIR=" + os.path.join(os.path.realpath(parent), key, "b")}
+    return any(entry in wanted for entry in env)
+
+
+def _owners():
+    """{pid: uid} for every process, from ps ({} when ps can't say: then no owner is known, which fails closed)."""
+    return {pid: uid for pid, ppid, pgid, uid in _process_table()}
+
+
 def _check(approved, lanes):
     blocks = [base for base, _ in lanes]
     tmps = [str(_parent_path() / key / "tmp") for _, key in lanes]
+    owners = None
     missing, listeners = None, None
     for attempt in range(2):                            # a socket that opened or closed between the two reads
         listeners, why = _read_netstat()                # is gone from the second round
@@ -898,19 +919,34 @@ def _check(approved, lanes):
     paths, lane_pids = {}, {}
     for item in listeners:
         port, host, pid = item["port"], item["host"], item["pid"]
-        in_lane = any(base <= port < base + BLOCK for base in blocks)
-        is_lane = False
+        block = next((key for base, key in lanes if base <= port < base + BLOCK), None)
+        in_lane = block is not None
+        is_lane, beyond = False, None
         if not in_lane and not is_loopback(host):       # a lane's process exposes the app to the network, however
             if pid not in lane_pids:                    # it is reached: checked before the reachability skip
                 lane_pids[pid] = _lane_process(pid, tmps)
             is_lane = lane_pids[pid]
         if not in_lane and not is_lane and not reachable(host):
-            continue                                    # bound to one other address: no lane can reach it
+            # Bound to one other address: no lane can reach it. Another user's (Tailscale, a root service) doesn't
+            # count; while a lane is live, this user's does, whatever its environment (I3).
+            if not lanes:
+                continue
+            if owners is None:
+                owners = _owners()
+            if owners.get(pid) is None:
+                beyond = "and ps can't say whose it is"
+            elif owners[pid] == os.getuid():
+                beyond = "as this user while a lane runs"
+            else:
+                continue
         if pid not in paths:
             paths[pid] = pid_path(pid)
         exe = paths[pid]
         name = "%s (pid %d)" % (item["command"] or (os.path.basename(exe) if exe else "?"), pid)
         launchd = ", launchd holds it for a socket-activated job" if pid == 1 else ""
+        if beyond:
+            problems.append("%s listens on %s port %d, beyond loopback, %s (%s)" % (name, host, port, beyond, exe or "?"))
+            continue
         if exe is None:
             problems.append("%s listens on %s port %d, and its program can't be identified%s"
                             % (name, host, port, launchd))
@@ -923,6 +959,9 @@ def _check(approved, lanes):
             if not is_loopback(host):
                 problems.append("%s listens on %s port %d, beyond loopback, in a lane's block (%s)"
                                 % (name, host, port, exe))
+            elif not _lanes_own(pid, block):            # I4: lanes share localhost; a block is its lane's alone
+                problems.append("%s listens on %s port %d, in lane %s's block, but isn't that lane's or its broker "
+                                "(%s)" % (name, host, port, block, exe))
         elif exe not in approved:
             problems.append("%s listens on port %d (%s)%s" % (name, port, exe, launchd))
     return not problems, sorted(set(problems))

@@ -319,6 +319,15 @@ the Mac.
   `/sbin`. It matches on any port.
 - **What fails:** a lane process listening on a non-loopback address fails the check. `127.0.0.0/8` and `::1` count
   as loopback, and every other address, IPv6 included, does not. lsof's IPv6 output is parsed, not just IPv4.
+  - **I3 (final fix wave ruling):** while any lane is live, a listener owned by this uid (`ps`) on any specific
+    non-loopback address fails, whether or not it carries a lane's environment: a lane process that cleared its
+    environment (`env -i`) looks like any other. Another uid's listener there (Tailscale, a root service) stays
+    skipped as unreachable. A pid `ps` can't place fails closed. D10 already requires Andy's own services to be
+    stopped while lanes run.
+  - **I4 (final fix wave ruling):** a listener in lane X's block must carry X's exact `CLAUDE_CODE_TMPDIR`, or be X's
+    broker, whose environment holds `TMPDIR=<X>/b`. Anything else fails: another lane's process or broker, a process
+    with no lane's environment, one whose environment can't be read.
+  - Any error the check itself hits (deep JSON, a lock that errs, a bug) fails it closed (T4).
 - **UDP is not checked.** Egress is already closed, DNS included, and the browser's profile allows TCP only to the
   lane's ports. A local UDP service that does something dangerous on request is accepted as a known limit.
 - **Matching is a convenience, not a boundary.** A process can change directory after it starts listening, and an
@@ -372,6 +381,8 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   a file of their language is opened; the scratch test couldn't start one without a model turn, so whether
   `--strict-mcp-config` covers them is unconfirmed. Acceptance step 2's `ps` rows list every process under a lane's
   turn that runs outside the sandbox.
+- Lanes share localhost: with more than one lane, a lane's worker can connect to another lane's servers (the
+  listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
   only as good as the approved list.
 - The preload is advisory: a worker can start a child without `NODE_OPTIONS`. Binding beyond loopback is caught only
@@ -420,7 +431,8 @@ address (`127.0.0.0/8`, `::1`) or to a wildcard (`*`, `0.0.0.0`, `::`).
   - the broker's profile allows only the lane's ports.
 - So such a listener neither blocks a lane nor needs approval.
 - The non-loopback rule for *lane* processes (see "The listener check") is unchanged: a lane process listening on any
-  non-loopback address fails the check.
+  non-loopback address fails the check. While a lane is live, the same holds for any listener of this user's (I3);
+  only other users' listeners on a specific address stay skipped.
 
 ## Build order
 

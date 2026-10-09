@@ -189,16 +189,22 @@ def planted_settings(existing):
     return data
 
 
-def listener_rows(listeners, path_of, approved):
+def listener_rows(listeners, path_of, approved, owner=None):
     """--list-listeners, from the listener check's own enumeration and rules: (pid, address, executable, verdict).
     "approvable" is exactly what lane.load_approved accepts (lane.approval_problem). Pid 1 is launchd holding a
     socket-activated job's socket; approving /sbin/launchd covers every such job until the job's own program first
-    accepts a connection (then it is that program's)."""
+    accepts a connection (then it is that program's). A listener bound to one address beyond loopback counts while a
+    lane runs when it is this user's, or whose it is can't be told (I3); `owner` gives a pid's uid."""
     rows = []
     for item in listeners:
         exe = path_of(item["pid"])
         address = "%s:%d" % (item["host"], item["port"])
-        if not lane.reachable(item["host"]):
+        uid = owner(item["pid"]) if owner is not None and not lane.reachable(item["host"]) else None
+        if not lane.reachable(item["host"]) and owner is not None and uid is None:
+            verdict = "stop it while a lane runs: whose it is can't be told"
+        elif not lane.reachable(item["host"]) and uid == os.getuid():
+            verdict = "stop it while a lane runs: it is yours, beyond loopback"
+        elif not lane.reachable(item["host"]):
             verdict = "doesn't count: a lane can't reach it"
         elif exe is None:
             verdict = "can't be identified: a lane waits"
@@ -1711,7 +1717,7 @@ def list_listeners():
     except lane.LaneRefused as e:
         approved = set()
         print("The approved list is broken, so every listener below counts as unapproved: %s\n" % e)
-    rows = listener_rows(found, lane.pid_path, approved)
+    rows = listener_rows(found, lane.pid_path, approved, owner=lane._owners().get)
     for pid, address, exe, verdict in rows:
         print("pid %-7d %-26s %s  (%s)" % (pid, address, exe, verdict))
     try:

@@ -687,10 +687,15 @@ class Ran:
 def listeners(env, held, monkeypatch):
     """A Mac's listeners: netstat prints `state["sockets"]` (in `state["header"]`'s format), lsof the user's own,
     proc_pidpath maps pids to executables, and the block at 41000 is a live lane's (this test holds t1's lock)."""
+    mine = os.getuid()
+    kaylee = ["HOME=/h", "CLAUDE_CODE_TMPDIR=" + str(lane._parent_path() / lane.lane_hash("t1", "kaylee") / "tmp")]
     state = {"sockets": list(SOCKETS), "header": HEADER_PID, "netstat_rc": 0, "netstat": None,
              "lsof": [(900, "127.0.0.1:41000"), (901, "[::1]:41001")], "lsof_rc": 0, "exe": dict(EXE),
              "lsof_rounds": [], "netstat_rounds": [], "lsof_stderr": "",   # one-off answers, round by round
-             "environ": {}}                              # pid -> the environment the _environ seam reports
+             "environ": {900: kaylee, 901: kaylee},      # pid -> the environment the _environ seam reports
+             # pid -> owner, as ps reports it (Apple's daemons and tailscaled are root's; node and ollama the user's)
+             "uids": {501: mine, 612: mine, 220: 0, 1: 0, 333: 0, 900: mine, 901: mine, 902: mine, 905: mine, 777: mine},
+             "ps_rc": 0}
 
     def run(cmd, timeout=60):
         if cmd[0].endswith("netstat"):
@@ -700,6 +705,8 @@ def listeners(env, held, monkeypatch):
         if cmd[0].endswith("lsof"):
             pairs = state["lsof_rounds"].pop(0) if state["lsof_rounds"] else state["lsof"]
             return Ran(state["lsof_rc"], lsof_text(pairs), state["lsof_stderr"])
+        if cmd[0] == "/bin/ps":
+            return Ran(state["ps_rc"], "".join("%d 1 %d %d\n" % (pid, pid, uid) for pid, uid in state["uids"].items()))
         raise AssertionError(cmd)
     monkeypatch.setattr(lane, "_run", run)
     monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/" + name)
@@ -753,8 +760,9 @@ def test_a_lane_process_listening_beyond_loopback_fails(listeners, address):
 @pytest.mark.parametrize("counted", ["*.9002", "::ffff:127.0.0.1.9003", "fe80::1%lo0.9004", "[weird].9005"])
 def test_a_listener_bound_to_one_other_address_does_not_count(listeners, counted):
     """The reachability ruling: neither the worker nor the broker can reach a socket bound only to the tailnet or the
-    LAN, so it neither blocks a lane nor needs approval. A wildcard counts, and so do an IPv4-mapped loopback address,
-    anything scoped to lo0 and an address the check can't read (N8)."""
+    LAN, so another user's neither blocks a lane nor needs approval (the user's own does: I3). A wildcard counts, and
+    so do an IPv4-mapped loopback address, anything scoped to lo0 and an address the check can't read (N8)."""
+    listeners["uids"][777] = os.getuid() + 1
     listeners["sockets"] += [("tcp4", "100.101.102.103.9000", "LISTEN", 777, "ollama"),
                              ("tcp4", "192.168.1.20.9001", "LISTEN", 777, "ollama"),
                              ("tcp6", "fe80::1%en0.9006", "LISTEN", 777, "ollama")]
@@ -972,6 +980,7 @@ def test_the_sealed_volume_is_checked_on_a_mac_only(env, monkeypatch):
 def test_round_two_reads_netstat_again(listeners):
     """Review: a pair lsof sees that round 2's netstat lists is no failure."""
     listeners["exe"][905] = "/opt/homebrew/bin/node"
+    listeners["environ"][905] = listeners["environ"][900]
     listeners["lsof"].append((905, "127.0.0.1:41003"))
     listeners["netstat_rounds"] = [list(SOCKETS), SOCKETS + [("tcp4", "127.0.0.1.41003", "LISTEN", 905, "node")]]
     assert lane.listeners_ok() == (True, [])
@@ -1019,19 +1028,109 @@ ELSEWHERE = [("tcp4", "192.168.1.5.3000"), ("tcp4", "100.101.102.104.3000"), ("t
 
 @pytest.mark.parametrize("proto, address", ELSEWHERE)
 def test_a_lane_process_fails_on_every_non_loopback_address_and_others_are_skipped(listeners, proto, address):
+    """Important 3, with I3's ruling: another user's listener on a specific address beyond loopback is skipped as
+    unreachable; the user's own fails while a lane runs, and a lane's process is named as one."""
     listeners["exe"][902] = "/opt/homebrew/bin/node"
+    listeners["uids"][902] = os.getuid() + 1
     listeners["sockets"].append((proto, address, "LISTEN", 902, "node"))
-    assert lane.listeners_ok() == (True, [])                                      # not a lane's process: unreachable
+    assert lane.listeners_ok() == (True, [])                                      # someone else's: unreachable
+    listeners["uids"][902] = os.getuid()
+    host, _, port = address.rpartition(".")
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["node (pid 902) listens on %s port %s, beyond loopback, as this user while a lane "
+                                   "runs (/opt/homebrew/bin/node)" % (host, port)]
     listeners["environ"][902] = ["CLAUDE_CODE_TMPDIR=" + lane_tmp()]
     ok, problems = lane.listeners_ok()
-    host, _, port = address.rpartition(".")
-    assert not ok and len(problems) == 1 and "%s port %s, beyond loopback" % (host, port) in problems[0]
+    assert not ok and len(problems) == 1 and "a lane's process, listens on %s port %s, beyond loopback" % (host, port) \
+        in problems[0]
 
 
-def test_a_non_lane_process_on_a_lan_address_is_still_skipped(listeners):
-    listeners["environ"][777] = ["CLAUDE_CODE_TMPDIR=/tmp/elsewhere/tmp"]
+def test_this_users_listener_on_a_lan_address_fails_while_a_lane_runs(listeners):
+    """I3 (ruling): a lane process that clears its environment (env -i) looks like any other, so while any lane is
+    live a listener of this user's on any specific address beyond loopback fails, whatever its environment."""
     listeners["sockets"].append(("tcp4", "192.168.1.20.9100", "LISTEN", 777, "ollama"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["ollama (pid 777) listens on 192.168.1.20 port 9100, beyond loopback, as this user "
+                                   "while a lane runs (/opt/homebrew/bin/ollama)"]
+
+
+def test_another_users_listener_on_a_lan_address_is_still_skipped(listeners):
+    """I3 (ruling): Tailscale's or a root service's listener on a specific address stays unreachable from a lane."""
+    listeners["uids"][777] = 0
+    listeners["sockets"].append(("tcp4", "192.168.1.20.9100", "LISTEN", 777, "ollama"))
+    listeners["sockets"].append(("tcp6", "fd7a:115c:a1e0::5.9101", "LISTEN", 777, "ollama"))
     assert lane.listeners_ok() == (True, [])
+
+
+def test_whose_listener_it_is_must_be_known_or_the_check_fails(listeners):
+    """I3: ps failing, or a pid it doesn't list, fails closed; with no live lane, nothing beyond loopback that no lane
+    can reach counts."""
+    listeners["sockets"].append(("tcp4", "192.168.1.20.9100", "LISTEN", 778, "ollama"))
+    listeners["exe"][778] = "/opt/homebrew/bin/ollama"
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["ollama (pid 778) listens on 192.168.1.20 port 9100, beyond loopback, and ps can't "
+                                   "say whose it is (/opt/homebrew/bin/ollama)"]
+    listeners["ps_rc"] = 1                                                      # ps itself fails: nobody's is known
+    listeners["uids"][778] = os.getuid() + 1
+    assert lane.listeners_ok()[1] == problems + [
+        "tailscaled (pid 333) listens on 100.101.102.103 port 8080, beyond loopback, and ps can't say whose it is "
+        "(/opt/homebrew/bin/tailscaled)"]
+    lane.release_block("t1", "kaylee")                                           # no lane is live now
+    listeners["sockets"] = [x for x in listeners["sockets"] if x[3] not in (900, 901)]
+    listeners["lsof"] = []
+    assert lane.listeners_ok() == (True, [])
+
+
+def lane_b(name="wash"):
+    lane.allocate_block("t1", name)
+    return lane.lane_hash("t1", name)
+
+
+def test_a_lanes_own_server_and_its_broker_pass_in_its_block(listeners):
+    """I4 (ruling): a listener in lane X's block must carry X's exact CLAUDE_CODE_TMPDIR, or be X's broker, whose
+    environment has TMPDIR=<X>/b (the parent resolved, as lane_text names it, or not)."""
+    key = lane.lane_hash("t1", "kaylee")
+    for pid, b_dir in ((910, os.path.join(os.path.realpath(lane._parent_path()), key, "b")),
+                       (911, str(lane._parent_path() / key / "b"))):
+        listeners["exe"][pid] = "/opt/homebrew/bin/node"
+        listeners["uids"][pid] = os.getuid()
+        listeners["environ"][pid] = ["PATH=/usr/bin:/bin", "TMPDIR=" + b_dir, "MAC_CHROMIUM_TMPDIR=" + b_dir]
+        listeners["sockets"].append(("tcp4", "127.0.0.1.41031", "LISTEN", pid, "node"))
+        listeners["lsof"].append((pid, "127.0.0.1:41031"))
+    assert lane.listeners_ok() == (True, [])
+
+
+@pytest.mark.parametrize("environ, why", [
+    ("wash", "lane A's process in lane B's block"),
+    ("wash broker", "lane A's broker in lane B's block"),
+    ("none", "no lane's environment"),
+    ("unreadable", "an environment that can't be read"),
+    ("prefix", "a CLAUDE_CODE_TMPDIR that only starts like the lane's"),
+])
+def test_anything_else_in_a_lanes_block_fails(listeners, environ, why):
+    """I4 (ruling): lanes share localhost, so a block's ports belong to its lane alone."""
+    other = lane_b()
+    env_of = {"wash": ["CLAUDE_CODE_TMPDIR=" + str(lane._parent_path() / other / "tmp")],
+              "wash broker": ["TMPDIR=" + str(lane._parent_path() / other / "b")],
+              "none": ["HOME=/h"], "unreadable": None, "prefix": ["CLAUDE_CODE_TMPDIR=" + lane_tmp() + "x"]}[environ]
+    listeners["exe"][920] = "/opt/homebrew/bin/node"
+    listeners["uids"][920] = os.getuid()
+    listeners["environ"][920] = env_of
+    listeners["sockets"].append(("tcp4", "127.0.0.1.41005", "LISTEN", 920, "node"))
+    listeners["lsof"].append((920, "127.0.0.1:41005"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["node (pid 920) listens on 127.0.0.1 port 41005, in lane %s's block, but isn't "
+                                   "that lane's or its broker (/opt/homebrew/bin/node)"
+                                   % lane.lane_hash("t1", "kaylee")], why
+
+
+def test_a_listener_check_that_errs_any_way_fails_closed(listeners, monkeypatch):
+    """T4: deeply nested JSON (RecursionError), a lock that errs, anything: (False, ...), never raised."""
+    for error in (RecursionError("deep"), OSError(5, "EIO"), KeyError("x"), RuntimeError("bug")):
+        monkeypatch.setattr(lane, "_check", lambda approved, lanes, e=error: (_ for _ in ()).throw(e))
+        ok, problems = lane.listeners_ok()
+        assert ok is False and problems == ["the listener check failed (%s), so it fails closed"
+                                            % error.__class__.__name__]
 
 
 def test_kern_procargs2_is_read_past_argv_to_the_environment():

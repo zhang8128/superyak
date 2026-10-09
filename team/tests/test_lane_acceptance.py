@@ -1302,3 +1302,19 @@ def test_main_announces_the_person_plan_without_crashing(acceptance, tmp_path, m
     monkeypatch.setattr(acceptance.sys, "argv", ["lane_acceptance.py", "--bricks", str(tmp_path)])
     assert acceptance.main() == 0
     assert "ANDY ACTION" in capsys.readouterr().out
+
+
+# ================= Final fix wave =================
+
+def test_listeners_on_a_specific_address_are_listed_by_whose_they_are(acceptance):
+    """I3: --list-listeners shows that the user's own listener beyond loopback counts while a lane runs, and another
+    user's doesn't; with no owner known it counts (the check fails closed)."""
+    listeners = [{"pid": 333, "command": "", "host": "100.101.102.103", "port": 8080},
+                 {"pid": 777, "command": "", "host": "192.168.1.20", "port": 11434},
+                 {"pid": 778, "command": "", "host": "192.168.1.20", "port": 11435}]
+    paths = {333: "/opt/homebrew/bin/tailscaled", 777: "/opt/homebrew/bin/ollama", 778: "/opt/homebrew/bin/x"}
+    owners = {333: 0, 777: os.getuid()}
+    assert acceptance.listener_rows(listeners, paths.get, set(), owner=owners.get) == [
+        (333, "100.101.102.103:8080", "/opt/homebrew/bin/tailscaled", "doesn't count: a lane can't reach it"),
+        (777, "192.168.1.20:11434", "/opt/homebrew/bin/ollama", "stop it while a lane runs: it is yours, beyond loopback"),
+        (778, "192.168.1.20:11435", "/opt/homebrew/bin/x", "stop it while a lane runs: whose it is can't be told")]
