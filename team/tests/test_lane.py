@@ -5271,3 +5271,48 @@ def test_h6_a_workers_permission_rules_hold_none_that_claude_code_ignores(env, m
     assert "Edit(//r/wt/**)" in build["permissions"]["allow"]
     assert {"Edit(//r/wt/.git)", "Edit(//r/wt/.git/**)"} <= set(build["permissions"]["deny"])
     assert "Write" in workers.claude_sandbox_settings("/r/room", "collab", False, repo="/r/repo")["permissions"]["deny"]
+
+
+# ---------- Lane hardening H5: the instruction walk counts as it reads a folder ----------
+
+def test_h5_the_instruction_walk_stops_at_its_cap_without_reading_the_whole_folder(env, tmp_path, monkeypatch):
+    """H5: sorted(os.scandir()) read a whole folder before the deadline or the cap were checked. Now each entry is
+    counted as it comes, and the snapshot is still in sorted order."""
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    for i in range(50):
+        (wt / ("f%02d" % i)).write_text("x")
+    monkeypatch.setattr(lane, "INSTRUCTION_MAX_ENTRIES", 5)
+    real, pulled = os.scandir, [0]
+
+    class Counting:
+        def __init__(self, it):
+            self.it = it
+
+        def __enter__(self):
+            self.it.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self.it.__exit__(*exc)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            entry = next(self.it)
+            pulled[0] += 1
+            return entry
+    monkeypatch.setattr(os, "scandir", lambda fd: Counting(real(fd)))
+    with pytest.raises(RuntimeError, match="entries"):
+        lane.instruction_snapshot(wt)
+    assert pulled[0] <= 6, pulled
+
+
+def test_h5_the_snapshot_keys_stay_in_sorted_order(env, tmp_path):
+    wt = tmp_path / "wt"
+    (wt / "b").mkdir(parents=True)
+    (wt / "a").mkdir()
+    for name in ("b/CLAUDE.md", "a/CLAUDE.md", "CLAUDE.md", "AGENTS.md"):
+        (wt / name).write_text(name)
+    assert list(lane.instruction_snapshot(wt)) == sorted(lane.instruction_snapshot(wt))

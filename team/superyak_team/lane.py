@@ -2391,13 +2391,15 @@ def instruction_snapshot(path):
     def walk(dfd, rel, depth):
         if depth > INSTRUCTION_MAX_DEPTH:
             raise RuntimeError("the worktree is more than %d folders deep" % INSTRUCTION_MAX_DEPTH)
+        entries = []
         with os.scandir(dfd) as it:
-            entries = sorted(it, key=lambda e: e.name)
+            for entry in it:                             # counted as it is read: a huge folder hits the cap, not memory
+                counted[0] += 1
+                if counted[0] > INSTRUCTION_MAX_ENTRIES or time.monotonic() > deadline:
+                    raise RuntimeError("the worktree's walk took longer than %d s or %d entries"
+                                       % (INSTRUCTION_TIMEOUT_S, INSTRUCTION_MAX_ENTRIES))
+                entries.append(entry)
         for entry in entries:
-            counted[0] += 1
-            if counted[0] > INSTRUCTION_MAX_ENTRIES or time.monotonic() > deadline:
-                raise RuntimeError("the worktree's walk took longer than %d s or %d entries"
-                                   % (INSTRUCTION_TIMEOUT_S, INSTRUCTION_MAX_ENTRIES))
             name, child = entry.name, (rel + "/" + entry.name if rel else entry.name)
             if name == ".git":
                 continue
@@ -2434,7 +2436,7 @@ def instruction_snapshot(path):
         raise RuntimeError("the worktree can't be walked (%s)" % (e.strerror or e))
     finally:
         os.close(root)
-    return snapshot
+    return dict(sorted(snapshot.items()))            # the walk's order is the file system's; the result's is not
 
 
 def _instruction_content(dfd, name, st):
