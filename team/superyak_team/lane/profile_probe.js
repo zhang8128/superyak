@@ -6,7 +6,7 @@
 // run (unknown probe, missing or invalid input: stdout `broken: ...`), which lane.judge_probe never reads as a
 // refusal. It never prints a file's contents and never creates an rc file; lane.self_check removes anything a probe
 // managed to create. Adapted from team/scripts/lane_profile_probe.js (spike 5).
-const fs = require('fs'), net = require('net'), path = require('path'), { execFileSync } = require('child_process');
+const fs = require('fs'), net = require('net'), path = require('path'), { spawnSync } = require('child_process');
 const probe = process.argv[1], marker = 'superyak-lane-probe';
 class Usage extends Error {}
 const need = (name) => { const v = process.env[name]; if (!v) throw new Usage('missing ' + name); return v; };
@@ -15,7 +15,14 @@ const needPort = (name) => {
   if (!/^[0-9]+$/.test(v) || +v < 1 || +v > 65535) throw new Usage('invalid ' + name);
   return +v;
 };
-const run = (file, args) => execFileSync(file, args, { stdio: 'pipe', timeout: 8000 });
+// The child's pid goes to stderr, so the acceptance run can match the sandbox's denials (charged to the child that
+// was refused the exec) to this probe. It is a hint only: lane.judge_probe reads stdout and the exit code.
+const run = (file, args) => {
+  const r = spawnSync(file, args, { stdio: 'pipe', timeout: 8000 });
+  process.stderr.write('child pid ' + (r.pid || 0) + '\n');
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error('exit ' + r.status);
+};
 const connect = (port, host) => new Promise((ok, fail) => {
   const s = net.connect(port, host).on('connect', () => { s.destroy(); ok(); }).on('error', fail);
   s.setTimeout(5000, () => { s.destroy(); fail(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })); });

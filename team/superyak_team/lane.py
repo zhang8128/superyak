@@ -556,6 +556,21 @@ def _sealed(entry):
         return "not on the sealed system volume"
 
 
+def approval_problem(entry):
+    """Why this path can't be on the approved list, or "" when it can: the rules load_approved applies to each entry
+    (an Apple program in a SIP-protected folder, never an interpreter, on the sealed system volume). Shared with the
+    acceptance script's --list-listeners, so what it calls approvable is what load_approved accepts."""
+    if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPROVED_DIRS):
+        return "only Apple programs in /System, /usr/libexec, /usr/sbin or /sbin may listen while a lane runs"
+    if INTERPRETER_RE.fullmatch(os.path.basename(entry).lower()):
+        return "an interpreter is never approved"
+    why = ("not on the sealed system volume" if entry.startswith(NOT_SEALED)
+           or "/CoreTypes.bundle/Contents/Library/" in entry else _sealed(entry))
+    if why:
+        return "%s%s" % (why, ", so a person could change what it runs" if why.startswith("not") else "")
+    return ""
+
+
 def load_approved():
     """D10 and D11: the approved list holds executable paths only, each an Apple program in one of its SIP-protected
     folders (/System, /usr/libexec, /usr/sbin, /sbin) and never an interpreter. It is approved on any port. A list
@@ -571,16 +586,9 @@ def load_approved():
         raise LaneWait("%s must be a list of executable paths" % path)
     out = set()
     for entry in data:
-        if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPROVED_DIRS):
-            raise LaneWait("%s: %r refused: only Apple programs in /System, /usr/libexec, /usr/sbin or /sbin may "
-                           "listen while a lane runs" % (path, entry))
-        if INTERPRETER_RE.fullmatch(os.path.basename(entry).lower()):
-            raise LaneWait("%s: %r refused: an interpreter is never approved" % (path, entry))
-        why = ("not on the sealed system volume" if entry.startswith(NOT_SEALED)
-               or "/CoreTypes.bundle/Contents/Library/" in entry else _sealed(entry))
-        if why:
-            raise LaneWait("%s: %r refused: %s%s" % (path, entry, why, ", so a person could change what it runs"
-                                                     if why.startswith("not") else ""))
+        problem = approval_problem(entry)
+        if problem:
+            raise LaneWait("%s: %r refused: %s" % (path, entry, problem))
         out.add(entry)
     return out
 
