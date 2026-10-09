@@ -304,7 +304,7 @@ and the tasks).
     `lane.port_free`;
   - `lane._run` (netstat, lsof, ps, getconf), `lane._run_env` (the installer), `lane._extract` (tarfile's filter),
     `lane.pid_path` (proc_pidpath), `lane._environ` (KERN_PROCARGS2), `lane.team_alive`, `lane.SANDBOX_EXEC`,
-    `lane.PRIVATE_TMP`, `lane.USERS_SHARED` and `lane.PROBE_PROGRAMS`;
+    `lane.PRIVATE_TMP`, `lane.USERS_SHARED`, `lane.PROBE_PROGRAMS`, `lane.CALCULATOR_APP`, `lane.network_up` and `lane.UNSAFE_ROOTS`;
   - `shutil.which`, the `fetch` argument and `Team.clock`.
 
   `log stream`, `sandbox-exec`, `proc_pidpath`, `bootstrap_look_up` and `sandbox_check` run only on the Mac.
