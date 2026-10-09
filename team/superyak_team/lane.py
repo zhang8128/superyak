@@ -34,7 +34,7 @@ import tempfile
 import threading
 import time
 import urllib.request
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePosixPath
 
 from . import teamlib, workers
@@ -846,12 +846,21 @@ VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 STAMP = ".superyak-integrity"
 STAMP_MANIFEST = ".superyak-manifest"          # the manifest hash of the unpacked package, written beside the stamp
 DEPENDENCIES_MARKER = "DEPENDENCIES_VALIDATED"
+UNSAFE_ROOTS = ("/private/tmp", "/tmp", "/private/var/folders")    # shared temp folders: the broker never lives there
 
 
 def broker_root():
     """~/.superyak/team/broker: teamd's own copies of Playwright and its browser, outside every worktree."""
     root = teamlib.team_home() / "broker"
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise LaneRefused("%s can't be made (%s)" % (root, e.strerror or e))
+    _plain_folder(root)                                   # before the chmod, which would follow a link
+    real = os.path.realpath(root)
+    for unsafe in UNSAFE_ROOTS:
+        if real == unsafe or real.startswith(unsafe + os.sep):
+            raise LaneRefused("%s lies under the shared temp folder %s" % (root, unsafe))
     os.chmod(root, 0o700)
     return root
 
@@ -881,15 +890,17 @@ def install_lock():
         if _install_depth:
             yield
             return
+        stack = ExitStack()
         try:
-            with teamlib.locked(install_lock_path()):
-                _install_depth = 1
-                try:
-                    yield
-                finally:
-                    _install_depth = 0
-        except OSError as e:
+            stack.enter_context(teamlib.locked(install_lock_path()))
+        except OSError as e:                              # only taking the lock; the caller's own errors pass through
             raise LaneRefused("the install lock can't be taken (%s)" % (e.strerror or e))
+        with stack:
+            _install_depth = 1
+            try:
+                yield
+            finally:
+                _install_depth = 0
 
 
 def lock_entry(repo, base):
@@ -935,13 +946,13 @@ def https_get(url, limit=64 * 2 ** 20, deadline=300):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _HttpsOnly)
     start, chunks, size = time.monotonic(), [], 0
     try:
-        with opener.open(url, timeout=60) as response:
+        with opener.open(url, timeout=max(0.1, min(60, deadline))) as response:
             if not str(response.geturl()).lower().startswith("https://"):
                 raise LaneRefused("%s ended on %s, which isn't https" % (url, response.geturl()))
             while True:
                 if time.monotonic() - start > deadline:
                     raise LaneRefused("downloading %s took longer than %d seconds" % (url, deadline))
-                chunk = response.read(1 << 16)
+                chunk = response.read1(1 << 16)          # what has arrived, never waiting for a full block
                 if not chunk:
                     break
                 size += len(chunk)
@@ -982,8 +993,9 @@ def extract_package(data, dest, stamp):
         tmp = Path(tempfile.mkdtemp(prefix=".unpack-", dir=dest.parent))
         try:
             _extract(tar, members, tmp)
-            os.chmod(tmp / "package", 0o755)             # the implicit folder: not whatever the umask made it
-            recorded = manifest_hash(tmp / "package")
+            for top, dirs, _files in os.walk(tmp / "package", followlinks=False):
+                os.chmod(top, 0o755)                     # folders tarfile made implicitly: not whatever the umask made
+            recorded = manifest_hash(tmp / "package", ignore=(STAMP, STAMP_MANIFEST))
             _write_text(tmp / "package" / STAMP_MANIFEST, recorded + "\n", 0o600)
             _write_text(tmp / "package" / STAMP, stamp + "\n", 0o600)
             os.rename(tmp / "package", dest)
@@ -991,6 +1003,21 @@ def extract_package(data, dest, stamp):
             raise LaneRefused("playwright-core can't be unpacked into %s (%s)" % (dest, e.strerror or e))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _read_plain(path):
+    """A regular file's text, read without following a link."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise LaneRefused("%s isn't a plain file; remove its folder and the next lane fetches it again" % path)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise LaneRefused("%s isn't a plain file; remove its folder and the next lane fetches it again" % path)
+        try:
+            return f.read(4096).decode()
+        except (OSError, ValueError):
+            raise LaneRefused("%s can't be read" % path)
 
 
 def _sweep_unpacks(root):
@@ -1017,13 +1044,10 @@ def pinned_playwright(repo, base, fetch=None):
             _check_owner(dest, os.lstat(dest))
             _check_ancestors(dest)
             stamp, recorded = dest / STAMP, dest / STAMP_MANIFEST
-            if not stamp.is_file() or not recorded.is_file():
+            if not os.path.lexists(stamp) or not os.path.lexists(recorded):
                 raise LaneRefused("%s isn't stamped with the integrity hash the base commit names; remove it and the "
                                   "next lane fetches it again" % dest)
-            try:
-                stamped, was = stamp.read_text().strip(), recorded.read_text().strip()
-            except (OSError, ValueError):
-                raise LaneRefused("%s's stamps can't be read; remove it and the next lane fetches it again" % dest)
+            stamped, was = _read_plain(stamp).strip(), _read_plain(recorded).strip()
             if stamped != integrity:
                 raise LaneRefused("%s isn't stamped with the integrity hash the base commit names; remove it and the "
                                   "next lane fetches it again" % dest)

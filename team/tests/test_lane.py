@@ -50,6 +50,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", "%s:%s" % (MOCK_BIN, os.environ["PATH"]))
     monkeypatch.setenv("MOCK_TEAM_LOG", str(tmp_path / "agent.log"))
     monkeypatch.setattr(lane, "MANAGED_SETTINGS", tmp_path / "managed-settings.json")
+    monkeypatch.setattr(lane, "UNSAFE_ROOTS", ())          # the tests' own folders are under /tmp
     return {"repo": repo, "tmp": tmp_path, "home": home}
 
 
@@ -1505,9 +1506,10 @@ def test_the_browser_folder_must_be_directly_in_the_browsers_root(env, manifests
 
 class FakeOpener:
     def __init__(self, chunks=(), error=None, final="https://registry.npmjs.org/x"):
-        self.chunks, self.error, self.final = list(chunks), error, final
+        self.chunks, self.error, self.final, self.timeouts = list(chunks), error, final, []
 
     def open(self, url, timeout=None):
+        self.timeouts.append(timeout)
         if self.error:
             raise self.error
         return self
@@ -1518,7 +1520,7 @@ class FakeOpener:
     def __exit__(self, *a):
         return False
 
-    def read(self, n=-1):
+    def read1(self, n=-1):
         return self.chunks.pop(0) if self.chunks else b""
 
     def geturl(self):
@@ -1541,12 +1543,6 @@ def test_a_download_must_be_https_all_the_way_and_finish_in_time(monkeypatch):
         lane.https_get("https://registry.npmjs.org/x")
     with pytest.raises(lane.LaneRefused, match="isn't https"):                          # a redirect to http
         lane._HttpsOnly().redirect_request(urllib.request.Request("https://a/"), None, 302, "Found", {}, "http://b/")
-    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: FakeOpener([b"ab"] * 5))
-    ticks = iter([0, 1, 2, 1000, 1001, 1002])
-    monkeypatch.setattr(lane.time, "monotonic", lambda: next(ticks))
-    with pytest.raises(lane.LaneRefused, match="took longer than"):
-        lane.https_get("https://registry.npmjs.org/x")
-    monkeypatch.undo()
     monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: FakeOpener([b"abcd", b"efgh"]))
     with pytest.raises(lane.LaneRefused, match="larger than"):
         lane.https_get("https://registry.npmjs.org/x", limit=5)
@@ -1751,6 +1747,99 @@ def test_the_install_lock_is_taken_by_the_installers_themselves_and_nests(env, u
         fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
     waited, result = blocked_until_released(lambda: lane.install_headless_shell("/opt/homebrew/bin/node", pw), path)
     assert waited and len(result) == 1
-    with lane.install_lock():                                           # prepare_broker's own hold: no deadlock
-        assert lane.pinned_playwright(env["repo"], base, Registry(tarball))
-        assert lane.install_headless_shell("/opt/homebrew/bin/node", pw)
+    def nested():
+        with lane.install_lock():                                       # prepare_broker's own hold: no deadlock
+            assert lane.pinned_playwright(env["repo"], base, Registry(tarball))
+            assert lane.install_headless_shell("/opt/homebrew/bin/node", pw)
+    t = threading.Thread(target=nested, daemon=True)
+    t.start()
+    t.join(10)
+    assert not t.is_alive()
+
+
+class Dripper(FakeOpener):
+    """A server that sends one byte every 0.25 s. read(n) blocks until it has n bytes (capped here at 8 so a
+    regression ends the test instead of hanging it); read1 returns what has arrived."""
+    def read(self, n=-1):
+        time.sleep(0.25 * min(n, 8))
+        return b"x" * min(n, 8)
+
+    def read1(self, n=-1):
+        time.sleep(0.25)
+        return b"x"
+
+
+def test_the_download_deadline_holds_against_a_server_that_drips_bytes(monkeypatch):
+    """Review: read(65536) blocks until it has 64 KiB, so a deadline checked between reads fires late."""
+    fake = Dripper()
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: fake)
+    started = time.monotonic()
+    with pytest.raises(lane.LaneRefused, match="took longer than"):
+        lane.https_get("https://registry.npmjs.org/x", deadline=1)
+    assert time.monotonic() - started < 1.75
+    assert fake.timeouts and fake.timeouts[0] <= 1                    # connect and headers are bounded by it too
+    assert FakeOpener().timeouts == []
+    fake = FakeOpener([b"a"])
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: fake)
+    lane.https_get("https://registry.npmjs.org/x")
+    assert fake.timeouts[0] <= 60
+
+
+def test_https_get_installs_the_https_only_redirect_handler(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lane.urllib.request, "build_opener", lambda *h: seen.extend(h) or FakeOpener([b"a"]))
+    lane.https_get("https://registry.npmjs.org/x")
+    assert lane._HttpsOnly in seen
+
+
+def test_unpacking_under_a_group_writable_umask_still_gives_a_plain_package(env, unpack):
+    """Review: npm tarballs have no folder entries, so tarfile makes lib/ with teamd's umask."""
+    files = dict(PW_FILES, **{"package/lib/deep/util.js": b"x"})
+    tarball = npm_tarball(files)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    lane.broker_root()                                                  # made before the umask changes
+    old = os.umask(0o002)
+    try:
+        dest = lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    finally:
+        os.umask(old)
+    for folder in (dest, dest / "lib", dest / "lib" / "deep"):
+        assert stat_mode(os.lstat(folder)) == 0o755
+    assert lane.pinned_playwright(env["repo"], base, Registry(tarball)) == dest
+
+
+@pytest.mark.parametrize("which", ["STAMP", "STAMP_MANIFEST"])
+def test_a_stamp_that_is_a_symlink_is_refused(env, unpack, which):
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    dest = lane.pinned_playwright(env["repo"], base, Registry(tarball))
+    stamp = dest / getattr(lane, which)
+    copy = env["tmp"] / "copy"
+    copy.write_text(stamp.read_text())
+    stamp.unlink()
+    os.symlink(copy, stamp)
+    with pytest.raises(lane.LaneRefused, match="isn't a plain file"):
+        lane.pinned_playwright(env["repo"], base, Registry(tarball))
+
+
+def test_the_broker_root_must_be_a_real_folder_outside_the_shared_temp_folders(env, monkeypatch):
+    real = lane.broker_root()
+    shutil.rmtree(real)
+    elsewhere = env["tmp"] / "elsewhere"
+    elsewhere.mkdir()
+    os.symlink(elsewhere, real)
+    with pytest.raises(lane.LaneRefused, match="isn't a plain folder"):
+        lane.broker_root()
+    real.unlink()
+    monkeypatch.setattr(lane, "UNSAFE_ROOTS", (str(env["tmp"]),))
+    with pytest.raises(lane.LaneRefused, match="under the shared temp folder"):
+        lane.broker_root()
+    monkeypatch.undo()
+
+
+def test_an_oserror_inside_the_install_lock_keeps_its_own_message(env):
+    with pytest.raises(OSError, match="boom"):
+        with lane.install_lock():
+            raise OSError(5, "boom")
+    with lane.install_lock():                                           # and the lock is usable again
+        pass
