@@ -179,7 +179,8 @@ With `lane=None`, the output is byte-for-byte what it is today.
   `sandbox-exec -f <lane>/b/broker.sb <node> lane_broker.js`.
 - **Its environment** is built from nothing, not inherited, so no inherited `NODE_OPTIONS`, `PLAYWRIGHT_*` or `PW_*`
   can reach the broker. teamd sets `PLAYWRIGHT_BROWSERS_PATH` itself. It holds only `PATH=/usr/bin:/bin`, `HOME`, `TMPDIR` and `MAC_CHROMIUM_TMPDIR` (both
-  `<lane>/b`), the pinned Playwright path, and the secret.
+  `<lane>/b`) and the pinned Playwright path. The secret reaches the broker on stdin, never in its environment, which
+  Chrome would inherit.
 - **Its options:** the headless shell, `chromiumSandbox: false`, and host `127.0.0.1` on the lane's last port, with the
   secret as the path. The headless shell is Playwright's own build for headless Chromium, and it is what
   `chromium.launchServer({headless: true})` starts with no `channel`. The environment adds `PLAYWRIGHT_BROWSERS_PATH`,
