@@ -1,10 +1,11 @@
 # Many ships on one machine (D7)
 
-Status: revision 2. Revision 1 (15070a6) had Rio Grande's review (room "Superyak: city of AI" (39fd79), message
-83d519d5) and a fresh reviewer's D8 verdict, APPROVE WITH CHANGES (message 3a98c821). This revision resolves the five
-must-fixes, the should-fixes and Rio Grande's three points; the table at the end maps each to its section,
-requirement and test. Rio Grande checks these edits under the interim rule; the D8 reviewer doesn't need to see it
-again. The build is on branch `many-ships`, tests first.
+Status: revision 3. Revision 1 (15070a6) had Rio Grande's review (room "Superyak: city of AI" (39fd79), message
+83d519d5) and a fresh reviewer's D8 verdict, APPROVE WITH CHANGES (message 3a98c821). Revision 2 (ac1ee5f, 1f05ff9)
+resolved the five must-fixes, the should-fixes and Rio Grande's three points. Rio Grande's check of revision 2
+(message fe96a6ec) was READY AFTER EDITS; this revision makes its four required edits, its four small ones and its
+build note. The tables at the end map each item to its section, requirement and test. Rio Grande checks only these
+edits; the D8 reviewer doesn't need to see it again. The build is on branch `many-ships`, tests first.
 
 Andy said yes to D7 on 2026-10-09 ("Yes, set it up"): the Bricks lead docks as its own ship, `serenity-bricks`, on the
 Mac that already carries Serenity. Rio Grande asked Serenity to own this spec (message 9cd6f656).
@@ -89,11 +90,13 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
   - `--home` is accepted only when it equals `~/.superyak` (machine ship) or `~/.superyak/ships/<ship>`; with
     `--project` and no `--home`, the home is `~/.superyak/ships/<ship>`. Fixed homes can't nest, collide or land in a
     repository.
-  - **No name collision.** Dock refuses a `--ship` equal to the `ship_name` in any *other* local home
-    (`~/.superyak/station.json` and every `~/.superyak/ships/*/station.json`). The station treats a docking for an
-    existing name as a re-dock and revokes all of that ship's keys (ships.py:153-160), so the approval would look
-    routine and would kill the other session's key. A home whose `station.json` belongs to a different ship is also
-    refused.
+  - **No name collision.** Dock refuses a `--ship` equal to the `ship` field, the station username, in any *other*
+    local home (`~/.superyak/station.json` and every `~/.superyak/ships/*/station.json`). It never compares
+    `ship_name`: that field is the display name (`ship['name']`, dock.py:123-124), which the station makes with
+    `.replace('-', ' ').title()` (ships.py:157), so "Serenity Bricks" never equals a `--ship` value and a check on it
+    could never fire. The station treats a docking for an existing username as a re-dock and revokes all of that
+    ship's keys (ships.py:153-160), so the approval would look routine and would kill the other session's key. A home
+    whose `station.json` has a `ship` other than `--ship` is also refused.
 - **S3. Commands carry the home through `--config`.** Every command dock installs already takes `--config`: `mcp`,
   `hook`, `watch` (with `--state` and `--mcp-config`) and `run-mcp`. Dock always writes them with the absolute
   `<home>/station.json`. `dock`, `status` and `undock` gain `--home` (default `~/.superyak`), so a person never types
@@ -116,18 +119,28 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 - **S5. A project ship's wiring stays out of git.**
   - **Git, hardened.** Dock runs git in the repository only as `git --git-dir <common dir from the reader (S6)>
     --work-tree <root>` with `HARDENED_GIT` (workers.py:32) and `_isolated_git_env()` (workers.py:43), so no
-    repository config, hook, fsmonitor or filter can run, and no user or system config is read.
-  - **The checks, all fail closed:**
+    repository config, hook, fsmonitor or filter can run, and no user or system config is read. Every call runs
+    with the repository root as its working directory: git resolves the pathspec against the cwd, so from a
+    subdirectory `ls-files --error-unmatch -- .claude/settings.local.json` answers 1 (untracked) for a tracked file,
+    and dock would refuse for the wrong reason or pass a check it should fail.
+  - **The exclude lines** are `/.claude/settings.local.json` and `/.claude/.settings.local.json.*` (the temporary
+    file `_write_settings` makes, install.py:57).
+  - **The checks, all fail closed, and writing nothing:**
     - `<root>/.claude`, if present, must be a real directory, not a symlink; `settings.local.json`, if present, a
       regular file. Otherwise dock refuses.
     - `ls-files --error-unmatch -- .claude/settings.local.json`: exit 1 means untracked and dock goes on; exit 0
       (tracked) or any other exit refuses.
-    - Dock always appends, idempotently, `/.claude/settings.local.json` and `/.claude/.settings.local.json.*` (the
-      temporary file `_write_settings` makes, install.py:57) to `<common dir>/info/exclude`, creating `info/` if
-      needed. It appends even when a global rule exists, because the isolated environment can't see a custom
-      `core.excludesFile`.
-    - Then `check-ignore -q` must exit 0 for both `.claude/settings.local.json` and
-      `.claude/.settings.local.json.probe.tmp`; any other exit (1 for a negation, 128 for an error) refuses.
+    - `check-ignore -q`, run with `-c core.excludesFile=<a temporary file outside the repository holding the two
+      exclude lines>`, must exit 0 for both `.claude/settings.local.json` and `.claude/.settings.local.json.probe.tmp`;
+      any other exit (1 for a negation, 128 for an error) refuses. The temporary file is removed afterwards. This
+      dry check is never looser than the real one: a repository `.gitignore` negation defeats both, and a negation
+      already in `info/exclude` outranks `core.excludesFile`, so it refuses where the real append (later in the same
+      file, so last match wins) would pass. That direction fails closed, and the refusal names the line.
+  - **The real exclude, after the claim (S9).** Dock appends the two lines, idempotently, to
+    `<common dir>/info/exclude`, creating `info/` if needed. It appends even when a global rule exists, because the
+    isolated environment can't see a custom `core.excludesFile`. Then it runs `check-ignore -q` again, with no
+    `-c core.excludesFile`, before anything is written in the work tree. A rollback removes the lines only if this
+    run added them.
   - **Tools:** `claude mcp add --scope local station -- <python> run_agent.py mcp --config <home>/station.json`, run
     with the main checkout root as its working directory (the entry lands in `~/.claude.json`, M2). Dock first removes
     any local `station` there, then confirms with `claude mcp get station` from the root that the scope is local and
@@ -144,16 +157,27 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
     points at another home. The project ship's Codex sessions run `codex -p <name>`; plain `codex` is the machine ship,
     which refuses inside a claimed project and says to use `-p` (S7). Dock prints this.
   - **The only files dock writes inside a repository's work tree** are `.claude/settings.local.json` and, while it is
-    being written, its temporary file; both are excluded before they're written. `info/exclude` is inside `.git`.
+    being written, its temporary file; both are excluded before they're written. `info/exclude` is inside `.git`, and
+    dock writes it only after the claim; a refusal before that point has written nothing anywhere in the repository.
   - **aDNA** is machine-wide and unchanged.
 - **S6. Claims, and how a session's project is found.**
   - **The registry:** `~/.superyak/projects.json`, mode 0600, written through `write_private` under an exclusive
     `fcntl` lock on `~/.superyak/projects.lock`, whole-file replace. One entry per claim: `{ship, home, root, dev,
     ino}`: `root` is the real path of the main checkout root, `dev` and `ino` from `os.stat(root)`. The same claim is
     also written to `<home>/claim.json`, so undock and status work without the registry.
+  - **One lock hold per claim change.** Adding a claim writes the registry entry first, then `<home>/claim.json`,
+    inside one hold of the lock; removing one deletes `<home>/claim.json` first, then the registry entry, inside one
+    hold. A stop between the two can leave a registry entry without its `claim.json`: the project ship doesn't act
+    there (it needs both), the machine ship stands down there (a claim matches), and `status` names the mismatch. It
+    can never leave a `claim.json` with no registry.
+  - **`projects.json` is never deleted once it exists.** Removing the last claim writes `[]`, and an empty list means
+    no claims.
   - **The registry is unreadable** when it can't be read, isn't valid JSON, or fails the schema (a list of entries,
     each with exactly those five fields of the right types, ships and roots unique), and also when it's missing while
-    any `~/.superyak/ships/*/station.json` exists. A missing registry with no project ship means no claims.
+    any `~/.superyak/ships/*/claim.json` exists: a claim was written, so the registry was too, and it has been lost.
+    A missing registry with no `claim.json` means no claims. A project home with only `station.json` (docked, or
+    stopped before its claim) never counts, so the first project dock's own check under the lock can't refuse
+    itself, and a dock that stops before its claim leaves every hook and MCP server working as before.
   - **The session's project:** `CLAUDE_PROJECT_DIR` (M4, M8); else stdin `cwd` for the hook, or the process cwd for
     the MCP server.
   - **The root reader** (shared by dock, the hook, the MCP server and status; it never runs git):
@@ -208,19 +232,45 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
     - the station MCP server refuses every call under `SUPERYAK_RUN=1` (S7 rule 1), which teamd sets for every
       worker (workers.py:391);
     - the hooks return at once for that value (hook.py:106);
-    - teamd's Claude worker settings deny `mcp__station` (added to the deny list at workers.py:308).
+    - teamd's Claude worker settings deny `mcp__station` (added to the deny list at workers.py:308), and deny reads
+      of `~/.superyak` through the file tools (S11).
   - Browser workers also run with `disableAllHooks` and `--strict-mcp-config` (workers.py:346, 375), and Codex workers
     switch the station off (workers.py:249-250).
 - **S9. Order of writes, and rollback.**
-  - Before the docking request, dock checks the mode and name (S2), finds the root (S6), refuses a root claimed by
-    another ship (full or partial match), and runs the git checks (S5). A refused project never creates a station
-    account.
-  - After docking, it runs those checks again, then writes in this order: the claim (registry entry and
-    `<home>/claim.json`, under the lock: a reservation), `info/exclude`, the local tool entry, the hooks, the Codex
-    profile, the service. Any failure rolls back what this run wrote, the claim last.
-  - A **project dock confirms the machine ship's hooks** in `~/.claude/settings.json` run this checkout's
-    `run_agent.py`, because the stand-down lives in that code; if they run another checkout's, dock refuses and says to
-    dock the machine ship again from this checkout.
+  - **Before the docking request**, dock checks the mode and name (S2), finds the root (S6), refuses a root claimed by
+    another ship (full or partial match), confirms the machine ship's wiring (below) and runs the git checks (S5),
+    writing nothing. A refused project never creates a station account.
+  - **While a docking is pending**, dock runs those checks again before each poll of the station (`Dock.run`'s loop,
+    dock.py:46-52).
+  - **After docking**, dock takes the registry lock, runs the checks again inside that hold, and writes the claim in
+    the same hold (S6): a reservation. Only then does it release the lock and write, in order: `info/exclude` (with
+    its real check, S5), the local tool entry, the hooks, the Codex profile, the service. Any failure there rolls back
+    what this run wrote, the claim last.
+  - **A check that fails once the station has the ship** (pending or docked) means dock writes no claim and stops.
+    It says plainly which check failed, that the ship `<name>` exists on the station, and how to clean up:
+    - **pending:** delete `<home>/docking.json`, then Andy runs `make station-deny ID=<short id>` on the Pi, or lets
+      it expire: a pending docking lasts 10 minutes (`DOCKING_LIFETIME = 600`, ships.py:8);
+    - **docked:** `agent/run_agent.py undock --home ~/.superyak/ships/<name>`, from the superyak checkout.
+    
+    It also says that `<home>/station.json` is kept, so a retry after fixing the cause uses the same key with no new
+    docking, and that undock works with no claim (S10).
+  - **A project dock confirms the machine ship's wiring runs this checkout's code**, because the stand-down and the
+    S7 refusals live in it. All three must name this checkout's `run_agent.py`:
+    - the machine ship's hooks in `~/.claude/settings.json`;
+    - its user-scope `station`, read with `claude mcp get station` from `~/.superyak` (R7);
+    - the `[mcp_servers.station]` table in `~/.codex/config.toml`.
+    
+    If any names another checkout's, dock refuses. Docking the machine ship again doesn't fix it:
+    - `install_hooks` replaces only hooks that name this checkout's `run_agent.py` (`is_station_hook`,
+      install.py:68-79), so the other checkout's SessionStart and UserPromptSubmit entries stay and new ones are added
+      beside them;
+    - `register_claude` and `register_codex` skip when a `station` entry exists (install.py:224, 181).
+    
+    So the refusal names both checkouts, lists each of the other checkout's entries (each hook command in
+    `~/.claude/settings.json`, the user `station`, the Codex table), and gives two fixes:
+    - remove those entries (the hook entries from `~/.claude/settings.json`, `claude mcp remove --scope user
+      station`, the table from `~/.codex/config.toml`), then dock the machine ship again from this checkout;
+    - or run the project dock from the other checkout, where this same check runs against that checkout's code.
 - **S10. Undocking one ship never touches another.** A ship's undock does only these things, in this order:
   - revokes its own key;
   - stops and removes its own service (S4);
@@ -230,14 +280,29 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
     `<root>/.claude/settings.local.json`;
   - removes its own Codex entry: the machine ship's `[mcp_servers.station]`, or only the `station` table of
     `~/.codex/<name>.config.toml`, deleting that file only if it is then empty;
-  - removes its own home's files;
-  - removes its own claim last, from the registry and its home. Undock finds the claim in `<home>/claim.json`, so it
-    works when the registry is unreadable. The machine ship's undock leaves `~/.superyak/ships/` and `projects.json`
-    alone.
+  - removes its own home's files, except `claim.json`;
+  - removes its own claim last, in one lock hold: `<home>/claim.json`, then its registry entry, writing `[]` when it
+    was the last (S6: `projects.json` is never deleted). Undock finds the claim in `<home>/claim.json`, so it works
+    when the registry is unreadable, and with no claim at all (a dock that stopped before claiming). The machine
+    ship's undock leaves `~/.superyak/ships/` and `projects.json` alone.
 - **S11. Keys, provenance and authority.** Per-ship keys on one Unix user separate provenance, not authority: an
   unsandboxed session of either ship can read both homes, so spec A's per-ship grants must not assume one ship can't
-  use another's key. teamd workers and builder runs can't read them (the OS sandbox denies reads of `$HOME`,
-  workers.py:328), and read-only runs have no shell and read only their workspace snapshot (runs.py:47-62).
+  use another's key. teamd workers, builder runs and read runs all take their settings from
+  `claude_sandbox_settings` (workers.py; runs.py:52, 67). Two separate controls keep the homes unread:
+  - **Bash:** the OS sandbox denies reads of `$HOME` (workers.py:328). It covers Bash and what Bash starts, not
+    Claude Code's own file tools, and read runs have no shell (runs.py:47-62).
+  - **Read, Grep and Glob** go by permission rules. Their allow rules cover only the run's own folders
+    (workers.py:304-305), but a worker in a claimed project also loads the main checkout's `settings.local.json`
+    (M1, S8), where the lead's approvals and allow rules merge in. So `claude_sandbox_settings` also denies
+    `Read(//<home>/.superyak/**)` and `Grep(//<home>/.superyak/**)`, beside `mcp__station` (R19). A deny rule wins
+    over an allow rule from any source.
+  - **Rule syntax.** Permission docs, "Read and Edit": `//path` is an absolute path. `~/path` is home-relative and
+    would match too. A single-slash `/path` anchors to the directory of the settings source, which for a
+    `--settings <file>` is that file's own folder, so it must not be used here. `<home>` is `Path.home()`, written
+    the way workers.py:304-305 builds its allow rules (`"%s(/%s/**)" % (tool, path)` with an absolute path).
+  - **Glob:** file permission checks use only `Edit` and `Read` path rules. The errors docs ("is not matched by file
+    permission checks") say to write a Glob path rule as `Read(path)`, so the `Read` deny is the one that applies to
+    Glob too. Mac acceptance confirms it (below).
 - **S12. The Andy step is one docking approval.** The Bricks lead runs, from its own session:
 
   ```
@@ -254,28 +319,42 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 - **R1.** With no `--project` and no `--home`, every path, label, unit, log, tool registration, Codex block, watcher
   argument, hook command and undock call is byte-for-byte today's.
 - **R2.** The mode pairing, the station's name rule, the fixed homes and the no-collision rule (S2) are checked before
-  any network call or write.
+  any network call or write. The collision and "home holds another ship" checks compare `--ship` with the `ship`
+  field (the username) of every local `station.json`, never `ship_name`.
 - **R3.** `--project` resolves through the root reader (S6). "No repository", or a root claimed by another ship (fully
   or partially), is refused before the docking request.
-- **R4.** The S5 checks run before the docking request and again before the first write. A symlinked `.claude`, a
-  tracked or unignorable file, or any unexpected git exit means nothing is written.
+- **R4.** The S5 checks run before the docking request, before each poll of a pending docking, and inside the lock
+  hold that writes the claim; none of those runs writes anything, `info/exclude` included (the dry `check-ignore`
+  with a temporary `core.excludesFile`). After the claim, the real append and `check-ignore` run before anything is
+  written in the work tree. A symlinked `.claude`, a tracked or unignorable file, or any unexpected git exit refuses.
 - **R5.** Dock's git calls in a repository use `--git-dir`, `--work-tree`, `HARDENED_GIT` and `_isolated_git_env()`,
-  and no other form.
+  and no other form, with the repository root as their working directory.
 - **R6.** The settings backup is written to the ship's home, never into the repository.
 - **R7.** Local tool registration replaces only a local `station` in that project, and dock confirms its scope and
   args. The machine ship's `claude mcp` calls run with `~/.superyak` as their working directory.
 - **R8.** The registry is written only under its lock, through `write_private`, as a whole-file replace; each claim is
-  also in `<home>/claim.json`.
-- **R9.** The claim is the first write after docking; any later failure rolls back this run's writes, the claim last.
-  The refusal checks (R2-R4) run again under the registry lock just before the claim is written. If that second
-  check fails after the station account exists (pending or docked), dock writes no claim, stops, and says so
-  plainly: which check failed, that the ship `<name>` now exists on the station, and the exact step that removes
-  it (`make station-deny ID=<short id>` while it is pending, or `undock --home <home>` once docked), so no ship
-  is left behind unannounced. Test: `test_a_claim_lost_to_a_race_names_the_orphan_ship`.
-- **R10.** A project dock refuses when the machine ship's hooks run another checkout's `run_agent.py`. The refusal
-  names both checkouts and both fixes: dock the machine ship again from this checkout, or run the project dock
-  from the other one. Test: `test_project_dock_checks_the_machine_hook_checkout` asserts both paths and both fixes
-  appear.
+  also in `<home>/claim.json`. Adding a claim writes the registry entry, then `claim.json`, in one lock hold;
+  removing one deletes `claim.json`, then the entry, in one hold. `projects.json` is never deleted once it exists:
+  the last removal writes `[]`.
+- **R9.** The claim is the first write after docking, made in the same lock hold as the last run of the refusal
+  checks (R2-R4, R10); any later failure rolls back this run's writes, the claim last. The checks also run before
+  each poll of a pending docking. If a check fails once the station has the ship (pending or docked), dock writes no
+  claim, stops, and says plainly:
+  - which check failed;
+  - that the ship `<name>` exists on the station;
+  - how to clean up: while pending, delete `<home>/docking.json`, then `make station-deny ID=<short id>` on the Pi,
+    or let it expire in 10 minutes; once docked, `agent/run_agent.py undock --home ~/.superyak/ships/<name>`;
+  - that `<home>/station.json` is kept for a retry, and that undock works with no claim.
+
+  So no ship is left behind unannounced.
+- **R10.** A project dock refuses when any of the machine ship's hooks in `~/.claude/settings.json`, its user-scope
+  `station`, or its `[mcp_servers.station]` table in `~/.codex/config.toml` names another checkout's `run_agent.py`.
+  The refusal:
+  - names both checkouts and lists each of the other checkout's entries;
+  - gives two fixes: remove those entries, then dock the machine ship again from this checkout; or run the project
+    dock from the other checkout.
+  
+  It never offers "dock the machine ship again" alone, since that leaves the other entries in place (S9).
 - **R11.** (Test rule) every dock test that checks git status points `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL` at empty
   temporary files and sets `GIT_CONFIG_NOSYSTEM=1`, so a machine's global ignore (M5) can't make it pass.
 - **R12.** The hook reads stdin once, for both `session_id` and `cwd`; `session_from_stdin` stays as a thin wrapper.
@@ -286,11 +365,14 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 - **R15.** A partial match is a stale claim: both hooks print nothing, both MCP servers refuse naming it, `status`
   names it, and a project re-dock refreshes it.
 - **R16.** An unreadable registry (S6) gives the fixed SessionStart line, nothing at a prompt, MCP refusals naming the
-  file, a dock refusal naming it, and a `status` line naming it before any config read or network call.
+  file, a dock refusal naming it, and a `status` line naming it before any config read or network call. A missing
+  registry is unreadable only while some `~/.superyak/ships/*/claim.json` exists; a project home with only
+  `station.json` never makes it so.
 - **R17.** The root reader follows S6 exactly and never runs git.
 - **R18.** The station MCP server applies S7's rules on every call, re-reading the registry each time, and sends no
   instructions at `initialize` when it would refuse.
-- **R19.** teamd's Claude workers deny `mcp__station`.
+- **R19.** Every settings file `claude_sandbox_settings` builds (teamd's Claude workers, builder runs, read runs) denies
+  `mcp__station`, `Read(//<home>/.superyak/**)` and `Grep(//<home>/.superyak/**)` (S11).
 - **R20.** The Codex profile file is never overwritten: dock changes only its `station` table, and undock removes only
   that table and deletes the file only if empty.
 - **R21.** Undock touches only its own ship (S10), removes the claim last, and works without the registry.
@@ -301,7 +383,8 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 ## Compatibility
 
 - The machine ship is unchanged (R1). The Pi, the Mac and the Legion Go need nothing beyond pulling main.
-- `projects.json` doesn't exist until a project ship docks; with no project ship, a missing file means no claims.
+- `projects.json` doesn't exist until a project ship claims; with no `claim.json` anywhere, a missing file means no
+  claims. Once written it is never deleted.
 - A hook installed by an older agent ignores claims. The hook runs from the checkout, so pulling main picks up the
   stand-down; R10 makes a project dock check it. The hook command string doesn't change, so `settings.json` isn't
   rewritten.
@@ -312,9 +395,11 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 
 - Nothing with a key goes into a repository: tools live in `~/.claude.json`, keys and the settings backup in the
   ship's home (0600), and hooks name only a config path. Every git check fails closed (R4).
-- Git runs in the repository only hardened and isolated (R5). The hook and the MCP server never run git (R17).
+- Git runs in the repository only hardened and isolated, from the root (R5). The hook and the MCP server never run
+  git (R17).
 - Per-ship keys separate provenance, not authority (S11).
-- Workers can't act as a project ship, through three independent layers (S8).
+- Workers can't act as a project ship, through three independent layers (S8), and can't read the ships' homes
+  through Bash (the OS sandbox) or the file tools (the `~/.superyak` denies, R19).
 - The registry fails closed, loudly (R16).
 
 ## Testing (each check fails without its feature)
@@ -327,23 +412,40 @@ directory):
   calls (R1).
 - `test_modes_names_and_collisions_are_refused_before_the_network`: `--home ships/<n>` without `--project`,
   `--project` with `~/.superyak`, a name outside `[a-z][a-z0-9-]{1,31}`, a `--ship` already in another local home,
-  and a home holding another ship are each refused with no request and no write (R2).
+  and a home holding another ship are each refused with no request and no write. Every fixture `station.json` has
+  `ship` ≠ `ship_name` (`serenity` / `Serenity`, as the station writes them), so `--ship serenity --project X` must
+  be refused through `ship` (R2).
 - `test_service_names_per_ship`: the plist label and file, the unit file and name, and the log for a project ship; the
   machine ship's are unchanged (S4).
 - `test_dock_writes_nothing_tracked`: starting with an existing `settings.local.json`, a project dock leaves
   `git status --porcelain` empty, the backup is in the ship's home, and `info/exclude` holds both lines once after two
-  docks. A tracked file, a negation rule and a symlinked `.claude` are each refused with nothing written (R4, R6, R11).
+  docks. A tracked file, a negation rule and a symlinked `.claude` are each refused with nothing written, and a
+  refusal before the request leaves `info/exclude` byte-for-byte unchanged (R4, R6, R11).
 - `test_dock_git_is_hardened`: every git call dock makes in the repository carries `--git-dir`, `--work-tree`, every
-  `HARDENED_GIT` option and the isolated environment; a repository `core.fsmonitor` command never runs (R5).
+  `HARDENED_GIT` option and the isolated environment, and records the root as its working directory, including when
+  dock runs from a subdirectory; from a subdirectory a tracked `settings.local.json` is refused as tracked. A
+  repository `core.fsmonitor` command never runs (R5).
 - `test_refused_project_never_reaches_the_station`: a folder that is no repository, a claimed root and a tracked file
   each fail before any docking request (R3, R4).
-- `test_claim_first_and_rollback`: a failure at each later write leaves no claim and none of this run's files (R9).
+- `test_claim_first_and_rollback`: a failure at each later write leaves no claim and none of this run's files,
+  `info/exclude` lines included only when this run added them; the last checks and the claim are recorded inside
+  one hold of a fake lock (R9).
+- `test_a_claim_lost_to_a_race_names_the_orphan_ship`: a check that starts failing while a docking is pending stops
+  dock before its next poll; one that fails inside the lock after docking writes no claim. Each message names the
+  check, the ship and its cleanup (`<home>/docking.json`, `make station-deny ID=…` and the 10-minute expiry while
+  pending; `undock --home …` once docked), and `<home>/station.json` is still there (R9).
+- `test_a_docked_ship_without_a_claim_keeps_the_hooks_on`: with a `ships/<n>/station.json`, no `claim.json` and no
+  `projects.json`, the machine ship's hook and MCP server act normally and a first project dock's checks pass inside
+  the lock; with a `claim.json` and no `projects.json`, the registry is unreadable (R8, R16).
 - `test_local_station_registration_checks_scope`: dock ignores an existing user `station`, replaces a stale local
   one, and refuses when the confirmation shows the wrong scope or args (R7).
 - `test_machine_registration_runs_outside_claims`: a machine dock's `claude mcp` calls record `~/.superyak` as their
   working directory, even when dock runs inside a claimed project (R7).
-- `test_project_dock_checks_the_machine_hook_checkout`: a machine hook naming another checkout's `run_agent.py` is
-  refused (R10).
+- `test_project_dock_checks_the_machine_ship_checkout`: a machine hook, a user-scope `station` and a Codex
+  `[mcp_servers.station]` table naming another checkout's `run_agent.py` are each refused. The message names both
+  checkouts, lists each foreign entry, gives both fixes, and never offers docking the machine ship again alone.
+  After the listed entries are removed and the machine ship is docked again from this checkout, the project dock
+  passes (R10).
 - `test_machine_ship_hook_stands_down_in_a_claimed_project`: from the root, a subdirectory and a worktree, via
   `CLAUDE_PROJECT_DIR` and via stdin `cwd` when it's unset, it prints nothing, makes no station call and doesn't touch
   the unreachable marker or session files (R13, R14).
@@ -356,15 +458,17 @@ directory):
 - `test_project_root_reader_layouts`: a worktree through `commondir`, a relative `gitdir:`, a broken back-link, a
   submodule, a bare repository with worktrees and a `--separate-git-dir` checkout give the S6 answers; an unreadable
   `.git` means no repository; `git` is never called (a failing `git` is first on `PATH`) (R17).
-- `test_unreadable_registry_is_loud`: unreadable, schema-invalid, and missing-with-a-ship-home each give the fixed
+- `test_unreadable_registry_is_loud`: unreadable, schema-invalid, and missing-with-a-`claim.json` each give the fixed
   SessionStart line, nothing at a prompt, no station call, MCP refusals and a dock refusal naming the file, and a
-  `status` line before any config read (R16).
+  `status` line before any config read. Undocking the last project ship leaves `projects.json` holding `[]` (R8,
+  R16).
 - `test_station_tools_refuse_inside_runs`: with `SUPERYAK_RUN=1`, every tool call is refused even when the session's
   `settings.local.json` holds an allow rule for the station tools; with it unset or `hook`, calls go through (R18).
 - `test_mcp_server_follows_the_claims`: the machine server refuses inside a claim with the `codex -p` hint; the project
   server refuses outside its own claim; neither sends instructions at `initialize` then; a claim added between two
   calls applies to the second (R18).
-- `test_workers_deny_the_station`: teamd's Claude worker settings carry `mcp__station` in `deny` (R19).
+- `test_workers_deny_the_station`: the settings `claude_sandbox_settings` builds for a teamd worker, a builder run and
+  a read run carry `mcp__station`, `Read(//<home>/.superyak/**)` and `Grep(//<home>/.superyak/**)` in `deny` (R19).
 - `test_codex_profile_is_never_overwritten`: a foreign profile file keeps its other tables; a `station` table for
   another home is refused; undock removes only the table and deletes the file only when empty (R20).
 - `test_undock_one_ship_leaves_the_other`: the recorded calls and remaining files show the other ship untouched, both
@@ -380,9 +484,10 @@ get both `CLAUDE_PROJECT_DIR` and stdin):
 - A real session with both ships' hooks live, from the root, a subdirectory and a worktree: the project ship's hook
   speaks and the machine ship's prints nothing.
 - "Don't ask again" on a station tool lands in `settings.local.json`; a teamd worker in a worktree still has every
-  station call refused (S8).
-- Codex: where it starts MCP servers (decides S7 (a) or (b)), and `codex -p <name> mcp list` shows the project ship's
-  station (M6).
+  station call refused (S8). With an allow rule for `Read(~/.superyak/**)` added to that file, the worker's Read,
+  Grep and Glob of `~/.superyak` are still denied (S11).
+- Codex: re-checks M8 (where Codex starts MCP servers) on the Codex version present; a different answer stops the
+  build at step 5. `codex -p <name> mcp list` shows the project ship's station (M6).
 - `/cd`: in a session started in hyper-bricks, `/cd` out and back; in one started outside, `/cd` in. Pass: the tools'
   ship and the hook's ship are the same after each `/cd` (whichever ship that is); record which.
 
@@ -391,13 +496,15 @@ get both `CLAUDE_PROJECT_DIR` and stdin):
 1. Modes, names and collisions; `--home`; the config path through dock and `install_all`; `--workspace` default None;
    `install_service` with label, unit and log; per-ship service names; the first-install mention cursor (S2–S4; R1,
    R2, R22).
-2. The root reader, the registry, its lock and `<home>/claim.json`; `status` checks the registry first (S6; R8, R16,
-   R17).
+2. The root reader, the registry, its lock, `<home>/claim.json` and their write order; the missing-registry rule
+   from `claim.json`; `status` checks the registry first (S6; R8, R16, R17).
 3. Hardened git checks and local wiring: local tools from the root, machine registration from `~/.superyak`, hooks
-   with the backup in the home, the Codex profile; the reservation and rollback; the machine-hook checkout check (S5,
-   S9; R3–R7, R9–R11, R20).
+   with the backup in the home, the Codex profile; the dry and real exclude checks; the checks before each poll and
+   inside the claim's lock hold; the reservation, rollback and cleanup messages; the machine ship checkout check over
+   hooks, user `station` and Codex table (S5, S9; R3–R7, R9–R11, R20).
 4. The hook's stand-down, stale claims and the loud registry (S6; R12–R16).
-5. Mac acceptance for Codex's server cwd, then the MCP server's rules and the worker deny rule (S7, S8; R18, R19).
+5. Mac acceptance re-checks M8 (Codex's server cwd), then the MCP server's rules and the worker deny rules (S7, S8,
+   S11; R18, R19).
 6. Undock (S10, R21).
 7. The rest of Mac acceptance, then the Bricks lead docks with `--no-service` (S12).
 
@@ -409,7 +516,8 @@ Adding serenity-bricks's watcher later means docking again without `--no-service
 backlog. These change on that day and must be settled first:
 - Its runs work in hyper-bricks with `--setting-sources project,local` (runs.py:124): they load the repository's
   tracked project settings, so other committers' hooks run unsandboxed and their allow rules apply, plus the lead's
-  local approvals. Consider `disableAllHooks` for those runs and a deny on `~/.superyak/**`.
+  local approvals. Consider `disableAllHooks` for those runs. The `~/.superyak` read denies are already in their
+  settings (R19).
 - Read runs show hyper-bricks's HEAD to anyone in serenity-bricks's rooms, bridged rooms included.
 - `git worktree add` in runs.py:192 and 203 isn't hardened, so checkout hooks would run.
 - Builder branches `lighthouse/serenity-bricks/*` appear in the shared clone.
@@ -456,7 +564,7 @@ backlog. These change on that day and must be settled first:
 | Should-fix: registry schema and missing file | S6 registry | R16 | `test_unreadable_registry_is_loud` |
 | Should-fix: hook kind from home, stand-down first | S1, S6 | R13, R14 | `test_machine_ship_hook_stands_down_in_a_claimed_project` |
 | Should-fix: machine registration cwd | S5 | R7 | `test_machine_registration_runs_outside_claims` |
-| Should-fix: stale checkout | S9 | R10 | `test_project_dock_checks_the_machine_hook_checkout`; Known limits |
+| Should-fix: stale checkout | S9 | R10 | `test_project_dock_checks_the_machine_ship_checkout`; Known limits |
 | Should-fix: watcher day | The watcher day | — | — |
 | Should-fix: security wording | S11 | — | — |
 | Should-fix: Codex profile | S5 Codex, S10 | R20 | `test_codex_profile_is_never_overwritten` |
@@ -466,3 +574,17 @@ backlog. These change on that day and must be settled first:
 | Rio Grande 1: hardened git | S5 Git | R5 | `test_dock_git_is_hardened` |
 | Rio Grande 2: MCP refusal | S7 | R18 | `test_mcp_server_follows_the_claims`; Mac acceptance (Codex cwd) |
 | Rio Grande 3: R9 loud | S6 loud registry | R16 | `test_unreadable_registry_is_loud` |
+
+## Review map (revision 3: Rio Grande's check, message fe96a6ec)
+
+| Item | Where | Requirement | Test |
+|---|---|---|---|
+| Required 1: collision guard compares `ship_name` | S2 | R2 | `test_modes_names_and_collisions_are_refused_before_the_network` (`ship` ≠ `ship_name` fixtures) |
+| Required 2: missing registry vs claim order | S6 registry, one lock hold, never deleted; S10; Compatibility | R8, R16 | `test_a_docked_ship_without_a_claim_keeps_the_hooks_on`, `test_unreadable_registry_is_loud` |
+| Required 3: ruling 1 in full | S9 (checks before each poll and inside the claim's lock hold; cleanup message; `station.json` kept; undock with no claim) | R4, R9 | `test_a_claim_lost_to_a_race_names_the_orphan_ship`, `test_claim_first_and_rollback` |
+| Required 4: R10's fix that doesn't work | S9 | R10 | `test_project_dock_checks_the_machine_ship_checkout` |
+| Small 5: R10 checks the user `station` and Codex table too | S9 | R10 | `test_project_dock_checks_the_machine_ship_checkout` |
+| Small 6: `info/exclude` written before the request | S5 (dry `check-ignore` with a temporary `core.excludesFile`; the real append after the claim) | R4 | `test_dock_writes_nothing_tracked` |
+| Small 7: S11 overstated what workers can read | S8, S11 (`Read`/`Grep` denies on `~/.superyak`, syntax cited) | R19 | `test_workers_deny_the_station`; Mac acceptance |
+| Nit 8: Mac acceptance wording | Mac acceptance, Build order 5 | — | Mac acceptance |
+| Build note: git from the root | S5 Git | R5 | `test_dock_git_is_hardened` |
