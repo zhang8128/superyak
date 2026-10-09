@@ -496,6 +496,14 @@ get both `CLAUDE_PROJECT_DIR` and stdin):
   R19's denies in place, a browser lane worker's `node` must still load its preload (the lane acceptance run shows it,
   since every lane node requires it). If it doesn't, narrow R19's `Read` and `Grep` denies to
   `~/.superyak/station.json` and `~/.superyak/ships/**`, which hold the keys, and re-run.
+  - Measured on this Mac, 2026-10-09 (Claude Code 2.1.295, Seatbelt), with a throwaway fake home holding a fake
+    `station.json` and a fake preload at the lane's path, `claude -p` with `--settings` (sandbox on, unsandboxed
+    commands off), `--setting-sources project`, `--strict-mcp-config` and `SUPERYAK_RUN` set, running `cat` on both
+    through sandboxed Bash: with only the permission denies plus `allowRead` of the preload, the preload read and
+    `station.json` gave "Operation not permitted"; with the lane's `denyRead` of the whole home plus `allowRead` of
+    the preload, the same with and without R19's denies. So the deny reaches Seatbelt on the Mac too, and an explicit
+    `allowRead` under it still wins: the lane preload keeps loading. The real-node check in the lane acceptance run
+    still confirms it end to end.
 - `/cd`: in a session started in hyper-bricks, `/cd` out and back; in one started outside, `/cd` in. Pass: the tools'
   ship and the hook's ship are the same after each `/cd` (whichever ship that is); record which.
 
