@@ -685,19 +685,22 @@ def listeners(env, held, monkeypatch):
     proc_pidpath maps pids to executables, and the block at 41000 is a live lane's (this test holds t1's lock)."""
     state = {"sockets": list(SOCKETS), "header": HEADER_PID, "netstat_rc": 0, "netstat": None,
              "lsof": [(900, "127.0.0.1:41000"), (901, "[::1]:41001")], "lsof_rc": 0, "exe": dict(EXE),
-             "lsof_rounds": []}                         # one-off lsof answers, used up first, round by round
+             "lsof_rounds": [], "netstat_rounds": [], "lsof_stderr": "",   # one-off answers, round by round
+             "environ": {}}                              # pid -> the environment the _environ seam reports
 
     def run(cmd, timeout=60):
         if cmd[0].endswith("netstat"):
-            text = state["netstat"] if state["netstat"] is not None else netstat_text(state["sockets"], state["header"])
+            sockets = state["netstat_rounds"].pop(0) if state["netstat_rounds"] else state["sockets"]
+            text = state["netstat"] if state["netstat"] is not None else netstat_text(sockets, state["header"])
             return Ran(state["netstat_rc"], text)
         if cmd[0].endswith("lsof"):
             pairs = state["lsof_rounds"].pop(0) if state["lsof_rounds"] else state["lsof"]
-            return Ran(state["lsof_rc"], lsof_text(pairs))
+            return Ran(state["lsof_rc"], lsof_text(pairs), state["lsof_stderr"])
         raise AssertionError(cmd)
     monkeypatch.setattr(lane, "_run", run)
     monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/" + name)
     monkeypatch.setattr(lane, "pid_path", lambda pid: state["exe"].get(pid))
+    monkeypatch.setattr(lane, "_environ", lambda pid: state["environ"].get(pid))
     monkeypatch.setattr(lane, "port_free", lambda port: True)
     held("t1")
     assert lane.allocate_block("t1", "kaylee") == 41000
@@ -799,6 +802,13 @@ def test_netstat_or_lsof_failing_fails(listeners, monkeypatch):
     HEADER_PID + "\ntcp4       0      0  127.0.0.1.41000        *.*                    LISTEN\n",
     HEADER_PID + "\ntcp4       0      0  127.0.0.1.41000        *.*                    LISTEN  131072  131072  -\n",
     HEADER_PROCESS + "\ntcp4  0  0  127.0.0.1.41000  *.*  LISTEN  1  2  131072  131072  node:pid\n",
+    # full-length rows (netstat_text makes them), so the pid check itself is what refuses
+    netstat_text([("tcp4", "127.0.0.1.41000", "LISTEN", 4242, "node")], HEADER_PROCESS).replace("4242", "pid"),
+    netstat_text([("tcp4", "127.0.0.1.41000", "LISTEN", 4242, "node")], HEADER_PID).replace("4242", "-"),
+    netstat_text([("tcp4", "garbage", "LISTEN", 4242, "node")], HEADER_PID),
+    netstat_text([("tcp4", "garbage", "LISTEN", 4242, "node")], HEADER_PROCESS),
+    netstat_text([("tcp", "127.0.0.1.41000", "LISTEN", 4242, "node")], HEADER_PID),     # a bare "tcp" proto
+    netstat_text([("tcp4", "127.0.0.1.41000", "LISTEN", 4242, "node")], HEADER_PID.replace("pid ", "pid process:pid ", 1)),
 ])
 def test_a_netstat_it_doesnt_recognise_fails_closed(listeners, text):
     listeners["netstat"] = text
@@ -811,7 +821,9 @@ def test_a_listener_lsof_sees_and_netstat_doesnt_fails(listeners):
     enumeration can't be trusted."""
     listeners["lsof"].append((905, "127.0.0.1:41003"))
     ok, problems = lane.listeners_ok()
-    assert not ok and problems == ["lsof shows pid 905 listening on port 41003, which netstat doesn't list"]
+    assert not ok and problems == [
+        "lsof shows pid 905 listening on port 41003, which netstat doesn't list (a socket several processes share, "
+        "such as a pre-fork server or inherited descriptors, fails until only one holds it)"]
 
 
 def test_a_socket_that_opens_between_netstat_and_lsof_doesnt_fail_the_check(listeners):
@@ -874,6 +886,13 @@ def test_lsof_output_is_parsed_with_ipv6():
     ("/System/Library/Frameworks/Python.framework/Versions/3.9/bin/python3.9", "an interpreter is never approved"),
     ("/usr/libexec/perl5.30", "an interpreter is never approved"),
     ("/usr/sbin/zsh", "an interpreter is never approved"),
+    ("/System/Volumes/Data/opt/homebrew/bin/ollama", "not on the sealed system volume"),
+    ("/System/Volumes/Data/Users/andy/bin/tool", "not on the sealed system volume"),
+    ("/usr/libexec/cups/backend/ipp", "not on the sealed system volume"),
+    ("/System/Library/Caches/com.apple.x/helper", "not on the sealed system volume"),
+    ("/System/Library/AssetsV2/com.apple.MobileAsset/x/bin/helper", "not on the sealed system volume"),
+    ("/System/Library/Speech/Voices/helper", "not on the sealed system volume"),
+    ("/System/Library/CoreServices/CoreTypes.bundle/Contents/Library/helper", "not on the sealed system volume"),
     ({"executable": "/usr/libexec/rapportd", "port": 49152}, "only Apple programs"),  # D10's old shape
     (49152, "only Apple programs"),
 ])
@@ -883,7 +902,7 @@ def test_the_approved_list_holds_only_apple_program_paths(env, entry, reason):
     with pytest.raises(lane.LaneWait, match=reason):
         lane.load_approved()
     ok, problems = lane.listeners_ok()
-    assert not ok and reason.split()[0] in problems[0]
+    assert not ok and reason in problems[0]
 
 
 def test_the_approved_list_must_be_a_readable_list(env):
@@ -895,3 +914,135 @@ def test_the_approved_list_must_be_a_readable_list(env):
             lane.load_approved()
     approve(["/usr/libexec/rapportd", "/sbin/launchd", CONTROL_CENTER, "/usr/sbin/sshd"])
     assert lane.load_approved() == {"/usr/libexec/rapportd", "/sbin/launchd", CONTROL_CENTER, "/usr/sbin/sshd"}
+
+
+# ---------- Task 4, fix round 1 ----------
+
+REAL_RUN = lane._run
+
+
+def test_bytes_that_are_not_utf8_fail_the_check_closed_and_never_raise(listeners, monkeypatch):
+    """Critical 1: a 16-byte process name cut inside a multibyte character is not UTF-8. The real _run reads it, and
+    listeners_ok answers (False, ...) instead of raising past Task 8's watch."""
+    text = netstat_text([("tcp4", "127.0.0.1.9000", "LISTEN", 4321, "aaaa")], HEADER_PROCESS)
+    script = "import sys; sys.stdout.buffer.write(%r.replace(b'aaaa', b'a' * 15 + b'\\xc3'))" % text.encode()
+
+    def run(cmd, timeout=60):
+        if cmd[0].endswith("netstat"):
+            return REAL_RUN([sys.executable, "-c", script])
+        return Ran(0, lsof_text([]))
+    monkeypatch.setattr(lane, "_run", run)
+    ok, problems = lane.listeners_ok()
+    assert ok is False and problems
+
+
+def test_a_parse_error_fails_the_check_closed(listeners, monkeypatch):
+    monkeypatch.setattr(lane, "_netstat_rows", lambda text: (_ for _ in ()).throw(ValueError("boom")))
+    ok, problems = lane.listeners_ok()
+    assert ok is False and len(problems) == 1
+
+
+def test_a_netstat_row_it_cannot_read_is_named_as_the_row_not_the_header(listeners):
+    listeners["netstat"] = netstat_text([("tcp4", "garbage", "LISTEN", 4242, "node")], HEADER_PID)
+    ok, problems = lane.listeners_ok()
+    assert not ok and "row" in problems[0] and "header" not in problems[0]
+
+
+def test_a_process_name_with_a_line_separator_is_one_row():
+    text = netstat_text([("tcp4", "127.0.0.1.9000", "LISTEN", 4321, "a\x0bb c")], HEADER_PROCESS)
+    assert lane.parse_netstat(text) == [{"pid": 4321, "command": "a b c", "host": "127.0.0.1", "port": 9000}]
+
+
+def test_the_sealed_volume_is_checked_on_a_mac_only(env, monkeypatch):
+    approve(["/usr/libexec/rapportd"])
+    devices = {"/usr/sbin": 1, "/usr/libexec/rapportd": 1}
+    monkeypatch.setattr(lane, "_device", lambda path: devices[path])
+    assert lane.load_approved() == {"/usr/libexec/rapportd"}                     # Linux: skipped
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    assert lane.load_approved() == {"/usr/libexec/rapportd"}
+    devices["/usr/libexec/rapportd"] = 2                                         # another volume
+    with pytest.raises(lane.LaneWait, match="not on the sealed system volume"):
+        lane.load_approved()
+
+
+def test_round_two_reads_netstat_again(listeners):
+    """Review: a pair lsof sees that round 2's netstat lists is no failure."""
+    listeners["exe"][905] = "/opt/homebrew/bin/node"
+    listeners["lsof"].append((905, "127.0.0.1:41003"))
+    listeners["netstat_rounds"] = [list(SOCKETS), SOCKETS + [("tcp4", "127.0.0.1.41003", "LISTEN", 905, "node")]]
+    assert lane.listeners_ok() == (True, [])
+
+
+def test_lsofs_own_failures_fail_the_check(listeners, monkeypatch):
+    real_run, real_which = lane._run, lane.shutil.which
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: None if name == "lsof" else real_which(name, path=path))
+    assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
+    monkeypatch.setattr(lane.shutil, "which", real_which)
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: None if cmd[0].endswith("lsof") else real_run(cmd, timeout))
+    assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
+    monkeypatch.setattr(lane, "_run", real_run)
+    listeners["lsof_rc"], listeners["lsof_stderr"] = 1, "lsof: WARNING: can't stat() fuse file system"
+    assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
+
+
+def test_the_cross_check_message_mentions_shared_sockets(listeners):
+    listeners["lsof"].append((905, "127.0.0.1:41003"))
+    assert "several processes share" in lane.listeners_ok()[1][0]
+
+
+def lane_tmp():
+    return str(lane._parent_path() / lane.lane_hash("t1", "kaylee") / "tmp")
+
+
+def test_a_lane_process_listening_beyond_loopback_fails_on_any_port(listeners):
+    """Important 3: a lane process is a pid whose environment holds CLAUDE_CODE_TMPDIR=<a live lane's tmp>."""
+    listeners["environ"][902] = ["HOME=/h", "CLAUDE_CODE_TMPDIR=" + lane_tmp()]
+    listeners["exe"][902] = "/opt/homebrew/bin/node"
+    listeners["sockets"].append(("tcp4", "*.9100", "LISTEN", 902, "node"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and len(problems) == 1 and "port 9100" in problems[0] and "lane" in problems[0]
+    listeners["sockets"][-1] = ("tcp4", "192.168.1.20.9100", "LISTEN", 902, "node")
+    assert lane.listeners_ok() == (True, [])       # not reachable, so not counted at all
+    listeners["sockets"][-1] = ("tcp4", "127.0.0.1.9100", "LISTEN", 902, "node")
+    ok, problems = lane.listeners_ok()             # on loopback it is an ordinary unapproved listener
+    assert problems == ["node (pid 902) listens on port 9100 (/opt/homebrew/bin/node)"]
+
+
+def test_a_lane_process_on_a_lan_address_outside_its_block_is_checked(listeners, monkeypatch):
+    listeners["environ"][902] = ["CLAUDE_CODE_TMPDIR=" + lane_tmp()]
+    listeners["exe"][902] = "/opt/homebrew/bin/node"
+    monkeypatch.setattr(lane, "reachable", lambda host: True)                     # the address counts as listed
+    listeners["sockets"].append(("tcp4", "192.168.1.20.9100", "LISTEN", 902, "node"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and [p for p in problems if "192.168.1.20 port 9100, beyond loopback" in p]
+
+
+def test_a_non_lane_process_on_a_lan_address_is_still_skipped(listeners):
+    listeners["environ"][777] = ["CLAUDE_CODE_TMPDIR=/tmp/elsewhere/tmp"]
+    listeners["sockets"].append(("tcp4", "192.168.1.20.9100", "LISTEN", 777, "ollama"))
+    assert lane.listeners_ok() == (True, [])
+
+
+def test_kern_procargs2_is_read_past_argv_to_the_environment():
+    raw = (2).to_bytes(4, sys.byteorder) + b"/opt/homebrew/bin/node\0\0\0node\0-e\0A=1\0CLAUDE_CODE_TMPDIR=/x\0\0junk"
+    assert lane._parse_procargs2(raw) == ["A=1", "CLAUDE_CODE_TMPDIR=/x"]
+    assert lane._parse_procargs2(b"\0") == []
+
+
+def test_environ_reads_a_real_process_on_linux_and_none_for_a_missing_one():
+    if sys.platform == "linux":
+        assert any(item.startswith("PATH=") for item in lane._environ(os.getpid()) or [])
+    assert lane._environ(2 ** 22 + 12345) is None
+
+
+@pytest.mark.parametrize("host, counts", [("::0", True), ("0:0:0:0:0:0:0:0", True), ("::ffff:0.0.0.0", True),
+                                          ("::ffff:127.0.0.1", True), ("::ffff:192.168.1.1", False),
+                                          ("fe80::1", False), ("100.101.102.103", False)])
+def test_reachable_reads_addresses_not_strings(host, counts):
+    assert lane.reachable(host) is counts
+
+
+def test_pid_1_is_explained_to_the_lead(listeners):
+    approve([p for p in APPROVED if p != "/sbin/launchd"])
+    ok, problems = lane.listeners_ok()
+    assert problems == ["launchd (pid 1) listens on port 22 (/sbin/launchd), launchd holds it for a socket-activated job"]

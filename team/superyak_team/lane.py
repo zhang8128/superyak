@@ -485,12 +485,17 @@ def block_of(team_id, worker_id):
     return entry["base"] if entry else None
 
 
+def live_lanes():
+    """(base, lane folder name) of every lane whose teamd is running."""
+    with _registry_lock():
+        data = _read_registry()
+    return sorted((entry["base"], key) for key, entry in data.items() if team_alive(str(entry.get("team", ""))))
+
+
 def live_blocks():
     """Bases of the blocks whose teamd is running. A dead teamd's block stays held until it is reclaimed, but it no
     longer counts as a lane for the listener check: a listener there fails, which fails closed."""
-    with _registry_lock():
-        data = _read_registry()
-    return sorted(entry["base"] for entry in data.values() if team_alive(str(entry.get("team", ""))))
+    return [base for base, _ in live_lanes()]
 
 
 # ---------- the worker's environment (spec: Worker environment) ----------
@@ -514,6 +519,10 @@ def worker_env(path, base, endpoint):
 
 CHECK_EVERY_S = 60
 APPROVED_DIRS = ("/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/")
+# Under those folders, but not on the sealed system volume: the writable Data volume and the firmlink targets.
+NOT_SEALED = ("/System/Volumes/", "/usr/libexec/cups/", "/System/Library/Caches/", "/System/Library/Assets/",
+              "/System/Library/AssetsV2/", "/System/Library/PreinstalledAssets/",
+              "/System/Library/PreinstalledAssetsV2/", "/System/Library/Speech/")
 WILDCARDS = ("*", "0.0.0.0", "::")
 INTERPRETER_RE = re.compile(r"(python|perl|ruby|php|node|deno|bun|lua|tclsh|wish|osascript|java|swift"
                             r"|(ba|z|da|k|tc|c|fi)?sh)[0-9.]*")
@@ -523,6 +532,21 @@ NETSTAT_HEAD = ["Proto", "Recv-Q", "Send-Q", "Local Address", "Foreign Address",
 def approved_path():
     """Only the person edits this file; it is never a team key."""
     return teamlib.team_home() / "lane-listeners.json"
+
+
+def _device(path):
+    return os.lstat(path).st_dev
+
+
+def _sealed(entry):
+    """On a Mac the program must sit on the same volume as /usr/sbin (the sealed system volume). Elsewhere this is
+    skipped; a path that can't be examined is not sealed."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        return _device(entry) == _device("/usr/sbin")
+    except OSError:
+        return False
 
 
 def load_approved():
@@ -543,6 +567,9 @@ def load_approved():
         if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPROVED_DIRS):
             raise LaneWait("%s: %r refused: only Apple programs in /System, /usr/libexec, /usr/sbin or /sbin may "
                            "listen while a lane runs" % (path, entry))
+        if entry.startswith(NOT_SEALED) or "/CoreTypes.bundle/Contents/Library/" in entry or not _sealed(entry):
+            raise LaneWait("%s: %r refused: not on the sealed system volume, so a person could change what it runs"
+                           % (path, entry))
         if INTERPRETER_RE.fullmatch(os.path.basename(entry).lower()):
             raise LaneWait("%s: %r refused: an interpreter is never approved" % (path, entry))
         out.add(entry)
@@ -552,8 +579,8 @@ def load_approved():
 def _run(cmd, timeout=60):
     """Every command lane.py runs outside the sandbox goes through here (the tests' seam). None when it can't run."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
+        return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
 
 
@@ -561,7 +588,7 @@ def parse_lsof(text):
     """`lsof -F pn` output (or `-F pcn`): one dict per listening socket, {pid, command, host, port}. IPv6 hosts come
     in brackets ([::1]:41000), a wildcard as *."""
     out, pid, command = [], None, ""
-    for line in text.splitlines():
+    for line in text.split("\n"):
         if not line:
             continue
         field, value = line[0], line[1:]
@@ -579,29 +606,26 @@ def parse_lsof(text):
     return out
 
 
-def parse_netstat(text):
-    """`netstat -anv -p tcp` (macOS): every listening TCP socket, whoever owns it, as {pid, command, host, port}.
-    Addresses end in .<port> (127.0.0.1.631, *.5000, ::1.631, fe80::1%lo0.631). The pid column is found from the
-    header: older macOS calls it `pid`, newer `process:pid` (values like rapportd:571). A header it doesn't
-    recognise, or a listening line it can't read, gives None, so the check fails closed."""
-    lines = text.splitlines()
+def _netstat_rows(text):
+    """(rows, why): why is "header" or "row" when the text can't be read, so the lead is told which."""
+    lines = text.split("\n")
     header = next((line for line in lines if line.startswith("Proto")), None)
     if header is None:
-        return None
+        return None, "header"
     columns = header.replace("Local Address", "Local\0Address").replace("Foreign Address", "Foreign\0Address").split()
     columns = [c.replace("\0", " ") for c in columns]
     if columns[:6] != NETSTAT_HEAD or ("pid" in columns) == ("process:pid" in columns):
-        return None
+        return None, "header"
     named = "process:pid" in columns
     index = columns.index("process:pid" if named else "pid")
     trailing = len(columns) - index - 1                 # the columns after it, counted from the header
     out = []
     for line in lines:
         fields = line.split()
-        if len(fields) < 6 or fields[0] not in ("tcp4", "tcp6", "tcp46") or fields[5] != "LISTEN":
+        if len(fields) < 6 or fields[5] != "LISTEN" or not fields[0].startswith("tcp"):
             continue
-        if len(fields) < index + 1 + trailing:
-            return None
+        if fields[0] not in ("tcp4", "tcp6", "tcp46") or len(fields) < index + 1 + trailing:
+            return None, "row"
         host, sep, port = fields[3].rpartition(".")
         if named:                                       # a process name may hold spaces: "Google Chrome He:4321"
             found = re.fullmatch(r"(.*):([0-9]+)", " ".join(fields[index:len(fields) - trailing]))
@@ -609,9 +633,17 @@ def parse_netstat(text):
         else:
             command, pid = "", fields[index]
         if not sep or not host or not port.isdigit() or not pid.isdigit():
-            return None
+            return None, "row"
         out.append({"pid": int(pid), "command": command, "host": host, "port": int(port)})
-    return out
+    return out, ""
+
+
+def parse_netstat(text):
+    """`netstat -anv -p tcp` (macOS): every listening TCP socket, whoever owns it, as {pid, command, host, port}.
+    Addresses end in .<port> (127.0.0.1.631, *.5000, ::1.631, fe80::1%lo0.631). The pid column is found from the
+    header: older macOS calls it `pid`, newer `process:pid` (values like rapportd:571). A header it doesn't
+    recognise, or a listening line it can't read (an unknown tcp* proto too), gives None, so the check fails closed."""
+    return _netstat_rows(text)[0]
 
 
 def is_loopback(host):
@@ -635,20 +667,27 @@ def reachable(host):
         address = ipaddress.ip_address(host.split("%", 1)[0])
     except ValueError:
         return True
+    if address.is_unspecified:
+        return True
     mapped = getattr(address, "ipv4_mapped", None)
-    return mapped is not None and mapped in ipaddress.ip_network("127.0.0.0/8")
+    return mapped is not None and (mapped.is_loopback or mapped.is_unspecified)
+
+
+def _read_netstat():
+    """(rows, why): see _netstat_rows; why is "run" when netstat itself failed."""
+    netstat = shutil.which("netstat", path=SYSTEM_PATH)
+    if not netstat:
+        return None, "run"
+    r = _run([netstat, "-anv", "-p", "tcp"])
+    if r is None or r.returncode != 0:
+        return None, "run"
+    return _netstat_rows(r.stdout)
 
 
 def read_listeners():
     """Every listening TCP socket on the machine, root's included (netstat sees them; lsof run as the user doesn't),
     or None when netstat fails or prints something this check doesn't know."""
-    netstat = shutil.which("netstat", path=SYSTEM_PATH)
-    if not netstat:
-        return None
-    r = _run([netstat, "-anv", "-p", "tcp"])
-    if r is None or r.returncode != 0:
-        return None
-    return parse_netstat(r.stdout)
+    return _read_netstat()[0]
 
 
 def lsof_listeners():
@@ -687,13 +726,32 @@ def listeners_ok():
     The check is machine-wide, so it takes no team."""
     try:
         approved = load_approved()
-        blocks = live_blocks()
+        lanes = live_lanes()
     except LaneRefused as e:
         return False, [str(e)]
+    try:
+        return _check(approved, lanes)
+    except ValueError as e:                             # anything unreadable fails closed, never raises
+        return False, ["the listener check could not read what it was given (%s), so it fails closed"
+                       % e.__class__.__name__]
+
+
+def _lane_process(pid, tmps):
+    """Whether this pid's environment holds exactly CLAUDE_CODE_TMPDIR=<a live lane's tmp folder>."""
+    env = _environ(pid) or []
+    return any("CLAUDE_CODE_TMPDIR=" + tmp in env for tmp in tmps)
+
+
+def _check(approved, lanes):
+    blocks = [base for base, _ in lanes]
+    tmps = [str(_parent_path() / key / "tmp") for _, key in lanes]
     missing, listeners = None, None
     for attempt in range(2):                            # a socket that opened or closed between the two reads
-        listeners = read_listeners()                    # is gone from the second round
+        listeners, why = _read_netstat()                # is gone from the second round
         if listeners is None:
+            if why == "row":
+                return False, ["netstat failed: it printed a listening row this check can't read, so the listener "
+                               "check fails closed"]
             return False, ["netstat failed, or printed a header this check doesn't know, so the listener check "
                            "fails closed"]
         seen = lsof_listeners()
@@ -703,8 +761,10 @@ def listeners_ok():
         missing = lacking if missing is None else missing & lacking
         if not missing:
             break
-    problems = ["lsof shows pid %d listening on port %d, which netstat doesn't list" % pair for pair in sorted(missing)]
-    paths = {}
+    problems = ["lsof shows pid %d listening on port %d, which netstat doesn't list (a socket several processes "
+                "share, such as a pre-fork server or inherited descriptors, fails until only one holds it)" % pair
+                for pair in sorted(missing)]
+    paths, lane_pids = {}, {}
     for item in listeners:
         port, host, pid = item["port"], item["host"], item["pid"]
         in_lane = any(base <= port < base + BLOCK for base in blocks)
@@ -714,12 +774,59 @@ def listeners_ok():
             paths[pid] = pid_path(pid)
         exe = paths[pid]
         name = "%s (pid %d)" % (item["command"] or (os.path.basename(exe) if exe else "?"), pid)
+        launchd = ", launchd holds it for a socket-activated job" if pid == 1 else ""
         if exe is None:
-            problems.append("%s listens on %s port %d, and its program can't be identified" % (name, host, port))
-        elif in_lane:
+            problems.append("%s listens on %s port %d, and its program can't be identified%s"
+                            % (name, host, port, launchd))
+            continue
+        if not in_lane and not is_loopback(host):
+            if pid not in lane_pids:
+                lane_pids[pid] = _lane_process(pid, tmps)
+            if lane_pids[pid]:
+                problems.append("%s, a lane's process, listens on %s port %d, beyond loopback (%s)"
+                                % (name, host, port, exe))
+                continue
+        if in_lane:
             if not is_loopback(host):
                 problems.append("%s listens on %s port %d, beyond loopback, in a lane's block (%s)"
                                 % (name, host, port, exe))
         elif exe not in approved:
-            problems.append("%s listens on port %d (%s)" % (name, port, exe))
+            problems.append("%s listens on port %d (%s)%s" % (name, port, exe, launchd))
     return not problems, sorted(set(problems))
+
+
+def _parse_procargs2(raw):
+    """KERN_PROCARGS2's buffer: argc, the executable's path, padding, argc arguments, then the environment."""
+    if len(raw) < 4:
+        return []
+    argc = int.from_bytes(raw[:4], sys.byteorder)
+    parts = raw[4:].split(b"\0")
+    i = 1
+    while i < len(parts) and parts[i] == b"":
+        i += 1
+    env = []
+    for part in parts[i + argc:]:
+        if not part:
+            break
+        env.append(part.decode("utf-8", "replace"))
+    return env
+
+
+def _environ(pid):
+    """A process's environment as NAME=value strings, or None: KERN_PROCARGS2 on macOS, /proc on Linux."""
+    if sys.platform != "darwin":
+        try:
+            data = Path("/proc/%d/environ" % pid).read_bytes()
+        except OSError:
+            return None
+        return [s.decode("utf-8", "replace") for s in data.split(b"\0") if s]
+    try:
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    except OSError:
+        return None
+    mib = (ctypes.c_int * 3)(1, 49, int(pid))           # CTL_KERN, KERN_PROCARGS2
+    size = ctypes.c_size_t(1 << 20)
+    buf = ctypes.create_string_buffer(size.value)
+    if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
+        return None
+    return _parse_procargs2(buf.raw[:size.value])
