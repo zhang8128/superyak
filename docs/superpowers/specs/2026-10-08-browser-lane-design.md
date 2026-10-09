@@ -172,7 +172,8 @@ With `lane=None`, the output is byte-for-byte what it is today.
   test can print it, and `teamlib.redact()` doesn't recognise it.
   - teamd removes the secret string from everything it forwards or stores: worker summaries, `team_post` and its
     Slack mirror, lead messages, `events.jsonl`, and the broker's stderr when it is shown.
-  - The broker's stderr is kept in `<lane>/b` and is never posted. Its last lines reach the lead only after this scrub.
+  - The broker's stderr is kept in teamd's own folder (`teams/<t>/workers/<w>/broker-stderr.log`, mode 0600), never in
+    the lane, and is never posted. Its last lines reach the lead only after this scrub.
 
 **The broker** (`team/superyak_team/lane.py`, plus `team/superyak_team/lane_broker.js`, which is spike 4's script):
 - **When it starts:** teamd starts it at the lane's first turn, after the listener check. It runs as
@@ -303,7 +304,8 @@ the Mac.
 
 **Process cleanup.** When a lane ends, teamd sends SIGTERM, then after 5 s SIGKILL, to the broker's group and to every
 process of this uid that either listens on a port in the lane's block or has its cwd or an open file under the lane
-(`lsof +D`). This catches Playwright's detached webServer and dev servers, which `killpg` on the worker misses.
+(`lsof -nP -a -u <uid> -F pn`, matched by string prefix with a trailing `/`, never walking the lane folder), or whose
+environment holds the lane's exact `CLAUDE_CODE_TMPDIR`. This catches Playwright's detached webServer and dev servers, which `killpg` on the worker misses.
 
 **Briefs.**
 - `team/superyak_team/roles/browser-lane.md` is a new file, appended to the initial prompt only for browser
