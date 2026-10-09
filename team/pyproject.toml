@@ -24,6 +24,7 @@ ignore-vcs = true
 only-include = [
     "superyak_team/__init__.py",
     "superyak_team/lane.py",
+    "superyak_team/lane_broker.js",
     "superyak_team/lane/broker.sb.tmpl",
     "superyak_team/lane/browsers.json",
     "superyak_team/lane/preload.cjs",

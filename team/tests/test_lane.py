@@ -2306,3 +2306,366 @@ def test_one_leftover_that_cant_be_removed_does_not_hide_the_next(profile_paths,
     assert not (env["home"] / "Library/LaunchAgents/superyak-lane-probe.plist").exists()
     assert any(n == "leftover" and "plist" in d for n, _, d in rows) and any(n == "cleanup" for n, _, _ in rows)
     (env["home"] / "superyak-lane-probe.txt").unlink()
+
+
+# ---------- Task 7: the broker, process cleanup, diagnostics and the secret ----------
+
+NODE = shutil.which("node")
+# Linux stand-in for sandbox-exec: record the inline profile ("-p <profile>") in a file of the test's, then run the
+# rest (without the PWD the shell adds). The broker's environment is built from nothing, so the path is in the script.
+FAKE_SANDBOX_EXEC = '#!/bin/sh\nprintf %%s "$2" > \'%s\'\nshift 2\nexec /usr/bin/env -u PWD "$@"\n'
+# A stand-in for playwright-core: launchServer listens where it is told, records what it was given, and starts a
+# child DETACHED, in its own process group, as Playwright starts Chrome (processLauncher: detached on every platform
+# but Windows); server.process() is that child. A FAIL file makes it fail the way Playwright does, quoting the
+# endpoint, secret and all.
+FAKE_PLAYWRIGHT = r"""
+const net = require('net'), fs = require('fs'), path = require('path'), { spawn } = require('child_process');
+exports.chromium = { launchServer: async (o) => {
+  const out = process.env.TMPDIR;
+  fs.writeFileSync(path.join(out, 'env.json'), JSON.stringify(Object.keys(process.env).sort()));
+  fs.writeFileSync(path.join(out, 'options.json'), JSON.stringify(o));
+  if (fs.existsSync(path.join(__dirname, 'FAIL'))) throw new Error('launchServer failed at ws://' + o.host + ':' + o.port + o.wsPath);
+  const child = spawn('sleep', ['300'], { stdio: 'ignore', detached: true });
+  fs.writeFileSync(path.join(out, 'child.pid'), String(child.pid));
+  const srv = net.createServer().listen(o.port, o.host);
+  await new Promise(resolve => srv.on('listening', resolve));
+  const stubborn = fs.existsSync(path.join(__dirname, 'STUBBORN'));   // a browser that ignores the close
+  return { wsEndpoint: () => 'ws://' + o.host + ':' + o.port + o.wsPath, process: () => child,
+           close: () => stubborn ? new Promise(() => {}) : new Promise(r => { child.kill(); srv.close(r); }) };
+} };
+"""
+
+
+@pytest.fixture
+def broker_parts(env, tmp_root, held, monkeypatch):
+    if not NODE:
+        pytest.skip("needs node")
+    fake = env["tmp"] / "sandbox-exec"
+    fake.write_text(FAKE_SANDBOX_EXEC % (env["tmp"] / "profile.sb"))
+    fake.chmod(0o755)
+    monkeypatch.setattr(lane, "SANDBOX_EXEC", str(fake))
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 1)
+    pw = env["tmp"] / "playwright-core-1.55.0"
+    pw.mkdir()
+    (pw / "index.js").write_text(FAKE_PLAYWRIGHT)
+    shell = lane.browsers_root() / "chromium_headless_shell-1243"
+    shell.mkdir()
+    for name, value in (("NODE_OPTIONS", "--require /evil.cjs"), ("PW_TEST_CONNECT_WS_ENDPOINT", "ws://evil"),
+                        ("PLAYWRIGHT_BROWSERS_PATH", "/Users/me/Library/Caches/ms-playwright")):
+        monkeypatch.setenv(name, value)
+    held("t1")
+    path = lane.ensure_lane("t1", "kaylee")
+    base = lane.allocate_block("t1", "kaylee")
+    stderr = teamlib.team_dir("t1") / "workers" / "kaylee" / "broker-stderr.log"
+    return {"path": path, "base": base, "node": Path(os.path.realpath(NODE)), "pw": pw, "shell": shell,
+            "stderr": stderr, "profile": env["tmp"] / "profile.sb"}
+
+
+def start(parts):
+    return lane.start_broker(parts["path"], parts["base"], parts["node"], parts["pw"], parts["shell"], parts["stderr"])
+
+
+def gone(pid, timeout=5):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_the_brokers_environment_holds_exactly_the_listed_keys(env, monkeypatch):
+    """Spec unit test 5: even when teamd's own environment has NODE_OPTIONS, PW_TEST_CONNECT_WS_ENDPOINT and another
+    PLAYWRIGHT_BROWSERS_PATH; the broker gets teamd's own browsers folder."""
+    monkeypatch.setenv("NODE_OPTIONS", "--require /evil.cjs")
+    monkeypatch.setenv("PW_TEST_CONNECT_WS_ENDPOINT", "ws://evil")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "/Users/me/Library/Caches/ms-playwright")
+    got = lane.broker_env("/tmp/sy-lane-501/0123456789/b", "/pw")
+    assert got == {"PATH": "/usr/bin:/bin", "HOME": str(env["home"]), "TMPDIR": "/tmp/sy-lane-501/0123456789/b",
+                   "MAC_CHROMIUM_TMPDIR": "/tmp/sy-lane-501/0123456789/b",
+                   "PLAYWRIGHT_BROWSERS_PATH": str(teamlib.team_home() / "broker" / "browsers"),
+                   "SUPERYAK_BROKER_PLAYWRIGHT": "/pw"}                    # the secret goes on stdin
+
+
+def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts):
+    broker = start(broker_parts)
+    b, base = broker_parts["path"] / "b", broker_parts["base"]
+    try:
+        assert re.fullmatch(r"[0-9a-f]{64}", broker.secret) and broker.port == base + 31
+        assert broker.endpoint == "ws://127.0.0.1:%d/%s" % (base + 31, broker.secret)
+        assert json.loads((b / "env.json").read_text()) == sorted(
+            ["PATH", "HOME", "TMPDIR", "MAC_CHROMIUM_TMPDIR", "PLAYWRIGHT_BROWSERS_PATH", "SUPERYAK_BROKER_PLAYWRIGHT"])
+        assert json.loads((b / "options.json").read_text()) == {
+            "headless": True, "host": "127.0.0.1", "port": base + 31, "wsPath": "/" + broker.secret,
+            "chromiumSandbox": False}
+        socket.create_connection(("127.0.0.1", base + 31), timeout=5).close()
+        assert os.getpgid(broker.proc.pid) == broker.proc.pid                   # its own process group
+        child = int((b / "child.pid").read_text())
+        assert os.getpgid(child) == child                                       # the "browser" leads another one
+        pids, groups = lane.family(broker.proc.pid)
+        assert child in pids and groups == {broker.proc.pid, child}
+        for pid in (broker.proc.pid, child):                                    # Chrome inherits no secret
+            assert broker.secret.encode() not in Path("/proc/%d/environ" % pid).read_bytes()
+    finally:
+        lane.stop_broker(broker)
+    assert broker.proc.poll() is not None and gone(child)
+    assert lane.port_free(base + 31)
+
+
+def test_starting_a_broker_ends_what_still_uses_its_folder(broker_parts):
+    """Review (N6): a process left in b/ (an old broker's helper, or something that wrote there) ends before a new
+    broker starts there."""
+    b = broker_parts["path"] / "b"
+    squatter = spawn_python("import time; time.sleep(60)", b)
+    try:
+        time.sleep(0.3)
+        broker = start(broker_parts)
+        lane.stop_broker(broker)
+        assert gone(squatter.pid)
+    finally:
+        squatter.kill()
+        squatter.wait()
+
+
+def test_the_brokers_family_is_its_descendants_and_the_groups_they_lead(monkeypatch):
+    """Review (N3): Chrome is node's child but leads its own group; a helper orphaned to launchd stays in Chrome's
+    group. A group that no family member leads is never touched."""
+    table = ("  700     1   700  501\n"      # the broker (node), its own group
+             "  701   700   701  501\n"      # Chrome, detached
+             "  702   701   701  501\n"      # a renderer
+             "  703     1   701  501\n"      # a helper whose parent died: still in Chrome's group
+             "  704   700   900  501\n"      # a child that joined someone else's group: itself, not that group
+             "  900     1   900  501\n"      # that someone else
+             "  801     1   801  501\n")     # unrelated
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, table))
+    assert lane.family(700) == ({700, 701, 702, 703, 704}, {700, 701})
+
+
+def test_nothing_in_the_lane_decides_what_the_broker_is(broker_parts):
+    """Review: the profile goes inline and the script runs as node -e from teamd's package, so the lane's b/, which
+    the broker itself (and any process that can write /tmp) can write, holds neither."""
+    broker = start(broker_parts)
+    try:
+        b = broker_parts["path"] / "b"
+        assert not (b / "broker.sb").exists() and not (b / "lane_broker.js").exists()
+        profile = broker_parts["profile"].read_text()
+        assert profile == lane.render_profile(lane.lane_text(b), broker_parts["pw"], lane.browsers_root(),
+                                              broker_parts["shell"], broker_parts["node"], broker_parts["base"])
+    finally:
+        lane.stop_broker(broker)
+
+
+def test_stopping_a_broker_reaches_a_browser_in_its_own_group(broker_parts):
+    """Review (N3): Playwright starts Chrome detached, so killing node's group alone would leave a browser that
+    ignores the close. stop_broker ends every group its family leads."""
+    (broker_parts["pw"] / "STUBBORN").write_text("")
+    broker = start(broker_parts)
+    child = int((broker_parts["path"] / "b" / "child.pid").read_text())
+    lane.stop_broker(broker)
+    assert gone(child)
+
+
+def test_the_broker_exits_when_its_browser_dies(broker_parts):
+    """Review: a broker whose browser is gone exits, so teamd sees it dead and starts a new one at the next turn."""
+    broker = start(broker_parts)
+    try:
+        os.kill(int((broker_parts["path"] / "b" / "child.pid").read_text()), signal.SIGKILL)
+        end = time.time() + 10
+        while time.time() < end and broker.alive():
+            time.sleep(0.05)
+        assert not broker.alive()
+    finally:
+        lane.stop_broker(broker)
+
+
+def test_a_broker_that_fails_is_refused_without_its_secret(broker_parts):
+    """Spec: the broker's stderr is kept (in teamd's own folder) and never posted; its last lines reach the lead only
+    after the scrub."""
+    (broker_parts["pw"] / "FAIL").write_text("")
+    with pytest.raises(lane.LaneRefused, match="the lane's browser didn't start") as refused:
+        start(broker_parts)
+    message = str(refused.value)
+    assert "[lane secret]" in message and not re.search(r"[0-9a-f]{64}", message)
+    assert re.search(r"[0-9a-f]{64}", broker_parts["stderr"].read_text())        # kept locally, in teamd's folder
+    assert not (broker_parts["path"] / "b" / "stderr.log").exists()
+    assert lane.port_free(broker_parts["base"] + 31)
+
+
+def test_the_brokers_stderr_never_goes_through_a_planted_link(broker_parts, env):
+    """Review: a stderr name swapped for a symlink to someone else's file, in the lane or in teamd's own folder,
+    leaves that file as it was."""
+    victim = env["home"] / ".zshrc"
+    victim.write_text("export SECRET=1\n")
+    os.symlink(victim, broker_parts["path"] / "b" / "stderr.log")
+    broker_parts["stderr"].parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(victim, broker_parts["stderr"])
+    (broker_parts["pw"] / "FAIL").write_text("")
+    with pytest.raises(lane.LaneRefused):
+        start(broker_parts)
+    assert victim.read_text() == "export SECRET=1\n"
+    assert not broker_parts["stderr"].is_symlink() and "launchServer failed" in broker_parts["stderr"].read_text()
+
+
+def spawn_python(code, cwd):
+    return subprocess.Popen([sys.executable, "-c", code], cwd=str(cwd), start_new_session=True,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def wait_listening(port, timeout=10):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+            return
+        except OSError:
+            time.sleep(0.05)
+    raise AssertionError("nothing listens on %d" % port)
+
+
+@pytest.mark.skipif(not shutil.which("lsof"), reason="needs lsof")
+def test_cleanup_ends_the_lanes_listeners_and_users_and_nothing_else(env, tmp_root, held, monkeypatch):
+    """Spec, process cleanup: a listener in the block and a process working under the lane (Playwright's detached
+    webServer, a dev server) end; a process outside the lane doesn't."""
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 1)
+    held("t1")
+    path = lane.ensure_lane("t1", "kaylee")
+    base = lane.allocate_block("t1", "kaylee")
+    server = spawn_python("import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', %d))\ns.listen()\n"
+                          "time.sleep(60)" % (base + 3), env["tmp"])
+    worker_child = spawn_python("import time; time.sleep(60)", path / "tmp")
+    bystander = spawn_python("import time; time.sleep(60)", env["tmp"])
+    try:
+        wait_listening(base + 3)
+        assert lane.cleanup_processes(path, base) is True
+        assert gone(server.pid) and gone(worker_child.pid)
+        assert bystander.poll() is None
+    finally:
+        for proc in (server, worker_child, bystander):
+            proc.kill()
+            proc.wait()
+
+
+@pytest.mark.skipif(not shutil.which("lsof"), reason="needs lsof")
+def test_a_lane_swapped_for_a_link_to_home_mid_cleanup_kills_nothing_there(env, tmp_root, monkeypatch):
+    """Review: cleanup matches lsof's names against the lane's own path, never walking or resolving the lane, so a
+    lane root swapped for a link to $HOME while cleanup runs touches nothing in $HOME."""
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 1)
+    path = lane.ensure_lane("t1", "kaylee")
+    (env["home"] / "notes.txt").write_text("mine\n")
+    in_home = spawn_python("import time; time.sleep(60)", env["home"])
+    real_run, swapped = lane._run, []
+
+    def run(cmd, timeout=60):
+        if not swapped:                                     # the swap lands while cleanup is running
+            shutil.rmtree(path)
+            os.symlink(env["home"], path)
+            swapped.append(True)
+        return real_run(cmd, timeout)
+    monkeypatch.setattr(lane, "_run", run)
+    try:
+        assert lane.cleanup_processes(path, None) is True
+        time.sleep(0.5)                                     # a signal would have landed by now
+        assert swapped and in_home.poll() is None
+        with pytest.raises(lane.LaneRefused, match="unsafe lane"):
+            lane.remove_lane(path)
+        assert (env["home"] / "notes.txt").read_text() == "mine\n"
+    finally:
+        in_home.kill()
+        in_home.wait()
+
+
+@pytest.mark.skipif(not os.path.exists("/proc/self/environ"), reason="reads /proc, as the Pi's tests do")
+def test_cleanup_ends_what_still_carries_the_lanes_environment(env, tmp_root, monkeypatch):
+    """Review (N4): a turn's setsid child holds nothing in the lane, but its environment still names the lane's
+    CLAUDE_CODE_TMPDIR. Only the exact value matches."""
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 1)
+    path = lane.ensure_lane("t1", "kaylee")
+    value = str(path / "tmp")
+
+    def started(with_value):
+        return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=str(env["tmp"]),
+                                env=dict(os.environ, CLAUDE_CODE_TMPDIR=with_value), start_new_session=True)
+    orphan, neighbour = started(value), started(value + "x")
+    try:
+        time.sleep(0.3)
+        assert lane.cleanup_processes(path, None, env=("CLAUDE_CODE_TMPDIR", value)) is True
+        assert gone(orphan.pid) and neighbour.poll() is None
+    finally:
+        for proc in (orphan, neighbour):
+            proc.kill()
+            proc.wait()
+
+
+def test_the_environment_match_never_takes_teamd_or_its_parents(monkeypatch):
+    """Review (N4): even if teamd's own environment carried the value, it and every process above it are spared."""
+    me, parent = os.getpid(), os.getppid()
+    table = "%d %d %d %d\n%d 1 %d %d\n4242 1 4242 %d\n4243 1 4243 %d\n" % (
+        me, parent, me, os.getuid(), parent, parent, os.getuid(), os.getuid(), os.getuid() + 1)
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, table))
+    monkeypatch.setattr(lane, "_environ", lambda pid: ["HOME=/h", "CLAUDE_CODE_TMPDIR=/tmp/sy-lane-1/abc/tmp"])
+    assert lane.env_pids("CLAUDE_CODE_TMPDIR", "/tmp/sy-lane-1/abc/tmp") == {4242}      # 4243 is another user's
+
+
+def test_cleanup_is_unfinished_when_lsof_cannot_say(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: None)
+    assert lane.cleanup_processes(path, 41000) is False
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/lsof")
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(2, ""))
+    assert lane.cleanup_processes(path, 41000) is False
+
+
+def test_denials_are_kept_only_for_the_brokers_process_group():
+    """Spec, diagnostics: by pid, never by name."""
+    lines = [
+        "2026-10-08 10:00:01.1 E  kernel[0:1] Sandbox: Mail(311) deny(1) file-read-data /Users/me/Library/Mail Downloads/payslip.pdf",
+        "2026-10-08 10:00:01.2 E  kernel[0:1] Sandbox: node(4410) deny(1) network-outbound 1.1.1.1:443",
+        "2026-10-08 10:00:01.3 E  kernel[0:1] Sandbox: chrome-headless-sh(5001) deny(1) mach-lookup com.apple.pasteboard.1",
+        "2026-10-08 10:00:01.4 E  kernel[0:1] Sandbox: node(5000) deny(1) file-read-data /Users/me/.zshrc",
+        "2026-10-08 10:00:01.5 E  kernel[0:1] Sandbox: chrome-headless-sh(5001) deny(1) mach-lookup com.apple.pasteboard.1",
+        "not a denial",
+    ]
+    assert lane.denials_for(lines, {5000, 5001}) == [
+        "chrome-headless-sh(5001): mach-lookup com.apple.pasteboard.1", "node(5000): file-read-data /Users/me/.zshrc"]
+
+
+def test_the_secret_is_scrubbed_from_text_and_files(tmp_path):
+    secret = "cd" * 32
+    endpoint = "ws://127.0.0.1:41031/" + secret
+    assert lane.scrub("connect failed: " + endpoint, [secret]) == "connect failed: ws://127.0.0.1:41031/[lane secret]"
+    assert lane.scrub("nothing here", []) == "nothing here"
+    events = tmp_path / "events.jsonl"
+    events.write_text(json.dumps({"type": "result", "result": "error at " + endpoint}) + "\n")
+    lane.scrub_file(events, [secret])
+    assert secret not in events.read_text() and "[lane secret]" in events.read_text()
+
+def test_prepare_broker_runs_for_real_without_deadlocking_on_the_install_lock(env, manifests, unpack, monkeypatch):
+    """Every other test stubs prepare_broker; this one runs the real thing, whose install lock the installers take
+    again inside it (the plan's old teamlib.locked on the same file deadlocked)."""
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    node = Path(os.path.realpath(NODE or sys.executable))
+    monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: node)
+    monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
+        fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
+    probe = env["tmp"] / "shellprobe"
+    fake_shell(probe)
+    record(manifests, "1243", lane.manifest_hash(probe))
+    result, errors = [], []
+
+    def run():
+        try:
+            result.append(lane.prepare_broker(env["repo"], base, [], fetch=Registry(tarball)))
+        except BaseException as e:                                      # reported below, never lost in the thread
+            errors.append(e)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(20)
+    assert not t.is_alive(), "prepare_broker deadlocked"
+    assert not errors, errors
+    node_bin, pw_dir, shell_dir = result[0]
+    assert node_bin == node and pw_dir == lane.broker_root() / "playwright-core-1.55.0"
+    assert shell_dir == lane.browsers_root() / "chromium_headless_shell-1243"
+

@@ -1523,3 +1523,356 @@ def self_check(node_bin, pw_dir, shell_dir, run=None):
         step("release the team lock", held.close)
         step("remove the lock file", lambda: _team_lock(team_id).unlink(missing_ok=True))
     return rows
+
+
+# ---------- the broker: start, stop, process cleanup, diagnostics (spec: The broker, Process cleanup) ----------
+
+START_TIMEOUT_S = 90
+KILL_GRACE_S = 5
+
+
+class Broker:
+    """A running broker: its process, which leads its own process group, its port (the block's last) and its secret,
+    32 random bytes, new for each broker."""
+
+    def __init__(self, proc, port, secret):
+        self.proc, self.port, self.secret = proc, port, secret
+
+    @property
+    def endpoint(self):
+        return "ws://127.0.0.1:%d/%s" % (self.port, self.secret)
+
+    def alive(self):
+        return self.proc.poll() is None
+
+
+def broker_env(b_dir, pw_dir):
+    """Built from nothing, never inherited, so no NODE_OPTIONS, PLAYWRIGHT_* or PW_* of teamd's can reach the broker.
+    The secret isn't here: it goes on the broker's stdin, so Chrome, which inherits this environment, never has it."""
+    b = str(b_dir)
+    return {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "TMPDIR": b, "MAC_CHROMIUM_TMPDIR": b,
+            "PLAYWRIGHT_BROWSERS_PATH": str(browsers_root()), "SUPERYAK_BROKER_PLAYWRIGHT": str(pw_dir)}
+
+
+def prepare_broker(repo, base_commit, worktrees, fetch=None):
+    """Everything a broker needs before it starts: lane_node, the pinned Playwright and the checked headless shell.
+    One teamd installs at a time. Returns (node_bin, pw_dir, shell_dir)."""
+    node_bin = check_lane_node(teamlib.load_config().get("lane_node"), worktrees)
+    with install_lock():  # Task 5 fix round: reentrant; teamlib.locked on the same file would deadlock
+        pw_dir = pinned_playwright(repo, base_commit, fetch)
+        shell_dir, revision = install_headless_shell(node_bin, pw_dir)
+        check_manifest(shell_dir, revision)
+    return node_bin, pw_dir, shell_dir
+
+
+def _drain(stream, lines):
+    for line in stream:
+        lines.put(line)
+    lines.put("")
+
+
+def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
+    """Start the lane's broker in its own process group and wait for its endpoint. The profile goes inline
+    (sandbox-exec -p) and the script runs as node -e from teamd's own package, with the port in argv, so nothing in
+    the lane, which hostile processes can write, decides what the broker is. Every process still using the lane's b/
+    ends first. sandbox-exec gets the resolved node binary, never a bare `node` (a deny-default profile refuses the
+    PATH search). Its stderr goes to stderr_path, in teamd's own folder, never the lane. A broker that doesn't start
+    is stopped, and LaneRefused carries the last lines of its stderr, scrubbed of the secret, plus its sandbox
+    denials (details)."""
+    b = Path(path) / "b"
+    b_text = lane_text(b)
+    if not cleanup_processes(b, None):
+        raise LaneRefused("lsof can't say which processes still use %s, so the lane's browser doesn't start" % b)
+    secret = secrets.token_hex(32)
+    port = base + BLOCK - 1
+    profile = render_profile(b_text, pw_dir, browsers_root(), shell_dir, node_bin, base)
+    source = (teamlib.package_dir() / "lane_broker.js").read_text()
+    stderr_path = Path(stderr_path)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    stream = start_denial_stream()
+    try:
+        err = _new_fd(str(stderr_path), 0o600)
+        try:
+            proc = subprocess.Popen([SANDBOX_EXEC, "-p", profile, str(node_bin), "-e", source, str(port)],
+                                    cwd=b_text, env=broker_env(b_text, pw_dir), stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=err, text=True, start_new_session=True)
+        finally:
+            os.close(err)
+        try:
+            proc.stdin.write(secret + "\n")
+            proc.stdin.flush()
+        except OSError:
+            pass                                        # it died already: the endpoint check below says so
+    except OSError as e:
+        stop_denial_stream(stream)
+        raise LaneRefused("the lane's browser can't start (%s)" % (e.strerror or e))
+    broker = Broker(proc, port, secret)
+    lines = queue.Queue()
+    threading.Thread(target=_drain, args=(proc.stdout, lines), daemon=True).start()
+    pids, first, deadline = {proc.pid}, None, time.monotonic() + START_TIMEOUT_S
+    while first is None and time.monotonic() < deadline:
+        try:
+            first = lines.get(timeout=0.5).strip()
+        except queue.Empty:
+            pids |= family(proc.pid)[0]
+    if first == "ENDPOINT " + broker.endpoint:
+        stop_denial_stream(stream)
+        return broker
+    exited = proc.poll()
+    pids |= family(proc.pid)[0]
+    stop_broker(broker)
+    denials = denials_for(stop_denial_stream(stream), pids)
+    log = stderr_path.read_text(errors="replace").splitlines()
+    tail = [line[:300] for line in log if not line.lstrip().startswith("at ")][-20:]
+    said = first or ("no endpoint within %d s" % START_TIMEOUT_S if exited is None
+                     else "the broker exited (%s) before its endpoint" % exited)
+    detail = scrub(teamlib.redact("\n".join([said] + tail)), [secret])
+    raise LaneRefused("the lane's browser didn't start: " + detail[-1500:],
+                      details=[scrub(line, [secret]) for line in denials])
+
+
+def _killpg(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def stop_broker(broker):
+    """Close its stdin (it closes the browser and exits), then SIGTERM every group and process of its family, then
+    after KILL_GRACE_S SIGKILL. The family is taken first, while node lives: once node exits, Chrome's parent is
+    launchd, and Chrome was never in node's group (Playwright launches it detached)."""
+    proc = broker.proc
+    pids, groups = family(proc.pid)
+    try:
+        proc.stdin.close()
+    except (OSError, ValueError):
+        pass
+    try:
+        proc.wait(timeout=KILL_GRACE_S)
+    except subprocess.TimeoutExpired:
+        pass
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for group in groups:
+            _killpg(group, sig)
+        for pid in pids:
+            if _alive(pid):
+                _kill(pid, sig)
+        deadline = time.monotonic() + KILL_GRACE_S
+        while sig == signal.SIGTERM and time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+            time.sleep(0.1)
+    try:
+        proc.wait(timeout=KILL_GRACE_S)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _process_table():
+    """(pid, ppid, pgid, uid) for every process, from ps; [] when ps can't say."""
+    r = _run(["/bin/ps", "-A", "-o", "pid=,ppid=,pgid=,uid="], timeout=10)
+    rows = []
+    for line in (r.stdout if r is not None and r.returncode == 0 else "").splitlines():
+        fields = line.split()
+        if len(fields) == 4 and all(f.isdigit() for f in fields):
+            rows.append(tuple(int(f) for f in fields))
+    return rows
+
+
+def family(root):
+    """The broker's processes: root, its descendants by ppid, and every process in a group one of them leads (Chrome
+    and its helpers: Playwright launches the browser detached, in its own group). Returns (pids, groups), the groups
+    being only those a member of the family leads."""
+    rows = _process_table()
+    children = {}
+    for pid, ppid, pgid, uid in rows:
+        children.setdefault(ppid, []).append(pid)
+    tree, stack = {root}, [root]
+    while stack:
+        for child in children.get(stack.pop(), []):
+            if child not in tree:
+                tree.add(child)
+                stack.append(child)
+    groups = {root} | {pgid for pid, ppid, pgid, uid in rows if pid in tree and pgid in tree}
+    return tree | {pid for pid, ppid, pgid, uid in rows if pgid in groups}, groups
+
+
+def _lane_prefixes(path):
+    """The names an open file under this lane path can have in lsof's output: the path as teamd names it, and with
+    the parent resolved. Nothing below the parent is ever resolved, so a lane swapped for a link to $HOME matches
+    nothing in $HOME. A parent that is a link refuses."""
+    path, parent = Path(path), _parent_path()
+    st = os.lstat(parent)
+    if stat.S_ISLNK(st.st_mode):
+        raise LaneRefused("unsafe lane folder %s (a symlink)" % parent)
+    return {str(path), os.path.join(os.path.realpath(parent), *path.relative_to(parent).parts)}
+
+
+def lane_pids(path, base):
+    """Processes of this uid that listen on a port in the lane's block (base None: no block was allocated), or have
+    their cwd or an open file under the lane. The files come from one `lsof -F pn` over all of this uid's open files,
+    matched by name: the lane folder is never walked. None when lsof can't say."""
+    lsof = shutil.which("lsof", path=SYSTEM_PATH)
+    if not lsof:
+        return None
+    uid, pids = str(os.getuid()), set()
+    if base is not None:
+        r = _run([lsof, "-nP", "-a", "-u", uid, "-iTCP:%d-%d" % (base, base + BLOCK - 1), "-sTCP:LISTEN", "-t"])
+        if r is None or r.returncode not in (0, 1):     # lsof exits 1 when it finds nothing
+            return None
+        pids |= {int(x) for x in r.stdout.split() if x.isdigit()}
+    try:
+        prefixes = _lane_prefixes(path)
+    except FileNotFoundError:
+        prefixes = set()                                # no parent: nothing can be open under the lane
+    except (OSError, LaneRefused):
+        return None
+    if prefixes:
+        r = _run([lsof, "-nP", "-a", "-u", uid, "-F", "pn"])
+        if r is None or r.returncode not in (0, 1):
+            return None
+        pid = None
+        for line in r.stdout.splitlines():
+            if line.startswith("p") and line[1:].isdigit():
+                pid = int(line[1:])
+            elif line.startswith("n") and pid is not None:
+                name = line[1:]
+                if any(name == prefix or name.startswith(prefix + "/") for prefix in prefixes):
+                    pids.add(pid)
+    pids.discard(os.getpid())
+    return pids
+
+
+def env_pids(name, value):
+    """This uid's processes whose environment holds exactly name=value: the lane's CLAUDE_CODE_TMPDIR finds what a
+    turn left behind in a new session (a setsid child), which neither the worker's group nor lsof's files would.
+    Never teamd itself or any process above it. None when ps can't say."""
+    rows = _process_table()
+    if not rows:
+        return None
+    parent = {pid: ppid for pid, ppid, pgid, uid in rows}
+    spared, pid = set(), os.getpid()
+    while pid and pid not in spared:
+        spared.add(pid)
+        pid = parent.get(pid, 0)
+    wanted = "%s=%s" % (name, value)
+    return {pid for pid, ppid, pgid, uid in rows
+            if uid == os.getuid() and pid not in spared and wanted in (_environ(pid) or [])}
+
+
+def _alive(pid):
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)            # reaps it if it is teamd's own child
+        if done:
+            return False
+    except ChildProcessError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _kill(pid, sig):
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def cleanup_processes(path, base, broker=None, env=None):
+    """When a lane ends (and before a broker starts in its b/): the broker, then every process found by lane_pids
+    (Playwright's detached webServer and dev servers, which killing the worker's group misses) and, with env as
+    (name, value), by env_pids. SIGTERM and after KILL_GRACE_S SIGKILL, then a second look for anything started
+    meanwhile. True once finished; False when lsof or ps couldn't say, so the block stays held."""
+    if broker is not None:
+        stop_broker(broker)
+
+    def found():
+        pids = lane_pids(path, base)
+        extra = env_pids(*env) if env else set()
+        return None if pids is None or extra is None else pids | extra
+    pids = found()
+    if pids is None:
+        return False
+    for pid in pids:
+        _kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + KILL_GRACE_S
+    while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+        time.sleep(0.1)
+    for pid in pids:
+        if _alive(pid):
+            _kill(pid, signal.SIGKILL)
+    again = found()
+    if again is None:
+        return False
+    for pid in again:
+        _kill(pid, signal.SIGKILL)
+    return True
+
+
+DENIAL_RE = re.compile(r"Sandbox: (.+?)\((\d+)\) deny\(\d+\) (\S+) ?(.*)$")
+
+
+def start_denial_stream():
+    """Sandbox denials as they happen (macOS only): `log show` after the fact caught nothing in spikes 1 and 2."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        return subprocess.Popen(["/usr/bin/log", "stream", "--style", "compact", "--predicate",
+                                 'eventMessage CONTAINS "Sandbox:" OR subsystem == "com.apple.sandbox.reporting"'],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+
+
+def stop_denial_stream(stream):
+    if stream is None:
+        return []
+    stream.terminate()
+    try:
+        out, _ = stream.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        stream.kill()
+        out, _ = stream.communicate()
+    return out.splitlines()
+
+
+def denials_for(lines, pids):
+    """Only the denials of these pids, the broker's process group. Never by name: a `node` prefix would match every
+    node on the Mac, and the stream sees every sandbox (spike 5 printed file names from Mail's downloads)."""
+    seen = []
+    for line in lines:
+        found = DENIAL_RE.search(line)
+        if not found or int(found.group(2)) not in pids:
+            continue
+        key = "%s(%s): %s %s" % (found.group(1).strip(), found.group(2), found.group(3), found.group(4)[:160])
+        if key not in seen:
+            seen.append(key)
+    return seen
+
+
+# ---------- the secret (spec: Worker environment) ----------
+
+def scrub(text, secrets_):
+    """Playwright's errors quote the whole endpoint, and teamlib.redact doesn't know the secret: remove it."""
+    text = text if isinstance(text, str) else str(text)
+    for secret in secrets_:
+        if secret:
+            text = text.replace(secret, "[lane secret]")
+    return text
+
+
+def scrub_file(path, secrets_):
+    """Rewrite a file teamd keeps (events.jsonl, stderr.log) without the secret. Only after the turn has ended."""
+    path = Path(path)
+    if not secrets_ or not path.is_file() or path.is_symlink():
+        return
+    text = path.read_text(errors="replace")
+    clean = scrub(text, secrets_)
+    if clean != text:
+        tmp = path.with_name(path.name + ".scrub")
+        _write_text(tmp, clean, 0o600)
+        os.replace(tmp, path)
