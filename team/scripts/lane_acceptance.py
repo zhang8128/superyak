@@ -254,26 +254,30 @@ def planted_settings(existing):
     return data
 
 
-def listener_rows(listeners, path_of, approved, owner=None):
+def listener_rows(listeners, path_of, approved, owner=None, names=None):
     """--list-listeners, from the listener check's own enumeration and rules: (pid, address, executable, verdict).
     "approvable" is exactly what lane.load_approved accepts (lane.approval_problem). Pid 1 is launchd holding a
     socket-activated job's socket; approving /sbin/launchd covers every such job until the job's own program first
     accepts a connection (then it is that program's). A listener bound to one address beyond loopback counts while a
-    lane runs when it is this user's, or whose it is can't be told (I3); `owner` gives a pid's uid."""
+    lane runs when it is this user's, or whose it is can't be told (I3); `owner` gives a pid's uid; `names` are the
+    loopback interfaces' names from the check's one getifaddrs reading (read now when not given)."""
     rows = []
     for item in listeners:
         exe = path_of(item["pid"])
         address = "%s:%d" % (item["host"], item["port"])
-        uid = owner(item["pid"]) if owner is not None and not lane.reachable(item["host"]) else None
-        if not lane.reachable(item["host"]) and owner is not None and uid is None:
+        if item["host"] == "*" and item.get("family") in (4, 6):
+            address += " (IPv%d)" % item["family"]           # a wildcard open for both families is two sockets
+        reach = lane.reachable(item["host"], names)
+        uid = owner(item["pid"]) if owner is not None and not reach else None
+        if not reach and owner is not None and uid is None:
             verdict = "stop it while a lane runs: whose it is can't be told"
-        elif not lane.reachable(item["host"]) and uid == os.getuid() and exe in approved:
+        elif not reach and uid == os.getuid() and exe in approved:
             verdict = "approved"
-        elif not lane.reachable(item["host"]) and uid == os.getuid() and exe and not lane.approval_problem(exe):
+        elif not reach and uid == os.getuid() and exe and not lane.approval_problem(exe):
             verdict = "approvable (yours, beyond loopback: it counts while a lane runs)"
-        elif not lane.reachable(item["host"]) and uid == os.getuid():
+        elif not reach and uid == os.getuid():
             verdict = "stop it while a lane runs: it is yours, beyond loopback"
-        elif not lane.reachable(item["host"]):
+        elif not reach:
             verdict = "doesn't count: a lane can't reach it"
         elif exe is None:
             verdict = "can't be identified: a lane waits"
@@ -2644,11 +2648,20 @@ def check_cleanup(report, when, w, pids, broker_pids):
 
 
 def list_listeners():
+    """--list-listeners. A refusal on the way (getifaddrs, lsof, nettop or ps) is one line, never a traceback."""
+    try:
+        _list_listeners()
+    except lane.LaneRefused as e:
+        sys.exit("the listener listing stopped: %s" % e)
+
+
+def _list_listeners():
     """What a lane could reach and who holds it, as the listener check sees it: the loopback scan of lo0's own
     addresses; each reachable port's owners named by lsof (this user) or nettop (others), identified by proc_pidpath;
     this user's listeners beyond loopback (I3); the live lane blocks; and every reachable port nobody names. A broken
-    approved list is shown as broken, and the rows still print."""
-    targets, notes, refusals = lane.loopback_targets()
+    approved list is shown as broken, and the rows still print. One getifaddrs reading serves the whole listing, and
+    nettop's rows of this user (judged by the check, never naming) aren't listed beside lsof's own."""
+    targets, notes, refusals, names = lane._loopback_view()
     for line in notes + refusals:
         print(line)
     if not targets:
@@ -2659,6 +2672,7 @@ def list_listeners():
     rows, sockets, failed = lane._named()
     if failed:
         sys.exit("; ".join(failed))
+    rows = [item for item in rows if not item.get("judge_only")]
     try:
         approved = lane.load_approved()
     except lane.LaneRefused as e:
@@ -2670,8 +2684,8 @@ def list_listeners():
     beyond = [item for item in rows if item["uid"] == os.getuid() and item not in served]
     uid_of = {item["pid"]: item["uid"] for item in rows}
     print("The scan reaches %d port(s) on %s.\n" % (len({port for _, port in reach}), ", ".join(by_label)))
-    found = listener_rows(served, lane.pid_path, approved) + listener_rows(beyond, lane.pid_path, approved,
-                                                                         owner=uid_of.get)
+    found = listener_rows(served, lane.pid_path, approved, names=names) + listener_rows(
+        beyond, lane.pid_path, approved, owner=uid_of.get, names=names)
     for pid, address, exe, verdict in found:
         print("pid %-7d %-26s %s  (%s)" % (pid, address, exe, verdict))
     try:

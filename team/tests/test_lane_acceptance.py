@@ -3,6 +3,7 @@ Pi. The run itself is macOS only: Serenity runs it, and it is the spec's Mac acc
 import importlib.util
 import json
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -812,6 +813,53 @@ def test_list_listeners_survives_a_broken_approved_list_and_shows_what_nobody_na
     assert "192.168.1.5:7001" in out and "beyond loopback" in out                  # this user's, beyond loopback (I3)
     assert "port 7000 on 127.0.0.1 doesn't answer a connect (it timed out)" in out
     assert "my-app (pid 999, /Users/me/my-app) holds it in nettop's Closed state" in out
+
+
+def _one_listing(monkeypatch, rows, reach, path, addresses=None):
+    monkeypatch.setattr(lane, "_loopback_addresses", addresses or (lambda: [(socket.AF_INET, "127.0.0.1", 0, "lo0")]))
+    monkeypatch.setattr(lane, "_named", lambda: (rows, [], []))
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: reach)
+    monkeypatch.setattr(lane, "pid_path", lambda pid: path)
+    monkeypatch.setattr(lane, "live_lanes", lambda: [])
+
+
+def test_list_listeners_shows_each_listener_once(acceptance, world, monkeypatch, capsys):
+    """nettop's rows of this uid are judged by the check but never name a port (review 6d8e99d7, item 5); the listing
+    printed them beside lsof's own, so every listener of this user appeared twice."""
+    mine = {"pid": 612, "command": "rapportd", "host": "*", "port": 49152, "family": 4, "uid": os.getuid()}
+    _one_listing(monkeypatch, [mine, dict(mine, judge_only=True)], {("127.0.0.1", 49152): "accepted"},
+                 "/usr/libexec/rapportd")
+    acceptance.list_listeners()
+    assert capsys.readouterr().out.count("pid 612 ") == 1
+
+
+def test_list_listeners_reads_the_loopback_names_once(acceptance, world, monkeypatch, capsys):
+    """Rio Grande (433cbbdf): --list-listeners read the interface names again for every row, so getifaddrs failing
+    after the first reading raised LaneRefused as a traceback. It uses the one reading the scan's targets came from."""
+    calls = []
+
+    def addresses():
+        calls.append(1)
+        return [(socket.AF_INET, "127.0.0.1", 0, "lo0")] if len(calls) == 1 else None
+    row = {"pid": 700, "command": "app", "host": "fe80::1%lo0", "port": 9004, "family": 6, "uid": os.getuid()}
+    _one_listing(monkeypatch, [row], {}, "/Users/me/app", addresses)
+    acceptance.list_listeners()
+    assert len(calls) == 1 and "fe80::1%lo0:9004" in capsys.readouterr().out
+
+
+def test_a_wildcard_row_says_its_family(acceptance):
+    """A wildcard listener open for IPv4 and IPv6 is two sockets; without the family they read as one row twice."""
+    rows = [{"pid": 938, "command": "rapportd", "host": "*", "port": 49380, "family": f} for f in (4, 6)]
+    assert [r[1] for r in acceptance.listener_rows(rows, {938: "/usr/libexec/rapportd"}.get, set())] == [
+        "*:49380 (IPv4)", "*:49380 (IPv6)"]
+
+
+def test_a_refusal_while_listing_is_one_line_not_a_traceback(acceptance, world, monkeypatch):
+    _one_listing(monkeypatch, [], {}, None)
+    monkeypatch.setattr(lane, "_named", lambda: (_ for _ in ()).throw(lane.LaneRefused("ps can't place pid 9")))
+    with pytest.raises(SystemExit) as stopped:
+        acceptance.list_listeners()
+    assert "ps can't place pid 9" in str(stopped.value.code)
 
 
 def test_a_lane_run_skipped_says_why(acceptance, capsys):
