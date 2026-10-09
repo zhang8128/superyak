@@ -65,6 +65,7 @@ class Briefs:
         """PUT /api/chats/{id}/brief, for the room's owner. The route has already refused ship keys and a missing CSRF
         token. Saving records no mentions and posts no message."""
         body = brief_body(body)
+        self._refuse_live_ship_keys(body, what='brief')  # its own transaction, so before ours
         if ':' in key:
             raise Problem(404, 'Not found')  # a received room's brief is never written here
         with self.transaction() as db:

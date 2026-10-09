@@ -301,3 +301,21 @@ def test_bridging_a_room_without_a_brief_carries_nothing(rooms, capsys):
     newest = current_room(store, andy, new)
     assert newest['id'] != new['id'] and store.get_room(andy['id'], newest['id'])['brief'] is None
     assert 'The room had no brief to carry.' in again
+
+
+def test_a_brief_saved_between_the_read_and_the_carry_stops_the_bridge_with_its_own_words(rooms, capsys, monkeypatch):
+    store, andy, doctor, wormhole, gamma = rooms
+    store.save_brief(andy['id'], gamma['id'], 'Plan.', 0)
+    real = Store.add_participants
+
+    def save_first(self, actor, key, member_ids, carry_brief=None):
+        self.save_brief(actor, key, 'Plan, changed.', 1)  # someone saves after the bridge read the brief
+        return real(self, actor, key, member_ids, carry_brief)
+
+    monkeypatch.setattr(Store, 'add_participants', save_first)
+    before = store.list_rooms(andy['id'])
+    with pytest.raises(SystemExit) as stopped:
+        cli(['station-bridge', '--data-dir', str(store.data_dir), '--id', gamma['id'][:6], '--as', 'andy'])
+    assert stopped.value.code not in (0, None)
+    assert 'The room brief changed while bridging; run station-bridge again' in capsys.readouterr().err
+    assert store.list_rooms(andy['id']) == before

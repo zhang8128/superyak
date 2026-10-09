@@ -254,3 +254,37 @@ def test_removing_a_member_keeps_the_room_and_its_brief(env):
     assert patient.delete(f'/api/chats/{room}/participants/{users[3]["id"]}').status_code == 200
     assert brief_of(patient, room)['body'] == 'Plan.' and brief_of(doctor, room)['body'] == 'Plan.'
     assert family.get(f'/api/chats/{room}').status_code == 404
+
+
+def test_a_live_ship_key_in_a_brief_is_refused_and_nothing_is_written(env):
+    app, clients, users, clock = env
+    patient = clients[0]
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    room = new_room(patient, ship)
+    assert put_brief(patient, room, 'Plan.', 0).status_code == 200
+    refused = put_brief(patient, room, f'Plan. The key is "{key}"', 1)
+    assert refused.status_code == 422
+    assert key not in refused.text and 'brief' in refused.json()['error'] and 'ship key' in refused.json()['error']
+    assert brief_row(app, room) == ('Plan.', 1)
+    other = new_room(patient, ship, title='Other')
+    assert put_brief(patient, other, f'Bearer {key}', 0).status_code == 422
+    assert brief_row(app, other) is None
+
+
+def test_a_revoked_ship_key_in_a_brief_saves_normally(env):
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    room = new_room(clients[0], ship)
+    app.state.store.revoke_presented_key(key)
+    assert put_brief(clients[0], room, f'old, revoked: {key}', 0).status_code == 200
+    assert brief_row(app, room) == (f'old, revoked: {key}', 1)
+
+
+def test_the_message_refusal_keeps_its_wording(env):
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'serenity')
+    room = new_room(clients[0], ship)
+    refused = clients[0].post(f'/api/chats/{room}/messages', json={'client_message_id': 'a', 'body': key})
+    assert refused.status_code == 422
+    assert refused.json()['error'] == ('This message contains a live ship key, so it was not posted. Treat that key as '
+                                       'exposed: its ship should revoke it and dock again.')

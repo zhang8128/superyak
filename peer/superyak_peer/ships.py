@@ -41,7 +41,7 @@ class Ships:
         db.execute("UPDATE users SET kind='ship',owner_id=? WHERE id=?", (owner_id, user['id']))
         return public_user(db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone())
 
-    def _refuse_live_ship_keys(self, body):
+    def _refuse_live_ship_keys(self, body, what='message'):
         """A room is history that many readers keep, so a message carrying a live ship key is refused before anything
         is written or sent to another peer. The refusal never repeats the key."""
         candidates = {token_hash(m.group(0)) for m in KEY_TOKEN.finditer(body)} if isinstance(body, str) else set()
@@ -50,7 +50,8 @@ class Ships:
         with self.transaction() as db:
             live = {row['key_hash'] for row in db.execute('SELECT key_hash FROM ship_keys WHERE revoked IS NULL')}
         if candidates & live:
-            raise Problem(422, 'This message contains a live ship key, so it was not posted. Treat that key as exposed: '
+            done = 'saved' if what == 'brief' else 'posted'
+            raise Problem(422, f'This {what} contains a live ship key, so it was not {done}. Treat that key as exposed: '
                                'its ship should revoke it and dock again.')
 
     def _new_ship_key(self, db, ship_id):
@@ -230,7 +231,12 @@ class Ships:
         if (wormhole in room['member_ids']) == bridge and not earlier:
             return room, False
         if bridge:
-            new = self.add_participants(actor, room['id'], [wormhole], carry)
+            try:
+                new = self.add_participants(actor, room['id'], [wormhole], carry)
+            except Problem as exc:
+                if exc.status == 409 and carry is not None:  # the brief was saved between the read and the carry
+                    raise Problem(409, 'The room brief changed while bridging; run station-bridge again') from exc
+                raise
             return {**new, 'brief_carried': carry is not None}, True  # the operator tells Andy whether it came along
         for key in earlier:  # the earlier rooms first: if this stops halfway, the current room still shows bridged
             self.remove_participant(actor, key, wormhole)
