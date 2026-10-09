@@ -276,8 +276,8 @@ the Mac.
 **The listener check (D9)** (`lane.listeners_ok(team)`, run by teamd outside every sandbox):
 - **What it reads:** every listening TCP socket on the machine, whoever owns it. Run as the user, `lsof` only sees the
   user's own processes, which would leave root's listeners invisible. So the check enumerates with
-  `netstat -anv -p tcp`, which lists every listening socket with its pid, and identifies each pid with
-  `ps -p <pid> -o comm=`.
+  `netstat -anv -p tcp`, which lists every listening socket with its pid, and identifies each pid by its full
+  executable path with `proc_pidpath()` (D11).
   - `lsof -nP -iTCP -sTCP:LISTEN` is only a cross-check for the user's own processes.
   - A listening socket whose process can't be identified fails the check.
   - When either command fails, the result is "not ok".
@@ -344,6 +344,12 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   commands, not every channel a worker has.
 - Bricks' specs need the Bricks change before they run in a lane.
 - Linux and Codex workers get no lane.
+- **Codex workers' sandbox can write /tmp** (Codex's workspace-write default; `workers.codex_command` doesn't set
+  `sandbox_workspace_write.exclude_slash_tmp`).
+  - They can write into `/tmp/sy-lane-<uid>`. teamd never lets anything there decide what runs: the profile and the
+    scripts are passed inline, and teamd's own writes refuse links.
+  - They can also read files a lane leaves there.
+  - Closing this changes Codex workers, so it is Andy's call.
 
 ## Approved listeners (Andy's decisions D10 and D11, 2026-10-08)
 
