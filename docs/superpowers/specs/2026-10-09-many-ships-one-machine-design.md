@@ -233,7 +233,7 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
       worker (workers.py:391);
     - the hooks return at once for that value (hook.py:106);
     - teamd's Claude worker settings deny `mcp__station` (added to the deny list at workers.py:308), and deny reads
-      of `~/.superyak` through the file tools (S11).
+      of what holds a ship's keys through the file tools (S11, R19).
   - Browser workers also run with `disableAllHooks` and `--strict-mcp-config` (workers.py:346, 375), and Codex workers
     switch the station off (workers.py:249-250).
 - **S9. Order of writes, and rollback.**
@@ -288,14 +288,18 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 - **S11. Keys, provenance and authority.** Per-ship keys on one Unix user separate provenance, not authority: an
   unsandboxed session of either ship can read both homes, so spec A's per-ship grants must not assume one ship can't
   use another's key. teamd workers, builder runs and read runs all take their settings from
-  `claude_sandbox_settings` (workers.py; runs.py:52, 67). Two separate controls keep the homes unread:
+  `claude_sandbox_settings` (workers.py; runs.py:52, 67). Two separate controls keep the keys unread:
   - **Bash:** the OS sandbox denies reads of `$HOME` (workers.py:328). It covers Bash and what Bash starts, not
     Claude Code's own file tools, and read runs have no shell (runs.py:47-62).
   - **Read, Grep and Glob** go by permission rules. Their allow rules cover only the run's own folders
     (workers.py:304-305), but a worker in a claimed project also loads the main checkout's `settings.local.json`
-    (M1, S8), where the lead's approvals and allow rules merge in. So `claude_sandbox_settings` also denies
-    `Read(//<home>/.superyak/**)` and `Grep(//<home>/.superyak/**)`, beside `mcp__station` (R19). A deny rule wins
-    over an allow rule from any source.
+    (M1, S8), where the lead's approvals and allow rules merge in. So `claude_sandbox_settings` also denies Read and
+    Grep of what holds keys: `~/.superyak/station.json`, `docking.json`, `access-request.json` and `invitation.txt`, everything under `~/.superyak/ships/`, and the settings backups `~/.superyak/*.bak-superyak` and `~/.claude/*.bak-superyak`, beside `mcp__station` (R19). A deny rule wins over an allow rule from any source,
+    and it reaches the OS sandbox too (measured on the Pi and on the Mac), so it must never cover a folder a run works
+    in: the watcher's read runs (`~/.superyak/worktrees/<ship>/read-<id>`, runs.py:182), its builder runs
+    (`~/.superyak/worktrees/<ship>/<id>`, runs.py:200), teamd's collab rooms (`~/.superyak/team/rooms/<team>/<w>`)
+    and a lane's preload (`~/.superyak/team/teams/<id>/workers/<w>/`). Revision 3 denied all of `~/.superyak`, which
+    would have left read runs blind and builder runs unable to read or edit (review 487c070b).
   - **Rule syntax.** Permission docs, "Read and Edit": `//path` is an absolute path. `~/path` is home-relative and
     would match too. A single-slash `/path` anchors to the directory of the settings source, which for a
     `--settings <file>` is that file's own folder, so it must not be used here. `<home>` is `Path.home()`, written
@@ -372,7 +376,8 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 - **R18.** The station MCP server applies S7's rules on every call, re-reading the registry each time, and sends no
   instructions at `initialize` when it would refuse.
 - **R19.** Every settings file `claude_sandbox_settings` builds (teamd's Claude workers, builder runs, read runs) denies
-  `mcp__station`, `Read(//<home>/.superyak/**)` and `Grep(//<home>/.superyak/**)` (S11).
+  `mcp__station`, and `Read(//…)` and `Grep(//…)` of what holds keys: `~/.superyak/station.json`, `docking.json`, `access-request.json` and `invitation.txt`, everything under `~/.superyak/ships/`, and the settings backups `~/.superyak/*.bak-superyak` and `~/.claude/*.bak-superyak` (S11). No deny covers a folder a run
+  works in.
 - **R20.** The Codex profile file is never overwritten: dock changes only its `station` table, and undock removes only
   that table and deletes the file only if empty.
 - **R21.** Undock touches only its own ship (S10), removes the claim last, and works without the registry.
@@ -398,8 +403,8 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 - Git runs in the repository only hardened and isolated, from the root (R5). The hook and the MCP server never run
   git (R17).
 - Per-ship keys separate provenance, not authority (S11).
-- Workers can't act as a project ship, through three independent layers (S8), and can't read the ships' homes
-  through Bash (the OS sandbox) or the file tools (the `~/.superyak` denies, R19).
+- Workers can't act as a project ship, through three independent layers (S8), and can't read the ships' keys through
+  Bash (the OS sandbox) or the file tools (the key-file denies, R19).
 - The registry fails closed, loudly (R16).
 
 ## Testing (each check fails without its feature)
@@ -467,8 +472,12 @@ directory):
 - `test_mcp_server_follows_the_claims`: the machine server refuses inside a claim with the `codex -p` hint; the project
   server refuses outside its own claim; neither sends instructions at `initialize` then; a claim added between two
   calls applies to the second (R18).
-- `test_workers_deny_the_station`: the settings `claude_sandbox_settings` builds for a teamd worker, a builder run and
-  a read run carry `mcp__station`, `Read(//<home>/.superyak/**)` and `Grep(//<home>/.superyak/**)` in `deny` (R19).
+- `test_workers_deny_the_station_and_the_keys`: the settings `claude_sandbox_settings` builds for a teamd builder and
+  collaborator, a builder run and a read run carry `mcp__station`, and Read and Grep denies that cover each key file
+  (R19).
+- `test_no_deny_covers_a_runs_own_folder`: with HOME such that the run folders sit under `~/.superyak` (a read run's
+  `worktrees/<ship>/read-<id>`, a builder run's `worktrees/<ship>/<id>`, a collab room, a lane preload), no deny
+  covers a run's own folder or a file in it, and its own Read allow still does (R19).
 - `test_codex_profile_is_never_overwritten`: a foreign profile file keeps its other tables; a `station` table for
   another home is refused; undock removes only the table and deletes the file only when empty (R20).
 - `test_undock_one_ship_leaves_the_other`: the recorded calls and remaining files show the other ship untouched, both
@@ -485,7 +494,7 @@ get both `CLAUDE_PROJECT_DIR` and stdin):
   speaks and the machine ship's prints nothing.
 - "Don't ask again" on a station tool lands in `settings.local.json`; a teamd worker in a worktree still has every
   station call refused (S8). With an allow rule for `Read(~/.superyak/**)` added to that file, the worker's Read,
-  Grep and Glob of `~/.superyak` are still denied (S11).
+  Grep and Glob of `~/.superyak/station.json` and `~/.superyak/ships/` are still denied (S11).
 - Codex: re-checks M8 (where Codex starts MCP servers) on the Codex version present; a different answer stops the
   build at step 5. `codex -p <name> mcp list` shows the project ship's station (M6). Build step 5 went ahead on
   Codex 0.160.0, the version M8 was measured on that day.
@@ -494,8 +503,8 @@ get both `CLAUDE_PROJECT_DIR` and stdin):
   `allowRead` file under the denied folder stayed readable. The lane's preload is such a file
   (`~/.superyak/team/teams/<id>/workers/<w>/lane-preload.cjs`), and Seatbelt's rule order could differ. So: with
   R19's denies in place, a browser lane worker's `node` must still load its preload (the lane acceptance run shows it,
-  since every lane node requires it). If it doesn't, narrow R19's `Read` and `Grep` denies to
-  `~/.superyak/station.json` and `~/.superyak/ships/**`, which hold the keys, and re-run.
+  since every lane node requires it). R19 now denies only the files that hold keys (review 487c070b), so no deny
+  covers the preload; the measurement below still holds for a deny over a whole folder.
   - Measured on this Mac, 2026-10-09 (Claude Code 2.1.295, Seatbelt), with a throwaway fake home holding a fake
     `station.json` and a fake preload at the lane's path, `claude -p` with `--settings` (sandbox on, unsandboxed
     commands off), `--setting-sources project`, `--strict-mcp-config` and `SUPERYAK_RUN` set, running `cat` on both
@@ -532,7 +541,7 @@ Adding serenity-bricks's watcher later means docking again without `--no-service
 backlog. These change on that day and must be settled first:
 - Its runs work in hyper-bricks with `--setting-sources project,local` (runs.py:124): they load the repository's
   tracked project settings, so other committers' hooks run unsandboxed and their allow rules apply, plus the lead's
-  local approvals. Consider `disableAllHooks` for those runs. The `~/.superyak` read denies are already in their
+  local approvals. Consider `disableAllHooks` for those runs. The key-file read denies are already in their
   settings (R19).
 - Read runs show hyper-bricks's HEAD to anyone in serenity-bricks's rooms, bridged rooms included.
 - `git worktree add` in runs.py:192 and 203 isn't hardened, so checkout hooks would run.
@@ -572,7 +581,7 @@ backlog. These change on that day and must be settled first:
 | D8 must-fix 1: backup and temp file in the repo | S5 Hooks, S5 checks; M9 | R4, R6, R11 | `test_dock_writes_nothing_tracked` |
 | D8 must-fix 2: path vs inode | S6 Matching; S7; M7 | R14, R15 | `test_a_moved_or_recloned_repository_is_a_stale_claim`, Mac acceptance |
 | D8 must-fix 3: modes, collision, name rule | S1, S2 | R2 | `test_modes_names_and_collisions_are_refused_before_the_network` |
-| D8 must-fix 4: allow rules in settings.local.json | S7 rule 1, S8 | R18, R19 | `test_station_tools_refuse_inside_runs`, `test_workers_deny_the_station` |
+| D8 must-fix 4: allow rules in settings.local.json | S7 rule 1, S8 | R18, R19 | `test_station_tools_refuse_inside_runs`, `test_workers_deny_the_station_and_the_keys` |
 | D8 must-fix 5: watcher backlog | S4 | R22 | `test_first_service_install_skips_the_backlog` |
 | Should-fix: root reader layouts | S6 root reader | R17 | `test_project_root_reader_layouts` |
 | Should-fix: git checks fail closed | S5 checks | R4 | `test_dock_writes_nothing_tracked` |
@@ -601,6 +610,6 @@ backlog. These change on that day and must be settled first:
 | Required 4: R10's fix that doesn't work | S9 | R10 | `test_project_dock_checks_the_machine_ship_checkout` |
 | Small 5: R10 checks the user `station` and Codex table too | S9 | R10 | `test_project_dock_checks_the_machine_ship_checkout` |
 | Small 6: `info/exclude` written before the request | S5 (dry `check-ignore` with a temporary `core.excludesFile`; the real append after the claim) | R4 | `test_dock_writes_nothing_tracked` |
-| Small 7: S11 overstated what workers can read | S8, S11 (`Read`/`Grep` denies on `~/.superyak`, syntax cited) | R19 | `test_workers_deny_the_station`; Mac acceptance |
+| Small 7: S11 overstated what workers can read | S8, S11 (`Read`/`Grep` denies on `~/.superyak`, syntax cited) | R19 | `test_workers_deny_the_station_and_the_keys`; Mac acceptance |
 | Nit 8: Mac acceptance wording | Mac acceptance, Build order 5 | — | Mac acceptance |
 | Build note: git from the root | S5 Git | R5 | `test_dock_git_is_hardened` |

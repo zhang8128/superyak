@@ -1,6 +1,7 @@
 """Many ships on one machine (D7), build step 5: the station MCP server follows the claims on every call and sends
 no instructions when it would refuse (S7, R18); it refuses everything inside teamd workers and watcher runs; and every
 settings file claude_sandbox_settings builds denies the station tools and reads of ~/.superyak (S8, S11, R19)."""
+import fnmatch
 import os
 from pathlib import Path
 import shutil
@@ -126,15 +127,52 @@ def test_a_docked_ship_without_a_claim_keeps_the_machine_server_on(monkeypatch, 
     assert not error and 'Ops' in text
 
 
-def test_workers_deny_the_station(tmp_path, monkeypatch):
-    """R19: teamd's Claude workers (builders, collaborators, browser lanes), builder runs and read runs all deny the
-    station tools and reads of ~/.superyak through Read and Grep, as absolute (//) rules."""
+def _covers(rule, path):
+    """Whether a Read/Grep/Edit/Glob permission rule with a path covers `path` (a `//` rule is absolute)."""
+    if '(' not in rule or not rule.split('(', 1)[0] in ('Read', 'Grep', 'Edit', 'Glob'):
+        return False
+    pattern = rule[rule.index('(') + 1:-1]
+    pattern = pattern[1:] if pattern.startswith('//') else pattern
+    return fnmatch.fnmatchcase(path, pattern)
+
+
+def _all_settings(build_wt, workspace, read_dir, room):
+    return {'teamd builder': (workers.claude_sandbox_settings(str(build_wt), mode='build', repo=str(workspace)), build_wt),
+            'teamd collab': (workers.claude_sandbox_settings(str(room), mode='collab'), room),
+            'builder run': (runs.builder_settings(build_wt, workspace), build_wt),
+            'read run': (runs.read_only_settings(read_dir), read_dir)}
+
+
+def test_workers_deny_the_station_and_the_keys(tmp_path):
+    """R19 (narrowed, review 487c070b): every kind of settings denies the station tools, and Read and Grep of what
+    holds keys: ~/.superyak/station.json, docking.json, access-request.json, invitation.txt, ships/** and the settings
+    backups outside ships/. `//` rules are absolute."""
     home = str(Path.home())
-    wanted = {'mcp__station', f'Read(/{home}/.superyak/**)', f'Grep(/{home}/.superyak/**)'}
-    assert all(rule.startswith(('mcp__', 'Read(//', 'Grep(//')) for rule in wanted)
-    built = [workers.claude_sandbox_settings(str(tmp_path / 'wt'), mode='build', repo=str(tmp_path / 'repo')),
-             workers.claude_sandbox_settings(str(tmp_path / 'wt'), mode='collab'),
-             runs.builder_settings(tmp_path / 'wt', tmp_path / 'repo'),
-             runs.read_only_settings(tmp_path / 'snapshot')]
-    for settings in built:
-        assert wanted <= set(settings['permissions']['deny']), settings['permissions']['deny']
+    keys = [f'{home}/.superyak/{name}' for name in ('station.json', 'docking.json', 'access-request.json', 'invitation.txt')]
+    keys += [f'{home}/.superyak/ships/serenity-bricks/station.json', f'{home}/.superyak/ships/serenity-bricks/claim.json',
+             f'{home}/.superyak/ships/serenity-bricks/settings.local.json.bak-superyak',
+             f'{home}/.claude/settings.json.bak-superyak', f'{home}/.superyak/settings.json.bak-superyak']
+    for name, (settings, _) in _all_settings(tmp_path / 'wt', tmp_path / 'repo', tmp_path / 'snapshot', tmp_path / 'room').items():
+        deny = settings['permissions']['deny']
+        assert 'mcp__station' in deny, name
+        for tool in ('Read', 'Grep'):
+            for key in keys:
+                assert any(_covers(rule, key) for rule in deny if rule.startswith(tool + '(')), (name, tool, key)
+
+
+def test_no_deny_covers_a_runs_own_folder(monkeypatch, tmp_path):
+    """Review 487c070b, critical: the watcher's read runs (~/.superyak/worktrees/<ship>/read-<id>), its builder runs
+    (~/.superyak/worktrees/<ship>/<id>), teamd's collab rooms (~/.superyak/team/rooms/<team>/<w>) and a lane's preload
+    sit under ~/.superyak. A deny beats any allow and reaches the OS sandbox, so none may cover them."""
+    home = tmp_path / 'home'
+    monkeypatch.setenv('HOME', str(home))
+    sy = home / '.superyak'
+    build_wt, read_dir = sy / 'worktrees' / 'rio-grande' / 'm1', sy / 'worktrees' / 'rio-grande' / 'read-m2'
+    room, workspace = sy / 'team' / 'rooms' / 't1' / 'wash', home / 'superyak'
+    preload = sy / 'team' / 'teams' / 't1' / 'workers' / 'kaylee' / 'lane-preload.cjs'
+    for name, (settings, folder) in _all_settings(build_wt, workspace, read_dir, room).items():
+        deny = settings['permissions']['deny']
+        for path in (str(folder), f'{folder}/src/app.py', str(preload)):
+            assert not [rule for rule in deny if _covers(rule, path)], (name, path, deny)
+        allowed = settings['permissions']['allow']
+        assert any(_covers(rule, f'{folder}/src/app.py') for rule in allowed if rule.startswith('Read(')), name
