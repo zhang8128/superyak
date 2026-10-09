@@ -39,6 +39,7 @@ class Team:
         self.brokers, self.lane_secrets, self.lane_checked = {}, set(), {}
         self.lane_stopped_at = {}
         self.turn_instructions = {}         # wid -> its instruction files as its browser turn started (or the error)
+        self.turn_seen = {}                 # wid -> {pid: start} of its browser turn's tree, sampled as it runs
         self.clock = time.time
         if not teamlib.get_token(team_id, "lead"):
             teamlib.issue_token(team_id, "lead")
@@ -322,16 +323,18 @@ class Team:
                                          preload=w["lane"]["preload"] if lane_env else None,
                                          plugins_off=lane.lane_plugins(w["path"]) if lane_env else ())
             env = self._engram_env(w)
+        began = time.time()                 # before the launch: whatever the turn starts, starts after this
         if lane_env:
             env.update(lane_env)
             self._instructions_at_start(wid)
+            self.turn_seen[wid] = {}
             self.procs[wid] = workers.launch(cmd, w["path"], wdir, env, drop_env=lane.DROP_ENV)
         else:
             self.procs[wid] = workers.launch(cmd, w["path"], wdir, env)
         w.pop("lane_wait", None)
         w.update(state="running", pid=self.procs[wid].pid, turns=w["turns"] + 1)
         w["started_at"] = w["started_at"] or time.time()
-        w["turn_started"] = time.time()
+        w["turn_started"] = began
         self.save()
         self.log("%s turn %d started pid=%s" % (wid, w["turns"], w["pid"]))
         return True
@@ -529,15 +532,40 @@ class Team:
             self._to_lead(wid, "INSTRUCTION FILES CHANGED by %s this turn:" % wid,
                           "%s; the next turn reads them at startup — check them before continuing" % ", ".join(listed))
 
+    def _lane_sample(self, wid, root):
+        """While a browser turn runs: its tree as {pid: start} (lane.turn_tree), added to what was seen. Logged, never
+        raised; a missed sample is made up by the next."""
+        try:
+            self.turn_seen.setdefault(wid, {}).update(lane.turn_tree(root))
+        except Exception as e:
+            self.log("sampling %s's turn: %r" % (wid, e))
+
+    def _turn_leftovers(self, wid):
+        """lane.turn_leftovers for this worker's last turn, as a function for the cleanup's two looks: what its tree was
+        seen to hold, and this uid's orphans in its worktree or lane folder since it began. Never the broker."""
+        w = self.state["workers"][wid]
+        seen = dict(self.turn_seen.get(wid, {}))
+        path = lane.lane_path(self.team_id, wid)
+        broker = self.brokers.get(wid)
+
+        def find():
+            spared = lane.family(broker.proc.pid)[0] if broker is not None else set()
+            return lane.turn_leftovers(seen, (w["path"], path), w.get("turn_started"), (w["path"], path / "tmp"),
+                                       spared)
+        return find
+
     def _lane_env_cleanup(self, wid):
-        """Whatever carries this lane's CLAUDE_CODE_TMPDIR (a turn's setsid leftovers), never ports or files, so never
-        the broker. Logged, never raised."""
+        """What the turn left: whatever carries this lane's CLAUDE_CODE_TMPDIR (a turn's setsid leftovers), and what
+        its environment can't show (_turn_leftovers), never ports or files, so never the broker. Logged, never
+        raised."""
         try:
             path = lane.lane_path(self.team_id, wid)
-            if not lane.cleanup_env(("CLAUDE_CODE_TMPDIR", str(path / "tmp"))):
+            if not lane.cleanup_env(("CLAUDE_CODE_TMPDIR", str(path / "tmp")), extra=self._turn_leftovers(wid)):
                 self.log("%s's lane processes couldn't be listed" % wid)
         except Exception as e:
             self.log("ending %s's turn leftovers: %r" % (wid, e))
+        finally:
+            self.turn_seen.pop(wid, None)
 
     def _lane_end(self, wid):
         """The lane ends: its broker and every process using it (cleanup_processes), the files teamd keeps are
@@ -557,10 +585,12 @@ class Team:
         # Also whatever still carries this lane's CLAUDE_CODE_TMPDIR: a turn's setsid child, which neither the
         # worker's group nor the lane's files would find.
         try:
-            finished = lane.cleanup_processes(path, base, broker, env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")))
+            finished = lane.cleanup_processes(path, base, broker, env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")),
+                                              extra=self._turn_leftovers(wid))
         except OSError as e:
             finished = False
             self.log("cleaning up %s's lane processes: %r" % (wid, e))
+        self.turn_seen.pop(wid, None)
         self._scrub_files(wid)
         try:
             lane.remove_lane(path)
@@ -684,6 +714,8 @@ class Team:
                     w["ident"], changed = ident, True
                 rc = proc.poll()
                 if rc is None:
+                    if w.get("browser"):
+                        self._lane_sample(wid, proc.pid)
                     if time.time() - w.get("turn_started", time.time()) > int(self.cfg["worker_timeout_s"]):
                         os.killpg(proc.pid, signal.SIGTERM)
                         self.say(wid, ":hourglass: turn timed out; stopped.", w["thread_ts"])

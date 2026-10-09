@@ -27,6 +27,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -2031,21 +2032,16 @@ def _lsof_descriptors(text):
     return out
 
 
-def _lstat_in_b(path, rel):
-    """lstat of <lane>/b/<rel...> without following any link: the lane's parent, then each component down to the
-    last, is opened with O_NOFOLLOW|O_DIRECTORY through the one before, and the last is stat'ed with dir_fd and
-    follow_symlinks=False. None if any step is missing or is a link. Nothing here is resolved by name."""
-    parent = _parent_path()
-    if any(part in (".", "..") for part in rel):          # a name that climbs out of b/ is not evidence
-        return None
-    try:
-        parts = list(Path(path).relative_to(parent).parts) + ["b"] + list(rel)
-    except ValueError:
+def _lstat_below(anchor, parts):
+    """lstat of anchor/<parts...> without following any link: anchor, then each component down to the last, is opened
+    with O_NOFOLLOW|O_DIRECTORY through the one before, and the last is stat'ed with dir_fd and follow_symlinks=False.
+    None if any step is missing or is a link, or a name climbs out (. or ..). Nothing here is resolved by name."""
+    if not parts or any(part in (".", "..") for part in parts):
         return None
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fds = []
     try:
-        fds.append(os.open(parent, flags))
+        fds.append(os.open(anchor, flags))
         for part in parts[:-1]:
             fds.append(os.open(part, flags, dir_fd=fds[-1]))
         return os.stat(parts[-1], dir_fd=fds[-1], follow_symlinks=False)
@@ -2054,6 +2050,19 @@ def _lstat_in_b(path, rel):
     finally:
         for fd in fds:
             os.close(fd)
+
+
+def _lstat_in_b(path, rel):
+    """lstat of <lane>/b/<rel...> without following any link: the walk (_lstat_below) starts at the lane's parent. None
+    if any step is missing or is a link."""
+    parent = _parent_path()
+    if any(part in (".", "..") for part in rel):          # a name that climbs out of b/ is not evidence
+        return None
+    try:
+        parts = list(Path(path).relative_to(parent).parts) + ["b"] + list(rel)
+    except ValueError:
+        return None
+    return _lstat_below(parent, parts)
 
 
 def _counts_as_the_lanes(path, prefixes, fd, kind, inode, device, name):
@@ -2140,6 +2149,173 @@ def env_pids(name, value):
             if uid == os.getuid() and pid not in spared and wanted in (_environ(pid) or [])}
 
 
+# What a turn leaves that its environment can't show. macOS hides an Apple program's environment from KERN_PROCARGS2
+# (a setsid child that execs /bin/sleep shows none), so env_pids can't see it. Two more kinds of evidence, both only for
+# processes of this uid under the turn's Seatbelt profile (_turn_sandboxed), never teamd or above it, never the broker:
+# (b) the turn's tree, sampled while the turn runs (turn_tree), each process by pid and start time;
+# (a) this uid's orphans (ppid 1) started since the turn began whose cwd is in its worktree or lane folder.
+# Spec, Known limits: what chdirs out and orphans between two samples is missed.
+PROC_PIDTBSDINFO, PROC_BSDINFO_SIZE = 3, 136          # struct proc_bsdinfo; its start time is at 120 (s) and 128 (us)
+SANDBOX_FILTER_NONE, SANDBOX_FILTER_PATH, SANDBOX_CHECK_NO_REPORT = 0, 1, 0x40000000
+
+
+def _libsystem():
+    """macOS's libSystem with proc_pidinfo and sandbox_check typed, or None where there is none (not macOS)."""
+    try:
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    except OSError:
+        return None
+    libc.proc_pidinfo.restype = ctypes.c_int
+    libc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    libc.sandbox_check.restype = ctypes.c_int
+    libc.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]   # then a path, variadic
+    return libc
+
+
+def _started(pid):
+    """When pid started, as a time.time() value, or None when it is gone or can't be read: proc_pidinfo on macOS (to
+    the microsecond), /proc elsewhere (to the clock tick). It asks what the system has rather than sys.platform."""
+    libc = _libsystem()
+    if libc is not None:
+        buf = ctypes.create_string_buffer(PROC_BSDINFO_SIZE)
+        if libc.proc_pidinfo(int(pid), PROC_PIDTBSDINFO, 0, buf, PROC_BSDINFO_SIZE) != PROC_BSDINFO_SIZE:
+            return None
+        sec, usec = struct.unpack_from("QQ", buf.raw, 120)
+        return sec + usec / 1e6
+    try:
+        fields = Path("/proc/%d/stat" % int(pid)).read_text().rpartition(")")[2].split()
+        boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                    if line.startswith("btime "))
+        return boot + int(fields[19]) / os.sysconf("SC_CLK_TCK")      # field 22, starttime, in clock ticks
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _turn_sandboxed(pid, writable):
+    """Whether pid runs under a Seatbelt profile that lets it write every folder in `writable` (the turn's: its
+    worktree and its lane's tmp/). Andy's shell and what claude starts outside its sandbox (its MCP servers) aren't
+    sandboxed; another app's sandbox, or another lane's turn, can't write this lane's tmp/; a gone pid reads as denied.
+    False where there is no Seatbelt (not macOS); None when sandbox_check answers something else."""
+    libc = _libsystem()
+    if libc is None:
+        return False
+    answer = libc.sandbox_check(int(pid), None, SANDBOX_FILTER_NONE)
+    if answer not in (0, 1):
+        return None
+    if answer == 0:
+        return False
+    for folder in writable:
+        answer = libc.sandbox_check(int(pid), b"file-write-data", SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT,
+                                    ctypes.c_char_p(os.fsencode(os.path.realpath(folder))))
+        if answer not in (0, 1):
+            return None
+        if answer == 1:
+            return False
+    return True
+
+
+def turn_tree(root):
+    """A running turn's processes as {pid: start}: root's descendants (not root, claude itself) that are this uid's.
+    {} when root isn't teamd's own child, so not a turn teamd started, or when ps can't say: a missed sample is made up
+    by the next one and, when the turn ends, by the orphan rule."""
+    rows = _process_table()
+    if not any(pid == root and ppid == os.getpid() for pid, ppid, pgid, uid in rows):
+        return {}
+    children = {}
+    for pid, ppid, pgid, uid in rows:
+        if uid == os.getuid():
+            children.setdefault(ppid, []).append(pid)
+    tree, stack = set(), [root]
+    while stack:
+        for child in children.get(stack.pop(), []):
+            if child not in tree and child != root:
+                tree.add(child)
+                stack.append(child)
+    starts = {pid: _started(pid) for pid in tree}
+    return {pid: start for pid, start in starts.items() if start is not None}
+
+
+def _cwd_in(folders, inode, device, name):
+    """Whether a cwd lsof names is a folder under one of `folders`: the name below the folder is walked from the
+    folder's real path without following a link (_lstat_below), and the folder found must have lsof's device and
+    inode (the hardlink fix's rule). A cwd without an inode and device is never evidence."""
+    if not (inode or "").isdigit() or not device:
+        return False
+    try:
+        dev = int(device, 16) if device.lower().startswith("0x") else int(device)
+    except ValueError:
+        return False
+    for folder in folders:
+        real = os.path.realpath(folder)
+        for prefix in {str(folder), real}:
+            if name == prefix or name.startswith(prefix + "/"):
+                rel = [x for x in name[len(prefix):].split("/") if x]
+                st = _lstat_below(real, rel) if rel else _lstat_below(os.path.dirname(real), [os.path.basename(real)])
+                if st is not None and stat.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) == (dev, int(inode)):
+                    return True
+    return False
+
+
+def _orphans_in(folders, began, mine):
+    """(a) This uid's orphans (ppid 1, in `mine` {pid: ppid}) that started at or after `began` and whose cwd is under
+    one of `folders`, as {pid: start}. {} without a start; None when lsof can't say."""
+    if began is None:
+        return {}
+    starts = {pid: _started(pid) for pid, ppid in mine.items() if ppid == 1}
+    candidates = {pid: start for pid, start in starts.items() if start is not None and start >= began}
+    if not candidates:
+        return {}
+    lsof = shutil.which("lsof", path=SYSTEM_PATH)
+    if not lsof:
+        return None
+    r = _run([lsof, "-nP", "-a", "-p", ",".join(str(pid) for pid in sorted(candidates)), "-d", "cwd", "-F", "pfitDn"])
+    if r is None or r.returncode not in (0, 1):         # 1: one of them exited meanwhile
+        return None
+    return {pid: candidates[pid] for pid, fd, kind, inode, device, name in _lsof_descriptors(r.stdout)
+            if fd == "cwd" and pid in candidates and _cwd_in(folders, inode, device, name)}
+
+
+def turn_leftovers(seen, folders, began, writable, spared=()):
+    """What a turn left that its environment can't show, as {pid: start}: (b) a process seen in its tree (`seen`,
+    {pid: start}) still running with the same start time, so a reused pid is spared, and (a) _orphans_in its
+    `folders` since `began`. Only this uid's, only under the turn's profile (_turn_sandboxed with `writable`), never
+    teamd or a process above it, never `spared` (the broker's). None when ps, lsof or the sandbox can't say."""
+    rows = _process_table()
+    if not rows:
+        return None
+    skip = _spared(rows) | set(spared)
+    mine = {pid: ppid for pid, ppid, pgid, uid in rows if uid == os.getuid() and pid not in skip}
+    found = {pid: start for pid, start in seen.items() if pid in mine and _started(pid) == start}
+    orphans = _orphans_in(folders, began, mine)
+    if orphans is None:
+        return None
+    found.update(orphans)
+    out = {}
+    for pid, start in found.items():
+        sandboxed = _turn_sandboxed(pid, writable)
+        if sandboxed is None:
+            return None
+        if sandboxed:
+            out[pid] = start
+    return out
+
+
+def _signal(pids, sig):
+    """pids is {pid: start or None}: one with a start is signalled only while _started still says it (checked just
+    before, so a pid reused since it was found is never signalled); None (found by environment, port or file) is
+    signalled as found."""
+    for pid, start in pids.items():
+        if start is None or _started(pid) == start:
+            _kill(pid, sig)
+
+
+def _merged(pids, extra):
+    """{pid: None} for what was found by environment, port or file, with `extra`'s starts laid over it."""
+    out = dict.fromkeys(pids)
+    out.update(extra)
+    return out
+
+
 def _alive(pid):
     """Whether pid is a running process. Never reaps: a child that some Popen owns still reports its own exit code.
     A zombie (exited, not yet reaped) is not running."""
@@ -2160,49 +2336,52 @@ def _kill(pid, sig):
         pass
 
 
-def cleanup_processes(path, base, broker=None, env=None):
+def cleanup_processes(path, base, broker=None, env=None, extra=None):
     """When a lane ends (and before a broker starts in its b/): the broker, then every process found by lane_pids
-    (Playwright's detached webServer and dev servers, which killing the worker's group misses) and, with env as
-    (name, value), by env_pids. SIGTERM and after KILL_GRACE_S SIGKILL, then a second look for anything started
-    meanwhile. True once finished; False when lsof or ps couldn't say, so the block stays held."""
+    (Playwright's detached webServer and dev servers, which killing the worker's group misses), with env as
+    (name, value) by env_pids, and with extra by what it gives ({pid: start}, or None when it can't say: teamd's
+    turn_leftovers). SIGTERM and after KILL_GRACE_S SIGKILL, then a second look for anything started meanwhile. True
+    once finished; False when lsof, ps or extra couldn't say, so the block stays held."""
     if broker is not None:
         stop_broker(broker)
 
     def found():
         pids = lane_pids(path, base)
-        extra = env_pids(*env) if env else set()
-        return None if pids is None or extra is None else pids | extra
+        more = env_pids(*env) if env else set()
+        given = extra() if extra is not None else {}
+        return None if pids is None or more is None or given is None else _merged(pids | more, given)
     pids = found()
     if pids is None:
         return False
-    for pid in pids:
-        _kill(pid, signal.SIGTERM)
+    _signal(pids, signal.SIGTERM)
     deadline = time.monotonic() + KILL_GRACE_S
     while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
         time.sleep(0.1)
     again = found()                                      # only what still matches: a pid that exited may be reused
     if again is None:
         return False
-    for pid in again:
-        _kill(pid, signal.SIGKILL)
+    _signal(again, signal.SIGKILL)
     return True
 
 
-def cleanup_env(env):
-    """End whatever still carries env=(name, value), and nothing else: no ports, no folder. A turn's setsid leftovers
-    carry the lane's CLAUDE_CODE_TMPDIR; the broker doesn't. SIGTERM, then SIGKILL after KILL_GRACE_S for what still
-    matches. True when ps could say."""
-    pids = env_pids(*env)
+def cleanup_env(env, extra=None):
+    """End whatever still carries env=(name, value), and with extra whatever it gives ({pid: start}, or None when it
+    can't say: teamd's turn_leftovers), and nothing else: no ports, no folder. A turn's setsid leftovers carry the
+    lane's CLAUDE_CODE_TMPDIR, unless macOS hides their environment; the broker doesn't. SIGTERM, then SIGKILL after
+    KILL_GRACE_S for what still matches. True when ps (and extra) could say."""
+    def found():
+        pids = env_pids(*env)
+        given = extra() if extra is not None else {}
+        return None if pids is None or given is None else _merged(pids, given)
+    pids = found()
     if pids is None:
         return False
-    for pid in pids:
-        _kill(pid, signal.SIGTERM)
+    _signal(pids, signal.SIGTERM)
     deadline = time.monotonic() + KILL_GRACE_S
     while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
         time.sleep(0.1)
-    again = env_pids(*env)
-    for pid in again or ():
-        _kill(pid, signal.SIGKILL)
+    again = found()
+    _signal(again or {}, signal.SIGKILL)
     return again is not None
 
 

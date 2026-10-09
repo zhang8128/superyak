@@ -373,6 +373,25 @@ hard-linked file by the path the kernel looked up last). Membership there comes 
 This catches Playwright's detached webServer and dev servers, which `killpg` on the worker misses. Known limit: a
 leftover that cleared its environment, doesn't listen in the block and has nothing under `b/` survives cleanup.
 
+**A turn's leftovers** (lane-mac-leftovers, after the first Mac run). When a browser turn ends, teamd ends what it left
+behind, never the broker and never ports or files. On macOS the environment match alone misses a turn's leftover that
+runs an Apple program: KERN_PROCARGS2 hides such a program's environment (a setsid child that execs `/bin/sleep` shows
+none). So two more kinds of evidence count. Both apply only to a process that is this uid's, isn't teamd or above it,
+isn't in the broker's family, and runs under the turn's Seatbelt profile. That last test is `sandbox_check`: the
+process is sandboxed, and its profile lets it write both the worker's worktree and `<lane>/tmp`. Andy's shell and what
+claude starts outside its sandbox fail it, and so do another app's sandbox and another lane's turn.
+- **(b) The turn's tree.** On every monitor pass while the turn runs, teamd samples the descendants of the turn's
+  claude, teamd's own child, as pid plus start time (`proc_pidinfo`, to the microsecond). At the end, a sampled
+  process still running with the same start time counts.
+- **(a) An orphan in the turn's folders.** This uid's processes with ppid 1 that started at or after the turn began
+  (taken just before the launch) and whose cwd is under the worktree or `<lane>`. The cwd is checked as under `b/`:
+  the name lsof gives is walked from the folder's real path without following a link, and the folder found must have
+  lsof's device and inode. A process from before the turn is never taken, even with its cwd in the worktree.
+
+Each process found this way is signalled only while its start time is still the one found, checked again just before
+each signal, so a pid reused meanwhile is never signalled. If ps, lsof or `sandbox_check` can't say, nothing is
+signalled and the cleanup counts as unfinished. At a lane's end the same evidence joins the lane's cleanup.
+
 **Briefs.**
 - `team/superyak_team/roles/browser-lane.md` is a new file, appended to the initial prompt only for browser
   workers. It says:
@@ -436,6 +455,12 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 - A compromised turn can plant instructions in any file the next turn reads, not only instruction files (a source
   comment, a test fixture, a README the task points at). The flag covers the startup files; the lead reviews the rest
   of the diff (round 2).
+- **A turn's leftover can slip past the cleanup** (lane-mac-leftovers). On macOS, a leftover running an Apple program
+  that changes its cwd out of the worktree and `<lane>`, and is orphaned between two samples (a pass every 2 s), shows
+  none of the evidence: its environment is hidden, it was never seen in the turn's tree, and its cwd is elsewhere. It
+  survives the turn and the lane's end. It still runs under the turn's Seatbelt profile, so it keeps that profile's
+  limits (no egress, writes only where the turn could write), but it can go on using the lane's ports and the
+  worker's worktree until it exits or Andy ends it.
 - Lanes share localhost: with more than one lane, a lane's worker can connect to another lane's servers (the
   listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
