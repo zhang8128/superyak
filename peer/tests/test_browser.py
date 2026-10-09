@@ -1912,3 +1912,45 @@ def test_new_layer_has_the_same_window_closed(browser_peer):
             expect(page.locator("section.editor").get_by_text("Unsaved changes")).to_have_count(0)
             page.wait_for_timeout(300)
     assert puts == [], puts
+
+
+def test_turn_off_public_link_in_the_old_editor_during_a_switch_leaves_the_new_layer_public(browser_peer):
+    """Break caught: buttons in the old editor act on selectedLayer(), which is already the layer being opened."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    first = store.create_layer(owner, {"title": "Alpha layer", "body": "A.", "public": True})
+    second = store.create_layer(owner, {"title": "Beta layer", "body": "B.", "public": True})
+    store.activate_layer(owner, first["id"], first["version"])
+    store.activate_layer(owner, second["id"], second["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            page.get_by_role("button", name="Turn off public link").click()
+            page.wait_for_timeout(300)
+            for route in held:
+                route.continue_()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            page.wait_for_timeout(300)
+    assert store.active_layer(second["id"], public=True)["body"] == "B."
+    assert store.active_layer(first["id"], public=True)["body"] == "A."
+
+
+def test_an_instructions_layer_switched_back_to_a_note_shows_note_mode(browser_peer):
+    """Break caught: the instructions form has no public input, so reading it when switching back threw."""
+    errors = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.get_by_role("link", name="My sharing layers").click()
+            open_new_layer(page)
+            page.get_by_label("Kind").select_option("instructions")
+            expect(page.get_by_label("Kind")).to_have_value("instructions")
+            expect(page.get_by_role("checkbox", name="Anyone with the public link")).to_have_count(0)
+            page.get_by_label("Kind").select_option("note")
+            expect(page.get_by_label("Kind")).to_have_value("note")
+            expect(page.get_by_role("checkbox", name="Anyone with the public link")).to_have_count(1)
+    assert errors == [], errors

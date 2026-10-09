@@ -826,7 +826,7 @@ function layerFormData(form = document.querySelector("#layer-form")) {
   if (form.elements.kind.value === "instructions") {
     return { ...base, kind: "instructions", audience_users: checked("audience-ship"), audience_spaces: [], public: false, attachment_ids: [] };
   }
-  return { ...base, kind: "note", audience_users: checked("audience-user"), audience_spaces: checked("audience-space"), public: form.elements.public.checked, attachment_ids: checked("attachment") };
+  return { ...base, kind: "note", audience_users: checked("audience-user"), audience_spaces: checked("audience-space"), public: Boolean(form.elements.public?.checked), attachment_ids: checked("attachment") };
 }
 
 // While a layer is opening, the old editor is still on screen but the selection is already the new layer. A form acts
@@ -1414,6 +1414,7 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
+  if (target.closest("section.editor") && refuseWhileSwitching()) return;
   if (action.startsWith("research-")) { await Research.action(target); return; }
   if (action.startsWith("dashboard-")) { await Dashboard.action(target); return; }
   if (action === "demo-login") {
