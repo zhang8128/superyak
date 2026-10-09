@@ -81,10 +81,13 @@ def _claude_dir():
 
 
 def settings_widenings():
-    """What settings outside the lane would merge into its sandbox: allowedDomains and WebFetch(domain:...) allow rules
-    widen the lane's network allowlist, and allowMachLookup its Mach services. Claude Code ignores allowMachLookup from
-    project and local settings when allowUnsandboxedCommands is false, so the user's and the managed files are the ones
-    that matter. A file that exists but can't be read counts as a widening: the check fails closed."""
+    """What settings outside the lane would merge into its sandbox. The check is an allowlist: in the user's files and
+    the managed one, any sandbox.network key with a value refuses (allowedDomains, allowUnixSockets,
+    allowAllUnixSockets, allowMachLookup, proxies, any key Claude Code adds later), except an empty allowedDomains; any
+    WebFetch allow rule widens the lane's network too. A managed policy's hooks run outside the sandbox with the lane's
+    environment even under disableAllHooks. A file that exists but can't be read, or holds a sandbox, network,
+    permissions or allow list of the wrong shape, counts as a widening: the check fails closed. Only plain-word key
+    names are quoted back (this text reaches the lead)."""
     found = []
     for path in (_claude_dir() / "settings.json", _claude_dir() / "settings.local.json", MANAGED_SETTINGS):
         try:
@@ -97,19 +100,36 @@ def settings_widenings():
         if not isinstance(data, dict):
             found.append("%s isn't a JSON object" % path)
             continue
-        sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
-        network = sandbox.get("network") if isinstance(sandbox.get("network"), dict) else {}
-        permissions = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
-        if network.get("allowedDomains"):
-            found.append("%s adds sandbox.network.allowedDomains" % path)
-        if network.get("allowMachLookup"):
-            found.append("%s adds sandbox.network.allowMachLookup" % path)
-        if any(str(rule).startswith("WebFetch(domain:") for rule in permissions.get("allow") or []):
-            found.append("%s allows WebFetch(domain:...)" % path)
-        if path == MANAGED_SETTINGS and data.get("hooks"):
-            found.append("%s defines hooks, which Claude Code runs outside the sandbox with the lane's environment "
-                         "even under disableAllHooks" % path)
+        found += ["%s %s" % (path, why) for why in _widenings(data, managed=path == MANAGED_SETTINGS)]
     return found
+
+
+def _widenings(data, managed):
+    sandbox, permissions = data.get("sandbox", {}), data.get("permissions", {})
+    if not isinstance(sandbox, dict):
+        return ["can't be read (its sandbox isn't an object)"]
+    network = sandbox.get("network", {})
+    if not isinstance(network, dict):
+        return ["can't be read (its sandbox.network isn't an object)"]
+    if not isinstance(permissions, dict):
+        return ["can't be read (its permissions isn't an object)"]
+    allow = permissions.get("allow", [])
+    if not isinstance(allow, list):
+        return ["can't be read (its permissions.allow isn't a list)"]
+    if not all(isinstance(rule, str) for rule in allow):
+        return ["can't be read (its permissions.allow holds a rule that isn't a string)"]
+    out = []
+    for key, value in network.items():
+        if not value:                                   # an empty list, an empty object, false or null widens nothing
+            continue
+        out.append("adds sandbox.network.%s" % key if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", key)
+                   else "adds a sandbox.network key this check doesn't know")
+    if any(rule == "WebFetch" or rule.startswith("WebFetch(") for rule in allow):
+        out.append("allows WebFetch")
+    if managed and data.get("hooks"):
+        out.append("defines hooks, which Claude Code runs outside the sandbox with the lane's environment even under "
+                   "disableAllHooks")
+    return out
 
 
 def check_spawn(cfg, kind, mode):

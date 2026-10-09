@@ -116,7 +116,7 @@ def test_status_shows_browser_lane(env):
     ("old claude", "claude", "build", "old", "needs Claude Code 2.1.285 or later \\(found 2.1.284\\)"),
     ("no claude", "claude", "build", "none", "needs Claude Code 2.1.285 or later \\(found none\\)"),
     ("user allowlist", "claude", "build", "domains", "adds sandbox.network.allowedDomains"),
-    ("user webfetch", "claude", "build", "webfetch", "allows WebFetch\\(domain:...\\)"),
+    ("user webfetch", "claude", "build", "webfetch", "allows WebFetch"),
     ("local mach", "claude", "build", "mach", "settings.local.json adds sandbox.network.allowMachLookup"),
     ("managed mach", "claude", "build", "managed", "managed-settings.json adds sandbox.network.allowMachLookup"),
     ("unreadable", "claude", "build", "broken", "settings.json can't be read"),
@@ -4120,3 +4120,70 @@ def test_managed_hooks_refuse_a_lane(env, mac):
                                          "environment even under disableAllHooks" % lane.MANAGED_SETTINGS]
     lane.MANAGED_SETTINGS.write_text(json.dumps({"hooks": {}}))
     assert lane.settings_widenings() == []
+
+
+# ---------- Final fix wave: I1, the settings check is an allowlist and fails closed ----------
+
+@pytest.mark.parametrize("name, data, refused", [
+    ("settings.json", {"sandbox": {"network": {"allowUnixSockets": ["/"]}}}, "adds sandbox.network.allowUnixSockets"),
+    ("settings.json", {"sandbox": {"network": {"allowAllUnixSockets": True}}}, "adds sandbox.network.allowAllUnixSockets"),
+    ("settings.local.json", {"sandbox": {"network": {"allowMachLookup": ["*"]}}}, "adds sandbox.network.allowMachLookup"),
+    ("managed", {"sandbox": {"network": {"allowAllUnixSockets": True}}}, "adds sandbox.network.allowAllUnixSockets"),
+    ("settings.json", {"sandbox": {"network": {"httpProxyPort": 8080}}}, "adds sandbox.network.httpProxyPort"),
+    ("settings.json", {"sandbox": {"network": {"allowedDomains": ["github.com"]}}}, "adds sandbox.network.allowedDomains"),
+    ("settings.json", {"sandbox": {"network": {"a key\nthat names\nlines": 1}}}, "adds a sandbox.network key this check doesn't know"),
+    ("settings.json", {"sandbox": "on"}, "can't be read (its sandbox isn't an object)"),
+    ("settings.json", {"sandbox": {"network": ["allowAllUnixSockets"]}}, "can't be read (its sandbox.network isn't an object)"),
+    ("settings.json", {"permissions": "WebFetch"}, "can't be read (its permissions isn't an object)"),
+    ("settings.json", {"permissions": {"allow": "WebFetch"}}, "can't be read (its permissions.allow isn't a list)"),
+    ("settings.json", {"permissions": {"allow": [{"tool": "WebFetch"}]}}, "can't be read (its permissions.allow holds a rule that isn't a string)"),
+    ("settings.json", {"permissions": {"allow": ["WebFetch"]}}, "allows WebFetch"),
+    ("settings.json", {"permissions": {"allow": ["WebFetch(https://example.com/*)"]}}, "allows WebFetch"),
+    ("settings.local.json", {"permissions": {"allow": ["WebFetch(domain:example.com)"]}}, "allows WebFetch"),
+    ("settings.json", {"sandbox": {"network": {"allowedDomains": []}}}, None),
+    ("settings.json", {"sandbox": {"network": {"allowLocalBinding": False, "allowedDomains": []}}}, None),
+    ("settings.json", {"sandbox": {"enabled": True}, "permissions": {"allow": ["Bash(npm test)", "WebSearch"]}}, None),
+])
+def test_settings_that_could_widen_a_lane_refuse_it(env, name, data, refused):
+    """I1: any non-empty sandbox.network key in user or managed settings refuses (allowUnixSockets, allowAllUnixSockets
+    and allowMachLookup among them), except an empty allowedDomains; any WebFetch allow rule widens; a value of the
+    wrong shape is unreadable, so refused. A key the file names is only quoted when it is a plain word."""
+    path = lane.MANAGED_SETTINGS if name == "managed" else env["home"] / ".claude" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+    found = lane.settings_widenings()
+    if refused is None:
+        assert found == []
+    else:
+        assert len(found) == 1 and found[0] == "%s %s" % (path, refused), found
+        assert "\n" not in found[0]
+
+
+@pytest.mark.parametrize("damage", ["oserror", "not an object", "not a directory", "not utf-8"])
+def test_a_settings_file_that_cant_be_read_refuses_a_lane(env, damage):
+    """I1 (Task 1's items): an unreadable file, JSON that isn't an object, a settings folder that is a file, and bytes
+    that aren't UTF-8 each refuse, never pass and never raise."""
+    claude_dir = env["home"] / ".claude"
+    if damage == "not a directory":
+        claude_dir.write_text("a file where the folder should be")
+        found = lane.settings_widenings()
+        assert len(found) == 2 and all("can't be read (NotADirectoryError)" in f for f in found)
+        return
+    claude_dir.mkdir()
+    path = claude_dir / "settings.json"
+    if damage == "oserror":
+        path.write_text("{}")
+        path.chmod(0)
+        if os.access(path, os.R_OK):
+            pytest.skip("running as a user who can read anything")
+    elif damage == "not an object":
+        path.write_text(json.dumps(["sandbox"]))
+    else:
+        path.write_bytes(b'{"sandbox": "\xff"}')
+    try:
+        found = lane.settings_widenings()
+    finally:
+        path.chmod(0o600)
+    reason = {"oserror": "can't be read (PermissionError)", "not an object": "isn't a JSON object",
+              "not utf-8": "can't be read (UnicodeDecodeError)"}[damage]
+    assert found == ["%s %s" % (path, reason)]

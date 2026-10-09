@@ -130,10 +130,14 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
   - `mode == "build"`;
   - `sys.platform == "darwin"`;
   - the Claude Code version is at least 2.1.285;
-  - `~/.claude/settings.json` and `settings.local.json` add no `sandbox.network.allowedDomains` and no
-    `WebFetch(domain:…)` allow rules. These merge into the lane's allowlist.
-  - Managed policy and user settings carry no `sandbox.network.allowMachLookup`, since those merge in too. (teamd's
-    `allowUnsandboxedCommands: false` makes Claude Code ignore that key from project and local settings.)
+  - `~/.claude/settings.json`, `settings.local.json` and the managed policy pass an allowlist (final fix wave, I1):
+    no `sandbox.network` key with a value except an empty `allowedDomains` (so no `allowedDomains`,
+    `allowUnixSockets`, `allowAllUnixSockets`, `allowMachLookup`, proxy or later key), and no `WebFetch` allow rule
+    of any form. These merge into the lane's sandbox. (teamd's `allowUnsandboxedCommands: false` makes Claude Code
+    ignore `allowMachLookup` from project and local settings.)
+  - A file that exists but can't be read, isn't a JSON object, or holds a `sandbox`, `network` or `permissions` that
+    isn't an object, or an `allow` that isn't a list of strings, refuses: the check fails closed.
+  - The managed policy defines no `hooks` (C1: Claude Code runs them even under a non-managed `disableAllHooks`).
 - The worker record stores `"browser": true`.
 
 **Lane directory.**
