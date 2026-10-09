@@ -1,0 +1,66 @@
+{
+ "permissions": {
+  "defaultMode": "dontAsk",
+  "allow": [
+   "Read(//r/repo/**)",
+   "Grep(//r/repo/**)",
+   "Glob(//r/repo/**)",
+   "Read(//r/room/**)",
+   "Grep(//r/room/**)",
+   "Glob(//r/room/**)",
+   "Bash",
+   "mcp__team__team_post",
+   "mcp__team__team_read",
+   "mcp__team__team_ask_lead",
+   "mcp__team__team_done",
+   "mcp__team__team_status",
+   "mcp__team__team_message",
+   "mcp__team__team_plan",
+   "mcp__plugin_engram_engram__recall",
+   "mcp__plugin_engram_engram__remember",
+   "mcp__plugin_engram_engram__share",
+   "mcp__plugin_engram_engram__shares",
+   "WebSearch"
+  ],
+  "deny": [
+   "Read(//**/.env)",
+   "Read(//**/.env.*)",
+   "WebFetch",
+   "Bash(git push*)",
+   "Bash(git commit*)",
+   "Bash(git reset*)",
+   "Bash(git rebase*)",
+   "Bash(security*)",
+   "Bash(*security *)",
+   "Edit",
+   "Write",
+   "NotebookEdit"
+  ]
+ },
+ "sandbox": {
+  "enabled": true,
+  "failIfUnavailable": true,
+  "autoAllowBashIfSandboxed": true,
+  "allowUnsandboxedCommands": false,
+  "filesystem": {
+   "allowWrite": [],
+   "denyWrite": [],
+   "denyRead": [
+    "/home/u",
+    "**/.env",
+    "**/.env.*"
+   ],
+   "allowRead": [
+    "/r/repo",
+    "/r/room",
+    "/home/u/.gitconfig",
+    "/home/u/.config/git",
+    "/home/u/.local/bin",
+    "/home/u/.local/share/fnm",
+    "/home/u/.local/share/uv",
+    "/home/u/.cache/uv",
+    "/home/u/.bun"
+   ]
+  }
+ }
+}

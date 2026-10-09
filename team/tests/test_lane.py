@@ -551,3 +551,78 @@ def test_a_bad_config_or_missing_preload_refuses(env, tmp_root, held, tmp_path, 
     monkeypatch.setattr(teamlib, "package_dir", lambda: tmp_path / "nowhere")
     with pytest.raises(lane.LaneRefused):
         lane.ensure_lane("t1", "kaylee")
+
+
+# ---------- Task 3: the worker's sandbox settings and environment ----------
+
+SNAPSHOTS = Path(__file__).resolve().parent / "snapshots"
+
+
+def test_without_a_lane_nothing_changes(env, monkeypatch):
+    """Spec unit test 1 (the team half; agent/tests/test_runs.py has the rest). The snapshots were taken from the code
+    before lanes existed, with HOME=/home/u."""
+    monkeypatch.setenv("HOME", "/home/u")
+    build = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    collab = workers.claude_sandbox_settings("/r/room", "collab", True, repo="/r/repo")
+    assert json.dumps(build, indent=1) + "\n" == (SNAPSHOTS / "settings-build.json").read_text()
+    assert json.dumps(collab, indent=1) + "\n" == (SNAPSHOTS / "settings-collab.json").read_text()
+    assert workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane=None) == build
+    cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo")
+    wdir = teamlib.team_dir("t1") / "workers" / "kaylee"
+    assert cmd == ["claude", "-p", "go", "--output-format", "stream-json", "--verbose", "--model", "opus",
+                   "--permission-mode", "dontAsk", "--settings", str(wdir / "settings.json"),
+                   "--mcp-config", str(wdir / "mcp.json")]
+    assert (wdir / "settings.json").read_text() == json.dumps(build)
+
+
+def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
+    """Spec unit test 2: and neither the lane root nor b/ is writable."""
+    monkeypatch.setenv("HOME", "/home/u")
+    uid = os.getuid()
+    path = "/tmp/sy-lane-%d/0123456789" % uid
+    plain = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    laned = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane=path)
+    assert laned["permissions"] == plain["permissions"]
+    assert {k: v for k, v in laned["sandbox"].items() if k not in ("network", "filesystem")} == \
+        {k: v for k, v in plain["sandbox"].items() if k != "filesystem"}
+    assert laned["sandbox"]["network"] == {"allowedDomains": [], "strictAllowlist": True, "allowLocalBinding": True,
+                                           "allowUnixSockets": [path + "/tmp"]}
+    fs, before = laned["sandbox"]["filesystem"], plain["sandbox"]["filesystem"]
+    assert fs["allowWrite"] == before["allowWrite"] + [path + "/tmp", path + "/npm-cache"]
+    assert fs["allowRead"] == before["allowRead"] + [path + "/tmp", path + "/npm-cache", path + "/preload.cjs"]
+    assert fs["denyRead"] == before["denyRead"] + ["/tmp/sy-lane-%d" % uid, "/private/tmp/claude-%d" % uid]
+    assert fs["denyWrite"] == before["denyWrite"]
+    assert path not in fs["allowWrite"] and path + "/b" not in fs["allowWrite"]
+    assert not any(p.startswith(path + "/b") for p in fs["allowWrite"] + fs["allowRead"])
+    cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo", lane=path)
+    written = json.loads(Path(cmd[cmd.index("--settings") + 1]).read_text())
+    assert written == laned
+
+
+def test_a_browser_workers_environment(env, monkeypatch, tmp_path):
+    """Spec unit test 5 (the worker's half): the lane variables, NODE_OPTIONS and the endpoint, and none of the
+    agent sockets; a worker without a lane gets exactly what it got before."""
+    path = Path("/tmp/sy-lane-%d/0123456789" % os.getuid())
+    endpoint = "ws://127.0.0.1:41031/" + "ab" * 32
+    extra = lane.worker_env(path, 41000, endpoint)
+    assert extra == {"CLAUDE_CODE_TMPDIR": str(path / "tmp"), "npm_config_cache": str(path / "npm-cache"),
+                     "SUPERYAK_BROWSER_LANE": "1", "SUPERYAK_LANE_PORT_BASE": "41000",
+                     "SUPERYAK_LANE_PORT_COUNT": "32", "PW_TEST_CONNECT_WS_ENDPOINT": endpoint,
+                     "NODE_OPTIONS": "--require " + str(path / "preload.cjs"),
+                     "BASH_DEFAULT_TIMEOUT_MS": "600000", "BASH_MAX_TIMEOUT_MS": "2400000"}
+    for name, value in (("SSH_AUTH_SOCK", "/tmp/agent.sock"), ("GPG_AGENT_INFO", "/tmp/gpg"),
+                        ("DOCKER_HOST", "unix:///var/run/docker.sock"), ("NODE_OPTIONS", "--inspect")):
+        monkeypatch.setenv(name, value)
+    seen = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            seen.append(kwargs["env"])
+    monkeypatch.setattr(workers.subprocess, "Popen", FakePopen)
+    workers.launch(["claude", "-p", "x"], tmp_path, tmp_path / "w1", dict(extra, ENGRAM_PROJECT_ROOT="/r"),
+                   drop_env=lane.DROP_ENV)
+    workers.launch(["claude", "-p", "x"], tmp_path, tmp_path / "w2", {"ENGRAM_PROJECT_ROOT": "/r"})
+    browser, plain = seen
+    assert not {"SSH_AUTH_SOCK", "GPG_AGENT_INFO", "DOCKER_HOST"} & set(browser)
+    assert {k: browser[k] for k in extra} == extra                        # NODE_OPTIONS is the preload, not teamd's
+    assert plain == dict(os.environ, ENGRAM_PROJECT_ROOT="/r", VOICE_NOTIFY_MUTE="1", SUPERYAK_RUN="1")

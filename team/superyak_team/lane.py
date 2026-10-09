@@ -491,3 +491,20 @@ def live_blocks():
     with _registry_lock():
         data = _read_registry()
     return sorted(entry["base"] for entry in data.values() if team_alive(str(entry.get("team", ""))))
+
+
+# ---------- the worker's environment (spec: Worker environment) ----------
+
+def worker_env(path, base, endpoint):
+    """What a browser worker's turn adds to its environment. workers.launch also drops DROP_ENV."""
+    path = Path(path)
+    return {"CLAUDE_CODE_TMPDIR": str(path / "tmp"),
+            "npm_config_cache": str(path / "npm-cache"),
+            "SUPERYAK_BROWSER_LANE": "1",
+            "SUPERYAK_LANE_PORT_BASE": str(base),
+            "SUPERYAK_LANE_PORT_COUNT": str(BLOCK),
+            "PW_TEST_CONNECT_WS_ENDPOINT": endpoint,
+            "NODE_OPTIONS": "--require " + str(path / "preload.cjs"),
+            # Bricks' shards run 20-35 minutes: one Bash call may take up to 40, within worker_timeout_s.
+            "BASH_DEFAULT_TIMEOUT_MS": "600000",
+            "BASH_MAX_TIMEOUT_MS": "2400000"}
