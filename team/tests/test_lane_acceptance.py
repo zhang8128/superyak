@@ -1042,6 +1042,33 @@ def test_the_advisory_set_is_the_agreed_tests(acceptance, tmp_path):
     assert "a tagged test in an agreed file, but not on the list" in [name for kind, name in rows if kind == "FAIL"]
 
 
+def test_the_pixel_suite_is_advisory_as_a_whole_file_tagged_or_not(acceptance, tmp_path):
+    """Review 7: the lead agreed visual.spec.ts at file level, so any failure there is advisory (INFO), tagged or not;
+    an untagged failure in a file whose tests are agreed one by one (approval-anatomy) is still a real FAIL."""
+    wt = tmp_path / "wt"
+    (wt / acceptance.PROBE_DIR).mkdir(parents=True)
+    anatomy = "School supplied approval anatomy preserves raw pins, exact local review and invalid editable bindings"
+
+    def spec(f, title):
+        return {"title": title, "file": f, "line": 1, "tags": [],
+                "tests": [{"status": "unexpected", "results": [{"error": {"message": "m"}}]}]}
+
+    def run(failing):
+        (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({
+            "config": {"rootDir": str(wt / "tests")}, "errors": [],
+            "suites": [{"title": "s", "specs": [{"title": "ok", "file": "a.spec.ts", "line": 1, "tags": [],
+                                                 "tests": [{"status": "expected"}]}] + failing}]}))
+        report = acceptance.Report()
+        acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
+        return report.rows
+    rows = run([spec("gtm/visual.spec.ts", "the pixel comparison")])
+    assert [r[2] for r in rows if r[1] == "kaylee tests/a.spec.ts"] == ["PASS"]
+    assert [(r[2], "the pixel comparison" in r[3]) for r in rows if "advisory" in r[1]] == [("INFO", True)]
+    rows = run([spec("gtm/approval-anatomy.spec.ts", anatomy)])
+    assert [r[2] for r in rows if r[1] == "kaylee tests/a.spec.ts"] == ["FAIL"]
+    assert not [r for r in rows if "advisory" in r[1]]
+
+
 def test_both_parametrised_titles_match(acceptance, tmp_path):
     rows = advisory_rows(acceptance, tmp_path, [("gtm/content-recipes-cards.spec.ts", SELDON, ["@lane-advisory"]),
                                                 ("gtm/content-recipes-cards.spec.ts", CHANI, ["@lane-advisory"])])
@@ -1588,6 +1615,35 @@ def test_the_turns_processes_outside_the_sandbox_are_only_teamds_team_server(acc
     assert [verdict for _, verdict, _ in rows] == ["FAIL", "FAIL", "FAIL"] and "pid 13" in rows[2][2]
     rows = acceptance.outside_verdicts(argv, {"disableAllHooks": True}, under + [(14, "node x", None)])
     assert rows[2][1] == "BROKEN"
+
+
+def test_a_process_that_ended_meanwhile_says_nothing_about_the_turn(acceptance):
+    """Review 3: measured on the Mac, sandbox_check answers 1 for a gone pid (zombie, reaped or never used), so a pid
+    that ended meanwhile is left out whatever it said; one still running that sandbox_check can't answer stays, as
+    None, for the BROKEN row."""
+    commands = {11: "run_team.py", 12: "/bin/bash -c sleep 30", 13: "sleep 1", 14: "node x"}
+    said = {11: False, 12: True, 13: True, 14: None}
+    alive = {11: True, 12: True, 13: False, 14: True}
+    assert acceptance.under_turn([11, 12, 13, 14, 15], commands, said.get, alive.get) == [
+        (11, "run_team.py", False), (12, "/bin/bash -c sleep 30", True), (14, "node x", None)]
+
+
+def test_the_leftover_gate_takes_the_turns_sandboxed_shell_and_never_claude_or_the_team_server(acceptance):
+    """Review 4: the real lane profile against lane._turn_sandboxed. Every sandboxed process under the turn passes the
+    gate; claude itself and teamd's run_team.py don't. If they didn't, rules (a) and (b) would silently do nothing."""
+    name = "C1: the leftover gate takes the turn's sandboxed shell, never claude or the team server"
+    under = [(11, "/usr/bin/python3 /x/team/run_team.py", False), (12, "/bin/bash -c sleep 30", True)]
+    gate = {10: False, 11: False, 12: True}
+    assert acceptance.leftover_gate_verdict(10, under, gate.get) == (
+        name, "PASS", "the gate takes the turn's sandboxed pid 12, not claude (pid 10) or run_team.py (pid 11)")
+    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: False, 11: False, 12: False}.get)[1:]
+    assert verdict == "FAIL" and "pid 12" in detail                            # (a) and (b) would do nothing
+    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: True, 11: False, 12: True}.get)[1:]
+    assert verdict == "FAIL" and "claude" in detail
+    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: False, 11: True, 12: True}.get)[1:]
+    assert verdict == "FAIL" and "run_team.py" in detail
+    assert acceptance.leftover_gate_verdict(10, under, {10: False, 11: False, 12: None}.get)[1] == "BROKEN"
+    assert acceptance.leftover_gate_verdict(10, under[:1], gate.get)[1] == "BROKEN"    # no sandboxed shell to ask about
 
 
 def test_the_preload_row_needs_teamds_own_file_outside_tmp(acceptance, tmp_path):

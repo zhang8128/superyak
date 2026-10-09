@@ -170,15 +170,29 @@ def rendezvous_pid(ps_text, broker_pid):
 
 
 
-def summarize(report):
-    """A Playwright JSON report: passes, real failures, advisory failures (@lane-advisory, reported separately and in
-    full), flaky tests, skips and top-level errors."""
+def _spec_path(report, root, spec):
+    """A spec's file as a full path: relative to the report's test folder (config.rootDir), or to `root` without one."""
+    base = (report.get("config") or {}).get("rootDir") or root
+    return os.path.normpath(os.path.join(base, str(spec.get("file"))))
+
+
+def _advisory_file(report, root, spec):
+    """Whether a spec is in a file agreed as a whole (ADVISORY_FILES, under the worktree `root`): any failure there is
+    advisory, tagged or not."""
+    return root is not None and _spec_path(report, root, spec) in {
+        os.path.normpath(os.path.join(root, f)) for f in ADVISORY_FILES}
+
+
+def summarize(report, root=None):
+    """A Playwright JSON report: passes, real failures, advisory failures (@lane-advisory, or any failure in a file
+    agreed as a whole when the worktree `root` is given; reported separately and in full), flaky tests, skips and
+    top-level errors."""
     out = {"passed": 0, "failed": [], "advisory": [], "flaky": [], "skipped": 0,
            "errors": [str(e.get("message", e))[:200] for e in report.get("errors") or []]}
 
     def walk(suite):
         for spec in suite.get("specs") or []:
-            advisory = advisory_title(spec)[0]
+            advisory = advisory_title(spec)[0] or _advisory_file(report, root, spec)
             name = "%s:%s %s" % (spec.get("file"), spec.get("line"), spec.get("title"))
             for test in spec.get("tests") or []:
                 status = test.get("status")
@@ -703,6 +717,41 @@ def preload_verdict(path, unsafe=("/tmp", "/private/tmp", "/private/var/folders"
     if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o644:
         return "FAIL", "%s isn't a plain file of yours at mode 644 (mode %o)" % (path, stat.S_IMODE(st.st_mode))
     return "PASS", "%s: teamd's own, mode 644, outside the shared temp folders" % path
+
+
+def under_turn(pids, commands, sandboxed_of, alive_of):
+    """[(pid, command, sandboxed)] for the processes under a turn, sandboxed None when sandbox_check can't say. On macOS
+    27 sandbox_check answers 1 for a gone pid (zombie, reaped or never used; measured 2026-10-09), so a pid that
+    ended meanwhile says nothing, whatever it answered, as in lane._turn_sandboxed: it is left out, asked after the
+    check so a pid that ends during it is too."""
+    out = []
+    for pid in pids:
+        sandboxed = sandboxed_of(pid)
+        if pid in commands and alive_of(pid):
+            out.append((pid, commands[pid], sandboxed))
+    return out
+
+
+def leftover_gate_verdict(turn, under, gate):
+    """C1, review 4: the real lane profile against the leftover gate (lane._turn_sandboxed, as `gate(pid)`): every
+    sandboxed process under the turn passes it, and claude itself (`turn`) and teamd's run_team.py don't. If the turn's
+    own processes failed it, the tree and orphan rules would silently do nothing. (row, verdict, detail)."""
+    name = "C1: the leftover gate takes the turn's sandboxed shell, never claude or the team server"
+    shells = [pid for pid, command, sandboxed in under if sandboxed is True]
+    servers = [pid for pid, command, sandboxed in under if re.search(r"(^|/)run_team\.py(\s|$)", command)]
+    if not shells:
+        return name, "BROKEN", "no sandboxed process under the turn to ask about"
+    said = {pid: gate(pid) for pid in [turn] + servers + shells}
+    unknown = sorted(pid for pid, answer in said.items() if answer is None)
+    if unknown:
+        return name, "BROKEN", "sandbox_check couldn't say for pids %s" % ", ".join(map(str, unknown))
+    wrong = ["pid %d (sandboxed under the turn) isn't taken" % pid for pid in shells if not said[pid]]
+    wrong += ["claude (pid %d) would be taken" % turn] if said[turn] else []
+    wrong += ["run_team.py (pid %d) would be taken" % pid for pid in servers if said[pid]]
+    if wrong:
+        return name, "FAIL", "; ".join(wrong)
+    return name, "PASS", "the gate takes the turn's sandboxed pid %s, not claude (pid %d)%s" % (
+        ", ".join(map(str, shells)), turn, " or run_team.py (pid %s)" % ", ".join(map(str, servers)) if servers else "")
 
 
 def is_sandboxed(pid):
@@ -1950,14 +1999,13 @@ def c1_rows(report, team_id, wid, w, turn):
     except (OSError, ValueError):
         settings = {}
     commands = commands_of(_ps_text())
-    under = []
-    for pid in sorted(lane.family(turn)[0] - {turn}):
-        sandboxed = is_sandboxed(pid)
-        if pid in commands and (sandboxed is not None or alive(pid)):     # one that ended meanwhile says nothing
-            under.append((pid, commands[pid], sandboxed))
+    under = under_turn(sorted(lane.family(turn)[0] - {turn}), commands, is_sandboxed, alive)
     for name, verdict, detail in outside_verdicts(r.stdout.strip(), settings if isinstance(settings, dict) else {},
                                                   under):
         report.add(2, name, verdict, detail)
+    path = Path(w["lane"]["path"])
+    report.add(2, *leftover_gate_verdict(turn, under, lambda pid: lane._turn_sandboxed(
+        pid, (w["path"], path / "tmp"), (path / "b",))))
     report.add(2, "C1: the preload is teamd's own file, outside /tmp", *preload_verdict(w["lane"].get("preload")))
 
 
@@ -2203,22 +2251,21 @@ def _person_listener(report, team, port, read, path_of, owner, clock, sleep, say
 
 def advisory_details(report, root):
     """(full path, title without the tag, 'file:line title', first error message) of every failing @lane-advisory
-    spec in a Playwright JSON report. A spec's file is relative to the report's test folder (config.rootDir), or to
-    `root` when it has none."""
+    spec in a Playwright JSON report, and of every failing spec in a file agreed as a whole (ADVISORY_FILES), tagged or
+    not. A spec's file is relative to the report's test folder (config.rootDir), or to `root` when it has none."""
     found = []
-    base = (report.get("config") or {}).get("rootDir") or root
 
     def walk(suite):
         for spec in suite.get("specs") or []:
             tagged, title = advisory_title(spec)
-            if not tagged:
+            if not tagged and not _advisory_file(report, root, spec):
                 continue
             for test in spec.get("tests") or []:
                 if test.get("status") in ("expected", "skipped", "flaky"):
                     continue
                 message = next((r["error"]["message"] for r in test.get("results") or []
                                 if isinstance(r.get("error"), dict) and r["error"].get("message")), "no message")
-                found.append((os.path.normpath(os.path.join(base, str(spec.get("file")))), title,
+                found.append((_spec_path(report, root, spec), title,
                               "%s:%s %s" % (spec.get("file"), spec.get("line"), spec.get("title")),
                               " ".join(message.split())[:200]))
         for child in suite.get("suites") or []:
@@ -2230,15 +2277,16 @@ def advisory_details(report, root):
 
 def report_spec(report, step, wid, worktree, specs):
     """Step 6's rows for each spec's JSON report. A failing @lane-advisory test is INFO, reported separately, only if
-    it is an agreed one: its file and whole title (the tag taken out) in ADVISORY_SPECS, or its file in ADVISORY_FILES.
-    Any other tagged failure, in an agreed file or not, is a FAIL."""
+    it is an agreed one: its file and whole title (the tag taken out) in ADVISORY_SPECS. Any failure in a file agreed
+    as a whole (ADVISORY_FILES) is INFO too, tagged or not. Any other tagged failure, in an agreed file or not, is a
+    FAIL."""
     agreed = {(os.path.normpath(os.path.join(worktree, f)), title) for f, title in ADVISORY_SPECS}
     agreed_files = {os.path.normpath(os.path.join(worktree, f)) for f in ADVISORY_FILES}
     for i, spec in enumerate(specs):
         path = Path(worktree) / PROBE_DIR / ("spec-%d.json" % i)
         try:
             data = json.loads(path.read_text())
-            got = summarize(data)
+            got = summarize(data, worktree)
         except (OSError, ValueError) as e:
             report.add(step, "%s %s" % (wid, spec), "FAIL", "no JSON report (%s)" % e.__class__.__name__)
             continue
