@@ -267,7 +267,15 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
 - **R8.** The registry is written only under its lock, through `write_private`, as a whole-file replace; each claim is
   also in `<home>/claim.json`.
 - **R9.** The claim is the first write after docking; any later failure rolls back this run's writes, the claim last.
-- **R10.** A project dock refuses when the machine ship's hooks run another checkout's `run_agent.py`.
+  The refusal checks (R2-R4) run again under the registry lock just before the claim is written. If that second
+  check fails after the station account exists (pending or docked), dock writes no claim, stops, and says so
+  plainly: which check failed, that the ship `<name>` now exists on the station, and the exact step that removes
+  it (`make station-deny ID=<short id>` while it is pending, or `undock --home <home>` once docked), so no ship
+  is left behind unannounced. Test: `test_a_claim_lost_to_a_race_names_the_orphan_ship`.
+- **R10.** A project dock refuses when the machine ship's hooks run another checkout's `run_agent.py`. The refusal
+  names both checkouts and both fixes: dock the machine ship again from this checkout, or run the project dock
+  from the other one. Test: `test_project_dock_checks_the_machine_hook_checkout` asserts both paths and both fixes
+  appear.
 - **R11.** (Test rule) every dock test that checks git status points `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL` at empty
   temporary files and sets `GIT_CONFIG_NOSYSTEM=1`, so a machine's global ignore (M5) can't make it pass.
 - **R12.** The hook reads stdin once, for both `session_id` and `cwd`; `session_from_stdin` stays as a thin wrapper.
