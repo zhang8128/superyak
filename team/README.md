@@ -88,8 +88,8 @@ refuses the turn, naming the file. A lane also denies writes to the worktree's `
 When a lane ends, teamd ends the processes in it, by three kinds of evidence only: a listening port in the lane's
 block; the lane's exact `CLAUDE_CODE_TMPDIR` in the environment; or a cwd or open file under `<lane>/b`, which the
 worker can't write (a regular file with one link whose device and inode match lsof's). A path under `tmp/` or
-`npm-cache/` is never evidence, and a hard-linked file never is. Known limit: a leftover that cleared its environment
-and holds only files in `tmp/` survives cleanup.
+`npm-cache/` is never evidence, and a hard-linked file never is. Known limit: a leftover that cleared its environment,
+doesn't listen in the block and has nothing under `b/` survives cleanup.
 
 The broker's stderr is kept in teamd's folder, `~/.superyak/team/<team>/workers/<worker>/broker-stderr.log`, never in
 the lane's folder.
@@ -113,9 +113,9 @@ unchanged.
 
 **Known limit: a process that leaves a lane's environment behind.** At the end of every browser turn, teamd ends any
 process whose environment still carries the lane's `CLAUDE_CODE_TMPDIR`, so a turn's background leftovers don't
-outlive it. When a lane ends, teamd ends the broker, every process with a file under the lane or a listener on its
+outlive it. When a lane ends, teamd ends the broker, every process with a cwd or file under `<lane>/b` or a listener on its
 ports, and every process whose environment still carries that variable. A child that started a new session, cleared
-its own environment and holds nothing in the lane escapes all three, until the next listener check finds anything it
+its own environment and holds nothing under `<lane>/b` escapes all three, until the next listener check finds anything it
 listens on.
 
 **Known limit: Claude Code's own transcripts.** teamd scrubs the lane's secret from everything it keeps and sends,

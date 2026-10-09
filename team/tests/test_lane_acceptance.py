@@ -536,7 +536,7 @@ def test_the_hardlink_row_finds_the_holders_descriptor_by_inode(acceptance, worl
     real = lane.lane_pids
 
     def spy(path, base):
-        seen["linked"] = (path / "tmp" / "linked.txt").exists()
+        seen["linked"] = (path / "b" / "linked.txt").exists()
         return real(path, base)
     monkeypatch.setattr(lane, "lane_pids", spy)
     verdict, detail = acceptance.hardlink_naming()

@@ -2601,6 +2601,7 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
         for pid in (broker.proc.pid, child):                                    # Chrome inherits no secret
             environment = lane._environ(pid)                       # /proc on Linux, KERN_PROCARGS2 on a Mac
             assert environment is not None, "couldn't read pid %d's environment" % pid
+            assert "TMPDIR=" + str(b) in environment, "pid %d: TMPDIR=<b> missing from %r" % (pid, environment)
             assert broker.secret not in "\n".join(environment), "secret in environment"
     finally:
         lane.stop_broker(broker)
@@ -5570,3 +5571,20 @@ def test_r2_8_the_process_wrapper_variable_is_dropped_and_refuses_a_lane(env, mo
     assert len(found) == 1 and "CLAUDE_CODE_PROCESS_WRAPPER" in found[0]
     monkeypatch.setenv("CLAUDE_CODE_PROCESS_WRAPPER", "")
     assert lane.settings_widenings() == []
+
+
+def test_r3_dot_components_in_a_name_are_never_walked_out_of_b(env, tmp_root, short_dir, monkeypatch):
+    """Re-review: <lane>/b/x/../../../../stranger/held.db walks out of b/ if . and .. are followed."""
+    path = lane.ensure_lane("t1", "kaylee")
+    outside = Path(short_dir)
+    (outside / "held.db").write_text("x")
+    (path / "b" / "x").mkdir()
+    st = os.lstat(outside / "held.db")
+    depth = len((path / "b" / "x").parts) - 1                         # folders from b/x up to /
+    name = "%s/b/x/%s%s/held.db" % (path, "../" * depth, str(outside).lstrip("/"))
+    assert os.lstat(name).st_ino == st.st_ino                        # the name really reaches the stranger's file
+    table_of_self(monkeypatch)
+    lsof_stub(monkeypatch, f_record(777, "3", "REG", st, name))
+    assert lane.lane_pids(path, None) == set()
+    lsof_stub(monkeypatch, f_record(777, "3", "REG", st, "%s/b/./held.db" % path))
+    assert lane.lane_pids(path, None) == set()

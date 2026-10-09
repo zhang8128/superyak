@@ -967,7 +967,7 @@ def _descriptors(text):
 
 
 def hardlink_naming():
-    """Review row `hardlink-naming`: a file another process of this user holds open, hard-linked into the lane's tmp/.
+    """Review row `hardlink-naming`: a file another process of this user holds open, hard-linked into the lane's b/ (the only place cleanup takes path evidence from).
     lsof may name a hard-linked file by whichever name was looked up last, so the file is stat'ed and opened through
     the LANE's path first, as a hostile lane would; the helper's descriptor is then found by inode (under either name)
     and the name lsof reports is printed. The verdict is the cleanup matcher's own: lane.lane_pids must NOT name the
@@ -986,7 +986,7 @@ def hardlink_naming():
         HELPERS.append(helper)
         if helper.stdout.readline().strip() != "ready":
             return "BROKEN", "the helper didn't start"
-        linked = path / "tmp" / "linked.txt"
+        linked = path / "b" / "linked.txt"           # b/ is where cleanup looks (the driver can write there)
         os.link(held, linked)
         st = os.lstat(linked)                               # through the lane's path, as a hostile lane would
         os.close(os.open(linked, os.O_RDONLY | os.O_NOFOLLOW))

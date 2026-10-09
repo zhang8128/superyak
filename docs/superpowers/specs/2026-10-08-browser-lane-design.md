@@ -371,7 +371,7 @@ Paths under `<lane>/tmp` and `<lane>/npm-cache`, which the worker can write, are
 folder there for a link, rename one of its own folders in, or hard-link a stranger's open file (macOS lsof names a
 hard-linked file by the path the kernel looked up last). Membership there comes only from the environment or a port.
 This catches Playwright's detached webServer and dev servers, which `killpg` on the worker misses. Known limit: a
-leftover that cleared its environment and holds only files in `tmp/` survives cleanup.
+leftover that cleared its environment, doesn't listen in the block and has nothing under `b/` survives cleanup.
 
 **Briefs.**
 - `team/superyak_team/roles/browser-lane.md` is a new file, appended to the initial prompt only for browser

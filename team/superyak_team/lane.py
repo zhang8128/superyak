@@ -1914,7 +1914,7 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
     pids |= family(proc.pid)[0]                         # before poll(), which may reap it and free its pid for reuse
     exited = proc.poll()
     stop_broker(broker)
-    cleanup_processes(Path(path), None)                 # node is gone: what it started is found by b/ (and its env) now
+    cleanup_processes(Path(path), None)                 # node is gone: what it started is found by b/ now (no env is passed here)
     denials = denials_for(stop_denial_stream(stream), pids)
     try:
         log = stderr_path.read_text(errors="replace").splitlines()
@@ -2036,6 +2036,8 @@ def _lstat_in_b(path, rel):
     last, is opened with O_NOFOLLOW|O_DIRECTORY through the one before, and the last is stat'ed with dir_fd and
     follow_symlinks=False. None if any step is missing or is a link. Nothing here is resolved by name."""
     parent = _parent_path()
+    if any(part in (".", "..") for part in rel):          # a name that climbs out of b/ is not evidence
+        return None
     try:
         parts = list(Path(path).relative_to(parent).parts) + ["b"] + list(rel)
     except ValueError:
