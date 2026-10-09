@@ -1306,9 +1306,10 @@ SHARED_ROOTS = ("/Users", "/Volumes", "/private/tmp", "/private/var/folders", "/
 
 
 def node_prefix(node_bin):
-    """node's own folder (the resolved binary's grandparent), which the broker reads whole. Refused when it is /,
-    /private, $HOME or a folder above it, or lies under /Users, /Volumes, /private/tmp or /private/var/folders: the
-    profile would read far more than node."""
+    """node's own folder (the resolved binary's grandparent), which the broker reads whole. Refused when it equals,
+    holds or lies under $HOME or any of SHARED_ROOTS (/Users, /Volumes, /private/tmp, /private/var/folders,
+    /System/Volumes); so /, /private and /private/var go too, since they hold those. The profile would read far more
+    than node."""
     try:
         prefix = Path(os.path.realpath(node_bin)).parents[1]
     except (ValueError, IndexError):
@@ -1386,10 +1387,11 @@ def _probe_leftovers():
             "write_users_shared": USERS_SHARED / "superyak-lane-probe"}
 
 
-def probe_targets(user_temp):
+def probe_targets(user_temp, lane_dir=None):
     """What each probe acts on, checked outside the sandbox: a probe whose target doesn't exist, or exists but can't
     be used (an unreadable rc file, an unwritable folder), would be "refused" for the wrong reason, so its row is
-    BROKEN. {probe: (variable for the probe or None, path or None)}."""
+    BROKEN. link_dotfile also needs a regular file (not a link) on the lane's device (`lane_dir`), or the link would
+    fail with EXDEV, a reason unrelated to the wall. {probe: (variable for the probe or None, path or None)}."""
     home = Path.home()
 
     def usable(path, mode):
@@ -1400,10 +1402,18 @@ def probe_targets(user_temp):
                for name, path in PROBE_PROGRAMS.items()}
     if not CALCULATOR_APP.is_dir():
         targets["exec_open_calculator"] = (None, None)
+    def linkable():
+        for n in (".zshrc", ".bashrc", ".profile", ".gitconfig"):
+            p = home / n
+            if p.is_file() and not p.is_symlink() and usable(p, os.R_OK):
+                if lane_dir is None or _device(p) == _device(lane_dir):
+                    return p
+                return None
+        return None
     read, write = os.R_OK | os.X_OK, os.W_OK | os.X_OK
     return {**targets,
             "read_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"), os.R_OK)),
-            "link_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"), os.R_OK)),
+            "link_dotfile": ("PROBE_DOTFILE", linkable()),
             "open_rc_for_write": ("PROBE_RC", first((".zshrc", ".bashrc", ".profile"), os.R_OK | os.W_OK)),
             "read_claude_tmp": ("PROBE_CLAUDE_TMP", folder(PRIVATE_TMP / ("claude-%d" % os.getuid()), read)),
             "read_user_temp": ("PROBE_USER_TEMP", folder(user_temp, read)),
@@ -1413,10 +1423,11 @@ def probe_targets(user_temp):
 
 
 # The codes a probe's refusal may carry. Only these prove the profile said no: a mistake (an unknown probe, a missing
-# input), a program that ran and failed, a timeout, a signal or ENOENT proves nothing. DNS is a Mach lookup the profile
-# denies, so net_domain may also come back as a failed name lookup.
+# input), a program that ran and failed, a timeout (code 23 from AbortSignal), a signal or ENOENT proves nothing. DNS
+# reaches mDNSResponder over its Unix socket, which the profile denies; network_up() showed resolution works outside the
+# sandbox, so any resolver failure inside it is the profile's doing and net_domain accepts the resolver's codes too.
 REFUSAL_CODES = ("EPERM", "EACCES")
-EXTRA_REFUSAL_CODES = {"net_domain": ("ENOTFOUND", "EAI_AGAIN")}
+EXTRA_REFUSAL_CODES = {"net_domain": ("ENOTFOUND", "EAI_AGAIN", "EAI_FAIL")}
 
 
 def judge_probe(name, returncode, output=""):
@@ -1463,7 +1474,7 @@ def self_check(node_bin, pw_dir, shell_dir, run=None):
         profile = render_profile(b_text, pw_dir, browsers_root(), shell_dir, node_bin, base)
         source = (teamlib.package_dir() / "lane" / "profile_probe.js").read_text()
         user_temp = _run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], timeout=10)
-        targets = probe_targets(user_temp.stdout.strip() if user_temp and user_temp.returncode == 0 else None)
+        targets = probe_targets(user_temp.stdout.strip() if user_temp and user_temp.returncode == 0 else None, path)
         env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "TMPDIR": b_text,
                "PROBE_CANARY_PORT": str(canary.getsockname()[1]), "PROBE_LANE_PORT": str(base + 2)}
         env.update({var: str(path) for var, path in targets.values() if var and path})
@@ -1501,8 +1512,9 @@ def self_check(node_bin, pw_dir, shell_dir, run=None):
         def sweep():
             for name, target in leftovers.items():
                 if name not in before and os.path.lexists(target):
-                    os.unlink(target)
-                    rows.append(("leftover", "FAIL", "removed %s, which a probe created" % target))
+                    step("remove %s" % target, lambda: os.unlink(target))
+                    if not os.path.lexists(target):
+                        rows.append(("leftover", "FAIL", "removed %s, which a probe created" % target))
         step("close the canary", canary.close)
         step("close the listener", listener.close)
         step("remove what a probe created", sweep)

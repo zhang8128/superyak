@@ -2102,18 +2102,53 @@ def test_the_probe_scripts_probes_are_the_self_checks(tmp_path):
     assert sorted(keys) == sorted(lane.SELF_CHECK_PROBES + lane.SELF_CHECK_POSITIVE) and len(set(keys)) == len(keys)
 
 
-def test_the_link_probe_makes_a_hard_link_and_reads_it(tmp_path):
+def test_the_link_probe_succeeds_when_the_link_is_made_and_always_removes_it(tmp_path):
+    """Review: the link itself is the bypass (same-uid sandboxes can write the lane), whatever a read through it does."""
     rc = tmp_path / "rc"
     rc.write_text("x")
-    r = run_probe_js("link_dotfile", tmp_path, PROBE_DOTFILE=str(rc))
-    assert (r.returncode, r.stdout.strip()) == (0, "succeeded") and os.stat(rc).st_nlink == 2
+    rc.chmod(0)                                                         # a read through the link would fail
+    try:
+        r = run_probe_js("link_dotfile", tmp_path, PROBE_DOTFILE=str(rc))
+        assert (r.returncode, r.stdout.strip()) == (0, "succeeded")
+        assert os.stat(rc).st_nlink == 1 and not (tmp_path / "superyak-lane-probe-link").exists()
+    finally:
+        rc.chmod(0o600)
+    r = run_probe_js("link_dotfile", tmp_path, PROBE_DOTFILE=str(tmp_path / "missing"))
+    assert (r.returncode, r.stdout.split()[:2]) == (1, ["refused:", "ENOENT"])
+
+
+@pytest.fixture(autouse=True)
+def hermetic_network(monkeypatch):
+    """A test that wants the network check patches it; none may reach the real network by accident."""
+    def no_network():
+        raise AssertionError("lane.network_up ran for real; patch it")
+    monkeypatch.setattr(lane, "network_up", no_network)
+
+
+def test_the_link_probe_needs_a_regular_dotfile_on_the_lanes_device(probe_world, env, monkeypatch):
+    lane_dir = env["tmp"] / "lane"
+    lane_dir.mkdir()
+    assert lane.probe_targets(None, lane_dir)["link_dotfile"] == ("PROBE_DOTFILE", env["home"] / ".zshrc")
+    device = lane._device
+    monkeypatch.setattr(lane, "_device", lambda path: 1 if Path(path) == lane_dir else 2)       # another volume: EXDEV
+    assert lane.probe_targets(None, lane_dir)["link_dotfile"][1] is None
+    assert lane.probe_targets(None, lane_dir)["read_dotfile"][1] == env["home"] / ".zshrc"
+    monkeypatch.setattr(lane, "_device", device)
+    real = env["tmp"] / "store-rc"
+    real.write_text("x")
+    (env["home"] / ".zshrc").unlink()
+    (env["home"] / ".zshrc").symlink_to(real)                           # a link into somewhere else: EXDEV or worse
+    assert lane.probe_targets(None, lane_dir)["link_dotfile"][1] is None
 
 
 @pytest.mark.parametrize("name, rc, out, verdict", [
     ("exec_osascript", 1, "refused: EPERM", "PASS"), ("exec_osascript", 1, "refused: EACCES (x)", "PASS"),
     ("read_dotfile", 1, "refused: EPERM", "PASS"), ("link_dotfile", 1, "refused: EPERM", "PASS"),
     ("open_rc_for_write", 1, "refused: EACCES", "PASS"), ("write_home", 1, "refused: EPERM", "PASS"),
-    ("net_domain", 1, "refused: ENOTFOUND", "PASS"), ("net_ip", 1, "refused: EPERM", "PASS"),
+    ("net_domain", 1, "refused: ENOTFOUND", "PASS"), ("net_domain", 1, "refused: EAI_FAIL", "PASS"),
+    ("net_domain", 1, "refused: EAI_AGAIN", "PASS"), ("net_domain", 1, "refused: EPERM", "PASS"),
+    ("net_domain", 1, "refused: EACCES", "PASS"), ("net_domain", 1, "refused: 23 (timeout)", "BROKEN"),
+    ("net_domain", 1, "refused: ECONNREFUSED", "BROKEN"), ("net_ip", 1, "refused: EAI_FAIL", "BROKEN"), ("net_ip", 1, "refused: EPERM", "PASS"),
     ("exec_osascript", -9, "", "BROKEN"), ("exec_osascript", 64, "", "BROKEN"),
     ("exec_osascript", 2, "broken: unknown probe", "BROKEN"), ("exec_osascript", 1, "", "BROKEN"),
     ("exec_osascript", 1, "TypeError: x", "BROKEN"), ("exec_osascript", 1, "refused: ETIMEDOUT", "BROKEN"),
@@ -2246,3 +2281,28 @@ def test_the_link_probe_gets_the_dotfile_and_its_lane(profile_paths, refusing, e
     _self_check(profile_paths, sandbox)
     e, cwd = seen["link_dotfile"]
     assert e["PROBE_DOTFILE"] == str(env["home"] / ".zshrc") and e["TMPDIR"] == cwd
+
+
+def test_one_leftover_that_cant_be_removed_does_not_hide_the_next(profile_paths, refusing, env, monkeypatch):
+    (env["home"] / "Library" / "LaunchAgents").mkdir(parents=True, exist_ok=True)
+
+    def sandbox(cmd, env=None, cwd=None, **kw):
+        if cmd[-1] in ("write_home", "write_launchagents"):
+            for target in lane._probe_leftovers().values():
+                if cmd[-1] == "write_home" and target.name.endswith(".txt") or \
+                        cmd[-1] == "write_launchagents" and target.name.endswith(".plist"):
+                    target.write_text("x")
+            return Ran(0, "succeeded")
+        return refusing(cmd, env=env, cwd=cwd)
+    real = os.unlink
+
+    def unlink(target, *a, **kw):
+        if str(target).endswith("superyak-lane-probe.txt"):
+            raise OSError(1, "nope")
+        return real(target, *a, **kw)
+    monkeypatch.setattr(lane.os, "unlink", unlink)
+    rows = _self_check(profile_paths, sandbox)
+    monkeypatch.undo()
+    assert not (env["home"] / "Library/LaunchAgents/superyak-lane-probe.plist").exists()
+    assert any(n == "leftover" and "plist" in d for n, _, d in rows) and any(n == "cleanup" for n, _, _ in rows)
+    (env["home"] / "superyak-lane-probe.txt").unlink()
