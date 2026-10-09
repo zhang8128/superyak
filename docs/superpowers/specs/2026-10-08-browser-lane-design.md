@@ -176,7 +176,7 @@ With `lane=None`, the output is byte-for-byte what it is today.
 
 **The broker** (`team/superyak_team/lane.py`, plus `team/superyak_team/lane_broker.js`, which is spike 4's script):
 - **When it starts:** teamd starts it at the lane's first turn, after the listener check. It runs as
-  `sandbox-exec -f <lane>/b/broker.sb <node> lane_broker.js`.
+  `sandbox-exec -p <profile> <node> -e <broker source> <port>`: the profile and the script are passed inline, so nothing in `/tmp` decides what the broker is.
 - **Its environment** is built from nothing, not inherited, so no inherited `NODE_OPTIONS`, `PLAYWRIGHT_*` or `PW_*`
   can reach the broker. teamd sets `PLAYWRIGHT_BROWSERS_PATH` itself. It holds only `PATH=/usr/bin:/bin`, `HOME`, `TMPDIR` and `MAC_CHROMIUM_TMPDIR` (both
   `<lane>/b`) and the pinned Playwright path. The secret reaches the broker on stdin, never in its environment, which
