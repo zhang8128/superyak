@@ -1867,7 +1867,8 @@ TEMPLATE_RULES = [
     '(allow mach-lookup (global-name-regex #"^org\\.chromium\\.Chromium\\.MachPortRendezvousServer\\.[0-9]+$"))',
 ]
 RENDEZVOUS = TEMPLATE_RULES[-2:]
-PATTERN_RULE = re.compile(r"\((prefix|regex|global-name-prefix|global-name-regex)\b")
+PATTERN_RULE = re.compile(r"\((?:[\w-]+-)?(?:prefix|regex)\b")
+ALLOW_FILE = Path(__file__).resolve().parent.parent / "scripts" / "lane_broker_allow.sb"
 
 
 def rules(text):
@@ -1878,6 +1879,7 @@ def test_the_template_is_exactly_the_reviewed_rules():
     """Spec unit test 9: the template, as an allowlist."""
     template = (teamlib.package_dir() / "lane" / "broker.sb.tmpl").read_text()
     assert rules(template) == TEMPLATE_RULES
+    assert TEMPLATE_RULES[-4:] == rules(ALLOW_FILE.read_text())         # the reviewed file itself, not a hand copy
     assert [r for r in rules(template) if PATTERN_RULE.search(r)] == RENDEZVOUS
 
 
@@ -1909,6 +1911,7 @@ def test_the_profile_denies_by_default_with_one_rule_per_lane_port(profile_paths
     assert '(allow network-bind network-inbound (local ip "localhost:41063"))' in rules(text)
     assert "(allow process-fork)" in rules(text)
     assert [r for r in rules(text) if PATTERN_RULE.search(r)] == RENDEZVOUS
+    assert "link_dotfile" in lane.SELF_CHECK_PROBES
     assert not any("remote tcp" in r or "localhost:*" in r for r in rules(text))
 
 
@@ -2001,6 +2004,10 @@ def probe_world(env, monkeypatch):
     monkeypatch.setattr(lane, "PRIVATE_TMP", private_tmp)
     monkeypatch.setattr(lane, "USERS_SHARED", shared)
     monkeypatch.setattr(lane, "PROBE_PROGRAMS", {name: sys.executable for name in lane.PROBE_PROGRAMS})
+    calculator = env["tmp"] / "Calculator.app"
+    calculator.mkdir()
+    monkeypatch.setattr(lane, "CALCULATOR_APP", calculator)
+    monkeypatch.setattr(lane, "network_up", lambda: True)
     return {"user_temp": user_temp}
 
 
@@ -2023,7 +2030,7 @@ def test_the_self_check_judges_every_probe_and_cleans_up(profile_paths, probe_wo
     rows = lane.self_check(profile_paths["node"], profile_paths["pw"], profile_paths["shell"], run=sandbox)
     verdicts = {name: verdict for name, verdict, _ in rows}
     assert set(verdicts) == set(lane.SELF_CHECK_PROBES) | set(lane.SELF_CHECK_POSITIVE) | {"leftover"}
-    assert len(lane.SELF_CHECK_PROBES) == 16 and "exec_open_calculator" in lane.SELF_CHECK_PROBES
+    assert len(lane.SELF_CHECK_PROBES) == 17 and "exec_open_calculator" in lane.SELF_CHECK_PROBES
     assert lane.SELF_CHECK_POSITIVE == ("lane_port", "write_own_folder", "exec_node")
     assert verdicts["write_home"] == "FAIL" and verdicts["leftover"] == "FAIL"
     assert all(v == "PASS" for name, v in verdicts.items() if name not in ("write_home", "leftover"))
@@ -2056,3 +2063,186 @@ def test_a_probe_whose_target_is_missing_is_broken_not_passed(profile_paths, pro
     for name in ("read_dotfile", "open_rc_for_write", "write_launchagents"):
         assert verdicts[name] == "BROKEN" and name not in ran
     assert not (env["home"] / ".zshrc").exists() and not (env["home"] / "Library" / "LaunchAgents").exists()
+
+
+# ---------- Task 6, fix round 1 ----------
+
+PROBE_JS = Path(lane.__file__).resolve().parent / "lane" / "profile_probe.js"
+
+
+def run_probe_js(name, tmp_path, **extra):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node")
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "TMPDIR": str(tmp_path)}
+    env.update(extra)
+    args = [node, "-e", PROBE_JS.read_text()] + ([name] if name is not None else [])
+    return subprocess.run(args, env=env, capture_output=True, text=True, timeout=60)
+
+
+def test_the_probe_script_runs_for_real_and_never_reads_a_mistake_as_a_refusal(tmp_path):
+    r = run_probe_js("no_such_probe", tmp_path)
+    assert r.returncode == 2 and not r.stdout.startswith("refused")
+    assert run_probe_js(None, tmp_path).returncode == 2
+    r = run_probe_js("exec_node", tmp_path)
+    assert (r.returncode, r.stdout.strip()) == (0, "succeeded")
+    r = run_probe_js("write_own_folder", tmp_path)
+    assert r.returncode == 0 and (tmp_path / "superyak-lane-probe").exists()
+    r = run_probe_js("open_rc_for_write", tmp_path, PROBE_RC=str(tmp_path / "missing-rc"))
+    assert (r.returncode, r.stdout.split()[:2]) == (1, ["refused:", "ENOENT"])
+    for name, extra in (("read_dotfile", {}), ("open_rc_for_write", {}), ("link_dotfile", {}), ("net_canary", {}),
+                        ("net_canary", {"PROBE_CANARY_PORT": "x"}), ("lane_port", {"PROBE_LANE_PORT": "99999"}),
+                        ("read_user_temp", {})):
+        r = run_probe_js(name, tmp_path, **extra)
+        assert r.returncode == 2 and not r.stdout.startswith("refused"), name
+
+
+def test_the_probe_scripts_probes_are_the_self_checks(tmp_path):
+    keys = re.findall(r"^  (\w+): \(\) =>", PROBE_JS.read_text(), re.M)
+    assert sorted(keys) == sorted(lane.SELF_CHECK_PROBES + lane.SELF_CHECK_POSITIVE) and len(set(keys)) == len(keys)
+
+
+def test_the_link_probe_makes_a_hard_link_and_reads_it(tmp_path):
+    rc = tmp_path / "rc"
+    rc.write_text("x")
+    r = run_probe_js("link_dotfile", tmp_path, PROBE_DOTFILE=str(rc))
+    assert (r.returncode, r.stdout.strip()) == (0, "succeeded") and os.stat(rc).st_nlink == 2
+
+
+@pytest.mark.parametrize("name, rc, out, verdict", [
+    ("exec_osascript", 1, "refused: EPERM", "PASS"), ("exec_osascript", 1, "refused: EACCES (x)", "PASS"),
+    ("read_dotfile", 1, "refused: EPERM", "PASS"), ("link_dotfile", 1, "refused: EPERM", "PASS"),
+    ("open_rc_for_write", 1, "refused: EACCES", "PASS"), ("write_home", 1, "refused: EPERM", "PASS"),
+    ("net_domain", 1, "refused: ENOTFOUND", "PASS"), ("net_ip", 1, "refused: EPERM", "PASS"),
+    ("exec_osascript", -9, "", "BROKEN"), ("exec_osascript", 64, "", "BROKEN"),
+    ("exec_osascript", 2, "broken: unknown probe", "BROKEN"), ("exec_osascript", 1, "", "BROKEN"),
+    ("exec_osascript", 1, "TypeError: x", "BROKEN"), ("exec_osascript", 1, "refused: ETIMEDOUT", "BROKEN"),
+    ("read_dotfile", 1, "refused: ENOENT", "BROKEN"), ("net_ip", 1, "refused: ENOTFOUND", "BROKEN"),
+    ("net_canary", 1, "refused: ECONNREFUSED", "BROKEN"), ("exec_osascript", 1, "refused: nocode (Command failed)", "BROKEN"),
+    ("exec_osascript", 0, "succeeded", "FAIL"), ("write_home", 0, "succeeded", "FAIL"),
+    ("exec_node", 0, "succeeded", "PASS"), ("lane_port", 0, "succeeded", "PASS"),
+    ("exec_node", 1, "refused: EPERM", "FAIL"), ("exec_node", -9, "", "BROKEN"), ("exec_node", 2, "broken: x", "BROKEN"),
+])
+def test_a_probe_passes_only_on_a_real_refusal(name, rc, out, verdict):
+    assert lane.judge_probe(name, rc, out) == verdict
+
+
+@pytest.mark.parametrize("bad", ["{{LANE_PORTS}}", "a{b", "a}b", "a\nb", "a\x01b", "a\x7fb"])
+def test_a_path_that_could_reopen_a_placeholder_or_a_line_is_refused(profile_paths, env, bad):
+    odd = env["home"] / ".superyak" / "team" / "broker" / ("playwright-core-" + bad)
+    with pytest.raises(lane.LaneRefused, match="can't quote"):
+        lane.render_profile(profile_paths["b_text"], odd, profile_paths["browsers"], profile_paths["shell"],
+                            profile_paths["node"], 41000)
+
+
+def test_a_nul_in_a_path_is_refused_not_raised(profile_paths, env):
+    with pytest.raises(lane.LaneRefused):
+        lane.render_profile(profile_paths["b_text"], "/opt/x/pw\x00y", profile_paths["browsers"], profile_paths["shell"],
+                            profile_paths["node"], 41000)
+    with pytest.raises(lane.LaneRefused):
+        lane.sb_quote("/opt/x\x00y")
+
+
+def test_every_rendered_rule_is_its_template_rule_with_only_values_filled_in(profile_paths):
+    safe = r'[^"\\{}\x00-\x1f]*'
+    fill = {"ANCESTORS": r'\(literal "%s"\)(?: \(literal "%s"\))*' % (safe, safe),
+            "LANE_PORTS": r'\(remote ip "localhost:[0-9]+"\)(?: \(remote ip "localhost:[0-9]+"\))*'}
+    template = rules(lane.TEMPLATE.read_text())
+    rendered = rules(render(profile_paths))
+    assert len(rendered) == len(template)
+    for line, pattern in zip(rendered, template):
+        regex = re.sub(r"\\\{\\\{([A-Z_]+)\\\}\\\}", lambda m: fill.get(m.group(1), safe), re.escape(pattern))
+        assert re.fullmatch(regex, line), (line, pattern)
+    assert [r for r in rules(render(profile_paths)) if PATTERN_RULE.search(r)] == RENDEZVOUS
+
+
+@pytest.mark.parametrize("node", [
+    "/private/var/bin/node", "/System/Volumes/Data/Users/me/node/bin/node", "/System/Volumes/Data/opt/node/bin/node",
+    "/System/Volumes/x/bin/node", "/Users/node/bin/node", "/private/tmp/bin/node", "/Volumes/node/bin/node"])
+def test_a_node_prefix_that_holds_or_sits_in_a_shared_area_is_refused(env, node):
+    with pytest.raises(lane.LaneRefused, match="too wide"):
+        lane.node_prefix(Path(node))
+
+
+@pytest.mark.parametrize("node", ["/opt/homebrew/Cellar/node/22.9.0/bin/node", "/usr/local/Cellar/node/22.9.0/bin/node",
+                                  "/opt/node/bin/node", "/usr/local/node/bin/node"])
+def test_homebrew_style_node_prefixes_stay_allowed(env, node):
+    assert lane.node_prefix(Path(node)) == Path(node).parents[1]
+
+
+def _self_check(profile_paths, sandbox):
+    return lane.self_check(profile_paths["node"], profile_paths["pw"], profile_paths["shell"], run=sandbox)
+
+
+@pytest.fixture
+def refusing(monkeypatch, probe_world):
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, str(probe_world["user_temp"]) + "\n"))
+    ran = []
+
+    def sandbox(cmd, env=None, cwd=None, **kw):
+        ran.append(cmd[-1])
+        return Ran(0 if cmd[-1] in lane.SELF_CHECK_POSITIVE else 1, "succeeded" if cmd[-1] in lane.SELF_CHECK_POSITIVE
+                   else "refused: EPERM")
+    sandbox.ran = ran
+    return sandbox
+
+
+def test_a_target_that_exists_but_cant_be_used_is_broken(profile_paths, refusing, env, monkeypatch):
+    """Review: ENOENT is not the only way to refuse for the wrong reason. An unreadable rc file, an unwritable
+    /Users/Shared, no Calculator and no network all make a refusal prove nothing."""
+    (env["home"] / ".zshrc").chmod(0)
+    lane.USERS_SHARED.chmod(0o500)
+    monkeypatch.setattr(lane, "CALCULATOR_APP", env["tmp"] / "no-Calculator.app")
+    monkeypatch.setattr(lane, "network_up", lambda: False)
+    try:
+        verdicts = {n: v for n, v, _ in _self_check(profile_paths, refusing)}
+    finally:
+        lane.USERS_SHARED.chmod(0o700)
+        (env["home"] / ".zshrc").chmod(0o600)
+    broken = {"read_dotfile", "link_dotfile", "open_rc_for_write", "write_users_shared", "exec_open_calculator",
+              "exec_curl", "net_domain", "net_ip"}
+    assert {n for n, v in verdicts.items() if v == "BROKEN"} == broken and not broken & set(refusing.ran)
+    assert verdicts["write_home"] == verdicts["exec_node"] == "PASS"
+
+
+def test_a_leftover_that_was_there_before_is_reported_and_kept(profile_paths, refusing, env):
+    old = env["home"] / "superyak-lane-probe.txt"
+    old.write_text("mine")
+    verdicts = {n: v for n, v, _ in _self_check(profile_paths, refusing)}
+    assert verdicts["leftover"] == "BROKEN" and verdicts["write_home"] == "BROKEN" and "write_home" not in refusing.ran
+    assert old.read_text() == "mine"
+
+
+def test_one_cleanup_step_failing_does_not_skip_the_rest(profile_paths, refusing, monkeypatch):
+    def boom(path):
+        raise OSError(5, "boom")
+    monkeypatch.setattr(lane, "remove_lane", boom)
+    rows = _self_check(profile_paths, refusing)
+    team_id = "superyak-self-check-%d" % os.getpid()
+    assert lane.block_of(team_id, "check") is None and not lane._team_lock(team_id).exists()
+    assert any(n == "cleanup" and v == "BROKEN" for n, v, _ in rows)
+    shutil.rmtree(lane.lane_path(team_id, "check"), ignore_errors=True)
+
+
+def test_a_probe_that_hangs_or_cant_start_costs_one_row_not_all(profile_paths, refusing):
+    def sandbox(cmd, **kw):
+        if cmd[-1] == "exec_curl":
+            raise subprocess.TimeoutExpired(cmd, 60)
+        if cmd[-1] == "net_ip":
+            raise OSError(2, "no sandbox-exec")
+        return refusing(cmd, **kw)
+    verdicts = {n: v for n, v, _ in _self_check(profile_paths, sandbox)}
+    assert verdicts["exec_curl"] == verdicts["net_ip"] == "BROKEN" and verdicts["write_home"] == "PASS"
+    assert len(verdicts) == len(lane.SELF_CHECK_PROBES) + len(lane.SELF_CHECK_POSITIVE)
+
+
+def test_the_link_probe_gets_the_dotfile_and_its_lane(profile_paths, refusing, env):
+    seen = {}
+
+    def sandbox(cmd, env=None, cwd=None, **kw):
+        seen[cmd[-1]] = (env, cwd)
+        return refusing(cmd, env=env, cwd=cwd)
+    _self_check(profile_paths, sandbox)
+    e, cwd = seen["link_dotfile"]
+    assert e["PROBE_DOTFILE"] == str(env["home"] / ".zshrc") and e["TMPDIR"] == cwd

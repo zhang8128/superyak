@@ -1286,27 +1286,35 @@ TEMPLATE = teamlib.package_dir() / "lane" / "broker.sb.tmpl"
 
 def sb_quote(path):
     """A path as a profile string: resolved (Seatbelt matches real paths), and refused if a profile can't quote it."""
-    return _sb_literal(os.path.realpath(str(path)))
+    try:
+        return _sb_literal(os.path.realpath(str(path)))
+    except ValueError:
+        raise LaneRefused("refusing a path a sandbox profile can't quote: %r" % str(path))
 
 
 def _sb_literal(path):
     """A path as given (not resolved), refused if a profile can't quote it."""
     path = str(path)
-    if '"' in path or "\\" in path:
+    if re.search(r'["\\{}\x00-\x1f\x7f]', path):
         raise LaneRefused("refusing a path a sandbox profile can't quote: %r" % path)
     return path
+
+
+# A node prefix may not be, hold or lie under $HOME or any of these ("/" and /private hold them; /System/Volumes/Data is
+# the Data volume the same /Users and /private/tmp live on).
+SHARED_ROOTS = ("/Users", "/Volumes", "/private/tmp", "/private/var/folders", "/System/Volumes")
 
 
 def node_prefix(node_bin):
     """node's own folder (the resolved binary's grandparent), which the broker reads whole. Refused when it is /,
     /private, $HOME or a folder above it, or lies under /Users, /Volumes, /private/tmp or /private/var/folders: the
     profile would read far more than node."""
-    prefix = Path(os.path.realpath(node_bin)).parents[1]
-    home = Path(os.path.realpath(Path.home()))
-    text = str(prefix)
-    if (prefix in (Path("/"), Path("/private"), home) or prefix in home.parents
-            or any(text == top or text.startswith(top + "/")
-                   for top in ("/Users", "/Volumes", "/private/tmp", "/private/var/folders"))):
+    try:
+        prefix = Path(os.path.realpath(node_bin)).parents[1]
+    except (ValueError, IndexError):
+        raise LaneRefused("lane_node %r has no folder the broker could read" % str(node_bin))
+    roots = [Path(os.path.realpath(Path.home()))] + [Path(r) for r in SHARED_ROOTS]
+    if any(prefix == root or root in prefix.parents or prefix in root.parents for root in roots):
         raise LaneRefused("lane_node's folder %s is too wide for the broker to read; install node somewhere like "
                           "/opt/homebrew" % prefix)
     return prefix
@@ -1320,7 +1328,10 @@ def render_profile(b_text, pw_dir, browsers_dir, shell_dir, node_bin, base):
     node_bin = Path(node_bin)
     prefix = node_prefix(node_bin)
     paths = [Path(pw_dir), Path(browsers_dir), Path(shell_dir), prefix, node_bin]
-    ancestors = {str(parent) for p in paths for q in (p, Path(os.path.realpath(p))) for parent in q.parents}
+    try:
+        ancestors = {str(parent) for p in paths for q in (p, Path(os.path.realpath(p))) for parent in q.parents}
+    except ValueError:
+        raise LaneRefused("refusing a path a sandbox profile can't quote")
     ancestors = sorted(ancestors | {str(parent) for parent in Path(b_text).parents})   # b_text as given
     values = {
         "B_DIR": _sb_literal(b_text), "PLAYWRIGHT_DIR": sb_quote(pw_dir), "BROWSERS_DIR": sb_quote(browsers_dir),
@@ -1329,9 +1340,11 @@ def render_profile(b_text, pw_dir, browsers_dir, shell_dir, node_bin, base):
         "LANE_PORTS": " ".join('(remote ip "localhost:%d")' % port for port in range(base, base + BLOCK - 1)),
         "BROKER_PORT": str(base + BLOCK - 1),
     }
-    text = TEMPLATE.read_text()
-    for key, value in values.items():
-        text = text.replace("{{%s}}" % key, value)
+    def fill(match):                                  # one pass: a value is never scanned for placeholders again
+        if match.group(1) not in values:
+            raise LaneRefused("the broker's profile template has a value lane.render_profile doesn't fill in")
+        return values[match.group(1)]
+    text = re.sub(r"\{\{([A-Z_]+)\}\}", fill, TEMPLATE.read_text())
     if "{{" in text or "}}" in text:
         raise LaneRefused("the broker's profile template has a value lane.render_profile doesn't fill in")
     return text
@@ -1341,58 +1354,104 @@ def render_profile(b_text, pw_dir, browsers_dir, shell_dir, node_bin, base):
 # with arguments that succeed outside any sandbox, so a refusal can only be the profile's. The positive controls
 # include exec_node: if fork were denied, every exec_* probe would "pass" for the wrong reason.
 SELF_CHECK_PROBES = ("exec_osascript", "exec_launchctl", "exec_security", "exec_pbpaste", "exec_open_calculator",
-                     "exec_curl", "net_domain", "net_ip", "net_canary", "read_dotfile", "read_claude_tmp",
+                     "exec_curl", "net_domain", "net_ip", "net_canary", "read_dotfile", "link_dotfile",
+                     "read_claude_tmp",
                      "read_user_temp", "write_home", "write_launchagents", "open_rc_for_write", "write_users_shared")
 SELF_CHECK_POSITIVE = ("lane_port", "write_own_folder", "exec_node")
 
 
 PRIVATE_TMP = Path("/private/tmp")
 USERS_SHARED = Path("/Users/Shared")
+CALCULATOR_APP = Path("/System/Applications/Calculator.app")
 PROBE_PROGRAMS = {"exec_osascript": "/usr/bin/osascript", "exec_launchctl": "/bin/launchctl",
                   "exec_security": "/usr/bin/security", "exec_pbpaste": "/usr/bin/pbpaste",
                   "exec_open_calculator": "/usr/bin/open", "exec_curl": "/usr/bin/curl"}
+NETWORK_PROBES = ("exec_curl", "net_domain", "net_ip")      # refused for the wrong reason if the network is down here
+
+
+def network_up():
+    """Outside the sandbox: can this machine resolve a name and reach an address? (The seam for the network probes.)"""
+    try:
+        socket.getaddrinfo("example.com", 443)
+        socket.create_connection(("1.1.1.1", 443), timeout=3).close()
+        return True
+    except OSError:
+        return False
 
 
 def _probe_leftovers():
-    return [Path.home() / "superyak-lane-probe.txt", Path.home() / "Library/LaunchAgents/superyak-lane-probe.plist",
-            USERS_SHARED / "superyak-lane-probe"]
+    """{probe: what it would create if it got through}."""
+    return {"write_home": Path.home() / "superyak-lane-probe.txt",
+            "write_launchagents": Path.home() / "Library/LaunchAgents/superyak-lane-probe.plist",
+            "write_users_shared": USERS_SHARED / "superyak-lane-probe"}
 
 
 def probe_targets(user_temp):
-    """What each probe acts on, checked outside the sandbox: a probe whose target doesn't exist would be "refused"
-    with ENOENT, which proves nothing, so its row is BROKEN. {probe: (variable for the probe or None, path or None)}."""
+    """What each probe acts on, checked outside the sandbox: a probe whose target doesn't exist, or exists but can't
+    be used (an unreadable rc file, an unwritable folder), would be "refused" for the wrong reason, so its row is
+    BROKEN. {probe: (variable for the probe or None, path or None)}."""
     home = Path.home()
-    first = lambda names: next((home / n for n in names if (home / n).is_file()), None)
-    folder = lambda path: path if path and Path(path).is_dir() else None
-    targets = {name: (None, Path(path) if os.path.isfile(path) else None) for name, path in PROBE_PROGRAMS.items()}
+
+    def usable(path, mode):
+        return os.access(os.path.realpath(path), mode)
+    first = lambda names, mode: next((home / n for n in names if (home / n).is_file() and usable(home / n, mode)), None)
+    folder = lambda path, mode: path if path and Path(path).is_dir() and usable(path, mode) else None
+    targets = {name: (None, Path(path) if os.path.isfile(path) and usable(path, os.X_OK) else None)
+               for name, path in PROBE_PROGRAMS.items()}
+    if not CALCULATOR_APP.is_dir():
+        targets["exec_open_calculator"] = (None, None)
+    read, write = os.R_OK | os.X_OK, os.W_OK | os.X_OK
     return {**targets,
-            "read_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"))),
-            "open_rc_for_write": ("PROBE_RC", first((".zshrc", ".bashrc", ".profile"))),
-            "read_claude_tmp": ("PROBE_CLAUDE_TMP", folder(PRIVATE_TMP / ("claude-%d" % os.getuid()))),
-            "read_user_temp": ("PROBE_USER_TEMP", folder(user_temp)),
-            "write_home": (None, folder(home)),
-            "write_launchagents": ("PROBE_LAUNCHAGENTS", folder(home / "Library" / "LaunchAgents")),
-            "write_users_shared": ("PROBE_USERS_SHARED", folder(USERS_SHARED))}
+            "read_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"), os.R_OK)),
+            "link_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"), os.R_OK)),
+            "open_rc_for_write": ("PROBE_RC", first((".zshrc", ".bashrc", ".profile"), os.R_OK | os.W_OK)),
+            "read_claude_tmp": ("PROBE_CLAUDE_TMP", folder(PRIVATE_TMP / ("claude-%d" % os.getuid()), read)),
+            "read_user_temp": ("PROBE_USER_TEMP", folder(user_temp, read)),
+            "write_home": (None, folder(home, write)),
+            "write_launchagents": ("PROBE_LAUNCHAGENTS", folder(home / "Library" / "LaunchAgents", write)),
+            "write_users_shared": ("PROBE_USERS_SHARED", folder(USERS_SHARED, write))}
 
 
-def judge_probe(name, returncode):
-    """A probe exits 0 when its action SUCCEEDED: a pass for the positive controls, a failure for the rest."""
-    succeeded = returncode == 0
-    return succeeded if name in SELF_CHECK_POSITIVE else not succeeded
+# The codes a probe's refusal may carry. Only these prove the profile said no: a mistake (an unknown probe, a missing
+# input), a program that ran and failed, a timeout, a signal or ENOENT proves nothing. DNS is a Mach lookup the profile
+# denies, so net_domain may also come back as a failed name lookup.
+REFUSAL_CODES = ("EPERM", "EACCES")
+EXTRA_REFUSAL_CODES = {"net_domain": ("ENOTFOUND", "EAI_AGAIN")}
+
+
+def judge_probe(name, returncode, output=""):
+    """PASS, FAIL or BROKEN for one probe. A probe exits 0 when its action SUCCEEDED (a pass for the positive controls,
+    a failure for the rest) and 1 with `refused: <code> ...` when it was refused. Anything else (a signal, 64, the
+    probe's own exit 2, a refusal without a code the profile gives) is BROKEN: the probe never showed what it was
+    meant to."""
+    output = (output or "").strip()
+    if returncode == 0:
+        if not output.startswith("succeeded"):
+            return "BROKEN"
+        return "PASS" if name in SELF_CHECK_POSITIVE else "FAIL"
+    match = re.match(r"refused: (\S+)", output)
+    if returncode != 1 or not match:
+        return "BROKEN"
+    if name in SELF_CHECK_POSITIVE:
+        return "FAIL"
+    return "PASS" if match.group(1) in REFUSAL_CODES + EXTRA_REFUSAL_CODES.get(name, ()) else "BROKEN"
 
 
 def self_check(node_bin, pw_dir, shell_dir, run=None):
     """Spec acceptance step 1 (and whenever the pinned revision changes): every spike 5 probe, plus `open -a
     Calculator`, run directly under a freshly generated profile, as code that took over the browser would run. The
     profile goes inline (sandbox-exec -p) and the probe as node -e, so nothing in the scratch lane decides what runs.
-    Each probe's target is checked outside the sandbox first. Returns [(probe, verdict, detail)], the verdict PASS,
-    FAIL or BROKEN (its target doesn't exist here). macOS only; `run` is the seam the tests use."""
+    Each probe's target is checked outside the sandbox first (it must exist and be usable, and the network probes need
+    the network). Returns [(probe, verdict, detail)], the verdict PASS, FAIL or BROKEN (the probe proved nothing).
+    macOS only; `run` is the seam the tests use."""
     run = run or subprocess.run
     team_id, worker_id = "superyak-self-check-%d" % os.getpid(), "check"
     held = hold_team(team_id)
     path = lane_path(team_id, worker_id)
     canary, listener = socket.socket(), socket.socket()
     rows = []
+    leftovers = _probe_leftovers()
+    before = {name for name, target in leftovers.items() if os.path.lexists(target)}
     try:
         ensure_lane(team_id, worker_id)
         base = allocate_block(team_id, worker_id)
@@ -1408,23 +1467,47 @@ def self_check(node_bin, pw_dir, shell_dir, run=None):
         env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "TMPDIR": b_text,
                "PROBE_CANARY_PORT": str(canary.getsockname()[1]), "PROBE_LANE_PORT": str(base + 2)}
         env.update({var: str(path) for var, path in targets.values() if var and path})
+        for name in sorted(before):
+            rows.append(("leftover", "BROKEN", "%s exists from before this run, so it is left alone and %s is skipped"
+                         % (leftovers[name], name)))
+        net_ok = None
         for name in SELF_CHECK_PROBES + SELF_CHECK_POSITIVE:
-            if name in targets and targets[name][1] is None:
-                rows.append((name, "BROKEN", "its target doesn't exist here, so a refusal would prove nothing"))
+            if name in before:
+                rows.append((name, "BROKEN", "its leftover file already exists, so it could not show a refusal"))
                 continue
-            r = run([SANDBOX_EXEC, "-p", profile, str(node_bin), "-e", source, name],
-                    env=env, cwd=b_text, capture_output=True, text=True, timeout=60)
-            rows.append((name, "PASS" if judge_probe(name, r.returncode) else "FAIL",
+            if name in targets and targets[name][1] is None:
+                rows.append((name, "BROKEN", "its target is missing or unusable here, so a refusal would prove nothing"))
+                continue
+            if name in NETWORK_PROBES:
+                net_ok = network_up() if net_ok is None else net_ok
+                if not net_ok:
+                    rows.append((name, "BROKEN", "this machine can't reach the network, so a refusal proves nothing"))
+                    continue
+            try:
+                r = run([SANDBOX_EXEC, "-p", profile, str(node_bin), "-e", source, name],
+                        env=env, cwd=b_text, capture_output=True, text=True, timeout=60)
+            except (subprocess.TimeoutExpired, OSError, ValueError) as e:
+                rows.append((name, "BROKEN", ("%s: %s" % (type(e).__name__, e))[:160]))
+                continue
+            rows.append((name, judge_probe(name, r.returncode, r.stdout),
                          (r.stdout or r.stderr or "").strip()[:160]))
     finally:
-        canary.close()
-        listener.close()
-        for target in _probe_leftovers():
-            if target.exists():
-                target.unlink()
-                rows.append(("leftover", "FAIL", "removed %s, which a probe created" % target))
-        remove_lane(path)
-        release_block(team_id, worker_id)
-        held.close()
-        _team_lock(team_id).unlink(missing_ok=True)
+        def step(what, fn):
+            try:
+                fn()
+            except Exception as e:                    # one step failing must not skip the rest
+                rows.append(("cleanup", "BROKEN", ("%s: %s: %s" % (what, type(e).__name__, e))[:160]))
+
+        def sweep():
+            for name, target in leftovers.items():
+                if name not in before and os.path.lexists(target):
+                    os.unlink(target)
+                    rows.append(("leftover", "FAIL", "removed %s, which a probe created" % target))
+        step("close the canary", canary.close)
+        step("close the listener", listener.close)
+        step("remove what a probe created", sweep)
+        step("remove the lane", lambda: remove_lane(path))
+        step("release the block", lambda: release_block(team_id, worker_id))
+        step("release the team lock", held.close)
+        step("remove the lock file", lambda: _team_lock(team_id).unlink(missing_ok=True))
     return rows
