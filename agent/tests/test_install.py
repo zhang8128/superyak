@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import plistlib
 import subprocess
+import sys
 from types import SimpleNamespace
 import pytest
 from superyak_agent import install
@@ -23,18 +24,163 @@ def test_launchd_plist_keeps_the_watcher_alive():
     assert plist['KeepAlive'] is True and plist['EnvironmentVariables'] == {'PATH': '/usr/bin:/bin'}
 
 
-def test_hook_is_added_once_preserving_settings_and_can_be_removed(tmp_path):
+SETTINGS_CONFIG = '/home/j/.superyak/station.json'
+
+
+def hook_commands(settings, event):
+    data = json.loads(Path(settings).read_text())
+    return [h['command'] for entry in data['hooks'].get(event, []) for h in entry['hooks']]
+
+
+def test_both_hooks_are_installed_with_the_given_commands_and_settings_are_kept(tmp_path):
     settings = tmp_path / '.claude' / 'settings.json'
     settings.parent.mkdir()
     settings.write_text(json.dumps({'model': 'opus', 'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'x'}]}]}}))
-    assert install.install_hook(settings, 'python3 run_agent.py hook') is True
-    assert install.install_hook(settings, 'python3 run_agent.py hook') is False
+    assert install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    base = install.hook_command(SETTINGS_CONFIG)
     data = json.loads(settings.read_text())
     assert data['model'] == 'opus' and data['hooks']['Stop']
-    assert data['hooks']['UserPromptSubmit'] == [{'hooks': [{'type': 'command', 'command': 'python3 run_agent.py hook', 'timeout': 10}]}]
+    assert hook_commands(settings, 'SessionStart') == ['SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_EVENT=session-start ' + base + ' || true']
+    assert hook_commands(settings, 'UserPromptSubmit') == [base + ' || true']
+    assert data['hooks']['UserPromptSubmit'][0]['hooks'][0]['timeout'] == 10
     assert (tmp_path / '.claude' / 'settings.json.bak-superyak').exists()
-    assert install.remove_hook(settings, 'python3 run_agent.py hook') is True
-    assert json.loads(settings.read_text())['hooks']['UserPromptSubmit'] == []
+
+
+def test_messages_off_prompt_hook_command(tmp_path):
+    settings = tmp_path / 'settings.json'
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=False)
+    base = install.hook_command(SETTINGS_CONFIG)
+    assert hook_commands(settings, 'UserPromptSubmit') == ['SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_MESSAGES=0 ' + base + ' || true']
+    assert not settings.with_name('settings.json.bak-superyak').exists()  # nothing to back up
+
+
+@pytest.mark.parametrize('messages', [True, False])
+def test_installing_hooks_twice_changes_nothing(tmp_path, messages):
+    settings = tmp_path / 'settings.json'
+    settings.write_text('{}')
+    assert install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)
+    first = settings.read_text()
+    assert not install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)
+    assert settings.read_text() == first
+
+
+def test_switching_messages_replaces_the_prompt_hook_without_duplicating_it(tmp_path):
+    settings = tmp_path / 'settings.json'
+    mine = {'type': 'command', 'command': 'notify-me'}
+    settings.write_text(json.dumps({'hooks': {'UserPromptSubmit': [{'hooks': [mine]}]}}))
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=False)
+    prompt = hook_commands(settings, 'UserPromptSubmit')
+    assert prompt[0] == 'notify-me' and len(prompt) == 2 and 'SUPERYAK_HOOK_MESSAGES=0' in prompt[1]
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    assert hook_commands(settings, 'UserPromptSubmit') == ['notify-me', install.hook_command(SETTINGS_CONFIG) + ' || true']
+    assert len(hook_commands(settings, 'SessionStart')) == 1
+
+
+def test_remove_hooks_removes_both_and_keeps_the_persons_own(tmp_path):
+    settings = tmp_path / 'settings.json'
+    mine = {'type': 'command', 'command': 'notify-me'}
+    settings.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [mine]}]}}))
+    install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    assert install.remove_hooks(settings) is True
+    assert hook_commands(settings, 'SessionStart') == ['notify-me'] and hook_commands(settings, 'UserPromptSubmit') == []
+    assert install.remove_hooks(settings) is False
+
+
+def test_prefixed_commands_are_station_hooks():
+    base = install.hook_command(SETTINGS_CONFIG)
+    assert install.is_station_hook('SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_EVENT=session-start ' + base)
+    assert install.is_station_hook('SUPERYAK_RUN=${SUPERYAK_RUN:-hook} SUPERYAK_HOOK_MESSAGES=0 ' + base)
+    assert not install.is_station_hook('SUPERYAK_RUN=${SUPERYAK_RUN:-hook} python3 other.py hook')
+
+
+@pytest.mark.parametrize('run_agent', ['/home/j/repo/agent/run_agent.py', '/home/j/My Repo/agent/run_agent.py'])
+def test_a_station_hook_is_run_agent_py_as_one_word_followed_by_hook(monkeypatch, run_agent):
+    monkeypatch.setattr(install, 'RUN_AGENT', Path(run_agent))
+    for messages in (True, False):
+        for command in install._hook_commands(SETTINGS_CONFIG, messages).values():
+            assert command.endswith(' || true') and install.is_station_hook(command), command
+    quoted = install.shlex.join(['/usr/bin/python3', run_agent, 'hook', '--config', SETTINGS_CONFIG])
+    assert install.is_station_hook(quoted) and install.is_station_hook(quoted + ' || true')
+    for other in [f'/usr/bin/python3 {install.shlex.quote(run_agent + ".bak")} hook',
+                  f'/usr/bin/python3 {install.shlex.quote(run_agent)} hook-log',
+                  f'/usr/bin/python3 {install.shlex.quote(run_agent)} watch --note hook',
+                  f'echo {install.shlex.quote(run_agent)}; python3 other.py hook',
+                  f'/usr/bin/python3 {install.shlex.quote(run_agent)} "hook',  # shlex cannot parse it
+                  None, 5, ['hook']]:
+        assert not install.is_station_hook(other), other
+
+
+def unguarded(config, messages):
+    """The commands an earlier dock installed: the same, without the guard."""
+    return {event: command.removesuffix(' || true') for event, command in install._hook_commands(config, messages).items()}
+
+
+@pytest.mark.parametrize('messages', [True, False])
+def test_every_installed_hook_exits_0_and_prints_nothing_when_the_checkout_is_gone(monkeypatch, tmp_path, messages):
+    """Break caught: python exits 2 when its script is missing, and a UserPromptSubmit hook that exits 2 blocks and
+    erases the prompt: a moved or deleted checkout would block every prompt on a docked machine."""
+    gone = tmp_path / 'moved away' / 'agent' / 'run_agent.py'
+    monkeypatch.setattr(install, 'RUN_AGENT', gone)
+    assert subprocess.run([sys.executable, str(gone)], capture_output=True).returncode == 2  # what the guard is for
+    settings = tmp_path / 'settings.json'
+    install.install_hooks(settings, tmp_path / 'station.json', messages=messages)
+    commands = hook_commands(settings, 'SessionStart') + hook_commands(settings, 'UserPromptSubmit')
+    assert len(commands) == 2
+    for command in commands:
+        done = subprocess.run(['sh', '-c', command], capture_output=True, input=b'{"session_id": "s1"}', timeout=30)
+        assert (done.returncode, done.stdout) == (0, b''), command
+    for command in unguarded(tmp_path / 'station.json', messages).values():  # the test can tell the difference
+        assert subprocess.run(['sh', '-c', command], capture_output=True, timeout=30).returncode == 2
+
+
+@pytest.mark.parametrize('messages', [True, False])
+def test_docking_again_upgrades_unguarded_hooks_without_adding_a_second(tmp_path, messages):
+    settings = tmp_path / 'settings.json'
+    mine = {'type': 'command', 'command': 'notify-me'}
+    old = unguarded(SETTINGS_CONFIG, messages)
+    settings.write_text(json.dumps({'hooks': {event: [{'hooks': [mine, {'type': 'command', 'command': command, 'timeout': 10}]}]
+                                              for event, command in old.items()}}))
+    assert sorted(install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)) == ['SessionStart', 'UserPromptSubmit']
+    for event, wanted in install._hook_commands(SETTINGS_CONFIG, messages).items():
+        assert hook_commands(settings, event) == ['notify-me', wanted]
+    assert install.install_hooks(settings, SETTINGS_CONFIG, messages=messages) == []
+    assert install.remove_hooks(settings) is True
+    assert hook_commands(settings, 'SessionStart') == ['notify-me'] and hook_commands(settings, 'UserPromptSubmit') == ['notify-me']
+
+
+def test_remove_hooks_skips_what_it_cannot_read_and_drops_emptied_events(tmp_path):
+    settings = tmp_path / 'settings.json'
+    ours = install._hook_commands(SETTINGS_CONFIG, True)['UserPromptSubmit']
+    odd = {'hooks': {'SessionStart': 'not a list', 'Stop': [{'hooks': [{'command': 'x'}]}],
+                     'UserPromptSubmit': [5, 'text', {'hooks': 'not a list'}, {'hooks': [7, {'command': 9}, {'type': 'command', 'command': ours}]}]}}
+    settings.write_text(json.dumps(odd))
+    assert install.remove_hooks(settings) is True
+    data = json.loads(settings.read_text())
+    assert data['hooks']['SessionStart'] == 'not a list' and data['hooks']['Stop'] == odd['hooks']['Stop']
+    assert data['hooks']['UserPromptSubmit'] == [5, 'text', {'hooks': 'not a list'}, {'hooks': [7, {'command': 9}]}]
+    settings.write_text(json.dumps({'hooks': {'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': ours}]}]}}))
+    assert install.remove_hooks(settings) is True and json.loads(settings.read_text()) == {'hooks': {}}
+    for value in ([], {'hooks': []}, {'hooks': None}, 'text'):
+        settings.write_text(json.dumps(value))
+        assert install.remove_hooks(settings) is False and json.loads(settings.read_text()) == value
+
+
+@pytest.mark.parametrize('mode', [0o600, 0o644])
+def test_settings_keep_their_mode_and_a_new_file_is_private(tmp_path, mode):
+    """Break caught: settings.json can hold `env` secrets, and every dock rewrote it with the umask's mode."""
+    settings = tmp_path / 'settings.json'
+    settings.write_text('{"env": {"TOKEN": "secret"}}')
+    settings.chmod(mode)
+    assert install.install_hooks(settings, SETTINGS_CONFIG, messages=True)
+    assert settings.stat().st_mode & 0o777 == mode
+    assert install.remove_hooks(settings) and settings.stat().st_mode & 0o777 == mode
+    assert json.loads(settings.read_text())['env'] == {'TOKEN': 'secret'} and sorted(p.name for p in tmp_path.iterdir()) == [
+        'settings.json', 'settings.json.bak-superyak']
+    fresh = tmp_path / 'new' / 'settings.json'
+    fresh.parent.mkdir()
+    install.install_hooks(fresh, SETTINGS_CONFIG, messages=False)
+    assert fresh.stat().st_mode & 0o777 == 0o600
 
 
 def test_codex_registration_appends_one_block(tmp_path):
@@ -55,17 +201,18 @@ def test_run_mcp_config_gives_watcher_runs_only_the_adna_tools(tmp_path):
 
 def test_hook_installed_with_another_interpreter_is_the_same_hook(tmp_path):
     settings = tmp_path / 'settings.json'
-    ours = lambda python: f'{python} {install.RUN_AGENT} hook --config /home/j/.superyak/station.json'  # noqa: E731
+    ours = lambda python: f'{python} {install.RUN_AGENT} hook --config /home/j/.superyak/station.json || true'  # noqa: E731
     mine = {'type': 'command', 'command': 'notify-me'}
     settings.write_text(json.dumps({'hooks': {'UserPromptSubmit': [{'hooks': [mine, {'type': 'command', 'command': ours('/old/python3.11')}]}]}}))
-    assert install.install_hook(settings, ours('/new/python3.13')) is False
+    install.install_hooks(settings, '/home/j/.superyak/station.json', messages=True)
     assert json.loads(settings.read_text())['hooks']['UserPromptSubmit'][0]['hooks'][1]['command'] == ours('/old/python3.11')
-    assert install.remove_hook(settings, ours('/new/python3.13')) is True
+    assert len(hook_commands(settings, 'UserPromptSubmit')) == 2
+    assert install.remove_hooks(settings) is True
     assert json.loads(settings.read_text())['hooks']['UserPromptSubmit'] == [{'hooks': [mine]}]
-    assert install.remove_hook(settings, ours('/new/python3.13')) is False
+    assert install.remove_hooks(settings) is False
     unrelated = {'hooks': {'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': 'python3 other.py hook'}]}]}}
     settings.write_text(json.dumps(unrelated))
-    assert install.remove_hook(settings, ours('/new/python3.13')) is False and json.loads(settings.read_text()) == unrelated
+    assert install.remove_hooks(settings) is False and json.loads(settings.read_text()) == unrelated
 
 
 def test_codex_block_is_removed_and_other_tables_are_kept(tmp_path):
@@ -190,7 +337,7 @@ def test_undock_removes_everything_it_added_and_says_when_the_key_could_not_be_r
     install.uninstall_all(machine.config, out=machine.out.append)
     assert machine.called('systemctl', '--user', 'disable', '--now', install.UNIT) and machine.called('claude', 'mcp', 'remove', '--scope', 'user', 'station')
     assert 'mcp_servers' not in (machine.home / '.codex' / 'config.toml').read_text()
-    assert json.loads(settings.read_text())['hooks']['UserPromptSubmit'] == []
+    assert 'UserPromptSubmit' not in json.loads(settings.read_text())['hooks']  # an event left empty is removed
     assert not machine.config.exists() and not (machine.config.parent / 'run-mcp.json').exists()
     assert not (machine.home / '.config' / 'systemd' / 'user' / install.UNIT).exists()
     assert machine.out[0].startswith('Could not revoke the key on the station (500: station is on fire)')
@@ -203,3 +350,52 @@ def test_undock_reports_a_revoked_key(monkeypatch, tmp_path):
     monkeypatch.setattr(install, 'client_for', lambda config: SimpleNamespace(revoke_key=lambda: revoked.append(config['key'])))
     install.uninstall_all(machine.config, out=machine.out.append)
     assert revoked == ['k'] and machine.out == ['Undocked: key revoked, watcher stopped, station tools and hook removed.']
+
+
+def test_dock_without_hook_flag_installs_the_law_hooks_with_messages_off(monkeypatch, tmp_path):
+    machine = Machine(monkeypatch, tmp_path)
+    machine.install(adna=False)
+    settings = machine.home / '.claude' / 'settings.json'
+    assert len(hook_commands(settings, 'SessionStart')) == 1
+    assert 'SUPERYAK_HOOK_MESSAGES=0' in hook_commands(settings, 'UserPromptSubmit')[0]
+    machine.out.clear()
+    machine.install(adna=False, hook=True)
+    assert hook_commands(settings, 'UserPromptSubmit') == [install.hook_command(machine.config) + ' || true']
+    machine.out.clear()
+    machine.install(adna=False)
+    assert 'Room messages will no longer appear in Claude Code sessions (instructions still load).' in machine.out
+    assert len(hook_commands(settings, 'UserPromptSubmit')) == 1
+
+
+def test_a_malformed_settings_file_is_reported_and_the_service_still_installs(monkeypatch, tmp_path):
+    machine = Machine(monkeypatch, tmp_path)
+    settings = machine.home / '.claude' / 'settings.json'
+    settings.parent.mkdir()
+    settings.write_text('{not json')
+    machine.install(adna=False, hook=True)
+    assert any('hook' in line and 'settings.json' in line for line in machine.out)
+    assert machine.called('systemctl', '--user', 'restart', install.UNIT)
+    assert settings.read_text() == '{not json'
+
+
+def test_a_private_settings_file_is_still_private_after_dock(monkeypatch, tmp_path):
+    machine = Machine(monkeypatch, tmp_path)
+    settings = machine.home / '.claude' / 'settings.json'
+    settings.parent.mkdir()
+    settings.write_text('{"env": {"TOKEN": "secret"}}')
+    settings.chmod(0o600)
+    machine.install(adna=False)
+    assert settings.stat().st_mode & 0o777 == 0o600 and 'hook' in settings.read_text()
+
+
+def test_undock_finishes_with_a_malformed_settings_file(monkeypatch, tmp_path):
+    """Break caught: a malformed settings file stopped undock after the key was revoked but before station.json went."""
+    machine = Machine(monkeypatch, tmp_path)
+    settings = machine.home / '.claude' / 'settings.json'
+    settings.parent.mkdir()
+    settings.write_text('{not json')
+    monkeypatch.setattr(install, 'client_for', lambda config: SimpleNamespace(revoke_key=lambda: None))
+    install.uninstall_all(machine.config, out=machine.out.append)
+    assert not machine.config.exists() and settings.read_text() == '{not json'
+    assert machine.out[0].startswith('Could not remove the Claude Code hooks from ~/.claude/settings.json (Expecting property name')
+    assert machine.out[-1] == 'Undocked: key revoked, watcher stopped and station tools removed; the hooks stay in ~/.claude/settings.json.'

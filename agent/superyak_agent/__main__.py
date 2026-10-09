@@ -1,5 +1,6 @@
 """superyak-agent: dock this machine's ship, serve its station tools, watch its mentions."""
 import argparse
+import sys
 from pathlib import Path
 from .station import CONFIG, HOME
 
@@ -17,7 +18,7 @@ def build_parser():
     watch.add_argument('--resident', action='store_true', help='Station resident: always read-only; answers one-person rooms')
     watch.add_argument('--model')
     watch.add_argument('--once', action='store_true')
-    hook = commands.add_parser('hook', help='Claude Code UserPromptSubmit hook')
+    hook = commands.add_parser('hook', help='Claude Code hook: session start and prompt')
     hook.add_argument('--config', type=Path, default=CONFIG)
     dock = commands.add_parser('dock', help='Request access if needed, dock this machine, install its tools')
     dock.add_argument('--station', required=True)
@@ -64,18 +65,33 @@ def build_parser():
     return parser
 
 
+def _hook(parser, argv):
+    """Claude Code hook: unknown flags are ignored and nothing may break the prompt, so it always exits 0."""
+    try:
+        import os
+        from .hook import run, session_from_stdin
+        args, _ = parser.parse_known_args(argv)
+        session_id = None if sys.stdin.isatty() else session_from_stdin(sys.stdin)
+        text = run(args.config, session_id=session_id,
+                   event='session-start' if os.environ.get('SUPERYAK_HOOK_EVENT') == 'session-start' else 'prompt',
+                   messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
+        if text:
+            print(text)
+    except BaseException:  # noqa: BLE001
+        pass
+    return 0
+
+
 def main(argv=None):
     parser = build_parser()
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv[:1] == ['hook']:
+        return _hook(parser, argv)
     args = parser.parse_args(argv)
     if args.command == 'mcp':
         from .mcp import serve
         serve(args.config)
-        return 0
-    if args.command == 'hook':
-        from .hook import run
-        text = run(args.config)
-        if text:
-            print(text)
         return 0
     if args.command == 'watch':
         import logging
@@ -119,10 +135,19 @@ def main(argv=None):
         write_private(args.out, run_mcp_config(args.config, args.adna_dist))
         return 0
     if args.command == 'status':
-        from .station import client_for, load_config
+        from .station import StationError, client_for, label, load_config
         config = load_config(args.config)
-        me = client_for(config).me()
+        client = client_for(config)
+        me = client.me()
         print(f'{me["name"]} (@{me["username"]}) is docked at {config["station"]}; workspace {config["workspace"]}.')
+        try:
+            layers = client.instructions().get('layers') or []
+            lines = ['Instructions:'] + [f'  {label(layer.get("title"))} · revision {layer.get("revision")} · signed by '
+                                         f'{label(layer.get("signer_name"))}' for layer in layers] if layers else ['Instructions: none']
+        except (StationError, OSError, ValueError, AttributeError, TypeError) as error:
+            # an older station (403), a station gone mid-command or an odd answer; the key never goes into the reason
+            lines = [f'Instructions: unavailable ({label(str(error).replace(config["key"], "[key]"))})']
+        print('\n'.join(lines))
         return 0
     if args.command == 'undock':
         from .install import uninstall_all
@@ -165,7 +190,6 @@ def main(argv=None):
         from .vault_git import serve
         return serve(args.repo)
     if args.command == 'wormhole-key':
-        import sys
         from .vault_git import install_key
         run_agent = Path(__file__).resolve().parents[1] / 'run_agent.py'
         try:

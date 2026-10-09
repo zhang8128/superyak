@@ -15,6 +15,9 @@ MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
 # A name shown as code, in double quotes or on a quoted line is talked about, not addressed. Each span
 # stops at its own opening mark too, so unclosed marks cannot make one message cost quadratic time.
 NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^“”\n]*”|^[ \t]*>[^\n]*', re.MULTILINE)
+# A ship key is secrets.token_urlsafe(32): 43 URL-safe characters. Every such token standing on its own is a candidate,
+# so a key is caught however it is quoted (JSON, a Bearer header, a URL parameter).
+KEY_TOKEN = re.compile(r'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])')
 
 SHIP_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS ship_keys(id TEXT PRIMARY KEY, ship_id TEXT NOT NULL REFERENCES users(id), key_hash TEXT UNIQUE NOT NULL, created REAL NOT NULL, last_used REAL, revoked REAL);
@@ -37,6 +40,18 @@ class Ships:
         user = self._create_user(db, username, name, secrets.token_urlsafe(48))
         db.execute("UPDATE users SET kind='ship',owner_id=? WHERE id=?", (owner_id, user['id']))
         return public_user(db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone())
+
+    def _refuse_live_ship_keys(self, body):
+        """A room is history that many readers keep, so a message carrying a live ship key is refused before anything
+        is written or sent to another peer. The refusal never repeats the key."""
+        candidates = {token_hash(m.group(0)) for m in KEY_TOKEN.finditer(body)} if isinstance(body, str) else set()
+        if not candidates:
+            return
+        with self.transaction() as db:
+            live = {row['key_hash'] for row in db.execute('SELECT key_hash FROM ship_keys WHERE revoked IS NULL')}
+        if candidates & live:
+            raise Problem(422, 'This message contains a live ship key, so it was not posted. Treat that key as exposed: '
+                               'its ship should revoke it and dock again.')
 
     def _new_ship_key(self, db, ship_id):
         key = secrets.token_urlsafe(32)

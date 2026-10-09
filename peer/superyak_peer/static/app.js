@@ -249,8 +249,17 @@ function layerStatus(layer) {
   return `<span class="badge active">Active</span>`;
 }
 
+function shipName(id) {
+  return (state.ships || []).find((ship) => ship.id === id)?.name || "a ship";
+}
+
+function draftedBy(layer) {
+  return layer.drafted_by ? `Drafted by ${shipName(layer.drafted_by)}. Read it before you activate it.` : "";
+}
+
 function layerItem(layer) {
-  return `<button class="item" data-action="open-layer" data-id="${escapeHtml(layer.id)}"><span class="item-main"><strong>${escapeHtml(layer.title)}</strong><span>Draft version ${layer.version}</span></span><span class="status-stack">${layerStatus(layer)}</span></button>`;
+  const drafted = layer.drafted_by ? `<span>Drafted by ${escapeHtml(shipName(layer.drafted_by))}</span>` : "";
+  return `<button class="item" data-action="open-layer" data-id="${escapeHtml(layer.id)}"><span class="item-main"><strong>${escapeHtml(layer.title)}</strong><span>Draft version ${layer.version}</span>${drafted}</span><span class="status-stack">${layerStatus(layer)}</span></button>`;
 }
 
 function selectedLayer() {
@@ -301,7 +310,8 @@ function formatBytes(value) {
 }
 
 function editorState(layer, active) {
-  const unsaved = currentLayerEdit()?.dirty ? '<span class="badge draft">Unsaved changes</span>' : "";
+  const drafted = layer.drafted_by ? `<span class="state-note">${escapeHtml(draftedBy(layer))}</span>` : "";
+  const unsaved = (currentLayerEdit()?.dirty ? '<span class="badge draft">Unsaved changes</span>' : "") + drafted;
   if (layer.active_revision && state.activeLayerErrors[layer.id]) {
     return `<span class="badge active">Active release</span>${unsaved}<span class="state-note">Latest sharing details unavailable</span>`;
   }
@@ -356,17 +366,26 @@ function withdrawDialog() {
   return `<dialog aria-labelledby="withdraw-title"><div class="dialog-body"><h2 id="withdraw-title">Stop every active route?</h2><p>This stops access on this peer for named people, spaces, and the public link. Remote hosts must acknowledge withdrawal before their hosted access stops; offline hosts may still show it. Existing copies cannot be erased. Your private draft and release history remain.</p><div class="button-row"><button class="button danger" data-action="confirm-withdraw">Yes, stop all sharing</button><button class="button secondary" data-action="close-dialog">Keep sharing on</button></div></div></dialog>`;
 }
 
+function shipChoices(layer) {
+  const mine = (state.ships || []).filter((ship) => ship.owner_id === state.me.id);
+  const selected = layer.audience_users || [];
+  return mine.map((ship) => `<label class="choice"><input type="checkbox" name="audience-ship" value="${escapeHtml(ship.id)}" ${selected.includes(ship.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(ship.name)}</strong><small>Your ship</small></span></label>`).join("") || `<p class="meta">You have no docked ships yet.</p>`;
+}
+
+// The Ships status view (what each ship has read, and when) is deferred to step 4.
 function layerEditor(layer) {
+  const instructions = layer.kind === "instructions";
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
   return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your private workspace</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
     <form id="layer-form">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
-      <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="100000">${escapeHtml(layer.body)}</textarea></div>
-      <fieldset class="field"><legend>Named people</legend><small>People only see an activated version. Selecting someone here does not reveal the private draft.</small><div class="choices">${state.contacts.map((contact) => choiceContact(contact, layer.audience_users || [])).join("") || `<p class="meta">No contacts are available yet.</p>`}</div></fieldset>
+      <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
+      <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="${instructions ? 20000 : 100000}">${escapeHtml(layer.body)}</textarea></div>
+      ${instructions ? `<fieldset class="field"><legend>Ships</legend><small>Only your own ships can read instructions, and only once you turn on a version.</small><div class="choices">${shipChoices(layer)}</div></fieldset>` : `<fieldset class="field"><legend>Named people</legend><small>People only see an activated version. Selecting someone here does not reveal the private draft.</small><div class="choices">${state.contacts.map((contact) => choiceContact(contact, layer.audience_users || [])).join("") || `<p class="meta">No contacts are available yet.</p>`}</div></fieldset>
       <fieldset class="field"><legend>Care circles and spaces</legend><div class="choices">${state.home.spaces.map((space) => choiceSpace(space, layer.audience_spaces || [])).join("") || `<p class="meta">No spaces are available yet.</p>`}</div></fieldset>
       <fieldset class="field"><legend>Public access</legend><label class="choice public-choice"><input type="checkbox" name="public" ${layer.public ? "checked" : ""}><span class="choice-copy"><strong>Anyone with the public link</strong><small>Only the activated version and its chosen attachments are public.</small></span></label></fieldset>
-      <fieldset class="field"><legend>Attachments</legend>${attachmentChoices(layer)}<label class="button secondary" for="file-upload">Upload a file</label><input class="sr-only" id="file-upload" type="file" accept="text/plain,text/csv,application/json,application/pdf,image/png,image/jpeg,image/gif,.csv,.json"><p id="upload-status" class="inline-message" role="status"></p></fieldset>
+      <fieldset class="field"><legend>Attachments</legend>${attachmentChoices(layer)}<label class="button secondary" for="file-upload">Upload a file</label><input class="sr-only" id="file-upload" type="file" accept="text/plain,text/csv,application/json,application/pdf,image/png,image/jpeg,image/gif,.csv,.json"><p id="upload-status" class="inline-message" role="status"></p></fieldset>`}
       <div class="editor-actions"><div class="button-row"><button class="button" type="submit">Save private draft</button><button class="button secondary" type="button" data-action="preview">Preview audience</button></div><span class="state-note">Saved version ${layer.version}</span></div>
       <p id="layer-status" class="inline-message ${edit?.conflict ? "error" : ""}" role="status">${edit?.conflict ? "This draft changed in another tab. Your text is still here." : ""}</p>${edit?.conflict ? '<button class="button secondary" type="button" data-action="resolve-conflict">Save my text onto the latest draft</button>' : ""}
     </form>
@@ -481,9 +500,16 @@ function readChatDraft(roomId) {
   }
 }
 
+function sourceLabel(message) {
+  const source = message.source;
+  if (!source) return "";
+  if (source.kind === "run") return source.mode === "build" ? (source.root_name ? `builder run for ${source.root_name}` : "builder run") : "read-only run";
+  return source.kind === "post" ? "no run ticket" : "";
+}
+
 function messageMarkup(message) {
   const mine = isSelf(message.author_id);
-  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(mine ? "You" : participantName(message.author_id))}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
+  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(mine ? "You" : participantName(message.author_id))}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
 }
 
 function roomDetail(room) {
@@ -765,14 +791,12 @@ async function refresh(message = null) {
 }
 
 function layerFormData(form = document.querySelector("#layer-form")) {
-  return {
-    title: form.elements.title.value,
-    body: form.elements.body.value,
-    audience_users: [...form.querySelectorAll('[name="audience-user"]:checked')].map((input) => input.value),
-    audience_spaces: [...form.querySelectorAll('[name="audience-space"]:checked')].map((input) => input.value),
-    public: form.elements.public.checked,
-    attachment_ids: [...form.querySelectorAll('[name="attachment"]:checked')].map((input) => input.value),
-  };
+  const checked = (name) => [...form.querySelectorAll(`[name="${name}"]:checked`)].map((input) => input.value);
+  const base = { title: form.elements.title.value, body: form.elements.body.value };
+  if (form.elements.kind.value === "instructions") {
+    return { ...base, kind: "instructions", audience_users: checked("audience-ship"), audience_spaces: [], public: false, attachment_ids: [] };
+  }
+  return { ...base, kind: "note", audience_users: checked("audience-user"), audience_spaces: checked("audience-space"), public: form.elements.public.checked, attachment_ids: checked("attachment") };
 }
 
 function rememberLayerForm(form = document.querySelector("#layer-form")) {
@@ -1465,6 +1489,10 @@ document.addEventListener("change", async (event) => {
   Research.remember(event.target); Dashboard.change(event.target);
   if (event.target.id === "research-upload") { await Research.choose(event.target); return; }
   if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
+  if (event.target.id === "layer-kind") {
+    const edit = currentLayerEdit();
+    if (edit) { edit.values = { ...edit.values, audience_users: [], audience_spaces: [], public: false, attachment_ids: [] }; render(); }
+  }
   if (event.target.id === "space-context") {
     state.currentSpaceId = event.target.value;
     location.hash = state.currentSpaceId === "all" ? "home" : `spaces/${pathPart(state.currentSpaceId)}`;

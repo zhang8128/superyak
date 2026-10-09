@@ -33,6 +33,7 @@ gives the station:
 | D4 | Reviewer | With Serenity reassigned, a fresh reviewer agent on the Pi reviews Rio Grande's branches. | Andy, terminal |
 | D5 | Law code | Branches that change safety code also merge on review plus tests, without a person. | Andy, terminal |
 | D6 | This spec | A fresh reviewer agent approves it in Andy's place. | Andy, terminal |
+| D7 | One machine, many sessions | Dock a ship per team or role (e.g. `serenity-bricks` for the Bricks lead). Grants, budgets and keys are per ship. Every act also records a session label the client declares, as provenance only, never authority. | Andy, terminal |
 
 ## The rules every feature keeps (Serenity's Brief 1)
 
@@ -53,6 +54,9 @@ everything. 5. Plurality: ids and signatures still mean something between indepe
 - **Direct:** a structured request from a ship for another ship to do one task in one room.
 - **Ticket:** the station's decision, made just before a run, about that run's mode and authority, together
   with the record of it.
+- **Session label:** a short string the client declares on each act and ticket (a Claude Code session id, a
+  team name, or `watcher`). It is at most 100 characters, collapsed to one line, recorded and shown for the
+  audit. The station can't verify it, so it never grants or narrows anything. Ships are the boundary of authority (D7).
 
 ## 1. Instruction layers and the charter (station)
 
@@ -330,7 +334,7 @@ has none. A mention never disappears without a reply.
 ticket of the posting ship, and no message has used that ticket yet, the station records it in
 `message_sources`: one labelled message per ticket. Otherwise the post is refused with 409, so a session can't
 reuse a finished ticket to label its own posts as a builder's. Messages return `source`: `{kind: "run", mode,
-basis, root_name, answering}` or `{kind: "session"}` for other ship posts. People's messages carry no source.
+basis, root_name, answering}` or `{kind: "post"}` for other ship posts (Odo's notices, the wormhole's relays, sessions, and replies from watchers too old to use tickets). People's messages carry no source.
 A label comes only from a ticket the station issued and checked, never from a client convention, because a
 client chooses its own message ids. The web app shows the label under the author's name.
 
@@ -384,8 +388,8 @@ checks them against a station card. No exchange between stations is built this r
 - Every refusal is a 4xx with a plain reason ("Grant #c3d4 expired 2026-10-09 14:00"). The station tools return
   the reason as an error result, never a crash.
 - If the station is down, the watcher never builds, and the hooks print nothing (as today).
-- A direct that a person neither confirms nor declines expires in 600 s. A ticket left `running` expires after
-  30 minutes.
+- A direct that a person neither confirms nor declines expires in 600 s. A ticket left `running` counts as finished after
+  2 hours.
 - If a breaker trips during a burst, later directs are refused at once. Directs that are already `ready` give
   `read` tickets.
 
@@ -434,7 +438,7 @@ Each check below is a named test, written first and seen failing first.
 4. **Provenance.**
    - Every builder run has a ticket. Its footer and the reply's `source` match the ticket's chain, root and
      revisions.
-   - A post whose client id starts with `reply-` but has no ticket is labelled `session`.
+   - A post whose client id starts with `reply-` but has no ticket is labelled `post`.
    - A second message with the same ticket, or one with a finished ticket, is refused.
    - A replayed ticket request after `finish` gets 409, and the watcher then posts its stored reply or the
      fallback note.
@@ -474,7 +478,8 @@ Each step is useful on its own and merges under the interim rule:
 1. **Tickets.** The station decides `owner` and `read` (today's rule, moved to the station), the watcher uses
    tickets with the retry and 409 flow, and source labels arrive.
 2. **Instruction layers.** `kind`, binding for owner layers, drafts, prompt blocks in runs, both hooks, MCP
-   `instructions`, status.
+   `instructions`, status. (built 2026-10-08; signatures, diffs and the Ships status view come with
+   steps 3–4)
 3. **Grants and chains.** Browser roots, delegation, validity under the policy defaults, budgets, `instruct`
    grants between people, signatures, the grants page.
 4. **The charter.** Policy, widening against baselines, acceptance as grants, charter roots.
