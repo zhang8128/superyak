@@ -1586,9 +1586,12 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
     secret = secrets.token_hex(32)
     port = base + BLOCK - 1
     profile = render_profile(b_text, pw_dir, browsers_root(), shell_dir, node_bin, base)
-    source = (teamlib.package_dir() / "lane_broker.js").read_text()
     stderr_path = Path(stderr_path)
-    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        source = (teamlib.package_dir() / "lane_broker.js").read_text()
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise LaneRefused("the lane's browser can't start (%s)" % (e.strerror or e))
     stream = start_denial_stream()
     try:
         err = _new_fd(str(stderr_path), 0o600)
@@ -1621,9 +1624,13 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
     exited = proc.poll()
     pids |= family(proc.pid)[0]
     stop_broker(broker)
+    cleanup_processes(b, None)                          # node is gone: what it started is found by its folder now
     denials = denials_for(stop_denial_stream(stream), pids)
-    log = stderr_path.read_text(errors="replace").splitlines()
-    tail = [line[:300] for line in log if not line.lstrip().startswith("at ")][-20:]
+    try:
+        log = stderr_path.read_text(errors="replace").splitlines()
+    except OSError:
+        log = []
+    tail = [scrub(line, [secret])[:300] for line in log if not line.lstrip().startswith("at ")][-20:]
     said = first or ("no endpoint within %d s" % START_TIMEOUT_S if exited is None
                      else "the broker exited (%s) before its endpoint" % exited)
     detail = scrub(teamlib.redact("\n".join([said] + tail)), [secret])
@@ -1643,6 +1650,10 @@ def stop_broker(broker):
     after KILL_GRACE_S SIGKILL. The family is taken first, while node lives: once node exits, Chrome's parent is
     launchd, and Chrome was never in node's group (Playwright launches it detached)."""
     proc = broker.proc
+    if proc.poll() is not None:
+        # Already reaped: its pid may belong to someone else now, so no family walk and no signal. What it left
+        # behind is ended by path (cleanup_processes: Chrome's cwd is b/).
+        return
     pids, groups = family(proc.pid)
     try:
         proc.stdin.close()
@@ -1652,14 +1663,16 @@ def stop_broker(broker):
         proc.wait(timeout=KILL_GRACE_S)
     except subprocess.TimeoutExpired:
         pass
+    def running(pid):                                    # the root is the Popen's: never a reused pid
+        return proc.poll() is None if pid == proc.pid else _alive(pid)
     for sig in (signal.SIGTERM, signal.SIGKILL):
         for group in groups:
             _killpg(group, sig)
         for pid in pids:
-            if _alive(pid):
+            if running(pid):
                 _kill(pid, sig)
         deadline = time.monotonic() + KILL_GRACE_S
-        while sig == signal.SIGTERM and time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+        while sig == signal.SIGTERM and time.monotonic() < deadline and any(running(pid) for pid in pids):
             time.sleep(0.1)
     try:
         proc.wait(timeout=KILL_GRACE_S)
@@ -1728,7 +1741,7 @@ def lane_pids(path, base):
         return None
     if prefixes:
         r = _run([lsof, "-nP", "-a", "-u", uid, "-F", "pn"])
-        if r is None or r.returncode not in (0, 1):
+        if r is None or r.returncode != 0:              # teamd always has open files: 1 means an error here
             return None
         pid = None
         for line in r.stdout.splitlines():
@@ -1738,8 +1751,17 @@ def lane_pids(path, base):
                 name = line[1:]
                 if any(name == prefix or name.startswith(prefix + "/") for prefix in prefixes):
                     pids.add(pid)
-    pids.discard(os.getpid())
-    return pids
+    return pids - _spared(_process_table())
+
+
+def _spared(rows):
+    """teamd and every process above it: never signalled."""
+    parent = {pid: ppid for pid, ppid, pgid, uid in rows}
+    spared, pid = set(), os.getpid()
+    while pid and pid not in spared:
+        spared.add(pid)
+        pid = parent.get(pid, 0)
+    return spared
 
 
 def env_pids(name, value):
@@ -1749,30 +1771,23 @@ def env_pids(name, value):
     rows = _process_table()
     if not rows:
         return None
-    parent = {pid: ppid for pid, ppid, pgid, uid in rows}
-    spared, pid = set(), os.getpid()
-    while pid and pid not in spared:
-        spared.add(pid)
-        pid = parent.get(pid, 0)
+    spared = _spared(rows)
     wanted = "%s=%s" % (name, value)
     return {pid for pid, ppid, pgid, uid in rows
             if uid == os.getuid() and pid not in spared and wanted in (_environ(pid) or [])}
 
 
 def _alive(pid):
-    try:
-        done, _ = os.waitpid(pid, os.WNOHANG)            # reaps it if it is teamd's own child
-        if done:
-            return False
-    except ChildProcessError:
-        pass
+    """Whether pid is a running process. Never reaps: a child that some Popen owns still reports its own exit code.
+    A zombie (exited, not yet reaped) is not running."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    r = _run(["/bin/ps", "-o", "stat=", "-p", str(pid)], timeout=10)
+    return not (r is not None and r.returncode == 0 and r.stdout.strip().startswith("Z"))
 
 
 def _kill(pid, sig):
@@ -1802,10 +1817,7 @@ def cleanup_processes(path, base, broker=None, env=None):
     deadline = time.monotonic() + KILL_GRACE_S
     while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
         time.sleep(0.1)
-    for pid in pids:
-        if _alive(pid):
-            _kill(pid, signal.SIGKILL)
-    again = found()
+    again = found()                                      # only what still matches: a pid that exited may be reused
     if again is None:
         return False
     for pid in again:
@@ -1870,9 +1882,12 @@ def scrub_file(path, secrets_):
     path = Path(path)
     if not secrets_ or not path.is_file() or path.is_symlink():
         return
-    text = path.read_text(errors="replace")
-    clean = scrub(text, secrets_)
-    if clean != text:
-        tmp = path.with_name(path.name + ".scrub")
-        _write_text(tmp, clean, 0o600)
-        os.replace(tmp, path)
+    try:
+        text = path.read_text(errors="replace")
+        clean = scrub(text, secrets_)
+        if clean != text:
+            tmp = path.with_name(path.name + ".scrub")
+            _write_text(tmp, clean, 0o600)
+            os.replace(tmp, path)
+    except OSError as e:
+        raise LaneRefused("%s can't be scrubbed of the lane's secret (%s)" % (path, e.strerror or e))

@@ -19,7 +19,7 @@ const start = async () => {
 };
 const fail = e => {  // the whole error to stderr (teamd's own folder, never posted); one line to stdout for teamd
   console.error(String(e && e.stack || e));
-  console.log('ERROR ' + String(e).split('\n')[0].slice(0, 300));
+  console.log('ERROR ' + String(e).split('\n')[0].split(secret || '\0').join('[lane secret]').slice(0, 300));
   process.exit(1);
 };
 process.stdin.setEncoding('utf8');

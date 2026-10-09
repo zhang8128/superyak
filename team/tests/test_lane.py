@@ -2324,7 +2324,15 @@ exports.chromium = { launchServer: async (o) => {
   const out = process.env.TMPDIR;
   fs.writeFileSync(path.join(out, 'env.json'), JSON.stringify(Object.keys(process.env).sort()));
   fs.writeFileSync(path.join(out, 'options.json'), JSON.stringify(o));
-  if (fs.existsSync(path.join(__dirname, 'FAIL'))) throw new Error('launchServer failed at ws://' + o.host + ':' + o.port + o.wsPath);
+  if (fs.existsSync(path.join(__dirname, 'FAIL_AFTER_SPAWN'))) {   // a child (cwd = b/) is left behind
+    const orphan = spawn('sleep', ['300'], { stdio: 'ignore', detached: true });
+    fs.writeFileSync(path.join(out, 'child.pid'), String(orphan.pid));
+  }
+  const failFile = path.join(__dirname, 'FAIL');
+  if (fs.existsSync(failFile) || fs.existsSync(path.join(__dirname, 'FAIL_AFTER_SPAWN'))) {
+    const pad = fs.existsSync(failFile) ? 'z'.repeat(Number(fs.readFileSync(failFile, 'utf8') || 0)) : '';
+    throw new Error('launchServer failed at ' + pad + 'ws://' + o.host + ':' + o.port + o.wsPath);
+  }
   const child = spawn('sleep', ['300'], { stdio: 'ignore', detached: true });
   fs.writeFileSync(path.join(out, 'child.pid'), String(child.pid));
   const srv = net.createServer().listen(o.port, o.host);
@@ -2368,9 +2376,7 @@ def start(parts):
 def gone(pid, timeout=5):
     end = time.time() + timeout
     while time.time() < end:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not lane._alive(pid):                    # a zombie the test hasn't waited for yet counts as gone
             return True
         time.sleep(0.05)
     return False
@@ -2393,13 +2399,13 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
     broker = start(broker_parts)
     b, base = broker_parts["path"] / "b", broker_parts["base"]
     try:
-        assert re.fullmatch(r"[0-9a-f]{64}", broker.secret) and broker.port == base + 31
-        assert broker.endpoint == "ws://127.0.0.1:%d/%s" % (base + 31, broker.secret)
+        assert re.fullmatch(r"[0-9a-f]{64}", broker.secret) is not None and broker.port == base + 31, "secret shape"
+        assert broker.endpoint == "ws://127.0.0.1:%d/%s" % (base + 31, broker.secret), "endpoint shape"   # no repr
         assert json.loads((b / "env.json").read_text()) == sorted(
             ["PATH", "HOME", "TMPDIR", "MAC_CHROMIUM_TMPDIR", "PLAYWRIGHT_BROWSERS_PATH", "SUPERYAK_BROKER_PLAYWRIGHT"])
-        assert json.loads((b / "options.json").read_text()) == {
-            "headless": True, "host": "127.0.0.1", "port": base + 31, "wsPath": "/" + broker.secret,
-            "chromiumSandbox": False}
+        options = json.loads((b / "options.json").read_text())
+        assert options.pop("wsPath") == "/" + broker.secret, "the secret path"
+        assert options == {"headless": True, "host": "127.0.0.1", "port": base + 31, "chromiumSandbox": False}
         socket.create_connection(("127.0.0.1", base + 31), timeout=5).close()
         assert os.getpgid(broker.proc.pid) == broker.proc.pid                   # its own process group
         child = int((b / "child.pid").read_text())
@@ -2407,7 +2413,7 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
         pids, groups = lane.family(broker.proc.pid)
         assert child in pids and groups == {broker.proc.pid, child}
         for pid in (broker.proc.pid, child):                                    # Chrome inherits no secret
-            assert broker.secret.encode() not in Path("/proc/%d/environ" % pid).read_bytes()
+            assert broker.secret.encode() not in Path("/proc/%d/environ" % pid).read_bytes(), "secret in environment"
     finally:
         lane.stop_broker(broker)
     assert broker.proc.poll() is not None and gone(child)
@@ -2487,8 +2493,9 @@ def test_a_broker_that_fails_is_refused_without_its_secret(broker_parts):
     with pytest.raises(lane.LaneRefused, match="the lane's browser didn't start") as refused:
         start(broker_parts)
     message = str(refused.value)
-    assert "[lane secret]" in message and not re.search(r"[0-9a-f]{64}", message)
-    assert re.search(r"[0-9a-f]{64}", broker_parts["stderr"].read_text())        # kept locally, in teamd's folder
+    assert "[lane secret]" in message, "the scrub marker"
+    assert re.search(r"[0-9a-f]{64}", message) is None, "secret in the lead's message"
+    assert re.search(r"[0-9a-f]{64}", broker_parts["stderr"].read_text()), "kept locally"    # in teamd's folder
     assert not (broker_parts["path"] / "b" / "stderr.log").exists()
     assert lane.port_free(broker_parts["base"] + 31)
 
@@ -2639,7 +2646,9 @@ def test_the_secret_is_scrubbed_from_text_and_files(tmp_path):
     events = tmp_path / "events.jsonl"
     events.write_text(json.dumps({"type": "result", "result": "error at " + endpoint}) + "\n")
     lane.scrub_file(events, [secret])
-    assert secret not in events.read_text() and "[lane secret]" in events.read_text()
+    assert secret not in events.read_text(), "secret left in the file"
+    assert "[lane secret]" in events.read_text(), "no marker"
+
 
 def test_prepare_broker_runs_for_real_without_deadlocking_on_the_install_lock(env, manifests, unpack, monkeypatch):
     """Every other test stubs prepare_broker; this one runs the real thing, whose install lock the installers take
@@ -2669,3 +2678,143 @@ def test_prepare_broker_runs_for_real_without_deadlocking_on_the_install_lock(en
     assert node_bin == node and pw_dir == lane.broker_root() / "playwright-core-1.55.0"
     assert shell_dir == lane.browsers_root() / "chromium_headless_shell-1243"
 
+
+
+# ---------- Task 7, fix round 1 ----------
+
+class FakeProc:
+    def __init__(self, pid, polled=None):
+        self.pid, self.polled = pid, polled
+        self.stdin = io.StringIO()
+
+    def poll(self):
+        return self.polled
+
+    def wait(self, timeout=None):
+        return self.polled
+
+
+FAMILY_TABLE = ("  700     1   700  501\n  701   700   701  501\n  702   701   701  501\n  703     1   701  501\n"
+                "  704   700   900  501\n  900     1   900  501\n  801     1   801  501\n")
+
+
+def test_stopping_a_broker_that_was_already_reaped_signals_nothing(monkeypatch):
+    """A reaped broker's pid can belong to someone else now: no family walk, no signal."""
+    sent = []
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, FAMILY_TABLE))
+    monkeypatch.setattr(lane, "_killpg", lambda g, sig: sent.append(("pg", g, sig)))
+    monkeypatch.setattr(lane, "_kill", lambda p, sig: sent.append(("pid", p, sig)))
+    monkeypatch.setattr(lane, "_alive", lambda pid: True)
+    lane.stop_broker(lane.Broker(FakeProc(700, polled=0), 41031, "ab" * 32))
+    assert sent == [], "signals went to a reaped broker's pid"
+
+
+def test_stopping_a_broker_signals_its_groups_and_each_pid(monkeypatch):
+    """Both paths are pinned: killpg on the groups the family leads, kill on the pids (704 leads no group of its own
+    in the family)."""
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 0.2)
+    groups, pids = [], []
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, FAMILY_TABLE))
+    monkeypatch.setattr(lane, "_killpg", lambda g, sig: groups.append((g, sig)))
+    monkeypatch.setattr(lane, "_kill", lambda p, sig: pids.append((p, sig)))
+    monkeypatch.setattr(lane, "_alive", lambda pid: True)
+    lane.stop_broker(lane.Broker(FakeProc(700), 41031, "ab" * 32))
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        assert {g for g, s in groups if s == sig} == {700, 701}
+        assert 704 in {p for p, s in pids if s == sig}
+    assert 801 not in {p for p, s in pids} and 900 not in {g for g, s in groups}
+
+
+def test_alive_never_reaps_a_child_somebody_else_owns():
+    proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+    try:
+        end = time.time() + 5
+        while time.time() < end and lane._alive(proc.pid):
+            time.sleep(0.05)
+        assert not lane._alive(proc.pid)
+        assert proc.poll() == 3, "_alive reaped the child"
+    finally:
+        proc.wait()
+
+
+def test_cleanup_kills_only_what_still_matches_after_the_grace(monkeypatch):
+    """A pid that exited during the grace may be reused: SIGKILL goes to what the second look finds."""
+    monkeypatch.setattr(lane, "KILL_GRACE_S", 0.2)
+    rounds, sent = [{4001, 4002}, {4002}], []
+    monkeypatch.setattr(lane, "lane_pids", lambda path, base: rounds.pop(0))
+    monkeypatch.setattr(lane, "_alive", lambda pid: True)
+    monkeypatch.setattr(lane, "_kill", lambda p, sig: sent.append((p, sig)))
+    assert lane.cleanup_processes("/x", None) is True
+    assert (4001, signal.SIGKILL) not in sent and (4002, signal.SIGKILL) in sent
+
+
+def test_a_refused_start_after_the_child_spawned_ends_what_uses_the_folder(broker_parts):
+    (broker_parts["pw"] / "FAIL_AFTER_SPAWN").write_text("")
+    with pytest.raises(lane.LaneRefused):
+        start(broker_parts)
+    child = int((broker_parts["path"] / "b" / "child.pid").read_text())
+    assert gone(child), "a process using b/ outlived the refused start"
+
+
+def test_a_secret_cut_by_the_truncation_cant_survive_the_scrub(broker_parts):
+    (broker_parts["pw"] / "FAIL").write_text("217")          # the endpoint straddles the 300-character cut
+    with pytest.raises(lane.LaneRefused) as refused:
+        start(broker_parts)
+    assert re.search(r"[0-9a-f]{12}", str(refused.value)) is None, "part of the secret reached the message"
+    assert "[lane secret]" in str(refused.value)
+
+
+def lsof_stub(monkeypatch, listing, rc=0, table=""):
+    def run(cmd, timeout=60):
+        if cmd[0] == "/bin/ps":
+            return Ran(0, table)
+        return Ran(rc, listing)
+    monkeypatch.setattr(lane, "_run", run)
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/lsof")
+
+
+def test_a_full_lsof_listing_that_exits_1_fails_closed(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    lsof_stub(monkeypatch, "p123\nn%s/tmp/f\n" % path, rc=1)
+    assert lane.lane_pids(path, None) is None
+
+
+def test_the_lane_prefix_match_needs_the_separator_and_teamd_is_never_taken(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    listing = "p111\nn%s/tmp/f\np222\nn%sd/f\np%d\nn%s/b\n" % (path, path, os.getpid(), path)
+    lsof_stub(monkeypatch, listing)
+    assert lane.lane_pids(path, None) == {111}
+
+
+def test_lane_pids_spares_teamds_whole_parent_chain(env, tmp_root, monkeypatch):
+    path = lane.ensure_lane("t1", "kaylee")
+    me, parent = os.getpid(), os.getppid()
+    table = "%d %d %d %d\n%d 1 %d %d\n" % (me, parent, me, os.getuid(), parent, parent, os.getuid())
+    listing = "p%d\nn%s/tmp/f\np555\nn%s/tmp/g\n" % (parent, path, path)
+    lsof_stub(monkeypatch, listing, table=table)
+    assert lane.lane_pids(path, None) == {555}
+
+
+def test_failures_reading_the_script_or_making_the_folder_refuse(broker_parts, monkeypatch):
+    blocker = broker_parts["stderr"].parent.parent / "blocker"
+    blocker.parent.mkdir(parents=True, exist_ok=True)
+    blocker.write_text("a file")
+    parts = dict(broker_parts, stderr=blocker / "sub" / "stderr.log")
+    with pytest.raises(lane.LaneRefused, match="can't start"):
+        start(parts)
+    monkeypatch.setattr(lane.teamlib, "package_dir", lambda: broker_parts["path"] / "nowhere")
+    with pytest.raises(lane.LaneRefused, match="can't start"):
+        start(broker_parts)
+
+
+def test_scrub_file_refuses_instead_of_raising_when_it_cant_write(tmp_path):
+    folder = tmp_path / "locked"
+    folder.mkdir()
+    events = folder / "events.jsonl"
+    events.write_text("at ws://x/" + "cd" * 32)
+    folder.chmod(0o500)
+    try:
+        with pytest.raises(lane.LaneRefused, match="can't be scrubbed"):
+            lane.scrub_file(events, ["cd" * 32])
+    finally:
+        folder.chmod(0o700)
