@@ -88,14 +88,32 @@ HOLDER_POLLS, HOLDER_POLL_S = 30, 2     # how long to look for a first-lane proc
 NOT_READ = object()          # the approved list existed but couldn't be read: it is never touched
 # A list entry the approved-list rules refuse for one specific reason (D10), without needing the file to exist.
 D10_ENTRY = "/usr/sbin/python3"
-# The specs the Bricks lead tagged @lane-advisory (via Serenity), by file; an advisory failure anywhere else is a real
-# failure. This is a file-level set for now: tests/gtm/visual-recipes.spec.ts and the individual test titles are still
-# pending from the Bricks lead, and until then a failure in a file not listed here (visual-recipes included) is a FAIL.
-# visual.spec.ts is skipped unless GTM_SOURCE_VISUAL=1 and uses its own visual.config.ts, so an ordinary lane run
-# doesn't run it; it is listed so that it is advisory whenever it does run.
-ADVISORY_SPECS = ("tests/gtm/approval-anatomy.spec.ts", "tests/gtm/four-up-school.spec.ts",
-                  "tests/gtm/content-recipes-cards.spec.ts", "tests/gtm/supplied-presentation.spec.ts",
-                  "tests/gtm/visual.spec.ts")
+# The tests the Bricks lead tagged @lane-advisory (via Serenity), as (file, title): an advisory failure of any other test
+# is a real failure, a tagged test in a listed file included. The titles are Playwright's own (its JSON reporter, checked
+# by the Bricks lead against main's tree); these files have no describe blocks, so file and title name a test whole.
+# tests/gtm/visual-recipes.spec.ts stays out.
+ADVISORY_SPECS = (
+    ("tests/gtm/approval-anatomy.spec.ts",
+     "School supplied approval anatomy preserves raw pins, exact local review and invalid editable bindings"),
+    ("tests/gtm/four-up-school.spec.ts",
+     "School library reuses featured progress and four-up cards without changing drafts, pins or record binding"),
+    ("tests/gtm/content-recipes-cards.spec.ts",
+     "seldon-content uses the same responsive card grid with its own supplied details"),
+    ("tests/gtm/content-recipes-cards.spec.ts",
+     "chani-recipes uses the same responsive card grid with its own supplied details"),
+    ("tests/gtm/supplied-presentation.spec.ts",
+     "School supplied plots and status cards preserve collection state, raw nodes, pins and failures"),
+    ("tests/gtm/supplied-presentation.spec.ts",
+     "actual TARS horizontal scores and Nexus compact windows retain source values across themes and widths"),
+    ("tests/gtm/supplied-presentation.spec.ts",
+     "actual Housekeeping cards preserve original first-row identity and source-only person and history"),
+    ("tests/gtm/unavailable-actions.spec.ts",
+     "School unavailable actions retain disabled controls, exact keyboard-readable reasons and raw state"),
+)
+# Advisory as a whole file: visual.spec.ts is skipped unless GTM_SOURCE_VISUAL=1 and uses its own visual.config.ts, so
+# an ordinary lane run doesn't run it; it is listed so that it is advisory whenever it does run.
+ADVISORY_FILES = ("tests/gtm/visual.spec.ts",)
+ADVISORY_TAG = "lane-advisory"
 NO_ROOT = "no root-owned listener to observe; run this once from Andy's own terminal (sudo)"
 # What the lead's inbox may be reduced to in a transcript: reason codes, never the messages (they name programs).
 REASONS = ("LANE WAITING", "LANE REFUSED", "only Apple programs", "an interpreter is never approved",
@@ -104,6 +122,21 @@ REASONS = ("LANE WAITING", "LANE REFUSED", "only Apple programs", "an interprete
 
 
 # ---------- pure helpers (team/tests/test_lane_acceptance.py runs these on the Pi) ----------
+
+def _tag(text):
+    """A tag as Playwright may give it: with or without its @, whitespace around it trimmed."""
+    return str(text).strip().lstrip("@").strip()
+
+
+def advisory_title(spec):
+    """(whether a Playwright JSON spec is tagged @lane-advisory, its title without that tag). The tag counts from
+    Playwright's { tag } option or from the title, where only an @ word is a tag, and is taken out the same way in
+    both; the title left is its words joined by single spaces, to be matched whole."""
+    words = str(spec.get("title", "")).split()
+    in_title = [w for w in words if w.startswith("@") and _tag(w) == ADVISORY_TAG]
+    tagged = bool(in_title) or ADVISORY_TAG in {_tag(t) for t in spec.get("tags") or []}
+    return tagged, " ".join(w for w in words if w not in in_title)
+
 
 def judge(expect, code):
     """A probe row's verdict: ok must exit 0, fail must not, info is only shown."""
@@ -145,8 +178,7 @@ def summarize(report):
 
     def walk(suite):
         for spec in suite.get("specs") or []:
-            tags = [str(t).lstrip("@") for t in spec.get("tags") or []]
-            advisory = "lane-advisory" in tags or "@lane-advisory" in spec.get("title", "")
+            advisory = advisory_title(spec)[0]
             name = "%s:%s %s" % (spec.get("file"), spec.get("line"), spec.get("title"))
             for test in spec.get("tests") or []:
                 status = test.get("status")
@@ -2170,22 +2202,23 @@ def _person_listener(report, team, port, read, path_of, owner, clock, sleep, say
 
 
 def advisory_details(report, root):
-    """(full path, 'file:line title', first error message) of every failing @lane-advisory spec in a Playwright JSON
-    report. A spec's file is relative to the report's test folder (config.rootDir), or to `root` when it has none."""
+    """(full path, title without the tag, 'file:line title', first error message) of every failing @lane-advisory
+    spec in a Playwright JSON report. A spec's file is relative to the report's test folder (config.rootDir), or to
+    `root` when it has none."""
     found = []
     base = (report.get("config") or {}).get("rootDir") or root
 
     def walk(suite):
         for spec in suite.get("specs") or []:
-            tags = [str(t).lstrip("@") for t in spec.get("tags") or []]
-            if "lane-advisory" not in tags and "@lane-advisory" not in spec.get("title", ""):
+            tagged, title = advisory_title(spec)
+            if not tagged:
                 continue
             for test in spec.get("tests") or []:
                 if test.get("status") in ("expected", "skipped", "flaky"):
                     continue
                 message = next((r["error"]["message"] for r in test.get("results") or []
                                 if isinstance(r.get("error"), dict) and r["error"].get("message")), "no message")
-                found.append((os.path.normpath(os.path.join(base, str(spec.get("file")))),
+                found.append((os.path.normpath(os.path.join(base, str(spec.get("file")))), title,
                               "%s:%s %s" % (spec.get("file"), spec.get("line"), spec.get("title")),
                               " ".join(message.split())[:200]))
         for child in suite.get("suites") or []:
@@ -2196,7 +2229,11 @@ def advisory_details(report, root):
 
 
 def report_spec(report, step, wid, worktree, specs):
-    agreed = {os.path.normpath(os.path.join(worktree, spec)) for spec in ADVISORY_SPECS}
+    """Step 6's rows for each spec's JSON report. A failing @lane-advisory test is INFO, reported separately, only if
+    it is an agreed one: its file and whole title (the tag taken out) in ADVISORY_SPECS, or its file in ADVISORY_FILES.
+    Any other tagged failure, in an agreed file or not, is a FAIL."""
+    agreed = {(os.path.normpath(os.path.join(worktree, f)), title) for f, title in ADVISORY_SPECS}
+    agreed_files = {os.path.normpath(os.path.join(worktree, f)) for f in ADVISORY_FILES}
     for i, spec in enumerate(specs):
         path = Path(worktree) / PROBE_DIR / ("spec-%d.json" % i)
         try:
@@ -2209,12 +2246,12 @@ def report_spec(report, step, wid, worktree, specs):
         report.add(step, "%s %s" % (wid, spec), "PASS" if ok else "FAIL",
                    "%d passed, %d skipped, failed: %s, errors: %s, flaky: %s"
                    % (got["passed"], got["skipped"], got["failed"] or "none", got["errors"] or "none", got["flaky"] or "none"))
-        for full, name, message in advisory_details(data, worktree):
-            if full in agreed:
+        for full, title, name, message in advisory_details(data, worktree):
+            if full in agreed_files or (full, title) in agreed:
                 report.add(step, "%s advisory (reported separately)" % wid, "INFO", "%s: %s" % (name, message))
             else:
                 report.add(step, "%s advisory outside the agreed set" % wid, "FAIL",
-                           "%s is tagged @lane-advisory but isn't one of the agreed specs: %s" % (name, message))
+                           "%s is tagged @lane-advisory but isn't one of the agreed tests: %s" % (name, message))
 
 
 def check_cleanup(report, when, w, pids, broker_pids):

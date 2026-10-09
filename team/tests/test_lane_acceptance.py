@@ -767,10 +767,11 @@ def test_a_report_spec_fails_a_missing_report_and_untagged_advisories(acceptance
     acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
     assert report.rows[0][2] == "FAIL" and "no JSON report" in report.rows[0][3]
     msg = {"results": [{"error": {"message": "expected 300 got 280"}}]}
-    spec = lambda f, tags: {"title": "t", "file": f, "line": 1, "tags": tags, "tests": [dict(status="unexpected", **msg)]}
+    spec = lambda f, tags, title="t": {"title": title, "file": f, "line": 1, "tags": tags,
+                                        "tests": [dict(status="unexpected", **msg)]}
     (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"errors": [], "suites": [{"title": "s", "specs": [
         {"title": "ok", "file": "tests/a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]},
-        spec("tests/gtm/four-up-school.spec.ts", ["@lane-advisory"]), spec("tests/a.spec.ts", ["@lane-advisory"])]}]}))
+        spec("tests/gtm/four-up-school.spec.ts", ["@lane-advisory"], FOUR_UP), spec("tests/a.spec.ts", ["@lane-advisory"])]}]}))
     report = acceptance.Report()
     acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
     by = {r[1]: r for r in report.rows}
@@ -991,23 +992,82 @@ def test_the_docs_say_who_runs_it_and_when_a_terminal_is_needed(acceptance):
 
 # ---- the advisory set (from the Bricks lead) ----
 
-def test_the_advisory_set_is_the_agreed_files(acceptance, tmp_path):
-    assert acceptance.ADVISORY_SPECS == ("tests/gtm/approval-anatomy.spec.ts", "tests/gtm/four-up-school.spec.ts",
-                                         "tests/gtm/content-recipes-cards.spec.ts", "tests/gtm/supplied-presentation.spec.ts",
-                                         "tests/gtm/visual.spec.ts")
-    source = (SCRIPTS / "lane_acceptance.py").read_text()
-    assert "visual-recipes" in source and "pending" in source                     # the comment about what is still open
+FOUR_UP = "School library reuses featured progress and four-up cards without changing drafts, pins or record binding"
+CHANI = "chani-recipes uses the same responsive card grid with its own supplied details"
+SELDON = "seldon-content uses the same responsive card grid with its own supplied details"
+CARDS = "tests/gtm/content-recipes-cards.spec.ts"
+
+
+def advisory_rows(acceptance, tmp_path, specs):
+    """report_spec's advisory rows for a report whose failing specs are `specs` [(file under tests/, title, tags)]:
+    [(kind, title)], kind being INFO (reported separately) or FAIL (outside the agreed set)."""
     wt = tmp_path / "wt"
-    (wt / acceptance.PROBE_DIR).mkdir(parents=True)
-    spec = lambda f: {"title": "t", "file": f, "line": 1, "tags": ["@lane-advisory"],
-                      "tests": [{"status": "unexpected", "results": [{"error": {"message": "m"}}]}]}
-    files = ["gtm/approval-anatomy.spec.ts", "gtm/visual.spec.ts", "gtm/visual-recipes.spec.ts", "a.spec.ts"]
-    (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"config": {"rootDir": str(wt / "tests")}, "errors": [], "suites": [{"title": "s", "specs":
-        [{"title": "ok", "file": "a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]}] + [spec(f) for f in files]}]}))
+    (wt / acceptance.PROBE_DIR).mkdir(parents=True, exist_ok=True)
+    failing = [{"title": title, "file": f, "line": 1, "tags": tags,
+                "tests": [{"status": "unexpected", "results": [{"error": {"message": "m"}}]}]} for f, title, tags in specs]
+    (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"config": {"rootDir": str(wt / "tests")}, "errors": [],
+        "suites": [{"title": "s", "specs": [{"title": "ok", "file": "a.spec.ts", "line": 1, "tags": [],
+                                             "tests": [{"status": "expected"}]}] + failing}]}))
     report = acceptance.Report()
     acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
-    assert [r[2] for r in report.rows if "reported separately" in r[1]] == ["INFO", "INFO"]
-    assert [r[2] for r in report.rows if "outside the agreed set" in r[1]] == ["FAIL", "FAIL"]
+    return [(r[2], r[3].split(" ", 1)[1].rsplit(": ", 1)[0].split(" is tagged @lane-advisory")[0])
+            for r in report.rows if "advisory" in r[1]]
+
+
+def test_the_advisory_set_is_the_agreed_tests(acceptance, tmp_path):
+    assert acceptance.ADVISORY_SPECS == (
+        ("tests/gtm/approval-anatomy.spec.ts",
+         "School supplied approval anatomy preserves raw pins, exact local review and invalid editable bindings"),
+        ("tests/gtm/four-up-school.spec.ts", FOUR_UP),
+        (CARDS, SELDON),
+        (CARDS, CHANI),
+        ("tests/gtm/supplied-presentation.spec.ts",
+         "School supplied plots and status cards preserve collection state, raw nodes, pins and failures"),
+        ("tests/gtm/supplied-presentation.spec.ts",
+         "actual TARS horizontal scores and Nexus compact windows retain source values across themes and widths"),
+        ("tests/gtm/supplied-presentation.spec.ts",
+         "actual Housekeeping cards preserve original first-row identity and source-only person and history"),
+        ("tests/gtm/unavailable-actions.spec.ts",
+         "School unavailable actions retain disabled controls, exact keyboard-readable reasons and raw state"))
+    assert acceptance.ADVISORY_FILES == ("tests/gtm/visual.spec.ts",)      # skipped unless GTM_SOURCE_VISUAL=1
+    assert not any("visual-recipes" in f for f, t in acceptance.ADVISORY_SPECS)
+    rows = advisory_rows(acceptance, tmp_path, [
+        ("gtm/four-up-school.spec.ts", FOUR_UP, ["@lane-advisory"]),
+        ("gtm/four-up-school.spec.ts", "a tagged test in an agreed file, but not on the list", ["@lane-advisory"]),
+        ("gtm/visual.spec.ts", "any title at all", ["@lane-advisory"]),
+        ("gtm/visual-recipes.spec.ts", FOUR_UP, ["@lane-advisory"]),
+        ("a.spec.ts", FOUR_UP, ["@lane-advisory"])])
+    assert [kind for kind, name in rows] == ["INFO", "FAIL", "INFO", "FAIL", "FAIL"]       # in the report's order
+    assert [name for kind, name in rows if kind == "INFO"] == [FOUR_UP, "any title at all"]
+    assert "a tagged test in an agreed file, but not on the list" in [name for kind, name in rows if kind == "FAIL"]
+
+
+def test_both_parametrised_titles_match(acceptance, tmp_path):
+    rows = advisory_rows(acceptance, tmp_path, [("gtm/content-recipes-cards.spec.ts", SELDON, ["@lane-advisory"]),
+                                                ("gtm/content-recipes-cards.spec.ts", CHANI, ["@lane-advisory"])])
+    assert rows == [("INFO", SELDON), ("INFO", CHANI)]
+
+
+def test_a_listed_title_matches_whole_never_as_a_substring(acceptance, tmp_path):
+    longer, shorter = CHANI + " on phones", CHANI.rsplit(" ", 1)[0]
+    rows = advisory_rows(acceptance, tmp_path, [("gtm/content-recipes-cards.spec.ts", longer, ["@lane-advisory"]),
+                                                ("gtm/content-recipes-cards.spec.ts", shorter, ["@lane-advisory"]),
+                                                ("gtm/content-recipes-cards.spec.ts", "x " + CHANI, ["@lane-advisory"])])
+    assert [kind for kind, name in rows] == ["FAIL", "FAIL", "FAIL"]
+
+
+def test_the_tag_is_taken_out_the_same_way_wherever_it_is(acceptance, tmp_path):
+    """Playwright's { tag } option with or without the @ and with whitespace around it, or the tag in the title at
+    either end (Playwright reports a title tag as part of the title): the title left is matched whole."""
+    variants = [(FOUR_UP, ["@lane-advisory"]), (FOUR_UP, ["lane-advisory"]), (FOUR_UP, [" @lane-advisory "]),
+                (FOUR_UP + " @lane-advisory", []), ("@lane-advisory " + FOUR_UP, []),
+                ("  " + FOUR_UP + "   @lane-advisory  ", []), (FOUR_UP + " @lane-advisory", ["@lane-advisory"])]
+    rows = advisory_rows(acceptance, tmp_path, [("gtm/four-up-school.spec.ts", title, tags) for title, tags in variants])
+    assert [kind for kind, name in rows] == ["INFO"] * len(variants)
+    # a different tag that merely starts with the advisory one is no tag of ours: an ordinary failure, not advisory
+    rows = advisory_rows(acceptance, tmp_path, [("gtm/four-up-school.spec.ts", FOUR_UP + " @lane-advisory-later", []),
+                                                ("gtm/four-up-school.spec.ts", FOUR_UP, ["@lane-advisory-later"])])
+    assert rows == []
 
 
 # ---- N5: only this run's team socket ----

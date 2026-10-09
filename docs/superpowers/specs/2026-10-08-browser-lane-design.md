@@ -81,9 +81,13 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
 - A real Chromium. The Bricks lead agreed (relayed by Serenity, 2026-10-08) that the headless shell is fine for lane
   runs, because no Bricks spec depends on branded-Chrome features (codecs, the channel itself, DRM).
   - Two groups of results are **advisory** in a lane, because they already differ between the Mac's Chrome and CI's:
-    the geometry checks (card widths and overflow in approval-anatomy, four-up-school, content-recipes-cards and
-    supplied-presentation) and the opt-in GTM pixel suite.
-  - Bricks tags the individual geometry tests (not whole spec files) `@lane-advisory`.
+    the geometry checks (card widths and overflow in approval-anatomy, four-up-school, content-recipes-cards,
+    supplied-presentation and unavailable-actions) and the opt-in GTM pixel suite.
+  - Bricks tags the individual geometry tests (not whole spec files) `@lane-advisory`. The acceptance run's step 6
+    agrees eight of them by file and whole title, as Playwright reports them (`ADVISORY_SPECS`), and the pixel
+    suite's file as a whole (`ADVISORY_FILES`, skipped unless `GTM_SOURCE_VISUAL=1`). The tag is taken out of the
+    title, or read from Playwright's `{ tag }` option with or without its `@`, the same way in both. Any other tagged
+    failure, in an agreed file or not, is a FAIL there; `visual-recipes.spec.ts` stays out.
   - The advisory set is taken from the base commit, and a diff that adds `@lane-advisory` is flagged to the lead. The
     check runs at `team_done` in teams with `browser_lane` only (final fix wave, I2: a team without lanes is
     unchanged); `git cat-file --batch-check` comes first, and a blob over 1 MB is never read: the lead hears which
