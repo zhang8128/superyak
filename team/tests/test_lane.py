@@ -171,3 +171,301 @@ def test_team_spawn_offers_browser_as_a_boolean(env):
     from superyak_team import mcp      # here, not at the top: mcp reads SUPERYAK_TEAM_ROLE when it is imported
     spawn = [t for t in mcp.LEAD_TOOLS if t[0] == "team_spawn"][0]
     assert spawn[2]["browser"]["type"] == "boolean"
+
+
+# ---------- Task 2: the lane's directory, its port block and the preload ----------
+
+@pytest.fixture
+def tmp_root(tmp_path, monkeypatch):
+    """lane.TMP_ROOT stands in for /tmp."""
+    root = tmp_path / "tmp"
+    root.mkdir()
+    monkeypatch.setattr(lane, "TMP_ROOT", root)
+    return root
+
+
+@pytest.fixture
+def held(env):
+    """Teams whose teamd is running, as far as the registry can tell: this test holds their locks."""
+    files = {}
+
+    def hold(team_id):
+        files[team_id] = lane.hold_team(team_id)
+    yield hold
+    for f in files.values():
+        f.close()
+
+
+def stat_mode(st):
+    return st.st_mode & 0o7777
+
+
+def test_the_lane_parent_is_private_or_refused(env, tmp_root, monkeypatch):
+    """Spec unit test 6: created 0700; refused with another owner, another mode, or as a symlink."""
+    parent = lane.private_parent()
+    st = os.lstat(parent)
+    assert parent == tmp_root / ("sy-lane-%d" % os.getuid())
+    assert stat_mode(st) == 0o700 and st.st_uid == os.getuid()
+    os.chmod(parent, 0o755)
+    with pytest.raises(lane.LaneRefused, match="mode 755, not 700"):
+        lane.private_parent()
+    assert stat_mode(os.lstat(parent)) == 0o755                     # refused, never repaired
+    os.rmdir(parent)
+    elsewhere = env["tmp"] / "elsewhere"
+    elsewhere.mkdir(mode=0o700)
+    os.symlink(elsewhere, parent)
+    with pytest.raises(lane.LaneRefused, match="not a directory you own"):
+        lane.private_parent()
+    os.unlink(parent)
+    real_uid = os.getuid()
+    monkeypatch.setattr(lane.os, "getuid", lambda: real_uid + 1)   # the folder is ours, the "user" is someone else
+    with pytest.raises(lane.LaneRefused, match="not a directory you own"):
+        lane.private_parent()
+
+
+def test_a_parent_that_vanishes_is_refused_not_raised(env, tmp_root, monkeypatch):
+    """Review (M5): a process that can write /tmp may remove the parent between mkdir and lstat; teamd must get
+    LaneRefused, never a raw OSError."""
+    parent = tmp_root / ("sy-lane-%d" % os.getuid())
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if str(path) == str(parent):
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return real_lstat(path, *args, **kwargs)
+    monkeypatch.setattr(lane.os, "lstat", lstat)
+    with pytest.raises(lane.LaneRefused, match="unsafe lane folder .*No such file"):
+        lane.private_parent()
+    with pytest.raises(lane.LaneRefused):
+        lane.ensure_lane("t1", "kaylee")
+
+
+def test_a_lane_has_its_folders_and_the_preload_and_is_refused_as_a_symlink(env, tmp_root):
+    """Spec unit test 6: the lane is refused when it is a symlink at turn time."""
+    path = lane.ensure_lane("t1", "kaylee")
+    assert path == tmp_root / ("sy-lane-%d" % os.getuid()) / lane.lane_hash("t1", "kaylee")
+    assert len(path.name) == 10 and path.name == hashlib.sha256(b"t1/kaylee").hexdigest()[:10]
+    assert sorted(p.name for p in path.iterdir()) == ["b", "npm-cache", "preload.cjs", "tmp"]
+    assert stat_mode(os.lstat(path)) == 0o700
+    assert "net.Server.prototype.listen" in (path / "preload.cjs").read_text()
+    assert lane.ensure_lane("t1", "kaylee") == path                  # the next turn checks it again
+    victim = env["tmp"] / "victim"
+    victim.mkdir()
+    (path / "b").rmdir()
+    os.symlink(victim, path / "b")                                     # b/ swapped for a symlink
+    with pytest.raises(lane.LaneRefused, match="unsafe lane"):
+        lane.ensure_lane("t1", "kaylee")
+    lane.remove_lane(path)
+    os.symlink(victim, path)                                           # the lane itself swapped for a symlink
+    with pytest.raises(lane.LaneRefused, match="unsafe lane"):
+        lane.ensure_lane("t1", "kaylee")
+    with pytest.raises(lane.LaneRefused, match="unsafe lane"):
+        lane.remove_lane(path)
+    assert victim.is_dir() and os.listdir(victim) == []
+
+
+def test_teamd_never_writes_through_a_planted_link(env, tmp_root):
+    """Review: every teamd write under the lane unlinks the name, then creates it with O_EXCL|O_NOFOLLOW. A preload
+    swapped for a hard link, or a symlink, to someone else's file leaves that file as it was."""
+    path = lane.ensure_lane("t1", "kaylee")
+    victim = env["home"] / ".zshrc"
+    victim.write_text("export SECRET=1\n")
+    (path / "preload.cjs").unlink()
+    os.link(victim, path / "preload.cjs")                              # a hard-link swap
+    lane.ensure_lane("t1", "kaylee")
+    assert victim.read_text() == "export SECRET=1\n"
+    assert os.stat(path / "preload.cjs").st_ino != os.stat(victim).st_ino
+    (path / "preload.cjs").unlink()
+    os.symlink(victim, path / "preload.cjs")                           # a symlink swap
+    lane.ensure_lane("t1", "kaylee")
+    assert victim.read_text() == "export SECRET=1\n" and not (path / "preload.cjs").is_symlink()
+
+
+def test_removal_is_fd_safe_and_refused_without_symlink_protection(env, tmp_root, monkeypatch):
+    """Spec unit test 6."""
+    path = lane.ensure_lane("t1", "kaylee")
+    outside = env["tmp"] / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
+    os.symlink(outside, path / "tmp" / "link")                          # a link the worker could have made in tmp/
+    assert lane.remove_lane(path) is True
+    assert not os.path.lexists(path) and (outside / "keep.txt").read_text() == "keep"
+    assert lane.remove_lane(path) is False                             # nothing left to remove
+    path = lane.ensure_lane("t1", "kaylee")
+
+    def unsafe_rmtree(p):
+        raise AssertionError("must not be called")
+    unsafe_rmtree.avoids_symlink_attacks = False
+    monkeypatch.setattr(lane.shutil, "rmtree", unsafe_rmtree)
+    with pytest.raises(lane.LaneRefused, match="without following symlinks"):
+        lane.remove_lane(path)
+    assert path.is_dir()
+
+
+def test_leftovers_are_this_teams_dead_workers_by_exact_hash(env, tmp_root):
+    """Spec unit test 6: team bricks never touches bricks-ux, and nothing is matched by prefix."""
+    dead = lane.ensure_lane("bricks", "kaylee")
+    alive = lane.ensure_lane("bricks", "wash")
+    other_team = lane.ensure_lane("bricks-ux", "kaylee")
+    parent = dead.parent
+    (parent / (dead.name + "x")).mkdir()                                # longer name with the same start
+    (parent / dead.name[:9]).mkdir()                                     # a prefix of it
+    workers = {"kaylee": {"state": "done"}, "wash": {"state": "idle"}, "zoe": {"state": "stopped"}}
+    assert lane.leftover_lanes("bricks", workers, lane.LIVE_STATES) == [("kaylee", dead)]
+    assert alive.is_dir() and other_team.is_dir()
+
+
+def test_blocks_never_overlap_and_lie_in_the_pool(env, held, monkeypatch):
+    """Spec unit test 7."""
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    held("t1")
+    held("t2")
+    bases = [lane.allocate_block("t1", "w%d" % i) for i in range(20)]
+    assert len(set(bases)) == 20
+    for base in bases:
+        assert lane.PORT_FIRST <= base and base + lane.BLOCK - 1 <= lane.PORT_LAST
+        assert (base - lane.PORT_FIRST) % lane.BLOCK == 0
+    spans = sorted((b, b + lane.BLOCK - 1) for b in bases)
+    assert all(a[1] < b[0] for a, b in zip(spans, spans[1:]))
+    assert lane.allocate_block("t1", "w3") == bases[3]                     # a lane keeps its block
+    assert lane.allocate_block("t1", "w%d" % 20) == lane.PORT_FIRST + 20 * lane.BLOCK
+    lane.release_block("t1", "w0")
+    assert lane.allocate_block("t2", "kaylee") == lane.PORT_FIRST          # freed blocks are reused
+    assert 48968 + lane.BLOCK - 1 == lane.PORT_LAST                        # the last block ends at 48999
+    registry = teamlib.team_home() / "lane-ports.json"
+    assert stat_mode(os.stat(registry)) == 0o600 and not registry.with_name("lane-ports.json.tmp").exists()
+
+
+def test_a_block_something_else_uses_is_skipped(env, held, monkeypatch):
+    """Spec unit test 7."""
+    held("t1")
+    busy = {41000, 41040}                                                 # one port in each of the first two blocks
+    monkeypatch.setattr(lane, "port_free", lambda port: port not in busy)
+    assert lane.allocate_block("t1", "kaylee") == 41064
+    monkeypatch.setattr(lane, "port_free", lambda port: False)
+    with pytest.raises(lane.LaneRefused, match="no free block of 32 loopback ports"):
+        lane.allocate_block("t1", "wash")
+
+
+def test_port_free_sees_a_real_listener_on_either_loopback():
+    """Review (N9): a server on ::1 alone holds the port too."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    try:
+        assert lane.port_free(s.getsockname()[1]) is False
+    finally:
+        s.close()
+    try:
+        s6 = socket.socket(socket.AF_INET6)
+        s6.bind(("::1", 0))
+    except OSError:
+        pytest.skip("no IPv6 loopback here")
+    s6.listen()
+    try:
+        assert lane.port_free(s6.getsockname()[1]) is False
+    finally:
+        s6.close()
+
+
+def test_a_team_is_alive_while_its_teamd_holds_the_lock(env):
+    """Review: liveness is a lock teamd holds for its whole life, never a pid that could be reused. A teamd that is
+    just exiting gets about a second to let go (N11)."""
+    assert lane.team_alive("t1") is False
+    f = lane.hold_team("t1")
+    assert lane.team_alive("t1") is True
+    started = time.monotonic()
+    with pytest.raises(lane.LaneRefused, match="another teamd already runs team t1"):
+        lane.hold_team("t1")
+    assert time.monotonic() - started >= 0.9
+    threading.Timer(0.3, f.close).start()                                  # the old teamd exits meanwhile
+    lane.hold_team("t1").close()
+    assert lane.team_alive("t1") is False
+
+
+def test_only_blocks_of_a_running_teamd_count_as_live(env, held, monkeypatch):
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    held("t1")
+    mine = lane.allocate_block("t1", "kaylee")
+    f = lane.hold_team("t2")
+    theirs = lane.allocate_block("t2", "kaylee")
+    assert lane.live_blocks() == [mine, theirs]
+    f.close()                                                             # t2's teamd is gone
+    assert lane.live_blocks() == [mine]
+
+
+def test_a_dead_teamds_block_is_reclaimed_only_when_nothing_uses_it(env, held, monkeypatch):
+    """Review: a block whose teamd is gone returns to the pool once its worker isn't alive and its ports are free."""
+    busy = set()
+    monkeypatch.setattr(lane, "port_free", lambda port: port not in busy)
+    locks = [lane.hold_team(team_id) for team_id in ("gone", "restarting", "serving")]
+    for team_id in ("gone", "restarting", "serving"):
+        lane.allocate_block(team_id, "kaylee")                            # 41000, 41032, 41064
+    for f in locks:                                                       # then their teamds die
+        f.close()
+    state = teamlib.team_dir("restarting")                                 # its teamd is down, its worker still alive
+    state.mkdir(parents=True)
+    (state / "state.json").write_text(json.dumps({"workers": {"kaylee": {"state": "idle"}}}))
+    busy.add(41064 + 3)                                                   # "serving" left a server running
+    held("t1")
+    assert lane.allocate_block("t1", "kaylee") == 41000                   # "gone" was reclaimed
+    assert lane.block_of("restarting", "kaylee") == 41032 and lane.block_of("serving", "kaylee") == 41064
+
+
+def test_a_damaged_registry_refuses_lanes(env, tmp_root, held):
+    """Review: a corrupt registry never forgets blocks silently."""
+    held("t1")
+    registry = teamlib.team_home() / "lane-ports.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    for text in ("{not json", json.dumps(["a list"]), json.dumps({"abc": {"base": "41000"}})):
+        registry.write_text(text)
+        with pytest.raises(lane.LaneRefused, match="is damaged"):
+            lane.allocate_block("t1", "kaylee")
+        assert lane.block_of("t1", "kaylee") is None
+        with pytest.raises(lane.LaneRefused, match="is damaged"):
+            lane.live_blocks()
+
+
+def test_one_lane_per_machine_when_the_person_asks_for_it(env, held, tmp_path, monkeypatch):
+    """Review: the fallback when a second lane could read the first one's endpoint lives in the registry, so it
+    holds across teams, whatever max_workers says."""
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    held("t1")
+    held("t2")
+    (tmp_path / "cfg.json").write_text(json.dumps({"lane_one_at_a_time": True}))
+    assert lane.allocate_block("t1", "kaylee") == 41000
+    assert lane.allocate_block("t1", "kaylee") == 41000                   # the lane that holds it keeps it
+    with pytest.raises(lane.LaneWait, match="one browser lane per machine at a time.*kaylee of team t1"):
+        lane.allocate_block("t2", "wash")
+    lane.release_block("t1", "kaylee")
+    assert lane.allocate_block("t2", "wash") == 41000
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_the_preload_binds_unspecified_addresses_to_loopback(tmp_path):
+    """Spec unit test 11."""
+    preload = teamlib.package_dir() / "lane" / "preload.cjs"
+    sock = tmp_path / "s.sock"
+    script = r"""
+    const net = require('net'), http = require('http');
+    const cases = {
+      'listen(0)': s => s.listen(0), "listen(0, '0.0.0.0')": s => s.listen(0, '0.0.0.0'),
+      "listen(0, '::')": s => s.listen(0, '::'), 'listen()': s => s.listen(), 'listen(cb)': s => s.listen(() => {}),
+      'listen({port: 0})': s => s.listen({port: 0}), "listen({port: 0, host: '::'})": s => s.listen({port: 0, host: '::'}),
+      'listen(0, backlog)': s => s.listen(0, 5), 'http listen(0)': s => s.listen(0), "explicit '127.0.0.2'": s => s.listen(0, '127.0.0.2'),
+    };
+    const out = {};
+    const all = Object.entries(cases).map(([name, start]) => new Promise(done => {
+      const s = name.startsWith('http') ? http.createServer() : net.createServer();
+      start(s);
+      s.on('listening', () => { out[name] = s.address().address; s.close(done); });
+    }));
+    all.push(new Promise(done => { const u = net.createServer().listen(process.argv[1], function () { out.unix = this.address(); this.close(done); }); }));
+    Promise.all(all).then(() => console.log(JSON.stringify(out)));
+    """
+    r = subprocess.run(["node", "--require", str(preload), "-e", script, str(sock)], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    unix, explicit = out.pop("unix"), out.pop("explicit '127.0.0.2'")
+    assert set(out.values()) == {"127.0.0.1"}, out
+    assert len(out) == 9 and unix == str(sock) and explicit == "127.0.0.2"
