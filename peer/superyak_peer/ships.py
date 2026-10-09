@@ -224,11 +224,14 @@ class Ships:
             if len(matches) > 1:
                 raise Problem(409, f'{prefix} matches more than one room; give more characters')
             room = self._room(db, actor, matches[0])
+            brief, revision = self._room_brief(db, room['id'])
+            carry = revision if brief else None  # bridging is the same room continuing, so its brief comes along
             earlier = [] if bridge else self._earlier_bridged(db, actor, room, wormhole)
         if (wormhole in room['member_ids']) == bridge and not earlier:
             return room, False
         if bridge:
-            return self.add_participants(actor, room['id'], [wormhole]), True
+            new = self.add_participants(actor, room['id'], [wormhole], carry)
+            return {**new, 'brief_carried': carry is not None}, True  # the operator tells Andy whether it came along
         for key in earlier:  # the earlier rooms first: if this stops halfway, the current room still shows bridged
             self.remove_participant(actor, key, wormhole)
         if wormhole in room['member_ids']:

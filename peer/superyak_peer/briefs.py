@@ -46,6 +46,17 @@ class Briefs:
                    'carried_from=excluded.carried_from',
                    (room_id, body, revision, author_id, self.clock(), carried_from))
 
+    def _brief_to_carry(self, db, room_id, carry):
+        """The body to copy into the next room. None without carry_brief (the default: carrying is always a choice) or
+        when the brief was removed. carry_brief is the revision the owner saw, so a brief changed since then is never
+        carried unseen (409)."""
+        if carry is None:
+            return None
+        brief, revision = self._room_brief(db, room_id)
+        if carry != revision:
+            raise Problem(409, 'The room brief changed since you looked at it; look again before carrying it')
+        return brief['body'] if brief else None
+
     def save_brief(self, actor, key, body, revision):
         """PUT /api/chats/{id}/brief, for the room's owner. The route has already refused ship keys and a missing CSRF
         token. Saving records no mentions and posts no message."""

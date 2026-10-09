@@ -489,7 +489,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/chats/{key}/participants', status_code=201)
     async def chat_add(key: str, request: Request):
         who, data = actor(request), await body(request)
-        return store.add_participants(who, key, data.get('member_ids', []))
+        return store.add_participants(who, key, data.get('member_ids', []), data.get('carry_brief'))
 
     @app.delete('/api/chats/{key}/participants/{user_id}')
     def chat_remove(key: str, user_id: str, request: Request):

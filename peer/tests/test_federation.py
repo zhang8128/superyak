@@ -400,3 +400,18 @@ def test_normal_sync_get_exposes_pending_without_network(env, tmp_path):
     assert len(response['deliveries']) == 1
     assert response['deliveries'][0]['status'] == 'pending'
     assert clients[2].get('/api/sync').json()['deliveries'] == []
+
+
+def test_a_received_room_has_no_brief_and_takes_none(two_peers):
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Across peers', [ca['id']])
+    a[0].save_brief(a[1], room['id'], 'Only for this station.', 0)
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    assert ':' in remote
+    got = b[0].get_room(b[1], remote)
+    assert got['brief'] is None and got['brief_revision'] == 0
+    with pytest.raises(Problem) as refused:
+        b[0].save_brief(b[1], remote, 'Mine.', 0)
+    assert refused.value.status == 404
+    assert a[0].get_room(a[1], room['id'])['brief']['body'] == 'Only for this station.'

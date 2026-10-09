@@ -1,5 +1,6 @@
 """Trusted local approval on the station host: list, approve and deny without a browser."""
 import pytest
+from superyak_peer.common import Problem
 from superyak_peer.__main__ import main as cli
 from superyak_peer.db import Store
 
@@ -264,3 +265,39 @@ def test_bridging_without_a_wormhole_ship_says_to_create_it_first(tmp_path, caps
         assert caught.value.code == 1 and 'create it first' in capsys.readouterr().err
     assert [r['id'] for r in store.list_rooms(andy['id'])] == [room['id']]
     assert 'Gamma Quadrant' in run(capsys, store, 'station-rooms', '--as', 'andy')
+
+
+def test_bridging_carries_the_brief_and_removing_members_keeps_it(rooms, capsys):
+    store, andy, doctor, wormhole, gamma = rooms
+    store.save_brief(andy['id'], gamma['id'], 'Gamma: decisions D1-D9.', 0)
+    out = run(capsys, store, 'station-bridge', '--id', gamma['id'][:6], '--as', 'andy')
+    assert "The room's brief came along." in out
+    new = current_room(store, andy, gamma)
+    brief = store.get_room(andy['id'], new['id'])['brief']
+    assert (brief['body'], brief['revision'], brief['carried_from'], brief['author_id']) == ('Gamma: decisions D1-D9.', 1, gamma['id'], andy['id'])
+    assert store.get_room(wormhole['id'], new['id'])['brief']['body'] == 'Gamma: decisions D1-D9.'
+    assert 'Unbridged' in run(capsys, store, 'station-unbridge', '--id', new['id'][:6], '--as', 'andy')
+    assert store.get_room(andy['id'], new['id'])['brief']['body'] == 'Gamma: decisions D1-D9.'
+    with pytest.raises(Problem) as gone:
+        store.get_room(wormhole['id'], new['id'])
+    assert gone.value.status == 404
+    store.remove_participant(andy['id'], new['id'], doctor['id'])
+    assert store.get_room(andy['id'], new['id'])['brief']['body'] == 'Gamma: decisions D1-D9.'
+    with pytest.raises(Problem) as removed:
+        store.get_room(doctor['id'], new['id'])
+    assert removed.value.status == 404
+
+
+def test_bridging_a_room_without_a_brief_carries_nothing(rooms, capsys):
+    store, andy, doctor, wormhole, gamma = rooms
+    out = run(capsys, store, 'station-bridge', '--id', gamma['id'][:6], '--as', 'andy')
+    new = current_room(store, andy, gamma)
+    got = store.get_room(andy['id'], new['id'])
+    assert got['brief'] is None and got['brief_revision'] == 0 and 'The room had no brief to carry.' in out
+    store.save_brief(andy['id'], new['id'], 'Soon gone.', 0)
+    store.save_brief(andy['id'], new['id'], '', 1)  # a removed brief carries nothing either
+    run(capsys, store, 'station-unbridge', '--id', new['id'][:6], '--as', 'andy')
+    again = run(capsys, store, 'station-bridge', '--id', new['id'][:6], '--as', 'andy')
+    newest = current_room(store, andy, new)
+    assert newest['id'] != new['id'] and store.get_room(andy['id'], newest['id'])['brief'] is None
+    assert 'The room had no brief to carry.' in again
