@@ -257,14 +257,14 @@ def test_the_planted_import_is_broken_when_a_target_is_missing(acceptance, world
     assert ran == ["write_home"]
 
 
-def test_the_lsof_exit_code_is_recorded_and_only_0_passes(acceptance):
+def test_the_lsof_exit_code_is_recorded_as_information(acceptance):
     got = []
     ok = lambda cmd, timeout=60: got.append(cmd) or Ran(0, "p1\nn/a\np2\nn/b\n")
     verdict, detail = acceptance.lsof_exit(ok)
-    assert verdict == "PASS" and "exit 0" in detail and "4 lines" in detail
+    assert verdict == "INFO" and "exit 0" in detail and "4 lines" in detail
     assert got[0][1:] == ["-nP", "-a", "-u", str(os.getuid()), "-F", "pn"] and got[0][0].endswith("lsof")
     verdict, detail = acceptance.lsof_exit(lambda cmd, timeout=60: Ran(1, "", "WARNING: can't stat() fuse\n more"))
-    assert verdict == "FAIL" and "exit 1" in detail and "can't stat() fuse" in detail
+    assert verdict == "INFO" and "exit 1" in detail and "can't stat() fuse" not in detail     # stderr isn't echoed
     assert acceptance.lsof_exit(lambda cmd, timeout=60: None)[0] == "BROKEN"
 
 
@@ -335,3 +335,506 @@ def test_the_netstat_capture_writes_a_file_and_names_it(acceptance, tmp_path):
     assert "my-secret-app" not in dest.read_text() and dest.read_text().count("LISTEN") == 3
     assert acceptance.capture_netstat(lambda cmd, timeout=60: Ran(1, ""), lambda pid: None, dest)[0] == "BROKEN"
     assert acceptance.capture_netstat(lambda cmd, timeout=60: Ran(0, "garbage\n"), lambda pid: None, dest)[0] == "BROKEN"
+
+
+# ================= Fix round 1: no row passes without proving its property =================
+
+import signal  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+
+# ---- Critical 1: Andy's real lane-listeners.json survives any failure in step 4 ----
+
+class FakeTeam:
+    """A Team whose turns do what the test says; the run's own logic is the real steps2to7."""
+    fail_at = "waiting"            # which wait raises
+
+    def __init__(self, bricks, team_id):
+        self.id, self.inbox, self.bricks = team_id, [], bricks
+
+    def call(self, *a, **k):
+        return {}
+
+    def state(self):
+        w = self.world
+        return {"workers": {n: {"path": str(w["wk"][n]), "pid": 4242, "lane": {"path": str(w["lanes"][n]), "base": b}}
+                            for n, b in (("kaylee", 41000), ("wash", 41032))}}
+
+    def message(self, wid, text):
+        d = self.world["wk"][wid] / "node_modules" / ".superyak-lane-acceptance"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ("results-%s.json" % ("lane" if wid == "kaylee" else "peer"))).write_text(json.dumps({"pid": 1, "rows": []}))
+
+    def wait(self, wid, states, timeout=900, patient=False):
+        if states == (self.fail_at,):
+            raise RuntimeError("%s is not %s" % (wid, self.fail_at))
+        return states[0]
+
+    def status(self):
+        return {"workers": {}}
+
+
+@pytest.fixture
+def driven(acceptance, world, monkeypatch):
+    """steps2to7 with a fake team, no lsof and no browser: only the logic around the lane's files runs."""
+    root = world["root"]
+    bricks = root / "bricks"
+    bricks.mkdir()
+    subprocess.run(["git", "init", "-q", str(bricks)], check=True)
+    wk = {w: root / w for w in ("kaylee", "wash")}
+    lanes = {w: world["tmp"] / ("lane-" + w) for w in wk}
+    for w in wk:
+        (wk[w] / ".claude").mkdir(parents=True)
+        lanes[w].mkdir()
+    FakeTeam.world = {"wk": wk, "lanes": lanes}
+    FakeTeam.fail_at = "waiting"
+    lane.approved_path().parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(acceptance, "Team", FakeTeam)
+    monkeypatch.setattr(acceptance, "lsof_pids", lambda *a: set())
+    monkeypatch.setattr(acceptance.worker_probes, "bootstrap_look_up", lambda name: 0)
+    monkeypatch.setattr(acceptance, "HOLDER_POLLS", 1)
+    monkeypatch.setattr(acceptance, "HOLDER_POLL_S", 0)
+    monkeypatch.setattr(acceptance, "preflight", lambda args, report: True, raising=False)
+    real_run = subprocess.run
+    monkeypatch.setattr(acceptance.subprocess, "run",
+                        lambda cmd, **k: Ran(0, "") if "start" in cmd else real_run(cmd, **k))
+    return SimpleNamespace(args=SimpleNamespace(bricks=bricks, python="python3", prepare="npm-ci"), world=FakeTeam.world)
+
+
+def run_steps(acceptance, driven):
+    report = acceptance.Report()
+    try:
+        acceptance.steps2to7(driven.args, report)
+    except RuntimeError:
+        pass
+    return report
+
+
+def test_a_failure_in_step_4_leaves_the_real_approved_list_as_it_was(acceptance, driven):
+    original = json.dumps(["/usr/libexec/rapportd", "/sbin/launchd"])
+    lane.approved_path().write_text(original)
+    run_steps(acceptance, driven)
+    assert lane.approved_path().read_text() == original
+
+
+def test_an_approved_list_that_never_existed_does_not_appear_either(acceptance, driven):
+    assert not lane.approved_path().exists()
+    run_steps(acceptance, driven)
+    assert not lane.approved_path().exists()
+
+
+def test_an_approved_list_that_cannot_be_read_is_never_touched(acceptance, driven, monkeypatch):
+    lane.approved_path().write_text("[]")
+    lane.approved_path().chmod(0)
+    try:
+        report = run_steps(acceptance, driven)
+    finally:
+        lane.approved_path().chmod(0o600)
+    assert lane.approved_path().read_text() == "[]"
+    assert acceptance.NOT_READ is not None and any(r[2] == "BROKEN" and r[0] == 4 for r in report.rows)
+
+
+# ---- Critical 2: the download row ----
+
+def test_the_download_row_needs_a_control_and_a_download_that_began(acceptance):
+    ok = json.dumps({"control": {"began": True, "states": ["completed"]}, "home": {"began": True, "states": ["canceled"]}})
+    assert acceptance.download_verdict(0, ok, [], True, [])[0] == "PASS"
+    verdict, detail = acceptance.download_verdict(0, ok, [".zsh_history", "superyak-x.txt"], True, [])
+    assert verdict == "FAIL" and ".zsh_history" in detail and "superyak-x.txt" in detail
+    assert acceptance.download_verdict(0, ok, [], False, [])[0] == "BROKEN"                       # the control never landed
+    never = json.dumps({"control": {"began": True, "states": []}, "home": {"began": False, "states": []}})
+    assert acceptance.download_verdict(0, never, [], True, [])[0] == "BROKEN"                      # nothing was tried
+    assert acceptance.download_verdict(0, ok, [], True, ["/home/x/superyak-lane-acceptance-download.txt"])[0] == "BROKEN"
+    assert acceptance.download_verdict(2, "broken: no cdp", [], True, [])[0] == "BROKEN"
+    assert acceptance.download_verdict(1, "not json", [], True, [])[0] == "BROKEN"
+
+
+# ---- Critical 3: steps 2-3 judge refusals by their codes ----
+
+def test_a_negative_row_passes_only_with_a_refusal_code_it_expects(acceptance):
+    row = lambda code, detail, refusals=None, expect="fail": {"probe": "p", "expect": expect, "code": code, "detail": detail,
+                                                               "refusals": refusals}
+    net = list(worker_probes_module().NET_REFUSALS)
+    assert acceptance.judge_row(row(1, "refused: EPERM (x)", net)) == "PASS"
+    assert acceptance.judge_row(row(1, "refused: ENOENT (x)", net)) == "BROKEN"                  # a refusal for another reason
+    assert acceptance.judge_row(row(2, "broken: timeout", net)) == "BROKEN"
+    assert acceptance.judge_row(row(-1, "timed out", net)) == "BROKEN"
+    assert acceptance.judge_row(row(0, "succeeded", net)) == "FAIL"
+    assert acceptance.judge_row(row(1, "refused: NotAllowedError")) == "PASS"                    # the client proved it itself
+    assert acceptance.judge_row(row(0, "fine", expect="ok")) == "PASS"
+    assert acceptance.judge_row(row(1, "refused: EPERM", expect="ok")) == "FAIL"
+    assert acceptance.judge_row(row(0, "x", expect="info")) == "INFO"
+
+
+def worker_probes_module():
+    import worker_probes
+    return worker_probes
+
+
+def test_worker_probe_results_separate_refused_from_broken(tmp_path):
+    wp = worker_probes_module()
+    assert wp.classify(0, "succeeded") == (0, "succeeded")
+    assert wp.classify(1, "refused: EPERM (x)") == (1, "refused: EPERM (x)")
+    assert wp.classify(1, "something else")[0] == 2 and wp.classify(124, "")[0] == 2
+    assert wp.curl_result(7, "Operation not permitted")[1].startswith("refused: curl-7")
+    assert wp.curl_result(28, "timed out")[0] == 2 and wp.curl_result(0, "")[0] == 0
+    missing = wp.can_read(str(tmp_path / "missing"))
+    assert missing[0] == 1 and missing[1].startswith("refused: ENOENT")
+
+
+def test_the_driver_checks_the_world_before_blaming_the_sandbox(acceptance, tmp_path):
+    srv = tmp_path / "ok.sock"
+    s = socket.socket(socket.AF_UNIX)
+    s.bind(str(srv))
+    s.listen(1)
+    dead = tmp_path / "dead.sock"
+    d = socket.socket(socket.AF_UNIX)
+    d.bind(str(dead))
+    d.close()
+    try:
+        ok, bad = acceptance.usable_sockets([str(srv), str(dead), str(tmp_path / "none.sock")])
+    finally:
+        s.close()
+    assert ok == [str(srv)] and sorted(name for name, _ in bad) == sorted([str(dead), str(tmp_path / "none.sock")])
+
+
+import socket  # noqa: E402
+
+
+def test_the_dotfile_for_the_file_row_must_have_content(acceptance, tmp_path):
+    home, other, decoy = tmp_path / "home", tmp_path / "o", tmp_path / "d"
+    for f in (home, other, decoy):
+        f.mkdir()
+    (home / ".zshrc").write_text("")
+    present, missing = acceptance.read_targets(other, decoy, 424242, home=home)
+    assert "a dotfile in $HOME" not in present and "a dotfile in $HOME" in missing
+    (home / ".bashrc").write_text("x\n")
+    assert acceptance.read_targets(other, decoy, 424242, home=home)[0]["a dotfile in $HOME"] == str(home / ".bashrc")
+
+
+# ---- Critical 4: hardlink-naming looks at the inode, through the lane's own path ----
+
+def test_the_hardlink_row_finds_the_holders_descriptor_by_inode(acceptance, world, monkeypatch):
+    seen = {}
+    real = lane.lane_pids
+
+    def spy(path, base):
+        seen["linked"] = (path / "tmp" / "linked.txt").exists()
+        return real(path, base)
+    monkeypatch.setattr(lane, "lane_pids", spy)
+    verdict, detail = acceptance.hardlink_naming()
+    assert verdict == "PASS" and seen["linked"] and "descriptor" in detail and "lsof reports" in detail
+
+
+def test_a_holder_whose_inode_lsof_never_lists_is_broken_not_passed(acceptance, world, monkeypatch):
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, "p1\nf3\ni99999999\nn/nowhere\n"))
+    assert acceptance.hardlink_naming()[0] == "BROKEN"
+
+
+# ---- Important 1: the denial stream ----
+
+STREAM = """
+import sys, time, signal
+signal.signal(signal.SIGINT, lambda *a: sys.exit(0))
+print("Filtering the log data using ...", flush=True)
+time.sleep(0.6)
+print("Sandbox: node(812) deny(1) file-write-create /Users/me/x", flush=True)
+time.sleep(0.6)
+print("Sandbox: node(813) deny(1) process-exec /usr/bin/open", flush=True)
+time.sleep(60)
+"""
+
+
+def test_the_denial_stream_is_drained_from_the_start_and_read_until_quiet(acceptance):
+    proc = sp.Popen([sys.executable, "-c", STREAM], stdout=sp.PIPE, stderr=sp.DEVNULL, text=True)
+    stream = acceptance.DenialStream(proc)
+    assert stream.wait_ready(10) is True
+    t0 = time.monotonic()
+    lines = stream.finish(quiet=1.5, cap=15)
+    assert time.monotonic() - t0 < 10
+    assert [l for l in lines if "deny" in l] == ["Sandbox: node(812) deny(1) file-write-create /Users/me/x",
+                                                  "Sandbox: node(813) deny(1) process-exec /usr/bin/open"]
+    assert proc.poll() is not None                                           # stopped (SIGINT), not left running
+
+
+def test_a_missing_denial_stream_is_reported_as_unavailable(acceptance):
+    stream = acceptance.DenialStream(None)
+    assert stream.wait_ready(1) is False and stream.finish() == [] and not stream.available
+
+
+def test_a_probes_whole_family_is_matched_against_the_denials(acceptance, capsys):
+    recorder = acceptance.PidRecorder()
+    r = recorder([sys.executable, "-c", "import sys; sys.stderr.write('child pid 777\\n'); print('refused: EPERM')", "exec_open_calculator"],
+                 timeout=30)
+    assert recorder.pids[0][0] == "exec_open_calculator" and recorder.pids[-1][2] == 777
+    assert recorder.pids_of("exec_open_calculator") == [recorder.pids[0][2], 777]
+    report = acceptance.Report()
+    acceptance.report_profile_rows(report, [("exec_open_calculator", "BROKEN", "refused: nocode")], recorder,
+                                   ["Sandbox: open(777) deny(1) process-exec /usr/bin/open"])
+    assert "open(777): process-exec /usr/bin/open" in capsys.readouterr().out
+
+
+# ---- Important 3: the cross-lane check ----
+
+def test_only_processes_that_hold_the_endpoint_are_targets(acceptance):
+    env = {10: ["A=1", "PW_TEST_CONNECT_WS_ENDPOINT=ws://127.0.0.1:41031/x"], 11: ["A=1"], 12: None}
+    holders, others = acceptance.peer_targets([10, 11, 12], env.get)
+    assert holders == [10] and others == [11, 12]
+
+
+def test_the_first_lane_holds_its_round_open_until_the_marker_appears(tmp_path):
+    wp = worker_probes_module()
+    marker = tmp_path / "peer-done"
+    assert wp.hold(str(marker), 0.3) is False                                  # bounded: never waits forever
+    threading.Timer(0.3, lambda: marker.write_text("x")).start()
+    assert wp.hold(str(marker), 10) is True
+
+
+# ---- Important 4 and 5: the root listener ----
+
+PS = """  900   1 /usr/bin/sudo -n /usr/bin/nc -l 127.0.0.1 5555
+  901 900 /usr/bin/nc -l 127.0.0.1 5555
+  902 900 /bin/sleep 5
+  950   1 /usr/bin/nc -l 127.0.0.1 6666
+"""
+
+
+def test_only_the_nc_child_of_our_sudo_is_ever_signalled(acceptance):
+    assert acceptance.nc_child(PS, 900) == 901
+    assert acceptance.nc_child(PS, 1) is None                                  # not by port, not another nc
+    assert acceptance.nc_child("  900   1 /usr/bin/sleep 9\n", 900) is None
+
+
+def test_stopping_the_root_listener_reports_a_stuck_sudo(acceptance):
+    killed, said = [], []
+    root = SimpleNamespace(pid=900, wait=lambda timeout=None: (_ for _ in ()).throw(sp.TimeoutExpired("sudo", 1)))
+    acceptance.stop_root_listener(root, ps=lambda: PS, kill=lambda pid: killed.append(pid), say=said.append)
+    assert killed == [901] and any("900" in line and "by hand" in line for line in said)
+
+
+def test_a_root_listener_must_be_root_owned_and_invisible_to_lsof(acceptance, monkeypatch):
+    monkeypatch.setattr(lane, "lsof_listeners", lambda: {(901, 5555)})
+    verdict, detail = acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0)
+    assert verdict == "BROKEN" and "lsof" in detail                            # lsof sees it: netstat isn't what saw it
+    monkeypatch.setattr(lane, "lsof_listeners", lambda: set())
+    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 501)[0] == "BROKEN"
+    assert acceptance.root_listener_proof(901, 5555, owner=lambda pid: 0)[0] == "PASS"
+
+
+def test_sudo_is_refreshed_while_the_run_lasts(acceptance):
+    calls = []
+    keeper = acceptance.SudoKeeper(run=lambda cmd, **k: calls.append(cmd) or Ran(0), every=0.05)
+    assert keeper.start() is True
+    time.sleep(0.3)
+    keeper.stop()
+    n = len(calls)
+    time.sleep(0.2)
+    assert n >= 3 and len(calls) == n and calls[0] == ["/usr/bin/sudo", "-v"] and calls[-1] == ["/usr/bin/sudo", "-n", "-v"]
+    assert acceptance.SudoKeeper(run=lambda cmd, **k: Ran(1)).start() is False
+
+
+# ---- Important 6: step 7 needs evidence ----
+
+def test_cleanup_rows_need_evidence_and_fail_on_leftovers(acceptance, world, monkeypatch):
+    w = {"lane": {"base": 41000, "path": str(world["tmp"] / "gone")}}
+    monkeypatch.setattr(lane, "lane_pids", lambda path, base: set())
+    monkeypatch.setattr(lane, "env_pids", lambda name, value: set())
+    monkeypatch.setattr(lane, "read_listeners", lambda: [])
+    report = acceptance.Report()
+    acceptance.check_cleanup(report, "after worker_done", w, {5000, 5001, 5002}, {5000})
+    assert {r[1].split(": ")[1]: r[2] for r in report.rows} == {
+        "nothing listens on the lane's ports": "PASS", "broker and webServer gone": "PASS",
+        "no lane process is left": "PASS", "lane folder gone": "PASS"}
+    # only the broker's pid was ever recorded: "gone" proves nothing about the web server
+    report = acceptance.Report()
+    acceptance.check_cleanup(report, "x", w, {5000}, {5000})
+    assert [r[2] for r in report.rows if "webServer" in r[1]] == ["BROKEN"]
+    # netstat or lsof unable to say is BROKEN, and a leftover is FAIL
+    monkeypatch.setattr(lane, "read_listeners", lambda: None)
+    monkeypatch.setattr(lane, "lane_pids", lambda path, base: None)
+    report = acceptance.Report()
+    acceptance.check_cleanup(report, "x", w, {5000, 5001}, {5000})
+    assert {r[1].split(": ")[1]: r[2] for r in report.rows}["nothing listens on the lane's ports"] == "BROKEN"
+    assert {r[1].split(": ")[1]: r[2] for r in report.rows}["no lane process is left"] == "BROKEN"
+    monkeypatch.setattr(lane, "read_listeners", lambda: [{"pid": 7, "command": "", "host": "127.0.0.1", "port": 41005}])
+    monkeypatch.setattr(lane, "lane_pids", lambda path, base: {7})
+    report = acceptance.Report()
+    acceptance.check_cleanup(report, "x", w, {5000, 5001}, {5000})
+    got = {r[1].split(": ")[1]: r[2] for r in report.rows}
+    assert got["nothing listens on the lane's ports"] == "FAIL" and got["no lane process is left"] == "FAIL"
+
+
+# ---- Important 7: the netstat fixture keeps no private address ----
+
+def test_the_netstat_fixture_redacts_lan_and_tailnet_addresses(acceptance):
+    hdr = NETSTAT_NAMED.split("\n")[1]
+    row = lambda addr, name: ("tcp4       0      0  %-22s *.*                    LISTEN            0         0  131072 131072 %s   612 "
+                              "00180081 00000006 000000000000a001 00000900 00000001      0      0 000000" % (addr, name))
+    text = "\n".join(["Active Internet connections (including servers)", hdr,
+                      row("100.101.102.103.8080", "tailscaled:333"), row("192.168.1.23.5000", "rapportd:612"),
+                      row("fe80::1c2b:3aff:fe4d:5e6f%en0.7000", "rapportd:612"), row("127.0.0.1.631", "rapportd:612"),
+                      row("*.49152", "rapportd:612")]) + "\n"
+    lines = acceptance.netstat_fixture(text, lambda pid: "/usr/libexec/rapportd", rows=5)
+    joined = "\n".join(lines)
+    for private in ("100.101.102", "192.168.1", "fe80", "5e6f"):
+        assert private not in joined
+    assert "<addr>.8080" in joined and "127.0.0.1.631" in joined and "*.49152" in joined
+
+
+# ---- Important 8: --list-listeners and load_approved agree ----
+
+@pytest.mark.parametrize("path", [
+    "/System/Library/CoreServices/CoreTypes.bundle/Contents/Library/Foo.app/Contents/MacOS/Foo",
+    "/System/Volumes/Data/x", "/usr/libexec/../libexec/rapportd", "/usr/libexec/python3", "/usr/libexec/cups/daemon/x",
+    "/usr/libexec/rapportd", "/sbin/launchd"])
+def test_what_is_listed_as_approvable_is_what_load_approved_accepts(acceptance, world, path):
+    rows = acceptance.listener_rows([{"pid": 50, "command": "", "host": "*", "port": 9}], {50: path}.get, set())
+    lane.approved_path().parent.mkdir(parents=True, exist_ok=True)
+    lane.approved_path().write_text(json.dumps([path]))
+    try:
+        lane.load_approved()
+        accepted = True
+    except lane.LaneRefused:
+        accepted = False
+    assert rows[0][3].startswith("approvable") == accepted
+    assert (lane.approval_problem(path) == "") == accepted
+
+
+# ---- Important 9: an interrupted run restores and still reports ----
+
+def test_sigterm_and_sighup_raise_so_every_finally_runs(acceptance):
+    old = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        acceptance.install_signal_handlers()
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with pytest.raises(SystemExit):
+                signal.raise_signal(sig)
+    finally:
+        for s, h in old.items():
+            signal.signal(s, h)
+
+
+def test_main_prints_its_summary_even_when_the_run_raises(acceptance, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(acceptance.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "python_ok", lambda: True)
+    monkeypatch.setattr(acceptance, "step1", lambda args, report: (_ for _ in ()).throw(KeyError("boom")))
+    monkeypatch.setattr(acceptance.sys, "argv", ["lane_acceptance.py", "--bricks", str(tmp_path)])
+    assert acceptance.main() == 1
+    out = capsys.readouterr().out
+    assert "FAILED" in out and "the run stopped" in out
+
+
+# ---- Important 10: privacy ----
+
+def test_an_endpoint_never_reaches_the_transcript(acceptance, capsys):
+    secret = "ab" * 32
+    report = acceptance.Report()
+    report.add(3, "browser page", "FAIL", "refused: connect ws://127.0.0.1:41031/%s failed" % secret,
+               notes=["ws://127.0.0.1:41031/%s" % secret])
+    out = capsys.readouterr().out
+    assert secret not in out and "ws://127.0.0.1:41031/" in out
+    assert secret not in repr(report.rows)
+
+
+def test_the_leads_inbox_is_summarised_as_reason_codes_never_dumped(acceptance):
+    inbox = ["LANE WAITING: kaylee waits ...: tailscaled (pid 5) listens on port 8080 (/Applications/Tailscale.app/x)",
+             "/home/me/.superyak/team/lane-listeners.json: '/opt/x/python3' refused: only Apple programs in /System ..."]
+    codes = acceptance.reason_codes(inbox)
+    assert "LANE WAITING" in codes and "only Apple programs" in codes
+    assert not any("Tailscale" in c or "/opt" in c for c in codes)
+
+
+# ---- Important 11: the verdict helpers, extracted ----
+
+def test_the_rendezvous_verdicts(acceptance):
+    assert acceptance.rendezvous_verdict(1100, [], 5)[0] == "PASS"
+    assert acceptance.rendezvous_verdict(0, [], 5)[0] == "FAIL"
+    assert acceptance.rendezvous_verdict(1102, [], 5)[0] == "BROKEN"
+    assert acceptance.rendezvous_verdict(5, ["Sandbox: Python(5) deny(1) mach-lookup org.chromium.Chromium.MachPortRendezvousServer.1"], 5)[0] == "PASS"
+    assert acceptance.rendezvous_verdict(5, [], 5)[0] == "FAIL"
+    ps = "    1     0 /sbin/launchd\n  700     1 /opt/homebrew/bin/node -e broker\n"
+    assert acceptance.rendezvous_pid(ps, 0) is None                              # never launchd's children
+
+
+def test_a_report_spec_fails_a_missing_report_and_untagged_advisories(acceptance, tmp_path):
+    wt = tmp_path / "wt"
+    (wt / acceptance.PROBE_DIR).mkdir(parents=True)
+    report = acceptance.Report()
+    acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
+    assert report.rows[0][2] == "FAIL" and "no JSON report" in report.rows[0][3]
+    msg = {"results": [{"error": {"message": "expected 300 got 280"}}]}
+    spec = lambda f, tags: {"title": "t", "file": f, "line": 1, "tags": tags, "tests": [dict(status="unexpected", **msg)]}
+    (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"errors": [], "suites": [{"title": "s", "specs": [
+        {"title": "ok", "file": "tests/a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]},
+        spec("tests/four-up-school.spec.ts", ["@lane-advisory"]), spec("tests/a.spec.ts", ["@lane-advisory"])]}]}))
+    report = acceptance.Report()
+    acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
+    by = {r[1]: r for r in report.rows}
+    assert by["kaylee tests/a.spec.ts"][2] == "PASS"
+    infos = [r for r in report.rows if r[2] == "INFO"]
+    assert len(infos) == 1 and "four-up-school" in infos[0][3] and "expected 300 got 280" in infos[0][3]
+    assert [r[2] for r in report.rows if "outside the agreed set" in r[1]] == ["FAIL"]
+
+
+def test_list_listeners_survives_a_broken_approved_list_and_shows_the_cross_check(acceptance, world, monkeypatch, capsys):
+    lane.approved_path().parent.mkdir(parents=True, exist_ok=True)
+    lane.approved_path().write_text("{not json")
+    monkeypatch.setattr(lane, "read_listeners", lambda: [{"pid": 612, "command": "", "host": "*", "port": 49152}])
+    monkeypatch.setattr(lane, "pid_path", lambda pid: "/usr/libexec/rapportd")
+    monkeypatch.setattr(lane, "lsof_listeners", lambda: {(612, 49152), (999, 7000)})
+    monkeypatch.setattr(lane, "live_lanes", lambda: [(41000, "abc123")])
+    acceptance.list_listeners()
+    out = capsys.readouterr().out
+    assert "rapportd" in out and "approved list is broken" in out and "approvable" in out
+    assert "41000" in out and "999" in out and "7000" in out
+
+
+def test_a_lane_run_skipped_says_why(acceptance, capsys):
+    report = acceptance.Report()
+    acceptance.report_skipped(report, self_check_only=False, failed=2)
+    acceptance.report_skipped(report, self_check_only=True, failed=0)
+    assert [r[2] for r in report.rows] == ["INFO", "INFO"] and "step 1" in report.rows[0][3] and "--self-check-only" in report.rows[1][3]
+
+
+def test_step_1_names_every_probe_that_produced_no_row(acceptance):
+    rows = [(p, "PASS", "x") for p in lane.SELF_CHECK_PROBES + lane.SELF_CHECK_POSITIVE if p != "net_ip"]
+    assert acceptance.missing_probe_rows(rows) == ["net_ip"]
+    assert acceptance.missing_probe_rows(rows + [("net_ip", "BROKEN", "")]) == []
+
+
+def test_the_interpreter_row_names_its_specific_reason(acceptance):
+    assert acceptance.D10_ENTRY.startswith("/usr/sbin/") and lane.approval_problem(acceptance.D10_ENTRY) == \
+        "an interpreter is never approved"
+    assert "only Apple programs" in lane.approval_problem("/opt/homebrew/bin/python3.13")
+
+
+def test_a_planted_import_keeps_its_cleanup_rows_on_an_early_return(acceptance, world, monkeypatch):
+    broker = world["root"] / "broker"
+    pw, shell = broker / "pw", broker / "browsers" / "shell"
+    pw.mkdir(parents=True)
+    shell.mkdir(parents=True)
+    monkeypatch.setattr(lane, "browsers_root", lambda: broker / "browsers")
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, ""))
+    monkeypatch.setattr(lane, "render_profile", lambda *a, **k: "(version 1)\n")          # no import line to test
+    monkeypatch.setattr(lane, "release_block", lambda *a: (_ for _ in ()).throw(OSError("registry gone")))
+    rows = acceptance.planted_import(Path("/opt/n/bin/node"), pw, shell, lambda *a, **k: Ran(1, "refused: EPERM"))
+    assert [v for _, v, _ in rows[:2]] == ["BROKEN", "BROKEN"] and any(n == "planted-import:cleanup" for n, _, _ in rows)
+
+
+def test_git_branch_cleanup_errors_do_not_escape(acceptance, tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    acceptance.delete_branches(tmp_path, "t1")                                # no branches, no commits: still no raise
+    assert acceptance.git_try(tmp_path, "branch", "-D", "nope") == ""
+
+
+def test_a_missing_broker_pid_is_a_broken_row_and_never_launchds_child(acceptance):
+    report = acceptance.Report()
+    pid = acceptance.broker_and_browser_pids(report, "  1  0 /sbin/launchd\n", 0)
+    assert pid is None and [r[2] for r in report.rows] == ["BROKEN"]
+
+
+def test_both_ran_at_the_same_time_needs_a_server_in_each_block(acceptance):
+    assert acceptance.both_serving({"kaylee": "running", "wash": "running"}, {"kaylee": {5, 9}, "wash": {6, 8}}, {"kaylee": {5}, "wash": {6}}) is True
+    assert acceptance.both_serving({"kaylee": "running", "wash": "running"}, {"kaylee": {5}, "wash": {6, 8}}, {"kaylee": {5}, "wash": {6}}) is False
+    assert acceptance.both_serving({"kaylee": "running", "wash": "idle"}, {"kaylee": {5, 9}, "wash": {6, 8}}, {"kaylee": {5}, "wash": {6}}) is False

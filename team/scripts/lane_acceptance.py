@@ -6,7 +6,6 @@ need 3.11.4 or later for tarfile's data filter):
 
     cd team && uv run --python 3.13 python scripts/lane_acceptance.py --list-listeners      # fill lane-listeners.json
     cd team && uv run --python 3.13 python scripts/lane_acceptance.py --bricks ~/Projects/bricks --self-check-only
-    sudo -v                                                                                 # for step 4's root listener
     cd team && uv run --python 3.13 python scripts/lane_acceptance.py --bricks ~/Projects/bricks
 
 Prerequisites (the spec's, plus this script's):
@@ -17,7 +16,8 @@ Prerequisites (the spec's, plus this script's):
 - the Bricks checkout on the branch with the Bricks change (lane ports in the Playwright config and fixtures);
 - the worktree prepared, so npx needs no registry: the workers are spawned with --prepare (npm-ci by default);
 - the headless shell's manifest hash recorded for this revision (--self-check-only prints it the first time);
-- `sudo -v` shortly before, so step 4 can start a root-owned listener (or Printer Sharing on, whose cupsd is one).
+- an administrator password at the start: the run asks for `sudo -v` itself and refreshes it, so step 4 can start a
+  root-owned listener (without it, those two step 4 rows are BROKEN).
 
 It starts its own team in the Bricks checkout (two browser workers, kaylee and wash), drives them as their lead
 through `run_team.py`, and ends the team and deletes its branches when it is done. The probes inside the workers are
@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -60,6 +61,16 @@ NEVER_LIST = ["com.apple.SecurityServer", "com.apple.securityd.xpc", "com.apple.
 READY_TASK = ("Browser-lane acceptance worker. Reply with only the word ready. Do not run any command, and do not "
               "call team_done until a message asks you to.")
 NETCAT = "/usr/bin/nc"
+HOLDER_POLLS, HOLDER_POLL_S = 30, 2     # how long to look for a first-lane process that carries the endpoint
+NOT_READ = object()          # the approved list existed but couldn't be read: it is never touched
+# A list entry the approved-list rules refuse for one specific reason (D10), without needing the file to exist.
+D10_ENTRY = "/usr/sbin/python3"
+# The geometry specs the plan tags @lane-advisory; an advisory failure anywhere else is a real failure.
+ADVISORY_SPECS = ("approval-anatomy", "four-up-school", "content-recipes-cards", "supplied-presentation", "gtm-pixel")
+# What the lead's inbox may be reduced to in a transcript: reason codes, never the messages (they name programs).
+REASONS = ("LANE WAITING", "LANE REFUSED", "only Apple programs", "an interpreter is never approved",
+           "sealed system volume", "can't be identified", "beyond loopback", "lsof failed", "netstat failed",
+           "settings outside the lane", "one browser lane per machine", "manifest")
 
 
 # ---------- pure helpers (team/tests/test_lane_acceptance.py runs these on the Pi) ----------
@@ -84,12 +95,16 @@ def peer_verdict(expect, code, alive_before, alive_after):
 
 
 def rendezvous_pid(ps_text, broker_pid):
-    """The headless shell's main browser process: node's child with no --type= argument (not node's own pid)."""
+    """The headless shell's main browser process: node's child with no --type= argument (not node's own pid). With no
+    broker pid there is nothing to look under: never launchd's children."""
+    if not broker_pid:
+        return None
     for line in ps_text.splitlines():
         fields = line.split(None, 2)
         if len(fields) == 3 and fields[0].isdigit() and fields[1] == str(broker_pid) and "--type=" not in fields[2]:
             return int(fields[0])
     return None
+
 
 
 def summarize(report):
@@ -159,8 +174,9 @@ def planted_settings(existing):
 
 def listener_rows(listeners, path_of, approved):
     """--list-listeners, from the listener check's own enumeration and rules: (pid, address, executable, verdict).
-    Pid 1 is launchd holding a socket-activated job's socket; approving /sbin/launchd covers every such job until the
-    job's own program first accepts a connection (then it is that program's)."""
+    "approvable" is exactly what lane.load_approved accepts (lane.approval_problem). Pid 1 is launchd holding a
+    socket-activated job's socket; approving /sbin/launchd covers every such job until the job's own program first
+    accepts a connection (then it is that program's)."""
     rows = []
     for item in listeners:
         exe = path_of(item["pid"])
@@ -171,8 +187,7 @@ def listener_rows(listeners, path_of, approved):
             verdict = "can't be identified: a lane waits"
         elif exe in approved:
             verdict = "approved"
-        elif (exe.startswith(lane.APPROVED_DIRS) and not exe.startswith(lane.NOT_SEALED)
-              and not lane.INTERPRETER_RE.fullmatch(os.path.basename(exe).lower())):
+        elif not lane.approval_problem(exe):
             verdict = "approvable"
         else:
             verdict = "stop it while a lane runs"
@@ -182,11 +197,13 @@ def listener_rows(listeners, path_of, approved):
     return rows
 
 
+
 def read_targets(other_lane, decoy, uid, home=None):
     """Step 2's reads, each checked outside the sandbox first: ({name: path} that exist, [names that don't]). A read
     of something that isn't there would be "refused" with ENOENT, which proves nothing."""
     home = Path(home or Path.home())
-    dotfile = next((home / n for n in (".zshrc", ".bashrc", ".profile", ".gitconfig") if (home / n).is_file()), None)
+    dotfile = next((home / n for n in (".zshrc", ".bashrc", ".profile", ".gitconfig")
+                    if (home / n).is_file() and (home / n).stat().st_size > 0), None)
     wanted = {"a dotfile in $HOME": dotfile, "a decoy lane's folder": Path(decoy),
               "the other lane's real folder": Path(other_lane),
               "/private/tmp/claude-<uid>": Path("/private/tmp/claude-%d" % uid)}
@@ -196,10 +213,201 @@ def read_targets(other_lane, decoy, uid, home=None):
 
 # ---------- facts only a Mac can settle (review rows): each returns rows, or a (verdict, detail) ----------
 
+def judge_row(row):
+    """A worker-probe row's verdict. ok: exit 0 passes. fail: exit 0 FAILS (the wall let it through); exit 1 is a
+    refusal that passes only if its code is one the row accepts (`refusals`, None meaning the probe proved it
+    itself); anything else (a timeout, a crash, exit 2, a refusal for another reason such as ENOENT) proves nothing
+    and is BROKEN. info is only shown."""
+    expect, code = row["expect"], row["code"]
+    if expect == "info":
+        return "INFO"
+    if expect == "ok":
+        return "PASS" if code == 0 else "FAIL"
+    if code == 0:
+        return "FAIL"
+    if code != 1:
+        return "BROKEN"
+    refusals = row.get("refusals")
+    if refusals is None:
+        return "PASS"
+    found = re.match(r"refused: (\S+)", row.get("detail") or "")
+    return "PASS" if found and found.group(1) in refusals else "BROKEN"
+
+
+def download_verdict(code, detail, new_names, control_present, leftovers):
+    """The browser download row (spec step 3): the client reports whether each download began; the driver, outside the
+    sandbox, compares $HOME's top-level names and looks for the control file in the lane's b/. PASS needs the control
+    to have landed, the $HOME download to have begun, and no new name in $HOME. Names only are ever printed."""
+    if leftovers:
+        return "BROKEN", "left alone, from an earlier run: %s" % ", ".join(sorted(leftovers))
+    try:
+        result = json.loads(detail)
+        began = result["control"]["began"] and result["home"]["began"]
+    except (ValueError, KeyError, TypeError):
+        began, result = None, None
+    if code != 0 or result is None:
+        return "BROKEN", "the client could not run the downloads: %s" % " ".join(str(detail).split())[:160]
+    if not result["control"]["began"] or not control_present:
+        return "BROKEN", "the control download into the lane's b/ did not land (began: %s), so a missing download in $HOME " \
+                         "would prove nothing" % result["control"]["began"]
+    if not result["home"]["began"]:
+        return "BROKEN", "no download into $HOME ever started"
+    if new_names:
+        return "FAIL", "new in $HOME: %s" % ", ".join(sorted(new_names))
+    return "PASS", "the control landed in b/, the download into $HOME began (%s), and $HOME has no new name" \
+                   % "/".join(result["home"]["states"] or ["no progress event"])
+
+
+def reason_codes(inbox):
+    """The lead's messages reduced to known reason codes, in order, without the messages: they name the programs that
+    listen on the machine and their paths."""
+    found = []
+    for message in inbox:
+        for code in REASONS:
+            if code in str(message) and code not in found:
+                found.append(code)
+    return found
+
+
+def rendezvous_verdict(rc, denials, pid):
+    """Step 3's rendezvous lookup from inside the worker: 1100, or a deny line for the probe's own pid, passes; 1102 is a
+    broken check; reachable fails."""
+    kind = classify_lookup(rc)
+    if kind == "other" and denied_lookup(denials, pid):
+        kind = "denied"
+    return {"denied": "PASS", "reachable": "FAIL", "broken": "BROKEN"}.get(kind, "FAIL"), "rc %d (%s)" % (rc, kind)
+
+
+def peer_targets(pids, environ=None):
+    """(holders, others): only a process whose environment holds the endpoint is a target for the second lane's
+    check; for any other, "can't read the endpoint" would be true of everything."""
+    environ = environ or lane._environ
+    holders = [pid for pid in pids if any(e.startswith("PW_TEST_CONNECT_WS_ENDPOINT=") for e in environ(pid) or [])]
+    return holders, [pid for pid in pids if pid not in holders]
+
+
+def usable_sockets(paths):
+    """(accepting, [(path, why)]): which sockets accept a connection from outside the sandbox. A refusal inside
+    proves nothing about one that wouldn't accept anyone."""
+    ok, bad = [], []
+    for path in paths:
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(3)
+        try:
+            s.connect(path)
+            ok.append(path)
+        except OSError as e:
+            bad.append((path, e.strerror or e.__class__.__name__))
+        finally:
+            s.close()
+    return ok, bad
+
+
+def nc_child(ps_text, sudo_pid):
+    """The pid of `nc` among sudo's children (or sudo itself if it execed nc), from `ps -A -o pid=,ppid=,command=`.
+    Only this: never a process found by port, never another nc."""
+    if sudo_pid <= 1:
+        return None
+    for line in ps_text.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit() and fields[2].split()[0] == NETCAT \
+                and (int(fields[1]) == sudo_pid or int(fields[0]) == sudo_pid):
+            return int(fields[0])
+    return None
+
+
+def both_serving(states, listeners, brokers):
+    """Step 5's "at the same time": both workers running, and in each block a listener that isn't the broker."""
+    return all(states.get(w) == "running" and (listeners.get(w, set()) - brokers.get(w, set())) for w in ("kaylee", "wash"))
+
+
+def missing_probe_rows(rows):
+    """Step 1: the probes lane.self_check should have produced a row for and didn't."""
+    got = {name for name, _, _ in rows}
+    return sorted(set(lane.SELF_CHECK_PROBES + lane.SELF_CHECK_POSITIVE) - got)
+
+
+def root_listener_proof(pid, port, owner=None):
+    """Step 4's root listener: it must be owned by uid 0 (`ps -o uid=`), and the user's own lsof must NOT show it, which is
+    what proves the netstat path is the one that sees it. Returns (verdict, detail)."""
+    owner = owner or (lambda p: _owner_uid(p))
+    uid = owner(pid)
+    if uid != 0:
+        return "BROKEN", "pid %d on port %d is owned by uid %s, not root, so it doesn't show that root's sockets are seen" % (pid, port, uid)
+    seen = lane.lsof_listeners()
+    if seen is None:
+        return "BROKEN", "lsof failed, so the cross-check couldn't be made"
+    if (pid, port) in seen:
+        return "BROKEN", "the user's lsof also shows pid %d on port %d, so netstat isn't what proves root's listeners are seen" % (pid, port)
+    return "PASS", "pid %d (uid 0) on port %d is in netstat and not in the user's lsof" % (pid, port)
+
+
+def _owner_uid(pid):
+    r = lane._run(["/bin/ps", "-o", "uid=", "-p", str(pid)], timeout=10)
+    text = (r.stdout if r is not None and r.returncode == 0 else "").strip()
+    return int(text) if text.isdigit() else None
+
+
+
+class DenialStream:
+    """The sandbox's denial stream (`log stream`), drained on a thread from the moment it starts (as lane._drain does a
+    broker's output), so a full pipe never drops a line. wait_ready() returns once its first line (the header) has
+    arrived; finish() reads until it has been quiet for `quiet` seconds or `cap` have passed, then stops it with SIGINT.
+    `proc` is lane.start_denial_stream()'s Popen, or None where the stream isn't available."""
+
+    def __init__(self, proc):
+        self.proc, self.lines, self.last = proc, [], time.monotonic()
+        self.available = proc is not None
+        self.lock = threading.Lock()
+        self.thread = None
+        if proc is not None:
+            self.thread = threading.Thread(target=self._drain, daemon=True)
+            self.thread.start()
+
+    def _drain(self):
+        for line in self.proc.stdout:
+            with self.lock:
+                self.lines.append(line.rstrip("\n"))
+                self.last = time.monotonic()
+
+    def wait_ready(self, timeout=10):
+        end = time.monotonic() + timeout
+        while self.available and time.monotonic() < end:
+            with self.lock:
+                if self.lines:
+                    return True
+            time.sleep(0.1)
+        return False
+
+    def finish(self, quiet=3, cap=20):
+        if self.proc is None:
+            return []
+        start = time.monotonic()
+        while time.monotonic() - start < cap and self.proc.poll() is None:
+            with self.lock:
+                idle = time.monotonic() - max(self.last, start)
+            if idle >= quiet:
+                break
+            time.sleep(0.1)
+        try:
+            os.kill(self.proc.pid, signal.SIGINT)
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+        self.thread.join(timeout=5)
+        with self.lock:
+            return list(self.lines)
+
+
 class PidRecorder:
-    """subprocess.run for lane.self_check's `run` seam, remembering each probe's pid: sandbox-exec execs the probe in
-    its own pid, so the denial stream's lines for that pid are that probe's. A row is (probe, planted, pid); planted
-    is True when a system.sb sat in the probe's cwd (the planted-import rerun)."""
+    """subprocess.run for lane.self_check's `run` seam, remembering each probe's pids: sandbox-exec execs the probe in
+    its own pid, and profile_probe.js prints the pid of the child it spawns (the process refused an exec is that child)
+    on stderr as `child pid N`. A row is (probe, planted, pid); planted is True when a system.sb sat in the probe's cwd
+    (the planted-import rerun)."""
 
     def __init__(self):
         self.pids = []
@@ -207,38 +415,51 @@ class PidRecorder:
     def __call__(self, cmd, env=None, cwd=None, timeout=None, **_):
         proc = subprocess.Popen(cmd, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 errors="replace")
-        self.pids.append((cmd[-1], os.path.exists(os.path.join(cwd or "", "system.sb")), proc.pid))
+        planted = os.path.exists(os.path.join(cwd or "", "system.sb"))
+        self.pids.append((cmd[-1], planted, proc.pid))
         try:
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
             raise
+        for child in re.findall(r"^child pid ([0-9]+)$", err or "", re.M):
+            if int(child) > 0:
+                self.pids.append((cmd[-1], planted, int(child)))
         return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
+    def pids_of(self, probe, planted=False):
+        return [pid for name, was_planted, pid in self.pids if name == probe and was_planted == planted]
+
     def pid_of(self, probe, planted=False):
-        found = [pid for name, was_planted, pid in self.pids if name == probe and was_planted == planted]
-        return found[-1] if found else None
+        found = self.pids_of(probe, planted)
+        return found[0] if found else None
+
+
+
+
 
 
 def report_profile_rows(report, rows, recorder, denials, step=1, stream=True):
     """Every profile row with its whole detail (`refused: <code> (<message>)`). A BROKEN row also gets the sandbox
-    denial lines for that probe's pid (lane.denials_for filters the stream by pid, never by name)."""
+    denial lines for that probe's pids (the probe and the child it spawned), filtered by pid with lane.denials_for,
+    never by name."""
     for probe, verdict, detail in rows:
         notes = []
         if verdict == "BROKEN":
             planted = probe.startswith("planted-import:")
-            pid = recorder.pid_of(probe.split(":", 1)[1] if planted else probe, planted)
-            if pid is None:
+            pids = recorder.pids_of(probe.split(":", 1)[1] if planted else probe, planted)
+            label = "pid %d" % pids[0] if len(pids) == 1 else "pids " + ", ".join(str(p) for p in pids)
+            if not pids:
                 notes.append("no sandbox denial lines: the probe never ran")
             elif not stream:
-                notes.append("no sandbox denial lines for pid %d: the denial stream isn't available" % pid)
+                notes.append("no sandbox denial lines for %s: the denial stream isn't available" % label)
             else:
-                lines = lane.denials_for(denials, {pid})
-                notes += ["sandbox denial: " + line for line in lines] or \
-                    ["no sandbox denial lines for pid %d" % pid]
+                lines = lane.denials_for(denials, set(pids))
+                notes += ["sandbox denial: " + line for line in lines] or ["no sandbox denial lines for %s" % label]
         report.add(step, "profile:" + probe if not probe.startswith("planted-import:") else probe,
                    verdict, detail, full=True, notes=notes)
+
 
 
 def planted_import(node, pw, shell, run):
@@ -263,8 +484,9 @@ def planted_import(node, pw, shell, run):
         planted = path / "b" / "system.sb"
         lane._write_text(planted, "(allow default)\n", 0o600)
         if '(import "system.sb")' not in profile or not planted.is_file():
-            return [("planted-import:" + probe, "BROKEN", "the profile has no (import \"system.sb\") to test, or the "
-                     "planted file isn't there") for probe in ("write_home", "read_dotfile")]
+            rows.extend(("planted-import:" + probe, "BROKEN", "the profile has no (import \"system.sb\") to test, or the "
+                         "planted file isn't there") for probe in ("write_home", "read_dotfile"))
+            return rows                                  # the same list: the cleanup below still adds its rows
         for probe in ("write_home", "read_dotfile"):
             name = "planted-import:" + probe
             if probe == "write_home" and existed:
@@ -297,9 +519,10 @@ def planted_import(node, pw, shell, run):
 
 
 def lsof_exit(run=None):
-    """Review row `lsof-exit`: the full listing cleanup runs (`lsof -nP -a -u <uid> -F pn`) and its exit code. Cleanup
-    needs 0 (lane_pids treats anything else as "can't say" and keeps the block held), so a routine exit 1 on this
-    Mac is a FAIL, shown here. Returns (verdict, detail)."""
+    """Review row `lsof-exit`: the full listing cleanup runs (`lsof -nP -a -u <uid> -F pn`) and its exit code, recorded
+    as information. Cleanup needs 0 (lane_pids treats anything else as "can't say" and keeps the block held), so a
+    routine exit 1 on this Mac shows up here, and step 7's rows show its consequence. lsof's stderr is not echoed (it can
+    name files). Returns (verdict, detail)."""
     run = run or lane._run
     lsof = shutil.which("lsof", path=lane.SYSTEM_PATH)
     if not lsof:
@@ -307,19 +530,36 @@ def lsof_exit(run=None):
     r = run([lsof, "-nP", "-a", "-u", str(os.getuid()), "-F", "pn"], timeout=120)
     if r is None:
         return "BROKEN", "lsof couldn't run (or timed out)"
-    why = " ".join((r.stderr or "").split())[:120]
-    return ("PASS" if r.returncode == 0 else "FAIL",
-            "exit %d, %d lines of output%s" % (r.returncode, (r.stdout or "").count("\n"), ", stderr: " + why if why else ""))
+    return "INFO", "exit %d (cleanup needs 0), %d lines of output, %d bytes of stderr" \
+                   % (r.returncode, (r.stdout or "").count("\n"), len(r.stderr or ""))
+
 
 
 HELPERS = []            # the helper processes hardlink_naming started (the tests find their pids here)
-HOLDER = ("import sys, time\nf = open(sys.argv[1])\nprint('ready', flush=True)\ntime.sleep(300)\n")
+HOLDER = "import sys, time\nf = open(sys.argv[1])\nprint('ready', flush=True)\ntime.sleep(300)\n"
+
+
+def _descriptors(text):
+    """`lsof -F pfin` output as [(fd, inode, name)] for one process."""
+    out, current = [], None
+    for line in text.splitlines():
+        if line.startswith("f"):
+            current = {"fd": line[1:], "inode": None, "name": None}
+            out.append(current)
+        elif current is not None and line.startswith("i"):
+            current["inode"] = line[1:]
+        elif current is not None and line.startswith("n"):
+            current["name"] = line[1:]
+    return [(d["fd"], d["inode"], d["name"]) for d in out]
 
 
 def hardlink_naming():
-    """Review row `hardlink-naming`: a file another process of this user holds open, hard-linked into the lane's
-    tmp/. lsof names an open file by the name it was opened with, so the cleanup matcher (lane.lane_pids) must NOT
-    name the holder. The only process involved is a helper this function starts and ends. Returns (verdict, detail)."""
+    """Review row `hardlink-naming`: a file another process of this user holds open, hard-linked into the lane's tmp/.
+    lsof may name a hard-linked file by whichever name was looked up last, so the file is stat'ed and opened through
+    the LANE's path first, as a hostile lane would; the helper's descriptor is then found by inode (under either name)
+    and the name lsof reports is printed. The verdict is the cleanup matcher's own: lane.lane_pids must NOT name the
+    helper. BROKEN if no descriptor of the helper has the file's inode. The only process involved is a helper this
+    function starts and ends. Returns (verdict, detail)."""
     team_id, worker_id = "superyak-hardlink-naming-%d" % os.getpid(), "check"
     path = lane.lane_path(team_id, worker_id)
     folder, helper = None, None
@@ -333,21 +573,24 @@ def hardlink_naming():
         HELPERS.append(helper)
         if helper.stdout.readline().strip() != "ready":
             return "BROKEN", "the helper didn't start"
-        os.link(held, path / "tmp" / "linked.txt")
-        # Control: lsof does list the holder, under the name it opened (so the matcher had something to find).
+        linked = path / "tmp" / "linked.txt"
+        os.link(held, linked)
+        st = os.lstat(linked)                               # through the lane's path, as a hostile lane would
+        os.close(os.open(linked, os.O_RDONLY | os.O_NOFOLLOW))
         lsof = shutil.which("lsof", path=lane.SYSTEM_PATH)
-        seen = lane._run([lsof, "-nP", "-p", str(helper.pid), "-F", "n"]) if lsof else None
-        names = [line[1:] for line in (seen.stdout if seen is not None else "").splitlines() if line.startswith("n")]
-        if not any(os.path.realpath(held) == os.path.realpath(n) for n in names if n.startswith("/")):
-            return "BROKEN", "lsof doesn't list the helper's open file, so the matcher had nothing to name"
+        seen = lane._run([lsof, "-nP", "-p", str(helper.pid), "-F", "pfin"]) if lsof else None
+        matches = [(fd, name) for fd, inode, name in _descriptors(seen.stdout if seen is not None else "")
+                   if inode == str(st.st_ino)]
+        if not matches:
+            return "BROKEN", "none of the helper's descriptors has inode %d, so the matcher had nothing to name" % st.st_ino
         pids = lane.lane_pids(path, None)
         if pids is None:
             return "BROKEN", "lsof couldn't say (lane_pids gave None)"
+        where = "descriptor %s (inode %d), which lsof reports as %s" % (matches[0][0], st.st_ino, matches[0][1])
         if helper.pid in pids:
-            return "FAIL", "the helper (pid %d) holding %s is in the kill set: the hard link made it look like the lane's" \
-                   % (helper.pid, held)
-        return "PASS", "the helper (pid %d) holds a file hard-linked into the lane's tmp/ and is not in the kill set; " \
-                       "lsof names it %s" % (helper.pid, held)
+            return "FAIL", "the helper (pid %d), %s, is in the kill set: the hard link made it look like the lane's" \
+                   % (helper.pid, where)
+        return "PASS", "the helper (pid %d) holds %s; it is not in the kill set" % (helper.pid, where)
     except (lane.LaneRefused, OSError) as e:
         return "BROKEN", "%s: %s" % (type(e).__name__, e)
     finally:
@@ -366,6 +609,7 @@ def hardlink_naming():
             pass
 
 
+
 def extra_browser_folders(browsers, shell):
     """Review row `ffmpeg-folder`: everything in the browsers folder besides the headless shell's own folder, as
     `name (kind)`. Playwright's installer may add ffmpeg-<rev> there. Names only; nothing is followed."""
@@ -380,7 +624,7 @@ def extra_browser_folders(browsers, shell):
 
 def netstat_fixture(text, path_of, rows=3):
     """The real `netstat -anv -p tcp` header line and three sample LISTEN rows (varied by address kind where it can),
-    for test fixtures. Process names that aren't Apple's (by proc_pidpath, in the folders the approved list allows)
+    for test fixtures. A listening address that is neither a wildcard nor loopback becomes `<addr>.<port>`. Process names that aren't Apple's (by proc_pidpath, in the folders the approved list allows)
     become `<name>`. None when the header isn't one the listener check knows (nothing is written then)."""
     lines = text.split("\n")
     header = next((line for line in lines if line.startswith("Proto")), None)
@@ -405,6 +649,9 @@ def netstat_fixture(text, path_of, rows=3):
     chosen += [line for line in listening if line not in chosen]
     out = [header]
     for line in chosen[:rows]:
+        address = line.split()[3]
+        host, _, port = address.rpartition(".")
+        keep = host in lane.WILDCARDS or lane.is_loopback(host) or host.endswith("%lo0")
         if named:
             fields = line.split()
             segment = " ".join(fields[index:len(fields) - trailing])
@@ -412,6 +659,8 @@ def netstat_fixture(text, path_of, rows=3):
             exe = path_of(int(found.group(2))) if found else None
             if not (exe and exe.startswith(lane.APPROVED_DIRS)) and segment in line:
                 line = line.replace(segment, "<name>:%s" % (found.group(2) if found else "0"), 1)
+        if not keep:                                        # a LAN or tailnet address identifies the machine
+            line = line.replace(address, "<addr>." + port, 1)
         out.append(line)
     return out
 
@@ -437,17 +686,24 @@ class Report:
     def __init__(self):
         self.rows = []
 
+    @staticmethod
+    def clean(text):
+        """Whatever is printed or kept: an endpoint's secret is removed first (global-constraints: no log line)."""
+        return lane.ENDPOINT_RE.sub(r"\1[lane secret]", str(text))
+
     def add(self, step, name, verdict, detail="", full=False, notes=()):
         """One row. `full` prints the whole detail (the profile rows: the refusal's code and message are the
         evidence); `notes` are extra lines under it (a BROKEN probe's sandbox denials)."""
+        name, detail = self.clean(name), self.clean(detail)
         self.rows.append((step, name, verdict, detail))
-        text = " ".join(str(detail).split())
+        text = " ".join(detail.split())
         print("%-6s step %s  %-44s %s" % (verdict, step, name, text if full else text[:220]), flush=True)
         for note in notes:
-            print("         %s" % " ".join(str(note).split()), flush=True)
+            print("         %s" % " ".join(self.clean(note).split()), flush=True)
 
     def failed(self):
         return [r for r in self.rows if r[2] in ("FAIL", "BROKEN")]
+
 
 
 def git(repo, *args):
@@ -489,8 +745,8 @@ class Team:
             if state in states:
                 return state
             if state == "failed" or (state == "waiting" and not patient):
-                raise RuntimeError("%s is %s; the lead's inbox says: %s"
-                                   % (wid, state, " | ".join(self.inbox[-3:])[:800]))
+                raise RuntimeError("%s is %s; the lead's messages name: %s"
+                                   % (wid, state, ", ".join(reason_codes(self.inbox[-3:])) or "no known reason"))
             time.sleep(3)
         raise RuntimeError("%s is not %s after %d s" % (wid, "/".join(states), timeout))
 
@@ -535,23 +791,40 @@ def alive(pid):
         return True
 
 
-def serve_canary(port):
-    """A loopback service outside the first lane's ports (in the second lane's block, so the listener check passes)."""
-    srv = socket.socket()
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", port))
-    srv.listen(5)
+class Canary:
+    """A loopback service on `port`. close() stops it and waits, so the port is free when it returns (a thread blocked in
+    accept() would otherwise keep the listening socket alive)."""
 
-    def serve():
-        while True:
+    def __init__(self, port):
+        self.srv = socket.socket()
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("127.0.0.1", port))
+        self.srv.listen(5)
+        self.srv.settimeout(0.2)
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self):
+        while not self.stopped.is_set():
             try:
-                conn, _ = srv.accept()
+                conn, _ = self.srv.accept()
                 conn.sendall(b"HTTP/1.0 200 OK\r\n\r\ncanary\n")
                 conn.close()
+            except socket.timeout:
+                continue
             except OSError:
                 return
-    threading.Thread(target=serve, daemon=True).start()
-    return srv
+
+    def close(self):
+        self.stopped.set()
+        self.thread.join(timeout=5)
+        self.srv.close()
+
+
+def serve_canary(port):
+    """A loopback service outside the first lane's ports (in the second lane's block, so the listener check passes)."""
+    return Canary(port)
 
 
 def free_port():
@@ -611,7 +884,7 @@ def step1(args, report):
     if extras is not None:
         report.add(1, "ffmpeg-folder", "INFO", ("besides the shell: " + ", ".join(extras)) if extras
                    else "only %s" % Path(shell).name, full=True)
-    # lsof-exit: cleanup needs the full listing to exit 0
+    # lsof-exit: cleanup needs the full listing to exit 0 (information; step 7 shows the consequence)
     result = guarded(report, 1, "lsof-exit", lsof_exit)
     if result:
         report.add(1, "lsof-exit", result[0], result[1], full=True)
@@ -625,27 +898,128 @@ def step1(args, report):
     if result:
         report.add(1, "hardlink-naming", result[0], result[1], full=True)
     # the profile probes, with the denial stream open so a BROKEN probe can show its pid's denials
-    recorder, stream = PidRecorder(), lane.start_denial_stream()
+    recorder, stream = PidRecorder(), DenialStream(lane.start_denial_stream())
+    if stream.available and not stream.wait_ready(10):
+        report.add(1, "denial stream", "INFO", "no output from `log stream` within 10 s: BROKEN rows may lack denial lines")
     rows = guarded(report, 1, "profile:self_check", lambda: lane.self_check(node, pw, shell, run=recorder)) or []
+    for probe in missing_probe_rows(rows) if rows else []:
+        rows.append((probe, "BROKEN", "the self-check produced no row for this probe"))
     rows += guarded(report, 1, "planted-import", lambda: planted_import(node, pw, shell, recorder)) or []
-    time.sleep(2 if stream is not None else 0)             # the stream lags the events it reports
-    denials = lane.stop_denial_stream(stream)
-    report_profile_rows(report, rows, recorder, denials, stream=stream is not None)
+    denials = stream.finish(quiet=3, cap=20)
+    report_profile_rows(report, rows, recorder, denials, stream=stream.available)
     return True
 
 
+class SudoKeeper:
+    """`sudo -v` once at the start (the person types the password in this terminal), then `sudo -n -v` every 60 s while
+    the run lasts, so step 4's root listener can start however long steps 1-3 take."""
+
+    def __init__(self, run=subprocess.run, every=60):
+        self.run, self.every, self.stopper, self.thread = run, every, threading.Event(), None
+
+    def start(self):
+        if self.run(["/usr/bin/sudo", "-v"]).returncode != 0:
+            return False
+        self.thread = threading.Thread(target=self._refresh, daemon=True)
+        self.thread.start()
+        return True
+
+    def _refresh(self):
+        while not self.stopper.wait(self.every):
+            self.run(["/usr/bin/sudo", "-n", "-v"], capture_output=True)
+
+    def stop(self):
+        self.stopper.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+
+
 def root_listener(port):
-    """A root-owned listener for step 4: `sudo -n nc -l` on a loopback port (sudo -v beforehand), or None."""
+    """A root-owned listener for step 4: `sudo -n nc -l` on a loopback port (SudoKeeper holds the credentials), or
+    None."""
     if subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/true"], capture_output=True).returncode != 0:
         return None
     return subprocess.Popen(["/usr/bin/sudo", "-n", NETCAT, "-l", "127.0.0.1", str(port)],
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def stop_root_listener(port):
-    for item in lane.read_listeners() or []:
-        if item["port"] == port:
-            subprocess.run(["/usr/bin/sudo", "-n", "/bin/kill", str(item["pid"])], capture_output=True)
+def stop_root_listener(root, ps=None, kill=None, say=print):
+    """End the listener we started, and nothing else: the `nc` child of our own sudo (found from the process table by
+    its parent and its command, never by port), killed as root. If sudo doesn't end, say which pid to stop by hand."""
+    ps = ps or (lambda: subprocess.run(["/bin/ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True,
+                                       text=True).stdout)
+    kill = kill or (lambda pid: subprocess.run(["/usr/bin/sudo", "-n", "/bin/kill", str(pid)], capture_output=True))
+    child = nc_child(ps(), root.pid)
+    if child is not None:
+        kill(child)
+    try:
+        root.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        say("the root listener's sudo (pid %d) is still running: stop it by hand with `sudo kill %d`"
+            % (root.pid, child or root.pid))
+
+
+def read_original(path):
+    """The approved list as it is now: its text, None when there is none, NOT_READ when it exists but can't be read
+    (then it is never touched)."""
+    try:
+        return Path(path).read_text()
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return NOT_READ
+
+
+def restore_approved(path, original, touched):
+    """Put back exactly what read_original saw, if this run changed it. True when it did."""
+    if not touched or original is NOT_READ:
+        return False
+    if original is None:
+        Path(path).unlink(missing_ok=True)
+    else:
+        Path(path).write_text(original)
+    return True
+
+
+def git_try(repo, *args):
+    """git whose failure is not an error (cleanup in a finally): the output, or ''."""
+    try:
+        return git(repo, *args)
+    except (subprocess.CalledProcessError, OSError):
+        return ""
+
+
+def delete_branches(bricks, team_id):
+    for branch in git_try(bricks, "branch", "--list", "team/%s/*" % team_id, "--format=%(refname:short)").split():
+        git_try(bricks, "branch", "-D", branch)
+
+
+def broker_and_browser_pids(report, ps_text, broker_pid):
+    """The headless shell's pid, or None with a BROKEN row (no broker pid: never launchd's children)."""
+    if not broker_pid:
+        report.add(3, "rendezvous positive control (teamd)", "BROKEN",
+                   "no broker pid: lsof found no listener on the lane's broker port")
+        return None
+    shell_pid = rendezvous_pid(ps_text, broker_pid)
+    if shell_pid is None:
+        report.add(3, "rendezvous positive control (teamd)", "BROKEN", "the broker (pid %d) has no browser process" % broker_pid)
+    return shell_pid
+
+
+def preflight(args, report):
+    """The world, before blaming the sandbox: a refusal inside a lane means nothing if the network is down here."""
+    up = lane.network_up()
+    report.add(2, "the network is up outside the sandbox", "PASS" if up else "BROKEN",
+               "so a refusal in a lane is the sandbox's" if up else "a refusal would prove nothing: no steps 2-7")
+    return up
+
+
+def install_signal_handlers():
+    """SIGTERM and SIGHUP raise SystemExit, so every `finally` (the settings, the list, the preset, the team) runs."""
+    def stop(signum, frame):
+        raise SystemExit(128 + signum)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, stop)
 
 
 def steps2to7(args, report):
@@ -654,9 +1028,13 @@ def steps2to7(args, report):
     team, preset = Team(bricks, "lane-acceptance-%s" % stamp), "lane-acceptance-%s" % stamp
     presets_file = teamlib.presets_path()
     presets_before = presets_file.read_text() if presets_file.exists() else None
+    approved = lane.approved_path()
+    listeners_original, listeners_touched = read_original(approved), False
     decoy = lane.private_parent() / "acceptance-decoy"
-    settings_file, settings_before, listeners_before, canary = None, None, None, None
+    settings_file, settings_before, canary = None, None, None
     try:
+        if not preflight(args, report):
+            return
         presets = json.loads(presets_before) if presets_before else {}
         presets[preset] = {"description": "browser-lane acceptance (removed when the run ends)", "browser_lane": True,
                            "default_kind": "claude", "default_mode": "build", "max_workers": 2}
@@ -674,6 +1052,8 @@ def steps2to7(args, report):
         a, b = state["workers"]["kaylee"], state["workers"]["wash"]
         report.add(5, "two lanes, two blocks", "PASS" if a["lane"]["base"] != b["lane"]["base"] else "FAIL",
                    "%d and %d" % (a["lane"]["base"], b["lane"]["base"]))
+        brokers = {"kaylee": lsof_pids("-iTCP:%d" % (a["lane"]["base"] + 31), "-sTCP:LISTEN"),
+                   "wash": lsof_pids("-iTCP:%d" % (b["lane"]["base"] + 31), "-sTCP:LISTEN")}
 
         # ---- steps 2 and 3: inside the first lane, then the second lane looks at the first ----
         settings_file = Path(a["path"]) / ".claude" / "settings.json"
@@ -685,61 +1065,94 @@ def steps2to7(args, report):
         lane._write_text(decoy / "secret.txt", "decoy\n", 0o600)
         canary_port = b["lane"]["base"] + 10
         canary = serve_canary(canary_port)
-        broker_pid = min(lsof_pids("-iTCP:%d" % (a["lane"]["base"] + 31), "-sTCP:LISTEN") or {0})
+        broker_pid = min(brokers["kaylee"] or {0})
         ps = subprocess.run(["/bin/ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
-        shell_pid = rendezvous_pid(ps, broker_pid)
+        shell_pid = broker_and_browser_pids(report, ps, broker_pid)
         name = RENDEZVOUS % (shell_pid or 0)
-        rc = worker_probes.bootstrap_look_up(name)
-        report.add(3, "rendezvous positive control (teamd)", "PASS" if rc == 0 else "BROKEN",
-                   "%s -> %d (broker %d, browser %s)" % (name, rc, broker_pid, shell_pid))
         if shell_pid:
+            rc = worker_probes.bootstrap_look_up(name)
+            report.add(3, "rendezvous positive control (teamd)", "PASS" if rc == 0 else "BROKEN",
+                       "%s -> %d (broker %d, browser %s)" % (name, rc, broker_pid, shell_pid))
             for service in NEVER_LIST:
                 verdict = sandbox_check(shell_pid, service)
                 report.add(3, "sandbox_check %s" % service, "INFO" if verdict is None else
                            ("PASS" if verdict == 1 else "FAIL"), {None: "unavailable", 0: "allowed", 1: "denied"}[verdict])
-        sockets = [os.environ["SSH_AUTH_SOCK"]] if os.environ.get("SSH_AUTH_SOCK") else []
-        sockets += sorted(str(p) for p in Path("/tmp/sy-team-%d" % uid).glob("*.sock"))
-        sockets += [p for p in (str(Path.home() / ".docker/run/docker.sock"), "/var/run/docker.sock") if os.path.exists(p)]
+        candidates = [os.environ["SSH_AUTH_SOCK"]] if os.environ.get("SSH_AUTH_SOCK") else []
+        if not candidates:
+            report.add(2, "an ssh-agent socket to test", "BROKEN", "SSH_AUTH_SOCK isn't set, so that wall isn't tested")
+        candidates += sorted(str(p) for p in Path("/tmp/sy-team-%d" % uid).glob("*.sock"))
+        candidates += [p for p in (str(Path.home() / ".docker/run/docker.sock"), "/var/run/docker.sock") if os.path.exists(p)]
+        sockets, unusable = usable_sockets(candidates)
+        for path, why in unusable:
+            report.add(2, "socket %s" % path, "BROKEN" if path == os.environ.get("SSH_AUTH_SOCK") else "INFO",
+                       "it doesn't accept a connection from outside the sandbox (%s), so a refusal would prove nothing" % why)
         claude_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
         domains = effective_domains([claude_dir / "settings.json", claude_dir / "settings.local.json",
                                      lane.MANAGED_SETTINGS, settings_file, settings_file.with_name("settings.local.json")])
         reads, missing = read_targets(b["lane"]["path"], decoy, uid)
         for target in missing:
             report.add(2, "read %s" % target, "BROKEN", "it doesn't exist here, so a refusal would prove nothing")
+        home = Path.home()
+        control_dir, control_name = Path(a["lane"]["path"]) / "b", WRITE_PROBE.replace(".txt", "-control.txt")
+        leftovers = [str(x) for x in (home / WRITE_PROBE, control_dir / control_name) if os.path.lexists(x)]
+        home_before = set(os.listdir(home))
+        marker = Path(a["path"]) / PROBE_DIR / "peer-done"
         install_probes(a["path"], {"lane": a["lane"]["path"], "base": a["lane"]["base"], "worktree": a["path"],
                                    "domains": domains, "sockets": sockets, "reads": reads,
-                                   "rendezvous": name, "canary_port": canary_port, "write_probe": WRITE_PROBE})
-        stream = lane.start_denial_stream()
+                                   "dotfile": reads.get("a dotfile in $HOME"), "home": str(home),
+                                   "control_dir": str(control_dir), "write_probe_control": control_name,
+                                   "rendezvous": name, "canary_port": canary_port, "write_probe": WRITE_PROBE,
+                                   "hold_marker": str(marker), "hold_s": 900})
+        stream = DenialStream(lane.start_denial_stream())
+        stream.wait_ready(10)
         team.message("kaylee", probe_message(args.python, "lane"))
         team.wait("kaylee", ("running",), timeout=120)
         a_turn = team.state()["workers"]["kaylee"]["pid"]
-        targets = [p for p in (broker_pid, shell_pid, a_turn) if p]
+        holders = []
+        for _ in range(HOLDER_POLLS):                    # the turn and its children that carry the endpoint
+            holders, _others = peer_targets(sorted(lane.family(a_turn)[0] | {a_turn}))
+            if holders:
+                break
+            time.sleep(HOLDER_POLL_S)
+        if not holders:
+            report.add(3, "second lane: a first-lane process that holds the endpoint", "BROKEN",
+                       "none of the turn's processes carries PW_TEST_CONNECT_WS_ENDPOINT, so there is nothing to read")
+        targets = holders
         before = {pid: alive(pid) for pid in targets}
         install_probes(b["path"], {"peer_pids": targets})
         team.message("wash", probe_message(args.python, "peer"))
         team.wait("wash", ("idle",))
         after = {pid: alive(pid) for pid in targets}
+        marker.write_text("done\n")                       # kaylee's round was held open until now
         team.wait("kaylee", ("idle",))
-        denials = lane.stop_denial_stream(stream)
+        denials = stream.finish(quiet=3, cap=20)
         lane_results = results(a["path"], "lane")
+        download = {}
         for row in lane_results["rows"]:
             step = 3 if row["probe"].startswith(("browser", "rendezvous")) else 2
             if row["expect"] == "denied":
-                kind = classify_lookup(row["code"])
-                if kind == "other" and denied_lookup(denials, lane_results["pid"]):
-                    kind = "denied"
-                verdict = {"denied": "PASS", "reachable": "FAIL", "broken": "BROKEN"}.get(kind, "FAIL")
-                report.add(3, row["probe"], verdict, "rc %d (%s)" % (row["code"], kind), full=True,
+                verdict, detail = rendezvous_verdict(row["code"], denials, lane_results["pid"])
+                report.add(3, row["probe"], verdict, detail, full=True,
                            notes=["sandbox denial: " + line for line in lane.denials_for(denials, {lane_results["pid"]})]
                            if verdict == "BROKEN" else ())
             else:
-                report.add(step, row["probe"], judge(row["expect"], row["code"]), row["detail"])
-        written = Path.home() / WRITE_PROBE
-        report.add(3, "browser download into $HOME", "FAIL" if written.exists() else "PASS",
-                   "written (removed)" if written.exists() else "nothing written")
-        if written.exists():
-            written.unlink()
-        for row in results(b["path"], "peer")["rows"]:
+                if row["probe"] == "browser write":
+                    download = row
+                report.add(step, row["probe"], judge_row(row), row["detail"], full=True)
+        new_names = sorted(set(os.listdir(home)) - home_before)
+        written = home / WRITE_PROBE
+        control_present = os.path.lexists(control_dir / control_name)
+        verdict, detail = download_verdict(download.get("code", 2), download.get("detail", "no result"), new_names,
+                                           control_present, leftovers)
+        report.add(3, "browser download into $HOME", verdict, detail, full=True)
+        for created in (written, control_dir / control_name):      # what this run made; a leftover from before stays
+            if str(created) not in leftovers and os.path.lexists(created):
+                try:
+                    os.unlink(created)
+                except OSError:
+                    pass
+        peer_rows = results(b["path"], "peer")["rows"]
+        for row in peer_rows:
             pid = row["pid"]
             verdict = peer_verdict(row["expect"], row["code"], before.get(pid), after.get(pid))
             report.add(3, "second lane: " + row["probe"], verdict,
@@ -755,58 +1168,73 @@ def steps2to7(args, report):
         listener.bind(("127.0.0.1", 0))
         listener.listen(5)
         port = listener.getsockname()[1]
+        if listeners_original is NOT_READ:
+            report.add(4, "the approved list can be put back", "BROKEN",
+                       "%s exists but can't be read, so it is left alone and D10 isn't tried" % approved)
         try:
             team.message("kaylee", "Reply with only the word done. Do not run anything.")
             team.wait("kaylee", ("waiting",), timeout=60)
-            named = any("LANE WAITING" in m and "port %d" % port in m for m in team.inbox)
-            report.add(4, "an unapproved listener makes the turn wait", "PASS" if named else "FAIL", "port %d" % port)
-            approved = lane.approved_path()
-            listeners_before = approved.read_text() if approved.exists() else None
-            entries = json.loads(listeners_before) if listeners_before else []
-            approved.write_text(json.dumps(entries + [os.path.realpath(sys.executable)]))
-            time.sleep(40)                                   # one retry (LANE_RETRY_S) with the widened list
-            team.status()
-            still = team.status()["workers"]["kaylee"]["state"] == "waiting"
-            refused = any("only Apple programs" in m or "never approved" in m for m in team.inbox)
-            report.add(4, "approving an interpreter is refused (D10)", "PASS" if still and refused else "FAIL",
-                       "still waiting" if still else "the turn ran")
+            exe = os.path.realpath(sys.executable)
+            named = any("LANE WAITING" in m and "port %d" % port in m and exe in m for m in team.inbox)
+            report.add(4, "an unapproved listener makes the turn wait", "PASS" if named else "FAIL",
+                       "port %d, named with its path %s" % (port, exe) if named else "port %d: the lead's messages name: %s"
+                       % (port, ", ".join(reason_codes(team.inbox)) or "nothing"))
+            if listeners_original is not NOT_READ:
+                try:
+                    entries = json.loads(listeners_original) if listeners_original else []
+                except ValueError:
+                    entries = []
+                listeners_touched = True
+                approved.parent.mkdir(parents=True, exist_ok=True)
+                approved.write_text(json.dumps(entries + [D10_ENTRY]))
+                time.sleep(40)                               # one retry (LANE_RETRY_S) with the widened list
+                team.status()
+                still = team.status()["workers"]["kaylee"]["state"] == "waiting"
+                refused = any("an interpreter is never approved" in m for m in team.inbox)
+                report.add(4, "an interpreter on the approved list is refused (D10)", "PASS" if still and refused else "FAIL",
+                           "still waiting; the lead's messages name: %s" % (", ".join(reason_codes(team.inbox)) or "nothing")
+                           if still else "the turn ran")
+                approved.write_text(json.dumps([exe]))
+                try:
+                    lane.load_approved()
+                    d11 = ("FAIL", "%s was accepted as an approved program" % exe)
+                except lane.LaneRefused as e:
+                    d11 = ("PASS", "refused: only Apple programs") if "only Apple programs" in str(e) else \
+                          ("BROKEN", "refused for another reason: %s" % lane.approval_problem(exe))
+                report.add(4, "a non-Apple program on the approved list is refused (D11)", *d11)
         finally:
-            if listeners_before is None:
-                lane.approved_path().unlink(missing_ok=True)
-            else:
-                lane.approved_path().write_text(listeners_before)
-            listeners_before = None
+            if restore_approved(approved, listeners_original, listeners_touched):
+                listeners_touched = False
             listener.close()
         state = team.wait("kaylee", ("running", "idle"), timeout=120, patient=True)
         report.add(4, "once it is gone, the turn runs", "PASS", state)
         team.wait("kaylee", ("idle",))
         root_port = free_port()
         root = root_listener(root_port)
-        try:
-            time.sleep(2)
-            found = [item for item in lane.read_listeners() or []
-                     if (root and item["port"] == root_port) or (not root and item["port"] == 631)]
-            exe = lane.pid_path(found[0]["pid"]) if found else None
-            if found and exe:
-                report.add(4, "a root-owned listener is seen", "PASS", "pid %d on port %d: %s"
-                           % (found[0]["pid"], found[0]["port"], exe))
-            else:
-                report.add(4, "a root-owned listener is seen", "FAIL", "run `sudo -v` first, or turn Printer Sharing on"
-                           if not root else "netstat didn't show it, or its program couldn't be identified")
-            if root:
+        if root is None:
+            for row in ("a root-owned listener is seen", "it holds the lane, named by its path"):
+                report.add(4, row, "BROKEN", "no root-owned listener could be started (sudo -v didn't succeed)")
+        else:
+            try:
+                time.sleep(2)
+                found = [item for item in lane.read_listeners() or [] if item["port"] == root_port]
+                exe = lane.pid_path(found[0]["pid"]) if found else None
+                if found and exe:
+                    verdict, detail = root_listener_proof(found[0]["pid"], root_port)
+                    report.add(4, "a root-owned listener is seen", verdict, "%s: %s" % (detail, exe))
+                else:
+                    report.add(4, "a root-owned listener is seen", "FAIL",
+                               "netstat didn't show it, or its program couldn't be identified")
                 team.message("kaylee", "Reply with only the word done. Do not run anything.")
                 team.wait("kaylee", ("waiting",), timeout=60)
                 named = any("LANE WAITING" in m and "port %d" % root_port in m and NETCAT in m for m in team.inbox)
                 report.add(4, "it holds the lane, named by its path", "PASS" if named else "FAIL", NETCAT)
-        finally:
-            if root:
-                stop_root_listener(root_port)
-                root.wait(timeout=30)
-        if root:
+            finally:
+                stop_root_listener(root)
             team.wait("kaylee", ("idle",), timeout=180, patient=True)
 
         # ---- step 5: two browser workers at once, each running Bricks spec 1 ----
-        servers = {}
+        servers = {"kaylee": set(), "wash": set()}
         for wid, w in (("kaylee", a), ("wash", b)):
             install_probes(w["path"], {"worktree": w["path"], "specs": SMOKE_SPECS[:1]})
             team.message(wid, probe_message(args.python, "spec"))
@@ -815,15 +1243,17 @@ def steps2to7(args, report):
         while time.time() < end:
             states = {wid: v["state"] for wid, v in team.status()["workers"].items()}
             if {"failed", "waiting"} & {states["kaylee"], states["wash"]}:
-                raise RuntimeError("step 5 stopped: %s; the lead's inbox says: %s"
-                                   % (states, " | ".join(team.inbox[-3:])[:800]))
-            both = both or (states["kaylee"] == states["wash"] == "running")
-            for wid, w in (("kaylee", a), ("wash", b)):
-                servers.setdefault(wid, set()).update(block_listeners(w["lane"]["base"]))
+                raise RuntimeError("step 5 stopped: %s; the lead's messages name: %s"
+                                   % (states, ", ".join(reason_codes(team.inbox[-3:])) or "no known reason"))
+            current = {wid: block_listeners(w["lane"]["base"]) for wid, w in (("kaylee", a), ("wash", b))}
+            both = both or both_serving(states, current, brokers)
+            for wid in servers:
+                servers[wid].update(current[wid])
             if states["kaylee"] == states["wash"] == "idle":
                 break
             time.sleep(5)
-        report.add(5, "both ran at the same time", "PASS" if both else "FAIL")
+        report.add(5, "both ran at the same time", "PASS" if both else "FAIL",
+                   "" if both else "no poll found both running with a listener in each block besides the brokers")
         for wid, w in (("kaylee", a), ("wash", b)):
             report_spec(report, 5, wid, w["path"], SMOKE_SPECS[:1])
 
@@ -851,10 +1281,10 @@ def steps2to7(args, report):
         end = time.time() + 120
         while time.time() < end and Path(a["lane"]["path"]).exists():
             time.sleep(2)
-        check_cleanup(report, "after worker_done", a, servers["kaylee"] | {broker_pid, shell_pid})
+        check_cleanup(report, "after worker_done", a, servers["kaylee"] | {broker_pid, shell_pid or 0}, {broker_pid, shell_pid or 0})
         b_broker = lsof_pids("-iTCP:%d" % (b["lane"]["base"] + 31), "-sTCP:LISTEN")
         team.call("stop", "worker=wash")
-        check_cleanup(report, "after stop_worker", b, servers["wash"] | b_broker)
+        check_cleanup(report, "after stop_worker", b, servers["wash"] | b_broker, b_broker)
     finally:
         if canary is not None:
             canary.close()
@@ -863,8 +1293,7 @@ def steps2to7(args, report):
                 settings_file.unlink(missing_ok=True)
             else:
                 settings_file.write_text(settings_before)
-        if listeners_before is not None:
-            lane.approved_path().write_text(listeners_before)
+        restore_approved(approved, listeners_original, listeners_touched)
         shutil.rmtree(decoy, ignore_errors=True)
         try:
             team.call("end", "summary=browser-lane acceptance")
@@ -874,15 +1303,38 @@ def steps2to7(args, report):
             presets_file.unlink(missing_ok=True)
         else:
             presets_file.write_text(presets_before)
-        for branch in git(bricks, "branch", "--list", "team/%s/*" % team.id, "--format=%(refname:short)").split():
-            git(bricks, "branch", "-D", branch)
+        delete_branches(bricks, team.id)
+
+
+def advisory_details(report):
+    """(file, 'file:line title', first error message) of every failing @lane-advisory spec in a Playwright JSON report."""
+    found = []
+
+    def walk(suite):
+        for spec in suite.get("specs") or []:
+            tags = [str(t).lstrip("@") for t in spec.get("tags") or []]
+            if "lane-advisory" not in tags and "@lane-advisory" not in spec.get("title", ""):
+                continue
+            for test in spec.get("tests") or []:
+                if test.get("status") in ("expected", "skipped", "flaky"):
+                    continue
+                message = next((r["error"]["message"] for r in test.get("results") or []
+                                if isinstance(r.get("error"), dict) and r["error"].get("message")), "no message")
+                found.append((str(spec.get("file")), "%s:%s %s" % (spec.get("file"), spec.get("line"), spec.get("title")),
+                              " ".join(message.split())[:200]))
+        for child in suite.get("suites") or []:
+            walk(child)
+    for suite in report.get("suites") or []:
+        walk(suite)
+    return found
 
 
 def report_spec(report, step, wid, worktree, specs):
     for i, spec in enumerate(specs):
         path = Path(worktree) / PROBE_DIR / ("spec-%d.json" % i)
         try:
-            got = summarize(json.loads(path.read_text()))
+            data = json.loads(path.read_text())
+            got = summarize(data)
         except (OSError, ValueError) as e:
             report.add(step, "%s %s" % (wid, spec), "FAIL", "no JSON report (%s)" % e.__class__.__name__)
             continue
@@ -890,33 +1342,77 @@ def report_spec(report, step, wid, worktree, specs):
         report.add(step, "%s %s" % (wid, spec), "PASS" if ok else "FAIL",
                    "%d passed, %d skipped, failed: %s, errors: %s, flaky: %s"
                    % (got["passed"], got["skipped"], got["failed"] or "none", got["errors"] or "none", got["flaky"] or "none"))
-        for name in got["advisory"]:
-            report.add(step, "%s advisory (reported separately)" % wid, "INFO", name)
+        for file, name, message in advisory_details(data):
+            if any(agreed in file for agreed in ADVISORY_SPECS):
+                report.add(step, "%s advisory (reported separately)" % wid, "INFO", "%s: %s" % (name, message))
+            else:
+                report.add(step, "%s advisory outside the agreed set" % wid, "FAIL",
+                           "%s is tagged @lane-advisory but isn't one of the agreed geometry specs: %s" % (name, message))
 
 
-def check_cleanup(report, when, w, pids):
-    left = block_listeners(w["lane"]["base"])
-    report.add(7, "%s: nothing listens on the lane's ports" % when, "FAIL" if left else "PASS", sorted(left) or "")
-    running = sorted(p for p in pids if p and alive(p))
-    report.add(7, "%s: broker and webServer gone" % when, "FAIL" if running else "PASS", running or "")
-    gone = not os.path.lexists(w["lane"]["path"])
-    report.add(7, "%s: lane folder gone" % when, "PASS" if gone else "FAIL", w["lane"]["path"])
+def check_cleanup(report, when, w, pids, broker_pids):
+    """Step 7's rows, each with its evidence. netstat (root's sockets included) lists the lane's ports; lane_pids and
+    env_pids are the cleanup's own matchers and must come back empty; "gone" counts only if a pid besides the broker's
+    was recorded while the lane ran. A matcher that can't say is BROKEN, never a pass."""
+    base, path = w["lane"]["base"], w["lane"]["path"]
+    listening = lane.read_listeners()
+    if listening is None:
+        report.add(7, "%s: nothing listens on the lane's ports" % when, "BROKEN", "netstat failed or printed an unknown format")
+    else:
+        left = sorted(item["pid"] for item in listening if base <= item["port"] < base + lane.BLOCK)
+        report.add(7, "%s: nothing listens on the lane's ports" % when, "FAIL" if left else "PASS", left or "")
+    recorded = sorted(p for p in pids if p)
+    others = [p for p in recorded if p not in {x for x in broker_pids if x}]
+    running = [p for p in recorded if alive(p)]
+    if not others:
+        report.add(7, "%s: broker and webServer gone" % when, "BROKEN",
+                   "no webServer pid was recorded while the lane ran, so 'gone' proves nothing about it")
+    else:
+        report.add(7, "%s: broker and webServer gone" % when, "FAIL" if running else "PASS", running or recorded)
+    left, extra = lane.lane_pids(Path(path), base), lane.env_pids("CLAUDE_CODE_TMPDIR", str(Path(path) / "tmp"))
+    if left is None or extra is None:
+        report.add(7, "%s: no lane process is left" % when, "BROKEN", "lsof or ps couldn't say (lsof-exit above shows why)")
+    else:
+        report.add(7, "%s: no lane process is left" % when, "FAIL" if left | extra else "PASS", sorted(left | extra) or "")
+    gone = not os.path.lexists(path)
+    report.add(7, "%s: lane folder gone" % when, "PASS" if gone else "FAIL", path)
 
 
 def list_listeners():
-    """Every listener, from the listener check's own enumeration (netstat, root's included, and proc_pidpath)."""
+    """Every listener, from the listener check's own enumeration (netstat, root's included, and proc_pidpath), the live
+    lane blocks, and the lsof cross-check. A broken approved list is shown as broken, and the rows still print."""
     found = lane.read_listeners()
     if found is None:
         sys.exit("netstat failed, or printed a header the listener check doesn't know")
     try:
         approved = lane.load_approved()
     except lane.LaneRefused as e:
-        sys.exit(str(e))
+        approved = set()
+        print("The approved list is broken, so every listener below counts as unapproved: %s\n" % e)
     rows = listener_rows(found, lane.pid_path, approved)
     for pid, address, exe, verdict in rows:
         print("pid %-7d %-26s %s  (%s)" % (pid, address, exe, verdict))
+    try:
+        lanes = lane.live_lanes()
+    except lane.LaneRefused as e:
+        lanes = None
+        print("\nThe lane registry can't be read: %s" % e)
+    for base, key in lanes or []:
+        print("\nlive lane block %d-%d (lane %s): listeners there are expected" % (base, base + lane.BLOCK - 1, key))
+    seen = lane.lsof_listeners()
+    if seen is None:
+        print("\nlsof failed, so the listener check would fail closed")
+    else:
+        for pid, port in sorted(seen - {(item["pid"], item["port"]) for item in found}):
+            print("\nlsof shows pid %d listening on port %d, which netstat doesn't list: the check fails until only "
+                  "one process holds it" % (pid, port))
     approvable = sorted({exe for _, _, exe, verdict in rows if verdict.startswith(("approved", "approvable"))})
     print("\nThe approvable ones, for %s:\n%s" % (lane.approved_path(), json.dumps(approvable, indent=1)))
+
+
+def report_skipped(report, self_check_only, failed):
+    report.add("-", "steps 2-7", "INFO", "skipped: --self-check-only runs step 1 only" if self_check_only
+               else "skipped: step 1 has %d failing row(s)" % failed)
 
 
 def main():
@@ -935,18 +1431,27 @@ def main():
     if args.list_listeners:
         return list_listeners()
     args.bricks = args.bricks.expanduser().resolve()
-    report = Report()
-    print("== step 1: the profile, before any worker ==", flush=True)
-    step1(args, report)
-    if not args.self_check_only and not report.failed():
-        try:
+    install_signal_handlers()
+    report, keeper = Report(), None
+    try:
+        print("== step 1: the profile, before any worker ==", flush=True)
+        step1(args, report)
+        if args.self_check_only or report.failed():
+            report_skipped(report, args.self_check_only, len(report.failed()))
+        else:
+            keeper = SudoKeeper()
+            if not keeper.start():
+                print("sudo -v did not succeed: step 4's root-owned listener will be reported BROKEN", flush=True)
             steps2to7(args, report)
-        except (RuntimeError, subprocess.CalledProcessError, OSError, KeyError, ValueError) as e:
-            report.add("-", "the run stopped", "FAIL", e)
-    failed = report.failed()
-    print("\n== %s: %d rows, %d failed ==" % ("PASSED" if not failed else "FAILED", len(report.rows), len(failed)))
-    for step, name, verdict, detail in failed:
-        print("%-6s step %s  %s  %s" % (verdict, step, name, detail))
+    except Exception as e:                       # the summary below is always printed
+        report.add("-", "the run stopped", "FAIL", "%s: %s" % (type(e).__name__, e))
+    finally:
+        if keeper is not None:
+            keeper.stop()
+        failed = report.failed()
+        print("\n== %s: %d rows, %d failed ==" % ("PASSED" if not failed else "FAILED", len(report.rows), len(failed)))
+        for step, name, verdict, detail in failed:
+            print("%-6s step %s  %s  %s" % (verdict, step, name, detail))
     return 1 if failed else 0
 
 

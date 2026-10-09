@@ -11,16 +11,35 @@ is ok (must succeed, exit 0), fail (must be refused) or info. It never prints a 
 Stdlib only.
 """
 import ctypes
+import errno
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LEAKS = ("SUPERYAK_BROKER_SECRET=", "PW_TEST_CONNECT_WS_ENDPOINT=")
-CONNECT = ("const s = require('net').connect(process.argv[1]); s.on('connect', () => process.exit(0));"
-           "s.on('error', e => { console.log(e.code); process.exit(1); });")
+# Every negative probe returns (code, text) in profile_probe.js's convention: 0 the action SUCCEEDED, 1 it was REFUSED
+# ("refused: <CODE> (...)"), 2 the probe could not tell ("broken: ..."). The driver counts a refusal only if its code
+# is one the sandbox gives (the lists below); a timeout, ENOENT or a crash proves nothing and is BROKEN.
+NET_REFUSALS = ("EPERM", "EACCES", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENOTFOUND", "EAI_AGAIN", "EAI_FAIL",
+                "curl-6", "curl-7")
+SOCKET_REFUSALS = ("EPERM", "EACCES")
+READ_REFUSALS = ("EPERM", "EACCES")
+CONNECT = ("const s = require('net').connect(process.argv[1]);"
+           "s.on('connect', () => { console.log('succeeded'); process.exit(0); });"
+           "s.on('error', e => { console.log('refused: ' + (e.code || 'nocode')); process.exit(1); });"
+           "s.setTimeout(5000, () => { console.log('broken: timeout'); process.exit(2); });")
+CONNECT_TCP = ("const s = require('net').connect(80, '1.1.1.1');"
+               "s.on('connect', () => { console.log('succeeded'); process.exit(0); });"
+               "s.on('error', e => { console.log('refused: ' + (e.code || 'nocode')); process.exit(1); });"
+               "s.setTimeout(5000, () => { console.log('broken: timeout'); process.exit(2); });")
+FETCH = ("fetch('https://' + process.argv[1], { signal: AbortSignal.timeout(8000) })"
+         ".then(() => { console.log('succeeded'); process.exit(0); },"
+         " e => { console.log('refused: ' + String((e.cause && e.cause.code) || e.code || 'nocode'));"
+         " process.exit(1); })")
 
 
 def run(cmd, timeout=60, cwd=None):
@@ -34,6 +53,26 @@ def run(cmd, timeout=60, cwd=None):
 
 def node(code, *args, timeout=60):
     return run(["node", "-e", code, *args], timeout=timeout)
+
+
+def classify(rc, text):
+    """A node probe's (exit code, text) as the convention above: anything else is "could not tell" (2)."""
+    text = (text or "").strip()
+    if rc == 0:
+        return 0, text or "succeeded"
+    if rc == 1 and text.startswith("refused:"):
+        return 1, text
+    return 2, text or ("exit %d" % rc)
+
+
+def curl_result(rc, text):
+    """curl's exit 6 (couldn't resolve) and 7 (couldn't connect) are the sandbox's refusals; 28 (timeout) and the
+    rest prove nothing."""
+    if rc == 0:
+        return 0, "succeeded"
+    if rc in (6, 7):
+        return 1, "refused: curl-%d (%s)" % (rc, text[:120])
+    return 2, "broken: curl exit %d (%s)" % (rc, text[:120])
 
 
 def libsystem():
@@ -70,7 +109,18 @@ def can_read(path):
             f.read(1)
         return 0, "readable"
     except OSError as e:
-        return 1, e.strerror or e.__class__.__name__
+        return 1, "refused: %s (%s)" % (errno.errorcode.get(e.errno, "nocode"), e.strerror or e.__class__.__name__)
+
+
+def hold(marker, seconds):
+    """Keep this round (and the worker's turn) open until the driver writes `marker` or `seconds` pass. The second
+    lane's worker looks at this turn's processes meanwhile. True when the marker appeared."""
+    end = time.time() + seconds
+    while time.time() < end:
+        if os.path.lexists(marker):
+            return True
+        time.sleep(0.2)
+    return os.path.lexists(marker)
 
 
 def leaked(text):
@@ -80,20 +130,19 @@ def leaked(text):
 def lane_round(p, rows):
     """Steps 2 and 3: the worker's own walls, then the broker's, from inside the lane."""
     lane, uid, base, worktree = Path(p["lane"]), os.getuid(), p["base"], p["worktree"]
-    add = lambda name, expect, result: rows.append({"probe": name, "expect": expect, "code": result[0], "detail": result[1]})
+
+    def add(name, expect, result, refusals=None):
+        rows.append({"probe": name, "expect": expect, "code": result[0], "detail": result[1], "refusals": refusals})
     code, out = node("console.log(require('os').tmpdir())")
     want = os.path.realpath(lane / "tmp" / ("claude-%d" % uid))
     add("tmpdir is <lane>/tmp/claude-<uid>", "ok", (0 if code == 0 and os.path.realpath(out) == want else 1, out))
     for domain in p["domains"]:
-        add("curl %s" % domain, "fail", run(["curl", "-sSf", "--max-time", "5", "-o", "/dev/null", "https://" + domain]))
-        add("node fetch %s" % domain, "fail", node("fetch('https://' + process.argv[1]).then(() => process.exit(0), "
-                                                    "e => { console.log(String(e.cause && e.cause.code || e)); "
-                                                    "process.exit(1); })", domain))
-    add("curl 1.1.1.1", "fail", run(["curl", "-sSf", "--max-time", "5", "-o", "/dev/null", "http://1.1.1.1"]))
-    add("node connect 1.1.1.1:80", "fail", node("const s = require('net').connect(80, '1.1.1.1');"
-                                                 "s.on('connect', () => process.exit(0)); s.on('error', e => {"
-                                                 "console.log(e.code); process.exit(1); });"
-                                                 "s.setTimeout(5000, () => process.exit(2));"))
+        add("curl %s" % domain, "fail", curl_result(*run(["curl", "-sSf", "--max-time", "5", "-o", "/dev/null",
+                                                           "https://" + domain])), NET_REFUSALS)
+        add("node fetch %s" % domain, "fail", classify(*node(FETCH, domain)), NET_REFUSALS)
+    add("curl 1.1.1.1", "fail", curl_result(*run(["curl", "-sSf", "--max-time", "5", "-o", "/dev/null",
+                                                   "http://1.1.1.1"])), NET_REFUSALS)
+    add("node connect 1.1.1.1:80", "fail", classify(*node(CONNECT_TCP)), NET_REFUSALS)
     add("listen on a lane port", "ok", node("require('net').createServer().listen(+process.argv[1], '127.0.0.1',"
                                             "function () { process.exit(0); }).on('error', e => { console.log(e.code);"
                                             "process.exit(1); })", str(base + 4)))
@@ -108,26 +157,30 @@ def lane_round(p, rows):
     except OSError as e:
         add("npm cache write", "ok", (1, str(e)[:200]))
     for i, sock in enumerate(p["sockets"]):
-        add("socket %s" % sock, "fail", node(CONNECT, sock))
+        add("socket %s" % sock, "fail", classify(*node(CONNECT, sock)), SOCKET_REFUSALS)
         for kind, make in (("symlink", os.symlink), ("hard link", os.link)):
             link = lane / "tmp" / ("acceptance-%s-%d.sock" % (kind.replace(" ", ""), i))
             try:
                 make(sock, link)
             except OSError as e:
-                add("%s to %s" % (kind, sock), "fail", (1, "can't make it: %s" % e.strerror))
+                add("%s to %s" % (kind, sock), "fail", (1, "refused: %s (can't make it)" % errno.errorcode.get(e.errno, "nocode")),
+                    ())                                          # making the link failed: not a test of the socket wall
                 continue
             try:
-                add("%s to %s" % (kind, sock), "fail", node(CONNECT, str(link)))
+                add("%s to %s" % (kind, sock), "fail", classify(*node(CONNECT, str(link))), SOCKET_REFUSALS)
             finally:
                 link.unlink()
     for name, path in sorted(p["reads"].items()):       # only targets the driver saw exist, outside the sandbox
-        add("read %s" % name, "fail", can_read(path))
+        add("read %s" % name, "fail", can_read(path), READ_REFUSALS)
     rc = bootstrap_look_up(p["rendezvous"])
-    rows.append({"probe": "rendezvous lookup", "expect": "denied", "code": rc, "detail": p["rendezvous"]})
+    rows.append({"probe": "rendezvous lookup", "expect": "denied", "code": rc, "detail": p["rendezvous"],
+                 "refusals": None})
     client = str(HERE / "broker_client.js")
     for what in ("page", "wrongsecret", "external", "file", "canary", "write", "getusermedia", "exposenetwork"):
-        expect = {"page": "ok", "exposenetwork": "info"}.get(what, "fail")
-        add("browser %s" % what, expect, run(["node", client, what, json.dumps(p)], timeout=120, cwd=worktree))
+        expect = {"page": "ok", "exposenetwork": "info", "write": "info"}.get(what, "fail")
+        code, text = run(["node", client, what, json.dumps(p)], timeout=120, cwd=worktree)
+        # the client speaks the convention itself: it exits 1 only for a refusal it has recognised by its code
+        add("browser %s" % what, expect, (code, text) if expect != "fail" else classify(code, text), None)
 
 
 def peer_round(p, rows):
@@ -168,6 +221,8 @@ def main():
     {"lane": lane_round, "peer": peer_round, "spec": spec_round}[which](params, rows)
     (HERE / ("results-%s.json" % which)).write_text(json.dumps({"round": which, "pid": os.getpid(), "rows": rows}))
     print("done: %d rows" % len(rows))
+    if which == "lane" and params.get("hold_marker"):     # the second lane looks at this turn's processes meanwhile
+        hold(params["hold_marker"], params.get("hold_s", 900))
 
 
 if __name__ == "__main__":
