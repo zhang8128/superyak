@@ -67,6 +67,11 @@ def resolve_team(requested=None):
     return active_team(repo)
 
 
+# Lead calls that can start or end a browser lane wait for it: a first install, a broker start and a lane's cleanup
+# all run inside them, past rpc's usual 30 s, and a lead must never see an error for a spawn that succeeded.
+SLOW_OPS = {"spawn": 900, "message": 900, "stop": 900, "end": 900}
+
+
 def call(op, args=None):
     args = dict(args or {})
     if IS_WORKER:
@@ -76,7 +81,7 @@ def call(op, args=None):
     token = teamlib.get_token(team_id, caller)
     if not daemon_alive(team_id):
         raise teamlib.RejectedMessage("team %s daemon is not running (team_start to restart)" % team_id)
-    resp = teamlib.rpc(team_id, op, caller, args, token=token)
+    resp = teamlib.rpc(team_id, op, caller, args, timeout=SLOW_OPS.get(op, 30), token=token)
     if not resp.get("ok"):
         raise teamlib.RejectedMessage(resp.get("error", "unknown error"))
     return resp["result"]

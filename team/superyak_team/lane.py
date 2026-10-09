@@ -1891,3 +1891,37 @@ def scrub_file(path, secrets_):
             os.replace(tmp, path)
     except OSError as e:
         raise LaneRefused("%s can't be scrubbed of the lane's secret (%s)" % (path, e.strerror or e))
+
+
+# ---------- a turn the last teamd started (teamd.sweep_lanes) ----------
+
+def _etime_seconds(text):
+    """ps's etime ([[dd-]hh:]mm:ss) in seconds, or None."""
+    days, _, rest = text.strip().rpartition("-")
+    parts = rest.split(":")
+    if not 2 <= len(parts) <= 3 or not all(p.isdigit() for p in parts) or (days and not days.isdigit()):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + int(part)
+    return seconds + int(days or 0) * 86400
+
+
+def lost_turn(pid, cwd, started, now=None):
+    """Whether pid is still the turn a previous teamd started: the leader of its own process group, running claude,
+    with its cwd the worker's folder and a start time within 30 s of the turn's. A reused pid can't pass all four,
+    so Andy's own claude is never killed."""
+    if not pid or not started:
+        return False
+    r = _run(["/bin/ps", "-o", "pgid=,etime=,command=", "-p", str(pid)], timeout=10)
+    fields = r.stdout.split(None, 2) if r is not None and r.returncode == 0 else []
+    if len(fields) != 3 or fields[0] != str(pid) or "claude" not in fields[2]:
+        return False
+    age = _etime_seconds(fields[1])
+    now = time.time() if now is None else now
+    if age is None or abs((now - age) - started) > 30:
+        return False
+    lsof = shutil.which("lsof", path=SYSTEM_PATH)
+    r = _run([lsof, "-nP", "-a", "-p", str(pid), "-d", "cwd", "-F", "n"], timeout=10) if lsof else None
+    names = [line[1:] for line in (r.stdout.splitlines() if r is not None else []) if line.startswith("n")]
+    return bool(names) and os.path.realpath(names[0]) == os.path.realpath(cwd)

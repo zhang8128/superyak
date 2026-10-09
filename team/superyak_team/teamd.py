@@ -22,7 +22,8 @@ from . import lane, teamlib, workers
 from .slack import Slack, SlackError
 
 ACTIVE = ("running",)
-LIVE = ("preparing", "queued", "running", "idle")
+LIVE = lane.LIVE_STATES   # with "waiting": a browser lane's listener check failed
+LANE_RETRY_S = 30
 
 
 class Team:
@@ -34,6 +35,9 @@ class Team:
         self.procs = {}
         self.prepare_procs = {}
         self.stopping = threading.Event()
+        # Browser lanes (lane.py). Brokers and their secrets live only in memory: a secret is never written to disk.
+        self.brokers, self.lane_secrets, self.lane_checked = {}, set(), {}
+        self.clock = time.time
         if not teamlib.get_token(team_id, "lead"):
             teamlib.issue_token(team_id, "lead")
         state_file = self.dir / "state.json"
@@ -54,7 +58,7 @@ class Team:
 
     def log(self, msg):
         with open(self.dir / "teamd.log", "a") as f:
-            f.write("%s %s\n" % (time.strftime("%H:%M:%S"), msg))
+            f.write("%s %s\n" % (time.strftime("%H:%M:%S"), self._scrub(msg)))
 
     def display_name(self, who):
         if who == "lead":
@@ -64,8 +68,9 @@ class Team:
 
     def say(self, who, text, thread_ts=None):
         """Record locally, then post to Slack (best effort). Returns Slack ts or None.
-        Everything outbound is redacted: agent output and stderr are not sanitized at the source."""
-        text = teamlib.redact(text)
+        Everything outbound is redacted: agent output and stderr are not sanitized at the source.
+        A browser lane's secret is scrubbed too (teamlib.redact doesn't know it)."""
+        text = self._scrub(teamlib.redact(text))
         teamlib.append_record(self.team_id, {"from": who, "type": "post", "message": text,
                                              "thread_ts": thread_ts})
         if not self.slack:
@@ -114,6 +119,9 @@ class Team:
             raise teamlib.RejectedMessage("mode must be 'build' or 'collab'")
         if browser:
             lane.check_spawn(self.cfg, kind, mode)
+            # The install and the manifest check, before teamd's lock: a first install can take minutes, and it has
+            # its own lock (.install.lock). The lane's first turn checks them again, quickly.
+            lane.prepare_broker(self.repo, workers.resolve_base(self.repo, base), self._worktrees())
         with self.lock:
             wid = self._new_worker_id()
             if mode == "build":
@@ -257,22 +265,247 @@ class Team:
         return {"ENGRAM_PROJECT_ROOT": w["path"]}
 
     def _start_turn(self, wid, prompt):
+        """Start a turn. A browser worker's turn first needs its lane (_lane_turn): when the listener check fails it
+        waits (False), and when the lane is refused the worker fails (False)."""
         w = self.state["workers"][wid]
         wdir = self.dir / "workers" / wid
+        lane_env = None
+        if w.get("browser"):
+            try:
+                lane_env = self._lane_turn(wid)
+            except lane.LaneWait as e:
+                self._lane_wait(wid, prompt, str(e))
+                return False
+            except lane.LaneRefused as e:
+                self._lane_refused(wid, e)
+                return False
+            except OSError as e:                         # the registry, the broker's folders, a manifest, a stamp
+                self._lane_refused(wid, lane.LaneRefused("the lane's setup failed (%s)" % e))
+                return False
         if w["kind"] == "codex":
             cmd = workers.codex_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
                                         w.get("mode", "build"))
             env = self._engram_env(w)
         else:
             cmd = workers.claude_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
-                                         w.get("mode", "build"), self.repo)
+                                         w.get("mode", "build"), self.repo,
+                                         lane=w["lane"]["path"] if lane_env else None)
             env = self._engram_env(w)
-        self.procs[wid] = workers.launch(cmd, w["path"], wdir, env)
+        if lane_env:
+            env.update(lane_env)
+            self.procs[wid] = workers.launch(cmd, w["path"], wdir, env, drop_env=lane.DROP_ENV)
+        else:
+            self.procs[wid] = workers.launch(cmd, w["path"], wdir, env)
+        w.pop("lane_wait", None)
         w.update(state="running", pid=self.procs[wid].pid, turns=w["turns"] + 1)
         w["started_at"] = w["started_at"] or time.time()
         w["turn_started"] = time.time()
         self.save()
         self.log("%s turn %d started pid=%s" % (wid, w["turns"], w["pid"]))
+        return True
+
+    # ---------- browser lanes (lane.py; docs/superpowers/specs/2026-10-08-browser-lane-design.md) ----------
+    def _scrub(self, text):
+        return lane.scrub(text, self.lane_secrets)
+
+    def _scrub_files(self, wid):
+        """events.jsonl and stderr.log without the secret, once the turn has exited. A write failure is logged: the
+        lane's cleanup and the turn's bookkeeping carry on."""
+        for name in ("events.jsonl", "stderr.log"):
+            try:
+                lane.scrub_file(self.dir / "workers" / wid / name, self.lane_secrets)
+            except (lane.LaneRefused, OSError) as e:
+                self.log("%s" % e)
+
+    def _worktrees(self):
+        out = workers.git(self.repo, "worktree", "list", "--porcelain", check=False).stdout
+        return [self.repo] + [line[len("worktree "):] for line in out.splitlines() if line.startswith("worktree ")]
+
+    def _lane_turn(self, wid):
+        """What a browser worker's turn needs, in the spec's order: the lane folder (checked every turn), its port
+        block, the listener check, and at the lane's first turn (or once its broker has died) the broker. Returns the
+        turn's environment."""
+        w = self.state["workers"][wid]
+        try:
+            widened = lane.settings_widenings()           # the person's settings may have changed since the spawn
+        except lane.LaneRefused:
+            raise
+        except Exception as e:                            # a check that errs has failed: never swallowed
+            raise lane.LaneRefused("the settings check failed (%r)" % e)
+        if widened:
+            raise lane.LaneRefused("settings outside the lane now widen its sandbox: " + "; ".join(widened))
+        path = lane.ensure_lane(self.team_id, wid)
+        base = lane.allocate_block(self.team_id, wid)
+        w["lane"] = {"hash": path.name, "path": str(path), "base": base}
+        self.save()
+        try:
+            ok, problems = lane.listeners_ok()
+        except lane.LaneRefused:
+            raise
+        except Exception as e:
+            raise lane.LaneRefused("the listener check failed (%r)" % e)
+        if not ok:
+            raise lane.LaneWait("; ".join(problems))
+        broker = self.brokers.get(wid)
+        if broker is None or not broker.alive():
+            if broker is not None:
+                lane.stop_broker(self.brokers.pop(wid))
+            node_bin, pw_dir, shell_dir = lane.prepare_broker(self.repo, w["base"], self._worktrees())
+            broker = lane.start_broker(path, base, node_bin, pw_dir, shell_dir,
+                                       self.dir / "workers" / wid / "broker-stderr.log")
+            self.brokers[wid] = broker
+            self.lane_secrets.add(broker.secret)
+        self.lane_checked[wid] = self.clock()
+        return lane.worker_env(path, base, broker.endpoint)
+
+    def _lane_wait(self, wid, prompt, reason):
+        """D9: the turn doesn't start; the worker waits and _lane_watch tries again every LANE_RETRY_S. The lead hears
+        once per distinct reason, naming each unapproved listener; Slack gets no process names."""
+        w = self.state["workers"][wid]
+        before = (w.get("lane_wait") or {}).get("reason")
+        w["state"] = "waiting"
+        w["lane_wait"] = {"prompt": prompt, "reason": reason, "at": self.clock()}
+        if reason != before:
+            self._to_lead("teamd", "LANE WAITING:",
+                          "%s waits for its browser lane, which starts by itself once every listener is in a lane's "
+                          "ports or approved (only macOS's own services, in ~/.superyak/team/lane-listeners.json): %s"
+                          % (wid, reason))
+            self.say(wid, ":hourglass: waiting for the browser lane (the lead has the details).", w["thread_ts"])
+        self.save()
+
+    def _lane_refused(self, wid, error):
+        w = self.state["workers"][wid]
+        w["state"] = "failed"
+        w.pop("lane_wait", None)
+        if error.details:
+            log = self.dir / "workers" / wid / "lane-diagnostics.log"
+            try:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(self._scrub("\n".join(error.details)) + "\n")
+            except OSError as e:
+                self.log("writing %s's lane diagnostics: %r" % (wid, e))
+        self._to_lead("teamd", "LANE REFUSED:", "%s: %s" % (wid, error))
+        self.say(wid, ":x: browser lane refused (the lead has the details).", w["thread_ts"])
+        self._lane_end(wid)
+        self.save()
+
+    def _lane_watch(self):
+        """Every CHECK_EVERY_S during a browser turn, the listener check and the settings check again: a failure
+        stops the turn and the broker (the turn then fails and its lane ends). Waiting workers are tried again every
+        LANE_RETRY_S. Nothing here may stop monitor_once: an error is logged, and a check that errs has failed."""
+        now = self.clock()
+        due = [wid for wid in self.procs if self.state["workers"][wid].get("browser")
+               and not self.state["workers"][wid].get("lane_stopped")
+               and now - self.lane_checked.get(wid, 0) >= lane.CHECK_EVERY_S]
+        if due:
+            try:
+                ok, problems = lane.listeners_ok()
+                widened = lane.settings_widenings()
+            except Exception as e:                       # fails closed: a check that errs has failed
+                ok, problems, widened = False, ["the listener or settings check failed (%r)" % e], []
+            if widened:
+                ok, problems = False, problems + ["settings outside the lane now widen its sandbox: "
+                                                  + "; ".join(widened)]
+            for wid in due:
+                self.lane_checked[wid] = now
+                if not ok:
+                    try:
+                        self._lane_stop_turn(wid, problems)
+                    except Exception as e:
+                        self.log("stopping %s's lane turn: %r" % (wid, e))
+        for wid, w in self.state["workers"].items():
+            if (w["state"] == "waiting" and now - w["lane_wait"]["at"] >= LANE_RETRY_S
+                    and self._running_count() < int(self.cfg["max_workers"])):
+                try:
+                    self._start_turn(wid, w["lane_wait"]["prompt"])
+                except Exception as e:
+                    self.log("retrying %s's lane: %r" % (wid, e))
+
+    def _lane_stop_turn(self, wid, problems):
+        """The turn counts as failed however claude exits, and the lead hears once while it exits."""
+        w = self.state["workers"][wid]
+        w["lane_stopped"] = True
+        proc = self.procs.get(wid)
+        if proc is not None and proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGTERM)
+        broker = self.brokers.pop(wid, None)
+        if broker is not None:
+            lane.stop_broker(broker)
+        self._to_lead("teamd", "LANE STOPPED:", "%s's turn and its browser were stopped because the lane's check "
+                                               "failed: %s" % (wid, "; ".join(problems)))
+        self.say(wid, ":no_entry: lane turn stopped: the listener check failed (the lead has the details).",
+                 w["thread_ts"])
+
+    def _lane_end(self, wid):
+        """The lane ends: its broker and every process using it (cleanup_processes), the files teamd keeps are
+        scrubbed, the folder goes, and only then its block returns to the pool. Runs from worker_done (once the turn
+        has exited), stop_worker, a failed turn, end, and a refused lane; idempotent."""
+        w = self.state["workers"][wid]
+        w.pop("lane_end", None)
+        w.pop("lane_stopped", None)
+        broker = self.brokers.pop(wid, None)
+        path = lane.lane_path(self.team_id, wid)                    # by exact hash, never a stored path
+        base = (w.get("lane") or {}).get("base")
+        if base is None:
+            base = lane.block_of(self.team_id, wid)
+        if broker is None and base is None and not os.path.lexists(path):
+            return
+        # Also whatever still carries this lane's CLAUDE_CODE_TMPDIR: a turn's setsid child, which neither the
+        # worker's group nor the lane's files would find.
+        try:
+            finished = lane.cleanup_processes(path, base, broker, env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")))
+        except OSError as e:
+            finished = False
+            self.log("cleaning up %s's lane processes: %r" % (wid, e))
+        self._scrub_files(wid)
+        try:
+            lane.remove_lane(path)
+        except (lane.LaneRefused, OSError) as e:
+            self._to_lead("teamd", "LANE LEFT BEHIND:", "%s: %s" % (wid, e))
+        if finished:
+            try:
+                lane.release_block(self.team_id, wid)
+                w["lane"] = None
+            except (lane.LaneRefused, OSError) as e:
+                finished = False
+                self.log("releasing %s's block: %r" % (wid, e))
+        if not finished:
+            self._to_lead("teamd", "LANE CLEANUP UNFINISHED:", "%s: lsof or ps couldn't list the lane's processes, "
+                                                               "so its ports stay held until the next cleanup" % wid)
+        self.lane_checked.pop(wid, None)
+        self.save()
+
+    def _kill_lost_turn(self, w):
+        """A turn the previous teamd started, only if that process is still the claude it launched (lane.lost_turn).
+        Returns whether it was stopped."""
+        if lane.lost_turn(w.get("pid"), w["path"], w.get("turn_started")):
+            try:
+                os.killpg(w["pid"], signal.SIGTERM)
+                return True
+            except OSError:
+                pass
+        return False
+
+    def sweep_lanes(self):
+        """When teamd starts. Lanes of this team's workers that state.json shows as not alive are ended (by exact
+        hash). A browser turn the old teamd was running is no longer watched by the 60 s check, so it is stopped and
+        fails, and its lane ends too. A live lane keeps its folder and block, but whatever the old teamd left running
+        in it (its broker, servers) ends; its next turn starts a new broker."""
+        for wid, w in self.state["workers"].items():
+            if w.get("browser") and w["state"] == "running":
+                stopped = self._kill_lost_turn(w)
+                w["state"] = "failed"
+                self._to_lead("teamd", "LANE TURN LOST:", "teamd restarted during %s's browser-lane turn; %s, and its "
+                              "lane was removed" % (wid, "the turn was stopped" if stopped else
+                                                    "its process couldn't be confirmed as that turn, so only what "
+                                                    "carries the lane's environment or files was stopped"))
+        for wid, _ in lane.leftover_lanes(self.team_id, self.state["workers"], LIVE):
+            self._lane_end(wid)
+        for wid, w in self.state["workers"].items():
+            if w.get("browser") and w["state"] in LIVE and w.get("lane"):
+                path = lane.lane_path(self.team_id, wid)
+                lane.cleanup_processes(path, w["lane"]["base"], env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")))
+        self.save()
 
     def deliver(self, wid, text, sender, push=True):
         """Queue a message for a worker. push=True (lead, Kairos) also delivers it into a running
@@ -282,6 +515,7 @@ class Team:
             w = self.state["workers"].get(wid)
             if not w:
                 raise teamlib.RejectedMessage("no worker %r" % wid)
+            text = self._scrub(text)
             item = {"from": sender, "message": text, "ts": time.time(), "pushed": False,
                     "read": False, "pull_only": not push}
             w["inbox"].append(item)
@@ -341,24 +575,33 @@ class Team:
                     continue
                 del self.procs[wid]
                 changed = True
+                if w.get("browser"):
+                    self._scrub_files(wid)
+                last = self._scrub(last)
                 if last and last != w["last_message"]:
                     w["last_message"] = last
                     self.say(wid, ":speech_balloon: %s" % last[:1500], w["thread_ts"])
                 if w["state"] == "running":
-                    w["state"] = "idle" if rc == 0 else "failed"
-                    if rc != 0:
+                    stopped = w.pop("lane_stopped", False)   # stopped by the listener check: failed, whatever rc says
+                    w["state"] = "idle" if rc == 0 and not stopped else "failed"
+                    if w["state"] == "failed":
                         err = (self.dir / "workers" / wid / "stderr.log")
                         tail = err.read_text(errors="replace")[-400:] if err.exists() else ""
                         self.say(wid, ":x: turn exited %s\n```%s```" % (rc, tail), w["thread_ts"])
+                        if w.get("browser"):
+                            self._lane_end(wid)
                     elif not self._resume_with_inbox(wid):
                         self._to_lead(wid, "turn ended (idle):", last[:300])
+                elif w.get("lane_end"):
+                    self._lane_end(wid)
+            self._lane_watch()
             if changed:
                 self._fill_slots()
                 self.save()
 
     def _to_lead(self, sender, label, text):
         """Worker-originated text reaches the lead (also an LLM) only as fenced, quoted data."""
-        body = teamlib.fence_external(sender, text, 1500)
+        body = teamlib.fence_external(sender, self._scrub(text), 1500)
         self.state["lead_inbox"].append({"from": sender, "message": "%s %s" % (label, body),
                                          "ts": time.time()})
 
@@ -392,7 +635,8 @@ class Team:
         """Publish (or update) who's plan as a Slack canvas in the team channel and link it in
         their thread; always keep a local copy so plans survive without Slack."""
         with self.lock:
-            title = teamlib.sanitize(title, 200).strip()
+            title = self._scrub(teamlib.sanitize(title, 200).strip())
+            markdown = self._scrub(markdown)
             plans = self.state.setdefault("plans", {})
             key = "%s:%s" % (who, teamlib.slugify(title, 40))
             local = self.dir / "plans" / (key.replace(":", "-") + ".md")
@@ -454,6 +698,7 @@ class Team:
     # ---------- worker-initiated ----------
     def worker_done(self, wid, summary, tests):
         with self.lock:
+            summary, tests = self._scrub(summary), self._scrub(tests)
             w = self.state["workers"][wid]
             if w.get("mode") == "collab":
                 sha = None
@@ -466,6 +711,12 @@ class Team:
                     summary, (sha or "no changes")[:10], tests or "(not reported)")
             self.say(wid, msg, w["thread_ts"])
             self._to_lead(wid, "DONE:", summary)
+            if w.get("browser"):
+                proc = self.procs.get(wid)
+                if proc is not None and proc.poll() is None:
+                    w["lane_end"] = True      # the worker is still answering this call: end its lane when it exits
+                else:
+                    self._lane_end(wid)
             self.save()
             return {"commit": sha}
 
@@ -609,6 +860,8 @@ class Team:
             w = self.state["workers"][wid]
             if w["state"] in LIVE:
                 w["state"] = "stopped"
+            if w.get("browser"):
+                self._lane_end(wid)
             self.save()
             self._fill_slots()
             return {"worker": wid, "state": w["state"]}
@@ -673,8 +926,17 @@ def main(argv=None):
     token = teamlib.keychain_secret(cfg["keychain_service"])
     if token and cfg.get("slack_channel") and teamlib.slack_allowed_for_repo(args.repo):
         slack = Slack(token, cfg["slack_channel"])
+    if cfg.get("browser_lane") and not lane.python_ok():
+        sys.exit("this team has browser lanes, which need Python 3.11.4 or later (tarfile's data filter); this is %s. "
+                 "Run team mode from uv's Python: cd team && uv sync --locked --python 3.13" % sys.version.split()[0])
+    try:
+        lane_lock = lane.hold_team(args.team)          # held for teamd's whole life: its lanes' blocks are live
+    except lane.LaneRefused as e:
+        sys.exit(str(e))
     team = Team(args.team, args.repo, args.goal, cfg, slack, args.lead_kind)
+    team.lane_lock = lane_lock
     (team.dir / "teamd.pid").write_text(str(os.getpid()))
+    team.sweep_lanes()
     team.log("teamd up (slack=%s)" % bool(slack))
     team.kickoff()
     server = serve(team)
