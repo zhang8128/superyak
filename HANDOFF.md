@@ -16,7 +16,7 @@ city of AI that runs with very little human involvement.
     it in the room (another ship, or per D4 a fresh reviewer agent) and its suites pass on the Pi. The merger restarts the affected
     services, checks them, and reverts on failure.
   - D4 and D5: a fresh reviewer agent reviews this ship's branches, safety code included.
-  - D6: a fresh reviewer agent approved spec A. D8 (room only) extends that to every Superyak spec; Bricks
+  - D6: a fresh reviewer agent approved spec A. D8 extends that to every Superyak spec; Bricks
     production, Guyana data and other people's repositories stay with a person.
   - D9: browser-lane workers run only while every localhost listener on the Mac is on Andy's approved list. The list
     is rechecked every turn, and a Node preload forces 127.0.0.1.
@@ -44,8 +44,9 @@ city of AI that runs with very little human involvement.
     - It can be carried into the next linked room, and `station-bridge` carries it too.
     - It never leaves the station.
   - A browser-test race fix (1de4213).
-  - **Database backups** in `~/.local/share/superyak/backups/`: `peer.sqlite3.pre-instruction-layers-20261008-163222`
-    and `peer-20261008-180140-pre-room-brief.sqlite3`. Ships roll back with the station; each plan's Deploy section
+  - **Database backups** in `~/.local/share/superyak/backups/`, one before each of October 8's deploys:
+    `peer-20261008-131613-pre-tickets.sqlite3`, `peer-20261008-144519-pre-inbox.sqlite3`,
+    `peer.sqlite3.pre-instruction-layers-20261008-163222` and `peer-20261008-180140-pre-room-brief.sqlite3`. Ships roll back with the station; each plan's Deploy section
     has the rollback.
 - **In flight:**
   - **`layer-guards`:** layers refuse live ship keys, and a layer switch can no longer file the old editor's input
@@ -63,7 +64,8 @@ city of AI that runs with very little human involvement.
     can bind a ship.
   - Spec B: reviews, merging, deploying and admitting under the charter.
 - **Parked for spec step 3/5:** the station gives a build ticket for any owner mention, however old. Once acts spend
-  build tickets, it must refuse old or already-answered messages.
+  build tickets, it must refuse old or already-answered messages. The Mac and the Legion Go show "no run ticket" until
+  they pull main and restart `superyak-ship`.
 - **How the work runs:** each feature has a spec approved by a fresh reviewer (D8), then a plan approved the same way.
   Tasks are built by a fresh implementer and reviewed per task, then the whole branch is reviewed (opus), then a fix
   wave is re-reviewed. The deploy follows the plan's Deploy section. Ledgers live in each worktree's git-ignored
