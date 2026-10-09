@@ -392,7 +392,10 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print, 
 
 
 def uninstall_all(config_path, out=print):
+    from .claims import kind_of
     config_path = Path(config_path)
+    if kind_of(config_path.parent) == 'project':
+        return uninstall_project(config_path.parent, out)
     config = read_json(config_path)
     revoked = None  # None: there was no key to revoke
     if config and config.get('key'):
@@ -412,7 +415,7 @@ def uninstall_all(config_path, out=print):
         subprocess.run(['launchctl', 'bootout', f'gui/{os.getuid()}/{LABEL}'], capture_output=True)
         (Path.home() / 'Library' / 'LaunchAgents' / f'{LABEL}.plist').unlink(missing_ok=True)
     if shutil.which('claude'):
-        subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True)
+        subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True, cwd=str(config_path.parent))
     remove_codex(Path.home() / '.codex' / 'config.toml', 'station')
     local = 'watcher stopped, station tools and hook removed'
     try:
@@ -428,3 +431,69 @@ def uninstall_all(config_path, out=print):
         out(f'Undocked on this machine ({local}), but the key was NOT revoked on the station: ask an admin to revoke it.')
     else:
         out(f'Undocked: {"key revoked, " if revoked else ""}{local}.')
+
+
+def _revoke(config, out):
+    """None when there was no key, True when it's revoked (or the station already refuses it), False otherwise."""
+    if not (config and config.get('key')):
+        return None
+    try:
+        client_for(config).revoke_key()
+        return True
+    except (StationError, OSError) as error:
+        if isinstance(error, StationError) and error.status == 401:
+            return True
+        out(f'Could not revoke the key on the station ({error}); ask an admin to revoke it under Connections → Ships.')
+        return False
+
+
+def uninstall_project(home, out=print):
+    """S10, R21: a project ship's undock touches only its own: its key, its service, its local station (from its
+    project root), its hooks in the project's settings.local.json, the station table of its Codex profile (the file
+    only when then empty), its home's files, and last its claim, in one lock hold. It finds the project in
+    <home>/claim.json, so it works with the registry unreadable and with no claim at all."""
+    from . import claims
+    home = Path(home)
+    config = read_json(home / 'station.json') if (home / 'station.json').exists() else None
+    claim = claims.read_json_quiet(home / 'claim.json')
+    root = Path(claim['root']) if isinstance(claim, dict) and isinstance(claim.get('root'), str) else None
+    revoked = _revoke(config, out)
+    remove_service(service_names(home))
+    notes = []
+    if root is not None and root.is_dir():
+        if shutil.which('claude'):
+            subprocess.run(['claude', 'mcp', 'remove', '--scope', 'local', 'station'], capture_output=True, cwd=str(root))
+        try:
+            settings = root / '.claude' / 'settings.local.json'
+            if settings.exists():
+                remove_hooks(settings)
+        except (OSError, ValueError, AttributeError, TypeError) as error:
+            notes.append(f'its hooks stay in {root}/.claude/settings.local.json ({_reason(error)}); remove the entries '
+                         'that run run_agent.py hook')
+    elif root is not None:
+        notes.append(f'its project {root} is gone, so its local station tools and hooks there were not touched')
+    profile = Path.home() / '.codex' / f'{home.name}.config.toml'
+    if remove_codex(profile, 'station') and not profile.read_text().strip():
+        profile.unlink()
+    for path in sorted(home.rglob('*'), reverse=True):
+        if path.name == 'claim.json' and path.parent == home:
+            continue
+        if path.is_dir() and not path.is_symlink():
+            path.rmdir()
+        else:
+            path.unlink()
+    try:
+        claims.unclaim(home)
+    except claims.Unreadable as error:
+        notes.append(f'{error}: its entry there stays until the file is fixed; its claim.json is gone')
+    try:
+        home.rmdir()
+    except OSError:
+        pass
+    local = 'service, station tools, hooks, Codex profile and claim removed'
+    tail = ''.join(f' Note: {note}.' for note in notes)
+    if revoked is False:
+        out(f'Undocked {home.name} on this machine ({local}), but the key was NOT revoked on the station: ask an admin '
+            f'to revoke it.{tail}')
+    else:
+        out(f'Undocked {home.name}: {"key revoked, " if revoked else ""}{local}.{tail}')

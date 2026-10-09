@@ -179,6 +179,11 @@ def main(argv=None):
         write_private(args.out, run_mcp_config(args.config, args.adna_dist))
         return 0
     if args.command in ('status', 'undock') and args.home is not None:
+        from .claims import kind_of
+        if kind_of(args.home) is None:
+            print(f'{args.command}: {args.home} is not a ship home: use ~/.superyak or ~/.superyak/ships/<ship>.',
+                  file=sys.stderr)
+            return 2
         args.config = args.home / 'station.json'
     if args.command == 'status':
         from .claims import Unreadable, read_registry, registry_line, stale_claims
