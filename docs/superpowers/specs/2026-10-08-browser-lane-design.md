@@ -190,8 +190,8 @@ With `lane=None`, the output is byte-for-byte what it is today.
   is writable by anyone but its owner. It is never `which node`.
 - **When it stops:** teamd stops it in the same four places that remove the lane. The broker runs in its own process
   group, and teamd kills that group.
-- **Its Playwright:** `~/.superyak/team/broker/playwright-core-<version>/`. `<version>` is read from the worktree's
-  `node_modules/playwright-core/package.json`, and it must match `^\d+\.\d+\.\d+$`. If that copy is missing, teamd
+- **Its Playwright:** `~/.superyak/team/broker/playwright-core-<version>/`. `<version>` and its integrity hash are read from the lockfile at the
+  worker's base commit (`git show <base>:package-lock.json`), never from the worktree, and the version must match `^\d+\.\d+\.\d+$`. If that copy is missing, teamd
   fetches the version's registry metadata, downloads the tarball, checks it against `dist.integrity` (sha512),
   extracts it with `tarfile`'s `data` filter into a temporary folder, and renames that into place. A mismatch refuses
   the lane.
@@ -204,7 +204,8 @@ With `lane=None`, the output is byte-for-byte what it is today.
   - metadata reads (`file-read-metadata`, literals only) of exactly the ancestor directories of those paths: `/`,
     `/private`, `/tmp`, `/Users`, and so on. Node's `realpath` lstats each one. No directory listing and no other
     file comes with them;
-  - one `(remote tcp "localhost:<port>")` rule for each port in the lane's block;
+  - one `(remote ip "localhost:<port>")` rule for each port in the lane's block apart from the broker's own. This is
+    the form spike 5 proved on the Mac. The broker's own port gets `network-bind` and `network-inbound` only;
   - the broker's own listening port.
 
   It refuses paths containing `"` or `\`.
@@ -273,7 +274,15 @@ unfiltered error path printed other apps' denials, including file names from Mai
 the Mac.
 
 **The listener check (D9)** (`lane.listeners_ok(team)`, run by teamd outside every sandbox):
-- **What it reads:** `lsof -nP -iTCP -sTCP:LISTEN -F pcn`. When lsof fails, the result is "not ok".
+- **What it reads:** every listening TCP socket on the machine, whoever owns it. Run as the user, `lsof` only sees the
+  user's own processes, which would leave root's listeners invisible. So the check enumerates with
+  `netstat -anv -p tcp`, which lists every listening socket with its pid, and identifies each pid with
+  `ps -p <pid> -o comm=`.
+  - `lsof -nP -iTCP -sTCP:LISTEN` is only a cross-check for the user's own processes.
+  - A listening socket whose process can't be identified fails the check.
+  - When either command fails, the result is "not ok".
+  - Acceptance step 4 also shows that a root-owned listener is seen; for example, Printer Sharing's port 631, if it is
+    on, or a listener the run starts with `sudo`.
 - **What passes:** a listener passes when its port is in a live lane's block, or when it matches an entry on the
   approved list, `~/.superyak/team/lane-listeners.json`. Only the person edits that file; it is never a team key.
   Under D10, an entry is a macOS service's executable (in `/System`, `/usr/libexec` or `/usr/sbin`) plus an exact
