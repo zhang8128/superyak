@@ -2115,6 +2115,8 @@ def test_a_full_backlog_is_shown_pending_then_read_as_a_listener(acceptance, mon
     assert verdict == "PASS" and "stayed pending after 3" in detail and "timed out" in detail
     answers = iter([False])
     assert acceptance.full_backlog_row(scan=lambda port: {})[0] == "FAIL"           # read as closed
+    answers = iter([False])
+    assert acceptance.full_backlog_row(scan=lambda port: {("127.0.0.1", port): "accepted"})[0] == "BROKEN"  # not full
     monkeypatch.setattr(acceptance.select, "select", lambda r, w, x, t: ([], w, []))
     verdict, detail = acceptance.full_backlog_row(scan=lambda port: {("127.0.0.1", port): "timed out"})
     assert verdict == "BROKEN" and "accepted 256 connects" in detail               # capped at 256, never a PASS
@@ -2132,6 +2134,7 @@ def test_a_socket_bound_but_not_listening_row(acceptance, monkeypatch):
         return False, ["port %d on 127.0.0.1 doesn't answer a connect (it timed out), and ..." % ports[-1]]
     assert acceptance.bound_not_listening_row(check=check)[0] == "PASS"
     assert acceptance.bound_not_listening_row(check=lambda: (True, []))[0] == "FAIL"
+    assert acceptance.bound_not_listening_row(check=lambda: (False, ["some other refusal"]))[0] == "FAIL"   # A5
     monkeypatch.setattr(lane, "_on_macos", lambda: False)
     assert acceptance.bound_not_listening_row()[0] == "INFO"
 
@@ -2166,6 +2169,7 @@ def test_a_link_local_only_listener_row(acceptance, monkeypatch):
 def test_the_canary_and_nettop_missing_rows(acceptance):
     assert acceptance.canary_row(check=lambda: (False, ["the scan can't see: it didn't reach ..."]))[0] == "PASS"
     assert acceptance.canary_row(check=lambda: (True, []))[0] == "FAIL"
+    assert acceptance.canary_row(check=lambda: (False, ["some other refusal"]))[0] == "FAIL"                # A9
     refused = (False, ["nettop couldn't be read (run), so the listener check fails closed"])
     assert acceptance.nettop_missing_row(check=lambda: refused)[0] == "PASS"
     assert acceptance.nettop_missing_row(check=lambda: (True, []))[0] == "FAIL"
@@ -2178,6 +2182,14 @@ def test_the_repeat_row_finds_a_phantom(acceptance, monkeypatch):
     verdict, detail = acceptance.repeat_scan_row(firewall=lambda: "block all: on; stealth: on")
     assert verdict == "FAIL" and "127.0.0.1:9" in detail and "stealth" in detail
     monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: {("127.0.0.1", 631): "accepted"})
+    assert acceptance.repeat_scan_row(firewall=lambda: "x")[0] == "PASS"
+    # review item 2: every verdict counts but "self", so a phantom that times out is a difference too
+    scans = iter([{("127.0.0.1", 631): "accepted"}] * 19 + [{("127.0.0.1", 631): "accepted", ("127.0.0.1", 7): "timed out"}])
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: next(scans))
+    verdict, detail = acceptance.repeat_scan_row(firewall=lambda: "x")
+    assert verdict == "FAIL" and "127.0.0.1:7" in detail
+    scans = iter([{("127.0.0.1", 631): "accepted"}] * 19 + [{("127.0.0.1", 631): "accepted", ("::1", 8): "self"}])
+    monkeypatch.setattr(lane, "scan_loopback", lambda targets, ports=None, **k: next(scans))
     assert acceptance.repeat_scan_row(firewall=lambda: "x")[0] == "PASS"
 
 
@@ -2194,6 +2206,7 @@ def test_taking_a_nettop_row_away_must_leave_its_port_unidentified(acceptance, m
         "others), so it can't be identified"]))
     assert verdict == "PASS" and "pid 1" in detail
     assert acceptance.nettop_row_removed(check=lambda: (True, []))[0] == "FAIL"
+    assert acceptance.nettop_row_removed(check=lambda: (False, ["some other refusal"]))[0] == "FAIL"        # A6
     rows[0]["uid"] = me                                                        # only this user's: nothing to take away
     assert acceptance.nettop_row_removed(check=lambda: (True, []))[0] == "BROKEN"
 

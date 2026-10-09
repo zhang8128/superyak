@@ -1262,9 +1262,11 @@ def full_backlog_row(scan=None, wait_s=0.5):
     if found is None:
         return "BROKEN", "the scan couldn't say"
     how = found.get(("127.0.0.1", port))
-    if how in ("timed out", "accepted"):
+    if how == "timed out":                              # only a timeout proves the backlog was full (review item 7)
         return "PASS", "port %d: a direct connect stayed pending after %d; the scan's verdict: %s (a listener)" % (
             port, len(held), how)
+    if how is not None:
+        return "BROKEN", "port %d: the scan's connect was %s, so the backlog wasn't full when it probed" % (port, how)
     return "FAIL", "port %d, a full backlog, read as closed by the scan" % port
 
 
@@ -1375,12 +1377,13 @@ def repeat_scan_row(times=20, firewall=None):
         found = lane.scan_loopback(targets)
         if found is None:
             return "BROKEN", "a scan couldn't finish"
-        sets.append(frozenset(key for key, how in found.items() if how == "accepted"))
+        sets.append(frozenset((key, how) for key, how in found.items() if how != "self"))   # every verdict but self
     state = (firewall or _firewall_state)()
     if all(item == sets[0] for item in sets):
         return "PASS", "%d scans, the same %d (address, port)s each time; %s" % (times, len(sets[0]), state)
     extra = sorted(set().union(*sets) - frozenset.intersection(*sets))
-    return "FAIL", "the scans differ on %s; %s" % (", ".join("%s:%d" % key for key in extra[:10]), state)
+    return "FAIL", "the scans differ on %s; %s" % (", ".join("%s:%d (%s)" % (key + (how,)) for key, how in extra[:10]),
+                                                   state)
 
 
 def _firewall_state():
