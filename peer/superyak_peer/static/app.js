@@ -379,7 +379,7 @@ function layerEditor(layer) {
   const active = state.activeLayers[layer.id];
   const edit = currentLayerEdit();
   return `<section class="card editor" aria-labelledby="editor-title"><div class="editor-head"><div><p class="eyebrow">Your private workspace</p><h2 id="editor-title">Edit this layer</h2><div class="status-stack">${editorState(layer, active)}</div></div></div>
-    <form id="layer-form">
+    <form id="layer-form" data-layer-id="${escapeHtml(layer.id)}">
       <div class="field"><label for="layer-title">Layer title</label><input class="input" id="layer-title" name="title" maxlength="200" value="${escapeHtml(layer.title)}" required></div>
       <div class="field"><label for="layer-kind">Kind</label><select class="input" id="layer-kind" name="kind"><option value="note" ${instructions ? "" : "selected"}>Note for people</option><option value="instructions" ${instructions ? "selected" : ""}>Instructions for my ships</option></select></div>
       <div class="field"><label for="layer-body">What do you want to share?</label><textarea class="textarea" id="layer-body" name="body" maxlength="${instructions ? 20000 : 100000}">${escapeHtml(layer.body)}</textarea></div>
@@ -826,12 +826,25 @@ function layerFormData(form = document.querySelector("#layer-form")) {
   if (form.elements.kind.value === "instructions") {
     return { ...base, kind: "instructions", audience_users: checked("audience-ship"), audience_spaces: [], public: false, attachment_ids: [] };
   }
-  return { ...base, kind: "note", audience_users: checked("audience-user"), audience_spaces: checked("audience-space"), public: form.elements.public.checked, attachment_ids: checked("attachment") };
+  return { ...base, kind: "note", audience_users: checked("audience-user"), audience_spaces: checked("audience-space"), public: Boolean(form.elements.public?.checked), attachment_ids: checked("attachment") };
+}
+
+// While a layer is opening, the old editor is still on screen but the selection is already the new layer. A form acts
+// only for the layer it shows (its data-layer-id), and only once that is the selected one.
+function editorSwitching(form = document.querySelector("#layer-form")) {
+  return Boolean(form) && form.dataset.layerId !== state.selectedLayerId;
+}
+
+function refuseWhileSwitching(form = document.querySelector("#layer-form")) {
+  if (!editorSwitching(form)) return false;
+  announce("The editor is switching layers; try again.");  // no render: the old editor keeps its text until the new one opens
+  return true;
 }
 
 function rememberLayerForm(form = document.querySelector("#layer-form")) {
-  const layer = selectedLayer();
-  if (!layer || !form) return null;
+  if (!form) return null;
+  const layer = state.home.layers.find((item) => item.id === form.dataset.layerId);
+  if (!layer) return null;
   const previous = state.layerEdits[layer.id];
   const edit = {
     values: layerFormData(form),
@@ -849,6 +862,7 @@ function updateLayer(layer) {
 }
 
 async function saveLayer(form) {
+  if (refuseWhileSwitching(form)) return;
   const layer = selectedLayer();
   const submitted = rememberLayerForm(form);
   const values = submitted.values;
@@ -891,6 +905,7 @@ async function saveLayer(form) {
 async function uploadFile(input) {
   const file = input.files?.[0];
   if (!file) return;
+  if (refuseWhileSwitching()) return;
   const initiatingLayer = selectedLayer();
   const layerId = initiatingLayer.id;
   const initiatingIdentity = state.editorIdentity;
@@ -951,6 +966,7 @@ async function openLayer(id) {
 }
 
 async function resolveConflict() {
+  if (refuseWhileSwitching()) return;
   const layer = selectedLayer();
   const initial = rememberLayerForm();
   if (!layer || !initial) return;
@@ -1398,6 +1414,7 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
+  if (target.closest("section.editor") && refuseWhileSwitching()) return;
   if (action.startsWith("research-")) { await Research.action(target); return; }
   if (action.startsWith("dashboard-")) { await Dashboard.action(target); return; }
   if (action === "demo-login") {
@@ -1424,6 +1441,7 @@ document.addEventListener("click", async (event) => {
   }
   if (action === "open-layer") await openLayer(target.dataset.id);
   if (action === "preview") {
+    if (refuseWhileSwitching()) return;
     if (currentLayerEdit()?.dirty) {
       const status = document.querySelector("#layer-status");
       status.className = "inline-message error";
@@ -1565,7 +1583,7 @@ document.addEventListener("click", async (event) => {
 document.addEventListener("input", (event) => {
   Research.remember(event.target); Dashboard.input(event.target);
   if (event.target.id === "brief-body" && state.briefEdit) state.briefEdit.body = event.target.value;
-  if (event.target.id === "assistant-request" && selectedLayer()) {
+  if (event.target.id === "assistant-request" && selectedLayer() && !editorSwitching()) {
     const entry = state.assistance[selectedLayer().id] ||= {};
     entry.text = event.target.value;
   }
@@ -1581,7 +1599,7 @@ document.addEventListener("change", async (event) => {
   Research.remember(event.target); Dashboard.change(event.target);
   if (event.target.id === "research-upload") { await Research.choose(event.target); return; }
   if (event.target.closest("#layer-form") && event.target.id !== "file-upload") rememberLayerForm();
-  if (event.target.id === "layer-kind") {
+  if (event.target.id === "layer-kind" && !editorSwitching()) {
     const edit = currentLayerEdit();
     if (edit) { edit.values = { ...edit.values, audience_users: [], audience_spaces: [], public: false, attachment_ids: [] }; render(); }
   }
@@ -1611,6 +1629,7 @@ function assistantPanel(layer) {
 }
 
 async function askAssistant() {
+  if (refuseWhileSwitching()) return;
   const layer = selectedLayer();
   const identity = identityKey(state.me);
   const entry = state.assistance[layer.id] ||= {};
@@ -1639,6 +1658,7 @@ async function askAssistant() {
 }
 
 function applySuggestion() {
+  if (refuseWhileSwitching()) return;
   const layer = selectedLayer();
   const entry = state.assistance[layer.id];
   if (!entry?.result) return;

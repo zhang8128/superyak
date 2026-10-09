@@ -15,6 +15,9 @@ class Layers:
             raise Problem(400, 'Invalid layer kind')
         text(draft['title'], 'title')
         text(draft['body'], 'body', 100000, empty=True)
+        if self._live_ship_key_in(db, draft['title']) or self._live_ship_key_in(db, draft['body']):
+            raise Problem(422, 'This layer contains a live ship key, so it was not saved. Treat that key as exposed: '
+                               'its ship should revoke it and dock again.')
         if type(draft['public']) is not bool:
             raise Problem(400, 'Invalid public selection')
         for field in ('audience_users', 'audience_spaces', 'attachment_ids'):

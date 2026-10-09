@@ -41,15 +41,21 @@ class Ships:
         db.execute("UPDATE users SET kind='ship',owner_id=? WHERE id=?", (owner_id, user['id']))
         return public_user(db.execute('SELECT * FROM users WHERE id=?', (user['id'],)).fetchone())
 
+    def _live_ship_key_in(self, db, body):
+        """True when body holds a token that is a live ship key. Uses the caller's db and opens no transaction."""
+        candidates = {token_hash(m.group(0)) for m in KEY_TOKEN.finditer(body)} if isinstance(body, str) else set()
+        if not candidates:
+            return False
+        return bool(candidates & {row['key_hash'] for row in db.execute('SELECT key_hash FROM ship_keys WHERE revoked IS NULL')})
+
     def _refuse_live_ship_keys(self, body, what='message'):
         """A room is history that many readers keep, so a message carrying a live ship key is refused before anything
         is written or sent to another peer. The refusal never repeats the key."""
-        candidates = {token_hash(m.group(0)) for m in KEY_TOKEN.finditer(body)} if isinstance(body, str) else set()
-        if not candidates:
+        if not (isinstance(body, str) and KEY_TOKEN.search(body)):
             return
         with self.transaction() as db:
-            live = {row['key_hash'] for row in db.execute('SELECT key_hash FROM ship_keys WHERE revoked IS NULL')}
-        if candidates & live:
+            live = self._live_ship_key_in(db, body)
+        if live:
             done = 'saved' if what == 'brief' else 'posted'
             raise Problem(422, f'This {what} contains a live ship key, so it was not {done}. Treat that key as exposed: '
                                'its ship should revoke it and dock again.')
