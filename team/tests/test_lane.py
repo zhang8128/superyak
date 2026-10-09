@@ -3890,7 +3890,7 @@ def test_many_changed_files_are_read_by_one_cat_file(env, monkeypatch):
     commit_files(w, {"f%02d.ts" % n: TAGGED for n in range(30)})
     calls = count_git(monkeypatch)
     assert len(lane.advisory_added(w["path"], w["base"], w["gitdir"])) == 21     # 20 files and "… and 10 more"
-    assert calls["cat-file"] == 1 and calls["config"] == 1 and calls["all"] <= 4, calls
+    assert calls["cat-file"] == 2 and calls["config"] == 1 and calls["all"] <= 5, calls   # --batch-check, --batch (I2)
 
 
 def test_a_branch_with_too_many_changes_is_flagged_not_skipped_silently(env, monkeypatch):
@@ -4187,3 +4187,85 @@ def test_a_settings_file_that_cant_be_read_refuses_a_lane(env, damage):
     reason = {"oserror": "can't be read (PermissionError)", "not an object": "isn't a JSON object",
               "not utf-8": "can't be read (UnicodeDecodeError)"}[damage]
     assert found == ["%s %s" % (path, reason)]
+
+
+# ---------- Final fix wave: I2 and T9, the advisory check ----------
+
+def git_calls(monkeypatch):
+    """Every git argv subprocess.run is given, with its stdin, from here on."""
+    calls = []
+    real = subprocess.run
+
+    def run(argv, *a, **kw):
+        if isinstance(argv, list) and argv and argv[0] == "git":
+            calls.append((list(argv), kw.get("input")))
+        return real(argv, *a, **kw)
+    monkeypatch.setattr(subprocess, "run", run)
+    return calls
+
+
+def test_a_non_lane_teams_done_runs_no_advisory_git(env, monkeypatch):
+    """I2 (ruling): the advisory check is for browser_lane teams only, so a team without lanes is as it was."""
+    team = lane_team(env, browser_lane=False)
+    team.spawn("tidy the cards spec", "claude")
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    commit_files(w, {"tests/cards.spec.ts": TAGGED})
+    calls = git_calls(monkeypatch)
+    team.worker_done("kaylee", "tidied", "ok")
+    assert not [argv for argv, _ in calls if "cat-file" in argv or "--raw" in argv], calls
+    assert advisory_flags(team) == []
+
+
+def test_a_blob_over_a_megabyte_is_skipped_and_reported(env, monkeypatch):
+    """I2: git cat-file --batch-check first; a blob over 1 MB is never read, and the lead hears it was skipped."""
+    team, w = idle_builder(env)
+    big = b"x" * (1 << 20) + b"\n" + TAGGED
+    commit_files(w, {"big.spec.ts": big, "small.spec.ts": TAGGED})
+    calls = git_calls(monkeypatch)
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    big_sha = workers.worker_git(w["path"], w["gitdir"], "rev-parse", "HEAD:big.spec.ts").stdout.strip()
+    assert found[0].startswith("small.spec.ts: 0 -> 1")
+    assert found[-1] == ("the advisory check skipped big.spec.ts (%d bytes, over 1 MB); review its tags by hand"
+                         % len(big))
+    checks = [stdin for argv, stdin in calls if "--batch-check" in argv]
+    reads = [stdin for argv, stdin in calls if "--batch" in argv]
+    assert len(checks) == 1 and big_sha.encode() in checks[0]
+    assert len(reads) == 1 and big_sha.encode() not in reads[0]
+    team.worker_done("kaylee", "big", "ok")
+    assert any("skipped big.spec.ts" in m for m in advisory_flags(team))
+
+
+def test_the_batch_reader_is_not_fooled_by_a_header_lookalike_line(env):
+    """T9: a blob holding a line shaped like cat-file's own header is read by its size, not by its lines."""
+    team, w = idle_builder(env)
+    lookalike = b"%s blob 999\n" % (b"a" * 40) + TAGGED + b"%s blob 3\nxyz\n" % (b"b" * 40)
+    commit_files(w, {"a.spec.ts": lookalike, "b.spec.ts": TAGGED + TAGGED})
+    found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    assert [f.split("\n")[0] for f in found] == ["a.spec.ts: 0 -> 1 occurrences", "b.spec.ts: 0 -> 2 occurrences"]
+
+
+def test_a_short_read_from_cat_file_is_an_error():
+    """T9: output cut short (or not ended by its newline) is never taken for the blob."""
+    sha = "c" * 40
+    with pytest.raises(RuntimeError, match="cut short"):
+        lane._cat_file_batch(b"%s blob 10\nabc" % sha.encode(), [sha])
+    with pytest.raises(RuntimeError, match="cut short"):
+        lane._cat_file_batch(b"%s blob 3\nabcX" % sha.encode(), [sha])
+    assert lane._cat_file_batch(b"%s blob 3\nabc\n" % sha.encode(), [sha]) == {sha: b"abc"}
+
+
+def test_worker_git_and_the_advisory_check_share_one_hardened_argv(env, monkeypatch):
+    """T9: worker_git_argv is the one place teamd's hardened git for a worker's folder is built."""
+    team, w = idle_builder(env)
+    commit_files(w, {"a.spec.ts": TAGGED})
+    expected = workers.worker_git_argv(w["path"], w["gitdir"])
+    assert expected[:5] == ["git", "--git-dir", w["gitdir"], "--work-tree", w["path"]]
+    assert expected[5:5 + len(workers.HARDENED_GIT)] == workers.HARDENED_GIT
+    calls = git_calls(monkeypatch)
+    workers.worker_git(w["path"], w["gitdir"], "status")
+    lane.advisory_added(w["path"], w["base"], w["gitdir"])
+    hardened = [argv for argv, _ in calls if argv[:2] == ["git", "--git-dir"] and "--work-tree" in argv]
+    assert hardened[0] == expected + ["status"]
+    assert all(argv[:len(expected) + 1] == expected + ["--no-replace-objects"] for argv in hardened[1:])
+    assert len(hardened) >= 3

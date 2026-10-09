@@ -84,7 +84,10 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
     the geometry checks (card widths and overflow in approval-anatomy, four-up-school, content-recipes-cards and
     supplied-presentation) and the opt-in GTM pixel suite.
   - Bricks tags the individual geometry tests (not whole spec files) `@lane-advisory`.
-  - The advisory set is taken from the base commit, and a diff that adds `@lane-advisory` is flagged to the lead.
+  - The advisory set is taken from the base commit, and a diff that adds `@lane-advisory` is flagged to the lead. The
+    check runs at `team_done` in teams with `browser_lane` only (final fix wave, I2: a team without lanes is
+    unchanged); `git cat-file --batch-check` comes first, and a blob over 1 MB is never read: the lead hears which
+    file was skipped, to review by hand.
   - Advisory failures are reported in full and separately, never dropped, so a geometry difference never reads as a
     lane failure and never disappears either. The merge gate still runs every test.
 - Loopback ports for each run: the test port, Vite, the auth host, a fake Google server and child fixture hosts.

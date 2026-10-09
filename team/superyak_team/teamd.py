@@ -780,7 +780,8 @@ class Team:
                     summary, (sha or "no changes")[:10], tests or "(not reported)")
             self.say(wid, msg, w["thread_ts"])
             self._to_lead(wid, "DONE:", summary)
-            if w.get("mode") != "collab" and w.get("base"):
+            # The advisory set matters only where lanes run: a team without browser_lane runs no advisory git (I2).
+            if self.cfg.get("browser_lane") is True and w.get("mode") != "collab" and w.get("base"):
                 try:
                     tagged = lane.advisory_added(w["path"], w["base"], w["gitdir"])
                 except Exception as e:

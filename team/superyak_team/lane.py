@@ -2085,17 +2085,38 @@ def lost_turn(pid, cwd, started, now=None):
 ADVISORY_TAG = b"@lane-advisory"
 ADVISORY_MAX_FILES, ADVISORY_MAX_LINE = 20, 160
 ADVISORY_MAX_CHANGED, ADVISORY_TIMEOUT_S = 500, 60
+ADVISORY_MAX_BLOB = 1 << 20                    # bytes: a bigger blob is skipped, and the lead told to look by hand
+ADVISORY_MAX_SKIPPED = 5
+
+
+def _cat_file_header(line, sha):
+    """`<sha> blob <size>` for this sha, as its size; anything else is output this check doesn't understand."""
+    header = line.split()
+    if len(header) != 3 or header[0].decode("ascii", "replace") != sha or header[1] != b"blob" \
+            or not header[2].isdigit():
+        raise RuntimeError("git cat-file output was not understood for %s" % sha)
+    return int(header[2])
+
+
+def _cat_file_sizes(read, shas):
+    """Parse `git cat-file --batch-check` output (`<sha> <type> <size>` per object, in order) into {sha: size}."""
+    lines = read.split(b"\n")
+    if len(lines) != len(shas) + 1 or lines[-1] != b"":
+        raise RuntimeError("git cat-file --batch-check output was not understood")
+    return {sha: _cat_file_header(line, sha) for sha, line in zip(shas, lines)}
 
 
 def _cat_file_batch(read, shas):
-    """Parse `git cat-file --batch` output (`<sha> <type> <size>\\n<content>\\n` per object) into {sha: bytes}."""
+    """Parse `git cat-file --batch` output (`<sha> <type> <size>\\n<content>\\n` per object) into {sha: bytes}: each
+    blob is taken by its size, never by its lines, and output cut short is an error."""
     blobs, pos = {}, 0
     for sha in shas:
         end = read.find(b"\n", pos)
-        header = read[pos:end].split()
-        if end < 0 or len(header) != 3 or header[0].decode("ascii", "replace") != sha or header[1] != b"blob":
+        if end < 0:
             raise RuntimeError("git cat-file output was not understood for %s" % sha)
-        size = int(header[2])
+        size = _cat_file_header(read[pos:end], sha)
+        if end + 1 + size + 1 > len(read) or read[end + 1 + size:end + 2 + size] != b"\n":
+            raise RuntimeError("git cat-file output was cut short for %s" % sha)
         blobs[sha] = read[end + 1:end + 1 + size]
         pos = end + 1 + size + 1
     return blobs
@@ -2106,12 +2127,13 @@ def advisory_added(path, base, gitdir):
     weren't tagged at base (a tag moved), as "<file>: <was> -> <now> occurrences" plus the new lines. The advisory
     set is the base commit's, so the lead reviews any tag a branch adds or moves. It reads blobs as bytes (never a
     diff, which .gitattributes `-diff`, a NUL byte or a line starting `++ ` can blind), all in one `git cat-file
-    --batch`, through teamd's hardened git without replace refs, under one 60 s deadline and a cap of 500 files.
-    Any git failure or timeout raises RuntimeError: the caller tells the lead."""
+    --batch`, through teamd's hardened git (workers.worker_git_argv) without replace refs, under one 60 s deadline and
+    a cap of 500 files. `git cat-file --batch-check` comes first: a file whose blob on either side is over 1 MB is never
+    read, and the lead is told to look at it by hand. Any git failure or timeout raises RuntimeError: the caller tells
+    the lead."""
     deadline = time.monotonic() + ADVISORY_TIMEOUT_S
     try:
-        argv = (["git", "--git-dir", str(gitdir), "--work-tree", str(path)] + workers.HARDENED_GIT
-                + workers._driver_overrides(gitdir) + ["--no-replace-objects"])
+        argv = workers.worker_git_argv(path, gitdir, "--no-replace-objects")
         env = workers._isolated_git_env()
     except OSError as e:
         raise RuntimeError("git could not run: %r" % e)
@@ -2144,10 +2166,16 @@ def advisory_added(path, base, gitdir):
         return None if mode == b"160000" or set(sha) == {ord("0")} else sha.decode("ascii")
     sides = [(wanted(a, c), wanted(b, d), name) for a, b, c, d, name in changed]
     shas = sorted({x for before, after, _ in sides for x in (before, after) if x})
-    blobs = _cat_file_batch(git("cat-file", "--batch", input=("\n".join(shas) + "\n").encode()) if shas else b"",
-                            shas)
-    found = []
+    sizes = _cat_file_sizes(git("cat-file", "--batch-check", input=("\n".join(shas) + "\n").encode()), shas) \
+        if shas else {}
+    readable = [sha for sha in shas if sizes[sha] <= ADVISORY_MAX_BLOB]
+    blobs = _cat_file_batch(git("cat-file", "--batch", input=("\n".join(readable) + "\n").encode())
+                            if readable else b"", readable)
+    found, too_big = [], []
     for before_sha, after_sha, name in sides:
+        if any(sha and sizes[sha] > ADVISORY_MAX_BLOB for sha in (before_sha, after_sha)):
+            too_big.append((name, max(sizes[sha] for sha in (before_sha, after_sha) if sha)))
+            continue
         before, after = blobs.get(before_sha, b""), blobs.get(after_sha, b"")
         was, now = before.count(ADVISORY_TAG), after.count(ADVISORY_TAG)
         old_lines = set(before.split(b"\n"))
@@ -2164,4 +2192,9 @@ def advisory_added(path, base, gitdir):
         found = found[:ADVISORY_MAX_FILES] + ["… and %d more" % (len(found) - ADVISORY_MAX_FILES)]
     if skipped:
         found.append("the advisory check skipped %d files (too many changes); review the tags by hand" % skipped)
+    for name, size in too_big[:ADVISORY_MAX_SKIPPED]:
+        found.append("the advisory check skipped %s (%d bytes, over 1 MB); review its tags by hand"
+                     % (name.decode("utf-8", "replace"), size))
+    if len(too_big) > ADVISORY_MAX_SKIPPED:
+        found.append("… and %d more files over 1 MB" % (len(too_big) - ADVISORY_MAX_SKIPPED))
     return found

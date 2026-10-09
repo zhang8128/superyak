@@ -87,9 +87,15 @@ def start_prepare(name, cwd, log_path):
                             stderr=subprocess.STDOUT, env=env, start_new_session=True)
 
 
+def worker_git_argv(path, gitdir, *args):
+    """git for a worker's folder, the only way teamd builds it: the git dir recorded at spawn (never the folder's
+    .git), the hardening flags and every driver the repo's config defines blanked. Run it with _isolated_git_env()."""
+    return (["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
+            + HARDENED_GIT + _driver_overrides(gitdir) + list(args))
+
+
 def worker_git(path, gitdir, *args, check=True, input=None, text=True):
-    return subprocess.run(["git", "--git-dir", str(gitdir), "--work-tree", str(path)]
-                          + HARDENED_GIT + _driver_overrides(gitdir) + list(args),
+    return subprocess.run(worker_git_argv(path, gitdir, *args),
                           cwd=str(path), env=_isolated_git_env(), input=input,
                           capture_output=True, text=text, check=check)
 
