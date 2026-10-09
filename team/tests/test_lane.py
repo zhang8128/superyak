@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -2491,7 +2492,9 @@ exports.chromium = { launchServer: async (o) => {
     const pad = fs.existsSync(failFile) ? 'z'.repeat(Number(fs.readFileSync(failFile, 'utf8') || 0)) : '';
     throw new Error('launchServer failed at ' + pad + 'ws://' + o.host + ':' + o.port + o.wsPath);
   }
-  const child = spawn('sleep', ['300'], { stdio: 'ignore', detached: true });
+  // The "browser" is node, as the headless shell is a program of its own: macOS hides an Apple program's (sleep's)
+  // environment from KERN_PROCARGS2, and the test reads this child's.
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 300000)'], { stdio: 'ignore', detached: true });
   fs.writeFileSync(path.join(out, 'child.pid'), String(child.pid));
   const srv = net.createServer().listen(o.port, o.host);
   await new Promise(resolve => srv.on('listening', resolve));
@@ -2584,10 +2587,13 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
         assert broker.endpoint == "ws://127.0.0.1:%d/%s" % (base + 31, broker.secret), "endpoint shape"   # no repr
         # The real broker is `sandbox-exec -p ... node -e ...` with no shell, so its environment is exactly the built
         # one. This test's stand-in sandbox-exec is a /bin/sh script, and a shell adds SHLVL, PWD and _ on macOS: those
-        # (only) are ignored here.
+        # are ignored here. So is __CF_USER_TEXT_ENCODING on a real Mac: CoreFoundation in node adds it to node's own
+        # environment as it starts, exec'd directly with a built environment and under sandbox-exec alike, so the real
+        # broker shows it too (measured on macOS 27, node 26.10). Nothing in lane.py compares the broker's environment.
         values = json.loads((b / "env-values.json").read_text())
         assert values.get("TMPDIR") == str(b) and values.get("MAC_CHROMIUM_TMPDIR") == str(b), "TMPDIR=<b> missing"
-        assert [k for k in json.loads((b / "env.json").read_text()) if k not in ("SHLVL", "PWD", "_")] == sorted(
+        added = ("SHLVL", "PWD", "_") + (("__CF_USER_TEXT_ENCODING",) if REAL_PLATFORM == "darwin" else ())
+        assert [k for k in json.loads((b / "env.json").read_text()) if k not in added] == sorted(
             ["PATH", "HOME", "TMPDIR", "MAC_CHROMIUM_TMPDIR", "PLAYWRIGHT_BROWSERS_PATH", "SUPERYAK_BROKER_PLAYWRIGHT"])
         options = json.loads((b / "options.json").read_text())
         assert options.pop("wsPath") == "/" + broker.secret, "the secret path"
@@ -2808,6 +2814,323 @@ def test_the_environment_match_never_takes_teamd_or_its_parents(monkeypatch):
     monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, table))
     monkeypatch.setattr(lane, "_environ", lambda pid: ["HOME=/h", "CLAUDE_CODE_TMPDIR=/tmp/sy-lane-1/abc/tmp"])
     assert lane.env_pids("CLAUDE_CODE_TMPDIR", "/tmp/sy-lane-1/abc/tmp") == {4242}      # 4243 is another user's
+
+
+# ---------- what a turn leaves that its environment can't show (macOS hides an Apple program's environment) ----------
+
+def orphan_world(monkeypatch, tmp_path, rows, starts, sandboxed=(), lsof=None, lsof_rc=0):
+    """ps shows `rows` (pid, ppid, pgid, uid), _started reads `starts`, lsof prints `lsof` for the cwds asked about,
+    and only the pids in `sandboxed` run under the turn's profile. Returns the folders: a worktree with a sub folder,
+    an outside folder, and a link in the worktree to the outside one."""
+    worktree, outside = tmp_path / "wt", tmp_path / "outside"
+    (worktree / "sub").mkdir(parents=True)
+    outside.mkdir()
+    (worktree / "link").symlink_to(outside)
+    asked = []
+    monkeypatch.setattr(lane, "_process_table", lambda: list(rows))
+    monkeypatch.setattr(lane, "_started", lambda pid: starts.get(pid))
+    monkeypatch.setattr(lane, "_turn_sandboxed", lambda pid, writable, unreadable=(): pid in sandboxed)
+    monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: "/usr/sbin/lsof")
+
+    def run(cmd, timeout=60):
+        asked.append(cmd)
+        return None if lsof is None else Ran(lsof_rc, lsof)
+    monkeypatch.setattr(lane, "_run", run)
+    return worktree, outside, asked
+
+
+def cwd_lines(pid, folder, name=None):
+    st = os.stat(folder)
+    return "p%d\nfcwd\ntDIR\nD0x%x\ni%d\nn%s\n" % (pid, st.st_dev, st.st_ino, name or os.path.realpath(folder))
+
+
+def test_a_process_seen_in_the_turns_tree_is_taken_only_while_its_start_time_matches(monkeypatch, tmp_path):
+    me = os.getuid()
+    rows = [(500, 1, 500, me), (501, 1, 501, me), (502, 1, 502, me + 1), (503, 77, 503, me)]
+    worktree, outside, asked = orphan_world(monkeypatch, tmp_path, rows, {500: 10.5, 501: 99.0, 502: 10.5, 503: 10.5},
+                                            sandboxed={500, 501, 502, 503}, lsof="")
+    seen = {500: 10.5, 501: 11.0, 502: 10.5, 503: 10.5, 504: 10.5}   # 501 was reused, 502 is another uid's, 504 is gone
+    assert lane.turn_leftovers(seen, (worktree,), None, (worktree,)) == {500: 10.5, 503: 10.5}
+    assert lane.turn_leftovers(seen, (worktree,), None, (worktree,), spared={503}) == {500: 10.5}   # the broker
+    assert not asked                                    # no orphan rule without the turn's start
+
+
+def test_claudes_unsandboxed_children_and_the_brokers_family_survive_the_turns_tree(monkeypatch, tmp_path):
+    """Review: teamd's MCP server, which claude starts outside its sandbox, is in the turn's tree and still running at
+    its end, but fails the sandbox gate; the broker's family is spared even if it were sandboxed and in the tree."""
+    me = os.getuid()
+    mcp, broker, browser, leftover = 510, 511, 512, 513
+    rows = [(mcp, 1, mcp, me), (broker, 1, broker, me), (browser, broker, broker, me), (leftover, 1, leftover, me)]
+    starts = {pid: 10.5 for pid, ppid, pgid, uid in rows}
+    worktree, outside, asked = orphan_world(monkeypatch, tmp_path, rows, starts,
+                                            sandboxed={broker, browser, leftover}, lsof="")
+    assert lane.turn_leftovers(dict(starts), (worktree,), None, (worktree,),
+                               spared={broker, browser}) == {leftover: 10.5}
+
+
+def test_teamd_and_its_parent_are_never_a_turns_leftover(monkeypatch, tmp_path):
+    """Review 2: teamd and the process above it, even seen in the turn's tree and as sandboxed orphans with their cwd in
+    the worktree, are never taken; the turn's own leftover still is."""
+    uid, me, parent, leftover = os.getuid(), os.getpid(), os.getppid(), 520
+    rows = [(me, parent, me, uid), (parent, 1, parent, uid), (leftover, 1, leftover, uid)]
+    starts = {me: 10.5, parent: 10.5, leftover: 10.5}
+    worktree, outside, asked = orphan_world(monkeypatch, tmp_path, rows, starts, sandboxed={me, parent, leftover})
+    lsof = cwd_lines(me, worktree) + cwd_lines(parent, worktree) + cwd_lines(leftover, worktree)
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, lsof))
+    assert lane.turn_leftovers(dict(starts), (worktree,), 10.0, (worktree,)) == {leftover: 10.5}
+
+
+class FakeLibSystem:
+    """sandbox_check as macOS answers it, from answer(pid, operation, path); every question asked is kept."""
+    def __init__(self, answer):
+        self.answer, self.asked = answer, []
+
+    def sandbox_check(self, pid, operation, flags, *path):
+        folder = os.fsdecode(path[0].value) if path else None
+        self.asked.append((pid, operation, folder))
+        return self.answer(pid, operation, folder)
+
+
+def on_a_mac(monkeypatch, answer):
+    lib = FakeLibSystem(answer)
+    monkeypatch.setattr(lane, "_on_macos", lambda: True)
+    monkeypatch.setattr(lane, "_libsystem", lambda: lib)
+    return lib
+
+
+def test_an_odd_sandbox_answer_is_nothing_for_a_gone_pid_and_unknown_for_a_running_one(monkeypatch, tmp_path):
+    """Review 3: measured on the Mac, sandbox_check answers 1 for a zombie, a reaped and a never-used pid, and 1 for
+    their every path, so a gone pid reads as denied. An answer other than 0 or 1 is False when the pid is gone (one
+    gone pid must not hold up the whole cleanup) and None only while it still runs."""
+    alive = {}
+    monkeypatch.setattr(lane, "_alive", lambda pid: alive[pid])
+    on_a_mac(monkeypatch, lambda pid, op, folder: -1)
+    alive.update({600: False, 601: True})
+    assert lane._turn_sandboxed(600, (tmp_path,)) is False
+    assert lane._turn_sandboxed(601, (tmp_path,)) is None
+    on_a_mac(monkeypatch, lambda pid, op, folder: 1 if folder is None else -1)        # odd only on the path check
+    assert lane._turn_sandboxed(600, (tmp_path,)) is False
+    assert lane._turn_sandboxed(601, (tmp_path,)) is None
+
+
+def test_a_process_that_can_read_the_brokers_folder_is_not_the_turns(monkeypatch, tmp_path):
+    """Review 5: a 4th probe. The turn's profile denies reading <lane>/b; most other sandboxes allow it, so a process
+    that may read b/ is not the turn's, whatever it may write. b/ is asked about by its real path."""
+    b = tmp_path / "lane" / "b"
+    b.mkdir(parents=True)
+    readable = {600}
+    lib = on_a_mac(monkeypatch, lambda pid, op, folder: 1 if folder is None else
+                   (0 if pid in readable else 1) if op == b"file-read-data" else 0)
+    assert lane._turn_sandboxed(600, (tmp_path,), (b,)) is False
+    assert lane._turn_sandboxed(601, (tmp_path,), (b,)) is True
+    assert (601, b"file-read-data", os.path.realpath(b)) in lib.asked
+
+
+@pytest.mark.parametrize("case", ["not sandboxed", "may not write the worktree", "may not write the lane's tmp",
+                                  "a gone pid: 1 to everything"])
+def test_the_gate_is_every_probe_at_once(monkeypatch, tmp_path, case):
+    """Re-review: the gate is an AND. With b/ unreadable in every case, each single probe that fails is enough for
+    False: not sandboxed, a turn folder it may not write, or the gone pid's 1 to everything (measured on the Mac)."""
+    worktree, lane_dir = tmp_path / "wt", tmp_path / "lane"
+    for folder in (worktree, lane_dir / "tmp", lane_dir / "b"):
+        folder.mkdir(parents=True)
+    tmp, b = os.path.realpath(lane_dir / "tmp"), os.path.realpath(lane_dir / "b")
+    denied = {"not sandboxed": set(), "may not write the worktree": {os.path.realpath(worktree)},
+              "may not write the lane's tmp": {tmp}}.get(case)
+
+    def answer(pid, op, folder):
+        if denied is None:
+            return 1                                    # a gone pid
+        if folder is None:
+            return 0 if case == "not sandboxed" else 1
+        if op == b"file-read-data":
+            return 1                                    # b/ unreadable, as under the turn's profile
+        return 1 if folder in denied else 0
+    on_a_mac(monkeypatch, answer)
+    monkeypatch.setattr(lane, "_alive", lambda pid: case != "a gone pid: 1 to everything")
+    assert lane._turn_sandboxed(600, (worktree, lane_dir / "tmp"), (lane_dir / "b",)) is False
+    # and with every probe passing, the same world says True
+    on_a_mac(monkeypatch, lambda pid, op, folder: 1 if folder is None or op == b"file-read-data" else 0)
+    assert lane._turn_sandboxed(600, (worktree, lane_dir / "tmp"), (lane_dir / "b",)) is True
+
+
+def test_the_started_clock_falls_back_to_the_wall_clock_when_proc_cant_say(monkeypatch):
+    """Off macOS, when /proc can't say, the wall clock itself: a later start only drops orphans, never takes one."""
+    monkeypatch.setattr(lane, "_on_macos", lambda: False)
+
+    def no_proc():
+        raise OSError("no /proc/stat")
+    monkeypatch.setattr(lane, "_btime", no_proc)
+    monkeypatch.setattr(lane.time, "time", lambda: 777.0)
+    assert lane.started_clock() == 777.0
+
+
+def test_macos_is_told_by_platform_not_by_sys_platform(monkeypatch):
+    """Review 6: the mac fixture patches sys.platform, so it must not decide whether Seatbelt is there to ask."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane.platform, "system", lambda: "Linux")
+    assert lane._on_macos() is False
+    monkeypatch.setattr(lane.sys, "platform", "linux")
+    monkeypatch.setattr(lane.platform, "system", lambda: "Darwin")
+    assert lane._on_macos() is True
+
+
+def test_a_broken_libsystem_on_macos_leaves_the_cleanup_unfinished(monkeypatch, tmp_path):
+    """Review 6: on macOS, a libSystem (or a symbol) that can't load is "can't say", never "not macOS": the gate says
+    None and turn_leftovers None, even with nothing to ask about; the start clock stays the wall clock."""
+    monkeypatch.setattr(lane, "_on_macos", lambda: True)
+    monkeypatch.setattr(lane, "_libsystem", lambda: None)
+    monkeypatch.setattr(lane, "_process_table", lambda: [(os.getpid(), os.getppid(), os.getpid(), os.getuid())])
+    monkeypatch.setattr(lane.time, "time", lambda: 777.0)
+    assert lane._turn_sandboxed(600, (tmp_path,)) is None
+    assert lane.turn_leftovers({}, (tmp_path,), None, (tmp_path,)) is None
+    assert lane._started(os.getpid()) is None
+    assert lane.started_clock() == 777.0
+
+
+def test_libsystem_loads_once_and_a_missing_symbol_counts_as_broken(monkeypatch):
+    """Review 6 and 9: libSystem is loaded once; one that loads without sandbox_check or proc_pidinfo is broken."""
+    import types
+    loads = []
+
+    def cdll(path, use_errno=False):
+        loads.append(path)
+        return types.SimpleNamespace(proc_pidinfo=types.SimpleNamespace())          # no sandbox_check
+    monkeypatch.setattr(lane, "_on_macos", lambda: True)
+    monkeypatch.setattr(lane, "_LIBSYSTEM", {})
+    monkeypatch.setattr(lane.ctypes, "CDLL", cdll)
+    assert lane._libsystem() is None and lane._libsystem() is None and len(loads) == 1
+    monkeypatch.setattr(lane, "_LIBSYSTEM", {})
+    monkeypatch.setattr(lane.ctypes, "CDLL", lambda path, use_errno=False: types.SimpleNamespace(
+        proc_pidinfo=types.SimpleNamespace(), sandbox_check=types.SimpleNamespace()))
+    lib = lane._libsystem()
+    assert lib is not None and lane._libsystem() is lib
+    monkeypatch.setattr(lane, "_LIBSYSTEM", {})
+    monkeypatch.setattr(lane, "_on_macos", lambda: False)
+    assert lane._libsystem() is None                    # off macOS nothing is loaded
+
+
+def test_only_this_turns_sandboxed_orphans_in_its_folders_count(monkeypatch, tmp_path):
+    me, began = os.getuid(), 100.0
+    rows = [(600, 1, 600, me), (601, 1, 601, me), (602, 4242, 602, me), (603, 1, 603, me), (604, 1, 604, me + 1),
+            (605, 1, 605, me), (606, 1, 606, me), (607, 1, 607, me)]
+    starts = {pid: began + 1 for pid, ppid, pgid, uid in rows}
+    starts[603] = began - 0.001                          # Andy's shell: there before the turn
+    worktree, outside, asked = orphan_world(monkeypatch, tmp_path, rows, starts, sandboxed=set(starts) - {605})
+    sub, real = worktree / "sub", os.path.realpath(worktree)
+    lsof = (cwd_lines(600, sub) + cwd_lines(601, outside) + cwd_lines(602, sub) + cwd_lines(603, sub)
+            + cwd_lines(604, sub) + cwd_lines(605, sub)
+            + cwd_lines(606, outside, name=real + "/link")                       # a link in the worktree isn't followed
+            + cwd_lines(607, outside, name=real + "/sub"))                       # the name is, but the inode isn't
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: (asked.append(cmd), Ran(0, lsof))[1])
+    assert lane.turn_leftovers({}, (worktree,), began, (worktree,)) == {600: began + 1}
+    cmd = asked[-1]
+    assert cmd[cmd.index("-d") + 1] == "cwd"            # lsof is asked only about orphans of this uid since the start
+    assert sorted(cmd[cmd.index("-p") + 1].split(",")) == ["600", "601", "605", "606", "607"]
+
+
+def test_the_leftover_search_fails_closed(monkeypatch, tmp_path):
+    me = os.getuid()
+    rows = [(600, 1, 600, me)]
+    worktree, outside, asked = orphan_world(monkeypatch, tmp_path, rows, {600: 101.0}, sandboxed={600}, lsof=None)
+    assert lane.turn_leftovers({}, (worktree,), 100.0, (worktree,)) is None                 # lsof couldn't run
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(2, ""))
+    assert lane.turn_leftovers({}, (worktree,), 100.0, (worktree,)) is None                 # lsof failed
+    monkeypatch.setattr(lane, "_process_table", lambda: [])
+    assert lane.turn_leftovers({600: 101.0}, (worktree,), 100.0, (worktree,)) is None       # ps couldn't say
+    monkeypatch.setattr(lane, "_process_table", lambda: rows)
+    monkeypatch.setattr(lane, "_turn_sandboxed", lambda pid, writable, unreadable=(): None)
+    assert lane.turn_leftovers({600: 101.0}, (worktree,), None, (worktree,)) is None        # the sandbox couldn't say
+
+
+def test_a_pid_whose_start_time_changed_since_it_was_found_is_never_signalled(monkeypatch):
+    signalled, starts = [], {700: 5.0, 701: 6.0}
+    monkeypatch.setattr(lane, "env_pids", lambda name, value: set())
+    monkeypatch.setattr(lane, "_kill", lambda pid, sig: signalled.append((pid, sig)))
+    monkeypatch.setattr(lane, "_alive", lambda pid: False)
+    monkeypatch.setattr(lane, "_started", lambda pid: starts.get(pid))
+    found = iter([{700: 5.0, 701: 6.0}, {700: 5.0, 701: 6.0}])
+
+    def extra():
+        got = next(found)
+        starts[701] = 60.0                               # 701 exits and its pid is reused before the signal
+        return got
+    assert lane.cleanup_env(("CLAUDE_CODE_TMPDIR", "/x"), extra=extra) is True
+    assert {pid for pid, sig in signalled} == {700}
+
+
+def test_a_lane_ends_cleanup_never_kills_a_pid_whose_start_changed_since_the_second_look(monkeypatch):
+    """Review 2: cleanup_processes re-checks the start just before its SIGKILL too, not only before its SIGTERM."""
+    signalled, starts = [], {700: 5.0, 701: 6.0}
+    monkeypatch.setattr(lane, "lane_pids", lambda path, base: set())
+    monkeypatch.setattr(lane, "_kill", lambda pid, sig: signalled.append((pid, sig)))
+    monkeypatch.setattr(lane, "_alive", lambda pid: False)
+    monkeypatch.setattr(lane, "_started", lambda pid: starts.get(pid))
+    looks = []
+
+    def extra():
+        looks.append(1)
+        if len(looks) == 2:
+            starts[701] = 60.0                           # after the SIGTERM, 701 exits and its pid is reused
+        return {700: 5.0, 701: 6.0}
+    assert lane.cleanup_processes("/x", None, extra=extra) is True
+    assert signalled == [(700, signal.SIGTERM), (701, signal.SIGTERM), (700, signal.SIGKILL)]
+
+
+def test_the_turns_tree_is_sampled_only_under_teamds_own_child(monkeypatch):
+    me = os.getuid()
+    rows = [(4242, 77, 4242, me), (4243, 4242, 4242, me), (4300, os.getpid(), 4300, me), (4301, 4300, 4300, me),
+            (4302, 4301, 4302, me), (4303, 4301, 4303, me + 1)]
+    monkeypatch.setattr(lane, "_process_table", lambda: rows)
+    monkeypatch.setattr(lane, "_started", lambda pid: float(pid))
+    assert lane.turn_tree(4242) == {}                   # not teamd's child: not a turn teamd started
+    assert lane.turn_tree(4300) == {4301: 4301.0, 4302: 4302.0}       # not claude itself, not another uid's
+
+
+def test_started_reads_a_real_process(monkeypatch):
+    proc = subprocess.Popen(["sleep", "5"])
+    try:
+        start = lane._started(proc.pid)
+        assert start is not None and abs(start - time.time()) < 5 and lane._started(proc.pid) == start
+    finally:
+        proc.kill()
+        proc.wait()
+    assert lane._started(proc.pid) is None
+
+
+def test_a_process_started_after_the_started_clock_never_reads_as_earlier():
+    """Review (Pi): a turn's start and _started must share a frame. On Linux _started is /proc/stat's btime (whole
+    seconds) plus clock ticks, up to 1 s off time.time(), so with time.time() as the turn's start an orphan the turn
+    started read as from before it. No tolerance: a slack would let a process from just before the turn count."""
+    for _ in range(20):
+        began = lane.started_clock()
+        proc = subprocess.Popen(["sleep", "5"])
+        try:
+            start = lane._started(proc.pid)
+            assert start is not None and start >= began, (start, began)
+        finally:
+            proc.kill()
+            proc.wait()
+
+
+def test_the_started_clock_off_macos_is_btime_plus_whole_ticks_of_the_boot_clock(monkeypatch):
+    """Off macOS: btime (as _started reads it) plus CLOCK_BOOTTIME (what starttime counts) cut to whole clock ticks, so
+    a process that starts now, at this tick or a later one, reads as no earlier. The wall clock is not used."""
+    monkeypatch.setattr(lane, "_on_macos", lambda: False)
+    monkeypatch.setattr(lane, "_btime", lambda: 1000)
+    monkeypatch.setattr(lane, "_ticks_per_second", lambda: 100)
+    monkeypatch.setattr(lane.time, "CLOCK_BOOTTIME", 7, raising=False)
+    monkeypatch.setattr(lane.time, "clock_gettime", lambda clock: 5.6789 if clock == 7 else 99999.0)
+    assert lane.started_clock() == 1000 + 567 / 100
+
+
+def test_a_turns_start_is_taken_on_the_started_clock(env, lanes, tmp_path, monkeypatch):
+    """teamd takes a browser turn's start with lane.started_clock, the frame the orphan rule compares it in."""
+    monkeypatch.setattr(lane, "started_clock", lambda: 12345.25)
+    fake_claude(tmp_path, monkeypatch, "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    assert team.state["workers"]["kaylee"]["turn_started"] == 12345.25
 
 
 def test_cleanup_is_unfinished_when_lsof_cannot_say(env, tmp_root, monkeypatch):
@@ -3061,7 +3384,7 @@ class FakeSlack:
 @pytest.fixture
 def lanes(env, mac, tmp_root, monkeypatch):
     """teamd with every macOS-only step faked: the listener check, the broker and its process cleanup."""
-    calls = {"listeners": 0, "started": [], "stopped": [], "cleanup": []}
+    calls = {"listeners": 0, "started": [], "stopped": [], "cleanup": [], "cleanup_extra": []}
     state = {"ok": True, "problems": [], "cleanup_finishes": True}
 
     def listeners_ok():
@@ -3077,8 +3400,9 @@ def lanes(env, mac, tmp_root, monkeypatch):
         broker.proc.code = -15
         calls["stopped"].append(broker)
 
-    def cleanup_processes(path, base, broker=None, env=None):
+    def cleanup_processes(path, base, broker=None, env=None, extra=None):
         calls["cleanup"].append((path, base, broker, lane.block_of("t1", "kaylee"), env))
+        calls["cleanup_extra"].append(extra)
         if broker is not None:
             stop_broker(broker)
         return state["cleanup_finishes"]
@@ -3221,6 +3545,68 @@ def test_stop_worker_ends_the_lane(env, lanes, monkeypatch):
     team.spawn("check the login page", "claude", browser=True)
     team.stop_worker("kaylee")
     assert ends_lane(lanes, team)
+
+
+def turn_leftovers_args(monkeypatch):
+    """lane.turn_leftovers as teamd calls it: every call's arguments, by name."""
+    got = []
+
+    def turn_leftovers(seen, folders, began, writable, spared=(), unreadable=()):
+        got.append({"seen": seen, "folders": folders, "began": began, "writable": writable, "spared": spared,
+                    "unreadable": unreadable})
+        return {}
+    monkeypatch.setattr(lane, "turn_leftovers", turn_leftovers)
+    return got
+
+
+def test_teamd_spares_the_brokers_family_when_it_looks_for_a_turns_leftovers(env, lanes, monkeypatch):
+    """Review 2: Team._turn_leftovers passes the broker's whole family as spared, and the turn's own folders, start,
+    the two paths its profile writes and the broker's b/, which it can't read."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    broker, w = team.brokers["kaylee"], team.state["workers"]["kaylee"]
+    monkeypatch.setattr(lane, "family", lambda pid: ({pid, 9991}, {pid}) if pid == broker.proc.pid else (set(), set()))
+    got = turn_leftovers_args(monkeypatch)
+    team._turn_leftovers("kaylee")()
+    path = lane.lane_path("t1", "kaylee")
+    assert got == [{"seen": {}, "folders": (w["path"], path), "began": w["turn_started"],
+                    "writable": (w["path"], path / "tmp"), "spared": {broker.proc.pid, 9991},
+                    "unreadable": (path / "b",)}]
+
+
+def test_a_lanes_end_looks_for_the_turns_leftovers_too(env, lanes, monkeypatch):
+    """Review 2: the lane-end cleanup is given the turn's evidence (extra), and it asks about this turn."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    team.stop_worker("kaylee")
+    assert ends_lane(lanes, team)
+    extra = lanes["calls"]["cleanup_extra"][-1]
+    assert callable(extra)
+    got = turn_leftovers_args(monkeypatch)
+    extra()
+    path = lane.lane_path("t1", "kaylee")
+    assert [(g["folders"], g["began"], g["writable"]) for g in got] == [
+        ((w["path"], path), w["turn_started"], (w["path"], path / "tmp"))]
+
+
+def test_a_lane_cleanup_that_raises_anything_is_logged_and_left_unfinished(env, lanes, monkeypatch):
+    """Review 6: whatever the cleanup raises (a broken libSystem's AttributeError, say), the lane's end goes on, says
+    the cleanup is unfinished and keeps the block held."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    logged = []
+    monkeypatch.setattr(team, "log", lambda text: logged.append(text))
+
+    def broken(*args, **kwargs):
+        raise AttributeError("sandbox_check")
+    monkeypatch.setattr(lane, "cleanup_processes", broken)
+    team.stop_worker("kaylee")
+    assert any("cleaning up kaylee's lane processes" in line and "AttributeError" in line for line in logged)
+    assert lane.block_of("t1", "kaylee") is not None                             # the block stays held
 
 
 def test_a_failed_turn_ends_the_lane(env, lanes, monkeypatch):
@@ -3771,22 +4157,72 @@ def test_one_lane_at_a_time_waits_with_its_own_reason(env, lanes, held, tmp_path
     assert "once every listener" not in waiting[0]
 
 
-def test_a_turns_leftover_children_end_with_the_turn_but_the_broker_stays(env, lanes, tmp_path, monkeypatch):
-    def proc_environ(pid):                 # the mac fixture says darwin; a Pi reads /proc
+def proc_environ(pid):                     # the mac fixture says darwin; a Pi reads /proc
+    try:
+        return [s.decode() for s in Path("/proc/%d/environ" % pid).read_bytes().split(b"\0") if s]
+    except OSError:
+        return None
+
+
+# A turn's leftover as a Bash command would leave it: a new session without the `setsid` program (macOS has none), then
+# exec of /bin/sleep, an Apple program whose environment KERN_PROCARGS2 hides (the pid stays the same across the exec).
+# On a real Mac it runs inside a Seatbelt profile, as the turn's Bash commands do; off macOS there is no Seatbelt, so
+# the tests that need it say the leftover is under the turn's profile (turn_profile).
+LEFTOVER = ("import os, sys; os.setsid(); f = open(sys.argv[1], 'w'); f.write(str(os.getpid())); f.close(); "
+            "os.execv('/bin/sleep', ['sleep', '300'])")
+
+
+def sandboxed(readable_b=False):
+    """On a real Mac, the leftover's Seatbelt profile: everything allowed except, as the turn's own profile does,
+    reading kaylee's <lane>/b (review 5's probe), unless readable_b. Off macOS, nothing."""
+    if REAL_PLATFORM != "darwin":
+        return ""
+    deny = "" if readable_b else '(deny file-read* (subpath "%s"))' % os.path.realpath(lane.lane_path("t1", "kaylee") / "b")
+    return "/usr/bin/sandbox-exec -p '(version 1)(allow default)%s' " % deny
+
+
+def leftover_line(pidfile, readable_b=False):
+    """A shell line that starts the leftover in the background; it writes its pid to `pidfile` (a shell word)."""
+    return "%s'%s' -c \"%s\" %s &\n" % (sandboxed(readable_b), sys.executable, LEFTOVER, pidfile)
+
+
+def wait_line(pidfile):
+    return "while [ ! -s %s ]; do sleep 0.05; done\n" % pidfile
+
+
+@pytest.fixture
+def turn_profile(monkeypatch):
+    """Off macOS there is no Seatbelt to ask, so every process counts as running under the turn's profile."""
+    if REAL_PLATFORM != "darwin":
+        monkeypatch.setattr(lane, "_turn_sandboxed", lambda pid, writable, unreadable=(): True)
+
+
+@pytest.fixture
+def hidden_environments(monkeypatch):
+    """Every environment hidden, as macOS hides an Apple program's: the env match finds nothing, so the sampled tree
+    (b) and the orphan rule (a) must end a leftover on their own, on a Pi too, where /proc shows every environment."""
+    monkeypatch.setattr(lane, "_environ", lambda pid: [])
+
+
+def kill_quietly(pid):
+    if pid:
         try:
-            return [s.decode() for s in Path("/proc/%d/environ" % pid).read_bytes().split(b"\0") if s]
+            os.kill(pid, signal.SIGKILL)
         except OSError:
-            return None
+            pass
+
+
+def read_pid(pidfile):
+    text = pidfile.read_text() if pidfile.exists() else ""
+    return int(text) if text.isdigit() else None
+
+
+def test_a_turns_leftover_children_end_with_the_turn_but_the_broker_stays(env, lanes, tmp_path, monkeypatch,
+                                                                         turn_profile):
     if REAL_PLATFORM != "darwin":
         monkeypatch.setattr(lane, "_environ", proc_environ)       # on a real Mac the real KERN_PROCARGS2 reader runs
-    # A new session without the `setsid` program (macOS has none), then exec of /bin/sleep, an Apple program: on a real
-    # Mac this proves KERN_PROCARGS2 shows an Apple program's environment (the pid stays the same across the exec).
-    leftover = ("import os, sys; os.setsid(); f = open(sys.argv[1], 'w'); f.write(str(os.getpid())); f.close(); "
-                "os.execv('/bin/sleep', ['sleep', '300'])")
-    fake_claude(tmp_path, monkeypatch,
-                "'%s' -c \"%s\" \"$PWD/leftover.pid\" &\n"
-                "while [ ! -s \"$PWD/leftover.pid\" ]; do sleep 0.05; done\n"
-                "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n" % (sys.executable, leftover))
+    fake_claude(tmp_path, monkeypatch, leftover_line('"$PWD/leftover.pid"') + wait_line('"$PWD/leftover.pid"')
+                + "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
     team, now = browser_team(env)
     team.spawn("check the login page", "claude", browser=True)
     w = team.state["workers"]["kaylee"]
@@ -3794,7 +4230,7 @@ def test_a_turns_leftover_children_end_with_the_turn_but_the_broker_stays(env, l
     pid = None
     try:
         def why():             # on a Mac this shows what the real _environ gave for the leftover
-            left = int(pidfile.read_text()) if pidfile.exists() and pidfile.read_text().isdigit() else None
+            left = read_pid(pidfile)
             return "state %s; leftover pid %s; lane._environ(pid) = %r; lane tmp = %s" % (
                 w["state"], left, lane._environ(left) if left else None, lane.lane_path("t1", "kaylee") / "tmp")
         assert run_until(team, lambda: w["state"] == "idle"), why()
@@ -3802,11 +4238,97 @@ def test_a_turns_leftover_children_end_with_the_turn_but_the_broker_stays(env, l
         assert not lane._alive(pid), "the leftover outlived its turn: " + why()
         assert not lanes["calls"]["stopped"] and "kaylee" in team.brokers      # the broker is not touched
     finally:
-        if pid:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
+        kill_quietly(pid)
+
+
+def test_with_every_environment_hidden_a_leftover_seen_in_the_turns_tree_ends_with_it(
+        env, lanes, tmp_path, monkeypatch, turn_profile, hidden_environments):
+    """(b) alone: the turn lives on after starting the leftover, so a sample finds it in the turn's tree; the orphan
+    rule is off."""
+    monkeypatch.setattr(lane, "_orphans_in", lambda *a, **kw: {})
+    fake_claude(tmp_path, monkeypatch, leftover_line('"$PWD/leftover.pid"') + wait_line('"$PWD/leftover.pid"')
+                + "sleep 1.5\necho '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    pidfile = Path(w["path"]) / "leftover.pid"
+    try:
+        assert run_until(team, lambda: w["state"] == "idle")
+        assert not lane._alive(read_pid(pidfile)), "the sampled leftover outlived its turn"
+        assert "kaylee" not in team.turn_seen                                   # the samples go with the turn
+    finally:
+        kill_quietly(read_pid(pidfile))
+
+
+def test_with_every_environment_hidden_a_sandboxed_orphan_in_the_worktree_ends_with_the_turn(
+        env, lanes, tmp_path, monkeypatch, turn_profile, hidden_environments):
+    """(a) alone: the turn exits as soon as the leftover is up, and the sampled tree is off."""
+    monkeypatch.setattr(lane, "turn_tree", lambda root: {})
+    fake_claude(tmp_path, monkeypatch, leftover_line('"$PWD/leftover.pid"') + wait_line('"$PWD/leftover.pid"')
+                + "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    pidfile = Path(w["path"]) / "leftover.pid"
+    try:
+        assert run_until(team, lambda: w["state"] == "idle")
+        pid = read_pid(pidfile)
+        if REAL_PLATFORM != "darwin" and lane._alive(pid):
+            parent = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            if parent != "1":
+                pytest.skip("orphans here go to a subreaper (pid %s), not pid 1; the orphan rule is macOS's" % parent)
+        assert not lane._alive(pid), "the orphaned leftover outlived its turn"
+    finally:
+        kill_quietly(read_pid(pidfile))
+
+
+@pytest.mark.skipif(REAL_PLATFORM != "darwin", reason="real Seatbelt: the 4th probe asks sandbox_check itself")
+def test_a_sandboxed_leftover_that_can_read_the_brokers_folder_is_not_the_turns(
+        env, lanes, tmp_path, monkeypatch, hidden_environments):
+    """Review 5 on real Seatbelt: a leftover under a profile that may read <lane>/b fails the 4th probe, so even seen in
+    the turn's tree and orphaned in its worktree it is not taken. (The turn's own profile denies that read.)"""
+    fake_claude(tmp_path, monkeypatch, leftover_line('"$PWD/leftover.pid"', readable_b=True)
+                + wait_line('"$PWD/leftover.pid"') + "sleep 1.5\necho '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    pidfile = Path(w["path"]) / "leftover.pid"
+    try:
+        assert run_until(team, lambda: w["state"] == "idle")
+        assert lane._alive(read_pid(pidfile)), "a process that may read b/ was taken as the turn's"
+    finally:
+        kill_quietly(read_pid(pidfile))
+
+
+def test_a_process_from_before_the_turn_with_its_cwd_in_the_worktree_survives_it(
+        env, lanes, tmp_path, monkeypatch, turn_profile, hidden_environments):
+    """Andy's shell in the worktree: this uid, an orphan, sandboxed and in the worktree, but it started before the
+    turn, so it is not the turn's. The turn's own leftover still ends."""
+    fake_claude(tmp_path, monkeypatch, "[ -f \"$PWD/second\" ] && { " + leftover_line('"$PWD/leftover.pid"').strip()
+                + " " + wait_line('"$PWD/leftover.pid"').strip() + "; }\n"
+                "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    worktree = Path(w["path"])
+    shell_pidfile, pidfile = tmp_path / "andy.pid", worktree / "leftover.pid"
+    subprocess.run(["/bin/sh", "-c", leftover_line(shlex.quote(str(shell_pidfile))) + wait_line(
+        shlex.quote(str(shell_pidfile)))], cwd=str(worktree), check=True, timeout=10)
+    andy = read_pid(shell_pidfile)
+    try:
+        parent = subprocess.run(["ps", "-o", "ppid=", "-p", str(andy)], capture_output=True, text=True).stdout.strip()
+        if parent != "1":           # review 8: else Andy's process is never an orphan, and survives for no reason
+            pytest.skip("orphans here go to a subreaper (pid %s), not pid 1; the orphan rule is macOS's" % parent)
+        time.sleep(0.05)
+        (worktree / "second").write_text("")
+        team.deliver("kaylee", "check it again", "lead")
+        assert run_until(team, lambda: w["state"] == "idle" and pidfile.exists())
+        assert run_until(team, lambda: not lane._alive(read_pid(pidfile))), "the turn's own leftover outlived it"
+        assert lane._alive(andy), "a process from before the turn was ended"
+    finally:
+        kill_quietly(andy)
+        kill_quietly(read_pid(pidfile))
 
 
 def test_ps_is_asked_for_the_whole_command(monkeypatch, tmp_path):
