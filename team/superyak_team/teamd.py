@@ -317,7 +317,8 @@ class Team:
             cmd = workers.claude_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
                                          w.get("mode", "build"), self.repo,
                                          lane=w["lane"]["path"] if lane_env else None,
-                                         preload=w["lane"]["preload"] if lane_env else None)
+                                         preload=w["lane"]["preload"] if lane_env else None,
+                                         plugins_off=lane.lane_plugins(w["path"]) if lane_env else ())
             env = self._engram_env(w)
         if lane_env:
             env.update(lane_env)

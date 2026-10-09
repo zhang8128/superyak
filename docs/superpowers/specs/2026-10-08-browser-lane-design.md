@@ -196,7 +196,14 @@ With `lane=None`, the output is byte-for-byte what it is today.
     from teamd's shipped copy (unlink, then `O_CREAT|O_EXCL|O_NOFOLLOW`), and refused when it is a symlink or another
     user's, or when its folder or any folder above it can be written by someone else, or lies in a shared temp
     folder;
-  - `npm_config_cache` stays in the lane: the worker's sandboxed npm needs it, and with the two switches above no
+  - plugins are off (round 2): every plugin named in the user's `settings.json` and `settings.local.json`, and in
+    the worktree's own `.claude/settings.json` and `settings.local.json`, is set to `false` under `enabledPlugins` in
+    the lane's flag settings, read at every turn's start. Claude Code has no single "no plugins" switch (`--safe-mode`
+    also drops CLAUDE.md and skills; `--bare` needs API-key auth), and its schema states the precedence user < project
+    < local < flag < policy. Confirmed on 2.1.295 with a plugin installed from a local marketplace in a scratch config:
+    enabled, its hook and MCP server start; `false` in the flag settings keeps it unloaded, even when the project's
+    `settings.local.json` sets it `true`. A plugin a managed policy enables can't be overridden this way;
+  - `npm_config_cache` stays in the lane: the worker's sandboxed npm needs it, and with the switches above no
     unsandboxed process uses it.
   Confirmed against the installed Claude Code 2.1.295, in a scratch config with no network: without the switches,
   user, project and plugin hooks and MCP servers all start and inherit `NODE_OPTIONS` and `npm_config_cache`; with

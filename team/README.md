@@ -64,7 +64,8 @@ Only one teamd runs per team (a second refuses to start), which is how a lane's 
 
 A browser worker starts with `--strict-mcp-config` and `"disableAllHooks": true`: only teamd's `team` MCP server
 loads, and no hook runs, because whatever `claude` starts outside its sandbox inherits the lane's environment
-(`NODE_OPTIONS`, and an `npm_config_cache` the worker can write). So it has no engram memory. Its preload is teamd's
+(`NODE_OPTIONS`, and an `npm_config_cache` the worker can write). Its plugins are off too (each one your settings
+or the worktree's `.claude/` names is set to `false` in its flag settings). So it has no engram memory. Its preload is teamd's
 own file, `~/.superyak/team/teams/<team>/workers/<worker>/lane-preload.cjs`, never one under `/tmp`. A
 `managed-settings.json` that defines hooks refuses lanes: Claude Code runs those even under `disableAllHooks`. So does
 any `sandbox` key in your `~/.claude/settings.json`, `settings.local.json` or the managed policy, at any depth, except

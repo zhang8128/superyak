@@ -626,7 +626,8 @@ def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
     assert fs["denyWrite"] == before["denyWrite"]
     assert path not in fs["allowWrite"] and path + "/b" not in fs["allowWrite"] and preload not in fs["allowWrite"]
     assert not any(p.startswith(path + "/b") for p in fs["allowWrite"] + fs["allowRead"])
-    assert set(laned) - set(plain) == {"disableAllHooks", *lane.HELPER_KEYS} and laned["disableAllHooks"] is True
+    assert set(laned) - set(plain) == {"disableAllHooks", "enabledPlugins", *lane.HELPER_KEYS}
+    assert laned["disableAllHooks"] is True and laned["enabledPlugins"] == {}
     cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo", lane=path,
                                  preload=preload)
     written = json.loads(Path(cmd[cmd.index("--settings") + 1]).read_text())
@@ -4126,7 +4127,7 @@ def test_a_browser_worker_starts_with_strict_mcp_config_and_hooks_off(env, monke
     written = json.loads((wdir / "settings.json").read_text())
     assert written["disableAllHooks"] is True
     before = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
-    assert set(written) - set(before) == {"disableAllHooks", *lane.HELPER_KEYS}
+    assert set(written) - set(before) == {"disableAllHooks", "enabledPlugins", *lane.HELPER_KEYS}
     assert "disableAllHooks" not in json.loads((teamlib.team_dir("t1") / "workers" / "wash" / "settings.json").read_text())
 
 
@@ -4966,3 +4967,54 @@ def test_a_lanes_flag_settings_blank_every_helper_a_project_file_could_set(env, 
         assert laned[key] == ""
     plain = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
     assert not set(lane.HELPER_KEYS) & set(plain)
+
+
+
+# ---------- Round 2, item 1: plugins off in lanes ----------
+
+def test_every_plugin_the_user_or_the_worktree_names_is_off_in_a_lane(env, tmp_path):
+    """Item 1: Claude Code has no single "no plugins" switch (only --safe-mode, which also drops CLAUDE.md, and --bare,
+    which needs API-key auth); flag settings outrank user, project and local ones, so every plugin named in the user's
+    settings, and in the worktree's own .claude/ files (which the worker could write), is mapped to false."""
+    claude = env["home"] / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"engram@superyak": True, "fmt@y": False}}))
+    (claude / "settings.local.json").write_text(json.dumps({"enabledPlugins": {"lsp@z": True}}))
+    wt = tmp_path / "wt"
+    (wt / ".claude").mkdir(parents=True)
+    (wt / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {"planted@evil": {"version": "1"}}}))
+    (wt / ".claude" / "settings.local.json").write_text("{not json")
+    assert lane.lane_plugins(wt) == ["engram@superyak", "fmt@y", "lsp@z", "planted@evil"]
+    settings = workers.claude_sandbox_settings(str(wt), "build", False, repo=str(wt), lane="/tmp/sy-lane-1/0123456789",
+                                               preload="/h/p.cjs", plugins_off=lane.lane_plugins(wt))
+    assert settings["enabledPlugins"] == {"engram@superyak": False, "fmt@y": False, "lsp@z": False,
+                                          "planted@evil": False}
+    assert "enabledPlugins" not in workers.claude_sandbox_settings(str(wt), "build", False, repo=str(wt))
+
+
+def test_reading_the_worktrees_plugins_never_waits_on_a_fifo_or_reads_a_huge_file(env, tmp_path):
+    wt = tmp_path / "wt"
+    (wt / ".claude").mkdir(parents=True)
+    os.mkfifo(wt / ".claude" / "settings.json")
+    (wt / ".claude" / "settings.local.json").write_text(json.dumps({"enabledPlugins": {"big@x": True}})
+                                                        + " " * (2 << 20))
+    result = []
+    t = threading.Thread(target=lambda: result.append(lane.lane_plugins(wt)), daemon=True)
+    t.start()
+    t.join(10)
+    try:
+        assert not t.is_alive() and result == [[]]
+    finally:
+        if t.is_alive():
+            os.close(os.open(wt / ".claude" / "settings.json", os.O_WRONLY | os.O_NONBLOCK))
+
+
+def test_a_browser_turns_flag_settings_turn_the_users_plugins_off(env, lanes):
+    (env["home"] / ".claude").mkdir()
+    (env["home"] / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {"engram@superyak": True}}))
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    team.spawn("write docs", "claude")
+    browser = json.loads((team.dir / "workers" / "kaylee" / "settings.json").read_text())
+    plain = json.loads((team.dir / "workers" / "wash" / "settings.json").read_text())
+    assert browser["enabledPlugins"] == {"engram@superyak": False} and "enabledPlugins" not in plain

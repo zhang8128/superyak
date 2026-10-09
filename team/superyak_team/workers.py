@@ -279,7 +279,7 @@ def _home(p):
 
 
 def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
-                            engram_prefix="mcp__plugin_engram_engram__", lane=None, preload=None):
+                            engram_prefix="mcp__plugin_engram_engram__", lane=None, preload=None, plugins_off=()):
     """Allowlist, not denylist, for Claude workers (all verified live 2026-10-02):
     - permissions run in dontAsk mode: any tool call not explicitly allowed is refused, which
       also shuts out the user's other plugins/MCP servers (Slack, browser, ...) as egress paths;
@@ -341,13 +341,15 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
         fs["denyRead"] = fs["denyRead"] + [str(lanes.TMP_ROOT / ("sy-lane-%d" % os.getuid())),
                                            "/private/tmp/claude-%d" % os.getuid()]
         settings["disableAllHooks"] = True
-        # Flag settings outrank the project's and the local ones the worker could write: an empty helper is no helper.
+        # Flag settings outrank the project's and the local ones the worker could write: an empty helper is no helper,
+        # and a plugin set to false is off (its hooks, MCP and LSP servers, monitors): lane.lane_plugins names them.
         settings.update({key: "" for key in lanes.HELPER_KEYS})
+        settings["enabledPlugins"] = {plugin: False for plugin in plugins_off}
     return settings
 
 
 def claude_command(cfg, team_id, worker, cwd, prompt, session_id=None, mode="build", repo=None, lane=None,
-                   preload=None):
+                   preload=None, plugins_off=()):
     """A browser worker (`lane`) also gets --strict-mcp-config, so claude loads no MCP server but teamd's own: the
     user's, the project's .mcp.json and plugins' would run outside the sandbox with the lane's environment."""
     wdir = teamlib.team_dir(team_id) / "workers" / worker
@@ -359,7 +361,8 @@ def claude_command(cfg, team_id, worker, cwd, prompt, session_id=None, mode="bui
         "env": mcp_env(team_id, worker)}}}))
     web = mode == "collab" and bool(cfg.get("collab_web_search", True))
     settings.write_text(json.dumps(claude_sandbox_settings(
-        cwd, mode, web, repo, cfg.get("engram_tool_prefix", "mcp__plugin_engram_engram__"), lane, preload)))
+        cwd, mode, web, repo, cfg.get("engram_tool_prefix", "mcp__plugin_engram_engram__"), lane, preload,
+        plugins_off)))
     # The permission mode is set here too: a CLI --permission-mode overrides the settings file.
     cmd = ["claude", "-p", safe_prompt(prompt), "--output-format", "stream-json", "--verbose",
            "--model", cfg["claude_model"], "--permission-mode", "dontAsk",

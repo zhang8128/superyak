@@ -156,6 +156,45 @@ def _sandbox_keys(sandbox, above=()):
             yield keys
 
 
+PLUGIN_SETTINGS_MAX = 1 << 20
+
+
+def _plugins_named(path, follow):
+    """The plugin ids a settings file's enabledPlugins names, whatever their values; [] when it can't be read. Never
+    waits on a FIFO and never reads past 1 MB. A user's file is read where it is; the worktree's are the worker's, so
+    one that is a link is still read (Claude Code would follow it) but only as a plain file."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (0 if follow else os.O_NOFOLLOW))
+    except OSError:
+        return []
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            return []
+        raw = f.read(PLUGIN_SETTINGS_MAX + 1)
+    if len(raw) > PLUGIN_SETTINGS_MAX:
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return []
+    plugins = data.get("enabledPlugins") if isinstance(data, dict) else None
+    return [str(key) for key in plugins] if isinstance(plugins, dict) else []
+
+
+def lane_plugins(worktree):
+    """Round 2, item 1: every plugin a browser turn could load, to be switched off in its flag settings
+    (enabledPlugins: false). Claude Code has no single switch for "no plugins" (--safe-mode also drops CLAUDE.md, and
+    --bare needs API-key auth), and its settings precedence is user < project < local < flag < policy, so false in the
+    flag settings beats every file named here: the user's settings.json and settings.local.json, and the worktree's
+    own .claude/settings.json and settings.local.json, which the worker could write. Read at every turn's start."""
+    names = set()
+    for path in (_claude_dir() / "settings.json", _claude_dir() / "settings.local.json"):
+        names.update(_plugins_named(path, follow=True))
+    for name in ("settings.json", "settings.local.json"):
+        names.update(_plugins_named(Path(worktree) / ".claude" / name, follow=True))
+    return sorted(names)[:500]
+
+
 def check_spawn(cfg, kind, mode):
     """Raise RejectedMessage, naming the reason, unless this worker may have a browser lane."""
     if cfg.get("browser_lane") is not True:
