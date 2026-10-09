@@ -5080,3 +5080,35 @@ def test_instruction_files_under_node_modules_fold_into_one_line(env, lanes, tmp
                                      " && echo x > node_modules/b/lib/CLAUDE.md && echo x > app/CLAUDE.md")
     flags = lead_messages(idle_browser_team(env, lanes)[0], FLAG)
     assert len(flags) == 1 and ("app/CLAUDE.md, 2 instruction files under node_modules changed" + ADVICE) in flags[0]
+
+
+# ---------- Round 2, items 5-6: docs ----------
+
+def test_every_text_that_says_where_browser_lane_goes_says_a_preset(env, monkeypatch):
+    """Item 5: browser_lane belongs in a preset, never config.json (which every team started on the Mac would take)."""
+    root = teamlib.package_dir().parent
+    lead_brief = (teamlib.package_dir() / "roles" / "lead.md").read_text()
+    team_mode = (root.parent / "docs" / "team-mode.md").read_text()
+    for text in (lead_brief, team_mode):
+        lane_lines = [line for line in text.splitlines() if "browser_lane" in line]
+        assert lane_lines and all("config.json" not in line for line in lane_lines), lane_lines
+        assert "preset" in " ".join(lane_lines)
+    with pytest.raises(teamlib.RejectedMessage) as off:
+        lane.check_spawn({"browser_lane": False}, "claude", "build")
+    with pytest.raises(teamlib.RejectedMessage) as override:
+        teamlib.team_config(None, {"browser_lane": True})
+    for refusal in (str(off.value), str(override.value)):
+        assert "config.json" not in refusal and "a preset" in refusal, refusal
+    assert "config.json" not in [line for line in (teamlib.package_dir() / "teamlib.py").read_text().splitlines()
+                                 if '"browser_lane": False' in line][0]
+
+
+def test_the_docs_say_a_compromised_turn_can_plant_instructions_anywhere(env):
+    """Item 6: the flag covers the startup files; the lead reviews the rest of the diff."""
+    readme = (teamlib.package_dir().parent / "README.md").read_text()
+    spec = (teamlib.package_dir().parent.parent / "docs" / "superpowers" / "specs"
+            / "2026-10-08-browser-lane-design.md").read_text()
+    for text in (readme, spec):
+        flat = " ".join(text.split())
+        assert "can plant instructions in any file the next turn reads, not only instruction files" in flat
+        assert "the lead reviews the rest of the diff" in flat

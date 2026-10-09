@@ -59,7 +59,7 @@ DEFAULT_CONFIG = {
     # Claude Code names plugin MCP tools mcp__plugin_<plugin>_<server>__<tool>; engram ships as
     # plugin "engram" with server "engram". Change this if the plugin or server is renamed.
     "engram_tool_prefix": "mcp__plugin_engram_engram__",       # Claude collaborators only (Codex can't restrict reads)
-    "browser_lane": False,           # a person turns browser lanes on in config.json or a preset, never team_start
+    "browser_lane": False,           # a person turns browser lanes on in a preset, never team_start
 }
 
 
@@ -138,7 +138,7 @@ def team_config(preset=None, overrides=None):
     overrides = overrides or {}
     if "browser_lane" in overrides:
         raise RejectedMessage("browser_lane can't be set in team_start: a person turns browser lanes "
-                              "on in ~/.superyak/team/config.json or a preset")
+                              "on in a preset (~/.superyak/team/presets.json)")
     bad = set(overrides) - OVERRIDE_KEYS
     if bad:
         raise RejectedMessage("unsupported team config keys: %s (allowed: %s)"

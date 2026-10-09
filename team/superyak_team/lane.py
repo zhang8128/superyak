@@ -199,7 +199,7 @@ def check_spawn(cfg, kind, mode):
     """Raise RejectedMessage, naming the reason, unless this worker may have a browser lane."""
     if cfg.get("browser_lane") is not True:
         raise teamlib.RejectedMessage("browser lanes are off for this team: a person turns them on with "
-                                      "browser_lane in ~/.superyak/team/config.json or a preset")
+                                      "browser_lane in a preset (~/.superyak/team/presets.json)")
     if kind != "claude":
         raise teamlib.RejectedMessage("a browser lane is for Claude workers only (kind='claude'): Codex's "
                                       "sandbox can't limit the network to the lane or restrict reads")

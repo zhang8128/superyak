@@ -39,8 +39,8 @@ Presets `build`, `research`, `review`, `mixed`, plus custom ones in
 `~/.superyak/team/presets.json`. Per-team overrides (validated, see `teamlib.OVERRIDE_KEYS`):
 `max_workers`, `default_mode`, `default_kind`, `codex_model`, `codex_effort`, `claude_model`,
 `collab_max_turns`, `peer_limit_build`, `peer_limit_collab`, `collab_web_search`,
-`slack_channel`, `engram_tool_prefix`. Presets and `config.json` may also set `browser_lane`
-(`teamlib.PRESET_KEYS`); `team_start` never can.
+`slack_channel`, `engram_tool_prefix`. A person sets `browser_lane` in a preset
+(`teamlib.PRESET_KEYS`), never in `config.json`, which every team would take; `team_start` never can.
 
 ### Browser lanes (macOS)
 A Claude builder spawned with `browser=true` runs and tests the app it builds in Playwright's

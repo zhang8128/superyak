@@ -112,6 +112,10 @@ content could write `CLAUDE.md`, `AGENTS.md` or files under `.claude/`, which th
 compares those paths at the start and end of every browser turn and tells the lead, as `INSTRUCTION FILES CHANGED by
 <worker> this turn: ...`; it doesn't block, since a task may change them on purpose. The lead reviews them.
 
+**Known limit: a compromised turn can plant instructions in any file the next turn reads, not only instruction
+files** (a source comment, a test fixture, a README the task points at). The flag covers the startup files; the lead
+reviews the rest of the diff.
+
 **Known limit: lanes share localhost.** With more than one lane, a lane's worker can connect to another lane's
 servers; `lane_one_at_a_time` avoids it.
 

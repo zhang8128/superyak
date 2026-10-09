@@ -422,6 +422,9 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   <worker> this turn: <paths>; the next turn reads them at startup — check them before continuing`, with the ones
   under `node_modules` folded into one count after the others. It never blocks, since a task may edit them on
   purpose: the lead reviews them. A check that fails is told to the lead too.
+- A compromised turn can plant instructions in any file the next turn reads, not only instruction files (a source
+  comment, a test fixture, a README the task points at). The flag covers the startup files; the lead reviews the rest
+  of the diff (round 2).
 - Lanes share localhost: with more than one lane, a lane's worker can connect to another lane's servers (the
   listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
