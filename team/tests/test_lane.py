@@ -452,7 +452,9 @@ def test_the_preload_binds_unspecified_addresses_to_loopback(tmp_path):
       'listen(0)': s => s.listen(0), "listen(0, '0.0.0.0')": s => s.listen(0, '0.0.0.0'),
       "listen(0, '::')": s => s.listen(0, '::'), 'listen()': s => s.listen(), 'listen(cb)': s => s.listen(() => {}),
       'listen({port: 0})': s => s.listen({port: 0}), "listen({port: 0, host: '::'})": s => s.listen({port: 0, host: '::'}),
-      'listen(0, backlog)': s => s.listen(0, 5), 'http listen(0)': s => s.listen(0), "explicit '127.0.0.2'": s => s.listen(0, '127.0.0.2'),
+      'listen(0, backlog)': s => s.listen(0, 5), 'http listen(0)': s => s.listen(0), "explicit '127.0.0.1'": s => s.listen(0, '127.0.0.1'),
+      "listen(0, '0')": s => s.listen(0, '0'), "listen(0, '::0')": s => s.listen(0, '::0'),
+      "listen(0, '0:0:0:0:0:0:0:0')": s => s.listen(0, '0:0:0:0:0:0:0:0'),
     };
     const out = {};
     const all = Object.entries(cases).map(([name, start]) => new Promise(done => {
@@ -466,6 +468,86 @@ def test_the_preload_binds_unspecified_addresses_to_loopback(tmp_path):
     r = subprocess.run(["node", "--require", str(preload), "-e", script, str(sock)], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    unix, explicit = out.pop("unix"), out.pop("explicit '127.0.0.2'")
+    unix, explicit = out.pop("unix"), out.pop("explicit '127.0.0.1'")
     assert set(out.values()) == {"127.0.0.1"}, out
-    assert len(out) == 9 and unix == str(sock) and explicit == "127.0.0.2"
+    assert len(out) == 12 and unix == str(sock) and explicit == "127.0.0.1"
+
+
+# ---------- Task 2, fix round 1 ----------
+
+def test_removal_and_lane_text_check_the_parent_too(env, tmp_root):
+    """Fix 1: a parent swapped for a symlink to a folder holding <h> must not let removal reach X/<h>."""
+    path = lane.ensure_lane("t1", "kaylee")
+    parent = path.parent
+    x = env["tmp"] / "X"
+    os.rename(parent, x)
+    os.symlink(x, parent)
+    with pytest.raises(lane.LaneRefused):
+        lane.remove_lane(path)
+    assert (x / path.name / "b").is_dir()
+    with pytest.raises(lane.LaneRefused):
+        lane.lane_text(path / "b")
+
+
+def test_lane_text_refuses_a_path_outside_the_parent(env, tmp_root):
+    """Fix 7."""
+    lane.private_parent()
+    with pytest.raises(lane.LaneRefused):
+        lane.lane_text(env["tmp"] / "elsewhere")
+
+
+@pytest.mark.parametrize("damage", ["bytes", "dir", "unreadable"])
+def test_an_unreadable_registry_refuses_instead_of_raising(env, held, damage):
+    """Fix 2."""
+    held("t1")
+    registry = teamlib.team_home() / "lane-ports.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    if damage == "bytes":
+        registry.write_bytes(b"\xff\xfe\x00")
+    elif damage == "dir":
+        registry.mkdir()
+    else:
+        registry.write_text("{}")
+        os.chmod(registry, 0)
+    try:
+        with pytest.raises(lane.LaneRefused):
+            lane.allocate_block("t1", "kaylee")
+        with pytest.raises(lane.LaneRefused):
+            lane.live_blocks()
+        assert lane.block_of("t1", "kaylee") is None
+        assert lane.release_block("t1", "kaylee") is None                  # fix 5: cleanup never raises
+    finally:
+        if damage == "unreadable":
+            os.chmod(registry, 0o600)
+
+
+def test_lock_and_write_failures_refuse(env, held, monkeypatch):
+    """Fix 2: the lock, the team lock and the registry write."""
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    held("t1")
+    lane.allocate_block("t1", "w0")
+    home = teamlib.team_home()
+    real_replace = os.replace
+    monkeypatch.setattr(lane.os, "replace", lambda *a: (_ for _ in ()).throw(PermissionError(13, "Permission denied")))
+    with pytest.raises(lane.LaneRefused):
+        lane.allocate_block("t1", "w1")
+    monkeypatch.setattr(lane.os, "replace", real_replace)
+    (home / "lane-teams" / "t3.lock").mkdir()
+    with pytest.raises(lane.LaneRefused):
+        lane.hold_team("t3")
+    (home / "lane-ports.lock").unlink()
+    (home / "lane-ports.lock").mkdir()
+    with pytest.raises(lane.LaneRefused):
+        lane.allocate_block("t1", "w2")
+
+
+def test_a_bad_config_or_missing_preload_refuses(env, tmp_root, held, tmp_path, monkeypatch):
+    """Fix 6."""
+    held("t1")
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    (tmp_path / "cfg.json").write_text("{bad")
+    with pytest.raises(lane.LaneRefused):
+        lane.allocate_block("t1", "kaylee")
+    monkeypatch.setattr(teamlib, "package_dir", lambda: tmp_path / "nowhere")
+    with pytest.raises(lane.LaneRefused):
+        lane.ensure_lane("t1", "kaylee")

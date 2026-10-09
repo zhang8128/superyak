@@ -219,8 +219,8 @@ def ensure_lane(team_id, worker_id):
     The worker may write tmp/ and npm-cache/ only (workers.claude_sandbox_settings)."""
     parent = private_parent()
     h = lane_hash(team_id, worker_id)
-    preload = (teamlib.package_dir() / "lane" / "preload.cjs").read_text()
     try:
+        preload = (teamlib.package_dir() / "lane" / "preload.cjs").read_text()
         pfd = _open_dir(str(parent))
         try:
             try:
@@ -250,12 +250,16 @@ def lane_text(path):
     rest as it is, each part checked right now as a real folder of this user's. A link below the parent refuses it,
     so a profile can never name the target of a link a hostile process planted."""
     path, parent = Path(path), _parent_path()
+    try:
+        parts = path.relative_to(parent).parts
+    except ValueError:
+        raise LaneRefused("unsafe lane %s (not under %s)" % (path, parent))
     check_lane(parent)
     current = parent
-    for part in path.relative_to(parent).parts:
+    for part in parts:
         current = current / part
         check_lane(current)
-    return os.path.join(os.path.realpath(parent), *path.relative_to(parent).parts)
+    return os.path.join(os.path.realpath(parent), *parts)
 
 
 def remove_lane(path):
@@ -264,9 +268,18 @@ def remove_lane(path):
         raise LaneRefused("this platform can't remove a folder without following symlinks; remove %s by hand" % path)
     if not os.path.lexists(path):
         return False
+    path = Path(path)
+    if path.parent != _parent_path() or not path.name:
+        raise LaneRefused("unsafe lane %s (not directly under %s)" % (path, _parent_path()))
     check_lane(path)
     try:
-        shutil.rmtree(path)
+        pfd = _open_dir(str(path.parent))               # never follows a parent swapped for a link
+        try:
+            shutil.rmtree(path.name, dir_fd=pfd)
+        finally:
+            os.close(pfd)
+    except FileNotFoundError:
+        return False
     except OSError as e:
         raise LaneRefused("the lane %s can't be removed (%s)" % (path, e.strerror or e))
     return True
@@ -298,8 +311,16 @@ def _registry():
 
 @contextmanager
 def _registry_lock():
-    with teamlib.locked(teamlib.team_home() / "lane-ports.lock"):
+    path = teamlib.team_home() / "lane-ports.lock"
+    try:
+        cm = teamlib.locked(path)
+        cm.__enter__()
+    except OSError as e:
+        raise LaneRefused("%s is damaged or can't be locked (%s), so no lane can take a block" % (path, e.strerror or e))
+    try:
         yield
+    finally:
+        cm.__exit__(None, None, None)
 
 
 def _read_registry():
@@ -309,6 +330,9 @@ def _read_registry():
         raw = path.read_text()
     except FileNotFoundError:
         return {}
+    except (OSError, ValueError) as e:                  # a directory, no permission, bytes that aren't UTF-8
+        raise LaneRefused("%s is damaged or can't be read (%s), so no lane can take a block; look at it, then remove it"
+                          % (path, getattr(e, "strerror", None) or e))
     try:
         data = json.loads(raw)
     except ValueError:
@@ -323,8 +347,11 @@ def _write_registry(data):
     """A whole new file, renamed into place: a crash never leaves half a registry."""
     path = _registry()
     tmp = path.with_name(path.name + ".tmp")
-    _write_text(tmp, json.dumps(data, indent=1, sort_keys=True), 0o600)
-    os.replace(tmp, path)
+    try:
+        _write_text(tmp, json.dumps(data, indent=1, sort_keys=True), 0o600)
+        os.replace(tmp, path)
+    except OSError as e:
+        raise LaneRefused("%s can't be written (%s), so no lane can take a block" % (path, e.strerror or e))
 
 
 def _team_lock(team_id):
@@ -335,14 +362,20 @@ def hold_team(team_id):
     """teamd holds this lock for its whole life: a team's lane blocks count as live only while it is held. Returns
     the open file, which must stay open."""
     path = _team_lock(team_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    f = open(path, "a")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(path, "a")
+    except OSError as e:
+        raise LaneRefused("the lock %s can't be opened (%s)" % (path, e.strerror or e))
     for attempt in range(10):                           # about a second: a teamd that is just exiting lets go
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return f
         except BlockingIOError:
             time.sleep(0.1)
+        except OSError as e:
+            f.close()
+            raise LaneRefused("the lock %s can't be taken (%s)" % (path, e.strerror or e))
     f.close()
     raise LaneRefused("another teamd already runs team %s" % team_id)
 
@@ -409,7 +442,11 @@ def allocate_block(team_id, worker_id):
         stale = [key for key, entry in data.items() if _reclaimable(entry)]
         for key in stale:
             del data[key]
-        if teamlib.load_config().get("lane_one_at_a_time") is True and data:
+        try:
+            one_at_a_time = teamlib.load_config().get("lane_one_at_a_time") is True
+        except (OSError, ValueError, AttributeError) as e:
+            raise LaneRefused("the config can't be read (%s)" % e)
+        if one_at_a_time and data:
             other = min(data.values(), key=lambda e: e["base"])
             if stale:
                 _write_registry(data)
@@ -429,10 +466,13 @@ def allocate_block(team_id, worker_id):
 
 def release_block(team_id, worker_id):
     """Back to the pool. Call only once the lane's process cleanup has finished."""
-    with _registry_lock():
-        data = _read_registry()
-        if data.pop(lane_hash(team_id, worker_id), None) is not None:
-            _write_registry(data)
+    try:
+        with _registry_lock():
+            data = _read_registry()
+            if data.pop(lane_hash(team_id, worker_id), None) is not None:
+                _write_registry(data)
+    except LaneRefused as e:                            # cleanup never raises: the registry needs a person
+        print("superyak-team: lane block of %s/%s not released: %s" % (team_id, worker_id, e), file=sys.stderr)
 
 
 def block_of(team_id, worker_id):

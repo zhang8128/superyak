@@ -6,7 +6,14 @@
 'use strict';
 const net = require('net');
 const LOOPBACK = '127.0.0.1';
-const unspecified = host => host === undefined || host === null || host === '' || host === '0.0.0.0' || host === '::';
+// Every spelling of an all-zero address: '0', '0.0', '0.0.0.0', '::', '::0', '0:0:0:0:0:0:0:0'.
+const zeroAddress = host => {
+  const family = net.isIP(host);
+  if (family === 4) return host.split('.').every(part => /^(0x0*|0+)$/i.test(part));
+  if (family === 6) return host.split(/[:.]/).every(part => part === '' || /^0+$/.test(part));
+  return /^(0x0*|0+)(\.(0x0*|0+))*$/i.test(host);                         // '0' and '0.0' are not IPs to net.isIP
+};
+const unspecified = host => host === undefined || host === null || host === '' || (typeof host === 'string' && zeroAddress(host));
 const isPort = value => typeof value === 'number' || (typeof value === 'string' && /^[0-9]+$/.test(value));
 const listen = net.Server.prototype.listen;
 net.Server.prototype.listen = function (...args) {
