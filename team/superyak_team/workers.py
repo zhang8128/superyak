@@ -315,7 +315,8 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
     superyak = os.path.join(home, ".superyak")
     keys = [os.path.join(superyak, name) for name in ("station.json", "docking.json", "access-request.json", "invitation.txt")]
     keys += [os.path.join(superyak, "ships", "**"), os.path.join(superyak, "*.bak-superyak"),
-             os.path.join(home, ".claude", "*.bak-superyak")]
+             os.path.join(home, ".claude", "*.bak-superyak"),
+             str(teamlib.teams_root() / "*" / "tokens" / "**")]    # teamd's per-worker secrets (review 7769235)
     deny += ["mcp__station"] + ["%s(/%s)" % (tool, path) for path in keys for tool in ("Read", "Grep")]
     if mode == "collab":
         deny += ["Edit", "Write", "NotebookEdit"]

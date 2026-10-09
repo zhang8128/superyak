@@ -592,14 +592,20 @@ def test_a_bad_config_or_missing_preload_refuses(env, tmp_root, held, tmp_path, 
 SNAPSHOTS = Path(__file__).resolve().parent / "snapshots"
 
 
+def as_home_u(text):
+    """A settings text with the test's team home spelled as on a default install with HOME=/home/u, where the
+    snapshots were taken: the token deny names the teams root, and `env` points that at a temporary folder."""
+    return text.replace(str(teamlib.teams_root()), "/home/u/.superyak/team/teams")
+
+
 def test_without_a_lane_nothing_changes(env, monkeypatch):
     """Spec unit test 1 (the team half; agent/tests/test_runs.py has the rest). The snapshots were taken from the code
     before lanes existed, plus D7's three denies (mcp__station, Read and Grep of ~/.superyak; R19), with HOME=/home/u."""
     monkeypatch.setenv("HOME", "/home/u")
     build = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
     collab = workers.claude_sandbox_settings("/r/room", "collab", True, repo="/r/repo")
-    assert json.dumps(build, indent=1) + "\n" == (SNAPSHOTS / "settings-build.json").read_text()
-    assert json.dumps(collab, indent=1) + "\n" == (SNAPSHOTS / "settings-collab.json").read_text()
+    assert as_home_u(json.dumps(build, indent=1)) + "\n" == (SNAPSHOTS / "settings-build.json").read_text()
+    assert as_home_u(json.dumps(collab, indent=1)) + "\n" == (SNAPSHOTS / "settings-collab.json").read_text()
     assert workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane=None) == build
     cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo")
     wdir = teamlib.team_dir("t1") / "workers" / "kaylee"
@@ -4704,7 +4710,7 @@ def test_a_non_browser_worker_is_byte_for_byte_what_it_was(env, monkeypatch):
     cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "wash", "/r/wt", "go", repo="/r/repo")
     assert "--strict-mcp-config" not in cmd
     settings = (teamlib.team_dir("t1") / "workers" / "wash" / "settings.json").read_text()
-    assert json.dumps(json.loads(settings), indent=1) + "\n" == (SNAPSHOTS / "settings-build.json").read_text()
+    assert as_home_u(json.dumps(json.loads(settings), indent=1)) + "\n" == (SNAPSHOTS / "settings-build.json").read_text()
 
 
 def test_node_options_names_teamds_own_preload_never_one_under_tmp(env, lanes):

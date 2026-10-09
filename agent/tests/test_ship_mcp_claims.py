@@ -162,6 +162,18 @@ def test_workers_deny_the_station_and_the_keys(tmp_path):
                 assert any(_covers(rule, key) for rule in deny if rule.startswith(tool + '(')), (name, tool, key)
 
 
+def test_workers_deny_teamds_worker_tokens(tmp_path):
+    """Review 7769235 (follow-up): teamd's per-worker secrets, <teams root>/<team>/tokens/<caller>, are denied to Read
+    and Grep in every kind of settings. The OS sandbox already denies them to Bash; the narrowed R19 list had stopped
+    covering them for the file tools, which an approval saved in a claimed project's settings.local.json could allow."""
+    from superyak_team import teamlib
+    token = str(teamlib.teams_root() / 't1' / 'tokens' / 'kaylee')
+    for name, (settings, _) in _all_settings(tmp_path / 'wt', tmp_path / 'repo', tmp_path / 'snapshot', tmp_path / 'room').items():
+        deny = settings['permissions']['deny']
+        for tool in ('Read', 'Grep'):
+            assert any(_covers(rule, token) for rule in deny if rule.startswith(tool + '(')), (name, tool, token)
+
+
 def test_no_deny_covers_a_runs_own_folder(monkeypatch, tmp_path):
     """Review 487c070b, critical: the watcher's read runs (~/.superyak/worktrees/<ship>/read-<id>), its builder runs
     (~/.superyak/worktrees/<ship>/<id>), teamd's collab rooms (~/.superyak/team/rooms/<team>/<w>) and a lane's preload
