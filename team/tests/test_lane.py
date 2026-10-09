@@ -2855,6 +2855,19 @@ def test_a_process_seen_in_the_turns_tree_is_taken_only_while_its_start_time_mat
     assert not asked                                    # no orphan rule without the turn's start
 
 
+def test_claudes_unsandboxed_children_and_the_brokers_family_survive_the_turns_tree(monkeypatch, tmp_path):
+    """Review: teamd's MCP server, which claude starts outside its sandbox, is in the turn's tree and still running at
+    its end, but fails the sandbox gate; the broker's family is spared even if it were sandboxed and in the tree."""
+    me = os.getuid()
+    mcp, broker, browser, leftover = 510, 511, 512, 513
+    rows = [(mcp, 1, mcp, me), (broker, 1, broker, me), (browser, broker, broker, me), (leftover, 1, leftover, me)]
+    starts = {pid: 10.5 for pid, ppid, pgid, uid in rows}
+    worktree, outside, asked = orphan_world(monkeypatch, tmp_path, rows, starts,
+                                            sandboxed={broker, browser, leftover}, lsof="")
+    assert lane.turn_leftovers(dict(starts), (worktree,), None, (worktree,),
+                               spared={broker, browser}) == {leftover: 10.5}
+
+
 def test_only_this_turns_sandboxed_orphans_in_its_folders_count(monkeypatch, tmp_path):
     me, began = os.getuid(), 100.0
     rows = [(600, 1, 600, me), (601, 1, 601, me), (602, 4242, 602, me), (603, 1, 603, me), (604, 1, 604, me + 1),

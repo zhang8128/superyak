@@ -465,6 +465,10 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   survives the turn and the lane's end. It still runs under the turn's Seatbelt profile, so it keeps that profile's
   limits (no egress, writes only where the turn could write), but it can go on using the lane's ports and the
   worker's worktree until it exits or Andy ends it.
+- **The profile test can't name the profile** (lane-mac-leftovers). `sandbox_check` shows that a process is sandboxed
+  and may write both the worktree and `<lane>/tmp`, not which profile it runs under, so another sandbox allowing both
+  would pass it. Only a lane turn is given `<lane>/tmp` to write, and the tree or orphan rule, the start time and the
+  cwd must still hold, so this is a narrow gap rather than an open door.
 - Lanes share localhost: with more than one lane, a lane's worker can connect to another lane's servers (the
   listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
