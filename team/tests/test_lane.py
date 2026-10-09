@@ -2926,6 +2926,45 @@ def test_a_process_that_can_read_the_brokers_folder_is_not_the_turns(monkeypatch
     assert (601, b"file-read-data", os.path.realpath(b)) in lib.asked
 
 
+@pytest.mark.parametrize("case", ["not sandboxed", "may not write the worktree", "may not write the lane's tmp",
+                                  "a gone pid: 1 to everything"])
+def test_the_gate_is_every_probe_at_once(monkeypatch, tmp_path, case):
+    """Re-review: the gate is an AND. With b/ unreadable in every case, each single probe that fails is enough for
+    False: not sandboxed, a turn folder it may not write, or the gone pid's 1 to everything (measured on the Mac)."""
+    worktree, lane_dir = tmp_path / "wt", tmp_path / "lane"
+    for folder in (worktree, lane_dir / "tmp", lane_dir / "b"):
+        folder.mkdir(parents=True)
+    tmp, b = os.path.realpath(lane_dir / "tmp"), os.path.realpath(lane_dir / "b")
+    denied = {"not sandboxed": set(), "may not write the worktree": {os.path.realpath(worktree)},
+              "may not write the lane's tmp": {tmp}}.get(case)
+
+    def answer(pid, op, folder):
+        if denied is None:
+            return 1                                    # a gone pid
+        if folder is None:
+            return 0 if case == "not sandboxed" else 1
+        if op == b"file-read-data":
+            return 1                                    # b/ unreadable, as under the turn's profile
+        return 1 if folder in denied else 0
+    on_a_mac(monkeypatch, answer)
+    monkeypatch.setattr(lane, "_alive", lambda pid: case != "a gone pid: 1 to everything")
+    assert lane._turn_sandboxed(600, (worktree, lane_dir / "tmp"), (lane_dir / "b",)) is False
+    # and with every probe passing, the same world says True
+    on_a_mac(monkeypatch, lambda pid, op, folder: 1 if folder is None or op == b"file-read-data" else 0)
+    assert lane._turn_sandboxed(600, (worktree, lane_dir / "tmp"), (lane_dir / "b",)) is True
+
+
+def test_the_started_clock_falls_back_to_the_wall_clock_when_proc_cant_say(monkeypatch):
+    """Off macOS, when /proc can't say, the wall clock itself: a later start only drops orphans, never takes one."""
+    monkeypatch.setattr(lane, "_on_macos", lambda: False)
+
+    def no_proc():
+        raise OSError("no /proc/stat")
+    monkeypatch.setattr(lane, "_btime", no_proc)
+    monkeypatch.setattr(lane.time, "time", lambda: 777.0)
+    assert lane.started_clock() == 777.0
+
+
 def test_macos_is_told_by_platform_not_by_sys_platform(monkeypatch):
     """Review 6: the mac fixture patches sys.platform, so it must not decide whether Seatbelt is there to ask."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
