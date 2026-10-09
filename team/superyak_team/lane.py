@@ -2324,98 +2324,128 @@ def advisory_added(path, base, gitdir):
     return found
 
 
-# ---------- instruction files a browser turn changed (final fix wave, additions) ----------
+# ---------- instruction files a browser turn changed (final fix wave, additions; round 2) ----------
 
 INSTRUCTION_NAMES = ("claude.md", "claude.local.md", "agents.md")
-INSTRUCTION_SPECS = (":(glob,icase)**/CLAUDE.md", ":(glob,icase)**/CLAUDE.local.md", ":(glob,icase)**/AGENTS.md",
-                     ":(glob,icase)**/.claude/**")
-INSTRUCTION_TIMEOUT_S = 60
+INSTRUCTION_TIMEOUT_S, INSTRUCTION_MAX_BYTES = 60, 1 << 20
+INSTRUCTION_MAX_ENTRIES, INSTRUCTION_MAX_DEPTH = 2_000_000, 256
+TOO_LARGE = "too large to compare"
 
 
 def is_instruction_path(rel):
-    """CLAUDE.md, CLAUDE.local.md and AGENTS.md at any depth, and anything under a .claude folder at any depth (agents,
-    commands, skills, settings): what Claude Code may read as instructions when a turn starts. Case-insensitive, as the
-    Mac's file system is."""
+    """CLAUDE.md, CLAUDE.local.md and AGENTS.md at any depth, and a .claude of any kind (folder, file or link) with
+    anything under it, at any depth: what Claude Code may read as instructions when a turn starts. Case-insensitive,
+    as the Mac's file system is."""
     parts = rel.split("/")
-    return parts[-1].lower() in INSTRUCTION_NAMES or any(part.lower() == ".claude" for part in parts[:-1])
+    return parts[-1].lower() in INSTRUCTION_NAMES or any(part.lower() == ".claude" for part in parts)
 
 
-def instruction_snapshot(path, gitdir):
-    """A worktree's instruction-bearing paths as they are right now: HEAD's (git ls-tree) and every untracked one,
-    ignored ones included (git ls-files --others, no excludes), each as its kind and git's hash of its content (git
-    hash-object --no-filters) or its link's target. Nothing is followed and nothing but a plain file is read: a path
-    under a folder that is a symlink is recorded by that link's target, a FIFO or device by its kind. {path: text}. One
-    deadline, through teamd's hardened git; a git failure or timeout raises RuntimeError."""
-    deadline = time.monotonic() + INSTRUCTION_TIMEOUT_S
+def _under_node_modules(rel):
+    return "node_modules" in rel.split("/")[:-1]
+
+
+def instruction_snapshot(path):
+    """A worktree's instruction-bearing paths as they are right now, from teamd's own walk (git ls-files --others never
+    enters a nested repository): every folder is opened through its parent's descriptor with O_NOFOLLOW, never through
+    a link, and nested repositories are entered (only .git is skipped). A plain instruction file is opened the same
+    way with O_NONBLOCK, confirmed regular with fstat and hashed here (sha256, at most 1 MB: a larger one is
+    TOO_LARGE); a link is recorded by its target, never followed: any link outside node_modules, since it can bring a
+    folder's CLAUDE.md into the next turn's reads; a FIFO, socket or device by its kind. {path: text}. One deadline
+    and a cap on entries; a walk that can't finish raises RuntimeError."""
+    deadline, counted = time.monotonic() + INSTRUCTION_TIMEOUT_S, [0]
+    snapshot = {}
+
+    def walk(dfd, rel, depth):
+        if depth > INSTRUCTION_MAX_DEPTH:
+            raise RuntimeError("the worktree is more than %d folders deep" % INSTRUCTION_MAX_DEPTH)
+        with os.scandir(dfd) as it:
+            entries = sorted(it, key=lambda e: e.name)
+        for entry in entries:
+            counted[0] += 1
+            if counted[0] > INSTRUCTION_MAX_ENTRIES or time.monotonic() > deadline:
+                raise RuntimeError("the worktree's walk took longer than %d s or %d entries"
+                                   % (INSTRUCTION_TIMEOUT_S, INSTRUCTION_MAX_ENTRIES))
+            name, child = entry.name, (rel + "/" + entry.name if rel else entry.name)
+            if name == ".git":
+                continue
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                if is_instruction_path(child) or not _under_node_modules(child):
+                    try:
+                        snapshot[child] = "l " + os.readlink(name, dir_fd=dfd)
+                    except OSError as e:
+                        snapshot[child] = "x %s" % (e.strerror or e.__class__.__name__)
+            elif stat.S_ISDIR(st.st_mode):
+                try:
+                    cfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+                except OSError as e:                     # swapped meanwhile, or unreadable: recorded, never followed
+                    if is_instruction_path(child):
+                        snapshot[child] = "x %s" % (e.strerror or e.__class__.__name__)
+                    continue
+                try:
+                    walk(cfd, child, depth + 1)
+                finally:
+                    os.close(cfd)
+            elif is_instruction_path(child):
+                snapshot[child] = _instruction_content(dfd, name, st)
     try:
-        argv = workers.worker_git_argv(path, gitdir, "--no-replace-objects")
-        env = workers._isolated_git_env()
+        root = os.open(str(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as e:
-        raise RuntimeError("git could not run: %r" % e)
-
-    def git(*args, input=None):
-        try:
-            r = subprocess.run(argv + list(args), cwd=str(path), env=env, input=input, capture_output=True,
-                               timeout=max(1.0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("git %s timed out" % args[0])
-        except OSError as e:
-            raise RuntimeError("git could not run: %r" % e)
-        if r.returncode != 0:
-            raise RuntimeError("git %s exited %d: %s" % (args[0], r.returncode,
-                                                        r.stderr.decode("utf-8", "replace").strip()[:200]))
-        return r.stdout
-    names = {os.fsdecode(n) for n in git("ls-tree", "-r", "-z", "--name-only", "HEAD").split(b"\0") if n}
-    names |= {os.fsdecode(n) for n in git("ls-files", "-z", "--others", "--", *INSTRUCTION_SPECS).split(b"\0") if n}
-    snapshot, plain = {}, []
-    for rel in sorted(n for n in names if is_instruction_path(n)):
-        kind = _instruction_kind(path, rel)
-        if kind == "plain":
-            plain.append(rel)
-        elif kind is not None:
-            snapshot[rel] = kind
-    if plain:
-        out = git("hash-object", "--no-filters", "--stdin-paths",
-                  input=("\n".join(os.path.join(str(path), rel) for rel in plain) + "\n").encode())
-        hashes = out.decode("ascii", "replace").split()
-        if len(hashes) != len(plain):
-            raise RuntimeError("git hash-object output was not understood")
-        snapshot.update({rel: "f " + sha for rel, sha in zip(plain, hashes)})
+        raise RuntimeError("the worktree can't be opened (%s)" % (e.strerror or e))
+    try:
+        walk(root, "", 0)
+    except OSError as e:
+        raise RuntimeError("the worktree can't be walked (%s)" % (e.strerror or e))
+    finally:
+        os.close(root)
     return snapshot
 
 
-def _instruction_kind(root, rel):
-    """"plain" for a regular file to hash, None when the path isn't there, else how it is recorded instead of read."""
-    if "\n" in rel:
-        return "x a name with a line break"
-    current = str(root)
-    parts = rel.split("/")
-    for i, part in enumerate(parts[:-1]):
-        current = os.path.join(current, part)
-        try:
-            st = os.lstat(current)
-        except FileNotFoundError:
-            return None
-        except OSError as e:
-            return "x %s" % (e.strerror or e.__class__.__name__)
-        if stat.S_ISLNK(st.st_mode):
-            return "x under %s, a link to %s" % ("/".join(parts[:i + 1]), os.readlink(current))
-        if not stat.S_ISDIR(st.st_mode):
-            return None
-    full = os.path.join(current, parts[-1])
+def _instruction_content(dfd, name, st):
+    """One instruction file's record, read only as a plain file: opened O_NOFOLLOW|O_NONBLOCK through its folder's
+    descriptor, fstat'ed, and read to at most 1 MB."""
+    if not stat.S_ISREG(st.st_mode):
+        return "x mode %o" % st.st_mode
     try:
-        st = os.lstat(full)
-    except FileNotFoundError:
-        return None
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
     except OSError as e:
-        return "x %s" % (e.strerror or e.__class__.__name__)
-    if stat.S_ISLNK(st.st_mode):
-        return "l " + os.readlink(full)
-    if stat.S_ISREG(st.st_mode):
-        return "plain"
-    return "x mode %o" % st.st_mode
+        return "x %s" % (e.strerror or e.__class__.__name__)          # swapped for a link or a FIFO meanwhile
+    with os.fdopen(fd, "rb") as f:
+        now = os.fstat(f.fileno())
+        if not stat.S_ISREG(now.st_mode):
+            return "x mode %o" % now.st_mode
+        if now.st_size > INSTRUCTION_MAX_BYTES:
+            return TOO_LARGE
+        data = f.read(INSTRUCTION_MAX_BYTES + 1)
+    if len(data) > INSTRUCTION_MAX_BYTES:
+        return TOO_LARGE
+    return "f " + hashlib.sha256(data).hexdigest()
 
 
 def instruction_changes(before, after):
-    """The paths added, removed or changed between two snapshots, sorted."""
-    return sorted(rel for rel in set(before) | set(after) if before.get(rel) != after.get(rel))
+    """The paths added, removed or changed between two snapshots, sorted. A file too large to compare counts as
+    changed."""
+    return sorted(rel for rel in set(before) | set(after)
+                  if before.get(rel) != after.get(rel) or after.get(rel) == TOO_LARGE)
+
+
+def describe_instruction_changes(before, after, limit=20):
+    """The lead's list: each path (too large ones and links noted), at most
+    `limit`, then one line for those under node_modules."""
+    changed = instruction_changes(before, after)
+    folded = [rel for rel in changed if _under_node_modules(rel)]
+    listed = []
+    for rel in changed:
+        if rel in folded:
+            continue
+        note = (" (%s)" % TOO_LARGE if after.get(rel) == TOO_LARGE else
+                " (a link)" if str(after.get(rel, before.get(rel))).startswith("l ") else "")
+        listed.append(rel[:160] + note)
+    if len(listed) > limit:
+        listed = listed[:limit] + ["… and %d more" % (len(listed) - limit)]
+    if folded:
+        listed.append("%d instruction file%s under node_modules changed" % (len(folded), "" if len(folded) == 1 else "s"))
+    return listed

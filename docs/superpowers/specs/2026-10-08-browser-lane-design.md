@@ -412,10 +412,15 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   the lane.
 - **A compromised turn can persist instructions for the next turn** (final fix wave, additions). Page content that
   takes over a turn can write `CLAUDE.md`, `AGENTS.md` (at any depth) or files under `.claude/` (agents, commands,
-  skills, settings), which the next turn reads at startup. teamd snapshots those paths with git as each browser turn
-  starts and ends (HEAD's and every untracked one, ignored ones included, by content hash; nothing followed through a
-  link), and tells the lead, fenced and scrubbed: `INSTRUCTION FILES CHANGED by <worker> this turn: <paths>; the next
-  turn reads them at startup — check them before continuing`. It never blocks, since a task may edit them on
+  skills, settings), which the next turn reads at startup. teamd snapshots those paths as each browser turn starts
+  and ends, with its own walk of the worktree (round 2): folders opened through their parent's descriptor with
+  `O_NOFOLLOW`, nested repositories entered and only `.git` skipped, every file present counted (tracked, untracked
+  or ignored). An instruction file is opened `O_NOFOLLOW|O_NONBLOCK`, confirmed regular with `fstat` and hashed in
+  teamd (sha256, up to 1 MB; a larger one counts as changed, "too large to compare"). A `.claude` of any kind (folder,
+  file or link) counts, and so does any link outside `node_modules`, recorded by its target and never followed, since
+  it can bring a folder's CLAUDE.md in. teamd tells the lead, fenced and scrubbed: `INSTRUCTION FILES CHANGED by
+  <worker> this turn: <paths>; the next turn reads them at startup — check them before continuing`, with the ones
+  under `node_modules` folded into one count after the others. It never blocks, since a task may edit them on
   purpose: the lead reviews them. A check that fails is told to the lead too.
 - Lanes share localhost: with more than one lane, a lane's worker can connect to another lane's servers (the
   listener check only makes sure each block's listeners are its own lane's, I4). `lane_one_at_a_time` avoids it.

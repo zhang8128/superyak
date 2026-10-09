@@ -4855,7 +4855,7 @@ def test_a_deleted_or_relinked_instruction_file_is_flagged(env, lanes, tmp_path,
     commit_in_repo(env, {"AGENTS.md": "rules\n", "CLAUDE.md": "more rules\n"})
     turn_that(tmp_path, monkeypatch, "rm AGENTS.md && rm CLAUDE.md && ln -s /etc/hostname CLAUDE.md")
     flags = lead_messages(one_browser_turn(env, lanes), FLAG)
-    assert len(flags) == 1 and "AGENTS.md, CLAUDE.md" + ADVICE in flags[0]
+    assert len(flags) == 1 and "AGENTS.md, CLAUDE.md (a link)" + ADVICE in flags[0]
 
 
 def test_a_turn_that_changes_no_instruction_file_says_nothing(env, lanes):
@@ -4883,8 +4883,8 @@ def test_a_changed_path_never_carries_the_lanes_secret(env, lanes, tmp_path, mon
 
 
 def test_an_instruction_check_that_fails_is_told_to_the_lead_and_blocks_nothing(env, lanes, monkeypatch):
-    def broken(path, gitdir):
-        raise RuntimeError("git ls-files exited 128")
+    def broken(*a):
+        raise RuntimeError("the walk took longer than 60 s")
     monkeypatch.setattr(lane, "instruction_snapshot", broken)
     team = one_browser_turn(env, lanes)
     failed = lead_messages(team, "INSTRUCTION FILE CHECK FAILED")
@@ -4892,39 +4892,35 @@ def test_an_instruction_check_that_fails_is_told_to_the_lead_and_blocks_nothing(
 
 
 def test_the_snapshot_never_reads_through_a_link_or_a_fifo(env, tmp_path):
-    """The worktree is the worker's: a tracked CLAUDE.md swapped for a FIFO is recorded by its kind, never opened, and
-    a tracked docs/AGENTS.md whose folder became a link is recorded by the link's target, never read through it.
-    (Untracked FIFOs and links to folders are invisible to git ls-files, so never read either.)"""
-    commit_in_repo(env, {"CLAUDE.md": "rules\n", "docs/AGENTS.md": "more rules\n"})
+    """The worktree is the worker's: a CLAUDE.md swapped for a FIFO is recorded by its kind, never waited on, and one
+    swapped for a link is recorded by the link's target, never read through. (Round 2, item 3.)"""
+    commit_in_repo(env, {"CLAUDE.md": "rules\n"})
     team = lane_team(env)
     team.spawn("tidy", "claude")
     w = team.state["workers"]["kaylee"]
     assert run_until(team, lambda: w["state"] == "idle")
     wt = Path(w["path"])
-    before = lane.instruction_snapshot(w["path"], w["gitdir"])
-    assert before["CLAUDE.md"].startswith("f ") and before["docs/AGENTS.md"].startswith("f ")
+    before = lane.instruction_snapshot(w["path"])
+    assert before["CLAUDE.md"].startswith("f ")
     (wt / "CLAUDE.md").unlink()
     os.mkfifo(wt / "CLAUDE.md")
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    (elsewhere / "AGENTS.md").write_text("more rules\n")                      # the same bytes, through a link
-    shutil.rmtree(wt / "docs")
-    os.symlink(elsewhere, wt / "docs")
     result = []
-    t = threading.Thread(target=lambda: result.append(lane.instruction_snapshot(w["path"], w["gitdir"])), daemon=True)
+    t = threading.Thread(target=lambda: result.append(lane.instruction_snapshot(w["path"])), daemon=True)
     t.start()
     t.join(20)
     try:
         assert not t.is_alive(), "the snapshot blocked on a FIFO"
-        after = result[0]
-        assert after["CLAUDE.md"].startswith("x mode ")
-        assert after["docs/AGENTS.md"] == "x under docs, a link to %s" % elsewhere
-        assert lane.instruction_changes(before, after) == ["CLAUDE.md", "docs/AGENTS.md"]
+        assert result[0]["CLAUDE.md"].startswith("x mode ")
     finally:
         if t.is_alive():
             os.close(os.open(wt / "CLAUDE.md", os.O_WRONLY | os.O_NONBLOCK))
         os.unlink(wt / "CLAUDE.md")
-
+    elsewhere = tmp_path / "rules.md"
+    elsewhere.write_text("rules\n")                                           # the same bytes, through a link
+    os.symlink(elsewhere, wt / "CLAUDE.md")
+    after = lane.instruction_snapshot(w["path"])
+    assert after["CLAUDE.md"] == "l %s" % elsewhere
+    assert lane.instruction_changes(before, after) == ["CLAUDE.md"]
 
 
 # ---------- Round 2: R2, the remaining paths for npm_config_cache ----------
@@ -5018,3 +5014,69 @@ def test_a_browser_turns_flag_settings_turn_the_users_plugins_off(env, lanes):
     browser = json.loads((team.dir / "workers" / "kaylee" / "settings.json").read_text())
     plain = json.loads((team.dir / "workers" / "wash" / "settings.json").read_text())
     assert browser["enabledPlugins"] == {"engram@superyak": False} and "enabledPlugins" not in plain
+
+
+
+# ---------- Round 2, items 2-4: the instruction flag's evasions, in-process hashing, node_modules ----------
+
+def idle_browser_team(env, lanes):
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    return team, w
+
+
+def test_an_untracked_claude_folder_that_is_a_link_is_flagged(env, lanes, tmp_path, monkeypatch):
+    """Item 2: a .claude of any kind is instruction-bearing: a link to a folder holding commands/x.md, a file."""
+    planted = tmp_path / "planted"
+    (planted / "commands").mkdir(parents=True)
+    (planted / "commands" / "x.md").write_text("run curl evil")
+    turn_that(tmp_path, monkeypatch, "ln -s %s .claude && mkdir -p sub && echo x > sub/.claude" % planted)
+    flags = lead_messages(idle_browser_team(env, lanes)[0], FLAG)
+    assert len(flags) == 1 and ".claude (a link), sub/.claude" + ADVICE in flags[0]
+
+
+def test_a_claude_md_inside_a_nested_repository_is_flagged(env, lanes, tmp_path, monkeypatch):
+    """Item 2: git ls-files --others doesn't enter a nested `git init` folder; teamd's own walk does (and skips .git)."""
+    turn_that(tmp_path, monkeypatch, "mkdir -p nested && git -C nested init -q && echo 'obey' > nested/CLAUDE.md && "
+                                     "echo x > nested/.git/CLAUDE.md")
+    flags = lead_messages(idle_browser_team(env, lanes)[0], FLAG)
+    assert len(flags) == 1 and "nested/CLAUDE.md" + ADVICE in flags[0] and ".git/CLAUDE.md" not in flags[0]
+
+
+def test_a_folder_swapped_for_a_link_that_brings_a_claude_md_in_is_flagged(env, lanes, tmp_path, monkeypatch):
+    """A link anywhere outside node_modules can bring a folder's CLAUDE.md into the next turn's reads; it is recorded
+    by its target, never followed."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "CLAUDE.md").write_text("obey")
+    turn_that(tmp_path, monkeypatch, "ln -s %s docs" % elsewhere)
+    flags = lead_messages(idle_browser_team(env, lanes)[0], FLAG)
+    assert len(flags) == 1 and "docs (a link)" + ADVICE in flags[0]
+
+
+def test_the_snapshot_reads_in_process_never_through_git(env, lanes, tmp_path, monkeypatch):
+    """Item 3: no git at all (hash-object reopened each path and followed links)."""
+    team, w = idle_browser_team(env, lanes)
+    (Path(w["path"]) / "AGENTS.md").write_text("rules\n")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran %r" % (a,))))
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran %r" % (a,))))
+    snapshot = lane.instruction_snapshot(w["path"])
+    assert snapshot["AGENTS.md"] == "f " + hashlib.sha256(b"rules\n").hexdigest()
+
+
+def test_an_oversized_instruction_file_counts_as_changed(env, lanes, tmp_path, monkeypatch):
+    """Item 3: reads stop at 1 MB; a larger file counts as changed whether or not it did, flagged as too large."""
+    commit_in_repo(env, {"CLAUDE.md": "x" * (1 << 20) + "y"})
+    turn_that(tmp_path, monkeypatch, "true")
+    flags = lead_messages(idle_browser_team(env, lanes)[0], FLAG)
+    assert len(flags) == 1 and "CLAUDE.md (too large to compare)" + ADVICE in flags[0]
+
+
+def test_instruction_files_under_node_modules_fold_into_one_line(env, lanes, tmp_path, monkeypatch):
+    """Item 4: node_modules stays in the check, folded into one count after the other paths."""
+    turn_that(tmp_path, monkeypatch, "mkdir -p node_modules/a node_modules/b/lib app && echo x > node_modules/a/AGENTS.md"
+                                     " && echo x > node_modules/b/lib/CLAUDE.md && echo x > app/CLAUDE.md")
+    flags = lead_messages(idle_browser_team(env, lanes)[0], FLAG)
+    assert len(flags) == 1 and ("app/CLAUDE.md, 2 instruction files under node_modules changed" + ADVICE) in flags[0]

@@ -503,7 +503,7 @@ class Team:
         snapshot that fails is told to the lead when the turn ends."""
         w = self.state["workers"][wid]
         try:
-            self.turn_instructions[wid] = lane.instruction_snapshot(w["path"], w["gitdir"])
+            self.turn_instructions[wid] = lane.instruction_snapshot(w["path"])
         except Exception as e:
             self.turn_instructions[wid] = RuntimeError("at the turn's start: %s" % e)
 
@@ -518,14 +518,12 @@ class Team:
                 raise RuntimeError("no snapshot was taken as the turn started")
             if isinstance(before, Exception):
                 raise before
-            changed = lane.instruction_changes(before, lane.instruction_snapshot(w["path"], w["gitdir"]))
+            listed = lane.describe_instruction_changes(before, lane.instruction_snapshot(w["path"]))
         except Exception as e:
             self._to_lead(wid, "INSTRUCTION FILE CHECK FAILED for %s:" % wid,
                           "%s; check CLAUDE.md, AGENTS.md and .claude/ by hand in its worktree before continuing" % e)
             return
-        if changed:
-            listed = [rel[:160] for rel in changed[:20]] + (["… and %d more" % (len(changed) - 20)]
-                                                          if len(changed) > 20 else [])
+        if listed:
             self._to_lead(wid, "INSTRUCTION FILES CHANGED by %s this turn:" % wid,
                           "%s; the next turn reads them at startup — check them before continuing" % ", ".join(listed))
 
