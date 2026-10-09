@@ -51,6 +51,8 @@ class Ships:
     def _refuse_live_ship_keys(self, body, what='message'):
         """A room is history that many readers keep, so a message carrying a live ship key is refused before anything
         is written or sent to another peer. The refusal never repeats the key."""
+        if not (isinstance(body, str) and KEY_TOKEN.search(body)):
+            return
         with self.transaction() as db:
             live = self._live_ship_key_in(db, body)
         if live:

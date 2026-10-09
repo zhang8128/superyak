@@ -158,3 +158,17 @@ def test_the_message_and_brief_refusal_wordings_are_unchanged(env):
         app.state.store._refuse_live_ship_keys(key, what='brief')
     assert brief.value.message == ('This brief contains a live ship key, so it was not saved. Treat that key as '
                                    'exposed: its ship should revoke it and dock again.')
+
+
+def test_a_body_without_a_key_shaped_token_opens_no_transaction(env, monkeypatch):
+    app, clients, users, ship, key, room = setup(env)
+    store = app.state.store
+    opened = []
+    real = store.transaction
+    monkeypatch.setattr(store, 'transaction', lambda *a, **k: (opened.append(1), real(*a, **k))[1])
+    for body in ('plain words', secrets.token_urlsafe(20), '', None):
+        store._refuse_live_ship_keys(body)
+        store._refuse_live_ship_keys(body, what='brief')
+    assert opened == []
+    store._refuse_live_ship_keys(secrets.token_urlsafe(32))  # key-shaped: the check still runs
+    assert opened == [1]
