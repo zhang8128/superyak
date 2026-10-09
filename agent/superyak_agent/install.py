@@ -415,7 +415,9 @@ def uninstall_all(config_path, out=print):
         subprocess.run(['launchctl', 'bootout', f'gui/{os.getuid()}/{LABEL}'], capture_output=True)
         (Path.home() / 'Library' / 'LaunchAgents' / f'{LABEL}.plist').unlink(missing_ok=True)
     if shutil.which('claude'):
-        subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True, cwd=str(config_path.parent))
+        # from ~/.superyak, outside every claim (R7); from HOME when that folder is already gone (review 487c070b)
+        cwd = config_path.parent if config_path.parent.is_dir() else Path.home()
+        subprocess.run(['claude', 'mcp', 'remove', '--scope', 'user', 'station'], capture_output=True, cwd=str(cwd))
     remove_codex(Path.home() / '.codex' / 'config.toml', 'station')
     local = 'watcher stopped, station tools and hook removed'
     try:

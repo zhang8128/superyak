@@ -340,7 +340,16 @@ def claim_guard(config_path):
     """S7, R18: on every call, the session's project (CLAUDE_PROJECT_DIR, else this server's own cwd, where Claude Code
     and Codex start it, M8) against the claims registry, read afresh."""
     home = Path(config_path).parent
-    return lambda: claims.refusal(home, claims.session_project(os.getcwd()))
+
+    def guard():
+        project = os.environ.get('CLAUDE_PROJECT_DIR')
+        if not project:          # the cwd only when needed: a deleted start folder (a removed worktree) can't be read
+            try:
+                project = os.getcwd()
+            except OSError:
+                project = None   # no project: the machine ship acts as before D7, a project ship refuses
+        return claims.refusal(home, project)
+    return guard
 
 
 def serve(config_path):

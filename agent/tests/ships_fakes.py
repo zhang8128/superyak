@@ -76,6 +76,8 @@ class FakeMachine:
     def run(self, argv, **kwargs):
         argv = [str(a) for a in argv]
         cwd = kwargs.get('cwd')
+        if cwd is not None and not Path(cwd).is_dir():     # as the real subprocess.run does
+            raise FileNotFoundError(2, 'No such file or directory', str(cwd))
         if Path(argv[0]).name == 'git':
             self.git_calls.append((argv, None if cwd is None else str(cwd), dict(kwargs.get('env') or {})))
             return REAL_RUN(argv, **kwargs)

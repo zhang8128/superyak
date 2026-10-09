@@ -108,3 +108,20 @@ def test_undock_refuses_a_home_that_is_neither_kind(both, tmp_path):
     before = machine_state(both)
     code, out = undock(both, elsewhere)
     assert code == 2 and 'home' in out and both.revoked == [] and machine_state(both) == before
+
+
+def test_the_machine_undock_finishes_when_its_home_is_gone(monkeypatch, tmp_path):
+    """Review 487c070b, finding 4: with ~/.superyak gone, `claude mcp remove` runs from HOME instead of crashing, and
+    the Codex table and the hooks are still removed."""
+    from ships_fakes import FakeMachine
+    import shutil
+    machine = FakeMachine(monkeypatch, tmp_path)
+    config = machine.dock_machine()
+    write_private(config.parent / 'ship-state.json', {'mention_seq': 0})
+    install.install_all(config, hook=True, adna=False, service=False, out=machine.out.append)
+    shutil.rmtree(config.parent)
+    machine.calls.clear()
+    install.uninstall_all(config, out=machine.out.append)
+    assert (['claude', 'mcp', 'remove', '--scope', 'user', 'station'], str(machine.home)) in machine.calls
+    assert '[mcp_servers.station]' not in (machine.home / '.codex' / 'config.toml').read_text()
+    assert hook_commands(machine.home / '.claude' / 'settings.json', 'UserPromptSubmit') == []

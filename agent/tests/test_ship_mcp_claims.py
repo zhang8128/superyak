@@ -178,3 +178,29 @@ def test_no_deny_covers_a_runs_own_folder(monkeypatch, tmp_path):
             assert not [rule for rule in deny if _covers(rule, path)], (name, path, deny)
         allowed = settings['permissions']['allow']
         assert any(_covers(rule, f'{folder}/src/app.py') for rule in allowed if rule.startswith('Read(')), name
+
+
+def test_the_guard_reads_the_cwd_only_when_it_needs_it_and_survives_a_deleted_one(ships, monkeypatch):
+    """Review 487c070b, finding 5: with CLAUDE_PROJECT_DIR the server's cwd is never read; without it, a server whose
+    start folder was deleted (a removed worktree) acts as before D7 for the machine ship (R1), and the project ship,
+    which can't tell where it is, refuses."""
+    def no_cwd():
+        raise FileNotFoundError(2, 'No such file or directory')
+    monkeypatch.setattr(os, 'getcwd', no_cwd)
+    monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(ships.repo))
+    assert call(tools(ships, ships.project_config, 'bricks-key'))[1] is False      # getcwd never called
+    monkeypatch.delenv('CLAUDE_PROJECT_DIR')
+    assert call(tools(ships, ships.machine_config, 'serenity-key'))[1] is False
+    text, error = call(tools(ships, ships.project_config, 'bricks-key'))
+    assert error and f'{SHIP} acts only in' in text
+
+
+def test_a_guard_that_breaks_refuses(ships):
+    """Review 487c070b, finding 7: the server never acts when it can't tell."""
+    def broken():
+        raise RuntimeError('boom')
+    client = StationClient('http://station.test', 'serenity-key', transport=ships.fake)
+    t = Tools(client, quick_client=client, guard=broken)
+    text, error = call(t)
+    assert error and 'could not be checked' in text and 'RuntimeError' in text
+    assert 'instructions' not in initialize(t)
