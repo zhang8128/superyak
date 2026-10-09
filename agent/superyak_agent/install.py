@@ -31,8 +31,8 @@ def systemd_unit(argv, path_env):
         '[Install]', 'WantedBy=default.target', ''])
 
 
-def launchd_plist(argv, path_env, log_path):
-    return plistlib.dumps({'Label': LABEL, 'ProgramArguments': [str(a) for a in argv], 'EnvironmentVariables': {'PATH': path_env},
+def launchd_plist(argv, path_env, log_path, label=LABEL):
+    return plistlib.dumps({'Label': label, 'ProgramArguments': [str(a) for a in argv], 'EnvironmentVariables': {'PATH': path_env},
                            'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 10,
                            'StandardOutPath': str(log_path), 'StandardErrorPath': str(log_path)})
 
@@ -266,24 +266,35 @@ def _setup_adna(root):
     return dist
 
 
-def install_service(argv, out, system=None):
+def service_names(home):
+    """S4: (launchd label, systemd unit, log) of the ship whose home this is. The machine ship's are today's; a project
+    ship's come from its name, so two ships' watchers never share a label, a unit or a log."""
+    from .claims import kind_of
+    home = Path(home)
+    if kind_of(home) == 'project':
+        return f'{LABEL}.{home.name}', f'superyak-ship-{home.name}.service', home / 'ship.log'
+    return LABEL, UNIT, Path.home() / '.superyak' / 'ship.log'
+
+
+def install_service(argv, out, system=None, names=None):
     system = system or platform.system()
+    label, unit_name, log = names or (LABEL, UNIT, Path.home() / '.superyak' / 'ship.log')
     path_env = os.environ.get('PATH', '/usr/bin:/bin')
     if system == 'Linux':
-        unit = Path.home() / '.config' / 'systemd' / 'user' / UNIT
+        unit = Path.home() / '.config' / 'systemd' / 'user' / unit_name
         unit.parent.mkdir(parents=True, exist_ok=True)
         unit.write_text(systemd_unit(argv, path_env))
         subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
-        subprocess.run(['systemctl', '--user', 'enable', UNIT], check=True, capture_output=True)
-        subprocess.run(['systemctl', '--user', 'restart', UNIT], check=True)
+        subprocess.run(['systemctl', '--user', 'enable', unit_name], check=True, capture_output=True)
+        subprocess.run(['systemctl', '--user', 'restart', unit_name], check=True)
         if subprocess.run(['loginctl', 'enable-linger'], capture_output=True).returncode:
             out('Could not enable linger; the watcher runs only while you are logged in.')
     elif system == 'Darwin':
-        plist = Path.home() / 'Library' / 'LaunchAgents' / f'{LABEL}.plist'
+        plist = Path.home() / 'Library' / 'LaunchAgents' / f'{label}.plist'
         plist.parent.mkdir(parents=True, exist_ok=True)
-        plist.write_bytes(launchd_plist(argv, path_env, Path.home() / '.superyak' / 'ship.log'))
+        plist.write_bytes(launchd_plist(argv, path_env, log, label=label))
         domain = f'gui/{os.getuid()}'
-        subprocess.run(['launchctl', 'bootout', f'{domain}/{LABEL}'], capture_output=True)
+        subprocess.run(['launchctl', 'bootout', f'{domain}/{label}'], capture_output=True)
         subprocess.run(['launchctl', 'bootstrap', domain, str(plist)], check=True)
     else:
         out(f'Start the watcher yourself: {shlex.join(str(a) for a in argv)}')
@@ -295,7 +306,34 @@ def hook_command(config_path):
     return shlex.join([sys.executable, str(RUN_AGENT), 'hook', '--config', str(config_path)])
 
 
-def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
+def start_at_newest_mention(config_path, state_path, client, out):
+    """R22: a ship whose watcher state has no mention cursor would answer every mention since docking (the cursor
+    starts at 0), so the first service install reads the mentions to the end and stores the newest. A ship that has a
+    cursor is left alone. True when the watcher may be installed."""
+    try:
+        state = read_json(state_path, {}) or {}
+        if not isinstance(state, dict):
+            raise ValueError('ship-state.json is not an object')
+        if 'mention_seq' in state:
+            return True
+        client = client or client_for(read_json(config_path))
+        newest = 0
+        while True:
+            rows = client.mentions(newest)
+            seqs = [int(row['seq']) for row in rows or []]
+            if not seqs or max(seqs) <= newest:
+                break
+            newest = max(seqs)
+    except (StationError, OSError, ValueError, KeyError, TypeError) as error:
+        out(f"Could not read this ship's mentions on the station ({_reason(error)}), so the watcher was not installed: "
+            'it would have answered every mention since docking. Run make dock again.')
+        return False
+    write_private(state_path, {**state, 'mention_seq': newest})
+    out(f"The watcher starts after mention {newest}; earlier mentions won't be answered.")
+    return True
+
+
+def install_all(config_path, *, hook=False, adna=True, service=True, out=print, client=None):
     """The required steps come first so that nothing optional can hold them up: the watcher's tool config
     (without aDNA), the station tools for Claude Code and Codex, the hook, the watcher service. Then the
     optional aDNA tools; if they install, the watcher's tool config is rewritten to include them (each run
@@ -321,9 +359,10 @@ def install_all(config_path, *, hook=False, adna=True, service=True, out=print):
             out('Room messages will no longer appear in Claude Code sessions (instructions still load).')
         elif changes:
             out('Added the station hooks: instructions load at the start of each Claude Code session.')
-    if service:
+    if service and start_at_newest_mention(config_path, home / 'ship-state.json', client, out):
         install_service([sys.executable, str(RUN_AGENT), 'watch', '--config', str(config_path),
-                         '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out)
+                         '--state', str(home / 'ship-state.json'), '--mcp-config', str(home / 'run-mcp.json')], out,
+                        names=service_names(home))
     adna_dist = setup_adna(out) if adna else None
     if adna_dist:
         write_private(home / 'run-mcp.json', run_mcp_config(config_path, adna_dist))

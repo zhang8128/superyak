@@ -24,7 +24,10 @@ def build_parser():
     dock.add_argument('--station', required=True)
     dock.add_argument('--door')
     dock.add_argument('--ship')
-    dock.add_argument('--workspace', default=str(Path(__file__).resolve().parents[2]))
+    dock.add_argument('--workspace', default=None, help='Where watcher runs work (default: this checkout for the machine '
+                      'ship, the project for a project ship)')
+    dock.add_argument('--home', type=Path, help='~/.superyak (the machine ship, the default) or ~/.superyak/ships/<ship>')
+    dock.add_argument('--project', type=Path, help='Dock a project ship that claims this repository (D7)')
     dock.add_argument('--request', action='store_true')
     dock.add_argument('--name')
     dock.add_argument('--contact')
@@ -38,7 +41,9 @@ def build_parser():
     run_mcp.add_argument('--out', type=Path, required=True)
     run_mcp.add_argument('--adna-dist', type=Path)
     for name in ('status', 'undock'):
-        commands.add_parser(name).add_argument('--config', type=Path, default=CONFIG)
+        sub = commands.add_parser(name)
+        sub.add_argument('--config', type=Path, default=CONFIG)
+        sub.add_argument('--home', type=Path, help="The ship's home, instead of --config")
     worm = commands.add_parser('wormhole', help='Relay bridged rooms and the Station.aDNA vault (runs as a service)')
     worm.add_argument('--config', type=Path, required=True)
     worm.add_argument('--state', type=Path, required=True)
@@ -118,6 +123,7 @@ def main(argv=None):
                 return 0
             time.sleep(POLL_SECONDS)
     if args.command == 'dock':
+        from .claims import Refused, check_mode
         from .dock import Dock
         from .install import install_all
         fields = None
@@ -125,15 +131,26 @@ def main(argv=None):
             if not (args.name and args.contact):
                 parser.error('--request needs --name and --contact')
             fields = {'name': args.name, 'contact': args.contact, 'note': args.note}
-        code = Dock(args.station, door=args.door, ship=args.ship, workspace=args.workspace).run(fields, wait=args.wait)
+        try:
+            home, kind = check_mode(args.ship, args.home, args.project)   # S2: before any network call or write
+        except Refused as error:
+            print(f'dock: {error}', file=sys.stderr)
+            return 2
+        if kind == 'project':
+            print('dock: project ships come in a later build step of D7.', file=sys.stderr)
+            return 2
+        workspace = args.workspace or str(Path(__file__).resolve().parents[2])
+        code = Dock(args.station, door=args.door, ship=args.ship, workspace=workspace, home=home).run(fields, wait=args.wait)
         if code == 0:
-            install_all(CONFIG, hook=args.hook, adna=not args.no_adna, service=not args.no_service)
+            install_all(home / 'station.json', hook=args.hook, adna=not args.no_adna, service=not args.no_service)
         return code
     if args.command == 'run-mcp':
         from .install import run_mcp_config
         from .station import write_private
         write_private(args.out, run_mcp_config(args.config, args.adna_dist))
         return 0
+    if args.command in ('status', 'undock') and args.home is not None:
+        args.config = args.home / 'station.json'
     if args.command == 'status':
         from .station import StationError, client_for, label, load_config
         config = load_config(args.config)
