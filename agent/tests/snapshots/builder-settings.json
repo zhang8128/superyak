@@ -26,6 +26,7 @@
    "Grep(//home/u/.superyak/invitation.txt)",
    "Grep(//home/u/.superyak/ships/**)",
    "Grep(//home/u/.superyak/station.json)",
+   "Grep(//home/u/.superyak/team/teams/*/tokens/**)",
    "Read(//**/.env)",
    "Read(//**/.env.*)",
    "Read(//home/u/.claude/*.bak-superyak)",
@@ -35,6 +36,7 @@
    "Read(//home/u/.superyak/invitation.txt)",
    "Read(//home/u/.superyak/ships/**)",
    "Read(//home/u/.superyak/station.json)",
+   "Read(//home/u/.superyak/team/teams/*/tokens/**)",
    "WebFetch",
    "WebSearch",
    "mcp__station"

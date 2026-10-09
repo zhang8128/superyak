@@ -45,6 +45,8 @@
    "Grep(//home/u/.superyak/*.bak-superyak)",
    "Read(//home/u/.claude/*.bak-superyak)",
    "Grep(//home/u/.claude/*.bak-superyak)",
+   "Read(//home/u/.superyak/team/teams/*/tokens/**)",
+   "Grep(//home/u/.superyak/team/teams/*/tokens/**)",
    "WebSearch",
    "Edit(//r/wt/.git)",
    "Edit(//r/wt/.git/**)"
