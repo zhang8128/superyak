@@ -338,7 +338,8 @@ def _read_registry():
     except ValueError:
         data = None
     if not isinstance(data, dict) or not all(isinstance(e, dict) and type(e.get("base")) is int
-                                             for e in data.values()):
+                                             and PORT_FIRST <= e["base"] <= PORT_LAST - BLOCK + 1
+                                             and (e["base"] - PORT_FIRST) % BLOCK == 0 for e in data.values()):
         raise LaneRefused("%s is damaged, so no lane can take a block; look at it, then remove it" % path)
     return data
 
@@ -384,7 +385,7 @@ def team_alive(team_id):
     """Whether a teamd holds this team's lock right now. A pid could be reused; a lock dies with its holder."""
     try:
         f = open(_team_lock(team_id))
-    except OSError:
+    except (OSError, ValueError):                       # ValueError: a NUL in the team id
         return False
     with f:
         try:
@@ -540,13 +541,15 @@ def _device(path):
 
 def _sealed(entry):
     """On a Mac the program must sit on the same volume as /usr/sbin (the sealed system volume). Elsewhere this is
-    skipped; a path that can't be examined is not sealed."""
+    skipped. Returns "" when fine, else why not: a missing file has its own reason."""
     if sys.platform != "darwin":
-        return True
+        return ""
     try:
-        return _device(entry) == _device("/usr/sbin")
-    except OSError:
-        return False
+        return "" if _device(entry) == _device("/usr/sbin") else "not on the sealed system volume"
+    except FileNotFoundError:
+        return "does not exist"
+    except (OSError, ValueError):
+        return "not on the sealed system volume"
 
 
 def load_approved():
@@ -567,11 +570,13 @@ def load_approved():
         if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPROVED_DIRS):
             raise LaneWait("%s: %r refused: only Apple programs in /System, /usr/libexec, /usr/sbin or /sbin may "
                            "listen while a lane runs" % (path, entry))
-        if entry.startswith(NOT_SEALED) or "/CoreTypes.bundle/Contents/Library/" in entry or not _sealed(entry):
-            raise LaneWait("%s: %r refused: not on the sealed system volume, so a person could change what it runs"
-                           % (path, entry))
         if INTERPRETER_RE.fullmatch(os.path.basename(entry).lower()):
             raise LaneWait("%s: %r refused: an interpreter is never approved" % (path, entry))
+        why = ("not on the sealed system volume" if entry.startswith(NOT_SEALED)
+               or "/CoreTypes.bundle/Contents/Library/" in entry else _sealed(entry))
+        if why:
+            raise LaneWait("%s: %r refused: %s%s" % (path, entry, why, ", so a person could change what it runs"
+                                                     if why.startswith("not") else ""))
         out.add(entry)
     return out
 
@@ -725,12 +730,9 @@ def listeners_ok():
     Returns (ok, problems).
     The check is machine-wide, so it takes no team."""
     try:
-        approved = load_approved()
-        lanes = live_lanes()
+        return _check(load_approved(), live_lanes())
     except LaneRefused as e:
         return False, [str(e)]
-    try:
-        return _check(approved, lanes)
     except ValueError as e:                             # anything unreadable fails closed, never raises
         return False, ["the listener check could not read what it was given (%s), so it fails closed"
                        % e.__class__.__name__]
@@ -768,7 +770,12 @@ def _check(approved, lanes):
     for item in listeners:
         port, host, pid = item["port"], item["host"], item["pid"]
         in_lane = any(base <= port < base + BLOCK for base in blocks)
-        if not in_lane and not reachable(host):
+        is_lane = False
+        if not in_lane and not is_loopback(host):       # a lane's process exposes the app to the network, however
+            if pid not in lane_pids:                    # it is reached: checked before the reachability skip
+                lane_pids[pid] = _lane_process(pid, tmps)
+            is_lane = lane_pids[pid]
+        if not in_lane and not is_lane and not reachable(host):
             continue                                    # bound to one other address: no lane can reach it
         if pid not in paths:
             paths[pid] = pid_path(pid)
@@ -779,13 +786,10 @@ def _check(approved, lanes):
             problems.append("%s listens on %s port %d, and its program can't be identified%s"
                             % (name, host, port, launchd))
             continue
-        if not in_lane and not is_loopback(host):
-            if pid not in lane_pids:
-                lane_pids[pid] = _lane_process(pid, tmps)
-            if lane_pids[pid]:
-                problems.append("%s, a lane's process, listens on %s port %d, beyond loopback (%s)"
-                                % (name, host, port, exe))
-                continue
+        if is_lane:
+            problems.append("%s, a lane's process, listens on %s port %d, beyond loopback (%s)"
+                            % (name, host, port, exe))
+            continue
         if in_lane:
             if not is_loopback(host):
                 problems.append("%s listens on %s port %d, beyond loopback, in a lane's block (%s)"
@@ -829,4 +833,4 @@ def _environ(pid):
     buf = ctypes.create_string_buffer(size.value)
     if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, ctypes.c_size_t(0)) != 0:
         return None
-    return _parse_procargs2(buf.raw[:size.value])
+    return _parse_procargs2(ctypes.string_at(buf, size.value))

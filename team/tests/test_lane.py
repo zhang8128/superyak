@@ -1002,19 +1002,26 @@ def test_a_lane_process_listening_beyond_loopback_fails_on_any_port(listeners):
     ok, problems = lane.listeners_ok()
     assert not ok and len(problems) == 1 and "port 9100" in problems[0] and "lane" in problems[0]
     listeners["sockets"][-1] = ("tcp4", "192.168.1.20.9100", "LISTEN", 902, "node")
-    assert lane.listeners_ok() == (True, [])       # not reachable, so not counted at all
+    ok, problems = lane.listeners_ok()             # a lane's process exposes the app to the network, reachable or not
+    assert not ok and len(problems) == 1 and "192.168.1.20 port 9100, beyond loopback" in problems[0]
     listeners["sockets"][-1] = ("tcp4", "127.0.0.1.9100", "LISTEN", 902, "node")
     ok, problems = lane.listeners_ok()             # on loopback it is an ordinary unapproved listener
     assert problems == ["node (pid 902) listens on port 9100 (/opt/homebrew/bin/node)"]
 
 
-def test_a_lane_process_on_a_lan_address_outside_its_block_is_checked(listeners, monkeypatch):
-    listeners["environ"][902] = ["CLAUDE_CODE_TMPDIR=" + lane_tmp()]
+ELSEWHERE = [("tcp4", "192.168.1.5.3000"), ("tcp4", "100.101.102.104.3000"), ("tcp6", "fd00::5.3000"),
+             ("tcp6", "2001:db8::5.3000"), ("tcp6", "fe80::1%en0.3000")]
+
+
+@pytest.mark.parametrize("proto, address", ELSEWHERE)
+def test_a_lane_process_fails_on_every_non_loopback_address_and_others_are_skipped(listeners, proto, address):
     listeners["exe"][902] = "/opt/homebrew/bin/node"
-    monkeypatch.setattr(lane, "reachable", lambda host: True)                     # the address counts as listed
-    listeners["sockets"].append(("tcp4", "192.168.1.20.9100", "LISTEN", 902, "node"))
+    listeners["sockets"].append((proto, address, "LISTEN", 902, "node"))
+    assert lane.listeners_ok() == (True, [])                                      # not a lane's process: unreachable
+    listeners["environ"][902] = ["CLAUDE_CODE_TMPDIR=" + lane_tmp()]
     ok, problems = lane.listeners_ok()
-    assert not ok and [p for p in problems if "192.168.1.20 port 9100, beyond loopback" in p]
+    host, _, port = address.rpartition(".")
+    assert not ok and len(problems) == 1 and "%s port %s, beyond loopback" % (host, port) in problems[0]
 
 
 def test_a_non_lane_process_on_a_lan_address_is_still_skipped(listeners):
@@ -1040,6 +1047,56 @@ def test_environ_reads_a_real_process_on_linux_and_none_for_a_missing_one():
                                           ("fe80::1", False), ("100.101.102.103", False)])
 def test_reachable_reads_addresses_not_strings(host, counts):
     assert lane.reachable(host) is counts
+
+
+def test_a_nul_in_the_approved_list_never_raises(listeners, monkeypatch):
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_device", lambda path: os.lstat(path).st_dev if "\0" in path else 1)
+    approve(APPROVED + ["/usr/libexec/\0rapportd"])
+    ok, problems = lane.listeners_ok()
+    assert ok is False and problems
+
+
+def test_a_nul_in_a_registry_team_never_raises(listeners):
+    with lane._registry_lock():
+        data = lane._read_registry()
+        data["x" * 10] = {"base": 41032, "team": "a\0b", "worker": "w"}
+        lane._write_registry(data)
+    assert lane.team_alive("a\0b") is False
+    assert lane.listeners_ok()[0] in (True, False)
+
+
+def test_a_nul_in_a_mac_path_is_not_sealed(monkeypatch):
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    assert lane._sealed("/usr/libexec/a\0b") == "not on the sealed system volume"
+
+
+@pytest.mark.parametrize("base", [600, 41001, 49000, 48969, -32])
+def test_a_registry_base_outside_the_pool_is_damaged(listeners, base):
+    with lane._registry_lock():
+        data = lane._read_registry()
+        data["y" * 10] = {"base": base, "team": "t1", "worker": "w"}
+        lane._write_registry(data)
+    ok, problems = lane.listeners_ok()
+    assert not ok and "damaged" in problems[0]
+
+
+@pytest.mark.parametrize("entry, reason", [
+    ("/usr/sbin/zsh", "an interpreter is never approved"),
+    ("/usr/libexec/perl5.30", "an interpreter is never approved"),
+    ("/System/Library/Frameworks/Python.framework/Versions/3.9/bin/python3.9", "an interpreter is never approved"),
+    ("/usr/libexec/nonesuch", "does not exist"),
+])
+def test_on_a_mac_an_interpreter_is_an_interpreter_even_when_it_is_missing(env, monkeypatch, entry, reason):
+    def device(path):
+        if path in ("/usr/sbin", "/usr/libexec/rapportd"):
+            return 1
+        raise FileNotFoundError(path)
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_device", device)
+    approve(["/usr/libexec/rapportd", entry])
+    with pytest.raises(lane.LaneWait, match=reason):
+        lane.load_approved()
 
 
 def test_pid_1_is_explained_to_the_lead(listeners):
