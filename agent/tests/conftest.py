@@ -3,6 +3,17 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def private_home(monkeypatch, tmp_path_factory):
+    """Every test gets its own HOME and no Claude Code project directory, so no test can read or write the machine's
+    ~/.superyak (its claims registry included), ~/.claude or ~/.codex, and a test run from a Claude session started in
+    a claimed project behaves like any other (D7)."""
+    home = tmp_path_factory.mktemp('home')
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.delenv('CLAUDE_PROJECT_DIR', raising=False)
+    return home
+
+
 class FakeStation:
     """Just enough of the station API for ship-side tests. The real station is exercised
     end to end in peer/tests/test_ship_agent.py."""

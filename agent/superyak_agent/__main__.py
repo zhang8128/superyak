@@ -152,7 +152,12 @@ def main(argv=None):
     if args.command in ('status', 'undock') and args.home is not None:
         args.config = args.home / 'station.json'
     if args.command == 'status':
+        from .claims import Unreadable, read_registry, registry_line
         from .station import StationError, client_for, label, load_config
+        try:
+            read_registry()                     # R16: named before the config is read or the station is called
+        except Unreadable as error:
+            print(registry_line(error))
         config = load_config(args.config)
         client = client_for(config)
         me = client.me()
