@@ -186,7 +186,7 @@ station-share-link:
 	python3 peer/scripts/share_link.py
 
 station-pending:
-	uv run --locked --project peer python -m superyak_peer station-pending --data-dir "$(STATION_DATA)"
+	uv run --locked --project peer python -m superyak_peer station-pending --data-dir "$(STATION_DATA)" --as "$(APPROVER)"
 
 station-approve station-deny:
 	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<short id from make station-pending> [APPROVER=andy]'; exit 2; }

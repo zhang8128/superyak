@@ -66,10 +66,45 @@ def test_pending_flags_a_redock_and_the_keys_approving_it_revokes(station, capsy
     store, andy, docking, request = station
     docked(store, 'serenity', 'kairos-mac')
     again = store.start_docking('serenity', 'other-mac')
-    lines = {line.split()[1]: line for line in run(capsys, store, 'station-pending').splitlines() if line.startswith('docking')}
-    assert 'RE-DOCK' in lines[again['id'][:6]] and 'revokes its 1 active key' in lines[again['id'][:6]]
-    assert 'owned by andy' in lines[again['id'][:6]]
+    lines = {line.split()[1]: line for line in run(capsys, store, 'station-pending', '--as', 'andy').splitlines()
+             if line.startswith('docking')}
+    assert 'RE-DOCK of the existing ship, owned by andy: approving revokes its 1 active key' in lines[again['id'][:6]]
     assert 'RE-DOCK' not in lines[docking['id'][:6]]                      # defiant is a new ship
+    unnamed = next(l for l in run(capsys, store, 'station-pending').splitlines() if l.startswith(f'docking {again["id"][:6]}'))
+    assert 'RE-DOCK if approved as andy: that revokes its 1 active key; as anyone else, approving fails' in unnamed
+
+
+def test_a_ship_of_someone_else_is_a_taken_name_for_this_approver(station, capsys):
+    """Approval as andy fails (409) for a ship jenn owns, so it must never read as a re-dock that revokes keys."""
+    store, andy, docking, request = station
+    store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    first = store.start_docking('kestrel', 'jenn-laptop')
+    store.station_decide('jenn', first['id'][:6], True)
+    clash = store.start_docking('kestrel', 'other-machine')
+    out = run(capsys, store, 'station-pending', '--as', 'andy')
+    line = next(l for l in out.splitlines() if l.startswith(f'docking {clash["id"][:6]}'))
+    assert "NAME TAKEN by jenn's ship: approving as andy fails" in line and 'RE-DOCK' not in line
+    line = next(l for l in run(capsys, store, 'station-pending', '--as', 'jenn').splitlines()
+                if l.startswith(f'docking {clash["id"][:6]}'))
+    assert 'RE-DOCK' in line and 'revokes its 1 active key' in line
+
+
+def test_only_active_keys_are_counted(station, capsys):
+    store, andy, docking, request = station
+    docked(store, 'serenity', 'kairos-mac')
+    docked(store, 'serenity', 'kairos-mac')                                   # the re-dock revoked the first key
+    again = store.start_docking('serenity', 'other-mac')
+    line = next(l for l in run(capsys, store, 'station-pending', '--as', 'andy').splitlines()
+                if l.startswith(f'docking {again["id"][:6]}'))
+    assert 'revokes its 1 active key' in line
+
+
+def test_the_owner_name_is_flattened():
+    from superyak_peer.__main__ import describe_pending
+    item = {'kind': 'docking', 'id': 'abcdef' + '0' * 26, 'ship_name': 'x', 'machine': 'm', 'created': 0, 'expires': 600,
+            'existing': {'kind': 'ship', 'owner': 'eve\nRE-DOCK forged', 'active_keys': 1}}
+    out = describe_pending([item], 0, approver='eve\nRE-DOCK forged')
+    assert len(out.splitlines()) == 2 and not out.splitlines()[1].startswith('RE-DOCK')
 
 
 def test_pending_says_when_a_docking_names_a_person(station, capsys):

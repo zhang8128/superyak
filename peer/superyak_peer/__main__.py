@@ -26,21 +26,27 @@ def keys(count, kind):
     return f'{count} {kind} key' + ('' if count == 1 else 's')
 
 
-def existing_warning(existing):
-    """Said after a docking whose ship name is already taken: a re-dock revokes every key the ship holds, which would
-    otherwise look like a routine new ship."""
+def existing_warning(existing, approver=None):
+    """Said after a docking whose ship name is already taken. Approving as the ship's owner is a re-dock, which revokes
+    every key the ship holds and would otherwise look like a routine new ship; approving as anyone else fails, as it
+    does for a person's or a station ship's name (_confirm_docking_row). Without an approver both are said."""
     if not existing:
         return ''
     if existing['kind'] != 'ship':
         return '  NAME TAKEN by a person: approving fails'
     if existing['owner'] is None:
         return '  NAME TAKEN by a station ship: approving fails'
-    return (f'  RE-DOCK of the existing ship, owned by {safe_line(existing["owner"])}: approving revokes its '
-            f'{keys(existing["active_keys"], "active")}')
+    owner, revokes = safe_line(existing['owner']), keys(existing['active_keys'], 'active')
+    if approver is None:
+        return f'  RE-DOCK if approved as {owner}: that revokes its {revokes}; as anyone else, approving fails'
+    if approver != existing['owner']:
+        return f"  NAME TAKEN by {owner}'s ship: approving as {safe_line(approver)} fails"
+    return f'  RE-DOCK of the existing ship, owned by {owner}: approving revokes its {revokes}'
 
 
-def describe_pending(items, now):
-    """One line per waiting item, keyed by a short id; requester text is flattened to one safe line."""
+def describe_pending(items, now, approver=None):
+    """One line per waiting item, keyed by a short id; requester text is flattened to one safe line. `approver` is who
+    would approve (make's APPROVER), so a taken ship name says what approving as them does."""
     if not items:
         return 'Nothing is waiting.'
     lines = [PENDING_HEADER]
@@ -48,7 +54,7 @@ def describe_pending(items, now):
         if item['kind'] == 'docking':
             lines.append(f'docking {item["id"][:6]}  {safe_line(item["ship_name"])} from {safe_line(item["machine"])}'
                          f'  asked {ago(now - item["created"])} ago, expires in {ago(item["expires"] - now)}'
-                         + existing_warning(item.get('existing')))
+                         + existing_warning(item.get('existing'), approver))
         else:
             note = f'  note: {safe_line(item["note"], 200)}' if item['note'].strip() else ''
             lines.append(f'access  {item["id"][:6]}  {safe_line(item["name"])} <{safe_line(item["contact"])}>'
@@ -184,6 +190,7 @@ def main(argv=None):
     notices.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     pending = commands.add_parser('station-pending', help='Trusted local: list waiting dockings and access requests by short id')
     pending.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    pending.add_argument('--as', dest='person', help='Who would approve (make passes APPROVER), so a taken ship name says what approving does')
     for name, verb in (('station-approve', 'approve'), ('station-deny', 'refuse')):
         decide = commands.add_parser(name, help=f'Trusted local: {verb} a waiting docking or access request by its short id')
         decide.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
@@ -250,7 +257,7 @@ def main(argv=None):
             print(f'Station ship {ship["username"]} created. Private config: {args.config}')
         elif args.command == 'station-pending':
             import time
-            print(describe_pending(Store(args.data_dir).station_pending(), time.time()))
+            print(describe_pending(Store(args.data_dir).station_pending(), time.time(), args.person))
         elif args.command in ('station-approve', 'station-deny'):
             approve = args.command == 'station-approve'
             item, result = Store(args.data_dir).station_decide(args.person, args.id, approve)
