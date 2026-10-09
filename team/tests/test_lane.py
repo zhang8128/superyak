@@ -700,7 +700,7 @@ EXE = {501: CONTROL_CENTER, 612: "/usr/libexec/rapportd", 220: "/usr/sbin/cupsd"
 APPROVED = [CONTROL_CENTER, "/usr/libexec/rapportd", "/usr/sbin/cupsd", "/sbin/launchd"]
 
 
-CANARY = 39999            # the fixture's canary port on each scanned address
+CANARIES = {"127.0.0.1": 39999, "::1": 39998, "fe80::1%lo0": 39997}    # each scanned address's own canary port
 LOOPBACK = [(socket.AF_INET, "127.0.0.1", 0, "127.0.0.1"), (socket.AF_INET6, "::1", 0, "::1"),
             (socket.AF_INET6, "fe80::1", 1, "fe80::1%lo0")]
 
@@ -784,8 +784,10 @@ def listeners(env, held, monkeypatch):
     kaylee = ["HOME=/h", "CLAUDE_CODE_TMPDIR=" + str(lane._parent_path() / lane.lane_hash("t1", "kaylee") / "tmp")]
     state = {"sockets": list(SOCKETS), "exe": dict(EXE),
              "lsof": None, "lsof_rc": 0, "lsof_rounds": [], "lsof_stderr": "",   # None: this user's sockets
-             "lsof_text": None,
+             "lsof_text": None, "lsof_calls": 0, "lsof_sleeps": [],      # seconds to take on each lsof run
+             "scan_sleep": 0, "reprobe_sleep": 0,
              "nettop": None, "nettop_rc": 0, "nettop_rounds": [], "no_nettop": False, "nettop_calls": 0,
+             "nettop_texts": [],
              "scan": None, "scan_extra": {}, "scan_rounds": [], "scanned": [],     # None: what the sockets make
              "scan_fails": False, "reprobe": {},    # (label, port) -> how on a probe alone (None: closed)
              "canary_fails": False, "canary_missed": False,
@@ -797,6 +799,9 @@ def listeners(env, held, monkeypatch):
 
     def run(cmd, timeout=60):
         if cmd[0].endswith("lsof"):
+            state["lsof_calls"] += 1
+            if state["lsof_sleeps"]:
+                time.sleep(state["lsof_sleeps"].pop(0))
             if state["lsof_text"] is not None:
                 text = state["lsof_text"]
             elif state["lsof_rounds"]:
@@ -809,17 +814,23 @@ def listeners(env, held, monkeypatch):
         if cmd[0].endswith("nettop"):
             state["nettop_calls"] += 1
             sockets = state["nettop_rounds"].pop(0) if state["nettop_rounds"] else state["sockets"]
-            return Ran(state["nettop_rc"], state["nettop"] if state["nettop"] is not None else nettop_of(sockets))
+            text = state["nettop_texts"].pop(0) if state["nettop_texts"] else None    # None: the usual
+            if text is None:
+                text = state["nettop"] if state["nettop"] is not None else nettop_of(sockets)
+            return Ran(state["nettop_rc"], text)
         if cmd[0] == "/bin/ps":
             return Ran(state["ps_rc"], "".join("%d 1 %d %d\n" % (pid, pid, uid) for pid, uid in state["uids"].items()))
         raise AssertionError(cmd)
 
     def scan(targets, ports=None, **kwargs):
         state["scanned"].append(ports)
+        time.sleep(state["reprobe_sleep"] if kwargs.get("batch_s") == lane.REPROBE_S else state["scan_sleep"])
         if kwargs.get("batch_s") == lane.REPROBE_S and ports and len(targets) == 1:
             key = (targets[0][3], ports[0])
             if key in state["reprobe"]:
                 how = state["reprobe"][key]
+                if isinstance(how, list):                   # one answer per probe, in turn
+                    how = how.pop(0) if len(how) > 1 else how[0]
                 return None if how == "fails" else ({} if how is None else {key: how})
         if state["scan_fails"]:
             return None
@@ -835,13 +846,13 @@ def listeners(env, held, monkeypatch):
             return None
         found = dict(found)
         if ports is None and not state["canary_missed"]:
-            found.update({(target[3], CANARY): "accepted" for target in targets})
+            found.update({(target[3], CANARIES[target[3]]): "accepted" for target in targets})
         labels = {target[3] for target in targets}
         return {key: how for key, how in found.items() if key[0] in labels and (ports is None or key[1] in ports)}
 
     @contextlib.contextmanager
     def canaries(targets):
-        yield None if state["canary_fails"] else {target[3]: CANARY for target in targets}
+        yield None if state["canary_fails"] else {target[3]: CANARIES[target[3]] for target in targets}
     monkeypatch.setattr(lane, "_run", run)
     monkeypatch.setattr(lane.shutil, "which",
                         lambda name, path=None: None if name == "nettop" and state["no_nettop"] else "/usr/sbin/" + name)
@@ -932,6 +943,7 @@ def test_lsof_failing_fails(listeners, monkeypatch):
     doesn't."""
     listeners["lsof_rc"] = 2
     assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
+    assert listeners["scanned"] == []                                              # refused at the naming, unscanned
     lane.release_block("t1", "kaylee")
     listeners["sockets"] = [x for x in SOCKETS if listeners["uids"].get(x[3]) != os.getuid()]
     listeners["lsof_rc"], listeners["lsof"] = 1, []                        # lsof found nothing of the user's: fine
@@ -1126,6 +1138,7 @@ def test_a_nettop_process_name_may_hold_dots_spaces_commas_and_separators():
     (nettop_text([("node", 900, [("tcp4", "127.0.0.1:9000", "")])]), "a socket with no state"),
     (NETTOP_HEADER + "\n09:51:18.3,node,,,0,0,0,0,0,,,,,,,,,,,,\n", "a process line without .pid"),
     (NETTOP_HEADER + "\n09:51:18.3,node.9\n", "a line with too few fields"),
+    (NETTOP_HEADER + "\n09:51:18.3,node.12x,,,0,0,0,0,0,,,,,,,,,,,,\n", "a process field with more after its pid"),
     (nettop_text([("node", 900, [])]) + nettop_socket("tcp4", "127.0.0.1:9000") + ",x\n", "a socket row's columns"),
 ])
 def test_nettop_output_it_cannot_read_names_nothing(text, why):
@@ -1223,6 +1236,213 @@ def test_a_pid_ps_cant_place_on_a_reachable_address_is_named_again_then_refused(
 def test_a_pid_ps_cant_place_beyond_loopback_is_left_alone(listeners):
     listeners["sockets"].append(("tcp4", "100.101.102.104.9000", "LISTEN", 4444, "ghost"))
     assert lane.listeners_ok() == (True, []) and listeners["nettop_calls"] == 1
+
+
+# ---- the opus review of 057530d (6d8e99d7): each surviving mutation pinned, and the PARTLY items ----
+
+def test_each_canary_is_its_own_address_and_port(listeners):
+    """M7: canaries are left out by (address, port), never by port: a real listener on ::1 at 127.0.0.1's canary port
+    is still seen, and nobody names it."""
+    listeners["scan_extra"] = {("::1", CANARIES["127.0.0.1"]): "accepted"}
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems[0].startswith("port %d on ::1 accepts connections" % CANARIES["127.0.0.1"])
+
+
+def test_a_scoped_row_covers_only_its_own_interface(listeners):
+    """M33: another uid's listener on fe80::1%en0 never covers ::1 (nor lo0's link-local address)."""
+    listeners["sockets"].append(("tcp6", "fe80::1%en0.9200", "LISTEN", 4545, "elsewhere"))
+    listeners["uids"][4545] = os.getuid() + 1
+    listeners["scan_extra"] = {("::1", 9200): "accepted"}
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems[0].startswith("port 9200 on ::1 accepts connections")
+
+
+def test_a_wildcard_row_the_scan_finds_closed_disagrees_too(listeners):
+    """M35: the disagreement check covers wildcard rows, not only loopback ones."""
+    full = {key: "accepted" for proto, local, st, pid, name in SOCKETS if st == "LISTEN" for key in scan_keys(proto, local)}
+    listeners["scan"] = {key: how for key, how in full.items() if key != ("127.0.0.1", 49152)}
+    listeners["reprobe"] = {("127.0.0.1", 49152): None}
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["scan and naming disagree: lsof says rapportd (pid 612) listens on 127.0.0.1 port "
+                                   "49152, but the scan finds it closed twice"]
+
+
+def test_a_second_naming_that_fails_refuses(listeners):
+    """M25: the naming read again before the verdict can fail too, and then the check refuses."""
+    listeners["scan_extra"] = {("127.0.0.1", 9300): "accepted"}
+    listeners["nettop_texts"] = [None, "something else entirely\n"]
+    assert lane.listeners_ok() == (False, ["nettop couldn't be read (header), so the listener check fails closed"])
+
+
+def test_an_ipv4_mapped_row_covers_127_0_0_1(listeners):
+    """M2: a listener bound to ::ffff:127.0.0.1 covers 127.0.0.1."""
+    listeners["sockets"].append(("tcp6", "::ffff:127.0.0.1.9010", "LISTEN", 612, "rapportd"))
+    assert lane.listeners_ok() == (True, [])
+
+
+def test_a_self_connect_is_probed_again_more_than_once(listeners):
+    """M18: REPROBE_TRIES; a self-connect, then closed, passes."""
+    listeners["scan_extra"] = {("::1", 61001): "self"}
+    listeners["reprobe"] = {("::1", 61001): ["self", None]}
+    assert lane.listeners_ok() == (True, [])
+
+
+def test_more_than_64_ports_to_probe_again_refuses_at_once(listeners):
+    """Review item 4: each timed-out port costs a 2 s probe under teamd's lock, so past 64 the check refuses at once."""
+    listeners["scan_extra"] = {("127.0.0.1", 20000 + n): "timed out" for n in range(65)}
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["the scan is incomplete: 65 ports to probe again, more than 64, so the listener "
+                                   "check fails closed"]
+    assert listeners["scanned"] == [None]
+    listeners["scanned"].clear()
+    listeners["scan_extra"] = {("127.0.0.1", 20000 + n): "timed out" for n in range(64)}
+    listeners["reprobe"] = {("127.0.0.1", 20000 + n): None for n in range(64)}
+    assert lane.listeners_ok() == (True, []) and len(listeners["scanned"]) == 65
+
+
+def test_a_check_past_its_deadline_refuses(listeners, monkeypatch):
+    monkeypatch.setattr(lane, "CHECK_DEADLINE_S", -1)
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["the listener check ran past its -1 s deadline, so it fails closed"]
+
+
+def test_the_deadline_holds_after_the_scan(listeners, monkeypatch):
+    """Past the deadline when the scan ends: refused there, before lsof is read again."""
+    monkeypatch.setattr(lane, "CHECK_DEADLINE_S", 0.2)
+    listeners["scan_sleep"] = 0.3
+    ok, problems = lane.listeners_ok()
+    assert not ok and len(problems) == 1 and problems[0].startswith("the listener check ran past")
+    assert listeners["lsof_calls"] == 1                                            # lsof isn't read again
+
+
+def test_the_deadline_stops_the_probes_one_at_a_time(listeners, monkeypatch):
+    """Past the deadline while probing again: the rest aren't probed, and the check refuses."""
+    monkeypatch.setattr(lane, "CHECK_DEADLINE_S", 0.3)
+    listeners["scan_extra"] = {("127.0.0.1", 30000 + n): "timed out" for n in range(3)}
+    listeners["reprobe"] = {("127.0.0.1", 30000 + n): None for n in range(3)}
+    listeners["reprobe_sleep"] = 0.2
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems[0].startswith("the listener check ran past")
+    assert len([p for p in listeners["scanned"] if p]) < 3
+
+
+def test_the_deadline_holds_at_the_end(listeners, monkeypatch):
+    """Past the deadline only by the last lsof: still refused."""
+    monkeypatch.setattr(lane, "CHECK_DEADLINE_S", 0.3)
+    listeners["lsof_sleeps"] = [0, 0.4]
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems[0].startswith("the listener check ran past")
+
+
+def test_nettops_rows_of_this_user_are_judged_but_never_name(listeners):
+    """Review item 5: a same-uid listener lsof missed (it bound after lsof ran) is judged from nettop's row, which only
+    adds refusals; it never names a port lsof didn't."""
+    listeners["lsof"] = [(900, "127.0.0.1:41000"), (901, "[::1]:41001")] + [
+        (pid, "%s:%s" % (local.rpartition(".")[0], local.rpartition(".")[2]), "IPv4" if proto == "tcp4" else "IPv6")
+        for proto, local, st, pid, name in SOCKETS if pid in (501, 612) and st == "LISTEN"]
+    listeners["exe"][905] = "/opt/homebrew/bin/node"
+    listeners["sockets"].append(("tcp4", "127.0.0.1.7000", "LISTEN", 905, "node"))     # beside ControlCenter's *:7000
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["node (pid 905) listens on port 7000 (/opt/homebrew/bin/node)"]
+    listeners["exe"][905] = CONTROL_CENTER                                         # approved: only the naming is left
+    listeners["scan_extra"] = {("127.0.0.1", 9400): "accepted"}
+    listeners["sockets"].append(("tcp4", "127.0.0.1.9400", "LISTEN", 905, "node"))
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems[0].startswith("port 9400 on 127.0.0.1 accepts connections")
+
+
+def test_lsof_is_read_again_after_the_scan_and_a_new_row_judged(listeners):
+    """Review item 5: a same-uid server that binds 127.0.0.1:7000 beside an approved *:7000 after lsof first ran."""
+    mine = [(pid, "%s:%s" % (local.rpartition(".")[0], local.rpartition(".")[2]),
+             "IPv4" if proto == "tcp4" else "IPv6")
+            for proto, local, st, pid, name in SOCKETS if listeners["uids"].get(pid) == os.getuid() and st == "LISTEN"]
+    listeners["exe"][905] = "/opt/homebrew/bin/node"
+    listeners["lsof_rounds"] = [list(mine), mine + [(905, "127.0.0.1:7000")]]
+    ok, problems = lane.listeners_ok()
+    assert not ok and problems == ["node (pid 905) listens on port 7000 (/opt/homebrew/bin/node)"]
+
+
+def test_lsof_rows_it_cannot_read_refuse(listeners):
+    """Review item 3: an n line whose port can't be read, or one before any p line, is never "no listeners"."""
+    assert lane.parse_lsof("p501\nf3\ntIPv4\nn127.0.0.1:\n") is None
+    assert lane.parse_lsof("f3\ntIPv4\nn127.0.0.1:80\n") is None
+    listeners["lsof_text"] = "p501\nf3\ntIPv4\nn127.0.0.1:\n"
+    assert lane.listeners_ok() == (False, ["lsof failed, so the listener check fails closed"])
+
+
+def test_lsof_link_local_in_kame_form_is_read_with_its_interface():
+    """Review item 6, measured on macOS 27: lsof prints fe80::1%lo0 as [fe80:1::1]:P (the scope inside the address)."""
+    name = socket.if_indextoname(1)
+    assert lane.parse_lsof("p7\nf3\ntIPv6\nn[fe80:1::1]:9500\n") == [
+        {"pid": 7, "command": "", "host": "fe80::1%" + name, "port": 9500, "family": 6}]
+
+
+def test_reachable_uses_the_real_loopback_interface(monkeypatch):
+    monkeypatch.setattr(lane, "_loopback_addresses", lambda: [(socket.AF_INET, "127.0.0.1", 0, "lo")])
+    assert lane.reachable("fe80::1%lo") and not lane.reachable("fe80::1%en0")
+
+
+def test_a_missing_ipv6_loopback_is_said_in_the_checks_own_result(listeners):
+    """Review item 8: the note isn't only for the acceptance row."""
+    listeners["addresses"] = [a for a in LOOPBACK if a[1] != "::1"]
+    listeners["sockets"] = [x for x in SOCKETS if not x[0].startswith("tcp6") and x[1].rpartition(".")[0] != "::1"]
+    assert lane.listeners_ok() == (True, ["::1 isn't configured on the loopback interface, so the scan skips it"])
+
+
+def test_a_failed_rlimit_restore_is_logged(monkeypatch, capsys):
+    """Review item 8: never swallowed."""
+    limits = [(256, 4096)]
+
+    def setrlimit(which, value):
+        if value[0] == 256:
+            raise ValueError("no")
+        limits[0] = value
+    monkeypatch.setattr(lane.resource, "getrlimit", lambda which: limits[0])
+    monkeypatch.setattr(lane.resource, "setrlimit", setrlimit)
+    monkeypatch.setattr(lane, "_maxfiles", lambda hard: 2048)
+    with lane._raised_nofile():
+        pass
+    assert "superyak-team: couldn't restore RLIMIT_NOFILE to 256" in capsys.readouterr().err
+
+
+@pytest.mark.real_scan
+def test_a_connect_that_completed_then_reset_is_a_listener(monkeypatch):
+    """M40: getpeername failing after a completed connect is never read as closed."""
+    class Probe:
+        def __init__(self, *a, **k):
+            pass
+
+        def setblocking(self, flag):
+            pass
+
+        def connect_ex(self, address):
+            return 0
+
+        def getsockname(self):
+            return ("127.0.0.1", 50000)
+
+        def getpeername(self):
+            raise OSError(errno.ECONNRESET, "reset")
+
+        def close(self):
+            pass
+    monkeypatch.setattr(lane.socket, "socket", Probe)
+    assert lane.scan_loopback([LOOPBACK[0]], ports=[9]) == {("127.0.0.1", 9): "accepted"}
+
+
+@pytest.mark.real_scan
+def test_each_canary_listens_on_its_own_address_only():
+    """M41: a canary bound to the wildcard would answer on the other family's loopback address too."""
+    targets = [t for t in LOOPBACK if t[1] in ("127.0.0.1", "::1")]
+    with lane._canaries(targets) as ports:
+        assert ports is not None
+        for family, address, scope, label in targets:
+            other = "::1" if family == socket.AF_INET else "127.0.0.1"
+            probe = socket.socket(socket.AF_INET6 if other == "::1" else socket.AF_INET)
+            try:
+                assert probe.connect_ex((other, ports[label])) == errno.ECONNREFUSED
+            finally:
+                probe.close()
 
 
 def test_ps_unable_to_place_nettops_listeners_refuses(listeners):

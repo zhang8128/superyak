@@ -773,6 +773,8 @@ IFF_LOOPBACK = 0x8
 SCAN_BATCH, SCAN_BATCH_S, SCAN_DEADLINE_S = 1024, 0.5, 60
 REPROBE_S, REPROBE_TRIES = 2.0, 3
 SCAN_LOCK_S = 90            # how long a check waits for another teamd's scan before it fails closed
+REPROBE_MOST = 64           # more ports than this to probe again (2 s each, under teamd's lock) refuses at once
+CHECK_DEADLINE_S = 90       # the whole check, scan and probes included; running past it refuses
 INCOMPLETE = (errno.EADDRNOTAVAIL, errno.EMFILE, errno.ENOBUFS)     # the scan's own trouble, never a port's verdict
 NOFILE_CAP = 10240          # when kern.maxfilesperproc can't be read (and on Linux): the soft limit's ceiling
 
@@ -861,12 +863,12 @@ def parse_lsof(text):
             family = None
         elif field == "t":
             family = {"IPv4": 4, "IPv6": 6}.get(value)
-        elif field == "n" and pid is not None:
+        elif field == "n":
             host, sep, port = value.rpartition(":")
-            if not sep or not port.isdigit():
-                continue
+            if pid is None or not sep or not port.isdigit():   # never "no listeners" (review item 3)
+                return None
             if host.startswith("[") and host.endswith("]"):
-                host = host[1:-1]
+                host = _unkame(host[1:-1])
             if host == "*" and family is None:              # which family's wildcard can't be told
                 return None
             row = {"pid": pid, "command": command, "host": host, "port": int(port)}
@@ -874,6 +876,25 @@ def parse_lsof(text):
                 row["family"] = family
             out.append(row)
     return out
+
+
+def _unkame(host):
+    """lsof prints a link-local address the KAME way, its scope inside it ([fe80:1::1] for fe80::1%lo0, measured on
+    macOS 27): the scope is moved out to the interface's name. Anything else is returned as it is."""
+    try:
+        address = ipaddress.IPv6Address(host)
+    except ValueError:
+        return host
+    packed = bytearray(address.packed)
+    if not (address.is_link_local and (packed[2] or packed[3])):
+        return host
+    scope = int.from_bytes(packed[2:4], "big")
+    packed[2:4] = b"\0\0"
+    try:
+        name = socket.if_indextoname(scope)
+    except OSError:
+        name = str(scope)
+    return "%s%%%s" % (ipaddress.IPv6Address(bytes(packed)), name)
 
 
 def _nettop_sockets(text):
@@ -933,10 +954,16 @@ def is_loopback(host):
     return address == ipaddress.ip_address("::1")
 
 
+def _loopback_names():
+    """The names of the interfaces flagged IFF_LOOPBACK (lo0 on macOS, lo on Linux)."""
+    return {name for _, _, _, name in _loopback_addresses() or []}
+
+
 def reachable(host):
     """Whether a lane could reach a socket bound to this address: loopback (an IPv4-mapped one too), a wildcard, or
-    anything scoped to lo0. An address it can't read counts, so the check fails closed."""
-    if host in WILDCARDS or is_loopback(host) or host.endswith("%lo0"):
+    anything scoped to a loopback interface (by its real name). An address it can't read counts, so the check fails
+    closed."""
+    if host in WILDCARDS or is_loopback(host) or ("%" in host and host.split("%", 1)[1] in _loopback_names()):
         return True
     try:
         address = ipaddress.ip_address(host.split("%", 1)[0])
@@ -998,8 +1025,11 @@ def _named():
         return None, None, ["ps failed, so nettop's listeners can't be placed and the listener check fails closed"]
     for item in listening:                              # a pid ps can't place names nothing (see _unplaced)
         item["placed"] = owners.get(item["pid"]) is not None
-    others = [dict({k: v for k, v in item.items() if k != "state"}, uid=owners[item["pid"]]) for item in listening
-              if owners.get(item["pid"]) not in (None, me)]
+    others = [dict({k: v for k, v in item.items() if k not in ("state", "placed")}, uid=owners[item["pid"]])
+              for item in listening if owners.get(item["pid"]) is not None]
+    for item in others:                                 # this uid's nettop rows: judged too, never naming (review 5)
+        if item["uid"] == me:
+            item["judge_only"] = True
     return [dict(item, uid=me) for item in mine] + others, sockets, []
 
 
@@ -1114,8 +1144,9 @@ def _raised_nofile():
         if raised:
             try:
                 resource.setrlimit(resource.RLIMIT_NOFILE, (original, hard))
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as e:
+                print("superyak-team: couldn't restore RLIMIT_NOFILE to %s after the scan: %r" % (original, e),
+                      file=sys.stderr)
 
 
 def scan_loopback(targets, ports=None, batch_s=SCAN_BATCH_S, deadline_s=SCAN_DEADLINE_S):
@@ -1232,14 +1263,17 @@ def _probe_one(target, port):
     return "incomplete" if found is None else found.get((target[3], port))
 
 
-def _reprobe(keys, targets):
-    """Each (label, port) in keys probed again one at a time: {key: how} for those not closed. A self-connect or an
-    incomplete probe is tried up to REPROBE_TRIES times; if it stays so, it stays so (and the check refuses)."""
+def _reprobe(keys, targets, end=None):
+    """Each (label, port) in keys probed again one at a time: {key: how} for those not closed, or None once the
+    check's deadline (`end`, monotonic) has passed. A self-connect or an incomplete probe is tried up to REPROBE_TRIES
+    times; if it stays so, it stays so (and the check refuses)."""
     by_label = {target[3]: target for target in targets}
     out = {}
     for label, port in sorted(keys, key=lambda key: (key[1], key[0])):
         how = None
         for _ in range(REPROBE_TRIES):
+            if end is not None and time.monotonic() > end:
+                return None
             how = _probe_one(by_label[label], port)
             if how not in ("self", "incomplete"):
                 break
@@ -1330,7 +1364,8 @@ def _unnamed(found, targets, rows):
     """The scanned (label, port)s no named row covers: {key: how}."""
     by_label = {target[3]: target for target in targets}
     return {(label, port): how for (label, port), how in found.items()
-            if not any(item["port"] == port and _covers(item, by_label[label]) for item in rows)}
+            if not any(item["port"] == port and not item.get("judge_only") and _covers(item, by_label[label])
+                       for item in rows)}
 
 
 def _unnamed_problems(unnamed, targets, sockets):
@@ -1454,6 +1489,8 @@ def _judge(rows, approved, lanes):
 def _check(approved, lanes):
     """Name, judge, then scan (spec amendment of 2026-10-09, revision 2). Naming only adds refusals: a scanned
     (address, port) passes only when a named row covers it and every covering row passes."""
+    end = time.monotonic() + CHECK_DEADLINE_S
+    late = ["the listener check ran past its %d s deadline, so it fails closed" % CHECK_DEADLINE_S]
     targets, notes, refusals = loopback_targets()
     if refusals:
         return False, refusals
@@ -1462,7 +1499,7 @@ def _check(approved, lanes):
         return False, problems
     problems = _judge(rows, approved, lanes)
     if problems:                                        # name first: a waiting lane doesn't scan Andy's services
-        return False, problems
+        return False, problems + notes
     with _scan_lock() as held:
         if not held:
             return False, ["another listener check's scan held the scan lock for %d s, so this one fails closed"
@@ -1470,11 +1507,18 @@ def _check(approved, lanes):
         found, problems = _scan_with_canaries(targets)
         if problems:
             return False, problems
+        if time.monotonic() > end:
+            return False, late
         disagree = _disagreeing(rows, targets, found)
         suspect = ({key for key, how in found.items() if how != "accepted"} | set(_unnamed(found, targets, rows))
                    | set(disagree))
+        if len(suspect) > REPROBE_MOST:                 # 2 s each, one at a time, under teamd's lock: never
+            return False, ["the scan is incomplete: %d ports to probe again, more than %d, so the listener check "
+                           "fails closed" % (len(suspect), REPROBE_MOST)]
         if suspect:                                     # before the verdict: probe again, alone, and name again
-            again = _reprobe(suspect, targets)
+            again = _reprobe(suspect, targets, end)
+            if again is None:
+                return False, late
             found = {key: how for key, how in found.items() if key not in suspect}
             found.update(again)
             rows, sockets, problems = _named()
@@ -1496,17 +1540,27 @@ def _check(approved, lanes):
             return False, sorted({"nettop shows pid %d (%s) listening on %s port %d, which a lane can reach, but ps "
                                   "can't place it, so the listener check fails closed"
                                   % (item["pid"], item["command"] or "?", item["host"], item["port"]) for item in ghosts})
+    after = lsof_rows()                                 # a same-uid listener that bound after lsof first ran
+    if after is None:
+        return False, ["lsof failed, so the listener check fails closed"]
+    known = {(item["pid"], item["host"], item["port"]) for item in rows}
+    fresh = [dict(item, uid=os.getuid()) for item in after if (item["pid"], item["host"], item["port"]) not in known]
+    problems = _judge(fresh, approved, lanes) if fresh else []
+    if problems:
+        return False, problems + notes
+    if time.monotonic() > end:
+        return False, late
     problems = ["the scan is incomplete at %s port %d (%s), so the listener check fails closed" % (label, port, how)
                 for (label, port), how in sorted(found.items(), key=lambda kv: (kv[0][1], kv[0][0]))
                 if how in ("self", "incomplete")]
     unnamed = {key: how for key, how in _unnamed(found, targets, rows).items() if how not in ("self", "incomplete")}
     problems += _unnamed_problems(unnamed, targets, sockets)
     for (label, port), items in sorted(disagree.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        owners = sorted({(item["pid"], item["command"] or "?") for item in items})
+        source = "lsof" if any(item["uid"] == os.getuid() and not item.get("judge_only") for item in items) else "nettop"
         problems.append("scan and naming disagree: %s says %s listens on %s port %d, but the scan finds it closed "
-                        "twice" % (" and ".join("lsof" if item["uid"] == os.getuid() else "nettop" for item in items[:1]),
-                                   ", ".join("%s (pid %d)" % (item["command"] or "?", item["pid"]) for item in items),
-                                   label, port))
-    return not problems, sorted(set(problems))
+                        "twice" % (source, ", ".join("%s (pid %d)" % (name, pid) for pid, name in owners), label, port))
+    return not problems, sorted(set(problems)) + notes
 
 
 def _parse_procargs2(raw):
