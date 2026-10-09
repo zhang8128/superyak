@@ -192,7 +192,7 @@ With `lane=None`, the output is byte-for-byte what it is today.
   group, and teamd kills that group.
 - **Its Playwright:** `~/.superyak/team/broker/playwright-core-<version>/`. `<version>` and its integrity hash are read from the lockfile at the
   worker's base commit (`git show <base>:package-lock.json`), never from the worktree, and the version must match `^\d+\.\d+\.\d+$`. If that copy is missing, teamd
-  fetches the version's registry metadata, downloads the tarball, checks it against `dist.integrity` (sha512),
+  fetches the version's registry metadata, downloads the tarball, checks it against the lockfile's committed `integrity` (sha512), never the registry's,
   extracts it with `tarfile`'s `data` filter into a temporary folder, and renames that into place. A mismatch refuses
   the lane.
 - **Its profile** is generated from a checked-in template, `team/superyak_team/lane/broker.sb.tmpl`, which starts
