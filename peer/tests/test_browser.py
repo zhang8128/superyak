@@ -22,6 +22,17 @@ from superyak_peer.federation import Federation
 from superyak_peer.identity import PeerIdentity
 
 
+def open_new_layer(page):
+    """Click "New layer" and wait for the new layer's own editor. The click creates the layer on the server before the
+    editor opens, so anything typed in between lands in the editor that was already open (this made the instructions
+    test save and activate a blank layer about 1 run in 8)."""
+    before = page.url
+    page.get_by_role("button", name="New layer").click()
+    page.wait_for_url(lambda url: url != before and "#layers/" in url)
+    expect(page.get_by_label("Layer title")).to_have_value("Untitled")
+
+
+
 # A unique run directory preserves prior screenshots and works in extracted source.
 ARTIFACTS = Path(tempfile.mkdtemp(prefix="superyak-browser-", dir=os.environ.get("SUPERYAK_TEST_ARTIFACTS")))
 
@@ -479,7 +490,7 @@ def test_private_draft_exact_release_public_route_and_withdrawal(browser_peer):
                     "see what each audience would see, and turn them on when you're ready."
                 )
             ).to_be_visible()
-            patient.get_by_role("button", name="New layer").click()
+            open_new_layer(patient)
             patient.get_by_label("Layer title").fill("A steady update")
             patient.get_by_label("What do you want to share?").fill(
                 "The first words chosen for my family."
@@ -625,7 +636,7 @@ def test_attachment_stays_selected_through_upload_and_public_release(browser_pee
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Documents I chose")
             page.get_by_label("What do you want to share?").fill("A note with one file.")
             page.get_by_role("checkbox", name="Anyone with the public link").check()
@@ -661,7 +672,7 @@ def test_active_route_controls_preserve_overlapping_access(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Overlap test")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("checkbox", name="Alex’s care circle").check()
@@ -689,7 +700,7 @@ def test_expired_session_relogin_preserves_unsaved_layer(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Still in my editor")
             page.get_by_label("What do you want to share?").fill(
                 "This survives signing in again."
@@ -733,7 +744,7 @@ def test_conflict_and_untrusted_values_leave_the_browser_usable(browser_peer):
             expect(page.get_by_text("Date unavailable")).to_be_visible()
 
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.wait_for_url("**/#layers/*")
             layer_id = decode_fragment_id(page.url)
             page.get_by_label("What do you want to share?").fill("Keep my conflicting text.")
@@ -809,7 +820,7 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             ).to_be_visible()
 
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Remote delivery")
             page.get_by_role("checkbox", name="Casey Remote").check()
             page.get_by_role("button", name="Save private draft").click()
@@ -842,7 +853,7 @@ def test_dirty_layer_survives_renders_conflicts_and_an_accepted_save(browser_pee
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Kept through a dialog")
             page.get_by_label("What do you want to share?").fill("First current text")
             page.get_by_role("button", name="Account and sign out").click()
@@ -1033,7 +1044,7 @@ def test_overlapping_upload_and_save_merges_attachment_into_latest_layer_values(
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             expect(page.get_by_role("heading", name="Edit this layer")).to_be_visible()
             layer_id = decode_fragment_id(page.url)
             page.get_by_label("What do you want to share?").fill("Text captured when upload began")
@@ -1554,7 +1565,7 @@ def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(brow
             editor = page.locator("section.editor")
             expect(editor.get_by_text("Drafted by Serenity. Read it before you activate it.")).to_be_visible()
             expect(editor.get_by_text("Unsaved changes")).to_have_count(0)
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Kind").select_option("instructions")
             expect(page.get_by_role("checkbox", name="Defiant")).to_have_count(0)
             page.get_by_label("Layer title").fill("House rules")
