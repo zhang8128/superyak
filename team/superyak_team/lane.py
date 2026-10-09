@@ -18,6 +18,7 @@ import http.client
 import io
 import ipaddress
 import json
+import math
 import os
 import platform
 import queue
@@ -2184,11 +2185,34 @@ def _started(pid):
         return sec + usec / 1e6
     try:
         fields = Path("/proc/%d/stat" % int(pid)).read_text().rpartition(")")[2].split()
-        boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
-                    if line.startswith("btime "))
-        return boot + int(fields[19]) / os.sysconf("SC_CLK_TCK")      # field 22, starttime, in clock ticks
+        return _btime() + int(fields[19]) / _ticks_per_second()        # field 22, starttime, in clock ticks
     except (OSError, ValueError, IndexError, StopIteration):
         return None
+
+
+def _btime():
+    """The boot time /proc/stat gives, in whole seconds since the epoch."""
+    return next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                if line.startswith("btime "))
+
+
+def _ticks_per_second():
+    return os.sysconf("SC_CLK_TCK")
+
+
+def started_clock():
+    """Now, in _started's frame: what _started would say of a process starting now, so a turn's start taken with it is
+    never later than its processes' starts. macOS: the wall clock, which proc_pidinfo's start is. Elsewhere _started is
+    btime, whole seconds, plus clock ticks since boot, up to 1 s off the wall clock: so btime plus CLOCK_BOOTTIME (what
+    starttime counts) cut to whole ticks. No tolerance, which would let a process from before the turn count. When /proc
+    can't say, the wall clock: a later start only drops orphans, never takes one."""
+    if _libsystem() is not None:
+        return time.time()
+    try:
+        hz = _ticks_per_second()
+        return _btime() + math.floor(time.clock_gettime(time.CLOCK_BOOTTIME) * hz) / hz
+    except (OSError, ValueError, AttributeError, StopIteration):
+        return time.time()
 
 
 def _turn_sandboxed(pid, writable):

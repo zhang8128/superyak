@@ -2938,6 +2938,41 @@ def test_started_reads_a_real_process(monkeypatch):
     assert lane._started(proc.pid) is None
 
 
+def test_a_process_started_after_the_started_clock_never_reads_as_earlier():
+    """Review (Pi): a turn's start and _started must share a frame. On Linux _started is /proc/stat's btime (whole
+    seconds) plus clock ticks, up to 1 s off time.time(), so with time.time() as the turn's start an orphan the turn
+    started read as from before it. No tolerance: a slack would let a process from just before the turn count."""
+    for _ in range(20):
+        began = lane.started_clock()
+        proc = subprocess.Popen(["sleep", "5"])
+        try:
+            start = lane._started(proc.pid)
+            assert start is not None and start >= began, (start, began)
+        finally:
+            proc.kill()
+            proc.wait()
+
+
+def test_the_started_clock_off_macos_is_btime_plus_whole_ticks_of_the_boot_clock(monkeypatch):
+    """Off macOS: btime (as _started reads it) plus CLOCK_BOOTTIME (what starttime counts) cut to whole clock ticks, so
+    a process that starts now, at this tick or a later one, reads as no earlier. The wall clock is not used."""
+    monkeypatch.setattr(lane, "_libsystem", lambda: None)
+    monkeypatch.setattr(lane, "_btime", lambda: 1000)
+    monkeypatch.setattr(lane, "_ticks_per_second", lambda: 100)
+    monkeypatch.setattr(lane.time, "CLOCK_BOOTTIME", 7, raising=False)
+    monkeypatch.setattr(lane.time, "clock_gettime", lambda clock: 5.6789 if clock == 7 else 99999.0)
+    assert lane.started_clock() == 1000 + 567 / 100
+
+
+def test_a_turns_start_is_taken_on_the_started_clock(env, lanes, tmp_path, monkeypatch):
+    """teamd takes a browser turn's start with lane.started_clock, the frame the orphan rule compares it in."""
+    monkeypatch.setattr(lane, "started_clock", lambda: 12345.25)
+    fake_claude(tmp_path, monkeypatch, "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    assert team.state["workers"]["kaylee"]["turn_started"] == 12345.25
+
+
 def test_cleanup_is_unfinished_when_lsof_cannot_say(env, tmp_root, monkeypatch):
     path = lane.ensure_lane("t1", "kaylee")
     monkeypatch.setattr(lane.shutil, "which", lambda name, path=None: None)

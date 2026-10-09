@@ -323,7 +323,7 @@ class Team:
                                          preload=w["lane"]["preload"] if lane_env else None,
                                          plugins_off=lane.lane_plugins(w["path"]) if lane_env else ())
             env = self._engram_env(w)
-        began = time.time()                 # before the launch: whatever the turn starts, starts after this
+        began = lane.started_clock()        # before the launch, in _started's frame: the turn's processes start after
         if lane_env:
             env.update(lane_env)
             self._instructions_at_start(wid)
