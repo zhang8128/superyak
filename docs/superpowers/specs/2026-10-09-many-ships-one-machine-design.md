@@ -1,6 +1,6 @@
 # Many ships on one machine (D7)
 
-Status: revision 3. Revision 1 (15070a6) had Rio Grande's review (room "Superyak: city of AI" (39fd79), message
+Status: revision 3, built; revision 4 records the build's review (message 487c070b), see the last table. Revision 1 (15070a6) had Rio Grande's review (room "Superyak: city of AI" (39fd79), message
 83d519d5) and a fresh reviewer's D8 verdict, APPROVE WITH CHANGES (message 3a98c821). Revision 2 (ac1ee5f, 1f05ff9)
 resolved the five must-fixes, the should-fixes and Rio Grande's three points. Rio Grande's check of revision 2
 (message fe96a6ec) was READY AFTER EDITS; this revision makes its four required edits, its four small ones and its
@@ -466,6 +466,12 @@ directory):
   ship's hook, or whose `info/exclude` lacks the two lines, is named; nothing inside `.git` changes (R15, Known
   limits).
 - `test_status_names_a_registry_entry_without_its_claim_json` (S6).
+- `test_the_rollback_undoes_in_reverse_and_the_claim_last`: the undo steps run in the reverse of the writes, the claim
+  last; `test_a_malformed_settings_local_json_still_rolls_back`: a `settings.local.json` holding a list, or a malformed
+  hooks entry, still rolls back and is left as it was (R9).
+- `test_an_unexpected_ls_files_exit_refuses` (R4); `test_a_guard_that_breaks_refuses` and
+  `test_the_guard_reads_the_cwd_only_when_it_needs_it_and_survives_a_deleted_one` (R1, R18);
+  `test_the_machine_undock_finishes_when_its_home_is_gone` (R1, R21).
 - `test_project_root_reader_layouts`: a worktree through `commondir`, a relative `gitdir:`, a broken back-link, a
   submodule, a bare repository with worktrees and a `--separate-git-dir` checkout give the S6 answers; an unreadable
   `.git` means no repository; `git` is never called (a failing `git` is first on `PATH`) (R17).
@@ -631,3 +637,17 @@ backlog. These change on that day and must be settled first:
 | Small 7: S11 overstated what workers can read | S8, S11 (`Read`/`Grep` denies on `~/.superyak`, syntax cited) | R19 | `test_workers_deny_the_station_and_the_keys`; Mac acceptance |
 | Nit 8: Mac acceptance wording | Mac acceptance, Build order 5 | — | Mac acceptance |
 | Build note: git from the root | S5 Git | R5 | `test_dock_git_is_hardened` |
+
+## Review map (revision 4: the build's opus review, message 487c070b)
+
+| Item | Where | Requirement | Test |
+|---|---|---|---|
+| Critical 1: the `~/.superyak` denies covered the watcher's run folders, teamd's rooms and a lane preload | S8, S11, Security | R19 | `test_no_deny_covers_a_runs_own_folder`, `test_workers_deny_the_station_and_the_keys` |
+| 2: ext4 reuses inode numbers, so a re-clone can match fully | Known limits; status | R15 | the `[recloned]` tests (old checkout renamed), `test_status_names_a_claim_whose_wiring_is_missing` |
+| 3: the rollback order was untested | S9 | R9 | `test_the_rollback_undoes_in_reverse_and_the_claim_last` |
+| 4: the machine undock crashed with `~/.superyak` gone | S10 | R1, R21 | `test_the_machine_undock_finishes_when_its_home_is_gone` |
+| 5: the MCP guard read the cwd on every call | S7 | R1, R18 | `test_the_guard_reads_the_cwd_only_when_it_needs_it_and_survives_a_deleted_one` |
+| 6: the rollback caught too few exception types | S9 | R9 | `test_a_malformed_settings_local_json_still_rolls_back` |
+| 7: two fail-closed branches untested | S5, S7 | R4, R18 | `test_an_unexpected_ls_files_exit_refuses`, `test_a_guard_that_breaks_refuses` |
+| 8: Known limits said status re-runs the hardened checks | Known limits; S6 (status now also names a registry entry without its claim.json) | — | `test_status_names_a_registry_entry_without_its_claim_json` |
+| 9: the collision guard sees only homes under `~/.superyak` | Known limits | — | — (the RE-DOCK flag in `make station-pending` is Rio Grande's peer branch) |
