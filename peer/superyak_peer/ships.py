@@ -162,11 +162,24 @@ class Ships:
         db.execute("UPDATE dockings SET status='confirmed',owner_id=?,ship_id=?,key=? WHERE id=?", (actor, ship_id, key, row['id']))
         return public_user(db.execute('SELECT * FROM users WHERE id=?', (ship_id,)).fetchone())
 
+    @staticmethod
+    def _existing_name(db, username):
+        """What a docking's ship name already belongs to: None, a person, or a ship with its owner's username and its
+        active keys, every one of which approving revokes (_confirm_docking_row)."""
+        user = db.execute('SELECT id,kind,owner_id FROM users WHERE username=?', (username,)).fetchone()
+        if user is None:
+            return None
+        if user['kind'] != 'ship':
+            return {'kind': 'person'}
+        owner = db.execute('SELECT username FROM users WHERE id=?', (user['owner_id'],)).fetchone()
+        keys = db.execute('SELECT count(*) FROM ship_keys WHERE ship_id=? AND revoked IS NULL', (user['id'],)).fetchone()[0]
+        return {'kind': 'ship', 'owner': owner['username'] if owner else None, 'active_keys': keys}
+
     def station_pending(self):
         """Trusted local operator only: waiting dockings and pending access requests."""
         with self.transaction() as db:
             now = self.clock()
-            dockings = [{'kind': 'docking', **dict(r)} for r in db.execute(
+            dockings = [{'kind': 'docking', **dict(r), 'existing': self._existing_name(db, r['ship_name'])} for r in db.execute(
                 "SELECT id,ship_name,machine,created,expires FROM dockings WHERE status='waiting' AND expires>? ORDER BY created", (now,))]
             requests = [{'kind': 'access', **dict(r)} for r in db.execute(
                 "SELECT id,name,contact,note,created,expires FROM access_requests WHERE status='pending' AND expires>? ORDER BY created", (now,))]
