@@ -340,12 +340,21 @@ the Mac.
   - **This uid:** `lsof -nP -iTCP -sTCP:LISTEN -F pctn`, with each socket's address and family, is authoritative.
     Coverage (below) replaces the old lsof/netstat cross-check.
   - **Other uids:** `nettop -L 1 -n -m tcp`, Listen rows only. nettop prints no uid, so each row's uid comes from
-    `ps`; this uid's rows are lsof's to name. A pid whose uid can't be read names nothing. The parser is strict: the
-    header must be exactly the one measured on the build above; each process line is `<name>.<pid>` (the pid is the
-    trailing digits, since names hold dots, spaces and commas); each socket row follows its process line.
-  - **Any naming failure refuses the whole check.** The rule "when either command fails, the result is not ok" stays:
-    lsof or nettop missing, exiting non-zero, timing out, printing an unknown header, or printing any socket row it
-    can't read completely.
+    `ps`; this uid's rows are lsof's to name. nettop's rows of this uid are judged too, which only adds refusals, but
+    never name a port. A pid whose uid can't be read names nothing. If its row covers a reachable (address, port), the
+    naming runs once more, and if ps still can't place it, the check refuses, so a vanished owner never slips past
+    while another row covers the same address (2b6e272b). The parser is strict: the header must be exactly the one
+    measured on the build above; each process line is `<name>.<pid>` (the pid is the trailing digits, since names hold
+    dots, spaces and commas); each socket row follows its process line.
+  - **Any naming failure refuses the whole check.** The rule "when either command fails, the result is not ok" stays.
+    It covers:
+    - lsof or nettop missing, exiting non-zero, timing out, printing an unknown header, or printing any socket row it
+      can't read completely;
+    - in lsof's output, an `n` line before any `p` line, a port that can't be read, and a `*` without its type
+      (which family's wildcard can't be told).
+    
+    lsof prints a link-local address the KAME way, with its scope inside it: `[fe80:1::1]:P` for `fe80::1%lo0`
+    (measured on macOS 27). The scope is moved out to the interface's name.
   - Each owner is identified by `proc_pidpath(pid)`, never by nettop's name field, and D10, D11, I3 and I4 apply as
     before.
 - **2. Judge the named rows, and refuse without scanning when one fails,** so a waiting lane doesn't scan Andy's
@@ -384,7 +393,11 @@ the Mac.
       retried, then the check refuses; it's never a verdict on the port.
   - **Retry before refusing:** every pending, erroring or unnamed (address, port) is re-probed one at a time with a
     2 s deadline, and the naming is read once more, before the verdict. It still fails closed. A check that fails
-    mid-turn stops a long shard and the broker, so this is worth its few seconds.
+    mid-turn stops a long shard and the broker, so this is worth its few seconds. More than 64 such ports refuses at
+    once ("the scan is incomplete" and the count). The whole check has a 90 s deadline, and running past it refuses.
+  - **After the scan, lsof is read once more,** and any new row is judged: a same-uid server that bound after lsof
+    first ran, such as `127.0.0.1:7000` beside an approved `*:7000`, is refused now, not at the next check.
+  - **Notes** (`::1` not configured) are part of the check's own result, not only the acceptance row's.
 - **4. Coverage, per (address, port), never per port.**
   - **What covers:** a scanned (address, port) is covered only by a Listen row on that address, on its family's
     wildcard (`*` or `0.0.0.0` for IPv4, `*` or `::` for IPv6), or, for `127.0.0.1`, on its IPv4-mapped form
@@ -558,7 +571,12 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   (Linux binds 127.0.0.2 with no alias, but Linux runs no lanes; its tests use a getifaddrs fixture.) nettop's format
   is a private tool's output: a macOS update that changes its header makes the check refuse every lane until the parser
   is measured again, which fails closed, not open. A port opened between the scan and a turn's start is reachable until
-  the next check, at most 60 s later, as before.
+  the next check, at most 60 s later, as before. There is also a window between the second lsof and the scan's own
+  connects: a same-uid listener that binds beside an approved wildcard inside it is covered by the wildcard until the
+  next check.
+- **A check holds teamd's lock while it runs** (amendment): the scan, any probes again (2 s each, at most 64) and the
+  naming, up to the 90 s deadline. The lead's stop requests and the SIGKILL of a turn that ignored SIGTERM wait
+  meanwhile. Moving the check out from under the lock is a separate item.
 - **macOS sends no RST to a socket that's bound but not listening** (amendment). A connect there times out instead
   of being refused, unlike on Linux, so such a socket refuses the lane until it closes or listens. The re-probe
   absorbs short-lived ones.
@@ -572,7 +590,8 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   - Lane servers get a connect-and-close in the middle of their tests.
 - **launchd's approval covers what its jobs run** (from D11). nettop, like netstat, gives each socket one pid, and
   launchd holds the listener of every socket-activated job, so approving `/sbin/launchd` approves whatever those jobs
-  run, Apple's or not.
+  run, Apple's or not. **Ruling (Andy, 2026-10-09): keep D11 as is.** `/sbin/launchd` stays approved by path, and
+  its socket-activated jobs aren't checked further. No third-party plist scan.
 - The preload is advisory: a worker can start a child without `NODE_OPTIONS`. Binding beyond loopback is caught only
   by the next check (at most 60 s later). The README therefore tells people running lanes to keep the macOS firewall's
   "Block all incoming connections" on.
