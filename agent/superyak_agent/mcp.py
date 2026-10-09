@@ -6,7 +6,9 @@ import queue
 import sys
 import threading
 import uuid
+from pathlib import Path
 from superyak_team.teamlib import redact
+from . import claims
 from .station import MESSAGE_LIMIT, StationError, brief_block, client_for, fence_message, label, load_config, plain_id, read_hint, shown_id, source_label
 
 DEFAULT_CHARS = 2000
@@ -116,8 +118,9 @@ def more_count(left, more):
 
 
 class Tools:
-    def __init__(self, client, quick_client=None):
+    def __init__(self, client, quick_client=None, guard=None):
         self.client, self.quick_client = client, quick_client or client
+        self.guard = guard  # D7: why this ship may not act in this session, re-read on every call (claim_guard)
         # Without a Claude Code session id (Codex, scripts) posts are keyed to this process, so two sessions'
         # identical posts never collapse into one; a retry within the process still posts once.
         self.salt, self.current, self.cancelled = f'proc-{uuid.uuid4().hex[:12]}', None, set()
@@ -289,7 +292,7 @@ def handle(tools, msg):
     if method == 'initialize':
         result = {'protocolVersion': params.get('protocolVersion', '2025-06-18'),
                   'capabilities': {'tools': {}}, 'serverInfo': {'name': 'superyak-station', 'version': '0.1.0'}}
-        blocks = initialize_instructions(tools, params)
+        blocks = None if _refusal(tools) else initialize_instructions(tools, params)
         if blocks:
             result['instructions'] = blocks
         return {'jsonrpc': '2.0', 'id': mid, 'result': result}
@@ -305,6 +308,9 @@ def handle(tools, msg):
             return {'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32602, 'message': f'unknown tool {name!r}'}}
         if arguments is None:
             arguments = {}
+        refused = _refusal(tools)
+        if refused:
+            return {'jsonrpc': '2.0', 'id': mid, 'result': {'content': [{'type': 'text', 'text': refused}], 'isError': True}}
         try:
             if not isinstance(arguments, dict):
                 raise ValueError('tool arguments must be an object')
@@ -319,9 +325,28 @@ def handle(tools, msg):
     return {'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32601, 'message': f'unknown method {method!r}'}}
 
 
+def _refusal(tools):
+    """The guard's refusal, or None. A guard that breaks refuses: the server never acts when it can't tell."""
+    guard = getattr(tools, 'guard', None)
+    if guard is None:
+        return None
+    try:
+        return guard()
+    except Exception as exc:  # noqa: BLE001
+        return f'The station tools refuse: this ship\'s claims could not be checked ({type(exc).__name__}).'
+
+
+def claim_guard(config_path):
+    """S7, R18: on every call, the session's project (CLAUDE_PROJECT_DIR, else this server's own cwd, where Claude Code
+    and Codex start it, M8) against the claims registry, read afresh."""
+    home = Path(config_path).parent
+    return lambda: claims.refusal(home, claims.session_project(os.getcwd()))
+
+
 def serve(config_path):
     config = load_config(config_path)
-    serve_with(Tools(client_for(config), quick_client=client_for(config, timeout=3)), sys.stdin, sys.stdout)
+    serve_with(Tools(client_for(config), quick_client=client_for(config, timeout=3), guard=claim_guard(config_path)),
+               sys.stdin, sys.stdout)
 
 
 def serve_with(tools, stdin, stdout):

@@ -30,6 +30,9 @@
    "Bash(git rebase*)",
    "Bash(security*)",
    "Bash(*security *)",
+   "mcp__station",
+   "Read(//home/u/.superyak/**)",
+   "Grep(//home/u/.superyak/**)",
    "WebSearch",
    "Edit(//r/wt/.git)",
    "Edit(//r/wt/.git/**)"

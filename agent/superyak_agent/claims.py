@@ -343,3 +343,28 @@ def stale_claims(entries):
         if (st.st_dev, st.st_ino) != (entry['dev'], entry['ino']):
             stale.append((entry, 'its root now holds another folder (re-cloned or remounted)'))
     return stale
+
+
+def refusal(home, project_dir):
+    """S7: why the station MCP server of the ship whose home this is refuses a call from a session in `project_dir`,
+    or None when it may act. In order: inside a teamd worker or a watcher run; an unreadable registry; the machine
+    ship in another ship's project (with the codex -p hint) or at a stale claim; a project ship at its stale claim,
+    outside its claim, or with no claim."""
+    if os.environ.get('SUPERYAK_RUN') not in (None, '', 'hook'):
+        return ('The station tools are off inside teamd workers and watcher runs (SUPERYAK_RUN is set): those act for '
+                'the person through their own channels, never as a ship.')
+    acts, detail = verdict(home, project_dir)
+    ship = Path(home).name
+    if acts == 'act':
+        return None
+    if acts == 'unreadable':
+        return f'{detail}, so every station tool on this machine refuses. Run `make dock` for your ship to see why.'
+    if acts == 'claimed':
+        return (f"This session is in {detail['root']}, which {detail['ship']} claims. In Codex, run "
+                f"`codex -p {detail['ship']}`; a Claude Code session started there uses {detail['ship']}'s station.")
+    if acts == 'stale':
+        return (f"{detail['ship']}'s claim on {detail['root']} is stale (the repository moved, or another folder is at "
+                f"that path), so the station tools refuse here. Dock {detail['ship']} again to refresh it.")
+    if acts == 'elsewhere':
+        return f"{ship} acts only in {detail['root']}."
+    return f'{ship} has no claim in {registry_path()}, so its station tools refuse. Dock it again.'

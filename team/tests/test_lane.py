@@ -594,7 +594,7 @@ SNAPSHOTS = Path(__file__).resolve().parent / "snapshots"
 
 def test_without_a_lane_nothing_changes(env, monkeypatch):
     """Spec unit test 1 (the team half; agent/tests/test_runs.py has the rest). The snapshots were taken from the code
-    before lanes existed, with HOME=/home/u."""
+    before lanes existed, plus D7's three denies (mcp__station, Read and Grep of ~/.superyak; R19), with HOME=/home/u."""
     monkeypatch.setenv("HOME", "/home/u")
     build = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
     collab = workers.claude_sandbox_settings("/r/room", "collab", True, repo="/r/repo")
@@ -4698,7 +4698,8 @@ def test_a_browser_worker_starts_with_strict_mcp_config_and_hooks_off(env, monke
 
 
 def test_a_non_browser_worker_is_byte_for_byte_what_it_was(env, monkeypatch):
-    """C1: the lane's additions are the lane's only. The snapshots were taken from the code before lanes existed."""
+    """C1: the lane's additions are the lane's only. The snapshots were taken from the code before lanes existed, plus
+    D7's three denies (R19)."""
     monkeypatch.setenv("HOME", "/home/u")
     cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "wash", "/r/wt", "go", repo="/r/repo")
     assert "--strict-mcp-config" not in cmd

@@ -308,6 +308,10 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
     deny = ["Read(//**/.env)", "Read(//**/.env.*)", "WebFetch",
             "Bash(git push*)", "Bash(git commit*)", "Bash(git reset*)", "Bash(git rebase*)",
             "Bash(security*)", "Bash(*security *)"]
+    # D7 (S8, S11, R19): workers never use a ship's station tools, even where a claimed project's settings.local.json
+    # (the lead's approvals) allows them, and never read the ships' homes through the file tools. `//` is absolute.
+    superyak = os.path.join(home, ".superyak")
+    deny += ["mcp__station", "Read(/%s/**)" % superyak, "Grep(/%s/**)" % superyak]
     if mode == "collab":
         deny += ["Edit", "Write", "NotebookEdit"]
         allow_write = []

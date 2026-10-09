@@ -487,7 +487,15 @@ get both `CLAUDE_PROJECT_DIR` and stdin):
   station call refused (S8). With an allow rule for `Read(~/.superyak/**)` added to that file, the worker's Read,
   Grep and Glob of `~/.superyak` are still denied (S11).
 - Codex: re-checks M8 (where Codex starts MCP servers) on the Codex version present; a different answer stops the
-  build at step 5. `codex -p <name> mcp list` shows the project ship's station (M6).
+  build at step 5. `codex -p <name> mcp list` shows the project ship's station (M6). Build step 5 went ahead on
+  Codex 0.160.0, the version M8 was measured on that day.
+- The lane preload under R19 (Rio Grande's measurement, room message 1138ee2e): on the Pi (Claude Code 2.1.295,
+  bwrap) the `Read(//<home>/.superyak/**)` deny also hid `~/.superyak` from sandboxed Bash, and an explicit
+  `allowRead` file under the denied folder stayed readable. The lane's preload is such a file
+  (`~/.superyak/team/teams/<id>/workers/<w>/lane-preload.cjs`), and Seatbelt's rule order could differ. So: with
+  R19's denies in place, a browser lane worker's `node` must still load its preload (the lane acceptance run shows it,
+  since every lane node requires it). If it doesn't, narrow R19's `Read` and `Grep` denies to
+  `~/.superyak/station.json` and `~/.superyak/ships/**`, which hold the keys, and re-run.
 - `/cd`: in a session started in hyper-bricks, `/cd` out and back; in one started outside, `/cd` in. Pass: the tools'
   ship and the hook's ship are the same after each `/cd` (whichever ship that is); record which.
 

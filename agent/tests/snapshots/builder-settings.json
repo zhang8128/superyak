@@ -19,8 +19,10 @@
    "Bash(security*)",
    "Edit(//r/wt/.git)",
    "Edit(//r/wt/.git/**)",
+   "Grep(//home/u/.superyak/**)",
    "Read(//**/.env)",
    "Read(//**/.env.*)",
+   "Read(//home/u/.superyak/**)",
    "WebFetch",
    "WebSearch",
    "mcp__station"
