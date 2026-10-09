@@ -50,6 +50,10 @@ MANAGED_MCP = Path("/Library/Application Support/ClaudeCode/managed-mcp.json")
 # otelHeadersHelper and proxyAuthHelper.
 HELPER_KEYS = ("apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "otelHeadersHelper",
                "proxyAuthHelper")
+# H1: keys read from the user's and the managed files that also run a command (processWrapper: managed, flag and user
+# settings only, confirmed in 2.1.295), and the managed-only policy helpers (both spellings the binary knows).
+USER_COMMAND_KEYS = ("processWrapper",)
+MANAGED_COMMAND_KEYS = ("policyHelper", "policyHelpers")
 LIVE_STATES = ("preparing", "queued", "running", "idle", "waiting")   # teamd.LIVE: a worker in one of these is alive
 
 
@@ -136,7 +140,15 @@ def _widenings(data, managed):
     if any(rule == "WebFetch" or rule.startswith("WebFetch(") for rule in allow):
         out.append("allows WebFetch")
     out += ["sets %s, which Claude Code runs outside the sandbox with the lane's environment" % key
-            for key in HELPER_KEYS if data.get(key) not in (None, "")]
+            for key in HELPER_KEYS + USER_COMMAND_KEYS + (MANAGED_COMMAND_KEYS if managed else ())
+            if data.get(key) not in (None, "")]
+    if managed:
+        plugins = data.get("enabledPlugins")
+        if plugins is not None and not isinstance(plugins, dict):
+            out.append("can't be read (its enabledPlugins isn't an object)")
+        elif isinstance(plugins, dict) and any(value is True for value in plugins.values()):
+            out.append("forces a plugin on with enabledPlugins, whose LSP servers and monitors would run with the "
+                       "lane's environment")
     if managed and data.get("hooks"):
         out.append("defines hooks, which Claude Code runs outside the sandbox with the lane's environment even under "
                    "disableAllHooks")
@@ -160,25 +172,46 @@ PLUGIN_SETTINGS_MAX = 1 << 20
 
 
 def _plugins_named(path, follow):
-    """The plugin ids a settings file's enabledPlugins names, whatever their values; [] when it can't be read. Never
+    """The plugin ids a settings file's enabledPlugins names, whatever their values; [] when there is no such file.
+    A file that exists but can't be fully read (not a regular file, over 1 MB, not JSON, not an object, enabledPlugins
+    not an object, any other OSError) raises LaneRefused naming it: the plugins it enables would stay on (H2). Never
     waits on a FIFO and never reads past 1 MB. A user's file is read where it is; the worktree's are the worker's, so
     one that is a link is still read (Claude Code would follow it) but only as a plain file."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (0 if follow else os.O_NOFOLLOW))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError as e:
+        raise LaneRefused("%s can't be read (%s), so the plugins it enables can't be switched off"
+                          % (path, e.strerror or e.__class__.__name__))
+    try:
+        regular = stat.S_ISREG(os.fstat(fd).st_mode)
     except OSError:
-        return []
+        regular = False
+    if not regular:
+        os.close(fd)
+        raise LaneRefused("%s isn't a regular file, so the plugins it enables can't be switched off" % path)
     with os.fdopen(fd, "rb") as f:
-        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-            return []
-        raw = f.read(PLUGIN_SETTINGS_MAX + 1)
+        try:
+            raw = f.read(PLUGIN_SETTINGS_MAX + 1)
+        except OSError as e:
+            raise LaneRefused("%s can't be read (%s), so the plugins it enables can't be switched off"
+                              % (path, e.strerror or e.__class__.__name__))
     if len(raw) > PLUGIN_SETTINGS_MAX:
-        return []
+        raise LaneRefused("%s is over 1 MB, so the plugins it enables can't be switched off" % path)
     try:
         data = json.loads(raw)
     except ValueError:
+        raise LaneRefused("%s isn't valid JSON, so the plugins it enables can't be switched off" % path)
+    if not isinstance(data, dict):
+        raise LaneRefused("%s isn't a JSON object, so the plugins it enables can't be switched off" % path)
+    plugins = data.get("enabledPlugins")
+    if plugins is None:
         return []
-    plugins = data.get("enabledPlugins") if isinstance(data, dict) else None
-    return [str(key) for key in plugins] if isinstance(plugins, dict) else []
+    if not isinstance(plugins, dict):
+        raise LaneRefused("%s: its enabledPlugins isn't an object, so the plugins it enables can't be switched off"
+                          % path)
+    return [str(key) for key in plugins]
 
 
 def lane_plugins(worktree):
@@ -192,7 +225,7 @@ def lane_plugins(worktree):
         names.update(_plugins_named(path, follow=True))
     for name in ("settings.json", "settings.local.json"):
         names.update(_plugins_named(Path(worktree) / ".claude" / name, follow=True))
-    return sorted(names)[:500]
+    return sorted(names)
 
 
 def check_spawn(cfg, kind, mode):

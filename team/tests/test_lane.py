@@ -4979,7 +4979,7 @@ def test_every_plugin_the_user_or_the_worktree_names_is_off_in_a_lane(env, tmp_p
     wt = tmp_path / "wt"
     (wt / ".claude").mkdir(parents=True)
     (wt / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {"planted@evil": {"version": "1"}}}))
-    (wt / ".claude" / "settings.local.json").write_text("{not json")
+    (wt / ".claude" / "settings.local.json").write_text("{}")             # one that doesn't parse refuses (H2)
     assert lane.lane_plugins(wt) == ["engram@superyak", "fmt@y", "lsp@z", "planted@evil"]
     settings = workers.claude_sandbox_settings(str(wt), "build", False, repo=str(wt), lane="/tmp/sy-lane-1/0123456789",
                                                preload="/h/p.cjs", plugins_off=lane.lane_plugins(wt))
@@ -4989,20 +4989,96 @@ def test_every_plugin_the_user_or_the_worktree_names_is_off_in_a_lane(env, tmp_p
 
 
 def test_reading_the_worktrees_plugins_never_waits_on_a_fifo_or_reads_a_huge_file(env, tmp_path):
+    """Never waits on a FIFO, never reads past 1 MB: and (H2) each refuses the turn instead of passing."""
     wt = tmp_path / "wt"
     (wt / ".claude").mkdir(parents=True)
     os.mkfifo(wt / ".claude" / "settings.json")
     (wt / ".claude" / "settings.local.json").write_text(json.dumps({"enabledPlugins": {"big@x": True}})
                                                         + " " * (2 << 20))
     result = []
-    t = threading.Thread(target=lambda: result.append(lane.lane_plugins(wt)), daemon=True)
+
+    def attempt():
+        try:
+            result.append(lane.lane_plugins(wt))
+        except lane.LaneRefused as e:
+            result.append(str(e))
+    t = threading.Thread(target=attempt, daemon=True)
     t.start()
     t.join(10)
     try:
-        assert not t.is_alive() and result == [[]]
+        assert not t.is_alive() and len(result) == 1 and "settings.json" in result[0] and "regular file" in result[0]
     finally:
         if t.is_alive():
             os.close(os.open(wt / ".claude" / "settings.json", os.O_WRONLY | os.O_NONBLOCK))
+
+
+@pytest.mark.parametrize("where", ["worktree", "user"])
+@pytest.mark.parametrize("damage, reason", [
+    ("fifo", "isn't a regular file"), ("directory", "isn't a regular file"), ("huge", "over 1 MB"),
+    ("junk", "isn't valid JSON"), ("array", "isn't a JSON object"), ("plugins array", "enabledPlugins isn't an object"),
+    ("unreadable", "can't be read"), ("loop", "can't be read")])
+def test_h2_a_settings_file_that_cant_be_fully_read_refuses_the_turn(env, tmp_path, where, damage, reason):
+    """H2: the plugins such a file enables would stay on, so lane_plugins refuses, naming the file and why."""
+    wt = tmp_path / "wt"
+    base = wt / ".claude" if where == "worktree" else env["home"] / ".claude"
+    base.mkdir(parents=True)
+    path = base / "settings.local.json"
+    if damage == "fifo":
+        os.mkfifo(path)
+    elif damage == "directory":
+        path.mkdir()
+    elif damage == "huge":
+        path.write_text(json.dumps({"enabledPlugins": {"big@x": True}}) + " " * (2 << 20))
+    elif damage == "junk":
+        path.write_text("{not json")
+    elif damage == "array":
+        path.write_text("[]")
+    elif damage == "plugins array":
+        path.write_text(json.dumps({"enabledPlugins": ["a@b"]}))
+    elif damage == "unreadable":
+        path.write_text("{}")
+        path.chmod(0)
+        if os.access(path, os.R_OK):
+            pytest.skip("running as a user that ignores modes")
+    elif damage == "loop":
+        os.symlink(path.name, path)
+    with pytest.raises(lane.LaneRefused) as refused:
+        lane.lane_plugins(wt)
+    assert str(path) in str(refused.value) and reason in str(refused.value)
+    path.chmod(0o600) if damage == "unreadable" else None
+
+
+def test_h2_missing_files_and_no_claude_folder_are_fine(env, tmp_path):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    assert lane.lane_plugins(wt) == []
+    (wt / ".claude").write_text("a file where the folder would be")       # nothing there to read
+    assert lane.lane_plugins(wt) == []
+    os.unlink(wt / ".claude")
+    (wt / ".claude").mkdir()
+    os.symlink("nowhere", wt / ".claude" / "settings.json")             # dangling: Claude Code reads nothing either
+    assert lane.lane_plugins(wt) == []
+
+
+def test_h2_the_plugin_list_is_not_truncated(env, tmp_path):
+    wt = tmp_path / "wt"
+    (wt / ".claude").mkdir(parents=True)
+    (wt / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {"p%d@x" % i: True
+                                                                                  for i in range(700)}}))
+    assert len(lane.lane_plugins(wt)) == 700
+
+
+def test_h2_a_turn_whose_settings_cant_be_read_fails_the_worker_with_the_reason(env, lanes):
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    (Path(w["path"]) / ".claude").mkdir(exist_ok=True)
+    (Path(w["path"]) / ".claude" / "settings.local.json").write_text("{not json")
+    team.deliver("kaylee", "again", "lead")
+    assert w["state"] == "failed" and "kaylee" not in team.procs
+    assert any("LANE REFUSED" in m["message"] and "settings.local.json" in m["message"]
+               and "isn't valid JSON" in m["message"] for m in team.state["lead_inbox"])
 
 
 def test_a_browser_turns_flag_settings_turn_the_users_plugins_off(env, lanes):
@@ -5112,3 +5188,49 @@ def test_the_docs_say_a_compromised_turn_can_plant_instructions_anywhere(env):
         flat = " ".join(text.split())
         assert "can plant instructions in any file the next turn reads, not only instruction files" in flat
         assert "the lead reviews the rest of the diff" in flat
+
+
+# ---------- Lane hardening H1: more settings that run a command or load a plugin refuse a lane ----------
+
+@pytest.mark.parametrize("name", ["settings.json", "settings.local.json", "managed"])
+def test_h1_a_process_wrapper_in_user_or_managed_settings_refuses_a_lane(env, name):
+    """H1: the binary (2.1.295) reads processWrapper from managed, flag and user settings only, and runs it outside
+    the sandbox. Empty is no wrapper."""
+    path = lane.MANAGED_SETTINGS if name == "managed" else env["home"] / ".claude" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"processWrapper": "/usr/local/bin/wrap"}))
+    assert lane.settings_widenings() == ["%s sets processWrapper, which Claude Code runs outside the sandbox with the "
+                                         "lane's environment" % path]
+    path.write_text(json.dumps({"processWrapper": ""}))
+    assert lane.settings_widenings() == []
+
+
+@pytest.mark.parametrize("key", ["policyHelper", "policyHelpers"])
+def test_h1_a_policy_helper_in_managed_settings_refuses_a_lane(env, key):
+    lane.MANAGED_SETTINGS.write_text(json.dumps({key: {"darwin": {"command": "/usr/local/bin/policy"}}}))
+    assert lane.settings_widenings() == ["%s sets %s, which Claude Code runs outside the sandbox with the lane's "
+                                         "environment" % (lane.MANAGED_SETTINGS, key)]
+    lane.MANAGED_SETTINGS.write_text(json.dumps({key: ""}))
+    assert lane.settings_widenings() == []
+
+
+def test_h1_a_policy_helper_in_user_settings_is_not_this_checks_business(env):
+    """policyHelpers is a managed-only key: the user's file can name it without effect."""
+    (env["home"] / ".claude").mkdir()
+    (env["home"] / ".claude" / "settings.json").write_text(json.dumps({"policyHelpers": {"darwin": "x"}}))
+    assert lane.settings_widenings() == []
+
+
+def test_h1_a_plugin_forced_on_by_managed_policy_refuses_a_lane(env):
+    """H1: a managed enabledPlugins entry set to true can't be turned off by flag settings (policy outranks them), and
+    its LSP servers and monitors would run with the lane's environment."""
+    claude = env["home"] / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"mine@x": True}}))
+    lane.MANAGED_SETTINGS.write_text(json.dumps({"enabledPlugins": {"off@x": False}}))
+    assert lane.settings_widenings() == []
+    lane.MANAGED_SETTINGS.write_text(json.dumps({"enabledPlugins": {"off@x": False, "forced@evil": True}}))
+    assert lane.settings_widenings() == ["%s forces a plugin on with enabledPlugins, whose LSP servers and monitors "
+                                         "would run with the lane's environment" % lane.MANAGED_SETTINGS]
+    lane.MANAGED_SETTINGS.write_text(json.dumps({"enabledPlugins": ["a@b"]}))
+    assert len(lane.settings_widenings()) == 1                      # the wrong shape fails closed
