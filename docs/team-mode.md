@@ -71,6 +71,8 @@ in), so nothing is written to the repo. Durable learnings are shared with
 - **Claude workers:** `--permission-mode dontAsk` with explicit allow rules; OS sandbox denies
   reading `$HOME` except the worker folder, repo and dev-tool paths, and `**/.env*` everywhere;
   no WebFetch.
+- **One teamd per team:** `lane.hold_team` holds the team's lock for teamd's whole life, so a second teamd for the
+  same team refuses to start. Browser lanes rely on it: a lane's port block is live exactly while its teamd holds that lock.
 - **Messages:** everything external reaches agents fenced as quoted data; outbound text is
   secret-redacted; builder peer messages are pull-only; per-pair loop guards escalate to the lead.
 

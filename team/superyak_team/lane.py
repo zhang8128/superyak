@@ -467,14 +467,17 @@ def allocate_block(team_id, worker_id):
 
 
 def release_block(team_id, worker_id):
-    """Back to the pool. Call only once the lane's process cleanup has finished."""
+    """Back to the pool. Call only once the lane's process cleanup has finished. Never raises: True once the block is
+    out of the registry (or never was in it), False when the registry needs a person (the caller says so)."""
     try:
         with _registry_lock():
             data = _read_registry()
             if data.pop(lane_hash(team_id, worker_id), None) is not None:
                 _write_registry(data)
-    except LaneRefused as e:                            # cleanup never raises: the registry needs a person
+        return True
+    except LaneRefused as e:
         print("superyak-team: lane block of %s/%s not released: %s" % (team_id, worker_id, e), file=sys.stderr)
+        return False
 
 
 def block_of(team_id, worker_id):
@@ -1825,6 +1828,24 @@ def cleanup_processes(path, base, broker=None, env=None):
     return True
 
 
+def cleanup_env(env):
+    """End whatever still carries env=(name, value), and nothing else: no ports, no folder. A turn's setsid leftovers
+    carry the lane's CLAUDE_CODE_TMPDIR; the broker doesn't. SIGTERM, then SIGKILL after KILL_GRACE_S for what still
+    matches. True when ps could say."""
+    pids = env_pids(*env)
+    if pids is None:
+        return False
+    for pid in pids:
+        _kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + KILL_GRACE_S
+    while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+        time.sleep(0.1)
+    again = env_pids(*env)
+    for pid in again or ():
+        _kill(pid, signal.SIGKILL)
+    return again is not None
+
+
 DENIAL_RE = re.compile(r"Sandbox: (.+?)\((\d+)\) deny\(\d+\) (\S+) ?(.*)$")
 
 
@@ -1870,21 +1891,28 @@ def denials_for(lines, pids):
 
 def scrub(text, secrets_):
     """Playwright's errors quote the whole endpoint, and teamlib.redact doesn't know the secret: remove it."""
-    text = text if isinstance(text, str) else str(text)
+    if not isinstance(text, str):
+        return text
     for secret in secrets_:
         if secret:
             text = text.replace(secret, "[lane secret]")
     return text
 
 
-def scrub_file(path, secrets_):
-    """Rewrite a file teamd keeps (events.jsonl, stderr.log) without the secret. Only after the turn has ended."""
+ENDPOINT_RE = re.compile(r"(ws://127\.0\.0\.1:\d+/)[0-9a-f]{64}")      # a dead teamd's secret, by its shape
+
+
+def scrub_file(path, secrets_, shaped=False):
+    """Rewrite a file teamd keeps (events.jsonl, stderr.log) without the secret. Only after the turn has ended.
+    With shaped, also any endpoint of the secret's shape: the sweep doesn't know the dead teamd's secrets."""
     path = Path(path)
-    if not secrets_ or not path.is_file() or path.is_symlink():
+    if not (secrets_ or shaped) or not path.is_file() or path.is_symlink():
         return
     try:
         text = path.read_text(errors="replace")
         clean = scrub(text, secrets_)
+        if shaped:
+            clean = ENDPOINT_RE.sub(r"\1[lane secret]", clean)
         if clean != text:
             tmp = path.with_name(path.name + ".scrub")
             _write_text(tmp, clean, 0o600)
@@ -1913,7 +1941,7 @@ def lost_turn(pid, cwd, started, now=None):
     so Andy's own claude is never killed."""
     if not pid or not started:
         return False
-    r = _run(["/bin/ps", "-o", "pgid=,etime=,command=", "-p", str(pid)], timeout=10)
+    r = _run(["/bin/ps", "-ww", "-o", "pgid=,etime=,command=", "-p", str(pid)], timeout=10)
     fields = r.stdout.split(None, 2) if r is not None and r.returncode == 0 else []
     if len(fields) != 3 or fields[0] != str(pid) or "claude" not in fields[2]:
         return False

@@ -519,7 +519,7 @@ def test_an_unreadable_registry_refuses_instead_of_raising(env, held, damage):
         with pytest.raises(lane.LaneRefused):
             lane.live_blocks()
         assert lane.block_of("t1", "kaylee") is None
-        assert lane.release_block("t1", "kaylee") is None                  # fix 5: cleanup never raises
+        assert lane.release_block("t1", "kaylee") is False                 # fix 5: cleanup never raises; it says so
     finally:
         if damage == "unreadable":
             os.chmod(registry, 0o600)
@@ -3237,7 +3237,7 @@ def test_a_scrub_that_cant_write_never_keeps_a_lane_alive(env, lanes, monkeypatc
     team, now = browser_team(env)
     team.spawn("check the login page", "claude", browser=True)
 
-    def broken(path, secrets_):
+    def broken(path, secrets_, **kw):
         raise lane.LaneRefused("%s can't be scrubbed of the lane's secret (disk full)" % path)
     monkeypatch.setattr(lane, "scrub_file", broken)
     team.stop_worker("kaylee")
@@ -3268,7 +3268,7 @@ def test_a_check_that_errs_before_a_turn_refuses_the_lane(env, lanes, monkeypatc
                for m in team.state["lead_inbox"])
 
 
-def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn(env, lanes, monkeypatch):
+def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn_task8(env, lanes, monkeypatch):
     team, now = browser_team(env)
     held = []
 
@@ -3287,3 +3287,331 @@ def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn(env, lanes
     with pytest.raises(lane.LaneRefused, match="1250"):
         team.spawn("x", "claude", browser=True)
     assert held == [True] and not team.state["workers"]
+
+
+# ---------- Task 8, fix round 1 ----------
+
+def fake_claude(tmp_path, monkeypatch, body):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "claude").write_text("#!/bin/sh\n" + body)
+    (bin_dir / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", "%s:%s" % (bin_dir, os.environ["PATH"]))
+
+
+def lead_messages(team, label):
+    return [m["message"] for m in team.state["lead_inbox"] if label in m["message"]]
+
+
+def test_a_stopped_turn_that_ignores_sigterm_is_killed(env, lanes, tmp_path, monkeypatch):
+    fake_claude(tmp_path, monkeypatch, "trap '' TERM\n"
+                "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n"
+                "i=0; while [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    proc = team.procs["kaylee"]
+    lanes["state"].update(ok=False, problems=["Python (pid 9) listens on port 8000"])
+    try:
+        for _ in range(20):
+            now[0] += 61
+            team.monitor_once()
+            time.sleep(0.2)
+        alive = proc.poll() is None
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+    assert not alive, "the stopped turn still runs after 20 failed-check periods"
+
+
+def test_the_next_check_counts_from_the_check(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    real_start = lane.start_broker
+
+    def slow_start(*a):
+        now[0] += 50
+        return real_start(*a)
+    monkeypatch.setattr(lane, "start_broker", slow_start)
+    team.spawn("check the login page", "claude", browser=True)
+    now[0] = 1000.0 + lane.CHECK_EVERY_S                 # 60 s after listeners_ok ran
+    team.monitor_once()
+    team.stop_worker("kaylee")
+    assert lanes["calls"]["listeners"] == 2
+
+
+def test_the_prepare_runs_before_the_listener_check(env, lanes, monkeypatch):
+    order = []
+    team, now = browser_team(env)
+    real = lane.listeners_ok
+    monkeypatch.setattr(lane, "listeners_ok", lambda: (order.append("check"), real())[1])
+    monkeypatch.setattr(lane, "prepare_broker", lambda repo, base, wt: (order.append("prepare"),
+                                                                       ("/n", "/pw", "/shell"))[1])
+    team.spawn("check the login page", "claude", browser=True)
+    assert order[-2:] == ["prepare", "check"], order
+
+
+def test_a_sweep_ends_a_lane_by_its_registry_block_not_state_jsons(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "0")
+    team, now = browser_team(env)
+    team.spawn("check", "claude", browser=True)
+    assert run_until(team, lambda: not team.procs)
+    team.state["workers"]["kaylee"]["state"] = "done"   # worker_done saved; the deferred _lane_end then crashed
+    team.save()
+    lane.release_block("t1", "kaylee")                   # while A was down, B's allocate_block reclaimed it
+    assert lane.allocate_block("t2-b", "zoe") == 41000
+    again = teamd.Team("t1", env["repo"], "toy goal", team.cfg)
+    again.sweep_lanes()
+    bases = [c[1] for c in lanes["calls"]["cleanup"] if c[0] == lane.lane_path("t1", "kaylee")]
+    assert bases and 41000 not in bases                  # B's ports are never touched; the folder and env are
+
+
+def test_a_turn_that_fails_to_launch_ends_its_lane_and_its_broker(env, lanes, monkeypatch):
+    team, now = browser_team(env)
+
+    def boom(*a, **k):
+        raise RuntimeError("no such claude")
+    monkeypatch.setattr(teamd.workers, "claude_command", boom)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert w["state"] == "failed" and "kaylee" not in team.procs
+    assert lanes["calls"]["stopped"] and not lane.lane_path("t1", "kaylee").exists()
+    assert lane.block_of("t1", "kaylee") is None
+    assert lead_messages(team, "LANE REFUSED")
+
+
+def test_an_oserror_setting_up_a_lane_fails_the_worker_without_raising(env, lanes, monkeypatch):
+    team, now = browser_team(env)
+
+    def boom(team_id, wid):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(lane, "ensure_lane", boom)
+    team.spawn("check the login page", "claude", browser=True)
+    assert team.state["workers"]["kaylee"]["state"] == "failed"
+    assert any("setup failed" in m for m in lead_messages(team, "LANE REFUSED"))
+
+
+def test_a_stop_is_saved_at_once(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    lanes["state"].update(ok=False, problems=["Python (pid 9) listens on port 8000"])
+    now[0] += 60
+    team.monitor_once()
+    on_disk = json.loads((team.dir / "state.json").read_text())
+    assert any("LANE STOPPED" in m["message"] for m in on_disk["lead_inbox"])
+    assert on_disk["workers"]["kaylee"]["lane_stopped"] is True
+
+
+def test_release_block_says_whether_it_released(env, held):
+    held("t1")
+    lane.allocate_block("t1", "kaylee")
+    assert lane.release_block("t1", "kaylee") is True
+    assert lane.release_block("t1", "kaylee") is True            # nothing to release is not a failure
+
+
+def test_a_block_that_cant_be_released_keeps_the_lane_and_tells_the_lead(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    monkeypatch.setattr(lane, "release_block", lambda team_id, wid: False)
+    team.stop_worker("kaylee")
+    assert team.state["workers"]["kaylee"]["lane"]["base"] == 41000
+    assert lead_messages(team, "LANE CLEANUP UNFINISHED")
+
+
+def test_the_scrub_leaves_non_strings_alone():
+    assert lane.scrub(None, ["ab" * 32]) is None and lane.scrub(3, ["ab" * 32]) == 3
+
+
+def endpoint_claude(tmp_path, monkeypatch):
+    fake_claude(tmp_path, monkeypatch,
+                "echo \"connect $PW_TEST_CONNECT_WS_ENDPOINT\" >&2\n"
+                "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n"
+                "echo \"{\\\"type\\\":\\\"result\\\",\\\"result\\\":\\\"at $PW_TEST_CONNECT_WS_ENDPOINT\\\"}\"\n")
+
+
+def test_a_turns_files_are_scrubbed_when_it_exits_without_ending_the_lane(env, lanes, tmp_path, monkeypatch):
+    endpoint_claude(tmp_path, monkeypatch)
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    for name in ("events.jsonl", "stderr.log"):
+        text = (team.dir / "workers" / "kaylee" / name).read_text()
+        assert SECRET not in text and "[lane secret]" in text
+    assert w["lane"] is not None and lane.lane_path("t1", "kaylee").exists()
+
+
+def test_the_lane_end_scrubs_the_files_and_the_brokers_stderr(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    wdir = team.dir / "workers" / "kaylee"
+    for name in ("events.jsonl", "stderr.log", "broker-stderr.log"):
+        (wdir / name).write_text("fail at ws://127.0.0.1:41031/%s\n" % SECRET)
+    team.stop_worker("kaylee")
+    for name in ("events.jsonl", "stderr.log", "broker-stderr.log"):
+        assert SECRET not in (wdir / name).read_text(), name
+
+
+def test_collect_is_scrubbed_including_the_diff_stat(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    w["summary"] = w["tests"] = w["last_message"] = "at ws://127.0.0.1:41031/" + SECRET
+    monkeypatch.setattr(teamd.workers, "diff_stat", lambda *a, **k: " a | 1 ws://127.0.0.1:41031/" + SECRET)
+    out = team.collect("kaylee")
+    assert SECRET not in json.dumps(out) and out["diff_stat"] and "[lane secret]" in out["summary"]
+    w["tests"] = None
+    assert team.collect("kaylee")["tests"] is None
+
+
+def test_the_sweep_scrubs_a_dead_turns_events(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    wdir = team.dir / "workers" / "kaylee"
+    old = "ws://127.0.0.1:41031/" + "cd" * 32
+    for name in ("events.jsonl", "stderr.log", "broker-stderr.log"):
+        (wdir / name).write_text("connect %s\n" % old)
+    team.state["workers"]["kaylee"]["state"] = "running"
+    team.state["workers"]["kaylee"]["pid"] = 999999
+    team.save()
+    again = teamd.Team("t1", env["repo"], "toy goal", team.cfg)      # a new teamd: it never knew the secret
+    again.sweep_lanes()
+    for name in ("events.jsonl", "stderr.log", "broker-stderr.log"):
+        assert "cd" * 32 not in (wdir / name).read_text(), name
+
+
+def test_a_plan_title_is_scrubbed(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    team.publish_plan("kaylee", "Plan for ws://127.0.0.1:41031/" + SECRET, "body")
+    assert SECRET not in json.dumps(team.state) and SECRET not in json.dumps(team.status())
+
+
+def test_settings_that_err_before_a_turn_refuse_the_lane(env, lanes, monkeypatch):
+    team, now = browser_team(env)
+    calls = []
+
+    def widenings():
+        calls.append(1)
+        if len(calls) > 1:                                # the spawn's own check passes; the lane turn's errs
+            raise ValueError("boom")
+        return []
+    monkeypatch.setattr(lane, "settings_widenings", widenings)
+    team.spawn("check the login page", "claude", browser=True)
+    assert team.state["workers"]["kaylee"]["state"] == "failed"
+    assert any("settings check failed" in m for m in lead_messages(team, "LANE REFUSED"))
+
+
+def test_settings_that_widen_during_a_turn_are_found_by_the_60s_check(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    slack = FakeSlack()
+    team.slack = slack
+    team.spawn("check the login page", "claude", browser=True)
+    monkeypatch.setattr(lane, "settings_widenings", lambda: ["allowedDomains in ~/.claude/settings.json"])
+    now[0] += 60
+    team.monitor_once()
+    assert any("widen" in m for m in lead_messages(team, "LANE STOPPED"))
+    assert any("settings check failed" in p for p in slack.posts)
+
+
+def test_the_sweep_cleans_a_live_lane_by_its_folder_and_environment(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "0")
+    team, now = browser_team(env)
+    team.spawn("check", "claude", browser=True)
+    assert run_until(team, lambda: team.state["workers"]["kaylee"]["state"] == "idle")
+    again = teamd.Team("t1", env["repo"], "toy goal", team.cfg)
+    again.sweep_lanes()
+    path = lane.lane_path("t1", "kaylee")
+    assert lanes["calls"]["cleanup"][-1][:3] == (path, 41000, None)
+    assert lanes["calls"]["cleanup"][-1][4] == ("CLAUDE_CODE_TMPDIR", str(path / "tmp"))
+    assert "live lane" in (again.dir / "teamd.log").read_text()
+
+
+def test_the_sweep_stops_a_lost_turn_that_is_still_that_turn(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "5")
+    team, now = browser_team(env)
+    team.spawn("check", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    w["pid"] = 4242
+    team.save()
+    sent = []
+    monkeypatch.setattr(lane, "lost_turn", lambda pid, cwd, started, now=None: True)
+    monkeypatch.setattr(teamd.os, "killpg", lambda pid, sig: sent.append((pid, sig)))
+    again = teamd.Team("t1", env["repo"], "toy goal", team.cfg)
+    again.sweep_lanes()
+    assert sent == [(4242, signal.SIGTERM)]
+    assert any("the turn was stopped" in m for m in lead_messages(again, "LANE TURN LOST"))
+
+
+def test_a_waiting_worker_is_not_retried_while_every_slot_is_taken(env, lanes, monkeypatch):
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env, max_workers=1)
+    lanes["state"].update(ok=False, problems=["x (pid 1) listens on port 5000"])
+    team.spawn("check the login page", "claude", browser=True)
+    assert team.state["workers"]["kaylee"]["state"] == "waiting"
+    plain = team.spawn("write docs", "claude")
+    assert team.state["workers"][plain["worker"]]["state"] == "running"
+    lanes["state"].update(ok=True, problems=[])
+    before = lanes["calls"]["listeners"]
+    now[0] += teamd.LANE_RETRY_S + 1
+    team.monitor_once()
+    assert team.state["workers"]["kaylee"]["state"] == "waiting" and lanes["calls"]["listeners"] == before
+    team.stop_worker(plain["worker"])
+    now[0] += 1
+    team.monitor_once()
+    assert team.state["workers"]["kaylee"]["state"] == "running"
+
+
+def test_one_lane_at_a_time_waits_with_its_own_reason(env, lanes, held, tmp_path):
+    held("t1-ux")
+    (tmp_path / "cfg.json").write_text(json.dumps({"lane_one_at_a_time": True}))
+    lane.ensure_lane("t1-ux", "kaylee")
+    lane.allocate_block("t1-ux", "kaylee")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    assert team.state["workers"]["kaylee"]["state"] == "waiting"
+    waiting = lead_messages(team, "LANE WAITING")
+    assert len(waiting) == 1 and "one browser lane per machine" in waiting[0]
+    assert "once every listener" not in waiting[0]
+
+
+def test_a_turns_leftover_children_end_with_the_turn_but_the_broker_stays(env, lanes, tmp_path, monkeypatch):
+    def proc_environ(pid):                 # the mac fixture says darwin; this Pi reads /proc
+        try:
+            return [s.decode() for s in Path("/proc/%d/environ" % pid).read_bytes().split(b"\0") if s]
+        except OSError:
+            return None
+    monkeypatch.setattr(lane, "_environ", proc_environ)
+    fake_claude(tmp_path, monkeypatch,
+                "setsid sh -c 'echo $$ > \"$PWD/leftover.pid\"; exec sleep 60' &\n"
+                "while [ ! -s \"$PWD/leftover.pid\" ]; do sleep 0.05; done\n"
+                "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    pidfile = Path(w["path"]) / "leftover.pid"
+    pid = None
+    try:
+        assert run_until(team, lambda: w["state"] == "idle")
+        pid = int(pidfile.read_text())
+        assert not lane._alive(pid), "the setsid leftover outlived its turn"
+        assert not lanes["calls"]["stopped"] and "kaylee" in team.brokers      # the broker is not touched
+    finally:
+        if pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def test_ps_is_asked_for_the_whole_command(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: (seen.append(cmd), Ran(1, ""))[1])
+    lane.lost_turn(4242, tmp_path, 9900.0, now=10000.0)
+    assert "-ww" in seen[0]

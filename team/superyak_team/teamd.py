@@ -37,6 +37,7 @@ class Team:
         self.stopping = threading.Event()
         # Browser lanes (lane.py). Brokers and their secrets live only in memory: a secret is never written to disk.
         self.brokers, self.lane_secrets, self.lane_checked = {}, set(), {}
+        self.lane_stopped_at = {}
         self.clock = time.time
         if not teamlib.get_token(team_id, "lead"):
             teamlib.issue_token(team_id, "lead")
@@ -268,7 +269,6 @@ class Team:
         """Start a turn. A browser worker's turn first needs its lane (_lane_turn): when the listener check fails it
         waits (False), and when the lane is refused the worker fails (False)."""
         w = self.state["workers"][wid]
-        wdir = self.dir / "workers" / wid
         lane_env = None
         if w.get("browser"):
             try:
@@ -279,9 +279,23 @@ class Team:
             except lane.LaneRefused as e:
                 self._lane_refused(wid, e)
                 return False
-            except OSError as e:                         # the registry, the broker's folders, a manifest, a stamp
-                self._lane_refused(wid, lane.LaneRefused("the lane's setup failed (%s)" % e))
+            except Exception as e:                       # the registry, the broker's folders, a manifest, a stamp, a bug
+                self._lane_refused(wid, lane.LaneRefused("the lane's setup failed (%r)" % e))
                 return False
+        try:
+            return self._launch_turn(wid, prompt, lane_env)
+        except Exception as e:
+            if not w.get("browser"):
+                raise
+            proc = self.procs.pop(wid, None)
+            if proc is not None and proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+            self._lane_refused(wid, lane.LaneRefused("the turn couldn't start (%r)" % e))   # ends the broker too
+            return False
+
+    def _launch_turn(self, wid, prompt, lane_env):
+        w = self.state["workers"][wid]
+        wdir = self.dir / "workers" / wid
         if w["kind"] == "codex":
             cmd = workers.codex_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
                                         w.get("mode", "build"))
@@ -308,12 +322,13 @@ class Team:
     def _scrub(self, text):
         return lane.scrub(text, self.lane_secrets)
 
-    def _scrub_files(self, wid):
+    def _scrub_files(self, wid, shaped=False):
         """events.jsonl and stderr.log without the secret, once the turn has exited. A write failure is logged: the
-        lane's cleanup and the turn's bookkeeping carry on."""
-        for name in ("events.jsonl", "stderr.log"):
+        lane's cleanup and the turn's bookkeeping carry on. shaped: the sweep, which doesn't know a dead teamd's
+        secrets, removes anything of an endpoint's shape."""
+        for name in ("events.jsonl", "stderr.log", "broker-stderr.log"):
             try:
-                lane.scrub_file(self.dir / "workers" / wid / name, self.lane_secrets)
+                lane.scrub_file(self.dir / "workers" / wid / name, self.lane_secrets, shaped=shaped)
             except (lane.LaneRefused, OSError) as e:
                 self.log("%s" % e)
 
@@ -338,24 +353,28 @@ class Team:
         base = lane.allocate_block(self.team_id, wid)
         w["lane"] = {"hash": path.name, "path": str(path), "base": base}
         self.save()
+        broker = self.brokers.get(wid)
+        prepared = None
+        if broker is None or not broker.alive():       # the install and manifest check come before the listener check
+            prepared = lane.prepare_broker(self.repo, w["base"], self._worktrees())
         try:
             ok, problems = lane.listeners_ok()
         except lane.LaneRefused:
             raise
         except Exception as e:
             raise lane.LaneRefused("the listener check failed (%r)" % e)
+        checked = self.clock()                         # the next 60 s are counted from the check, not the start
         if not ok:
             raise lane.LaneWait("; ".join(problems))
-        broker = self.brokers.get(wid)
-        if broker is None or not broker.alive():
+        if prepared is not None:
             if broker is not None:
                 lane.stop_broker(self.brokers.pop(wid))
-            node_bin, pw_dir, shell_dir = lane.prepare_broker(self.repo, w["base"], self._worktrees())
+            node_bin, pw_dir, shell_dir = prepared
             broker = lane.start_broker(path, base, node_bin, pw_dir, shell_dir,
                                        self.dir / "workers" / wid / "broker-stderr.log")
             self.brokers[wid] = broker
             self.lane_secrets.add(broker.secret)
-        self.lane_checked[wid] = self.clock()
+        self.lane_checked[wid] = checked
         return lane.worker_env(path, base, broker.endpoint)
 
     def _lane_wait(self, wid, prompt, reason):
@@ -366,10 +385,13 @@ class Team:
         w["state"] = "waiting"
         w["lane_wait"] = {"prompt": prompt, "reason": reason, "at": self.clock()}
         if reason != before:
-            self._to_lead("teamd", "LANE WAITING:",
-                          "%s waits for its browser lane, which starts by itself once every listener is in a lane's "
-                          "ports or approved (only macOS's own services, in ~/.superyak/team/lane-listeners.json): %s"
-                          % (wid, reason))
+            if reason.startswith("one browser lane per machine"):
+                preface = "%s waits for its browser lane, which starts by itself once the other lane has ended: %s"
+            else:
+                preface = ("%s waits for its browser lane, which starts by itself once every listener is in a lane's "
+                           "ports or approved (only macOS's own services, in ~/.superyak/team/lane-listeners.json): "
+                           "%s")
+            self._to_lead("teamd", "LANE WAITING:", preface % (wid, reason))
             self.say(wid, ":hourglass: waiting for the browser lane (the lead has the details).", w["thread_ts"])
         self.save()
 
@@ -413,6 +435,18 @@ class Team:
                         self._lane_stop_turn(wid, problems)
                     except Exception as e:
                         self.log("stopping %s's lane turn: %r" % (wid, e))
+        for wid, at in list(self.lane_stopped_at.items()):       # a stopped turn that ignored SIGTERM
+            proc = self.procs.get(wid)
+            if proc is None or proc.poll() is not None:
+                self.lane_stopped_at.pop(wid, None)
+            elif now - at >= lane.KILL_GRACE_S:
+                self.lane_stopped_at.pop(wid, None)
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    self._lane_env_cleanup(wid)
+                    self.log("%s's stopped turn ignored SIGTERM and was killed" % wid)
+                except Exception as e:
+                    self.log("killing %s's stopped turn: %r" % (wid, e))
         for wid, w in self.state["workers"].items():
             if (w["state"] == "waiting" and now - w["lane_wait"]["at"] >= LANE_RETRY_S
                     and self._running_count() < int(self.cfg["max_workers"])):
@@ -425,6 +459,7 @@ class Team:
         """The turn counts as failed however claude exits, and the lead hears once while it exits."""
         w = self.state["workers"][wid]
         w["lane_stopped"] = True
+        self.lane_stopped_at[wid] = self.clock()
         proc = self.procs.get(wid)
         if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -433,8 +468,23 @@ class Team:
             lane.stop_broker(broker)
         self._to_lead("teamd", "LANE STOPPED:", "%s's turn and its browser were stopped because the lane's check "
                                                "failed: %s" % (wid, "; ".join(problems)))
-        self.say(wid, ":no_entry: lane turn stopped: the listener check failed (the lead has the details).",
+        settings = any("settings" in p for p in problems)
+        listeners = any("settings" not in p for p in problems)
+        what = ("listener and settings checks" if settings and listeners else
+                "settings check" if settings else "listener check")
+        self.say(wid, ":no_entry: lane turn stopped: the %s failed (the lead has the details)." % what,
                  w["thread_ts"])
+        self.save()
+
+    def _lane_env_cleanup(self, wid):
+        """Whatever carries this lane's CLAUDE_CODE_TMPDIR (a turn's setsid leftovers), never ports or files, so never
+        the broker. Logged, never raised."""
+        try:
+            path = lane.lane_path(self.team_id, wid)
+            if not lane.cleanup_env(("CLAUDE_CODE_TMPDIR", str(path / "tmp"))):
+                self.log("%s's lane processes couldn't be listed" % wid)
+        except Exception as e:
+            self.log("ending %s's turn leftovers: %r" % (wid, e))
 
     def _lane_end(self, wid):
         """The lane ends: its broker and every process using it (cleanup_processes), the files teamd keeps are
@@ -443,11 +493,12 @@ class Team:
         w = self.state["workers"][wid]
         w.pop("lane_end", None)
         w.pop("lane_stopped", None)
+        self.lane_stopped_at.pop(wid, None)
         broker = self.brokers.pop(wid, None)
         path = lane.lane_path(self.team_id, wid)                    # by exact hash, never a stored path
-        base = (w.get("lane") or {}).get("base")
-        if base is None:
-            base = lane.block_of(self.team_id, wid)
+        # The block comes from the registry, keyed by this lane's hash, never from state.json: after a crash another
+        # team may hold that number now. With none, the cleanup matches by folder and environment only.
+        base = lane.block_of(self.team_id, wid)
         if broker is None and base is None and not os.path.lexists(path):
             return
         # Also whatever still carries this lane's CLAUDE_CODE_TMPDIR: a turn's setsid child, which neither the
@@ -464,14 +515,17 @@ class Team:
             self._to_lead("teamd", "LANE LEFT BEHIND:", "%s: %s" % (wid, e))
         if finished:
             try:
-                lane.release_block(self.team_id, wid)
-                w["lane"] = None
+                if lane.release_block(self.team_id, wid):
+                    w["lane"] = None
+                else:
+                    finished = False
             except (lane.LaneRefused, OSError) as e:
                 finished = False
                 self.log("releasing %s's block: %r" % (wid, e))
         if not finished:
             self._to_lead("teamd", "LANE CLEANUP UNFINISHED:", "%s: lsof or ps couldn't list the lane's processes, "
-                                                               "so its ports stay held until the next cleanup" % wid)
+                                                               "or its block couldn't be released, so its ports stay "
+                                                               "held until the next cleanup" % wid)
         self.lane_checked.pop(wid, None)
         self.save()
 
@@ -504,7 +558,15 @@ class Team:
         for wid, w in self.state["workers"].items():
             if w.get("browser") and w["state"] in LIVE and w.get("lane"):
                 path = lane.lane_path(self.team_id, wid)
-                lane.cleanup_processes(path, w["lane"]["base"], env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")))
+                try:
+                    done = lane.cleanup_processes(path, lane.block_of(self.team_id, wid),
+                                                  env=("CLAUDE_CODE_TMPDIR", str(path / "tmp")))
+                except Exception as e:
+                    done = repr(e)
+                self.log("%s's live lane cleanup at teamd start: %s" % (wid, done))
+        for wid, w in self.state["workers"].items():
+            if w.get("browser"):             # a crash mid-turn can leave a dead teamd's secret in what it wrote
+                self._scrub_files(wid, shaped=True)
         self.save()
 
     def deliver(self, wid, text, sender, push=True):
@@ -576,6 +638,7 @@ class Team:
                 del self.procs[wid]
                 changed = True
                 if w.get("browser"):
+                    self._lane_env_cleanup(wid)       # before the scrub: the turn's leftovers may still be writing
                     self._scrub_files(wid)
                 last = self._scrub(last)
                 if last and last != w["last_message"]:
@@ -841,6 +904,9 @@ class Team:
 
     def collect(self, wid):
         w = self.state["workers"][wid]
+        return {k: (self._scrub(v) if isinstance(v, str) else v) for k, v in self._collected(wid, w).items()}
+
+    def _collected(self, wid, w):
         return {"worker": wid, "state": w["state"], "branch": w["branch"], "base": w["base"],
                 "commit": w["commit"], "summary": w["summary"], "tests": w.get("tests"),
                 "mode": w.get("mode", "build"),
