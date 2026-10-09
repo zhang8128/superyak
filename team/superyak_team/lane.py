@@ -106,6 +106,9 @@ def settings_widenings():
             found.append("%s adds sandbox.network.allowMachLookup" % path)
         if any(str(rule).startswith("WebFetch(domain:") for rule in permissions.get("allow") or []):
             found.append("%s allows WebFetch(domain:...)" % path)
+        if path == MANAGED_SETTINGS and data.get("hooks"):
+            found.append("%s defines hooks, which Claude Code runs outside the sandbox with the lane's environment "
+                         "even under disableAllHooks" % path)
     return found
 
 
@@ -215,13 +218,13 @@ def _write_text(path, text, mode=0o644, dir_fd=None):
 
 def ensure_lane(team_id, worker_id):
     """The lane at a turn's start: created 0700 the first time, checked every time, with tmp/ (CLAUDE_CODE_TMPDIR),
-    npm-cache/ (npm_config_cache), b/ (the broker's folder) and preload.cjs. Everything goes through folder
-    descriptors opened without following links, so a lane or folder swapped for a link is refused, never followed.
-    The worker may write tmp/ and npm-cache/ only (workers.claude_sandbox_settings)."""
+    npm-cache/ (npm_config_cache) and b/ (the broker's folder). Everything goes through folder descriptors opened
+    without following links, so a lane or folder swapped for a link is refused, never followed. The worker may write
+    tmp/ and npm-cache/ only (workers.claude_sandbox_settings). teamd writes no file here: the preload, which every
+    node process outside the sandbox would load, is teamd's own (ensure_preload)."""
     parent = private_parent()
     h = lane_hash(team_id, worker_id)
     try:
-        preload = (teamlib.package_dir() / "lane" / "preload.cjs").read_text()
         pfd = _open_dir(str(parent))
         try:
             try:
@@ -236,7 +239,6 @@ def ensure_lane(team_id, worker_id):
                     except FileExistsError:
                         pass
                     os.close(_open_dir(sub, lfd))
-                _write_text("preload.cjs", preload, dir_fd=lfd)
             finally:
                 os.close(lfd)
         finally:
@@ -503,10 +505,104 @@ def live_blocks():
     return [base for base, _ in live_lanes()]
 
 
+# ---------- the preload (spec: The preload) ----------
+
+PRELOAD_NAME = "lane-preload.cjs"
+
+
+def preload_path(team_id, worker_id):
+    """teamd's own copy of the preload for this worker's lane, in its worker folder under ~/.superyak/team, never under
+    /tmp: NODE_OPTIONS names it in claude's own environment, so every node process claude starts, inside the sandbox
+    or not, requires it, and a Codex worker can write /tmp."""
+    return teamlib.team_dir(team_id) / "workers" / worker_id / PRELOAD_NAME
+
+
+def _private_folder(folder):
+    """A real folder of this user's that nobody else can write, outside the shared temp folders, every folder above it
+    owned by this user or root and writable by nobody else (a sticky one, like /tmp, aside), as lane_node's are."""
+    try:
+        st = os.lstat(folder)
+    except OSError as e:
+        raise LaneRefused("%s can't be checked (%s)" % (folder, e.strerror or e))
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise LaneRefused("%s isn't a folder of yours" % folder)
+    if st.st_mode & 0o022:
+        raise LaneRefused("%s is writable by someone other than its owner" % folder)
+    real = os.path.realpath(folder)
+    for unsafe in UNSAFE_ROOTS:
+        if real == unsafe or real.startswith(unsafe + os.sep):
+            raise LaneRefused("%s lies under the shared temp folder %s" % (folder, unsafe))
+    _check_ancestors(folder)
+
+
+def _preload_is(path, text):
+    """Whether path is already exactly the preload: a plain file of this user's, mode 0644, one link, these bytes.
+    False when it is missing or must be replaced. A symlink or another user's file in teamd's own folder is somebody
+    else's doing: refused, never replaced or followed."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        raise LaneRefused("the lane's preload %s can't be checked (%s)" % (path, e.strerror or e))
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        raise LaneRefused("the lane's preload %s isn't a plain file" % path)
+    if st.st_uid != os.getuid():
+        raise LaneRefused("the lane's preload %s belongs to another user" % path)
+    if stat.S_IMODE(st.st_mode) != 0o644 or st.st_nlink != 1 or st.st_size != len(text):
+        return False
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    with os.fdopen(fd, "rb") as f:
+        now = os.fstat(f.fileno())
+        if (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino):
+            return False
+        return f.read(len(text) + 1) == text
+
+
+def ensure_preload(team_id, worker_id):
+    """The preload at a browser turn's start, from teamd's shipped copy: a plain file of this user's at mode 0644 in a
+    folder only this user can write, outside the shared temp folders. A file that is already right is left alone; one
+    with other bytes, another mode or a second link is replaced (unlink, then O_CREAT|O_EXCL|O_NOFOLLOW), never written
+    through. Returns its path."""
+    path = preload_path(team_id, worker_id)
+    try:
+        text = (teamlib.package_dir() / "lane" / "preload.cjs").read_bytes()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as e:
+        raise LaneRefused("the lane's preload can't be prepared (%s)" % (e.strerror or e))
+    _private_folder(path.parent)
+    if _preload_is(path, text):
+        return path
+    try:
+        with os.fdopen(_new_fd(str(path), 0o644), "wb") as f:
+            os.fchmod(f.fileno(), 0o644)                # whatever teamd's umask
+            f.write(text)
+    except OSError as e:
+        raise LaneRefused("the lane's preload %s can't be written (%s)" % (path, e.strerror or e))
+    if not _preload_is(path, text):
+        raise LaneRefused("the lane's preload %s changed as it was written" % path)
+    return path
+
+
+def node_require(preload):
+    """NODE_OPTIONS's --require for the preload, quoted, since a home folder may hold a space. A path node's parser
+    couldn't take inside quotes is refused."""
+    text = str(preload)
+    if re.search(r'["\\\x00-\x1f\x7f]', text):
+        raise LaneRefused("refusing a preload path NODE_OPTIONS can't quote: %r" % text)
+    return '--require "%s"' % text
+
+
 # ---------- the worker's environment (spec: Worker environment) ----------
 
-def worker_env(path, base, endpoint):
-    """What a browser worker's turn adds to its environment. workers.launch also drops DROP_ENV."""
+def worker_env(path, base, endpoint, preload):
+    """What a browser worker's turn adds to its environment. workers.launch also drops DROP_ENV. All of it is in
+    claude's own environment, so whatever claude starts outside its sandbox inherits it too: browser workers run with
+    --strict-mcp-config and disableAllHooks (workers.claude_command), the preload is teamd's own file, and claude's
+    own updater is off (an npm install of claude would use npm_config_cache, which the worker can write)."""
     path = Path(path)
     return {"CLAUDE_CODE_TMPDIR": str(path / "tmp"),
             "npm_config_cache": str(path / "npm-cache"),
@@ -514,7 +610,8 @@ def worker_env(path, base, endpoint):
             "SUPERYAK_LANE_PORT_BASE": str(base),
             "SUPERYAK_LANE_PORT_COUNT": str(BLOCK),
             "PW_TEST_CONNECT_WS_ENDPOINT": endpoint,
-            "NODE_OPTIONS": "--require " + str(path / "preload.cjs"),
+            "NODE_OPTIONS": node_require(preload),
+            "DISABLE_AUTOUPDATER": "1",
             # Bricks' shards run 20-35 minutes: one Bash call may take up to 40, within worker_timeout_s.
             "BASH_DEFAULT_TIMEOUT_MS": "600000",
             "BASH_MAX_TIMEOUT_MS": "2400000"}

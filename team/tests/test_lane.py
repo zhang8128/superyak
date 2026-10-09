@@ -244,14 +244,14 @@ def test_a_parent_that_vanishes_is_refused_not_raised(env, tmp_root, monkeypatch
         lane.ensure_lane("t1", "kaylee")
 
 
-def test_a_lane_has_its_folders_and_the_preload_and_is_refused_as_a_symlink(env, tmp_root):
-    """Spec unit test 6: the lane is refused when it is a symlink at turn time."""
+def test_a_lane_has_its_folders_and_is_refused_as_a_symlink(env, tmp_root):
+    """Spec unit test 6: the lane is refused when it is a symlink at turn time. The preload is no longer here
+    (final fix wave, C1): it is teamd's own file, outside /tmp."""
     path = lane.ensure_lane("t1", "kaylee")
     assert path == tmp_root / ("sy-lane-%d" % os.getuid()) / lane.lane_hash("t1", "kaylee")
     assert len(path.name) == 10 and path.name == hashlib.sha256(b"t1/kaylee").hexdigest()[:10]
-    assert sorted(p.name for p in path.iterdir()) == ["b", "npm-cache", "preload.cjs", "tmp"]
+    assert sorted(p.name for p in path.iterdir()) == ["b", "npm-cache", "tmp"]
     assert stat_mode(os.lstat(path)) == 0o700
-    assert "net.Server.prototype.listen" in (path / "preload.cjs").read_text()
     assert lane.ensure_lane("t1", "kaylee") == path                  # the next turn checks it again
     victim = env["tmp"] / "victim"
     victim.mkdir()
@@ -269,20 +269,16 @@ def test_a_lane_has_its_folders_and_the_preload_and_is_refused_as_a_symlink(env,
 
 
 def test_teamd_never_writes_through_a_planted_link(env, tmp_root):
-    """Review: every teamd write under the lane unlinks the name, then creates it with O_EXCL|O_NOFOLLOW. A preload
-    swapped for a hard link, or a symlink, to someone else's file leaves that file as it was."""
+    """Review: teamd writes no file in the lane any more (C1 moved the preload out), so a name planted there, as a
+    hard link or a symlink to someone else's file, leaves that file as it was. The preload's own writes refuse links
+    (test_a_preload_name_swapped_for_a_hard_link_is_replaced_never_written_through)."""
     path = lane.ensure_lane("t1", "kaylee")
     victim = env["home"] / ".zshrc"
     victim.write_text("export SECRET=1\n")
-    (path / "preload.cjs").unlink()
-    os.link(victim, path / "preload.cjs")                              # a hard-link swap
+    os.link(victim, path / "preload.cjs")                              # a hard-link plant
+    os.symlink(victim, path / "other.cjs")                             # a symlink plant
     lane.ensure_lane("t1", "kaylee")
     assert victim.read_text() == "export SECRET=1\n"
-    assert os.stat(path / "preload.cjs").st_ino != os.stat(victim).st_ino
-    (path / "preload.cjs").unlink()
-    os.symlink(victim, path / "preload.cjs")                           # a symlink swap
-    lane.ensure_lane("t1", "kaylee")
-    assert victim.read_text() == "export SECRET=1\n" and not (path / "preload.cjs").is_symlink()
 
 
 def test_removal_is_fd_safe_and_refused_without_symlink_protection(env, tmp_root, monkeypatch):
@@ -554,7 +550,7 @@ def test_a_bad_config_or_missing_preload_refuses(env, tmp_root, held, tmp_path, 
         lane.allocate_block("t1", "kaylee")
     monkeypatch.setattr(teamlib, "package_dir", lambda: tmp_path / "nowhere")
     with pytest.raises(lane.LaneRefused):
-        lane.ensure_lane("t1", "kaylee")
+        lane.ensure_preload("t1", "kaylee")
 
 
 # ---------- Task 3: the worker's sandbox settings and environment ----------
@@ -584,8 +580,9 @@ def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
     monkeypatch.setenv("HOME", "/home/u")
     uid = os.getuid()
     path = "/tmp/sy-lane-%d/0123456789" % uid
+    preload = "/home/u/.superyak/team/teams/t1/workers/kaylee/lane-preload.cjs"
     plain = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
-    laned = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane=path)
+    laned = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane=path, preload=preload)
     assert laned["permissions"] == plain["permissions"]
     assert {k: v for k, v in laned["sandbox"].items() if k not in ("network", "filesystem")} == \
         {k: v for k, v in plain["sandbox"].items() if k != "filesystem"}
@@ -593,12 +590,14 @@ def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
                                            "allowUnixSockets": [path + "/tmp"]}
     fs, before = laned["sandbox"]["filesystem"], plain["sandbox"]["filesystem"]
     assert fs["allowWrite"] == before["allowWrite"] + [path + "/tmp", path + "/npm-cache"]
-    assert fs["allowRead"] == before["allowRead"] + [path + "/tmp", path + "/npm-cache", path + "/preload.cjs"]
+    assert fs["allowRead"] == before["allowRead"] + [path + "/tmp", path + "/npm-cache", preload]
     assert fs["denyRead"] == before["denyRead"] + ["/tmp/sy-lane-%d" % uid, "/private/tmp/claude-%d" % uid]
     assert fs["denyWrite"] == before["denyWrite"]
-    assert path not in fs["allowWrite"] and path + "/b" not in fs["allowWrite"]
+    assert path not in fs["allowWrite"] and path + "/b" not in fs["allowWrite"] and preload not in fs["allowWrite"]
     assert not any(p.startswith(path + "/b") for p in fs["allowWrite"] + fs["allowRead"])
-    cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo", lane=path)
+    assert set(laned) - set(plain) == {"disableAllHooks"} and laned["disableAllHooks"] is True
+    cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo", lane=path,
+                                 preload=preload)
     written = json.loads(Path(cmd[cmd.index("--settings") + 1]).read_text())
     assert written == laned
 
@@ -607,12 +606,13 @@ def test_a_browser_workers_environment(env, monkeypatch, tmp_path):
     """Spec unit test 5 (the worker's half): the lane variables, NODE_OPTIONS and the endpoint, and none of the
     agent sockets; a worker without a lane gets exactly what it got before."""
     path = Path("/tmp/sy-lane-%d/0123456789" % os.getuid())
+    preload = Path("/home/u/.superyak/team/teams/t1/workers/kaylee/lane-preload.cjs")
     endpoint = "ws://127.0.0.1:41031/" + "ab" * 32
-    extra = lane.worker_env(path, 41000, endpoint)
+    extra = lane.worker_env(path, 41000, endpoint, preload)
     assert extra == {"CLAUDE_CODE_TMPDIR": str(path / "tmp"), "npm_config_cache": str(path / "npm-cache"),
                      "SUPERYAK_BROWSER_LANE": "1", "SUPERYAK_LANE_PORT_BASE": "41000",
                      "SUPERYAK_LANE_PORT_COUNT": "32", "PW_TEST_CONNECT_WS_ENDPOINT": endpoint,
-                     "NODE_OPTIONS": "--require " + str(path / "preload.cjs"),
+                     "NODE_OPTIONS": '--require "%s"' % preload, "DISABLE_AUTOUPDATER": "1",
                      "BASH_DEFAULT_TIMEOUT_MS": "600000", "BASH_MAX_TIMEOUT_MS": "2400000"}
     for name, value in (("SSH_AUTH_SOCK", "/tmp/agent.sock"), ("GPG_AGENT_INFO", "/tmp/gpg"),
                         ("DOCKER_HOST", "unix:///var/run/docker.sock"), ("NODE_OPTIONS", "--inspect")):
@@ -2918,13 +2918,15 @@ def test_a_browser_turn_runs_in_its_lane_with_its_broker(env, lanes):
     w = team.state["workers"][r["worker"]]
     assert w["state"] == "running"
     path = lane.lane_path("t1", "kaylee")
-    assert w["lane"] == {"hash": path.name, "path": str(path), "base": 41000} and path.is_dir()
+    preload = teamlib.team_dir("t1") / "workers" / "kaylee" / "lane-preload.cjs"
+    assert w["lane"] == {"hash": path.name, "path": str(path), "base": 41000, "preload": str(preload)} and path.is_dir()
     settings = json.loads((team.dir / "workers" / "kaylee" / "settings.json").read_text())
     assert settings["sandbox"]["network"]["allowUnixSockets"] == [str(path / "tmp")]
     first = lanes["launched"][0]
     assert first["drop"] == lane.DROP_ENV
     assert first["env"]["PW_TEST_CONNECT_WS_ENDPOINT"] == "ws://127.0.0.1:41031/" + SECRET
-    assert first["env"]["NODE_OPTIONS"] == "--require " + str(path / "preload.cjs")
+    assert first["env"]["NODE_OPTIONS"] == '--require "%s"' % preload
+    assert "--strict-mcp-config" in first["cmd"]
     assert first["env"]["ENGRAM_PROJECT_ROOT"] == w["path"]
     assert lanes["calls"]["listeners"] == 1 and len(lanes["calls"]["started"]) == 1
     assert lanes["calls"]["started"][0][3] == team.dir / "workers" / "kaylee" / "broker-stderr.log"   # never the lane
@@ -2934,6 +2936,7 @@ def test_a_browser_turn_runs_in_its_lane_with_its_broker(env, lanes):
     assert lanes["calls"]["listeners"] == 2                                     # checked again before the turn
     plain = team.spawn("write docs", "claude")
     assert lanes["launched"][-1]["drop"] == () and "PW_TEST_CONNECT_WS_ENDPOINT" not in lanes["launched"][-1]["env"]
+    assert "--strict-mcp-config" not in lanes["launched"][-1]["cmd"] and "NODE_OPTIONS" not in lanes["launched"][-1]["env"]
     assert "lane" not in team.state["workers"][plain["worker"]]
 
 
@@ -3927,3 +3930,193 @@ def test_a_replace_ref_cannot_hide_a_tag(env):
     workers.worker_git(w["path"], w["gitdir"], "replace", blobs["a.spec.ts"], blobs["plain.txt"])
     found = lane.advisory_added(w["path"], w["base"], w["gitdir"])
     assert [f.split(":")[0] for f in found] == ["a.spec.ts"]
+
+
+# ---------- Final fix wave: C1, the lane's environment outside the sandbox ----------
+
+def preload_bytes():
+    return (teamlib.package_dir() / "lane" / "preload.cjs").read_bytes()
+
+
+def test_a_browser_worker_starts_with_strict_mcp_config_and_hooks_off(env, monkeypatch):
+    """C1: everything claude starts outside its sandbox inherits the lane's environment, so a browser worker loads only
+    teamd's own MCP config (--strict-mcp-config) and no hooks (disableAllHooks in its flag settings, which outrank
+    project and local settings)."""
+    monkeypatch.setenv("HOME", "/home/u")
+    path = "/tmp/sy-lane-%d/0123456789" % os.getuid()
+    preload = "/home/u/.superyak/team/teams/t1/workers/kaylee/lane-preload.cjs"
+    plain = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "wash", "/r/wt", "go", repo="/r/repo")
+    cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo", lane=path,
+                                 preload=preload)
+    wdir = teamlib.team_dir("t1") / "workers" / "kaylee"
+    assert cmd == [c.replace("/wash/", "/kaylee/") for c in plain] + ["--strict-mcp-config"]
+    assert cmd[cmd.index("--mcp-config") + 1] == str(wdir / "mcp.json")
+    written = json.loads((wdir / "settings.json").read_text())
+    assert written["disableAllHooks"] is True
+    before = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    assert set(written) - set(before) == {"disableAllHooks"}
+    assert "disableAllHooks" not in json.loads((teamlib.team_dir("t1") / "workers" / "wash" / "settings.json").read_text())
+
+
+def test_a_non_browser_worker_is_byte_for_byte_what_it_was(env, monkeypatch):
+    """C1: the lane's additions are the lane's only. The snapshots were taken from the code before lanes existed."""
+    monkeypatch.setenv("HOME", "/home/u")
+    cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "wash", "/r/wt", "go", repo="/r/repo")
+    assert "--strict-mcp-config" not in cmd
+    settings = (teamlib.team_dir("t1") / "workers" / "wash" / "settings.json").read_text()
+    assert json.dumps(json.loads(settings), indent=1) + "\n" == (SNAPSHOTS / "settings-build.json").read_text()
+
+
+def test_node_options_names_teamds_own_preload_never_one_under_tmp(env, lanes):
+    """C1, path 2: a preload under /tmp can be replaced by anything that can write /tmp (a Codex worker), and every node
+    process outside the sandbox that inherits NODE_OPTIONS would require it. It is teamd's own file now, in its worker
+    folder, at mode 0644, and the worker may read it."""
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    options = lanes["launched"][0]["env"]["NODE_OPTIONS"]
+    preload = teamlib.team_dir("t1") / "workers" / "kaylee" / "lane-preload.cjs"
+    assert options == '--require "%s"' % preload and w["lane"]["preload"] == str(preload)
+    named = Path(options.split('"')[1])
+    assert lane.TMP_ROOT not in named.parents and Path(os.path.realpath(lane.TMP_ROOT)) not in Path(os.path.realpath(named)).parents
+    assert named.read_bytes() == preload_bytes() and stat_mode(os.lstat(named)) == 0o644
+    assert not (lane.lane_path("t1", "kaylee") / "preload.cjs").exists()
+    settings = json.loads((team.dir / "workers" / "kaylee" / "settings.json").read_text())
+    assert str(preload) in settings["sandbox"]["filesystem"]["allowRead"]
+    assert str(preload) not in settings["sandbox"]["filesystem"]["allowWrite"]
+    assert "--strict-mcp-config" in lanes["launched"][0]["cmd"] and settings["disableAllHooks"] is True
+
+
+def test_the_preload_is_written_at_0644_whatever_the_umask_and_rewritten_only_when_wrong(env):
+    old = os.umask(0o077)
+    try:
+        path = lane.ensure_preload("t1", "kaylee")
+    finally:
+        os.umask(old)
+    assert path == teamlib.team_dir("t1") / "workers" / "kaylee" / "lane-preload.cjs"
+    assert stat_mode(os.lstat(path)) == 0o644 and path.read_bytes() == preload_bytes()
+    inode = os.lstat(path).st_ino
+    assert lane.ensure_preload("t1", "kaylee") == path and os.lstat(path).st_ino == inode        # right: left alone
+    path.write_bytes(b"require('child_process').exec('curl evil')\n")
+    lane.ensure_preload("t1", "kaylee")
+    assert path.read_bytes() == preload_bytes()
+    os.chmod(path, 0o666)
+    lane.ensure_preload("t1", "kaylee")
+    assert stat_mode(os.lstat(path)) == 0o644
+
+
+def test_a_preload_name_swapped_for_a_hard_link_is_replaced_never_written_through(env):
+    victim = env["home"] / ".zshrc"
+    victim.write_text("export SECRET=1\n")
+    path = lane.ensure_preload("t1", "kaylee")
+    path.unlink()
+    os.link(victim, path)
+    lane.ensure_preload("t1", "kaylee")
+    assert victim.read_text() == "export SECRET=1\n" and os.stat(path).st_ino != os.stat(victim).st_ino
+    assert path.read_bytes() == preload_bytes()
+
+
+@pytest.mark.parametrize("case", ["symlink", "someone else's", "group-writable folder", "world-writable folder",
+                                  "folder is a symlink"])
+def test_the_preload_is_refused_when_it_isnt_teamds_own(env, monkeypatch, case):
+    """C1: refused when it is a symlink, when someone else owns it, or when its folder is group- or world-writable;
+    nothing is written through it."""
+    path = lane.ensure_preload("t1", "kaylee")
+    victim = env["home"] / "victim.cjs"
+    victim.write_text("mine\n")
+    if case == "symlink":
+        path.unlink()
+        os.symlink(victim, path)
+    elif case == "someone else's":
+        real_lstat, mine = os.lstat, os.getuid()
+
+        class Theirs:
+            def __init__(self, st):
+                self._st = st
+
+            def __getattr__(self, name):
+                return mine + 1 if name == "st_uid" else getattr(self._st, name)
+        monkeypatch.setattr(lane.os, "lstat", lambda p, *a, **k: Theirs(real_lstat(p, *a, **k)) if str(p) == str(path)
+                            else real_lstat(p, *a, **k))
+    elif case == "group-writable folder":
+        os.chmod(path.parent, 0o770)
+    elif case == "world-writable folder":
+        os.chmod(path.parent, 0o707)
+    else:
+        real = env["tmp"] / "elsewhere"
+        shutil.move(str(path.parent), str(real))
+        os.symlink(real, path.parent)
+    reason = {"symlink": "isn't a plain file", "someone else's": "belongs to another user",
+              "group-writable folder": "writable by someone other than its owner",
+              "world-writable folder": "writable by someone other than its owner",
+              "folder is a symlink": "isn't a folder of yours"}[case]
+    with pytest.raises(lane.LaneRefused, match=reason):
+        lane.ensure_preload("t1", "kaylee")
+    assert victim.read_text() == "mine\n"
+    if case.endswith("folder"):
+        os.chmod(path.parent, 0o700)
+
+
+def test_a_preload_folder_above_that_others_can_write_is_refused(env):
+    lane.ensure_preload("t1", "kaylee")
+    above = teamlib.team_dir("t1")
+    os.chmod(above, 0o777)
+    try:
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.ensure_preload("t1", "kaylee")
+    finally:
+        os.chmod(above, 0o755)
+
+
+def test_a_preload_under_a_shared_temp_folder_is_refused(env, monkeypatch):
+    """With the real UNSAFE_ROOTS: the tests' team home is under the system's temp folder (/tmp on the Pi), as a
+    SUPERYAK_TEAM_HOME there, or a symlink into it, would be; the preload must never live there."""
+    real = os.path.realpath(env["tmp"])
+    roots = ("/private/tmp", "/tmp", "/private/var/folders")
+    if not any(real == r or real.startswith(r + os.sep) for r in roots):
+        pytest.skip("this machine's test folders aren't under a shared temp folder")
+    monkeypatch.setattr(lane, "UNSAFE_ROOTS", roots)
+    with pytest.raises(lane.LaneRefused, match="under the shared temp folder"):
+        lane.ensure_preload("t1", "kaylee")
+
+
+def test_a_preload_path_node_options_cant_quote_is_refused():
+    assert lane.node_require('/Users/A B/x.cjs') == '--require "/Users/A B/x.cjs"'
+    for bad in ('/a"b/x.cjs', "/a\\b/x.cjs", "/a\nb/x.cjs"):
+        with pytest.raises(lane.LaneRefused, match="can't quote"):
+            lane.node_require(bad)
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="needs node")
+def test_node_takes_the_quoted_preload_from_node_options(tmp_path):
+    """The preload's new home may hold a space; node reads NODE_OPTIONS's quoted --require."""
+    folder = tmp_path / "home with space"
+    folder.mkdir()
+    (folder / "lane-preload.cjs").write_bytes(preload_bytes())
+    script = "const s = require('net').createServer().listen(0, () => { console.log(s.address().address); s.close(); })"
+    r = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30,
+                       env=dict(os.environ, NODE_OPTIONS=lane.node_require(folder / "lane-preload.cjs")))
+    assert r.returncode == 0 and r.stdout.strip() == "127.0.0.1", r.stderr
+
+
+def test_the_worker_env_turns_claudes_own_updater_off(env):
+    """C1: claude's auto-updater runs outside the sandbox and, for an npm install, would use the lane's
+    npm_config_cache, which the worker can write."""
+    extra = lane.worker_env("/tmp/sy-lane-1/0123456789", 41000, "ws://x", "/h/lane-preload.cjs")
+    assert extra["DISABLE_AUTOUPDATER"] == "1" and extra["npm_config_cache"] == "/tmp/sy-lane-1/0123456789/npm-cache"
+
+
+def test_managed_hooks_refuse_a_lane(env, mac):
+    """C1: Claude Code runs a managed policy's hooks even under a non-managed disableAllHooks, outside the sandbox and
+    with the lane's environment. User and local hooks are switched off by the lane's flag settings, so only managed
+    ones refuse."""
+    hook = {"SessionStart": [{"hooks": [{"type": "command", "command": "npx something"}]}]}
+    claude_dir = env["home"] / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(json.dumps({"hooks": hook}))
+    assert lane.settings_widenings() == []
+    lane.MANAGED_SETTINGS.write_text(json.dumps({"hooks": hook}))
+    assert lane.settings_widenings() == ["%s defines hooks, which Claude Code runs outside the sandbox with the lane's "
+                                         "environment even under disableAllHooks" % lane.MANAGED_SETTINGS]
+    lane.MANAGED_SETTINGS.write_text(json.dumps({"hooks": {}}))
+    assert lane.settings_widenings() == []

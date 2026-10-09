@@ -109,7 +109,7 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
 | The broker's code | A Playwright copy that teamd pins and owns. Its version and its integrity hash come from the lockfile **at the worker's base commit** (`git show <base>:package-lock.json`, entry `packages["node_modules/playwright-core"]`). It is downloaded from the npm registry, checked against that committed hash, and stored outside every worktree. It is never the worktree's `node_modules`, and never a version the worker chose. | The worker can write its own `node_modules`, its `package.json` and its branch. The base commit is the lead's, fixed when the worker is spawned, so the worker can't pick which published version runs outside its sandbox. |
 | Ports | Each lane gets a block of 32 loopback ports from a pool, `41000`–`48999`. That is below macOS's ephemeral range (49152–65535), so an outgoing connection never takes a lane's port. The worker gets `SUPERYAK_LANE_PORT_BASE` and `SUPERYAK_LANE_PORT_COUNT`. The broker listens on the last port. A block returns to the pool only after the lane's process cleanup has finished. Bricks' servers and fixtures, including the fake Google, take ports from the block. | The broker's profile can then allow only the lane's ports, and shards can't reach each other's servers (`reuseExistingServer`). |
 | Other localhost services (D9) | A lane's turn starts only while every TCP listener on the machine is either in a lane's own port block or on the approved list. teamd checks before every turn and before starting a broker, and again every 60 s during a turn. A failure during a turn stops the turn and the broker. The check fails closed. | The worker's sandbox can connect to any localhost port (`allowLocalBinding` can't be narrowed), so every listener is part of the lane's attack surface. |
-| Binding beyond loopback | A Node preload (`NODE_OPTIONS=--require <lane>/preload.cjs`) rewrites `listen()` on an unspecified address, `0.0.0.0` or `::` to `127.0.0.1`. teamd's listener check also stops a lane whose processes listen on any non-loopback address. | `listen(0)` binds `::` (spike 3), which would accept connections from the LAN or the tailnet. |
+| Binding beyond loopback | A Node preload (`NODE_OPTIONS=--require "<teamd's worker folder>/lane-preload.cjs"`, outside `/tmp`) rewrites `listen()` on an unspecified address, `0.0.0.0` or `::` to `127.0.0.1`. teamd's listener check also stops a lane whose processes listen on any non-loopback address. | `listen(0)` binds `::` (spike 3), which would accept connections from the LAN or the tailnet. |
 | Temp, caches | One lane directory for each worker: `/tmp/sy-lane-<uid>/<h>`, where `<h>` is the first 10 hex characters of `sha256(team_id + '/' + worker_id)`. It holds `tmp/` (`CLAUDE_CODE_TMPDIR`), `npm-cache/` (`npm_config_cache`) and `b/` (the broker's folder, which the worker can't write). | It fixes denials 1 and 3. The short paths keep Chrome's and tsx's sockets under macOS's 104-byte limit. |
 | Page text | Text from pages, test output and traces is data. The lane brief says so. | The app under test can render anything, so it is a prompt-injection surface. |
 
@@ -156,7 +156,7 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
 and, to `filesystem`:
 - `allowWrite`: `<lane>/tmp` and `<lane>/npm-cache`. The lane root and `b/` are not writable, so the worker can't
   replace them with a symlink or tamper with the broker's folder.
-- `allowRead`: `<lane>/tmp`, `<lane>/npm-cache` and `<lane>/preload.cjs`.
+- `allowRead`: `<lane>/tmp`, `<lane>/npm-cache` and the preload (`~/.superyak/team/teams/<t>/workers/<w>/lane-preload.cjs`).
 - `denyRead`: `/tmp/sy-lane-<uid>`, so other lanes are unreadable, and `/private/tmp/claude-<uid>`, which is other
   sessions' scratch.
 
@@ -166,7 +166,28 @@ With `lane=None`, the output is byte-for-byte what it is today.
 - **Set:** for a browser worker, the environment gets `CLAUDE_CODE_TMPDIR=<lane>/tmp`,
   `npm_config_cache=<lane>/npm-cache`, `SUPERYAK_BROWSER_LANE=1`, `SUPERYAK_LANE_PORT_BASE`,
   `SUPERYAK_LANE_PORT_COUNT=32`, `PW_TEST_CONNECT_WS_ENDPOINT=ws://127.0.0.1:<broker port>/<secret>` and
-  `NODE_OPTIONS=--require <lane>/preload.cjs`.
+  `NODE_OPTIONS=--require "<the preload>"` (quoted: a home folder may hold a space), plus `DISABLE_AUTOUPDATER=1`
+  (final fix wave, C1: an npm install of claude would update itself outside the sandbox with the lane's
+  `npm_config_cache`).
+- **Outside the sandbox (final fix wave, C1).** All of this is in `claude`'s own environment, so everything `claude`
+  starts outside its sandbox inherits it: MCP servers (some start with `npx`), hooks, and `claude` itself if it runs
+  under node. The worker can write `npm-cache/`, and anything that can write `/tmp` (a Codex worker) could replace a
+  preload kept there. So:
+  - browser workers start with `--strict-mcp-config` (only teamd's own `--mcp-config`, the `team` server, loads: no
+    user, project `.mcp.json` or plugin servers, engram among them) and `"disableAllHooks": true` in their flag
+    settings (`--settings`), which no project or local file can turn back on;
+  - the preload is teamd's own file, `~/.superyak/team/teams/<t>/workers/<w>/lane-preload.cjs`, written at mode 0644
+    from teamd's shipped copy (unlink, then `O_CREAT|O_EXCL|O_NOFOLLOW`), and refused when it is a symlink or another
+    user's, or when its folder or any folder above it can be written by someone else, or lies in a shared temp
+    folder;
+  - `npm_config_cache` stays in the lane: the worker's sandboxed npm needs it, and with the two switches above no
+    unsandboxed process uses it.
+  Confirmed against the installed Claude Code 2.1.295, in a scratch config with no network: without the switches,
+  user, project and plugin hooks and MCP servers all start and inherit `NODE_OPTIONS` and `npm_config_cache`; with
+  both, only the `--mcp-config` server starts and no hook runs, even with `"disableAllHooks": false` in the project's
+  `.claude/settings.json` and `settings.local.json`. Either switch alone leaves the other half running. The
+  sandboxed commands' Seatbelt profile is passed inline (`sandbox-exec -p`), so nothing in `CLAUDE_CODE_TMPDIR`
+  decides what runs outside the sandbox.
 - **Drop:** `launch` gains a `drop_env` parameter, which removes `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` and `DOCKER_HOST`.
 - **The secret:** 32 random bytes, new for each broker. Playwright's errors quote the whole endpoint, so a failing
   test can print it, and `teamlib.redact()` doesn't recognise it.
@@ -299,7 +320,7 @@ the Mac.
 - **On failure:** the lane's turn doesn't start. The worker waits, and the lead gets a message naming each unapproved
   listener by command name and port.
 
-**The preload** (`<lane>/preload.cjs`, written by teamd, readable but not writable by the worker): it wraps
+**The preload** (`~/.superyak/team/teams/<t>/workers/<w>/lane-preload.cjs`, written by teamd outside `/tmp`, readable but not writable by the worker): it wraps
 `net.Server.prototype.listen` so that an unspecified host, `0.0.0.0` or `::` becomes `127.0.0.1`.
 
 **Process cleanup.** When a lane ends, teamd sends SIGTERM, then after 5 s SIGKILL, to the broker's group and to every
@@ -337,6 +358,13 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   - registering any name that matches the rendezvous pattern. Squatting such a name crashes another headless shell
     or Chromium of Andy's at start, including another lane's broker. It can't hijack one, because the real browser
     registers its name before launching children, and a failed registration is fatal. The names die with the broker.
+- **What claude still starts outside its sandbox** (final fix wave, C1). The `team` MCP server (teamd's own Python;
+  `NODE_OPTIONS` names teamd's own preload, which it never loads), Claude Code's own helpers, and anything a managed
+  policy defines: Claude Code runs managed-settings hooks even under a non-managed `disableAllHooks`, so a
+  `managed-settings.json` with `hooks` refuses lanes (`settings_widenings`). A plugin's LSP servers start lazily, when
+  a file of their language is opened; the scratch test couldn't start one without a model turn, so whether
+  `--strict-mcp-config` covers them is unconfirmed. Acceptance step 2's `ps` rows list every process under a lane's
+  turn that runs outside the sandbox.
 - The worker's own sandbox can still connect to any localhost port. D9's check is what makes that safe, and it is
   only as good as the approved list.
 - The preload is advisory: a worker can start a child without `NODE_OPTIONS`. Binding beyond loopback is caught only

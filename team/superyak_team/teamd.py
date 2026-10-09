@@ -307,7 +307,8 @@ class Team:
         else:
             cmd = workers.claude_command(self.cfg, self.team_id, wid, w["path"], prompt, w["ident"],
                                          w.get("mode", "build"), self.repo,
-                                         lane=w["lane"]["path"] if lane_env else None)
+                                         lane=w["lane"]["path"] if lane_env else None,
+                                         preload=w["lane"]["preload"] if lane_env else None)
             env = self._engram_env(w)
         if lane_env:
             env.update(lane_env)
@@ -341,9 +342,9 @@ class Team:
         return [self.repo] + [line[len("worktree "):] for line in out.splitlines() if line.startswith("worktree ")]
 
     def _lane_turn(self, wid):
-        """What a browser worker's turn needs, in the spec's order: the lane folder (checked every turn), its port
-        block, the listener check, and at the lane's first turn (or once its broker has died) the broker. Returns the
-        turn's environment."""
+        """What a browser worker's turn needs, in the spec's order: the lane folder and teamd's own preload (both checked
+        every turn), its port block, the listener check, and at the lane's first turn (or once its broker has died) the
+        broker. Returns the turn's environment."""
         w = self.state["workers"][wid]
         try:
             widened = lane.settings_widenings()           # the person's settings may have changed since the spawn
@@ -354,8 +355,9 @@ class Team:
         if widened:
             raise lane.LaneRefused("settings outside the lane now widen its sandbox: " + "; ".join(widened))
         path = lane.ensure_lane(self.team_id, wid)
+        preload = lane.ensure_preload(self.team_id, wid)
         base = lane.allocate_block(self.team_id, wid)
-        w["lane"] = {"hash": path.name, "path": str(path), "base": base}
+        w["lane"] = {"hash": path.name, "path": str(path), "base": base, "preload": str(preload)}
         self.save()
         broker = self.brokers.get(wid)
         prepared = None
@@ -379,7 +381,7 @@ class Team:
             self.brokers[wid] = broker
             self.lane_secrets.add(broker.secret)
         self.lane_checked[wid] = checked
-        return lane.worker_env(path, base, broker.endpoint)
+        return lane.worker_env(path, base, broker.endpoint, preload)
 
     def _lane_wait(self, wid, prompt, reason):
         """D9: the turn doesn't start; the worker waits and _lane_watch tries again every LANE_RETRY_S. The lead hears

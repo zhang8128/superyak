@@ -1,4 +1,5 @@
-// Superyak browser lane (written into <lane>/preload.cjs by teamd; the worker can read it but not change it).
+// Superyak browser lane (teamd writes this into its own worker folder, outside /tmp, as lane-preload.cjs; the worker
+// can read it but not change it).
 // NODE_OPTIONS=--require loads it into every node the worker starts. A server that listens on an unspecified
 // address (none, '', 0.0.0.0 or ::) binds 127.0.0.1 instead, so nothing a lane starts answers the LAN or the
 // tailnet: listen(0) alone binds :: (spike 3). Unix sockets, inherited handles and explicit addresses are left alone.

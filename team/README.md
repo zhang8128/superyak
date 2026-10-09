@@ -49,6 +49,12 @@ The profile self-check runs 17 negative probes (each action must be refused by t
 3 positive ones (the lane's own port, its own folder and `node` must work, so the refusals are the profile's doing).
 Only one teamd runs per team (a second refuses to start), which is how a lane's port block is known to be live.
 
+A browser worker starts with `--strict-mcp-config` and `"disableAllHooks": true`: only teamd's `team` MCP server
+loads, and no hook runs, because whatever `claude` starts outside its sandbox inherits the lane's environment
+(`NODE_OPTIONS`, and an `npm_config_cache` the worker can write). So it has no engram memory. Its preload is teamd's
+own file, `~/.superyak/team/teams/<team>/workers/<worker>/lane-preload.cjs`, never one under `/tmp`. A
+`managed-settings.json` that defines hooks refuses lanes: Claude Code runs those even under `disableAllHooks`.
+
 The broker's stderr is kept in teamd's folder, `~/.superyak/team/<team>/workers/<worker>/broker-stderr.log`, never in
 the lane's folder.
 
