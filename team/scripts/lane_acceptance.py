@@ -732,16 +732,25 @@ def under_turn(pids, commands, sandboxed_of, alive_of):
     return out
 
 
-def leftover_gate_verdict(turn, under, gate):
+def leftover_gate_verdict(turn, under, gate, alive_of):
     """C1, review 4: the real lane profile against the leftover gate (lane._turn_sandboxed, as `gate(pid)`): every
     sandboxed process under the turn passes it, and claude itself (`turn`) and teamd's run_team.py don't. If the turn's
-    own processes failed it, the tree and orphan rules would silently do nothing. (row, verdict, detail)."""
+    own processes failed it, the tree and orphan rules would silently do nothing. A gone pid answers 1 to everything,
+    so whoever `alive_of` (lane._alive: a zombie is gone) says is gone once the gate has been asked is left out, never
+    "isn't taken". (row, verdict, detail)."""
     name = "C1: the leftover gate takes the turn's sandboxed shell, never claude or the team server"
     shells = [pid for pid, command, sandboxed in under if sandboxed is True]
     servers = [pid for pid, command, sandboxed in under if re.search(r"(^|/)run_team\.py(\s|$)", command)]
     if not shells:
         return name, "BROKEN", "no sandboxed process under the turn to ask about"
     said = {pid: gate(pid) for pid in [turn] + servers + shells}
+    gone = {pid for pid in said if not alive_of(pid)}                 # asked after the gate: one that ended meanwhile
+    if turn in gone:
+        return name, "BROKEN", "claude (pid %d) ended while the gate was asked" % turn
+    shells, servers = [pid for pid in shells if pid not in gone], [pid for pid in servers if pid not in gone]
+    if not shells:
+        return name, "BROKEN", "every sandboxed process under the turn ended while the gate was asked"
+    said = {pid: answer for pid, answer in said.items() if pid not in gone}
     unknown = sorted(pid for pid, answer in said.items() if answer is None)
     if unknown:
         return name, "BROKEN", "sandbox_check couldn't say for pids %s" % ", ".join(map(str, unknown))
@@ -1999,13 +2008,13 @@ def c1_rows(report, team_id, wid, w, turn):
     except (OSError, ValueError):
         settings = {}
     commands = commands_of(_ps_text())
-    under = under_turn(sorted(lane.family(turn)[0] - {turn}), commands, is_sandboxed, alive)
+    under = under_turn(sorted(lane.family(turn)[0] - {turn}), commands, is_sandboxed, lane._alive)   # not a zombie
     for name, verdict, detail in outside_verdicts(r.stdout.strip(), settings if isinstance(settings, dict) else {},
                                                   under):
         report.add(2, name, verdict, detail)
     path = Path(w["lane"]["path"])
     report.add(2, *leftover_gate_verdict(turn, under, lambda pid: lane._turn_sandboxed(
-        pid, (w["path"], path / "tmp"), (path / "b",))))
+        pid, (w["path"], path / "tmp"), (path / "b",)), lane._alive))
     report.add(2, "C1: the preload is teamd's own file, outside /tmp", *preload_verdict(w["lane"].get("preload")))
 
 

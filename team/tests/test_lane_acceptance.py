@@ -1633,17 +1633,67 @@ def test_the_leftover_gate_takes_the_turns_sandboxed_shell_and_never_claude_or_t
     gate; claude itself and teamd's run_team.py don't. If they didn't, rules (a) and (b) would silently do nothing."""
     name = "C1: the leftover gate takes the turn's sandboxed shell, never claude or the team server"
     under = [(11, "/usr/bin/python3 /x/team/run_team.py", False), (12, "/bin/bash -c sleep 30", True)]
-    gate = {10: False, 11: False, 12: True}
-    assert acceptance.leftover_gate_verdict(10, under, gate.get) == (
+    gate, running = {10: False, 11: False, 12: True}, lambda pid: True
+    assert acceptance.leftover_gate_verdict(10, under, gate.get, running) == (
         name, "PASS", "the gate takes the turn's sandboxed pid 12, not claude (pid 10) or run_team.py (pid 11)")
-    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: False, 11: False, 12: False}.get)[1:]
+    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: False, 11: False, 12: False}.get, running)[1:]
     assert verdict == "FAIL" and "pid 12" in detail                            # (a) and (b) would do nothing
-    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: True, 11: False, 12: True}.get)[1:]
+    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: True, 11: False, 12: True}.get, running)[1:]
     assert verdict == "FAIL" and "claude" in detail
-    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: False, 11: True, 12: True}.get)[1:]
+    verdict, detail = acceptance.leftover_gate_verdict(10, under, {10: False, 11: True, 12: True}.get, running)[1:]
     assert verdict == "FAIL" and "run_team.py" in detail
-    assert acceptance.leftover_gate_verdict(10, under, {10: False, 11: False, 12: None}.get)[1] == "BROKEN"
-    assert acceptance.leftover_gate_verdict(10, under[:1], gate.get)[1] == "BROKEN"    # no sandboxed shell to ask about
+    assert acceptance.leftover_gate_verdict(10, under, {10: False, 11: False, 12: None}.get, running)[1] == "BROKEN"
+    assert acceptance.leftover_gate_verdict(10, under[:1], gate.get, running)[1] == "BROKEN"    # no shell to ask about
+
+
+def test_a_shell_that_ends_while_the_gate_is_asked_says_nothing(acceptance):
+    """Re-review fold 1: a gone pid answers 1 to everything, so the gate says False for a sandboxed shell that exits
+    between under_turn and the gate; whoever is gone once the gate has been asked is left out, never "isn't taken"."""
+    under = [(11, "/usr/bin/python3 /x/team/run_team.py", False), (12, "/bin/bash -c sleep 30", True),
+             (13, "/bin/bash -c true", True)]
+    asked = []
+
+    def gate(pid):
+        asked.append(pid)
+        return {10: False, 11: False, 12: True, 13: False}[pid]
+
+    def running(pid):
+        return pid != 13 or 13 not in asked                 # 13 exits once its gate has been asked
+    assert acceptance.leftover_gate_verdict(10, under, gate, running)[1:] == (
+        "PASS", "the gate takes the turn's sandboxed pid 12, not claude (pid 10) or run_team.py (pid 11)")
+    assert acceptance.leftover_gate_verdict(10, under[:1] + under[2:], gate, running)[1] == "BROKEN"   # none left
+
+
+def test_c1_asks_the_gate_with_the_turns_own_paths_and_leaves_out_a_zombie(acceptance, tmp_path, monkeypatch):
+    """Re-review folds 1 and 2: c1_rows asks lane._turn_sandboxed with exactly the turn's worktree and <lane>/tmp to
+    write and <lane>/b to read, and counts as running only what lane._alive does: a zombie under the turn (which
+    acceptance's own alive() and sandbox_check both count) is left out, not reported as "isn't taken"."""
+    worktree, lane_dir = tmp_path / "wt", tmp_path / "lane"
+    team_dir = tmp_path / "teams" / "t1"
+    (team_dir / "workers" / "kaylee").mkdir(parents=True)
+    (team_dir / "workers" / "kaylee" / "settings.json").write_text(json.dumps({"disableAllHooks": True}))
+    commands = {11: "/usr/bin/python3 /x/team/run_team.py", 12: "/bin/bash -c sleep 30", 13: "/bin/bash -c sleep 1"}
+    monkeypatch.setattr(acceptance.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(
+        a[0], 0, "claude -p go --strict-mcp-config\n", ""))
+    monkeypatch.setattr(acceptance.teamlib, "team_dir", lambda team_id: team_dir)
+    monkeypatch.setattr(acceptance, "_ps_text", lambda: "")
+    monkeypatch.setattr(acceptance, "commands_of", lambda text: commands)
+    monkeypatch.setattr(acceptance.lane, "family", lambda turn: ({turn, 11, 12, 13}, {turn}))
+    monkeypatch.setattr(acceptance, "is_sandboxed", {11: False, 12: True, 13: True}.get)
+    monkeypatch.setattr(acceptance, "alive", lambda pid: True)                 # a zombie still answers kill(pid, 0)
+    monkeypatch.setattr(acceptance.lane, "_alive", lambda pid: pid != 13)      # 13 is a zombie
+    asked = []
+
+    def turn_sandboxed(pid, writable, unreadable=()):
+        asked.append((pid, writable, unreadable))
+        return pid == 12
+    monkeypatch.setattr(acceptance.lane, "_turn_sandboxed", turn_sandboxed)
+    report = acceptance.Report()
+    acceptance.c1_rows(report, "t1", "kaylee", {"path": str(worktree), "lane": {"path": str(lane_dir), "preload": None}},
+                       10)
+    gate_rows = [r for r in report.rows if "leftover gate" in r[1]]
+    assert [r[2] for r in gate_rows] == ["PASS"], gate_rows
+    assert sorted(asked) == [(pid, (str(worktree), lane_dir / "tmp"), (lane_dir / "b",)) for pid in (10, 11, 12)]
 
 
 def test_the_preload_row_needs_teamds_own_file_outside_tmp(acceptance, tmp_path):
