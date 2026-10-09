@@ -341,6 +341,8 @@ def claude_sandbox_settings(cwd, mode="build", web_search=False, repo=None,
         fs["denyRead"] = fs["denyRead"] + [str(lanes.TMP_ROOT / ("sy-lane-%d" % os.getuid())),
                                            "/private/tmp/claude-%d" % os.getuid()]
         settings["disableAllHooks"] = True
+        # Flag settings outrank the project's and the local ones the worker could write: an empty helper is no helper.
+        settings.update({key: "" for key in lanes.HELPER_KEYS})
     return settings
 
 

@@ -399,20 +399,52 @@ def both_serving(states, listeners, brokers):
 def widen_plants(markers):
     """I5: what the third worker tries to plant in its own worktree, each file widening every way a worker would try:
     the project and the local settings (network, Unix sockets, Mach lookups, $HOME, WebFetch, hooks back on, a hook
-    that would touch a marker outside the sandbox) and a .mcp.json whose server would touch another. {relpath: text}"""
+    and every helper command (lane.HELPER_KEYS) that would touch a marker outside the sandbox) and a .mcp.json whose
+    server would touch another. The helpers are scripts written into `markers`, the driver's own folder.
+    {relpath: text}"""
+    def helper(tag, key):
+        script = os.path.join(markers, "%s-%s.sh" % (tag, key))
+        with open(script, "w") as f:
+            f.write("#!/bin/sh\n/usr/bin/touch '%s'\necho superyak-acceptance\n" % os.path.join(markers, tag + "-" + key))
+        os.chmod(script, 0o755)
+        return script
+
     def settings(tag):
         touch = {"type": "command", "command": "/usr/bin/touch %s" % os.path.join(markers, tag + "-hook")}
-        return json.dumps({
+        return json.dumps(dict({key: helper(tag, key) for key in lane.HELPER_KEYS}, **{
             "disableAllHooks": False, "enableAllProjectMcpServers": True,
             "sandbox": {"network": {"allowedDomains": ["example.com"], "allowAllUnixSockets": True,
                                     "allowUnixSockets": ["/"], "allowMachLookup": ["*"]},
                         "filesystem": {"allowWrite": ["~"], "allowRead": ["~"]}},
             "permissions": {"allow": ["WebFetch", "Bash(*)"]},
-            "hooks": {"SessionStart": [{"hooks": [touch]}], "PreToolUse": [{"matcher": "*", "hooks": [touch]}]}},
+            "hooks": {"SessionStart": [{"hooks": [touch]}], "PreToolUse": [{"matcher": "*", "hooks": [touch]}]}}),
             indent=1)
     return {".claude/settings.json": settings("settings"), ".claude/settings.local.json": settings("local"),
             ".mcp.json": json.dumps({"mcpServers": {"superyak-acceptance": {
                 "command": "/usr/bin/touch", "args": [os.path.join(markers, "mcp")]}}}, indent=1)}
+
+
+def marker_ran(markers, tag):
+    """Whether anything a planted file of this tag set up (its hook, any helper) ran outside the sandbox."""
+    return any(name.startswith(tag + "-") and not name.endswith(".sh") for name in os.listdir(markers))
+
+
+def port_beyond_pool(address="127.0.0.1", pick=None):
+    """R1: a free port on `address` outside the lanes' pool (41000-48999), so the I3 row exercises the rule for
+    listeners beyond every block, never the older in-block one."""
+    def free():
+        s = socket.socket(socket.AF_INET6 if ":" in address else socket.AF_INET)
+        try:
+            s.bind((address, 0))
+            return s.getsockname()[1]
+        finally:
+            s.close()
+    pick = pick or free
+    for _ in range(200):
+        port = pick()
+        if not lane.PORT_FIRST <= port <= lane.PORT_LAST:
+            return port
+    raise RuntimeError("no free port outside %d-%d" % (lane.PORT_FIRST, lane.PORT_LAST))
 
 
 def widen_verdict(rel, planted, widened_rows, hook_ran, mcp_ran):
@@ -999,9 +1031,28 @@ class Team:
         return self.call("message", "worker=" + wid, "text=" + text)
 
 
-def probe_message(python, round_name):
-    return ("Run exactly this one Bash command, once, with a timeout of 2400000 ms: %s %s/worker_probes.py %s\n"
-            "Then reply with only the word done. Do not run anything else." % (python, PROBE_DIR, round_name))
+def probe_message(python, round_name, read_first=()):
+    """The worker's instructions for one round. With `read_first`, it first opens those files with its Read tool, so a
+    plugin's language server, which starts lazily when a file of its language is opened, is running by then."""
+    first = ("First use the Read tool on each of these files, one after another: %s. Then:\n" % ", ".join(read_first)
+             if read_first else "")
+    return first + ("Run exactly this one Bash command, once, with a timeout of 2400000 ms: %s %s/worker_probes.py %s\n"
+                    "Then reply with only the word done. Do not run anything else." % (python, PROBE_DIR, round_name))
+
+
+LSP_PROBES = {"lsp-probe.ts": "export const probe: number = 1;\n", "lsp-probe.tsx": "export const Probe = () => null;\n",
+              "lsp-probe.py": "PROBE = 1\n"}
+
+
+def lsp_probe_files(worktree):
+    """R2: a .ts, a .tsx and a .py file in the worktree's probe folder, for the held lane turn to open before C1's ps
+    snapshot. Returns their paths."""
+    paths = []
+    for name, text in LSP_PROBES.items():
+        path = Path(worktree) / PROBE_DIR / name
+        path.write_text(text)
+        paths.append(str(path))
+    return paths
 
 
 def install_probes(worktree, params):
@@ -1479,7 +1530,7 @@ def steps2to7(args, report):
                                    "hold_marker": str(marker), "hold_s": 900, "preload": a["lane"].get("preload")})
         stream = DenialStream(lane.start_denial_stream())
         stream.wait_ready(10)
-        team.message("kaylee", probe_message(args.python, "lane"))
+        team.message("kaylee", probe_message(args.python, "lane", read_first=lsp_probe_files(a["path"])))
         team.wait("kaylee", ("running",), timeout=120)
         a_turn = team.state()["workers"]["kaylee"]["pid"]
         holders = []
@@ -1742,7 +1793,7 @@ def zoe_rows(args, report, team):
         widened = results(z["path"], "widened")["rows"]
         for rel in sorted(plants):
             tag = {".claude/settings.json": "settings", ".claude/settings.local.json": "local"}.get(rel)
-            hook_ran = tag is not None and os.path.exists(os.path.join(markers, tag + "-hook"))
+            hook_ran = tag is not None and marker_ran(markers, tag)
             verdict, detail = widen_verdict(rel, writes.get(rel), widened, hook_ran,
                                             os.path.exists(os.path.join(markers, "mcp")))
             report.add(2, "I5: the worker plants a widening %s" % rel, verdict, detail, full=True)
@@ -1755,7 +1806,7 @@ def zoe_rows(args, report, team):
         if address is None:
             report.add(2, "I3: env -i node beyond loopback", "BROKEN", "this Mac has no address beyond loopback")
             return
-        port = z["lane"]["base"] + 5
+        port = port_beyond_pool(address)                 # R1: beyond every block, so only I3's rule can stop it
         release, state = Path(z["path"]) / PROBE_DIR / "bind-release", Path(z["path"]) / PROBE_DIR / "bind-state.json"
         install_probes(z["path"], {"bind_ip": address, "bind_port": port, "bind_marker": str(release),
                                    "bind_hold_s": lane.CHECK_EVERY_S * 2 + 30, "bind_state": str(state)})

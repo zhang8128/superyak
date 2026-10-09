@@ -363,6 +363,7 @@ class FakeTeam:
                             for n, b in (("kaylee", 41000), ("wash", 41032))}}
 
     def message(self, wid, text):
+        getattr(FakeTeam, "messages", []).append((wid, text))
         d = self.world["wk"][wid] / "node_modules" / ".superyak-lane-acceptance"
         d.mkdir(parents=True, exist_ok=True)
         (d / ("results-%s.json" % ("lane" if wid == "kaylee" else "peer"))).write_text(json.dumps({"pid": 1, "rows": []}))
@@ -1560,7 +1561,7 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
     s.close()
     wt = tmp_path / "zoe"
     wt.mkdir()
-    threads = []
+    threads, ports = [], []
 
     class ZoeTeam:
         inbox, calls = [], []
@@ -1576,8 +1577,10 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
             return {"workers": {"zoe": {"path": str(wt), "lane": {"path": str(world["tmp"] / "zoe-lane"), "base": base}}}}
 
         def status(self):
+            params = json.loads((wt / acceptance.PROBE_DIR / "params.json").read_text())
+            ports.append(params["bind_port"])
             self.inbox.append("LANE STOPPED: zoe's turn ...: node (pid 9) listens on 127.0.0.1 port %d, beyond loopback, "
-                              "as this user while a lane runs" % (base + 5))
+                              "as this user while a lane runs" % params["bind_port"])
             return {}
 
         def message(self, wid, text):
@@ -1606,7 +1609,50 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
         assert verdict == "FAIL" and "write in $HOME" in detail and "read a dotfile" in detail
     assert rows["I5: the next turn: curl example.com"][0] == "PASS"
     assert rows["I3: env -i node listens beyond loopback (an address of this Mac's)"][0] == "PASS"
+    assert ports and not any(lane.PORT_FIRST <= port <= lane.PORT_LAST for port in ports)    # R1: beyond every block
     assert not (wt / ".claude" / "settings.json").exists() and not (wt / ".mcp.json").exists()
     assert not (world["home"] / "superyak-lane-acceptance-widen.txt").exists()
     assert ("stop", "worker=zoe") in team.calls and not any(t.is_alive() for t in threads)
     assert "127.0.0.1" not in json.dumps(report.rows)                         # the address is never printed
+
+
+
+# ================= Round 2 =================
+
+def test_the_bind_rows_port_lies_outside_every_lane_block(acceptance):
+    """R1: a port in zoe's own block is stopped by the older in-block rule, so the I3 row binds outside the pool."""
+    picks = iter([41005, lane.PORT_FIRST, lane.PORT_LAST, 49321])
+    assert acceptance.port_beyond_pool(pick=lambda: next(picks)) == 49321
+    port = acceptance.port_beyond_pool("127.0.0.1")
+    assert not lane.PORT_FIRST <= port <= lane.PORT_LAST
+    with pytest.raises(RuntimeError, match="outside"):
+        acceptance.port_beyond_pool(pick=lambda: 41000)
+
+
+def test_the_plants_also_set_every_helper_command(acceptance, tmp_path):
+    """R2: the I5 plants set apiKeyHelper and the other helpers to scripts that would touch a marker outside the
+    sandbox; any marker of a file's tag fails its row."""
+    plants = acceptance.widen_plants(str(tmp_path))
+    for rel, tag in ((".claude/settings.json", "settings"), (".claude/settings.local.json", "local")):
+        data = json.loads(plants[rel])
+        for key in lane.HELPER_KEYS:
+            script = Path(data[key])
+            assert script.parent == tmp_path and os.access(script, os.X_OK)
+            r = subprocess.run([str(script)], capture_output=True, text=True)
+            assert r.returncode == 0 and (tmp_path / ("%s-%s" % (tag, key))).exists()
+    assert acceptance.marker_ran(str(tmp_path), "settings") and not acceptance.marker_ran(str(tmp_path), "other")
+
+
+def test_the_held_lane_turn_opens_ts_tsx_and_py_files_before_the_c1_snapshot(acceptance, driven):
+    """R2: a plugin's LSP server starts lazily, when a file of its language is opened; the lane round's message has
+    the worker Read a .ts, a .tsx and a .py file first, so any such server is running when C1's ps snapshot is
+    taken."""
+    FakeTeam.messages = []
+    run_steps(acceptance, driven)
+    lane_round = [text for wid, text in FakeTeam.messages if wid == "kaylee" and "worker_probes.py lane" in text]
+    assert lane_round, FakeTeam.messages
+    text = lane_round[0]
+    probes = Path(driven.world["wk"]["kaylee"]) / acceptance.PROBE_DIR
+    for ext in (".ts", ".tsx", ".py"):
+        path = probes / ("lsp-probe" + ext)
+        assert path.is_file() and str(path) in text and text.index(str(path)) < text.index("Run exactly")

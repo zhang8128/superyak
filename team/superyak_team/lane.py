@@ -44,6 +44,12 @@ DROP_ENV = ("SSH_AUTH_SOCK", "GPG_AGENT_INFO", "DOCKER_HOST")
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 MANAGED_SETTINGS = Path("/Library/Application Support/ClaudeCode/managed-settings.json")
+MANAGED_MCP = Path("/Library/Application Support/ClaudeCode/managed-mcp.json")
+# Settings whose value is a command Claude Code runs outside the sandbox, with its own environment (the lane's), in
+# claude -p too; neither disableAllHooks nor --strict-mcp-config stops them. The binary's credential-helper list, plus
+# otelHeadersHelper and proxyAuthHelper.
+HELPER_KEYS = ("apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "otelHeadersHelper",
+               "proxyAuthHelper")
 LIVE_STATES = ("preparing", "queued", "running", "idle", "waiting")   # teamd.LIVE: a worker in one of these is alive
 
 
@@ -88,7 +94,8 @@ def settings_widenings():
     run fully outside the sandbox, allowUnsandboxedCommands, any key Claude Code adds later), except an empty
     network.allowedDomains; any WebFetch allow rule widens the lane's network too. Workers without a lane never call
     it. A managed policy's hooks run outside the sandbox with the lane's
-    environment even under disableAllHooks. A file that exists but can't be read, or holds a sandbox, network,
+    environment even under disableAllHooks, and so does any helper command (HELPER_KEYS); a managed MCP config refuses
+    too. A file that exists but can't be read, or holds a sandbox, network,
     permissions or allow list of the wrong shape, counts as a widening: the check fails closed. Only plain-word key
     names are quoted back (this text reaches the lead)."""
     found = []
@@ -104,6 +111,9 @@ def settings_widenings():
             found.append("%s isn't a JSON object" % path)
             continue
         found += ["%s %s" % (path, why) for why in _widenings(data, managed=path == MANAGED_SETTINGS)]
+    if os.path.lexists(MANAGED_MCP):
+        found.append("%s exists: its MCP servers would run outside the sandbox with the lane's environment"
+                     % MANAGED_MCP)
     return found
 
 
@@ -125,6 +135,8 @@ def _widenings(data, managed):
            else "adds a sandbox key this check doesn't know" for keys in _sandbox_keys(sandbox)]
     if any(rule == "WebFetch" or rule.startswith("WebFetch(") for rule in allow):
         out.append("allows WebFetch")
+    out += ["sets %s, which Claude Code runs outside the sandbox with the lane's environment" % key
+            for key in HELPER_KEYS if data.get(key) not in (None, "")]
     if managed and data.get("hooks"):
         out.append("defines hooks, which Claude Code runs outside the sandbox with the lane's environment even under "
                    "disableAllHooks")

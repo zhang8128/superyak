@@ -50,6 +50,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", "%s:%s" % (MOCK_BIN, os.environ["PATH"]))
     monkeypatch.setenv("MOCK_TEAM_LOG", str(tmp_path / "agent.log"))
     monkeypatch.setattr(lane, "MANAGED_SETTINGS", tmp_path / "managed-settings.json")
+    monkeypatch.setattr(lane, "MANAGED_MCP", tmp_path / "managed-mcp.json")
     monkeypatch.setattr(lane, "UNSAFE_ROOTS", ())          # the tests' own folders are under /tmp
     return {"repo": repo, "tmp": tmp_path, "home": home}
 
@@ -625,7 +626,7 @@ def test_a_lane_adds_exactly_its_network_block_and_paths(env, monkeypatch):
     assert fs["denyWrite"] == before["denyWrite"]
     assert path not in fs["allowWrite"] and path + "/b" not in fs["allowWrite"] and preload not in fs["allowWrite"]
     assert not any(p.startswith(path + "/b") for p in fs["allowWrite"] + fs["allowRead"])
-    assert set(laned) - set(plain) == {"disableAllHooks"} and laned["disableAllHooks"] is True
+    assert set(laned) - set(plain) == {"disableAllHooks", *lane.HELPER_KEYS} and laned["disableAllHooks"] is True
     cmd = workers.claude_command(dict(teamlib.DEFAULT_CONFIG), "t1", "kaylee", "/r/wt", "go", repo="/r/repo", lane=path,
                                  preload=preload)
     written = json.loads(Path(cmd[cmd.index("--settings") + 1]).read_text())
@@ -4125,7 +4126,7 @@ def test_a_browser_worker_starts_with_strict_mcp_config_and_hooks_off(env, monke
     written = json.loads((wdir / "settings.json").read_text())
     assert written["disableAllHooks"] is True
     before = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
-    assert set(written) - set(before) == {"disableAllHooks"}
+    assert set(written) - set(before) == {"disableAllHooks", *lane.HELPER_KEYS}
     assert "disableAllHooks" not in json.loads((teamlib.team_dir("t1") / "workers" / "wash" / "settings.json").read_text())
 
 
@@ -4922,3 +4923,46 @@ def test_the_snapshot_never_reads_through_a_link_or_a_fifo(env, tmp_path):
         if t.is_alive():
             os.close(os.open(wt / "CLAUDE.md", os.O_WRONLY | os.O_NONBLOCK))
         os.unlink(wt / "CLAUDE.md")
+
+
+
+# ---------- Round 2: R2, the remaining paths for npm_config_cache ----------
+
+def test_a_managed_mcp_config_refuses_a_lane(env):
+    """R2: managed MCP servers run outside the sandbox with claude's environment; whether --strict-mcp-config skips
+    them is unconfirmed, so the file's existence (any kind) refuses."""
+    assert lane.settings_widenings() == []
+    lane.MANAGED_MCP.write_text("{}")
+    assert lane.settings_widenings() == ["%s exists: its MCP servers would run outside the sandbox with the lane's "
+                                         "environment" % lane.MANAGED_MCP]
+    lane.MANAGED_MCP.unlink()
+    lane.MANAGED_MCP.mkdir()
+    assert len(lane.settings_widenings()) == 1
+
+
+@pytest.mark.parametrize("key", ["apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "otelHeadersHelper",
+                                 "gcpAuthRefresh", "proxyAuthHelper"])
+@pytest.mark.parametrize("name", ["settings.json", "settings.local.json", "managed"])
+def test_a_helper_command_in_user_or_managed_settings_refuses_a_lane(env, key, name):
+    """R2: Claude Code runs these helpers outside the sandbox with its environment, and neither disableAllHooks nor
+    --strict-mcp-config stops them (apiKeyHelper confirmed on 2.1.295)."""
+    path = lane.MANAGED_SETTINGS if name == "managed" else env["home"] / ".claude" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({key: "/usr/local/bin/helper"}))
+    assert lane.settings_widenings() == ["%s sets %s, which Claude Code runs outside the sandbox with the lane's "
+                                         "environment" % (path, key)]
+    path.write_text(json.dumps({key: ""}))
+    assert lane.settings_widenings() == []
+
+
+def test_a_lanes_flag_settings_blank_every_helper_a_project_file_could_set(env, monkeypatch):
+    """R2: a helper in the worktree's own .claude/settings.json or settings.local.json runs too (confirmed with
+    apiKeyHelper on 2.1.295, under disableAllHooks and --strict-mcp-config), and flag settings outrank both: an empty
+    string there stops it (null doesn't). Non-browser settings are unchanged."""
+    monkeypatch.setenv("HOME", "/home/u")
+    laned = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo", lane="/tmp/sy-lane-1/0123456789",
+                                            preload="/h/p.cjs")
+    for key in lane.HELPER_KEYS:
+        assert laned[key] == ""
+    plain = workers.claude_sandbox_settings("/r/wt", "build", False, repo="/r/repo")
+    assert not set(lane.HELPER_KEYS) & set(plain)

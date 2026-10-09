@@ -141,7 +141,15 @@ failures, 5 of them product bugs. With the lane, UX verification becomes work th
     ignore `allowMachLookup` from project and local settings.)
   - A file that exists but can't be read, isn't a JSON object, or holds a `sandbox`, `network` or `permissions` that
     isn't an object, or an `allow` that isn't a list of strings, refuses: the check fails closed.
-  - The managed policy defines no `hooks` (C1: Claude Code runs them even under a non-managed `disableAllHooks`).
+  - The managed policy defines no `hooks` (C1: Claude Code runs them even under a non-managed `disableAllHooks`), and
+    there is no `/Library/Application Support/ClaudeCode/managed-mcp.json` (round 2: its servers would run outside the
+    sandbox with the lane's environment; whether `--strict-mcp-config` skips them is unconfirmed).
+  - No user or managed settings file sets a helper command: `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`,
+    `gcpAuthRefresh`, `otelHeadersHelper` or `proxyAuthHelper` (round 2). Claude Code runs these outside the sandbox
+    with its environment, and neither `disableAllHooks` nor `--strict-mcp-config` stops them. On 2.1.295, in a scratch
+    config with no network, `apiKeyHelper` ran from the user's settings, the project's `.claude/settings.json` and
+    `.claude/settings.local.json` alike, with the lane's switches on. So a lane's flag settings also set every one of
+    them to `""`, which outranks the project and local files (`null` doesn't), and no helper runs.
 - The worker record stores `"browser": true`.
 
 **Lane directory.**

@@ -69,6 +69,10 @@ own file, `~/.superyak/team/teams/<team>/workers/<worker>/lane-preload.cjs`, nev
 `managed-settings.json` that defines hooks refuses lanes: Claude Code runs those even under `disableAllHooks`. So does
 any `sandbox` key in your `~/.claude/settings.json`, `settings.local.json` or the managed policy, at any depth, except
 an empty `network.allowedDomains`: those merge into the lane's sandbox (and `excludedCommands` run fully outside it).
+A `managed-mcp.json` refuses lanes, and so does a helper command (`apiKeyHelper`, `awsAuthRefresh`,
+`awsCredentialExport`, `gcpAuthRefresh`, `otelHeadersHelper`, `proxyAuthHelper`) in your settings or the managed
+policy: Claude Code runs those outside the sandbox with the lane's environment. A lane's own flag settings blank every
+helper, so one planted in the worktree's `.claude/` doesn't run either.
 
 The broker's stderr is kept in teamd's folder, `~/.superyak/team/<team>/workers/<worker>/broker-stderr.log`, never in
 the lane's folder.
