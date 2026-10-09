@@ -18,9 +18,16 @@ Prerequisites (the spec's, plus this script's):
 - the headless shell's manifest hash recorded for this revision (--self-check-only prints it the first time);
 - a root-owned listener to observe in step 4. Before step 1 the run looks for one that already exists (netstat plus
   `ps -o uid=` equal to 0, on loopback or a wildcard: launchd's *:22 with Remote Login on, or cupsd's 631) and needs no
-  sudo for it. Only when there is none does it try `sudo -n -v`. An agent's Bash tool can't use sudo (macOS caches
-  sudo credentials per terminal), so then the two root rows of step 4 are BROKEN with "no root-owned listener to
-  observe; run this once from Andy's own terminal (sudo)". Andy's own terminal is needed only for that case.
+  sudo for it. If there is none it tries `sudo -n -v` (an agent's Bash tool can't sudo: macOS caches credentials per
+  terminal). If that fails too, the run uses a PERSON: inside step 4, after the D9/D10/D11 rows, it prints
+
+      ANDY ACTION: in your own Terminal run: sudo /usr/bin/nc -lk 127.0.0.1 <port>
+      (leave it running; this run waits up to 15 minutes)
+
+  and, after the "seen" and "named" rows, `ANDY ACTION: stop it now: press Ctrl-C in that Terminal`. Serenity runs
+  the script in the background and passes each `ANDY ACTION:` line to Andy as soon as it appears; Andy's own terminal
+  is needed only for this. The script never signals that listener (no sudo, no kill): if it isn't gone 10 minutes
+  after the stop request, the row is BROKEN with its pid and `sudo kill <pid>`, and the run stops.
 
 It starts its own team in the Bricks checkout (two browser workers, kaylee and wash), drives them as their lead
 through `run_team.py`, and ends the team and deletes its branches when it is done. The probes inside the workers are
@@ -508,7 +515,7 @@ def exec_denials(lines, program, start, end):
     found = []
     for line in lines:
         stamp, match = DENIAL_TIME.match(line), lane.DENIAL_RE.search(line)
-        if not stamp or not match or match.group(3) != "process-exec" or match.group(4).strip() != program:
+        if not stamp or not match or not match.group(3).startswith("process-exec") or match.group(4).strip() != program:
             continue
         when = time.mktime(time.strptime(stamp.group(1), "%Y-%m-%d %H:%M:%S"))
         if start <= when <= end:
@@ -860,6 +867,13 @@ def lsof_pids(*args):
     return {int(x) for x in r.stdout.split() if x.isdigit()}
 
 
+def serving_pids(base):
+    """(servers, brokers) in a lane's block right now: the broker is whatever listens on base + 31 at THIS poll (a
+    restarted broker has new pids), the servers are the rest of the block."""
+    brokers = lsof_pids("-iTCP:%d" % (base + lane.BLOCK - 1), "-sTCP:LISTEN")
+    return block_listeners(base) - brokers, brokers
+
+
 def block_listeners(base):
     return lsof_pids("-a", "-u", str(os.getuid()), "-iTCP:%d-%d" % (base, base + lane.BLOCK - 1), "-sTCP:LISTEN")
 
@@ -1042,12 +1056,12 @@ def stop_root_listener(root, port, ps=None, kill=None, listening=None, say=print
     ps = ps or _ps_text
     kill = kill or (lambda pid: subprocess.run(["/usr/bin/sudo", "-n", "/bin/kill", "-TERM", str(pid)], capture_output=True))
     listening = listening or _listening
+    left = nc_descendants(ps(), root.pid, port)        # BEFORE the kill: once sudo is gone an nc belongs to launchd
     kill(root.pid)
     try:
         root.wait(timeout=10)
     except subprocess.TimeoutExpired:
         say("the root listener's sudo (pid %d) is still running: stop it by hand with `sudo kill %d`" % (root.pid, root.pid))
-    left = nc_descendants(ps(), root.pid, port)
     for pid in left:
         kill(pid)
     for _ in range(6):
@@ -1061,9 +1075,9 @@ def stop_root_listener(root, port, ps=None, kill=None, listening=None, say=print
 def choose_root_listener(read=None, owner=None, path_of=None, run=None):
     """Before step 1: the root-owned listener step 4 will observe. First an EXISTING one (netstat, owner uid 0 by
     `ps -o uid=`, reachable: loopback or a wildcard, program identified), which needs no sudo. Only if there is none,
-    `sudo -n -v` (an agent's Bash tool can't sudo: macOS caches credentials per terminal). Otherwise the root rows
-    are BROKEN with the reason. Returns {"kind": "existing", pid, port, host, exe} | {"kind": "sudo"} | {"kind": None,
-    "reason": ...}."""
+    `sudo -n -v` (an agent's Bash tool can't sudo: macOS caches credentials per terminal). Otherwise a PERSON starts
+    one in step 4 (person_root_rows). Returns {"kind": "existing", pid, port, host, exe} | {"kind": "sudo"} |
+    {"kind": "person"}."""
     read, owner = read or lane.read_listeners, owner or _owner_uid
     path_of, run = path_of or lane.pid_path, run or subprocess.run
     for item in sorted(read() or [], key=lambda i: (i["port"], i["pid"])):
@@ -1077,7 +1091,7 @@ def choose_root_listener(read=None, owner=None, path_of=None, run=None):
             return {"kind": "sudo"}
     except OSError:
         pass
-    return {"kind": None, "reason": NO_ROOT}
+    return {"kind": "person"}
 
 
 def root_rows_unavailable(report, reason):
@@ -1122,6 +1136,27 @@ def read_original(path):
         return NOT_READ
 
 
+def write_approved(path, text):
+    """The approved list, whole or not at all: a temp file in the same folder (0600), fsynced, then os.replace. A kill
+    can never leave it truncated."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix=".lane-listeners-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temp, 0o600)
+        os.replace(temp, path)
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise
+
+
 def restore_approved(path, original, touched):
     """Put back exactly what read_original saw, if this run changed it. True when it did."""
     if not touched or original is NOT_READ:
@@ -1129,8 +1164,32 @@ def restore_approved(path, original, touched):
     if original is None:
         Path(path).unlink(missing_ok=True)
     else:
-        Path(path).write_text(original)
+        write_approved(path, original)
     return True
+
+
+class ApprovedList:
+    """Andy's lane-listeners.json for the length of the run: read once, changed only through write() (which marks it
+    touched AFTER the write succeeded), and put back by restore() (idempotent)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.original = read_original(path)
+        self.touched = False
+
+    def entries(self):
+        try:
+            return json.loads(self.original) if self.original else []
+        except ValueError:
+            return []
+
+    def write(self, text):
+        write_approved(self.path, text)
+        self.touched = True
+
+    def restore(self):
+        if restore_approved(self.path, self.original, self.touched):
+            self.touched = False
 
 
 def git_try(repo, *args):
@@ -1190,7 +1249,7 @@ def steps2to7(args, report):
     presets_file = teamlib.presets_path()
     presets_before = presets_file.read_text() if presets_file.exists() else None
     approved = lane.approved_path()
-    listeners_original, listeners_touched = read_original(approved), False
+    al = ApprovedList(approved)
     decoy = lane.private_parent() / "acceptance-decoy"
     settings_file, settings_before, canary = None, None, None
     try:
@@ -1329,7 +1388,7 @@ def steps2to7(args, report):
         listener.bind(("127.0.0.1", 0))
         listener.listen(5)
         port = listener.getsockname()[1]
-        if listeners_original is NOT_READ:
+        if al.original is NOT_READ:
             report.add(4, "the approved list can be put back", "BROKEN",
                        "%s exists but can't be read, so it is left alone and D10 isn't tried" % approved)
         try:
@@ -1340,14 +1399,8 @@ def steps2to7(args, report):
             report.add(4, "an unapproved listener makes the turn wait", "PASS" if named else "FAIL",
                        "port %d, named with its path %s" % (port, exe) if named else "port %d: the lead's messages name: %s"
                        % (port, ", ".join(reason_codes(team.inbox)) or "nothing"))
-            if listeners_original is not NOT_READ:
-                try:
-                    entries = json.loads(listeners_original) if listeners_original else []
-                except ValueError:
-                    entries = []
-                listeners_touched = True
-                approved.parent.mkdir(parents=True, exist_ok=True)
-                approved.write_text(json.dumps(entries + [D10_ENTRY]))
+            if al.original is not NOT_READ:
+                al.write(json.dumps(al.entries() + [D10_ENTRY]))             # touched only once the write has succeeded
                 time.sleep(40)                               # one retry (LANE_RETRY_S) with the widened list
                 team.status()
                 still = team.status()["workers"]["kaylee"]["state"] == "waiting"
@@ -1355,7 +1408,7 @@ def steps2to7(args, report):
                 report.add(4, "an interpreter on the approved list is refused (D10)", "PASS" if still and refused else "FAIL",
                            "still waiting; the lead's messages name: %s" % (", ".join(reason_codes(team.inbox)) or "nothing")
                            if still else "the turn ran")
-                approved.write_text(json.dumps([exe]))
+                al.write(json.dumps([exe]))
                 try:
                     lane.load_approved()
                     d11 = ("FAIL", "%s was accepted as an approved program" % exe)
@@ -1364,8 +1417,7 @@ def steps2to7(args, report):
                           ("BROKEN", "refused for another reason: %s" % lane.approval_problem(exe))
                 report.add(4, "a non-Apple program on the approved list is refused (D11)", *d11)
         finally:
-            if restore_approved(approved, listeners_original, listeners_touched):
-                listeners_touched = False
+            al.restore()
             listener.close()
         state = team.wait("kaylee", ("running", "idle"), timeout=120, patient=True)
         report.add(4, "once it is gone, the turn runs", "PASS", state)
@@ -1374,12 +1426,12 @@ def steps2to7(args, report):
         if plan["kind"] is None:
             root_rows_unavailable(report, plan["reason"])
         elif plan["kind"] == "existing":
-            listeners_touched = listeners_original is not NOT_READ      # it may be taken off the list, then put back
             try:
-                existing_root_rows(report, team, plan, approved, listeners_original)
+                existing_root_rows(report, team, plan, al)
             finally:
-                if restore_approved(approved, listeners_original, listeners_touched):
-                    listeners_touched = False
+                al.restore()
+        elif plan["kind"] == "person":
+            person_root_rows(report, team)
         else:
             root_port = free_port()
             root = root_listener(root_port)
@@ -1405,7 +1457,7 @@ def steps2to7(args, report):
                 team.wait("kaylee", ("idle",), timeout=180, patient=True)
 
         # ---- step 5: two browser workers at once, each running Bricks spec 1 ----
-        servers = {"kaylee": set(), "wash": set()}
+        servers, broker_seen = {"kaylee": set(), "wash": set()}, {"kaylee": set(), "wash": set()}
         for wid, w in (("kaylee", a), ("wash", b)):
             install_probes(w["path"], {"worktree": w["path"], "specs": SMOKE_SPECS[:1]})
             team.message(wid, probe_message(args.python, "spec"))
@@ -1416,10 +1468,13 @@ def steps2to7(args, report):
             if {"failed", "waiting"} & {states["kaylee"], states["wash"]}:
                 raise RuntimeError("step 5 stopped: %s; the lead's messages name: %s"
                                    % (states, ", ".join(reason_codes(team.inbox[-3:])) or "no known reason"))
-            current = {wid: block_listeners(w["lane"]["base"]) for wid, w in (("kaylee", a), ("wash", b))}
-            both = both or both_serving(states, current, brokers)
+            polled = {wid: serving_pids(w["lane"]["base"]) for wid, w in (("kaylee", a), ("wash", b))}
+            current = {wid: polled[wid][0] for wid in polled}        # the block minus whatever is on base + 31 NOW
+            now_brokers = {wid: polled[wid][1] for wid in polled}
+            both = both or both_serving(states, current, now_brokers)
             for wid in servers:
                 servers[wid].update(current[wid])
+                broker_seen[wid].update(now_brokers[wid])
             if states["kaylee"] == states["wash"] == "idle":
                 break
             time.sleep(5)
@@ -1433,7 +1488,9 @@ def steps2to7(args, report):
         team.message("kaylee", probe_message(args.python, "spec"))
         team.wait("kaylee", ("running",), timeout=120)
         while team.status()["workers"]["kaylee"]["state"] == "running":
-            servers["kaylee"].update(block_listeners(a["lane"]["base"]))
+            now_servers, now_broker = serving_pids(a["lane"]["base"])
+            servers["kaylee"].update(now_servers)
+            broker_seen["kaylee"].update(now_broker)
             time.sleep(5)
         team.wait("kaylee", ("idle",), timeout=60)
         report_spec(report, 6, "kaylee", a["path"], SMOKE_SPECS)
@@ -1452,9 +1509,9 @@ def steps2to7(args, report):
         end = time.time() + 120
         while time.time() < end and Path(a["lane"]["path"]).exists():
             time.sleep(2)
-        kaylee_brokers = broker_ids | {shell_pid or 0}
+        kaylee_brokers = broker_ids | broker_seen["kaylee"] | {shell_pid or 0}
         check_cleanup(report, "after worker_done", a, servers["kaylee"] | kaylee_brokers, kaylee_brokers)
-        b_broker = lsof_pids("-iTCP:%d" % (b["lane"]["base"] + 31), "-sTCP:LISTEN")
+        b_broker = broker_seen["wash"] | brokers["wash"] | lsof_pids("-iTCP:%d" % (b["lane"]["base"] + 31), "-sTCP:LISTEN")
         team.call("stop", "worker=wash")
         check_cleanup(report, "after stop_worker", b, servers["wash"] | b_broker, b_broker)
     finally:
@@ -1465,7 +1522,7 @@ def steps2to7(args, report):
                 settings_file.unlink(missing_ok=True)
             else:
                 settings_file.write_text(settings_before)
-        restore_approved(approved, listeners_original, listeners_touched)
+        al.restore()
         shutil.rmtree(decoy, ignore_errors=True)
         if presets_before is None:                       # the presets file goes back before anything can fail below
             presets_file.unlink(missing_ok=True)
@@ -1478,38 +1535,100 @@ def steps2to7(args, report):
         delete_branches(bricks, team.id)
 
 
-def existing_root_rows(report, team, plan, approved, original):
+def existing_root_rows(report, team, plan, al):
     """Step 4 with a root-owned listener that was already there (launchd's *:22, cupsd's 631): netstat sees it and the
     user's lsof doesn't. To see it NAMED, its program is taken off the approved list for a moment (it must be on it, or
-    the lanes would have been waiting all along), and the list is put back by the caller's restore."""
+    the lanes would have been waiting all along); `al` (an ApprovedList) puts the list back."""
     pid, port, exe = plan["pid"], plan["port"], plan["exe"]
     if not any(i["pid"] == pid and i["port"] == port for i in lane.read_listeners() or []):
         root_rows_unavailable(report, "the root-owned listener (pid %d, port %d) isn't listening any more" % (pid, port))
         return
     verdict, detail = root_listener_proof(pid, port)
     report.add(4, "a root-owned listener is seen", verdict, "%s: %s" % (detail, exe))
-    try:
-        entries = json.loads(original) if original else []
-    except ValueError:
-        entries = []
-    if original is NOT_READ or exe not in entries:
+    if al.original is NOT_READ:                          # checked before it is parsed
         report.add(4, "it holds the lane, named by its path", "BROKEN",
-                   "%s isn't on the readable approved list, so it can't be taken off to see it named" % exe)
+                   "%s exists but can't be read, so it can't be changed to see the listener named" % al.path)
         return
-    approved.write_text(json.dumps([e for e in entries if e != exe]))
+    entries = al.entries()
+    if exe not in entries:
+        report.add(4, "it holds the lane, named by its path", "BROKEN",
+                   "%s isn't on the approved list, so it can't be taken off to see it named" % exe)
+        return
+    al.write(json.dumps([e for e in entries if e != exe]))
     try:
         team.message("kaylee", "Reply with only the word done. Do not run anything.")
         team.wait("kaylee", ("waiting",), timeout=60)
         named = any("LANE WAITING" in m and "port %d" % port in m and exe in m for m in team.inbox)
         report.add(4, "it holds the lane, named by its path", "PASS" if named else "FAIL", exe)
     finally:
-        approved.write_text(original)
+        al.restore()
     team.wait("kaylee", ("idle",), timeout=180, patient=True)
 
 
-def advisory_details(report):
-    """(file, 'file:line title', first error message) of every failing @lane-advisory spec in a Playwright JSON report."""
+def person_root_rows(report, team, read=None, path_of=None, owner=None, clock=None, sleep=None, say=None,
+                     pick_port=None, port_free=None, appear_s=900, gone_s=600):
+    """Step 4 when no root-owned listener exists and sudo -n fails: a PERSON starts `sudo /usr/bin/nc -lk` on a port
+    this run names, in his own Terminal. Runs after the D9/D10/D11 rows, with kaylee idle (an unapproved root nc
+    makes every lane turn wait). The script NEVER signals that listener: it asks the person to stop it and waits.
+    Raises RuntimeError (after a BROKEN row) when it is still listening 10 minutes after the request, since steps 5-7
+    would only wait."""
+    read, path_of, owner = read or lane.read_listeners, path_of or lane.pid_path, owner or _owner_uid
+    clock, sleep = clock or time.monotonic, sleep or time.sleep
+    say = say or (lambda line: print(line, flush=True))
+    pick_port, port_free = pick_port or free_port, port_free or lane.port_free
+    port = pick_port()
+    while not port_free(port):                           # right before printing: still free, outside the lane pool
+        port = pick_port()
+    say("ANDY ACTION: in your own Terminal run: sudo %s -lk 127.0.0.1 %d" % (NETCAT, port))
+    say("(leave it running; this run waits up to 15 minutes)")
+
+    def on_port():
+        return [item for item in read() or [] if item["port"] == port]
+    found, deadline = None, clock() + appear_s
+    while clock() < deadline:
+        for item in on_port():
+            if path_of(item["pid"]) == NETCAT:
+                found = item
+        if found:
+            break
+        sleep(2)
+    if not found:
+        root_rows_unavailable(report, "no root-owned nc appeared on port %d within 15 minutes" % port)
+        return
+    pid = found["pid"]
+    if owner(pid) != 0:
+        root_rows_unavailable(report, "pid %d on port %d is not root-owned: started without sudo" % (pid, port))
+    else:
+        verdict, detail = root_listener_proof(pid, port)
+        report.add(4, "a root-owned listener is seen", verdict, "%s: %s" % (detail, NETCAT))
+        try:
+            team.message("kaylee", "Reply with only the word done. Do not run anything.")
+            team.wait("kaylee", ("waiting",), timeout=60)
+            named = any("LANE WAITING" in m and "port %d" % port in m and NETCAT in m for m in team.inbox)
+            report.add(4, "it holds the lane, named by its path", "PASS" if named else "FAIL", NETCAT)
+        except RuntimeError as e:                        # the person must still be asked to stop it
+            report.add(4, "it holds the lane, named by its path", "FAIL", str(e))
+    say("ANDY ACTION: stop it now: press Ctrl-C in that Terminal")
+    deadline = clock() + gone_s
+    while clock() < deadline:
+        if not on_port():
+            report.add(4, "the root-owned listener is gone", "PASS", "nothing listens on port %d" % port)
+            team.wait("kaylee", ("idle",), timeout=180, patient=True)
+            return
+        sleep(2)
+    left = on_port()
+    pid = left[0]["pid"] if left else pid
+    report.add(4, "the root-owned listener is gone", "BROKEN",
+               "pid %d still listens on port %d ten minutes after the request: stop it with `sudo kill %d`" % (pid, port, pid))
+    raise RuntimeError("the root-owned nc (pid %d, port %d) is still running: steps 5-7 would only wait. Stop it with "
+                       "`sudo kill %d` and run again" % (pid, port, pid))
+
+
+def advisory_details(report, root):
+    """(full path, 'file:line title', first error message) of every failing @lane-advisory spec in a Playwright JSON
+    report. A spec's file is relative to the report's test folder (config.rootDir), or to `root` when it has none."""
     found = []
+    base = (report.get("config") or {}).get("rootDir") or root
 
     def walk(suite):
         for spec in suite.get("specs") or []:
@@ -1521,7 +1640,8 @@ def advisory_details(report):
                     continue
                 message = next((r["error"]["message"] for r in test.get("results") or []
                                 if isinstance(r.get("error"), dict) and r["error"].get("message")), "no message")
-                found.append((str(spec.get("file")), "%s:%s %s" % (spec.get("file"), spec.get("line"), spec.get("title")),
+                found.append((os.path.normpath(os.path.join(base, str(spec.get("file")))),
+                              "%s:%s %s" % (spec.get("file"), spec.get("line"), spec.get("title")),
                               " ".join(message.split())[:200]))
         for child in suite.get("suites") or []:
             walk(child)
@@ -1531,6 +1651,7 @@ def advisory_details(report):
 
 
 def report_spec(report, step, wid, worktree, specs):
+    agreed = {os.path.normpath(os.path.join(worktree, spec)) for spec in ADVISORY_SPECS}
     for i, spec in enumerate(specs):
         path = Path(worktree) / PROBE_DIR / ("spec-%d.json" % i)
         try:
@@ -1543,12 +1664,12 @@ def report_spec(report, step, wid, worktree, specs):
         report.add(step, "%s %s" % (wid, spec), "PASS" if ok else "FAIL",
                    "%d passed, %d skipped, failed: %s, errors: %s, flaky: %s"
                    % (got["passed"], got["skipped"], got["failed"] or "none", got["errors"] or "none", got["flaky"] or "none"))
-        for file, name, message in advisory_details(data):
-            if any(file == agreed or agreed.endswith("/" + file) or file.endswith("/" + agreed) for agreed in ADVISORY_SPECS):
+        for full, name, message in advisory_details(data, worktree):
+            if full in agreed:
                 report.add(step, "%s advisory (reported separately)" % wid, "INFO", "%s: %s" % (name, message))
             else:
                 report.add(step, "%s advisory outside the agreed set" % wid, "FAIL",
-                           "%s is tagged @lane-advisory but isn't one of the agreed geometry specs: %s" % (name, message))
+                           "%s is tagged @lane-advisory but isn't one of the agreed specs: %s" % (name, message))
 
 
 def check_cleanup(report, when, w, pids, broker_pids):
@@ -1641,10 +1762,11 @@ def main():
             report_skipped(report, args.self_check_only, len(report.failed()))
         else:
             args.root_plan = choose_root_listener()
+            plan = args.root_plan
             print("== step 4's root-owned listener: %s ==" % (
-                "the existing one on port %d (%s)" % (args.root_plan["port"], args.root_plan["exe"])
-                if args.root_plan["kind"] == "existing" else "a new one through sudo -n" if args.root_plan["kind"]
-                else args.root_plan["reason"]), flush=True)
+                "the existing one on port %d (%s)" % (plan["port"], plan["exe"]) if plan["kind"] == "existing"
+                else "a new one through sudo -n" if plan["kind"] == "sudo"
+                else "a person starts one (watch for ANDY ACTION lines)"), flush=True)
             if args.root_plan["kind"] == "sudo":
                 keeper = SudoKeeper()
                 keeper.start()

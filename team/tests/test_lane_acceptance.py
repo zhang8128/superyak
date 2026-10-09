@@ -552,7 +552,7 @@ print("Filtering the log data using ...", flush=True)
 time.sleep(0.6)
 print("Sandbox: node(812) deny(1) file-write-create /Users/me/x", flush=True)
 time.sleep(0.6)
-print("Sandbox: node(813) deny(1) process-exec /usr/bin/open", flush=True)
+print("Sandbox: node(813) deny(1) process-exec* /usr/bin/open", flush=True)
 time.sleep(60)
 """
 
@@ -565,7 +565,7 @@ def test_the_denial_stream_is_drained_from_the_start_and_read_until_quiet(accept
     lines = stream.finish(quiet=1.5, cap=15)
     assert time.monotonic() - t0 < 10
     assert [l for l in lines if "deny" in l] == ["Sandbox: node(812) deny(1) file-write-create /Users/me/x",
-                                                  "Sandbox: node(813) deny(1) process-exec /usr/bin/open"]
+                                                  "Sandbox: node(813) deny(1) process-exec* /usr/bin/open"]
     assert proc.poll() is not None                                           # stopped (SIGINT), not left running
 
 
@@ -582,8 +582,8 @@ def test_a_probes_whole_family_is_matched_against_the_denials(acceptance, capsys
     assert recorder.pids_of("exec_open_calculator") == [recorder.pids[0][2], 777]
     report = acceptance.Report()
     acceptance.report_profile_rows(report, [("exec_open_calculator", "BROKEN", "refused: nocode")], recorder,
-                                   ["Sandbox: open(777) deny(1) process-exec /usr/bin/open"])
-    assert "open(777): process-exec /usr/bin/open" in capsys.readouterr().out
+                                   ["Sandbox: open(777) deny(1) process-exec* /usr/bin/open"])
+    assert "open(777): process-exec* /usr/bin/open" in capsys.readouterr().out
 
 
 # ---- Important 3: the cross-lane check ----
@@ -954,18 +954,17 @@ def test_without_an_existing_root_listener_sudo_n_decides(acceptance):
 def test_with_neither_the_root_rows_say_what_to_do(acceptance):
     plan = acceptance.choose_root_listener(read=lambda: [], owner=lambda pid: 501, path_of=lambda pid: "/x",
                                            run=lambda cmd, **k: Ran(1))
-    assert plan["kind"] is None
-    assert "no root-owned listener to observe; run this once from Andy's own terminal (sudo)" in plan["reason"]
-    # a netstat that fails is not "none exist": the same BROKEN reason, never a crash
+    assert plan == {"kind": "person"}                                           # Andy starts one in his own terminal
+    # a netstat that fails is not "none exist": the same plan, never a crash
     assert acceptance.choose_root_listener(read=lambda: None, owner=lambda pid: 0, path_of=lambda pid: "/x",
-                                           run=lambda cmd, **k: Ran(1))["kind"] is None
+                                           run=lambda cmd, **k: Ran(1))["kind"] == "person"
 
 
 def test_an_unreachable_or_unidentified_root_listener_does_not_count(acceptance):
     odd = [{"pid": 5, "command": "", "host": "100.101.102.103", "port": 9}, {"pid": 6, "command": "", "host": "*", "port": 10}]
     plan = acceptance.choose_root_listener(read=lambda: odd, owner=lambda pid: 0, path_of=lambda pid: None,
                                            run=lambda cmd, **k: Ran(1))
-    assert plan["kind"] is None
+    assert plan["kind"] == "person"
 
 
 def test_step_4_without_a_root_listener_reports_the_reason_broken(acceptance, driven, monkeypatch):
@@ -982,6 +981,7 @@ def test_the_docs_say_who_runs_it_and_when_a_terminal_is_needed(acceptance):
     readme = (SCRIPTS.parent / "README.md").read_text()
     for doc in (text, readme):
         assert "Serenity" in doc and "root-owned listener" in doc and "Andy's own terminal" in doc
+        assert "ANDY ACTION" in doc and "background" in doc
 
 
 # ---- the advisory set (from the Bricks lead) ----
@@ -996,9 +996,9 @@ def test_the_advisory_set_is_the_agreed_files(acceptance, tmp_path):
     (wt / acceptance.PROBE_DIR).mkdir(parents=True)
     spec = lambda f: {"title": "t", "file": f, "line": 1, "tags": ["@lane-advisory"],
                       "tests": [{"status": "unexpected", "results": [{"error": {"message": "m"}}]}]}
-    files = ["tests/gtm/approval-anatomy.spec.ts", "gtm/visual.spec.ts", "tests/gtm/visual-recipes.spec.ts", "tests/a.spec.ts"]
-    (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"errors": [], "suites": [{"title": "s", "specs":
-        [{"title": "ok", "file": "tests/a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]}] + [spec(f) for f in files]}]}))
+    files = ["gtm/approval-anatomy.spec.ts", "gtm/visual.spec.ts", "gtm/visual-recipes.spec.ts", "a.spec.ts"]
+    (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps({"config": {"rootDir": str(wt / "tests")}, "errors": [], "suites": [{"title": "s", "specs":
+        [{"title": "ok", "file": "a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]}] + [spec(f) for f in files]}]}))
     report = acceptance.Report()
     acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
     assert [r[2] for r in report.rows if "reported separately" in r[1]] == ["INFO", "INFO"]
@@ -1031,19 +1031,19 @@ def test_preflight_tries_the_targets_the_probes_use(acceptance):
 # ---- N9: exec denials by program path and time window ----
 
 def test_a_refused_exec_is_matched_by_program_and_time_when_the_pid_is_unknown(acceptance, capsys):
-    lines = ["2026-10-09 12:00:05.100 Df kernel[0:1] Sandbox: node(901) deny(1) process-exec /usr/bin/open",
-             "2026-10-09 12:00:05.200 Df kernel[0:1] Sandbox: node(902) deny(1) process-exec /usr/bin/osascript",
-             "2026-10-09 12:30:00.000 Df kernel[0:1] Sandbox: node(903) deny(1) process-exec /usr/bin/open",
+    lines = ["2026-10-09 12:00:05.100 Df kernel[0:1] Sandbox: node(901) deny(1) process-exec* /usr/bin/open",
+             "2026-10-09 12:00:05.200 Df kernel[0:1] Sandbox: node(902) deny(1) process-exec* /usr/bin/osascript",
+             "2026-10-09 12:30:00.000 Df kernel[0:1] Sandbox: node(903) deny(1) process-exec* /usr/bin/open",
              "2026-10-09 12:00:05.300 Df kernel[0:1] Sandbox: node(904) deny(1) file-read-data /etc/hosts"]
     start = time.mktime(time.strptime("2026-10-09 12:00:04", "%Y-%m-%d %H:%M:%S"))
     got = acceptance.exec_denials(lines, "/usr/bin/open", start, start + 3)
-    assert got == ["node(901): process-exec /usr/bin/open"]
+    assert got == ["node(901): process-exec* /usr/bin/open"]
     recorder = acceptance.PidRecorder()
     recorder.pids = [("exec_open_calculator", False, 800)]
     recorder.windows = [("exec_open_calculator", False, start, start + 3)]
     report = acceptance.Report()
     acceptance.report_profile_rows(report, [("exec_open_calculator", "BROKEN", "refused: nocode")], recorder, lines)
-    assert "node(901): process-exec /usr/bin/open" in capsys.readouterr().out
+    assert "node(901): process-exec* /usr/bin/open" in capsys.readouterr().out
 
 
 # ---- N10: presets are restored before the team ends, and an error ending it is caught ----
@@ -1099,3 +1099,206 @@ def test_a_broker_is_every_process_on_its_port_not_the_first(acceptance, monkeyp
     report = acceptance.Report()                                           # only broker pids: nothing about the web server
     acceptance.check_cleanup(report, "x", w, {799, 800}, {799, 800})
     assert [r[2] for r in report.rows if "webServer" in r[1]] == ["BROKEN"]
+
+
+# ================= Fix round 3 =================
+
+# ---- 1. the person plan ----
+
+class PersonWorld:
+    """A fake clock, listener table and owner for the person flow. `script` decides what netstat shows at time t."""
+
+    def __init__(self, appear_at=None, owner=0, gone_after_stop=None, port=55555):
+        self.t, self.port, self.owner = 0.0, port, owner
+        self.appear_at, self.gone_after_stop, self.stopped_at = appear_at, gone_after_stop, None
+        self.said, self.inbox = [], []
+
+    def clock(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+    def say(self, line, **k):
+        self.said.append(line)
+        if "stop it now" in line:
+            self.stopped_at = self.t
+
+    def listening(self):
+        if self.appear_at is None or self.t < self.appear_at:
+            return False
+        if self.stopped_at is not None and self.gone_after_stop is not None and self.t >= self.stopped_at + self.gone_after_stop:
+            return False
+        return True
+
+    def read(self):
+        return [{"pid": 4321, "command": "", "host": "127.0.0.1", "port": self.port}] if self.listening() else []
+
+    # the team
+    def message(self, wid, text):
+        self.inbox.append("LANE WAITING: kaylee waits ...: nc (pid 4321) listens on port %d (/usr/bin/nc)" % self.port)
+
+    def wait(self, wid, states, timeout=900, patient=False):
+        return states[0]
+
+
+def run_person(acceptance, monkeypatch, world, **kw):
+    monkeypatch.setattr(acceptance, "root_listener_proof", lambda pid, port: ("PASS", "pid %d (uid 0) on port %d" % (pid, port)))
+    world.team = SimpleNamespace(message=world.message, wait=world.wait, inbox=world.inbox)
+    report = acceptance.Report()
+    error = None
+    try:
+        acceptance.person_root_rows(report, world.team, read=world.read, path_of=lambda pid: "/usr/bin/nc",
+                                    owner=lambda pid: world.owner, clock=world.clock, sleep=world.sleep, say=world.say,
+                                    pick_port=lambda: world.port, port_free=lambda port: True, **kw)
+    except RuntimeError as e:
+        error = e
+    return report, error
+
+
+def never_signals(monkeypatch, acceptance):
+    """The person's listener is never signalled by the script: any subprocess.run would be a kill or a sudo."""
+    def boom(*a, **k):
+        raise AssertionError("the script ran %r" % (a,))
+    monkeypatch.setattr(acceptance.subprocess, "run", boom)
+    monkeypatch.setattr(acceptance.os, "kill", boom)
+
+
+def test_person_plan_a_root_nc_appears_is_seen_named_and_gone(acceptance, monkeypatch, capsys):
+    world = PersonWorld(appear_at=30, owner=0, gone_after_stop=20)
+    never_signals(monkeypatch, acceptance)
+    report, error = run_person(acceptance, monkeypatch, world)
+    assert error is None
+    assert [(r[1], r[2]) for r in report.rows] == [("a root-owned listener is seen", "PASS"),
+                                                    ("it holds the lane, named by its path", "PASS"),
+                                                    ("the root-owned listener is gone", "PASS")]
+    assert world.said[0] == "ANDY ACTION: in your own Terminal run: sudo /usr/bin/nc -lk 127.0.0.1 55555"
+    assert world.said[1] == "(leave it running; this run waits up to 15 minutes)"
+    assert "ANDY ACTION: stop it now: press Ctrl-C in that Terminal" in world.said
+
+
+def test_person_plan_a_nc_started_without_sudo_is_broken_and_still_asked_to_stop(acceptance, monkeypatch):
+    world = PersonWorld(appear_at=10, owner=501, gone_after_stop=5)
+    never_signals(monkeypatch, acceptance)
+    report, error = run_person(acceptance, monkeypatch, world)
+    assert error is None
+    assert [r[2] for r in report.rows[:2]] == ["BROKEN", "BROKEN"] and "started without sudo" in report.rows[0][3]
+    assert any("stop it now" in line for line in world.said)
+
+
+def test_person_plan_nothing_by_the_deadline_makes_both_rows_broken(acceptance, monkeypatch):
+    world = PersonWorld(appear_at=None)
+    report, error = run_person(acceptance, monkeypatch, world)
+    assert error is None and [r[2] for r in report.rows] == ["BROKEN", "BROKEN"]
+    assert world.t >= 900 and not any("stop it now" in line for line in world.said)
+
+
+def test_person_plan_a_listener_that_is_never_stopped_stops_the_run_with_the_pid(acceptance, monkeypatch):
+    world = PersonWorld(appear_at=10, owner=0, gone_after_stop=None)
+    never_signals(monkeypatch, acceptance)
+    report, error = run_person(acceptance, monkeypatch, world)
+    assert isinstance(error, RuntimeError)
+    last = report.rows[-1]
+    assert last[2] == "BROKEN" and "4321" in last[3] and "sudo kill 4321" in last[3]
+    assert world.t >= 10 + 600                                                   # it waited up to 10 minutes for the stop
+
+
+def test_person_plan_rechecks_the_port_right_before_printing(acceptance, monkeypatch):
+    world = PersonWorld(appear_at=None)
+    ports, checks = iter([50001, 50002]), []
+    monkeypatch.setattr(acceptance, "root_listener_proof", lambda pid, port: ("PASS", ""))
+    report = acceptance.Report()
+    acceptance.person_root_rows(report, SimpleNamespace(message=world.message, wait=world.wait, inbox=[]), read=world.read,
+                                path_of=lambda pid: None, owner=lambda pid: 0, clock=world.clock, sleep=world.sleep,
+                                say=world.say, pick_port=lambda: next(ports), port_free=lambda p: checks.append(p) or p == 50002)
+    assert checks == [50001, 50002] and "127.0.0.1 50002" in world.said[0]
+
+
+# ---- 2 and 3 and 4: the approved list ----
+
+def test_an_unreadable_list_is_checked_before_it_is_parsed(acceptance, world, monkeypatch):
+    monkeypatch.setattr(lane, "read_listeners", lambda: [{"pid": 1, "port": 22, "host": "*", "command": ""}])
+    monkeypatch.setattr(acceptance, "root_listener_proof", lambda pid, port: ("PASS", "ok"))
+    al = acceptance.ApprovedList(world["root"] / "lane-listeners.json")
+    al.original = acceptance.NOT_READ
+    report = acceptance.Report()
+    acceptance.existing_root_rows(report, None, {"pid": 1, "port": 22, "exe": "/sbin/launchd"}, al)   # no TypeError
+    assert report.rows[-1][2] == "BROKEN" and not al.touched
+
+
+def test_the_list_counts_as_touched_only_after_a_write_succeeded(acceptance, driven, monkeypatch):
+    original = json.dumps(["/usr/libexec/rapportd"])
+    lane.approved_path().write_text(original)
+    FakeTeam.fail_at = "never"
+    restores = []
+    real = acceptance.restore_approved
+    monkeypatch.setattr(acceptance, "restore_approved", lambda path, orig, touched: restores.append(touched) or real(path, orig, touched))
+    monkeypatch.setattr(acceptance, "write_approved", lambda path, text: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(acceptance.time, "sleep", lambda s: None)
+    report = acceptance.Report()
+    with pytest.raises(OSError):
+        acceptance.steps2to7(driven.args, report)
+    assert restores and not any(restores)                                        # nothing written: nothing restored
+    assert lane.approved_path().read_text() == original
+
+
+def test_the_list_is_written_whole_or_not_at_all(acceptance, tmp_path, monkeypatch):
+    path = tmp_path / "sub" / "lane-listeners.json"
+    acceptance.write_approved(path, '["/sbin/launchd"]')
+    assert path.read_text() == '["/sbin/launchd"]' and (path.stat().st_mode & 0o777) == 0o600
+    assert [p.name for p in path.parent.iterdir()] == ["lane-listeners.json"]            # no temp file left
+    monkeypatch.setattr(acceptance.os, "replace", lambda a, b: (_ for _ in ()).throw(OSError("killed")))
+    with pytest.raises(OSError):
+        acceptance.write_approved(path, "[")
+    assert path.read_text() == '["/sbin/launchd"]' and [p.name for p in path.parent.iterdir()] == ["lane-listeners.json"]
+
+
+# ---- 5. an orphaned nc ----
+
+def test_an_nc_orphaned_by_the_kill_is_still_found_and_named(acceptance):
+    said, killed = [], []
+    orphan = "  902     1 /usr/bin/nc -l 127.0.0.1 5555\n"                           # once sudo is signalled, nc belongs to launchd
+    root = SimpleNamespace(pid=900, wait=lambda timeout=None: 0)
+    acceptance.stop_root_listener(root, 5555, ps=lambda: orphan if killed else PTY_TREE, kill=killed.append,
+                                  listening=lambda p: True, say=said.append)
+    assert 902 in killed and killed[0] == 900                                            # looked up before the kill
+    assert any("STILL LISTENING" in line and "902" in line for line in said)
+
+
+# ---- 7. brokers per poll ----
+
+def test_the_servers_in_a_block_are_whatever_is_not_listening_on_the_broker_port_now(acceptance, monkeypatch):
+    def lsof(*args):
+        return {5} if "-iTCP:41031" in args else {5, 9} if any(a.startswith("-iTCP:41000-") for a in args) else set()
+    monkeypatch.setattr(acceptance, "lsof_pids", lsof)
+    assert acceptance.serving_pids(41000) == ({9}, {5})
+    monkeypatch.setattr(acceptance, "lsof_pids", lambda *a: {7} if "-iTCP:41031" in a else {7, 8})
+    assert acceptance.serving_pids(41000) == ({8}, {7})                                  # a restarted broker is still the broker
+
+
+# ---- 8. the advisory match uses full paths ----
+
+def test_an_advisory_file_must_be_the_agreed_path_not_just_the_same_name(acceptance, tmp_path):
+    wt = tmp_path / "wt"
+    (wt / acceptance.PROBE_DIR).mkdir(parents=True)
+    spec = lambda f: {"title": "t", "file": f, "line": 1, "tags": ["@lane-advisory"],
+                      "tests": [{"status": "unexpected", "results": [{"error": {"message": "m"}}]}]}
+    report_json = {"config": {"rootDir": str(wt / "tests")}, "errors": [], "suites": [{"title": "s", "specs": [
+        {"title": "ok", "file": "a.spec.ts", "line": 1, "tags": [], "tests": [{"status": "expected"}]},
+        spec("gtm/visual.spec.ts"), spec("other/visual.spec.ts"), spec("visual.spec.ts")]}]}
+    (wt / acceptance.PROBE_DIR / "spec-0.json").write_text(json.dumps(report_json))
+    report = acceptance.Report()
+    acceptance.report_spec(report, 6, "kaylee", str(wt), ["tests/a.spec.ts"])
+    assert [r[2] for r in report.rows if "reported separately" in r[1]] == ["INFO"]
+    assert [r[2] for r in report.rows if "outside the agreed set" in r[1]] == ["FAIL", "FAIL"]
+
+
+def test_main_announces_the_person_plan_without_crashing(acceptance, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(acceptance.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "python_ok", lambda: True)
+    monkeypatch.setattr(acceptance, "step1", lambda args, report: True)
+    monkeypatch.setattr(acceptance, "choose_root_listener", lambda: {"kind": "person"})
+    monkeypatch.setattr(acceptance, "steps2to7", lambda args, report: report.add(4, "x", "PASS"))
+    monkeypatch.setattr(acceptance.sys, "argv", ["lane_acceptance.py", "--bricks", str(tmp_path)])
+    assert acceptance.main() == 0
+    assert "ANDY ACTION" in capsys.readouterr().out
