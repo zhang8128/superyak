@@ -8,6 +8,10 @@ Bricks lead picks, with uv's Python (lanes need 3.11.4 or later for tarfile's da
     cd team && uv run --python 3.13 python scripts/lane_acceptance.py --bricks ~/Projects/bricks --self-check-only
     cd team && uv run --python 3.13 python scripts/lane_acceptance.py --bricks ~/Projects/bricks
 
+The unit tests are `make check-team`, run from the repository root (team/ has no Makefile). On a Mac whose shell has
+no ssh-agent (SSH_AUTH_SOCK unset) step 2 tests launchd's agent sockets (/private/tmp/com.apple.launchd.*/Listeners)
+instead, and says INFO "no ssh-agent socket on this machine; nothing to protect" when there are none.
+
 Prerequisites (the spec's, plus this script's):
 - lane_node in ~/.superyak/team/config.json, and no browser_lane anywhere yet: the run makes its own preset, with
   browser_lane on, and removes it when it ends, so no lead can open a lane before the acceptance has passed;
@@ -1427,10 +1431,37 @@ def root_rows_unavailable(report, reason):
         report.add(4, row, "BROKEN", reason)
 
 
-def socket_candidates(team_id, env, home):
-    """The sockets steps 2-3 try: the ssh-agent's, THIS run's team socket (never another team's live teamd) and
-    Docker's."""
-    out = [env["SSH_AUTH_SOCK"]] if env.get("SSH_AUTH_SOCK") else []
+LAUNCHD_ROOT = Path("/private/tmp")
+
+
+def launchd_agent_sockets(root=LAUNCHD_ROOT):
+    """launchd's per-user agent sockets, `<root>/com.apple.launchd.*/Listeners` (the ssh-agent a Mac starts for you
+    when your shell has no SSH_AUTH_SOCK), that exist and are sockets."""
+    out = []
+    for path in sorted(Path(root).glob("com.apple.launchd.*/Listeners")):
+        try:
+            if stat.S_ISSOCK(os.stat(path).st_mode):
+                out.append(str(path))
+        except OSError:
+            continue
+    return out
+
+
+def ssh_agent_row(env, launchd_sockets):
+    """Step 2's row about the agent wall when SSH_AUTH_SOCK is unset: (verdict, detail), or None when it is set (its own
+    socket rows say the rest). INFO either way: a machine with no agent has nothing to protect."""
+    if env.get("SSH_AUTH_SOCK"):
+        return None
+    if launchd_sockets:
+        return "INFO", ("SSH_AUTH_SOCK isn't set; testing launchd's agent socket%s instead: %s"
+                        % ("s" if len(launchd_sockets) > 1 else "", ", ".join(launchd_sockets)))
+    return "INFO", "no ssh-agent socket on this machine; nothing to protect"
+
+
+def socket_candidates(team_id, env, home, launchd_root=LAUNCHD_ROOT):
+    """The sockets steps 2-3 try: the ssh-agent's (SSH_AUTH_SOCK, or when that is unset the launchd agent sockets under
+    `launchd_root`), THIS run's team socket (never another team's live teamd) and Docker's."""
+    out = [env["SSH_AUTH_SOCK"]] if env.get("SSH_AUTH_SOCK") else launchd_agent_sockets(launchd_root)
     mine = Path(teamlib.sock_path(team_id))
     if mine.exists():
         out.append(str(mine))
@@ -1625,8 +1656,9 @@ def steps2to7(args, report):
                 verdict = sandbox_check(shell_pid, service)
                 report.add(3, "sandbox_check %s" % service, "INFO" if verdict is None else
                            ("PASS" if verdict == 1 else "FAIL"), {None: "unavailable", 0: "allowed", 1: "denied"}[verdict])
-        if not os.environ.get("SSH_AUTH_SOCK"):
-            report.add(2, "an ssh-agent socket to test", "BROKEN", "SSH_AUTH_SOCK isn't set, so that wall isn't tested")
+        agent_row = ssh_agent_row(os.environ, launchd_agent_sockets())
+        if agent_row:
+            report.add(2, "an ssh-agent socket to test", *agent_row)
         candidates = socket_candidates(team.id, os.environ, Path.home())
         sockets, unusable = usable_sockets(candidates)
         for path, why in unusable:

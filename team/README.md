@@ -8,7 +8,7 @@ use local plus shared engram memory. See [docs/team-mode.md](../docs/team-mode.m
 ```sh
 superyak-runtime team status          # CLI (any op: start, list, spawn, message, collect, end, ...)
 superyak-runtime team                 # MCP server over stdio (Claude Code and Codex use this)
-make check-team                       # tests (mock agents, no network)
+make check-team                       # tests (mock agents, no network); run it from the repo root: team/ has no Makefile
 ```
 
 ## Browser lanes (macOS)
@@ -46,6 +46,9 @@ A person turns lanes on; a lead can't:
   Terminal` (or, if the run stops before it gets there, `ANDY ACTION: stop it now (if you started it): ...`). Serenity passes each `ANDY ACTION:` line to Andy as soon as it appears. The script never signals that
   listener; if it is still there 10 minutes after the request, the row is BROKEN with `sudo kill <pid>` and the run
   stops. Andy's own terminal is needed only for this.
+  The ssh-agent wall is tested with `SSH_AUTH_SOCK`; when that is unset (no agent in Serenity's shell) the run tests
+  launchd's agent sockets, `/private/tmp/com.apple.launchd.*/Listeners`, and when there are none the row is INFO,
+  "no ssh-agent socket on this machine; nothing to protect".
 - `lane_one_at_a_time: true` in `config.json` lets only one lane run on the Mac at a time. Set it if the acceptance
   run shows that one lane's worker can read another lane's endpoint. An idle browser worker keeps its block, so under
   this setting it holds the Mac's only lane until it is done or stopped.

@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+REAL_PLATFORM = sys.platform      # before any fixture says "darwin"
+
 from superyak_team import lane, teamd, teamlib, workers
 
 MOCK_BIN = Path(__file__).resolve().parent / "mock-bin"
@@ -473,10 +475,10 @@ def test_one_lane_per_machine_when_the_person_asks_for_it(env, held, tmp_path, m
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="needs node")
-def test_the_preload_binds_unspecified_addresses_to_loopback(tmp_path):
-    """Spec unit test 11."""
+def test_the_preload_binds_unspecified_addresses_to_loopback(short_dir):
+    """Spec unit test 11. The Unix socket's path is short: macOS allows 104 bytes."""
     preload = teamlib.package_dir() / "lane" / "preload.cjs"
-    sock = tmp_path / "s.sock"
+    sock = Path(short_dir) / "s.sock"
     script = r"""
     const net = require('net'), http = require('http');
     const cases = {
@@ -1743,6 +1745,7 @@ def test_a_damaged_manifest_record_or_browsers_json_is_a_refusal_not_a_crash(env
         lane.shell_revision(pw)
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="APFS refuses file names that aren't valid UTF-8 (EILSEQ)")
 def test_the_manifest_hashes_names_that_are_not_utf8(env, tmp_path):
     folder = tmp_path / "chromium_headless_shell-1243"
     fake_shell(folder)
@@ -2447,7 +2450,22 @@ def test_one_leftover_that_cant_be_removed_does_not_hide_the_next(profile_paths,
 
 # ---------- Task 7: the broker, process cleanup, diagnostics and the secret ----------
 
-NODE = shutil.which("node")
+def qualified_node():
+    """A node the broker's profile accepts (lane.node_prefix: not under $HOME, not in a shared root), found at the fixed
+    places a person installs one, never by PATH order: the developer's own node may be fnm's, under $HOME, which the
+    lane rightly refuses."""
+    for candidate in ("/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"):
+        if os.access(candidate, os.X_OK):
+            try:
+                lane.node_prefix(candidate)
+            except lane.LaneRefused:
+                continue
+            return candidate
+    return None
+
+
+NODE = qualified_node()
+NO_NODE = "no node outside $HOME for the broker; install one or set lane_node"
 # Linux stand-in for sandbox-exec: record the inline profile ("-p <profile>") in a file of the test's, then run the
 # rest (without the PWD the shell adds). The broker's environment is built from nothing, so the path is in the script.
 FAKE_SANDBOX_EXEC = '#!/bin/sh\nprintf %%s "$2" > \'%s\'\nshift 2\nexec /usr/bin/env -u PWD "$@"\n'
@@ -2484,7 +2502,7 @@ exports.chromium = { launchServer: async (o) => {
 @pytest.fixture
 def broker_parts(env, tmp_root, held, monkeypatch):
     if not NODE:
-        pytest.skip("needs node")
+        pytest.skip(NO_NODE)
     fake = env["tmp"] / "sandbox-exec"
     fake.write_text(FAKE_SANDBOX_EXEC % (env["tmp"] / "profile.sb"))
     fake.chmod(0o755)
@@ -2561,7 +2579,10 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
     try:
         assert re.fullmatch(r"[0-9a-f]{64}", broker.secret) is not None and broker.port == base + 31, "secret shape"
         assert broker.endpoint == "ws://127.0.0.1:%d/%s" % (base + 31, broker.secret), "endpoint shape"   # no repr
-        assert json.loads((b / "env.json").read_text()) == sorted(
+        # The real broker is `sandbox-exec -p ... node -e ...` with no shell, so its environment is exactly the built
+        # one. This test's stand-in sandbox-exec is a /bin/sh script, and a shell adds SHLVL, PWD and _ on macOS: those
+        # (only) are ignored here.
+        assert [k for k in json.loads((b / "env.json").read_text()) if k not in ("SHLVL", "PWD", "_")] == sorted(
             ["PATH", "HOME", "TMPDIR", "MAC_CHROMIUM_TMPDIR", "PLAYWRIGHT_BROWSERS_PATH", "SUPERYAK_BROKER_PLAYWRIGHT"])
         options = json.loads((b / "options.json").read_text())
         assert options.pop("wsPath") == "/" + broker.secret, "the secret path"
@@ -2573,7 +2594,9 @@ def test_a_broker_serves_on_the_last_port_and_stops_with_its_group(broker_parts)
         pids, groups = lane.family(broker.proc.pid)
         assert child in pids and groups == {broker.proc.pid, child}
         for pid in (broker.proc.pid, child):                                    # Chrome inherits no secret
-            assert broker.secret.encode() not in Path("/proc/%d/environ" % pid).read_bytes(), "secret in environment"
+            environment = lane._environ(pid)                       # /proc on Linux, KERN_PROCARGS2 on a Mac
+            assert environment is not None, "couldn't read pid %d's environment" % pid
+            assert broker.secret not in "\n".join(environment), "secret in environment"
     finally:
         lane.stop_broker(broker)
         stopped = gone(child) if child else True
@@ -2820,7 +2843,9 @@ def test_prepare_broker_runs_for_real_without_deadlocking_on_the_install_lock(en
     again inside it (the plan's old teamlib.locked on the same file deadlocked)."""
     tarball = npm_tarball(PW_FILES)
     base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
-    node = Path(os.path.realpath(NODE or sys.executable))
+    if not NODE:
+        pytest.skip(NO_NODE)
+    node = Path(os.path.realpath(NODE))
     monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: node)
     monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
         fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
@@ -3737,25 +3762,34 @@ def test_one_lane_at_a_time_waits_with_its_own_reason(env, lanes, held, tmp_path
 
 
 def test_a_turns_leftover_children_end_with_the_turn_but_the_broker_stays(env, lanes, tmp_path, monkeypatch):
-    def proc_environ(pid):                 # the mac fixture says darwin; this Pi reads /proc
+    def proc_environ(pid):                 # the mac fixture says darwin; a Pi reads /proc
         try:
             return [s.decode() for s in Path("/proc/%d/environ" % pid).read_bytes().split(b"\0") if s]
         except OSError:
             return None
-    monkeypatch.setattr(lane, "_environ", proc_environ)
+    if REAL_PLATFORM != "darwin":
+        monkeypatch.setattr(lane, "_environ", proc_environ)       # on a real Mac the real KERN_PROCARGS2 reader runs
+    # A new session without the `setsid` program (macOS has none), and a non-system process (python), whose
+    # environment KERN_PROCARGS2 reports; /bin/sleep is an Apple binary.
+    leftover = ("import os, sys, time; os.setsid(); f = open(sys.argv[1], 'w'); f.write(str(os.getpid())); f.close(); "
+                "time.sleep(60)")
     fake_claude(tmp_path, monkeypatch,
-                "setsid sh -c 'echo $$ > \"$PWD/leftover.pid\"; exec sleep 60' &\n"
+                "'%s' -c \"%s\" \"$PWD/leftover.pid\" &\n"
                 "while [ ! -s \"$PWD/leftover.pid\" ]; do sleep 0.05; done\n"
-                "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n")
+                "echo '{\"type\":\"system\",\"session_id\":\"s-1\"}'\n" % (sys.executable, leftover))
     team, now = browser_team(env)
     team.spawn("check the login page", "claude", browser=True)
     w = team.state["workers"]["kaylee"]
     pidfile = Path(w["path"]) / "leftover.pid"
     pid = None
     try:
-        assert run_until(team, lambda: w["state"] == "idle")
+        def why():             # on a Mac this shows what the real _environ gave for the leftover
+            left = int(pidfile.read_text()) if pidfile.exists() and pidfile.read_text().isdigit() else None
+            return "state %s; leftover pid %s; lane._environ(pid) = %r; lane tmp = %s" % (
+                w["state"], left, lane._environ(left) if left else None, lane.lane_path("t1", "kaylee") / "tmp")
+        assert run_until(team, lambda: w["state"] == "idle"), why()
         pid = int(pidfile.read_text())
-        assert not lane._alive(pid), "the setsid leftover outlived its turn"
+        assert not lane._alive(pid), "the leftover outlived its turn: " + why()
         assert not lanes["calls"]["stopped"] and "kaylee" in team.brokers      # the broker is not touched
     finally:
         if pid:
@@ -4523,10 +4557,24 @@ class StartFails:
         StartFails.order.append("poll")
         return 1
 
+    # On a Mac start_broker also starts `log stream` through the same Popen and ends it: terminate, kill, communicate.
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def communicate(self, timeout=None):
+        return "", ""
+
+    def wait(self, timeout=None):
+        return 1
+
 
 def test_a_failed_start_walks_the_brokers_family_before_it_polls(broker_parts, monkeypatch):
     """T7: poll() can reap the broker, and its pid may then be reused: its family is taken first."""
     StartFails.order = []
+    monkeypatch.setattr(lane.sys, "platform", "darwin")        # the denial stream starts (and stops) on a Mac only
     monkeypatch.setattr(lane.subprocess, "Popen", StartFails)
     monkeypatch.setattr(lane, "family", lambda pid: (StartFails.order.append("family"), (set(), set()))[1])
     monkeypatch.setattr(lane, "stop_broker", lambda broker: None)
@@ -4652,7 +4700,9 @@ def test_a_waiting_worker_is_not_rehashed_every_retry(env, lanes):
 def test_prepare_without_verify_hashes_nothing_already_installed(env, manifests, unpack, monkeypatch):
     tarball = npm_tarball(PW_FILES)
     base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
-    node = Path(os.path.realpath(NODE or sys.executable))
+    if not NODE:
+        pytest.skip(NO_NODE)
+    node = Path(os.path.realpath(NODE))
     monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: node)
     monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
         fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])

@@ -497,20 +497,22 @@ def test_worker_probe_results_separate_refused_from_broken(tmp_path):
     assert missing[0] == 1 and missing[1].startswith("refused: ENOENT")
 
 
-def test_the_driver_checks_the_world_before_blaming_the_sandbox(acceptance, tmp_path):
-    srv = tmp_path / "ok.sock"
+def test_the_driver_checks_the_world_before_blaming_the_sandbox(acceptance, short_dir):
+    """The sockets live under a short /tmp folder: macOS allows 104 bytes for a Unix socket path."""
+    folder = Path(short_dir)
+    srv = folder / "ok.sock"
     s = socket.socket(socket.AF_UNIX)
     s.bind(str(srv))
     s.listen(1)
-    dead = tmp_path / "dead.sock"
+    dead = folder / "dead.sock"
     d = socket.socket(socket.AF_UNIX)
     d.bind(str(dead))
     d.close()
     try:
-        ok, bad = acceptance.usable_sockets([str(srv), str(dead), str(tmp_path / "none.sock")])
+        ok, bad = acceptance.usable_sockets([str(srv), str(dead), str(folder / "none.sock")])
     finally:
         s.close()
-    assert ok == [str(srv)] and sorted(name for name, _ in bad) == sorted([str(dead), str(tmp_path / "none.sock")])
+    assert ok == [str(srv)] and sorted(name for name, _ in bad) == sorted([str(dead), str(folder / "none.sock")])
 
 
 import socket  # noqa: E402
@@ -538,7 +540,7 @@ def test_the_hardlink_row_finds_the_holders_descriptor_by_inode(acceptance, worl
         return real(path, base)
     monkeypatch.setattr(lane, "lane_pids", spy)
     verdict, detail = acceptance.hardlink_naming()
-    assert verdict == "PASS" and seen["linked"] and "descriptor" in detail and "lsof reports" in detail
+    assert verdict == "PASS" and seen["linked"] and "descriptor" in detail and "lsof reports" in detail, (verdict, detail)
 
 
 def test_a_holder_whose_inode_lsof_never_lists_is_broken_not_passed(acceptance, world, monkeypatch):
@@ -1760,3 +1762,43 @@ def test_h4_the_driven_round_reports_the_env_and_what_the_worker_said(tmp_path, 
     wp.driven_round({"pythonpath": "/tmp/pypath", "reported": {}}, rows)
     assert {r["probe"]: r for r in rows}["PYTHONPATH from project settings"]["code"] == 0
     assert {r["probe"]: r for r in rows}["read_tool report"]["detail"] == ""
+
+
+# ================= Mac fixes: no SSH_AUTH_SOCK =================
+
+def bound_socket(path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    s = socket.socket(socket.AF_UNIX)
+    s.bind(str(path))
+    s.listen(1)
+    return s
+
+
+def test_without_ssh_auth_sock_launchds_agent_sockets_are_the_candidates(acceptance, short_dir, tmp_path):
+    """A Mac with no ssh-agent in the shell still has launchd's /private/tmp/com.apple.launchd.*/Listeners sockets."""
+    root = Path(short_dir)
+    keep = bound_socket(root / "com.apple.launchd.AbCd" / "Listeners")
+    (root / "com.apple.launchd.plain").mkdir()
+    (root / "com.apple.launchd.plain" / "Listeners").write_text("")                  # not a socket
+    (root / "other.AbCd").mkdir()
+    (root / "other.AbCd" / "Listeners").write_text("")
+    try:
+        assert acceptance.launchd_agent_sockets(root) == [str(root / "com.apple.launchd.AbCd" / "Listeners")]
+        got = acceptance.socket_candidates("t1", {}, tmp_path / "nohome", launchd_root=root)
+        assert str(root / "com.apple.launchd.AbCd" / "Listeners") in got
+        # an SSH_AUTH_SOCK, when set, is the agent: launchd's are not searched
+        got = acceptance.socket_candidates("t1", {"SSH_AUTH_SOCK": "/tmp/agent.sock"}, tmp_path / "nohome",
+                                           launchd_root=root)
+        assert got[0] == "/tmp/agent.sock" and not any("launchd" in p for p in got)
+    finally:
+        keep.close()
+
+
+def test_the_ssh_agent_row_says_what_was_tested_or_that_there_is_nothing_to_protect(acceptance, short_dir):
+    row = acceptance.ssh_agent_row
+    assert row({"SSH_AUTH_SOCK": "/tmp/agent.sock"}, []) is None                     # a real agent: its own socket rows
+    verdict, detail = row({}, [])
+    assert verdict == "INFO" and detail == "no ssh-agent socket on this machine; nothing to protect"
+    verdict, detail = row({}, ["/private/tmp/com.apple.launchd.x/Listeners"])
+    assert verdict == "INFO" and "SSH_AUTH_SOCK isn't set" in detail and "launchd" in detail
+    assert acceptance.launchd_agent_sockets(Path(short_dir) / "missing") == []
