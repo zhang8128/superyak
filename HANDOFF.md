@@ -58,8 +58,9 @@ city of AI that runs with very little human involvement.
   Until all three exist no lane preset should be created. The `lane-hardening` branch (refusals for more
   command-running settings, `lane_plugins` failing closed, `.claude` and `.mcp.json` write denies, more I5 plants)
   lands before Andy creates a lasting lane preset.
-  - Where the Mac sequence lives: the room message posted with the merge, in "Superyak: city of AI" (39fd79). It
-    lists the steps in order, with the `ANDY ACTION:` lines the script prints.
+  - Where the Mac sequence lives: room 39fd79 ("Superyak: city of AI"), message
+    7c304a587efd4bddbb721053bf4ac290, posted with the merge. It lists the steps in order, with the `ANDY ACTION:`
+    lines the script prints.
 - **Next:**
   - Spec A step 3 (grants, revision signatures). For step 3: bracket layer titles before "signed by" once other signers
     can bind a ship.

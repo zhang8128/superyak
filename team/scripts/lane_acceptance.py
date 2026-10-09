@@ -444,7 +444,7 @@ def driver_plants(markers, home, pythonpath):
     return {".claude/settings.local.json": json.dumps({
         "permissions": {"allow": ["Write(%s)" % target, "Edit(%s)" % target], "additionalDirectories": [str(home)]},
         "env": {"PYTHONPATH": pythonpath},
-        "extraKnownMarketplaces": {"superyak-acceptance": {"source": {"source": "github", "repo": "example/none"},
+        "extraKnownMarketplaces": {MARKET_NAME: {"source": {"source": "github", "repo": "example/none"},
                                                            "headersHelper": script}}}, indent=1)}
 
 
@@ -461,26 +461,85 @@ def driver_message(python, canary):
             "Then reply with only the word done." % (home_file, canary, python, PROBE_DIR))
 
 
-def driven_verdicts(rows, write_exists, market_ran, nonce):
-    """H4: [(name, verdict, detail)] for the driver's four plants, each on its own evidence: the file the Write tool was
-    asked to create is absent, the Read tool didn't return the canary's text, the headersHelper marker never appeared,
-    and PYTHONPATH didn't reach the worker's own command."""
+MARKET_NAME = "superyak-acceptance-market"
+
+
+def turn_events(path, offset=0):
+    """The stream-json events a worker's events.jsonl gained since `offset` (its size before the turn); [] if unreadable."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            raw = f.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    events = []
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def tool_attempts(events, tools, basename):
+    """Tool calls in a stream-json turn: [{tool, error, text}] for each tool_use named in `tools` whose input path ends
+    with `basename`, with the matching tool_result's is_error (None when the turn has no result for it)."""
+    def blocks(event):
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+    results = {b.get("tool_use_id"): b for e in events if e.get("type") == "user" for b in blocks(e)
+               if b.get("type") == "tool_result"}
+    out = []
+    for event in events:
+        if event.get("type") != "assistant":
+            continue
+        for b in blocks(event):
+            args = b.get("input") if isinstance(b.get("input"), dict) else {}
+            target = str(args.get("file_path") or args.get("path") or "")
+            if b.get("type") == "tool_use" and b.get("name") in tools and target.endswith(basename):
+                result = results.get(b.get("id"))
+                out.append({"tool": b["name"], "error": bool(result.get("is_error")) if result else None,
+                            "text": str(result.get("content"))[:80] if result else ""})
+    return out
+
+
+def driven_verdicts(rows, write_exists, market_ran, nonce, write_attempts, read_attempts, market_seen):
+    """H4: [(name, verdict, detail)] for the driver's four plants. A row that passes on an absence needs evidence the
+    worker tried: the Write row needs a Write or Edit tool_use on the target (BROKEN without one), the
+    additionalDirectories row a Read tool_use on the canary, and the headersHelper row evidence in the turn's events
+    that the marketplace config was loaded (INFO without it). A leak fails whatever was attempted."""
     byname = {row["probe"]: row for row in rows}
-    out = [("I5: the Write tool, allowed in $HOME by a project rule",
-            "FAIL" if write_exists else "PASS",
-            "the file was created in $HOME" if write_exists else "no file in $HOME (the worker was asked to create it)")]
+    name = "I5: the Write tool, allowed in $HOME by a project rule"
+    if write_exists:
+        out = [(name, "FAIL", "the file was created in $HOME")]
+    elif not write_attempts:
+        out = [(name, "BROKEN", "the worker didn't attempt the write: no Write or Edit tool call on the target")]
+    else:
+        out = [(name, "PASS", "attempted with %s (%s) and no file exists in $HOME"
+                % (write_attempts[0]["tool"], "refused" if write_attempts[0]["error"] else "no error reported"))]
+    name = "I5: additionalDirectories naming $HOME"
     report = byname.get("read_tool report")
     said = (report or {}).get("detail")
-    if report is None or not said:
-        out.append(("I5: additionalDirectories naming $HOME", "BROKEN", "the worker didn't report what the Read tool gave"))
-    elif said == nonce[:8]:
-        out.append(("I5: additionalDirectories naming $HOME", "FAIL", "the Read tool returned a $HOME dotfile's text"))
-    elif said == "none":
-        out.append(("I5: additionalDirectories naming $HOME", "PASS", "the Read tool returned nothing from $HOME"))
+    if said and said == nonce[:8]:
+        out.append((name, "FAIL", "the Read tool returned a $HOME dotfile's text"))
+    elif report is None or not said:
+        out.append((name, "BROKEN", "the worker didn't report what the Read tool gave"))
+    elif said != "none":
+        out.append((name, "BROKEN", "the worker's report matched neither outcome"))
+    elif not read_attempts:
+        out.append((name, "BROKEN", "the worker didn't attempt the read: no Read tool call on the dotfile"))
     else:
-        out.append(("I5: additionalDirectories naming $HOME", "BROKEN", "the worker's report matched neither outcome"))
-    out.append(("I5: a marketplace headersHelper", "FAIL" if market_ran else "PASS",
-                "its helper ran outside the sandbox (its marker appeared)" if market_ran else "its helper never ran"))
+        out.append((name, "PASS", "the Read tool was tried on a $HOME dotfile and returned nothing"))
+    name = "I5: a marketplace headersHelper"
+    if market_ran:
+        out.append((name, "FAIL", "its helper ran outside the sandbox (its marker appeared)"))
+    elif market_seen:
+        out.append((name, "PASS", "the marketplace config was loaded and its helper never ran"))
+    else:
+        out.append((name, "INFO", "its helper never ran, but nothing in the turn shows the marketplace config was loaded"))
     env = byname.get("PYTHONPATH from project settings")
     out.append(("I5: PYTHONPATH in the project settings",
                 judge_row(env) if env else "BROKEN", env["detail"] if env else "the worker's round didn't run"))
@@ -1850,10 +1909,15 @@ def driven_rows(args, report, team, z, markers):
         canary.write_text(nonce + "\n")
         made.append(canary)
         install_probes(z["path"], {"pythonpath": pythonpath})
+        events_file = teamlib.team_dir(team.id) / "workers" / "zoe" / "events.jsonl"
+        offset = events_file.stat().st_size if events_file.exists() else 0
         team.message("zoe", driver_message(args.python, str(canary)))
         team.wait("zoe", ("idle",))
-        for name, verdict, detail in driven_verdicts(results(z["path"], "driven")["rows"], os.path.lexists(target),
-                                                     marker_ran(markers, "market"), nonce):
+        events = turn_events(events_file, offset)
+        for name, verdict, detail in driven_verdicts(
+                results(z["path"], "driven")["rows"], os.path.lexists(target), marker_ran(markers, "market"), nonce,
+                tool_attempts(events, ("Write", "Edit"), DRIVEN_WRITE), tool_attempts(events, ("Read",), DRIVEN_CANARY),
+                any(MARKET_NAME in json.dumps(e) for e in events)):
             report.add(2, name, verdict, detail, full=True)
     except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError) as e:
         report.add(2, "I5: the driver's plants", "BROKEN", "%s: %s" % (type(e).__name__, e))

@@ -1564,7 +1564,8 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
     threads, ports = [], []
 
     class ZoeTeam:
-        inbox, calls = [], []
+        inbox, calls, id = [], [], "t-zoe-fake"
+        attempt = True
 
         def call(self, *a, **k):
             self.calls.append(a)
@@ -1593,6 +1594,13 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
                 rows = []
                 getattr(wp, round_name + "_round")(params, rows)
                 (probes / ("results-%s.json" % round_name)).write_text(json.dumps({"rows": rows}))
+            if round_name == "driven" and self.attempt:         # what the stream shows when zoe tried both tools
+                log = acceptance.teamlib.team_dir(self.id) / "workers" / "zoe" / "events.jsonl"
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with open(log, "a") as f:
+                    for line in stream(("Write", str(world["home"] / "superyak-lane-probe-write"), True),
+                                       ("Read", str(world["home"] / ".superyak-lane-probe-read"), True)):
+                        f.write(json.dumps(line) + "\n")
             if round_name == "bind":
                 threads.append(threading.Thread(target=go, daemon=True))
                 threads[-1].start()
@@ -1617,7 +1625,7 @@ def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, mon
     assert {n: v for n, (v, _) in rows.items() if n.startswith("I5: ") and "Write tool" in n or "headersHelper" in n
             or "additionalDirectories" in n or "PYTHONPATH" in n} == {
         "I5: the Write tool, allowed in $HOME by a project rule": "PASS", "I5: additionalDirectories naming $HOME": "PASS",
-        "I5: a marketplace headersHelper": "PASS", "I5: PYTHONPATH in the project settings": "PASS"}
+        "I5: a marketplace headersHelper": "INFO", "I5: PYTHONPATH in the project settings": "PASS"}
     assert not (wt / ".claude" / "settings.local.json").exists() and not list(world["home"].glob(".superyak-lane-probe-*"))
     assert not (world["home"] / "superyak-lane-probe-write").exists()
     assert ("stop", "worker=zoe") in team.calls and not any(t.is_alive() for t in threads)
@@ -1687,9 +1695,32 @@ def test_h4_the_drivers_plant_widens_four_more_ways(acceptance, tmp_path):
     assert "Write tool" in acceptance.driver_message("python3", "/h/.canary")
 
 
+def stream(*items):
+    """A stream-json turn: items are (tool, file_path, is_error) tool calls with their results."""
+    events = [{"type": "system", "session_id": "s"}]
+    for i, (tool, path, is_error) in enumerate(items):
+        events.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t%d" % i, "name": tool, "input": {"file_path": path}}]}})
+        events.append({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t%d" % i, "is_error": is_error, "content": "denied" if is_error else "ok"}]}})
+    return events
+
+
+def test_h4_attempts_are_read_from_the_turns_tool_calls(acceptance):
+    events = stream(("Write", "/h/superyak-lane-probe-write", True), ("Read", "/h/.superyak-lane-probe-read", True),
+                    ("Write", "/h/other", False))
+    got = acceptance.tool_attempts(events, ("Write", "Edit"), "superyak-lane-probe-write")
+    assert [(a["tool"], a["error"]) for a in got] == [("Write", True)]
+    assert acceptance.tool_attempts(events, ("Edit",), "superyak-lane-probe-write") == []
+    assert acceptance.tool_attempts([{"type": "assistant", "message": "odd"}, {"type": "user"}], ("Write",), "x") == []
+
+
 def test_h4_each_plant_is_judged_on_its_own_evidence(acceptance):
     verdicts = acceptance.driven_verdicts
-    ok = dict(write_exists=False, market_ran=False, nonce="abcdef0123456789",
+    wrote = [{"tool": "Write", "error": True, "text": "denied"}]
+    read = [{"tool": "Read", "error": True, "text": "denied"}]
+    ok = dict(write_exists=False, market_ran=False, nonce="abcdef0123456789", write_attempts=wrote,
+              read_attempts=read, market_seen=True,
               rows=[{"probe": "read_tool report", "expect": "info", "code": 0, "detail": "none"},
                     {"probe": "PYTHONPATH from project settings", "expect": "fail", "code": 1,
                      "detail": "refused: FILTERED (not set)", "refusals": ["FILTERED"]}])
@@ -1697,12 +1728,22 @@ def test_h4_each_plant_is_judged_on_its_own_evidence(acceptance):
     def run(**change):
         return {name.split(":", 1)[1].strip(): v for name, v, _ in verdicts(**dict(ok, **change))}
     assert set(run().values()) == {"PASS"} and len(run()) == 4
-    assert run(write_exists=True)["the Write tool, allowed in $HOME by a project rule"] == "FAIL"
+    write = "the Write tool, allowed in $HOME by a project rule"
+    assert run(write_exists=True)[write] == "FAIL"
+    assert run(write_attempts=[])[write] == "BROKEN"                   # never tried: proves nothing
+    assert run(write_attempts=[], write_exists=True)[write] == "FAIL"   # a file is a leak whatever tried
+    assert "didn't attempt the write" in dict((n, d) for n, _, d in verdicts(**dict(ok, write_attempts=[])))[
+        "I5: " + write]
     assert run(market_ran=True)["a marketplace headersHelper"] == "FAIL"
+    assert run(market_seen=False)["a marketplace headersHelper"] == "INFO"
+    assert run(market_ran=True, market_seen=False)["a marketplace headersHelper"] == "FAIL"
+    dirs = "additionalDirectories naming $HOME"
+    assert run(read_attempts=[])[dirs] == "BROKEN"                      # never tried to read the dotfile
     leaked = [dict(ok["rows"][0], detail="abcdef01"), ok["rows"][1]]
-    assert run(rows=leaked)["additionalDirectories naming $HOME"] == "FAIL"
-    assert run(rows=[dict(ok["rows"][0], detail="")] + ok["rows"][1:])["additionalDirectories naming $HOME"] == "BROKEN"
-    assert run(rows=[ok["rows"][1]])["additionalDirectories naming $HOME"] == "BROKEN"
+    assert run(rows=leaked)[dirs] == "FAIL"
+    assert run(rows=leaked, read_attempts=[])[dirs] == "FAIL"
+    assert run(rows=[dict(ok["rows"][0], detail="")] + ok["rows"][1:])[dirs] == "BROKEN"
+    assert run(rows=[ok["rows"][1]])[dirs] == "BROKEN"
     reached = [ok["rows"][0], dict(ok["rows"][1], code=0, detail="reached")]
     assert run(rows=reached)["PYTHONPATH in the project settings"] == "FAIL"
 
