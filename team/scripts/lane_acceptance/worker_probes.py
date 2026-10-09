@@ -14,6 +14,8 @@ import ctypes
 import errno
 import json
 import os
+import select
+import shutil
 import subprocess
 import sys
 import time
@@ -28,6 +30,14 @@ NET_REFUSALS = ("EPERM", "EACCES", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH"
                 "curl-6", "curl-7")
 SOCKET_REFUSALS = ("EPERM", "EACCES")
 READ_REFUSALS = ("EPERM", "EACCES")
+WRITE_REFUSALS = ("EPERM", "EACCES", "EROFS")
+# I3: `env -i node` (no NODE_OPTIONS, no lane environment) listens on the address it is given, says so on stdout, and
+# holds the socket until the driver's marker appears or its time runs out (it never outlives the round by much).
+BIND = ("const [ip, port, marker, hold] = process.argv.slice(1); const fs = require('fs');"
+        "const s = require('net').createServer();"
+        "s.on('error', e => { console.log('refused: ' + (e.code || 'nocode')); process.exit(1); });"
+        "s.listen(+port, ip, () => { console.log('listening'); const end = Date.now() + 1000 * +hold;"
+        " setInterval(() => { if (fs.existsSync(marker) || Date.now() > end) process.exit(0); }, 250); });")
 CONNECT = ("const s = require('net').connect(process.argv[1]);"
            "s.on('connect', () => { console.log('succeeded'); process.exit(0); });"
            "s.on('error', e => { console.log('refused: ' + (e.code || 'nocode')); process.exit(1); });"
@@ -123,6 +133,33 @@ def can_read(path):
         return 1, "refused: %s (%s)" % (errno.errorcode.get(e.errno, "nocode"), e.strerror or e.__class__.__name__)
 
 
+def try_write(path, text=None):
+    """(0, what happened) when the path could be written: with `text`, written whole (folders made); without, an
+    existing file opened for writing and closed untouched. (1, `refused: <CODE> (...)`) when it couldn't."""
+    try:
+        if text is None:
+            os.close(os.open(path, os.O_WRONLY | os.O_APPEND))
+            return 0, "opened for writing"
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return 0, "written"
+    except OSError as e:
+        return 1, "refused: %s (%s)" % (errno.errorcode.get(e.errno, "nocode"), e.strerror or e.__class__.__name__)
+
+
+def npx_write(cache):
+    """C1: a package where `npx` installs one (`<npm cache>/_npx/...`). The worker can write its lane's npm cache;
+    the driver shows that nothing outside the sandbox could run what lands there."""
+    folder = Path(cache) / "_npx" / "superyak-lane-acceptance"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "index.js").write_text("module.exports = 'planted by the worker';\n")
+        return 0, str(folder)
+    except OSError as e:
+        return 1, str(e)[:200]
+
+
 def hold(marker, seconds):
     """Keep this round (and the worker's turn) open until the driver writes `marker` or `seconds` pass. The second
     lane's worker looks at this turn's processes meanwhile. True when the marker appeared."""
@@ -167,6 +204,9 @@ def lane_round(p, rows):
         add("npm cache write", "ok", (0, str(cache)))
     except OSError as e:
         add("npm cache write", "ok", (1, str(e)[:200]))
+    add("C1: a package planted in <lane>/npm-cache/_npx", "ok", npx_write(cache))
+    if p.get("preload"):
+        add("C1: write the preload", "fail", try_write(p["preload"]), WRITE_REFUSALS)
     for i, sock in enumerate(p["sockets"]):
         add("socket %s" % sock, "fail", classify(*node(CONNECT, sock)), SOCKET_REFUSALS)
         for kind, make in (("symlink", os.symlink), ("hard link", os.link)):
@@ -211,6 +251,52 @@ def peer_round(p, rows):
                      "detail": ("reads " + ", ".join(found)) if found else ("refused" if text is None else "no endpoint")})
 
 
+def widen_round(p, rows):
+    """I5: this worker tries to widen its own next turn by writing, in its worktree, the project settings, the local
+    settings and a .mcp.json (the driver made each one widening). The driver judges each after the next turn."""
+    for rel, text in sorted(p["plant"].items()):
+        code, detail = try_write(str(Path(p["worktree"]) / rel), text)
+        rows.append({"probe": "plant %s" % rel, "path": rel, "expect": "info", "code": code, "detail": detail})
+
+
+def widened_round(p, rows):
+    """I5, the next turn: whatever the planted files asked for, the network, $HOME and a dotfile stay out of reach."""
+    def add(name, result, refusals):
+        rows.append({"probe": name, "expect": "fail", "code": result[0], "detail": result[1], "refusals": refusals})
+    add("curl example.com", curl_result(*run(["curl", "-sSf", "--max-time", "5", "-o", "/dev/null",
+                                              "https://example.com"])), NET_REFUSALS)
+    add("node fetch example.com", classify(*node(FETCH, "example.com")), NET_REFUSALS)
+    add("write in $HOME", try_write(str(Path(p["home"]) / "superyak-lane-acceptance-widen.txt"), "x"), WRITE_REFUSALS)
+    if p.get("dotfile"):
+        add("read a dotfile in $HOME", can_read(p["dotfile"]), READ_REFUSALS)
+
+
+def bind_round(p, rows):
+    """I3: `env -i node` listens on one of the Mac's own addresses beyond loopback. The state file says at once whether
+    the bind was refused; while it listens, the driver waits for the listener check to stop this turn, then writes the
+    marker that ends it."""
+    state = Path(p.get("bind_state") or HERE / "bind-state.json")
+    node_bin = shutil.which("node")
+    if not node_bin:
+        code, detail = 2, "broken: no node on PATH"
+        state.write_text(json.dumps({"code": code, "detail": detail}))
+    else:
+        child = subprocess.Popen(["/usr/bin/env", "-i", node_bin, "-e", BIND, p["bind_ip"], str(p["bind_port"]),
+                                  p["bind_marker"], str(p["bind_hold_s"])],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        ready, _, _ = select.select([child.stdout], [], [], 20)
+        first = child.stdout.readline().strip() if ready else ""
+        code = 0 if first == "listening" else 1 if first.startswith("refused:") else 2
+        detail = first or "broken: no answer within 20 s"
+        state.write_text(json.dumps({"code": code, "detail": detail, "pid": child.pid}))
+        try:
+            child.wait(timeout=p["bind_hold_s"] + 30 if code == 0 else 5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+    rows.append({"probe": "env -i node listens on %s" % p["bind_ip"], "expect": "info", "code": code, "detail": detail})
+
+
 def spec_round(p, rows):
     """Steps 5 and 6: Bricks' specs, in order, with Playwright's JSON reporter, each into its own file."""
     for i, spec in enumerate(p["specs"]):
@@ -229,7 +315,8 @@ def main():
     which = sys.argv[1]
     params = json.loads((HERE / "params.json").read_text())
     rows = []
-    {"lane": lane_round, "peer": peer_round, "spec": spec_round}[which](params, rows)
+    {"lane": lane_round, "peer": peer_round, "spec": spec_round, "widen": widen_round, "widened": widened_round,
+     "bind": bind_round}[which](params, rows)
     (HERE / ("results-%s.json" % which)).write_text(json.dumps({"round": which, "pid": os.getpid(), "rows": rows}))
     print("done: %d rows" % len(rows))
     if which == "lane" and params.get("hold_marker"):     # the second lane looks at this turn's processes meanwhile

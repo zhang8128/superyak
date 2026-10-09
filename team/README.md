@@ -41,7 +41,7 @@ A person turns lanes on; a lead can't:
   sudo credentials per terminal). If both fail, a person does it, inside step 4 after the D9/D10/D11 rows: the script
   prints `ANDY ACTION: in your own Terminal run: sudo /usr/bin/nc -lk 127.0.0.1 <port>` and waits up to 15 minutes,
   checks that the listener is root-owned and named, then prints `ANDY ACTION: stop it now: press Ctrl-C in that
-  Terminal`. Serenity passes each `ANDY ACTION:` line to Andy as soon as it appears. The script never signals that
+  Terminal` (or, if the run stops before it gets there, `ANDY ACTION: stop it now (if you started it): ...`). Serenity passes each `ANDY ACTION:` line to Andy as soon as it appears. The script never signals that
   listener; if it is still there 10 minutes after the request, the row is BROKEN with `sudo kill <pid>` and the run
   stops. Andy's own terminal is needed only for this.
 - `lane_one_at_a_time: true` in `config.json` lets only one lane run on the Mac at a time. Set it if the acceptance

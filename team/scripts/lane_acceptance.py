@@ -24,13 +24,20 @@ Prerequisites (the spec's, plus this script's):
       ANDY ACTION: in your own Terminal run: sudo /usr/bin/nc -lk 127.0.0.1 <port>
       (leave it running; this run waits up to 15 minutes)
 
-  and, after the "seen" and "named" rows, `ANDY ACTION: stop it now: press Ctrl-C in that Terminal`. Serenity runs
-  the script in the background and passes each `ANDY ACTION:` line to Andy as soon as it appears; Andy's own terminal
-  is needed only for this. The script never signals that listener (no sudo, no kill): if it isn't gone 10 minutes
-  after the stop request, the row is BROKEN with its pid and `sudo kill <pid>`, and the run stops.
+  and, after the "seen" and "named" rows, `ANDY ACTION: stop it now: press Ctrl-C in that Terminal`. If the run
+  doesn't get that far (no listener by the deadline, an error, an interrupt), it prints `ANDY ACTION: stop it now (if
+  you started it): press Ctrl-C in that Terminal` instead. Serenity runs the script in the background and passes each
+  `ANDY ACTION:` line to Andy as soon as it appears; Andy's own terminal is needed only for this. The script never
+  signals that listener (no sudo, no kill): if it isn't gone 10 minutes after the stop request (a netstat that can't
+  be read doesn't count as gone), the row is BROKEN with its pid and `sudo kill <pid>`, and the run stops.
 
 It starts its own team in the Bricks checkout (two browser workers, kaylee and wash), drives them as their lead
-through `run_team.py`, and ends the team and deletes its branches when it is done. The probes inside the workers are
+through `run_team.py`, and ends the team and deletes its branches when it is done. Step 2 also spawns a third browser
+worker, zoe, whose turn may end failed: it tries to widen its own next turn (I5: a .claude/settings.json,
+settings.local.json and .mcp.json planted in its worktree), then runs `env -i node` listening on one of the Mac's own
+addresses beyond loopback (I3: the bind is refused, or the next listener check stops the turn); zoe is stopped
+before step 4. While kaylee's lane round is held open, the C1 rows read from ps and sandbox_check that the turn runs
+with --strict-mcp-config and hooks off and that nothing but teamd's team server runs outside its sandbox. The probes inside the workers are
 lane_acceptance/worker_probes.py and broker_client.js, which this script copies into each worker's
 node_modules/.superyak-lane-acceptance/. Every row prints as PASS, FAIL, BROKEN or INFO; the run passes only when
 steps 1-7 all pass in one run. Post the whole transcript in the room. It never prints a file's contents or a secret.
@@ -383,6 +390,144 @@ def nc_descendants(ps_text, root_pid, port):
 def both_serving(states, listeners, brokers):
     """Step 5's "at the same time": both workers running, and in each block a listener that isn't the broker."""
     return all(states.get(w) == "running" and (listeners.get(w, set()) - brokers.get(w, set())) for w in ("kaylee", "wash"))
+
+
+def widen_plants(markers):
+    """I5: what the third worker tries to plant in its own worktree, each file widening every way a worker would try:
+    the project and the local settings (network, Unix sockets, Mach lookups, $HOME, WebFetch, hooks back on, a hook
+    that would touch a marker outside the sandbox) and a .mcp.json whose server would touch another. {relpath: text}"""
+    def settings(tag):
+        touch = {"type": "command", "command": "/usr/bin/touch %s" % os.path.join(markers, tag + "-hook")}
+        return json.dumps({
+            "disableAllHooks": False, "enableAllProjectMcpServers": True,
+            "sandbox": {"network": {"allowedDomains": ["example.com"], "allowAllUnixSockets": True,
+                                    "allowUnixSockets": ["/"], "allowMachLookup": ["*"]},
+                        "filesystem": {"allowWrite": ["~"], "allowRead": ["~"]}},
+            "permissions": {"allow": ["WebFetch", "Bash(*)"]},
+            "hooks": {"SessionStart": [{"hooks": [touch]}], "PreToolUse": [{"matcher": "*", "hooks": [touch]}]}},
+            indent=1)
+    return {".claude/settings.json": settings("settings"), ".claude/settings.local.json": settings("local"),
+            ".mcp.json": json.dumps({"mcpServers": {"superyak-acceptance": {
+                "command": "/usr/bin/touch", "args": [os.path.join(markers, "mcp")]}}}, indent=1)}
+
+
+def widen_verdict(rel, planted, widened_rows, hook_ran, mcp_ran):
+    """I5: a planted file passes when the sandbox refused the write, or when it was written and changed nothing on the
+    next turn: its hook never ran, .mcp.json's server never ran (--strict-mcp-config), and the next turn's network,
+    $HOME and dotfile probes were still refused. Returns (verdict, detail)."""
+    if planted is None:
+        return "BROKEN", "no row for the write: the round didn't run"
+    if planted["code"] == 1:
+        found = re.match(r"refused: (\S+)", planted.get("detail") or "")
+        if found and found.group(1) in worker_probes.WRITE_REFUSALS:
+            return "PASS", "the write was refused (%s)" % found.group(1)
+        return "BROKEN", "the write failed for a reason that isn't the sandbox's: %s" % planted.get("detail")
+    if planted["code"] != 0:
+        return "BROKEN", str(planted.get("detail"))
+    if rel == ".mcp.json":
+        return (("FAIL", "written, and its server ran outside the sandbox (its marker appeared)") if mcp_ran else
+                ("PASS", "written, and ignored under --strict-mcp-config: its server never ran"))
+    if hook_ran:
+        return "FAIL", "written, and its hook ran outside the sandbox (its marker appeared)"
+    verdicts = [(row["probe"], judge_row(row)) for row in widened_rows]
+    if not verdicts:
+        return "BROKEN", "written, but the next turn's probes didn't run"
+    failed = [name for name, verdict in verdicts if verdict == "FAIL"]
+    if failed:
+        return "FAIL", "written, and the next turn got through: %s" % ", ".join(failed)
+    unproven = [name for name, verdict in verdicts if verdict != "PASS"]
+    if unproven:
+        return "BROKEN", "written, and the next turn's probes proved nothing: %s" % ", ".join(unproven)
+    return "PASS", "written, and inert: the next turn still refused %s, and its hook never ran" \
+        % ", ".join(name for name, _ in verdicts)
+
+
+def bind_verdict(state, stopped):
+    """I3: `env -i node` beyond loopback passes when the sandbox refused the bind, or when it listened and the listener
+    check stopped the turn, naming it. Returns (verdict, detail)."""
+    if state is None:
+        return "BROKEN", "the probe never said whether the bind worked"
+    code, detail = state.get("code"), str(state.get("detail") or "")
+    if code == 1:
+        found = re.match(r"refused: (\S+)", detail)
+        if found and found.group(1) in ("EPERM", "EACCES"):
+            return "PASS", "the sandbox refused the bind (%s)" % found.group(1)
+        return "BROKEN", "refused for a reason that isn't the sandbox's (%s): is the address this Mac's?" % detail
+    if code == 0:
+        return (("PASS", "it listened, and the next listener check stopped the turn, naming it") if stopped else
+                ("FAIL", "it listened, and no listener check stopped the turn"))
+    return "BROKEN", detail
+
+
+def outside_verdicts(argv, settings, under):
+    """C1's evidence, from ps and the worker's settings, for a lane's turn: claude's argv carries --strict-mcp-config,
+    its flag settings turn hooks off, and every process under the turn that runs outside the sandbox is teamd's team
+    server. `under` is [(pid, command, sandboxed)], sandboxed None when sandbox_check can't say. [(row, verdict,
+    detail)]."""
+    rows = [("C1: the turn runs with --strict-mcp-config",
+             "PASS" if "--strict-mcp-config" in argv.split() else "FAIL", "claude's argv, from ps"),
+            ("C1: the worker's flag settings turn hooks off",
+             "PASS" if settings.get("disableAllHooks") is True else "FAIL", "disableAllHooks: %r"
+             % settings.get("disableAllHooks"))]
+    unknown = [pid for pid, _, sandboxed in under if sandboxed is None]
+    outside = [(pid, command) for pid, command, sandboxed in under
+               if sandboxed is False and not re.search(r"(^|/)run_team\.py(\s|$)", command)]
+    name = "C1: outside the sandbox, only teamd's team server runs under the turn"
+    if outside:
+        rows.append((name, "FAIL", "; ".join("pid %d: %s" % (pid, " ".join(command.split())[:80])
+                                             for pid, command in outside)))
+    elif unknown:
+        rows.append((name, "BROKEN", "sandbox_check couldn't say for pids %s" % ", ".join(map(str, unknown))))
+    else:
+        rows.append((name, "PASS", "%d processes under the turn; outside the sandbox, only run_team.py"
+                     % len(under)))
+    return rows
+
+
+def preload_verdict(path, unsafe=("/tmp", "/private/tmp", "/private/var/folders")):
+    """C1: the lane's preload is teamd's own: a plain file of this user's at mode 0644, outside the shared temp
+    folders (a Codex worker can write /tmp)."""
+    if not path:
+        return "BROKEN", "the worker's lane has no preload recorded"
+    real = os.path.realpath(path)
+    if any(x == root or x.startswith(root + os.sep) for root in unsafe for x in (path, real)):
+        return "FAIL", "%s lies under a shared temp folder" % path
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        return "FAIL", "%s can't be checked (%s)" % (path, e.strerror or e)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o644:
+        return "FAIL", "%s isn't a plain file of yours at mode 644 (mode %o)" % (path, stat.S_IMODE(st.st_mode))
+    return "PASS", "%s: teamd's own, mode 644, outside the shared temp folders" % path
+
+
+def is_sandboxed(pid):
+    """sandbox_check(pid, NULL, SANDBOX_FILTER_NONE): whether the process runs under a sandbox at all, or None when the
+    call isn't available (off the Mac) or fails."""
+    import ctypes
+    try:
+        lib = ctypes.CDLL("/usr/lib/system/libsystem_sandbox.dylib")
+        check = lib.sandbox_check
+        check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        check.restype = ctypes.c_int
+        rc = check(pid, None, 0)
+    except (OSError, AttributeError):
+        return None
+    return None if rc < 0 else rc != 0
+
+
+def lan_address():
+    """One of this Mac's own addresses beyond loopback (the one its default route leaves from; a UDP connect sends
+    nothing), or None."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("1.1.1.1", 80))
+        address = s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+    return None if lane.is_loopback(address) else address
 
 
 def missing_probe_rows(rows):
@@ -1327,7 +1472,7 @@ def steps2to7(args, report):
                                    "dotfile": reads.get("a dotfile in $HOME"), "home": str(home),
                                    "control_dir": str(control_dir), "write_probe_control": control_name,
                                    "rendezvous": name, "canary_port": canary_port, "write_probe": WRITE_PROBE,
-                                   "hold_marker": str(marker), "hold_s": 900})
+                                   "hold_marker": str(marker), "hold_s": 900, "preload": a["lane"].get("preload")})
         stream = DenialStream(lane.start_denial_stream())
         stream.wait_ready(10)
         team.message("kaylee", probe_message(args.python, "lane"))
@@ -1342,6 +1487,7 @@ def steps2to7(args, report):
         if not holders:
             report.add(3, "second lane: a first-lane process that holds the endpoint", "BROKEN",
                        "none of the turn's processes carries PW_TEST_CONNECT_WS_ENDPOINT, so there is nothing to read")
+        guarded(report, 2, "C1: what runs outside the sandbox", lambda: c1_rows(report, team.id, "kaylee", a, a_turn))
         targets = holders
         before = {pid: alive(pid) for pid in targets}
         install_probes(b["path"], {"peer_pids": targets})
@@ -1386,6 +1532,9 @@ def steps2to7(args, report):
         if any(r[2] == "FAIL" and r[1].startswith("second lane") for r in report.rows):
             print("\nA second lane's worker can read the first lane's endpoint: set lane_one_at_a_time in "
                   "~/.superyak/team/config.json, and the spec records it.\n")
+
+        # ---- step 2, a third worker: it tries to widen its own next turn (I5), then to listen beyond loopback (I3) ----
+        zoe_rows(args, report, team)
 
         # ---- step 4: D9, D10 and D11 ----
         canary.close()
@@ -1541,6 +1690,110 @@ def steps2to7(args, report):
         delete_branches(bricks, team.id)
 
 
+def c1_rows(report, team_id, wid, w, turn):
+    """Step 2, C1: while the lane round's turn is held open, what runs under it, from ps and sandbox_check, and the
+    worker's flag settings; then the preload's own row."""
+    r = subprocess.run(["/bin/ps", "-ww", "-o", "command=", "-p", str(turn)], capture_output=True, text=True)
+    try:
+        settings = json.loads((teamlib.team_dir(team_id) / "workers" / wid / "settings.json").read_text())
+    except (OSError, ValueError):
+        settings = {}
+    commands = commands_of(_ps_text())
+    under = []
+    for pid in sorted(lane.family(turn)[0] - {turn}):
+        sandboxed = is_sandboxed(pid)
+        if pid in commands and (sandboxed is not None or alive(pid)):     # one that ended meanwhile says nothing
+            under.append((pid, commands[pid], sandboxed))
+    for name, verdict, detail in outside_verdicts(r.stdout.strip(), settings if isinstance(settings, dict) else {},
+                                                  under):
+        report.add(2, name, verdict, detail)
+    report.add(2, "C1: the preload is teamd's own file, outside /tmp", *preload_verdict(w["lane"].get("preload")))
+
+
+def zoe_rows(args, report, team):
+    """Step 2's rows for a third browser worker, zoe, whose turn may end failed (so kaylee and wash keep their lanes for
+    steps 3-7): I5, it plants a widening .claude/settings.json, .claude/settings.local.json and .mcp.json in its own
+    worktree, and the next turn must be unchanged; I3, `env -i node` listens on one of the Mac's own addresses beyond
+    loopback, and either the bind is refused or the next listener check stops the turn. Spawned without a prepare (it
+    runs no npm), stopped at the end; its own failure is a BROKEN row, never the run's end. The address is never
+    printed (it identifies the machine)."""
+    markers = tempfile.mkdtemp(prefix="sy-acc-markers-")
+    home_probe = Path.home() / "superyak-lane-acceptance-widen.txt"
+    home_probe_before = os.path.lexists(home_probe)
+    planted = []
+    try:
+        team.call("spawn", "task=" + READY_TASK, "kind=claude", "mode=build", "browser=true")
+        team.wait("zoe", ("idle",), timeout=900)
+        z = team.state()["workers"]["zoe"]
+        plants = widen_plants(markers)
+        planted = [Path(z["path"]) / rel for rel in plants if not os.path.lexists(Path(z["path"]) / rel)]
+        reads, _ = read_targets(z["lane"]["path"], z["lane"]["path"], os.getuid())
+        install_probes(z["path"], {"worktree": z["path"], "plant": plants, "home": str(Path.home()),
+                                   "dotfile": reads.get("a dotfile in $HOME")})
+        team.message("zoe", probe_message(args.python, "widen"))
+        team.wait("zoe", ("idle",))
+        writes = {row["path"]: row for row in results(z["path"], "widen")["rows"]}
+        team.message("zoe", probe_message(args.python, "widened"))
+        team.wait("zoe", ("idle",))
+        widened = results(z["path"], "widened")["rows"]
+        for rel in sorted(plants):
+            tag = {".claude/settings.json": "settings", ".claude/settings.local.json": "local"}.get(rel)
+            hook_ran = tag is not None and os.path.exists(os.path.join(markers, tag + "-hook"))
+            verdict, detail = widen_verdict(rel, writes.get(rel), widened, hook_ran,
+                                            os.path.exists(os.path.join(markers, "mcp")))
+            report.add(2, "I5: the worker plants a widening %s" % rel, verdict, detail, full=True)
+        for row in widened:
+            report.add(2, "I5: the next turn: %s" % row["probe"], judge_row(row), row["detail"], full=True)
+        for path in planted:                          # the worker's own planting goes before the next round
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
+        address = lan_address()
+        if address is None:
+            report.add(2, "I3: env -i node beyond loopback", "BROKEN", "this Mac has no address beyond loopback")
+            return
+        port = z["lane"]["base"] + 5
+        release, state = Path(z["path"]) / PROBE_DIR / "bind-release", Path(z["path"]) / PROBE_DIR / "bind-state.json"
+        install_probes(z["path"], {"bind_ip": address, "bind_port": port, "bind_marker": str(release),
+                                   "bind_hold_s": lane.CHECK_EVERY_S * 2 + 30, "bind_state": str(state)})
+        team.message("zoe", probe_message(args.python, "bind"))
+        said, end = None, time.time() + 180
+        while said is None and time.time() < end:
+            try:
+                said = json.loads(state.read_text())
+            except (OSError, ValueError):
+                time.sleep(2)
+        stopped, end = False, time.time() + lane.CHECK_EVERY_S * 2 + 20
+        while said is not None and said.get("code") == 0 and not stopped and time.time() < end:
+            team.status()
+            stopped = any("LANE STOPPED" in m and "beyond loopback" in m and "port %d" % port in m for m in team.inbox)
+            time.sleep(3)
+        try:
+            release.write_text("done\n")
+        except OSError:
+            pass
+        report.add(2, "I3: env -i node listens beyond loopback (an address of this Mac's)", *bind_verdict(said, stopped))
+        end = time.time() + 180
+        while time.time() < end and any(i["port"] == port and i["host"] == address for i in lane.read_listeners() or []):
+            time.sleep(2)
+        left = [i["pid"] for i in lane.read_listeners() or [] if i["port"] == port and i["host"] == address]
+        if left:
+            report.add(2, "I3: the env -i listener is gone", "BROKEN", "pid %s still listens: stop it with `kill %s`"
+                       % (left[0], left[0]))
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError, lane.LaneRefused) as e:
+        report.add(2, "I3 and I5: the third worker's rows", "BROKEN", "%s: %s" % (type(e).__name__, e))
+    finally:
+        for path in planted:
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
+        if not home_probe_before and os.path.lexists(home_probe):
+            home_probe.unlink()
+        try:
+            team.call("stop", "worker=zoe")
+        except Exception as e:                        # the team's end stops it too
+            print("stop zoe: %s: %s" % (type(e).__name__, e))
+        shutil.rmtree(markers, ignore_errors=True)
+
+
 def existing_root_rows(report, team, plan, al):
     """Step 4 with a root-owned listener that was already there (launchd's *:22, cupsd's 631): netstat sees it and the
     user's lsof doesn't. To see it NAMED, its program is taken off the approved list for a moment (it must be on it, or
@@ -1576,8 +1829,10 @@ def person_root_rows(report, team, read=None, path_of=None, owner=None, clock=No
     """Step 4 when no root-owned listener exists and sudo -n fails: a PERSON starts `sudo /usr/bin/nc -lk` on a port
     this run names, in his own Terminal. Runs after the D9/D10/D11 rows, with kaylee idle (an unapproved root nc
     makes every lane turn wait). The script NEVER signals that listener: it asks the person to stop it and waits.
-    Raises RuntimeError (after a BROKEN row) when it is still listening 10 minutes after the request, since steps 5-7
-    would only wait."""
+    Once the start line is printed, the stop line always follows, whatever happens (an interrupt, an error, the
+    deadline): "(if you started it)" when the run didn't get as far as asking. A netstat that can't be read says
+    nothing about whether the listener is gone. Raises RuntimeError (after a BROKEN row) when it is still listening,
+    or netstat can't say, 10 minutes after the request, since steps 5-7 would only wait."""
     read, path_of, owner = read or lane.read_listeners, path_of or lane.pid_path, owner or _owner_uid
     clock, sleep = clock or time.monotonic, sleep or time.sleep
     say = say or (lambda line: print(line, flush=True))
@@ -1587,7 +1842,15 @@ def person_root_rows(report, team, read=None, path_of=None, owner=None, clock=No
         port = pick_port()
     say("ANDY ACTION: in your own Terminal run: sudo %s -lk 127.0.0.1 %d" % (NETCAT, port))
     say("(leave it running; this run waits up to 15 minutes)")
+    asked = []
+    try:
+        _person_listener(report, team, port, read, path_of, owner, clock, sleep, say, asked, appear_s, gone_s)
+    finally:
+        if not asked:
+            say("ANDY ACTION: stop it now (if you started it): press Ctrl-C in that Terminal")
 
+
+def _person_listener(report, team, port, read, path_of, owner, clock, sleep, say, asked, appear_s, gone_s):
     def on_port():
         return [item for item in read() or [] if item["port"] == port]
     found, deadline = None, clock() + appear_s
@@ -1614,16 +1877,25 @@ def person_root_rows(report, team, read=None, path_of=None, owner=None, clock=No
             report.add(4, "it holds the lane, named by its path", "PASS" if named else "FAIL", NETCAT)
         except RuntimeError as e:                        # the person must still be asked to stop it
             report.add(4, "it holds the lane, named by its path", "FAIL", str(e))
+    asked.append(True)
     say("ANDY ACTION: stop it now: press Ctrl-C in that Terminal")
-    deadline = clock() + gone_s
+    deadline, left = clock() + gone_s, None
     while clock() < deadline:
-        if not on_port():
-            report.add(4, "the root-owned listener is gone", "PASS", "nothing listens on port %d" % port)
-            team.wait("kaylee", ("idle",), timeout=180, patient=True)
-            return
+        listening = read()
+        if listening is not None:                        # None: netstat couldn't be read, which says nothing
+            left = [item for item in listening if item["port"] == port]
+            if not left:
+                report.add(4, "the root-owned listener is gone", "PASS", "nothing listens on port %d" % port)
+                team.wait("kaylee", ("idle",), timeout=180, patient=True)
+                return
         sleep(2)
-    left = on_port()
-    pid = left[0]["pid"] if left else pid
+    if left is None:
+        report.add(4, "the root-owned listener is gone", "BROKEN",
+                   "netstat couldn't be read for ten minutes after the request, so whether pid %d still listens on "
+                   "port %d is unknown: check it, and stop it with `sudo kill %d`" % (pid, port, pid))
+        raise RuntimeError("netstat couldn't say whether the root-owned nc (pid %d, port %d) stopped: steps 5-7 would "
+                           "only wait. Check it, stop it with `sudo kill %d`, and run again" % (pid, port, pid))
+    pid = left[0]["pid"]
     report.add(4, "the root-owned listener is gone", "BROKEN",
                "pid %d still listens on port %d ten minutes after the request: stop it with `sudo kill %d`" % (pid, port, pid))
     raise RuntimeError("the root-owned nc (pid %d, port %d) is still running: steps 5-7 would only wait. Stop it with "

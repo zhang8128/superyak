@@ -578,6 +578,17 @@ The run:
    - a `.claude/settings.json` in the worktree that adds `example.com` to `allowedDomains`, a
      `WebFetch(domain:example.com)` rule and `allowMachLookup: ["*"]` doesn't let curl, node or the browser reach
      example.com, or the worker look up the rendezvous service.
+   - **C1 (final fix wave):** the worker writes a package under `<lane>/npm-cache/_npx/`; while its turn runs, `ps`
+     shows claude with `--strict-mcp-config`, the worker's flag settings have `disableAllHooks`, and `sandbox_check`
+     finds nothing under the turn outside the sandbox but teamd's `team` server, so nothing unsandboxed could load
+     what it wrote. The preload is teamd's own file, outside `/tmp`, and the worker can't open it for writing.
+   - **I5 (final fix wave):** a third browser worker writes a `.claude/settings.json`, a `.claude/settings.local.json`
+     and a `.mcp.json` in its own worktree, each widening (network, Unix sockets, Mach lookups, `$HOME`, WebFetch, hooks
+     back on, a hook and an MCP server that would touch markers outside the sandbox). Each write is refused, or has no
+     effect on its next turn: the network, `$HOME` and a dotfile stay refused, and neither marker appears. Non-lane
+     builders are unchanged.
+   - **I3 (final fix wave):** the same worker runs `env -i node` listening on one of the Mac's own addresses beyond
+     loopback: the bind is refused, or the next listener check stops the turn, naming it.
 3. **Through the broker:**
    - a page on a lane port loads;
    - a wrong secret is refused;

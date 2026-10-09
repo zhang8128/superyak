@@ -2172,8 +2172,10 @@ def test_the_self_check_judges_every_probe_and_cleans_up(profile_paths, probe_wo
     assert cmd[:2] == [lane.SANDBOX_EXEC, "-p"] and cmd[2].startswith(";") and "(deny default)" in cmd[2]
     assert cmd[3:5] == [str(profile_paths["node"]), "-e"] and "const probes" in cmd[5]
     assert set(probe_env) == {"PATH", "HOME", "TMPDIR", "PROBE_CANARY_PORT", "PROBE_LANE_PORT", "PROBE_CLAUDE_TMP",
-                              "PROBE_USER_TEMP", "PROBE_DOTFILE", "PROBE_RC", "PROBE_LAUNCHAGENTS", "PROBE_USERS_SHARED"}
-    assert probe_env["PROBE_DOTFILE"] == probe_env["PROBE_RC"] == str(env["home"] / ".zshrc")
+                              "PROBE_USER_TEMP", "PROBE_DOTFILE", "PROBE_LINK_DOTFILE", "PROBE_RC", "PROBE_LAUNCHAGENTS",
+                              "PROBE_USERS_SHARED"}
+    zshrc = os.path.realpath(env["home"] / ".zshrc")
+    assert probe_env["PROBE_DOTFILE"] == probe_env["PROBE_RC"] == probe_env["PROBE_LINK_DOTFILE"] == zshrc
     team_id = "superyak-self-check-%d" % os.getpid()
     assert not lane.lane_path(team_id, "check").exists() and lane.block_of(team_id, "check") is None
     assert not lane._team_lock(team_id).exists()
@@ -2241,12 +2243,12 @@ def test_the_link_probe_succeeds_when_the_link_is_made_and_always_removes_it(tmp
     rc.write_text("x")
     rc.chmod(0)                                                         # a read through the link would fail
     try:
-        r = run_probe_js("link_dotfile", tmp_path, PROBE_DOTFILE=str(rc))
+        r = run_probe_js("link_dotfile", tmp_path, PROBE_LINK_DOTFILE=str(rc))
         assert (r.returncode, r.stdout.strip()) == (0, "succeeded")
         assert os.stat(rc).st_nlink == 1 and not (tmp_path / "superyak-lane-probe-link").exists()
     finally:
         rc.chmod(0o600)
-    r = run_probe_js("link_dotfile", tmp_path, PROBE_DOTFILE=str(tmp_path / "missing"))
+    r = run_probe_js("link_dotfile", tmp_path, PROBE_LINK_DOTFILE=str(tmp_path / "missing"))
     assert (r.returncode, r.stdout.split()[:2]) == (1, ["refused:", "ENOENT"])
 
 
@@ -2261,7 +2263,7 @@ def hermetic_network(monkeypatch):
 def test_the_link_probe_needs_a_regular_dotfile_on_the_lanes_device(probe_world, env, monkeypatch):
     lane_dir = env["tmp"] / "lane"
     lane_dir.mkdir()
-    assert lane.probe_targets(None, lane_dir)["link_dotfile"] == ("PROBE_DOTFILE", env["home"] / ".zshrc")
+    assert lane.probe_targets(None, lane_dir)["link_dotfile"] == ("PROBE_LINK_DOTFILE", env["home"] / ".zshrc")
     device = lane._device
     monkeypatch.setattr(lane, "_device", lambda path: 1 if Path(path) == lane_dir else 2)       # another volume: EXDEV
     assert lane.probe_targets(None, lane_dir)["link_dotfile"][1] is None
@@ -2413,7 +2415,7 @@ def test_the_link_probe_gets_the_dotfile_and_its_lane(profile_paths, refusing, e
         return refusing(cmd, env=env, cwd=cwd)
     _self_check(profile_paths, sandbox)
     e, cwd = seen["link_dotfile"]
-    assert e["PROBE_DOTFILE"] == str(env["home"] / ".zshrc") and e["TMPDIR"] == cwd
+    assert e["PROBE_LINK_DOTFILE"] == os.path.realpath(env["home"] / ".zshrc") and e["TMPDIR"] == cwd
 
 
 def test_one_leftover_that_cant_be_removed_does_not_hide_the_next(profile_paths, refusing, env, monkeypatch):
@@ -4682,3 +4684,61 @@ def test_spawn_resolves_the_base_once_and_the_worktree_gets_that_commit(env, lan
                             text=True).stdout.strip()
     team.spawn("check the login page", "claude", base=branch, browser=True)
     assert prepared[0] == head and created == [head] and team.state["workers"]["kaylee"]["base"] == head
+
+
+# ---------- Final fix wave: T6, the dotfile probes ----------
+
+def test_each_dotfile_probe_gets_its_own_variable(profile_paths, refusing, env):
+    """T6: read_dotfile and link_dotfile used one PROBE_DOTFILE, so one probe could act on the other's file. A
+    .zshrc linked to a file elsewhere in $HOME can be read (its real path), not hard-linked; .bashrc can be both."""
+    home = env["home"]
+    (home / "dotfiles").mkdir()
+    (home / "dotfiles" / "zshrc").write_text("export X=1\n")
+    (home / ".zshrc").unlink()
+    (home / ".zshrc").symlink_to(home / "dotfiles" / "zshrc")
+    (home / ".bashrc").write_text("export Y=1\n")
+    seen = {}
+
+    def sandbox(cmd, env=None, cwd=None, **kw):
+        seen[cmd[-1]] = env
+        return refusing(cmd, env=env, cwd=cwd)
+    _self_check(profile_paths, sandbox)
+    assert seen["read_dotfile"]["PROBE_DOTFILE"] == os.path.realpath(home / "dotfiles" / "zshrc")
+    assert seen["link_dotfile"]["PROBE_LINK_DOTFILE"] == os.path.realpath(home / ".bashrc")
+
+
+def test_a_dotfile_that_resolves_outside_home_is_no_target(probe_world, env):
+    """T6: first() resolves each dotfile to its real path, which must lie under the real $HOME: a refused read of a file
+    elsewhere says nothing about $HOME."""
+    elsewhere = env["tmp"] / "etc-zshrc"
+    elsewhere.write_text("system\n")
+    (env["home"] / ".zshrc").unlink()
+    (env["home"] / ".zshrc").symlink_to(elsewhere)
+    targets = lane.probe_targets(None)
+    assert targets["read_dotfile"] == ("PROBE_DOTFILE", None) and targets["open_rc_for_write"] == ("PROBE_RC", None)
+    (env["home"] / ".bashrc").write_text("export Y=1\n")
+    assert lane.probe_targets(None)["read_dotfile"] == ("PROBE_DOTFILE", Path(os.path.realpath(env["home"] / ".bashrc")))
+
+
+def test_a_home_reached_through_a_symlink_gives_real_paths(probe_world, env, monkeypatch):
+    linked = env["tmp"] / "home-link"
+    linked.symlink_to(env["home"])
+    monkeypatch.setenv("HOME", str(linked))
+    assert lane.probe_targets(None)["read_dotfile"][1] == Path(os.path.realpath(env["home"] / ".zshrc"))
+
+
+def test_the_link_probe_counts_the_link_even_when_removing_it_fails(tmp_path):
+    """T6: making the link is the bypass; a cleanup that then throws must not turn it into a refusal."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node")
+    rc = tmp_path / "rc"
+    rc.write_text("x")
+    prelude = "require('fs').rmSync = () => { throw Object.assign(new Error('no'), { code: 'EPERM' }); };\n"
+    r = subprocess.run([node, "-e", prelude + PROBE_JS.read_text(), "link_dotfile"], capture_output=True, text=True,
+                       timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(tmp_path), "TMPDIR": str(tmp_path),
+                                        "PROBE_LINK_DOTFILE": str(rc)})
+    try:
+        assert (r.returncode, r.stdout.strip()) == (0, "succeeded"), (r.stdout, r.stderr)
+    finally:
+        (tmp_path / "superyak-lane-probe-link").unlink(missing_ok=True)

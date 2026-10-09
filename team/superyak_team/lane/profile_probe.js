@@ -44,10 +44,13 @@ const probes = {
   write_home: () => fs.writeFileSync(path.join(need('HOME'), marker + '.txt'), 'x'),
   // The classic bypass of path rules: a hard link to the dotfile inside the lane's own folder. Making the link is the
   // success (other same-uid sandboxes can write the lane, so the dotfile would be readable and writable through it),
-  // whatever a read through it does; the link is always removed.
+  // whatever a read through it does, and whether or not removing it afterwards works (that failure goes to stderr).
+  // Its own variable (PROBE_LINK_DOTFILE): read_dotfile's file may not be one that can be linked.
   link_dotfile: () => {
-    const link = path.join(need('TMPDIR'), marker + '-link');
-    try { fs.linkSync(need('PROBE_DOTFILE'), link); } finally { fs.rmSync(link, { force: true }); }
+    const link = path.join(need('TMPDIR'), marker + '-link'), target = need('PROBE_LINK_DOTFILE');
+    try { fs.rmSync(link, { force: true }); } catch (e) { /* a leftover that can't go: linkSync says so */ }
+    fs.linkSync(target, link);
+    try { fs.rmSync(link, { force: true }); } catch (e) { process.stderr.write('link left behind: ' + codeOf(e) + '\n'); }
   },
   write_launchagents: () => fs.writeFileSync(path.join(need('PROBE_LAUNCHAGENTS'), marker + '.plist'), 'x'),
   // Opens the EXISTING rc file for writing ('r+' never creates) and closes it without writing a byte.

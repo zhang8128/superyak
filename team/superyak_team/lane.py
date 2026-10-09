@@ -1563,13 +1563,22 @@ def _probe_leftovers():
 def probe_targets(user_temp, lane_dir=None):
     """What each probe acts on, checked outside the sandbox: a probe whose target doesn't exist, or exists but can't
     be used (an unreadable rc file, an unwritable folder), would be "refused" for the wrong reason, so its row is
-    BROKEN. link_dotfile also needs a regular file (not a link) on the lane's device (`lane_dir`), or the link would
-    fail with EXDEV, a reason unrelated to the wall. {probe: (variable for the probe or None, path or None)}."""
+    BROKEN. Each dotfile is taken by its real path, which must lie under the real $HOME (a refused read of a file
+    elsewhere says nothing about $HOME). link_dotfile has its own variable and also needs a regular file (not a link)
+    on the lane's device (`lane_dir`), or the link would fail with EXDEV, a reason unrelated to the wall.
+    {probe: (variable for the probe or None, path or None)}."""
     home = Path.home()
+    real_home = os.path.realpath(home)
 
     def usable(path, mode):
         return os.access(os.path.realpath(path), mode)
-    first = lambda names, mode: next((home / n for n in names if (home / n).is_file() and usable(home / n, mode)), None)
+
+    def in_home(path):
+        real = os.path.realpath(path)
+        return Path(real) if real.startswith(real_home + os.sep) and os.path.isfile(real) else None
+
+    def first(names, mode):
+        return next((in_home(home / n) for n in names if in_home(home / n) and usable(home / n, mode)), None)
     folder = lambda path, mode: path if path and Path(path).is_dir() and usable(path, mode) else None
     targets = {name: (None, Path(path) if os.path.isfile(path) and usable(path, os.X_OK) else None)
                for name, path in PROBE_PROGRAMS.items()}
@@ -1578,15 +1587,15 @@ def probe_targets(user_temp, lane_dir=None):
     def linkable():
         for n in (".zshrc", ".bashrc", ".profile", ".gitconfig"):
             p = home / n
-            if p.is_file() and not p.is_symlink() and usable(p, os.R_OK):
+            if p.is_file() and not p.is_symlink() and usable(p, os.R_OK) and in_home(p):
                 if lane_dir is None or _device(p) == _device(lane_dir):
-                    return p
+                    return in_home(p)
                 return None
         return None
     read, write = os.R_OK | os.X_OK, os.W_OK | os.X_OK
     return {**targets,
             "read_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"), os.R_OK)),
-            "link_dotfile": ("PROBE_DOTFILE", linkable()),
+            "link_dotfile": ("PROBE_LINK_DOTFILE", linkable()),
             "open_rc_for_write": ("PROBE_RC", first((".zshrc", ".bashrc", ".profile"), os.R_OK | os.W_OK)),
             "read_claude_tmp": ("PROBE_CLAUDE_TMP", folder(PRIVATE_TMP / ("claude-%d" % os.getuid()), read)),
             "read_user_temp": ("PROBE_USER_TEMP", folder(user_temp, read)),

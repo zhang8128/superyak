@@ -358,7 +358,8 @@ class FakeTeam:
 
     def state(self):
         w = self.world
-        return {"workers": {n: {"path": str(w["wk"][n]), "pid": 4242, "lane": {"path": str(w["lanes"][n]), "base": b}}
+        return {"workers": {n: {"path": str(w["wk"][n]), "pid": 4242, "lane": {"path": str(w["lanes"][n]), "base": b,
+                                                                               "preload": None}}
                             for n, b in (("kaylee", 41000), ("wash", 41032))}}
 
     def message(self, wid, text):
@@ -396,6 +397,7 @@ def driven(acceptance, world, monkeypatch):
     monkeypatch.setattr(acceptance, "HOLDER_POLLS", 1)
     monkeypatch.setattr(acceptance, "HOLDER_POLL_S", 0)
     monkeypatch.setattr(acceptance, "preflight", lambda args, report: True, raising=False)
+    monkeypatch.setattr(acceptance, "zoe_rows", lambda args, report, team: None)       # its own tests cover it
     real_run = subprocess.run
     monkeypatch.setattr(acceptance.subprocess, "run",
                         lambda cmd, **k: Ran(0, "") if "start" in cmd else real_run(cmd, **k))
@@ -1187,10 +1189,12 @@ def test_person_plan_a_nc_started_without_sudo_is_broken_and_still_asked_to_stop
 
 
 def test_person_plan_nothing_by_the_deadline_makes_both_rows_broken(acceptance, monkeypatch):
+    """T10 (c): at the deadline Andy may have started it anyway (on another port, too late): he is told to stop it."""
     world = PersonWorld(appear_at=None)
     report, error = run_person(acceptance, monkeypatch, world)
     assert error is None and [r[2] for r in report.rows] == ["BROKEN", "BROKEN"]
-    assert world.t >= 900 and not any("stop it now" in line for line in world.said)
+    assert world.t >= 900
+    assert world.said[-1] == "ANDY ACTION: stop it now (if you started it): press Ctrl-C in that Terminal"
 
 
 def test_person_plan_a_listener_that_is_never_stopped_stops_the_run_with_the_pid(acceptance, monkeypatch):
@@ -1318,3 +1322,285 @@ def test_listeners_on_a_specific_address_are_listed_by_whose_they_are(acceptance
         (333, "100.101.102.103:8080", "/opt/homebrew/bin/tailscaled", "doesn't count: a lane can't reach it"),
         (777, "192.168.1.20:11434", "/opt/homebrew/bin/ollama", "stop it while a lane runs: it is yours, beyond loopback"),
         (778, "192.168.1.20:11435", "/opt/homebrew/bin/x", "stop it while a lane runs: whose it is can't be told")]
+
+
+
+# ---- T10: the person flow ----
+
+class NetstatGlitch(PersonWorld):
+    """netstat fails (None) for a while after the stop request, then shows the port free."""
+    def __init__(self, fail_for, **kw):
+        super().__init__(**kw)
+        self.fail_for = fail_for
+
+    def read(self):
+        if self.stopped_at is not None and self.t < self.stopped_at + self.fail_for:
+            return None
+        return super().read()
+
+
+def test_person_plan_a_failed_netstat_read_is_not_gone(acceptance, monkeypatch):
+    """T10 (a): a netstat that can't be read says nothing about the listener: the run keeps polling."""
+    world = NetstatGlitch(fail_for=30, appear_at=10, owner=0, gone_after_stop=20)
+    never_signals(monkeypatch, acceptance)
+    report, error = run_person(acceptance, monkeypatch, world)
+    gone = [r for r in report.rows if r[1] == "the root-owned listener is gone"]
+    assert error is None and [r[2] for r in gone] == ["PASS"] and world.t >= world.stopped_at + 30
+
+
+def test_person_plan_a_netstat_that_never_reads_again_is_broken_not_gone(acceptance, monkeypatch):
+    world = NetstatGlitch(fail_for=10 ** 6, appear_at=10, owner=0, gone_after_stop=0)
+    never_signals(monkeypatch, acceptance)
+    report, error = run_person(acceptance, monkeypatch, world)
+    last = report.rows[-1]
+    assert last[1] == "the root-owned listener is gone" and last[2] == "BROKEN" and "netstat" in last[3]
+    assert isinstance(error, RuntimeError)
+
+
+@pytest.mark.parametrize("when", ["waiting for it", "while it is named"])
+def test_person_plan_says_stop_after_an_interrupt(acceptance, monkeypatch, when):
+    """T10 (b): Ctrl-C (or SIGTERM's SystemExit) anywhere after the start line still tells Andy to stop his listener,
+    once, and the interrupt goes on."""
+    world = PersonWorld(appear_at=10 if when == "while it is named" else None, owner=0, gone_after_stop=5)
+    never_signals(monkeypatch, acceptance)
+    if when == "waiting for it":
+        def sleep(s):
+            raise KeyboardInterrupt
+        world.sleep = sleep
+    else:
+        def message(wid, text):
+            raise KeyboardInterrupt
+        world.message = message
+    with pytest.raises(KeyboardInterrupt):
+        run_person(acceptance, monkeypatch, world)
+    stops = [line for line in world.said if "stop it now" in line]
+    assert stops == ["ANDY ACTION: stop it now (if you started it): press Ctrl-C in that Terminal"]
+
+
+def test_person_plan_says_stop_after_an_error(acceptance, monkeypatch):
+    world = PersonWorld(appear_at=10, owner=0, gone_after_stop=5)
+    never_signals(monkeypatch, acceptance)
+
+    def broken(pid, port):
+        raise ValueError("lsof printed something odd")
+    monkeypatch.setattr(acceptance, "root_listener_proof", broken)
+    world.team = SimpleNamespace(message=world.message, wait=world.wait, inbox=world.inbox)
+    with pytest.raises(ValueError):
+        acceptance.person_root_rows(acceptance.Report(), world.team, read=world.read, path_of=lambda pid: "/usr/bin/nc",
+                                    owner=lambda pid: 0, clock=world.clock, sleep=world.sleep, say=world.say,
+                                    pick_port=lambda: world.port, port_free=lambda port: True)
+    assert [line for line in world.said if "stop it now" in line] == [
+        "ANDY ACTION: stop it now (if you started it): press Ctrl-C in that Terminal"]
+
+
+# ---- C1, I3 and I5: the new step 2 rows ----
+
+def test_a_write_probe_reports_written_or_the_refusal_and_never_truncates(tmp_path):
+    wp = worker_probes_module()
+    target = tmp_path / "preload.cjs"
+    target.write_text("teamd's\n")
+    assert wp.try_write(str(target)) == (0, "opened for writing") and target.read_text() == "teamd's\n"
+    assert wp.try_write(str(tmp_path / "a" / "b.json"), "{}") == (0, "written")
+    assert (tmp_path / "a" / "b.json").read_text() == "{}"
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        if os.access(locked, os.W_OK):
+            pytest.skip("running as a user who can write anything")
+        code, detail = wp.try_write(str(locked / "x.json"), "{}")
+        assert code == 1 and detail.startswith("refused: EACCES")
+    finally:
+        locked.chmod(0o700)
+
+
+def test_the_npx_cache_probe_writes_where_an_npx_server_would_install(tmp_path):
+    wp = worker_probes_module()
+    code, detail = wp.npx_write(tmp_path / "npm-cache")
+    assert code == 0 and (tmp_path / "npm-cache" / "_npx" / "superyak-lane-acceptance" / "index.js").is_file()
+
+
+def test_the_widen_round_plants_each_file_in_the_worktree(tmp_path):
+    wp = worker_probes_module()
+    rows = []
+    wp.widen_round({"worktree": str(tmp_path), "plant": {".claude/settings.json": "{}", ".mcp.json": "{}"}}, rows)
+    assert [(r["probe"], r["code"]) for r in rows] == [("plant .claude/settings.json", 0), ("plant .mcp.json", 0)]
+    assert (tmp_path / ".claude" / "settings.json").read_text() == "{}"
+
+
+@pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")
+def test_the_bind_probe_says_at_once_and_holds_until_the_marker(tmp_path):
+    """I3's probe: `env -i node` listens on the address it is given, says so in its state file at once, and holds the
+    socket until the driver's marker appears (or its time runs out); an address that isn't this machine's is refused
+    with its code."""
+    wp = worker_probes_module()
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    state, marker = tmp_path / "bind-state.json", tmp_path / "release"
+    params = {"bind_ip": "127.0.0.1", "bind_port": port, "bind_marker": str(marker), "bind_hold_s": 30,
+              "bind_state": str(state)}
+    rows = []
+    t = threading.Thread(target=wp.bind_round, args=(params, rows), daemon=True)
+    t.start()
+    end = time.time() + 20
+    while time.time() < end and not state.exists():
+        time.sleep(0.1)
+    said = json.loads(state.read_text())
+    try:
+        assert said["code"] == 0 and said["detail"] == "listening"
+        socket.create_connection(("127.0.0.1", port), timeout=5).close()       # it really listens meanwhile
+    finally:
+        marker.write_text("done")
+        t.join(20)
+    assert not t.is_alive() and rows[0]["code"] == 0
+    state.unlink()
+    rows = []
+    wp.bind_round(dict(params, bind_ip="192.0.2.1"), rows)                      # TEST-NET-1: never this machine's
+    assert rows[0]["code"] == 1 and rows[0]["detail"].startswith("refused: EADDRNOTAVAIL")
+
+
+def test_the_planted_files_widen_every_way_a_worker_would_try(acceptance, tmp_path):
+    plants = acceptance.widen_plants(str(tmp_path))
+    assert sorted(plants) == [".claude/settings.json", ".claude/settings.local.json", ".mcp.json"]
+    for rel in (".claude/settings.json", ".claude/settings.local.json"):
+        data = json.loads(plants[rel])
+        assert data["disableAllHooks"] is False and data["enableAllProjectMcpServers"] is True
+        assert data["sandbox"]["network"]["allowedDomains"] == ["example.com"]
+        assert data["sandbox"]["network"]["allowAllUnixSockets"] is True and "WebFetch" in data["permissions"]["allow"]
+        assert data["sandbox"]["filesystem"]["allowWrite"] == ["~"]
+        hooks = json.dumps(data["hooks"])
+        assert str(tmp_path) in hooks and "SessionStart" in hooks and "PreToolUse" in hooks
+    server = json.loads(plants[".mcp.json"])["mcpServers"]["superyak-acceptance"]
+    assert server["args"] == [os.path.join(str(tmp_path), "mcp")]
+
+
+def test_a_planted_file_passes_if_refused_or_inert_on_the_next_turn(acceptance):
+    refused = {"code": 1, "detail": "refused: EPERM (Operation not permitted)"}
+    written = {"code": 0, "detail": "written"}
+    held = [{"probe": "curl example.com", "expect": "fail", "code": 1, "detail": "refused: curl-6 (x)",
+             "refusals": list(worker_probes_module().NET_REFUSALS)}]
+    leaked = [dict(held[0], code=0, detail="succeeded")]
+    verdict = acceptance.widen_verdict
+    assert verdict(".claude/settings.json", refused, held, False, False)[0] == "PASS"
+    assert verdict(".claude/settings.json", written, held, False, False)[0] == "PASS"
+    assert verdict(".claude/settings.json", written, held, True, False)[0] == "FAIL"        # its hook ran outside
+    assert verdict(".claude/settings.json", written, leaked, False, False)[0] == "FAIL"     # the next turn reached out
+    assert verdict(".mcp.json", written, held, False, False)[0] == "PASS"
+    assert verdict(".mcp.json", written, held, False, True)[0] == "FAIL"                    # its server ran outside
+    assert verdict(".mcp.json", {"code": 1, "detail": "refused: ENOENT (x)"}, held, False, False)[0] == "BROKEN"
+    assert verdict(".claude/settings.json", written, [dict(held[0], code=2, detail="broken: timeout")],
+                   False, False)[0] == "BROKEN"
+    assert verdict(".claude/settings.json", None, held, False, False)[0] == "BROKEN"
+
+
+def test_the_bind_row_passes_if_refused_or_the_turn_was_stopped_for_it(acceptance):
+    verdict = acceptance.bind_verdict
+    assert verdict({"code": 1, "detail": "refused: EPERM"}, False)[0] == "PASS"
+    assert verdict({"code": 0, "detail": "listening"}, True)[0] == "PASS"
+    assert verdict({"code": 0, "detail": "listening"}, False)[0] == "FAIL"
+    assert verdict({"code": 1, "detail": "refused: EADDRNOTAVAIL"}, False)[0] == "BROKEN"
+    assert verdict({"code": 2, "detail": "broken: no node"}, False)[0] == "BROKEN"
+    assert verdict(None, False)[0] == "BROKEN"
+
+
+def test_the_turns_processes_outside_the_sandbox_are_only_teamds_team_server(acceptance):
+    """C1's evidence from ps: claude's argv carries --strict-mcp-config, its flag settings turn hooks off, and every
+    process under the turn that runs outside the sandbox is teamd's team server."""
+    argv = "claude -p go --settings /s.json --mcp-config /m.json --strict-mcp-config"
+    under = [(11, "/usr/bin/python3 /x/team/run_team.py", False), (12, "/bin/bash -c npx playwright test", True)]
+    rows = acceptance.outside_verdicts(argv, {"disableAllHooks": True}, under)
+    assert [(name, verdict) for name, verdict, _ in rows] == [
+        ("C1: the turn runs with --strict-mcp-config", "PASS"), ("C1: the worker's flag settings turn hooks off", "PASS"),
+        ("C1: outside the sandbox, only teamd's team server runs under the turn", "PASS")]
+    rows = acceptance.outside_verdicts(argv.replace(" --strict-mcp-config", ""), {}, under + [
+        (13, "node /Users/me/.npm/_npx/abc/node_modules/.bin/some-mcp", False)])
+    assert [verdict for _, verdict, _ in rows] == ["FAIL", "FAIL", "FAIL"] and "pid 13" in rows[2][2]
+    rows = acceptance.outside_verdicts(argv, {"disableAllHooks": True}, under + [(14, "node x", None)])
+    assert rows[2][1] == "BROKEN"
+
+
+def test_the_preload_row_needs_teamds_own_file_outside_tmp(acceptance, tmp_path):
+    good = tmp_path / "teams" / "lane-preload.cjs"
+    good.parent.mkdir()
+    good.write_text("x")
+    good.chmod(0o644)
+    assert acceptance.preload_verdict(str(good), unsafe=())[0] == "PASS"
+    assert acceptance.preload_verdict(str(good), unsafe=(str(tmp_path),))[0] == "FAIL"
+    good.chmod(0o666)
+    assert acceptance.preload_verdict(str(good), unsafe=())[0] == "FAIL"
+    assert acceptance.preload_verdict(None, unsafe=())[0] == "BROKEN"
+    link = tmp_path / "link.cjs"
+    link.symlink_to(good)
+    assert acceptance.preload_verdict(str(link), unsafe=())[0] == "FAIL"
+
+
+def test_the_third_workers_rows_run_end_to_end_with_fakes(acceptance, world, monkeypatch, tmp_path):
+    """zoe_rows with a fake team that runs the real worker rounds in this process: no sandbox here, so every write
+    gets through and the rows must say so; nothing reaches the network; the planted files, the $HOME probe and the
+    listener all go, and zoe is stopped."""
+    import re as re_
+    wp = worker_probes_module()
+    monkeypatch.setattr(wp, "run", lambda cmd, timeout=60, cwd=None: (6, "Could not resolve host"))
+    monkeypatch.setattr(wp, "node", lambda code, *a, timeout=60: (1, "refused: ENOTFOUND"))
+    monkeypatch.setattr(acceptance, "lan_address", lambda: "127.0.0.1")
+    monkeypatch.setattr(lane, "read_listeners", lambda: [])
+    if not __import__("shutil").which("node"):
+        pytest.skip("needs node")
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    base = s.getsockname()[1] - 5
+    s.close()
+    wt = tmp_path / "zoe"
+    wt.mkdir()
+    threads = []
+
+    class ZoeTeam:
+        inbox, calls = [], []
+
+        def call(self, *a, **k):
+            self.calls.append(a)
+            return {}
+
+        def wait(self, wid, states, timeout=900, patient=False):
+            return states[0]
+
+        def state(self):
+            return {"workers": {"zoe": {"path": str(wt), "lane": {"path": str(world["tmp"] / "zoe-lane"), "base": base}}}}
+
+        def status(self):
+            self.inbox.append("LANE STOPPED: zoe's turn ...: node (pid 9) listens on 127.0.0.1 port %d, beyond loopback, "
+                              "as this user while a lane runs" % (base + 5))
+            return {}
+
+        def message(self, wid, text):
+            round_name = re_.search(r"worker_probes\.py (\w+)", text).group(1)
+            probes = wt / acceptance.PROBE_DIR
+            params = json.loads((probes / "params.json").read_text())
+
+            def go():
+                rows = []
+                getattr(wp, round_name + "_round")(params, rows)
+                (probes / ("results-%s.json" % round_name)).write_text(json.dumps({"rows": rows}))
+            if round_name == "bind":
+                threads.append(threading.Thread(target=go, daemon=True))
+                threads[-1].start()
+            else:
+                go()
+    team = ZoeTeam()
+    report = acceptance.Report()
+    acceptance.zoe_rows(SimpleNamespace(python="python3"), report, team)
+    for t in threads:
+        t.join(20)
+    rows = {name: (verdict, detail) for _, name, verdict, detail in report.rows}
+    assert rows["I5: the worker plants a widening .mcp.json"][0] == "PASS"
+    for rel in (".claude/settings.json", ".claude/settings.local.json"):
+        verdict, detail = rows["I5: the worker plants a widening %s" % rel]
+        assert verdict == "FAIL" and "write in $HOME" in detail and "read a dotfile" in detail
+    assert rows["I5: the next turn: curl example.com"][0] == "PASS"
+    assert rows["I3: env -i node listens beyond loopback (an address of this Mac's)"][0] == "PASS"
+    assert not (wt / ".claude" / "settings.json").exists() and not (wt / ".mcp.json").exists()
+    assert not (world["home"] / "superyak-lane-acceptance-widen.txt").exists()
+    assert ("stop", "worker=zoe") in team.calls and not any(t.is_alive() for t in threads)
+    assert "127.0.0.1" not in json.dumps(report.rows)                         # the address is never printed
