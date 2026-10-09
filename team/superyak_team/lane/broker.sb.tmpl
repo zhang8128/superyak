@@ -1,0 +1,50 @@
+; The browser lane's broker profile (docs/superpowers/specs/2026-10-08-browser-lane-design.md, "The broker").
+; lane.render_profile fills in the values in double braces for one lane, and refuses any path containing " or \.
+; teamd passes the result inline (sandbox-exec -p), so no file in the lane can change it.
+; Chrome's own sandbox is off inside it (macOS forbids a second sandbox), so this profile is the wall around Chrome:
+; code that takes over a renderer gets exactly these powers. Deny by default. (import "system.sb") grants a good deal
+; by itself (many Mach lookups, sysctl reads, metadata); the probe battery, not the phrase, is the guarantee.
+; Changing any rule here means changing tests/test_lane.py's pinned list, in a diff a reviewer sees.
+; Never allowed, whatever Chrome asks for: any other mach-register; securityd or the Keychain; launchd job submission
+; or anything that starts programs (ServiceManagement, smd, launchservicesd, lsd); the camera and microphone; any other
+; wildcard, regex or prefix rule for mach-lookup, network-outbound or file-*; appleevent-send; the pasteboard;
+; process-exec of anything but node itself and the headless shell's folder; reads or writes in $HOME beyond the pinned
+; Playwright and browsers folders (read only) and metadata literals of their ancestors; /private/tmp/claude-*;
+; /Users/Shared; /Volumes; the user's /private/var/folders tree outside <lane>/b.
+(version 1)
+(deny default)
+(import "system.sb")
+
+; ---- generated for this lane ----
+; The broker's own folder: its script, profile, stderr, and Chrome's temp files and singleton socket.
+(allow file-read* file-write* (subpath "{{B_DIR}}"))
+; The pinned Playwright and the pinned browsers folder, read only.
+(allow file-read* (subpath "{{PLAYWRIGHT_DIR}}") (subpath "{{BROWSERS_DIR}}"))
+; node's own prefix (its libraries), read only.
+(allow file-read* (subpath "{{NODE_PREFIX}}"))
+; Programs: the node binary itself and the headless shell's folder, nothing else. Starting one needs fork, which spike
+; 5's profile allowed explicitly; the self-check's exec_node control shows it works.
+(allow process-fork)
+(allow process-exec (literal "{{NODE_BIN}}") (subpath "{{SHELL_DIR}}"))
+; node's realpath lstats every ancestor of the paths above: metadata of exactly those folders, literals only.
+(allow file-read-metadata {{ANCESTORS}})
+; The lane's own ports, one rule each, apart from the broker's; nothing else on the network, DNS included. This is
+; the form spike 5 proved on the Mac.
+(allow network-outbound {{LANE_PORTS}})
+; The broker's own listening port, the block's last: bind and inbound only.
+(allow network-bind network-inbound (local ip "localhost:{{BROKER_PORT}}"))
+
+; ---- the template's own allowances, from spike 5 (b20b868), each reviewed ----
+; Homebrew node links its libraries from here (read only).
+(allow file-read* (subpath "/opt/homebrew/Cellar") (subpath "/opt/homebrew/opt") (subpath "/usr/local/Cellar") (subpath "/usr/local/opt"))
+; Without it the headless shell crashes at start (SIGSEGV); most likely Chromium's power monitor. Opening the client
+; needs no privilege; what it allows is sleep, wake timers and idle-sleep vetoes: availability only, no data, no
+; programs started. Claude Code's own worker profile already allows it.
+(allow iokit-open-user-client (iokit-user-client-class "RootDomainUserClient"))
+; The one exception to the never-list, accepted by the reviewer: Chromium registers one rendezvous service per browser
+; process to hand Mach ports to its own children (base/apple/mach_port_rendezvous_mac.cc:159 is FATAL without it). The
+; pid varies, so it is a pattern: anchored, digits only, Chromium's own name only; it can't match an Apple service. The
+; server replies only to children it launched (it checks the sender's audit token).
+(allow mach-register (global-name-regex #"^org\.chromium\.Chromium\.MachPortRendezvousServer\.[0-9]+$"))
+; The other half: the children look up the service their parent registered.
+(allow mach-lookup (global-name-regex #"^org\.chromium\.Chromium\.MachPortRendezvousServer\.[0-9]+$"))

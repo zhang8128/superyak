@@ -1843,3 +1843,216 @@ def test_an_oserror_inside_the_install_lock_keeps_its_own_message(env):
             raise OSError(5, "boom")
     with lane.install_lock():                                           # and the lock is usable again
         pass
+
+
+# ---------- Task 6: the broker's profile ----------
+
+# Spec unit test 9: every rule of the checked-in template, byte for byte. Changing the template means changing this
+# list, in a diff a reviewer sees. The last four are the template's own allowances from spike 5.
+TEMPLATE_RULES = [
+    '(version 1)',
+    '(deny default)',
+    '(import "system.sb")',
+    '(allow file-read* file-write* (subpath "{{B_DIR}}"))',
+    '(allow file-read* (subpath "{{PLAYWRIGHT_DIR}}") (subpath "{{BROWSERS_DIR}}"))',
+    '(allow file-read* (subpath "{{NODE_PREFIX}}"))',
+    '(allow process-fork)',
+    '(allow process-exec (literal "{{NODE_BIN}}") (subpath "{{SHELL_DIR}}"))',
+    '(allow file-read-metadata {{ANCESTORS}})',
+    '(allow network-outbound {{LANE_PORTS}})',
+    '(allow network-bind network-inbound (local ip "localhost:{{BROKER_PORT}}"))',
+    '(allow file-read* (subpath "/opt/homebrew/Cellar") (subpath "/opt/homebrew/opt") (subpath "/usr/local/Cellar") (subpath "/usr/local/opt"))',
+    '(allow iokit-open-user-client (iokit-user-client-class "RootDomainUserClient"))',
+    '(allow mach-register (global-name-regex #"^org\\.chromium\\.Chromium\\.MachPortRendezvousServer\\.[0-9]+$"))',
+    '(allow mach-lookup (global-name-regex #"^org\\.chromium\\.Chromium\\.MachPortRendezvousServer\\.[0-9]+$"))',
+]
+RENDEZVOUS = TEMPLATE_RULES[-2:]
+PATTERN_RULE = re.compile(r"\((prefix|regex|global-name-prefix|global-name-regex)\b")
+
+
+def rules(text):
+    return [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith(";")]
+
+
+def test_the_template_is_exactly_the_reviewed_rules():
+    """Spec unit test 9: the template, as an allowlist."""
+    template = (teamlib.package_dir() / "lane" / "broker.sb.tmpl").read_text()
+    assert rules(template) == TEMPLATE_RULES
+    assert [r for r in rules(template) if PATTERN_RULE.search(r)] == RENDEZVOUS
+
+
+@pytest.fixture
+def profile_paths(env, tmp_root):
+    broker = env["home"] / ".superyak" / "team" / "broker"
+    pw = broker / "playwright-core-1.55.0"
+    shell = broker / "browsers" / "chromium_headless_shell-1243"
+    node = Path("/opt/lane-test-node/22.9.0/bin/node")                  # only named, never run
+    for folder in (pw, shell):
+        folder.mkdir(parents=True)
+    b = lane.ensure_lane("t1", "kaylee") / "b"
+    return {"b": b, "b_text": lane.lane_text(b), "pw": pw, "browsers": broker / "browsers", "shell": shell, "node": node}
+
+
+def render(paths, base=41000):
+    return lane.render_profile(paths["b_text"], paths["pw"], paths["browsers"], paths["shell"], paths["node"], base)
+
+
+def test_the_profile_denies_by_default_with_one_rule_per_lane_port(profile_paths):
+    """Spec unit test 9, in spike 5's proven form: `remote ip` for every lane port but the broker's own, which gets
+    bind and inbound only."""
+    text = render(profile_paths, 41032)
+    assert rules(text)[:2] == ["(version 1)", "(deny default)"]          # SBPL needs (version 1) first
+    assert not any("(allow default)" in r or "appleevent-send" in r for r in rules(text)) and "{{" not in text
+    ports = re.findall(r'\(remote ip "localhost:(\d+)"\)', text)
+    assert ports == [str(p) for p in range(41032, 41063)] and len(ports) == 31 and "41063" not in ports
+    assert len([r for r in rules(text) if r.startswith("(allow network-outbound")]) == 1
+    assert '(allow network-bind network-inbound (local ip "localhost:41063"))' in rules(text)
+    assert "(allow process-fork)" in rules(text)
+    assert [r for r in rules(text) if PATTERN_RULE.search(r)] == RENDEZVOUS
+    assert not any("remote tcp" in r or "localhost:*" in r for r in rules(text))
+
+
+def test_under_home_the_profile_only_reads_the_pinned_folders(profile_paths, env):
+    """Spec unit test 9: under $HOME, read access to the pinned Playwright and browsers folders, exec of the headless
+    shell's folder, and file-read-metadata literals of their exact ancestors; nothing else. No subpath is $HOME or
+    a folder above it."""
+    home = str(env["home"])
+    text = render(profile_paths)
+    found = set()
+    for rule in rules(text):
+        operations = rule[len("(allow "):].split(" (")[0]
+        for kind, path in re.findall(r'\((subpath|literal) "([^"]*)"\)', rule):
+            if path == home or path.startswith(home + "/"):
+                found.add((operations, kind, path))
+    broker = home + "/.superyak/team/broker"
+    assert found == {
+        ("file-read*", "subpath", broker + "/playwright-core-1.55.0"),
+        ("file-read*", "subpath", broker + "/browsers"),
+        ("process-exec", "subpath", broker + "/browsers/chromium_headless_shell-1243"),
+        ("file-read-metadata", "literal", home), ("file-read-metadata", "literal", home + "/.superyak"),
+        ("file-read-metadata", "literal", home + "/.superyak/team"), ("file-read-metadata", "literal", broker),
+        ("file-read-metadata", "literal", broker + "/browsers"),
+    }
+    above = {home} | {str(p) for p in Path(home).parents}
+    assert not [path for path in re.findall(r'\(subpath "([^"]*)"\)', text) if path in above]
+
+
+def test_the_broker_folder_and_node_are_filled_in(profile_paths):
+    text = render(profile_paths)
+    b = profile_paths["b_text"]
+    assert b == os.path.realpath(profile_paths["b"])
+    assert '(allow file-read* file-write* (subpath "%s"))' % b in text
+    assert '(allow process-exec (literal "%s")' % os.path.realpath(profile_paths["node"]) in text
+    assert '(allow file-read* (subpath "%s"))' % os.path.realpath(profile_paths["node"].parents[1]) in text
+    for ancestor in Path(b).parents:
+        assert '(literal "%s")' % ancestor in text
+    write_rules = [r for r in rules(text) if "file-write" in r]
+    assert write_rules == ['(allow file-read* file-write* (subpath "%s"))' % b]
+
+
+def test_a_profile_never_names_the_target_of_a_planted_link(profile_paths, env):
+    """Review: b/ swapped for a link to $HOME can't become a writable subpath: lane_text refuses it."""
+    b = profile_paths["b"]
+    b.rmdir()
+    os.symlink(env["home"], b)
+    with pytest.raises(lane.LaneRefused, match="unsafe lane"):
+        lane.lane_text(b)
+
+
+@pytest.mark.parametrize("where", ["root", "home", "above home", "/Users", "/Volumes", "/private", "/private/tmp",
+                                   "/private/var/folders"])
+def test_a_node_prefix_that_reads_too_much_is_refused(env, where):
+    """Review: the broker reads node's prefix (of the resolved binary) whole, so /, /private, $HOME and above, and
+    anything under /Users, /Volumes, /private/tmp or /private/var/folders are out."""
+    home = Path(os.path.realpath(env["home"]))
+    node = {"root": Path("/nodebin/node"), "home": home / "bin" / "node", "above home": home.parent / "bin" / "node",
+            "/Users": Path("/Users/me/node/bin/node"), "/Volumes": Path("/Volumes/usb/node/bin/node"),
+            "/private": Path("/private/bin/node"), "/private/tmp": Path("/private/tmp/node/bin/node"),
+            "/private/var/folders": Path("/private/var/folders/xy/T/node/bin/node")}[where]
+    with pytest.raises(lane.LaneRefused, match="too wide"):
+        lane.node_prefix(node)
+    link = env["tmp"] / "opt" / "node" / "bin" / "node"                  # a tidy-looking link to a too-wide one
+    link.parent.mkdir(parents=True)
+    os.symlink(node, link)
+    with pytest.raises(lane.LaneRefused, match="too wide"):
+        lane.node_prefix(link)
+    assert lane.node_prefix(Path("/opt/homebrew/Cellar/node/22.9.0/bin/node")) == Path("/opt/homebrew/Cellar/node/22.9.0")
+
+
+@pytest.mark.parametrize("bad", ['quo"te', "back\\slash"])
+def test_paths_a_profile_cannot_quote_are_refused(profile_paths, env, bad):
+    """Spec unit test 9."""
+    odd = env["home"] / ".superyak" / "team" / "broker" / ("playwright-core-" + bad)
+    odd.mkdir(parents=True)
+    with pytest.raises(lane.LaneRefused, match="can't quote"):
+        lane.render_profile(profile_paths["b_text"], odd, profile_paths["browsers"], profile_paths["shell"],
+                            profile_paths["node"], 41000)
+
+
+@pytest.fixture
+def probe_world(env, monkeypatch):
+    """What the self-check's probes act on, made to exist here: dotfiles, LaunchAgents, Claude's tmp, /Users/Shared,
+    the user temp folder, and the programs (any real file stands in)."""
+    (env["home"] / ".zshrc").write_text("export X=1\n")
+    (env["home"] / "Library" / "LaunchAgents").mkdir(parents=True)
+    private_tmp, shared, user_temp = env["tmp"] / "private-tmp", env["tmp"] / "Shared", env["tmp"] / "T"
+    for folder in (private_tmp / ("claude-%d" % os.getuid()), shared, user_temp):
+        folder.mkdir(parents=True)
+    monkeypatch.setattr(lane, "PRIVATE_TMP", private_tmp)
+    monkeypatch.setattr(lane, "USERS_SHARED", shared)
+    monkeypatch.setattr(lane, "PROBE_PROGRAMS", {name: sys.executable for name in lane.PROBE_PROGRAMS})
+    return {"user_temp": user_temp}
+
+
+def test_the_self_check_judges_every_probe_and_cleans_up(profile_paths, probe_world, env, monkeypatch):
+    """Acceptance step 1's logic, with a fake sandbox-exec: every probe must be refused, the three positive controls
+    (exec_node among them) must succeed, the profile and the probe go inline, each probe gets its target's exact
+    path, and whatever a probe created is removed with the scratch lane."""
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    seen = []
+
+    def sandbox(cmd, env=None, cwd=None, **kw):
+        seen.append((cmd, env))
+        name = cmd[-1]
+        if name == "write_home":
+            (Path(env["HOME"]) / "superyak-lane-probe.txt").write_text("x")       # a probe that got through
+            return Ran(0, "succeeded")
+        positive = name in lane.SELF_CHECK_POSITIVE
+        return Ran(0 if positive else 1, "succeeded" if positive else "refused: EPERM")
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, str(probe_world["user_temp"]) + "\n"))
+    rows = lane.self_check(profile_paths["node"], profile_paths["pw"], profile_paths["shell"], run=sandbox)
+    verdicts = {name: verdict for name, verdict, _ in rows}
+    assert set(verdicts) == set(lane.SELF_CHECK_PROBES) | set(lane.SELF_CHECK_POSITIVE) | {"leftover"}
+    assert len(lane.SELF_CHECK_PROBES) == 16 and "exec_open_calculator" in lane.SELF_CHECK_PROBES
+    assert lane.SELF_CHECK_POSITIVE == ("lane_port", "write_own_folder", "exec_node")
+    assert verdicts["write_home"] == "FAIL" and verdicts["leftover"] == "FAIL"
+    assert all(v == "PASS" for name, v in verdicts.items() if name not in ("write_home", "leftover"))
+    assert not (env["home"] / "superyak-lane-probe.txt").exists()
+    cmd, probe_env = seen[0]
+    assert cmd[:2] == [lane.SANDBOX_EXEC, "-p"] and cmd[2].startswith(";") and "(deny default)" in cmd[2]
+    assert cmd[3:5] == [str(profile_paths["node"]), "-e"] and "const probes" in cmd[5]
+    assert set(probe_env) == {"PATH", "HOME", "TMPDIR", "PROBE_CANARY_PORT", "PROBE_LANE_PORT", "PROBE_CLAUDE_TMP",
+                              "PROBE_USER_TEMP", "PROBE_DOTFILE", "PROBE_RC", "PROBE_LAUNCHAGENTS", "PROBE_USERS_SHARED"}
+    assert probe_env["PROBE_DOTFILE"] == probe_env["PROBE_RC"] == str(env["home"] / ".zshrc")
+    team_id = "superyak-self-check-%d" % os.getpid()
+    assert not lane.lane_path(team_id, "check").exists() and lane.block_of(team_id, "check") is None
+    assert not lane._team_lock(team_id).exists()
+
+
+def test_a_probe_whose_target_is_missing_is_broken_not_passed(profile_paths, probe_world, env, monkeypatch):
+    """Review (N7): ENOENT is no refusal. With no rc file, no dotfile and no LaunchAgents folder, those probes don't
+    run at all, and nothing is created for them."""
+    monkeypatch.setattr(lane, "port_free", lambda port: True)
+    (env["home"] / ".zshrc").unlink()
+    (env["home"] / "Library" / "LaunchAgents").rmdir()
+    ran = []
+
+    def sandbox(cmd, env=None, cwd=None, **kw):
+        ran.append(cmd[-1])
+        return Ran(0 if cmd[-1] in lane.SELF_CHECK_POSITIVE else 1, "refused: EPERM")
+    monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: Ran(0, str(probe_world["user_temp"]) + "\n"))
+    verdicts = {name: verdict for name, verdict, _ in
+                lane.self_check(profile_paths["node"], profile_paths["pw"], profile_paths["shell"], run=sandbox)}
+    for name in ("read_dotfile", "open_rc_for_write", "write_launchagents"):
+        assert verdicts[name] == "BROKEN" and name not in ran
+    assert not (env["home"] / ".zshrc").exists() and not (env["home"] / "Library" / "LaunchAgents").exists()

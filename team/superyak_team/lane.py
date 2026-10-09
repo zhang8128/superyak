@@ -1277,3 +1277,154 @@ def check_lane_node(value, worktrees):
     _check_owner(real, os.stat(real))
     _check_ancestors(real)
     return real
+
+
+# ---------- the broker's profile (spec: Its profile) ----------
+
+TEMPLATE = teamlib.package_dir() / "lane" / "broker.sb.tmpl"
+
+
+def sb_quote(path):
+    """A path as a profile string: resolved (Seatbelt matches real paths), and refused if a profile can't quote it."""
+    return _sb_literal(os.path.realpath(str(path)))
+
+
+def _sb_literal(path):
+    """A path as given (not resolved), refused if a profile can't quote it."""
+    path = str(path)
+    if '"' in path or "\\" in path:
+        raise LaneRefused("refusing a path a sandbox profile can't quote: %r" % path)
+    return path
+
+
+def node_prefix(node_bin):
+    """node's own folder (the resolved binary's grandparent), which the broker reads whole. Refused when it is /,
+    /private, $HOME or a folder above it, or lies under /Users, /Volumes, /private/tmp or /private/var/folders: the
+    profile would read far more than node."""
+    prefix = Path(os.path.realpath(node_bin)).parents[1]
+    home = Path(os.path.realpath(Path.home()))
+    text = str(prefix)
+    if (prefix in (Path("/"), Path("/private"), home) or prefix in home.parents
+            or any(text == top or text.startswith(top + "/")
+                   for top in ("/Users", "/Volumes", "/private/tmp", "/private/var/folders"))):
+        raise LaneRefused("lane_node's folder %s is too wide for the broker to read; install node somewhere like "
+                          "/opt/homebrew" % prefix)
+    return prefix
+
+
+def render_profile(b_text, pw_dir, browsers_dir, shell_dir, node_bin, base):
+    """The broker's profile for one lane, from the checked-in template. Only these are filled in: b/ (read and write;
+    `b_text` comes from lane_text, never resolved here), the pinned Playwright and browsers folders (read), node's
+    prefix (read), node itself and the headless shell's folder (exec), metadata literals of exactly their ancestors,
+    one rule per lane port apart from the broker's, and the broker's port for bind and inbound only."""
+    node_bin = Path(node_bin)
+    prefix = node_prefix(node_bin)
+    paths = [Path(pw_dir), Path(browsers_dir), Path(shell_dir), prefix, node_bin]
+    ancestors = {str(parent) for p in paths for q in (p, Path(os.path.realpath(p))) for parent in q.parents}
+    ancestors = sorted(ancestors | {str(parent) for parent in Path(b_text).parents})   # b_text as given
+    values = {
+        "B_DIR": _sb_literal(b_text), "PLAYWRIGHT_DIR": sb_quote(pw_dir), "BROWSERS_DIR": sb_quote(browsers_dir),
+        "NODE_PREFIX": sb_quote(prefix), "NODE_BIN": sb_quote(node_bin), "SHELL_DIR": sb_quote(shell_dir),
+        "ANCESTORS": " ".join('(literal "%s")' % _sb_literal(a) for a in ancestors),
+        "LANE_PORTS": " ".join('(remote ip "localhost:%d")' % port for port in range(base, base + BLOCK - 1)),
+        "BROKER_PORT": str(base + BLOCK - 1),
+    }
+    text = TEMPLATE.read_text()
+    for key, value in values.items():
+        text = text.replace("{{%s}}" % key, value)
+    if "{{" in text or "}}" in text:
+        raise LaneRefused("the broker's profile template has a value lane.render_profile doesn't fill in")
+    return text
+
+
+# Spike 5's fifteen probes plus `open -a Calculator`, which spike 5 never ran. osascript, launchctl and security run
+# with arguments that succeed outside any sandbox, so a refusal can only be the profile's. The positive controls
+# include exec_node: if fork were denied, every exec_* probe would "pass" for the wrong reason.
+SELF_CHECK_PROBES = ("exec_osascript", "exec_launchctl", "exec_security", "exec_pbpaste", "exec_open_calculator",
+                     "exec_curl", "net_domain", "net_ip", "net_canary", "read_dotfile", "read_claude_tmp",
+                     "read_user_temp", "write_home", "write_launchagents", "open_rc_for_write", "write_users_shared")
+SELF_CHECK_POSITIVE = ("lane_port", "write_own_folder", "exec_node")
+
+
+PRIVATE_TMP = Path("/private/tmp")
+USERS_SHARED = Path("/Users/Shared")
+PROBE_PROGRAMS = {"exec_osascript": "/usr/bin/osascript", "exec_launchctl": "/bin/launchctl",
+                  "exec_security": "/usr/bin/security", "exec_pbpaste": "/usr/bin/pbpaste",
+                  "exec_open_calculator": "/usr/bin/open", "exec_curl": "/usr/bin/curl"}
+
+
+def _probe_leftovers():
+    return [Path.home() / "superyak-lane-probe.txt", Path.home() / "Library/LaunchAgents/superyak-lane-probe.plist",
+            USERS_SHARED / "superyak-lane-probe"]
+
+
+def probe_targets(user_temp):
+    """What each probe acts on, checked outside the sandbox: a probe whose target doesn't exist would be "refused"
+    with ENOENT, which proves nothing, so its row is BROKEN. {probe: (variable for the probe or None, path or None)}."""
+    home = Path.home()
+    first = lambda names: next((home / n for n in names if (home / n).is_file()), None)
+    folder = lambda path: path if path and Path(path).is_dir() else None
+    targets = {name: (None, Path(path) if os.path.isfile(path) else None) for name, path in PROBE_PROGRAMS.items()}
+    return {**targets,
+            "read_dotfile": ("PROBE_DOTFILE", first((".zshrc", ".bashrc", ".profile", ".gitconfig"))),
+            "open_rc_for_write": ("PROBE_RC", first((".zshrc", ".bashrc", ".profile"))),
+            "read_claude_tmp": ("PROBE_CLAUDE_TMP", folder(PRIVATE_TMP / ("claude-%d" % os.getuid()))),
+            "read_user_temp": ("PROBE_USER_TEMP", folder(user_temp)),
+            "write_home": (None, folder(home)),
+            "write_launchagents": ("PROBE_LAUNCHAGENTS", folder(home / "Library" / "LaunchAgents")),
+            "write_users_shared": ("PROBE_USERS_SHARED", folder(USERS_SHARED))}
+
+
+def judge_probe(name, returncode):
+    """A probe exits 0 when its action SUCCEEDED: a pass for the positive controls, a failure for the rest."""
+    succeeded = returncode == 0
+    return succeeded if name in SELF_CHECK_POSITIVE else not succeeded
+
+
+def self_check(node_bin, pw_dir, shell_dir, run=None):
+    """Spec acceptance step 1 (and whenever the pinned revision changes): every spike 5 probe, plus `open -a
+    Calculator`, run directly under a freshly generated profile, as code that took over the browser would run. The
+    profile goes inline (sandbox-exec -p) and the probe as node -e, so nothing in the scratch lane decides what runs.
+    Each probe's target is checked outside the sandbox first. Returns [(probe, verdict, detail)], the verdict PASS,
+    FAIL or BROKEN (its target doesn't exist here). macOS only; `run` is the seam the tests use."""
+    run = run or subprocess.run
+    team_id, worker_id = "superyak-self-check-%d" % os.getpid(), "check"
+    held = hold_team(team_id)
+    path = lane_path(team_id, worker_id)
+    canary, listener = socket.socket(), socket.socket()
+    rows = []
+    try:
+        ensure_lane(team_id, worker_id)
+        base = allocate_block(team_id, worker_id)
+        b_text = lane_text(path / "b")
+        canary.bind(("127.0.0.1", 0))
+        canary.listen(5)
+        listener.bind(("127.0.0.1", base + 2))
+        listener.listen(5)
+        profile = render_profile(b_text, pw_dir, browsers_root(), shell_dir, node_bin, base)
+        source = (teamlib.package_dir() / "lane" / "profile_probe.js").read_text()
+        user_temp = _run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], timeout=10)
+        targets = probe_targets(user_temp.stdout.strip() if user_temp and user_temp.returncode == 0 else None)
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()), "TMPDIR": b_text,
+               "PROBE_CANARY_PORT": str(canary.getsockname()[1]), "PROBE_LANE_PORT": str(base + 2)}
+        env.update({var: str(path) for var, path in targets.values() if var and path})
+        for name in SELF_CHECK_PROBES + SELF_CHECK_POSITIVE:
+            if name in targets and targets[name][1] is None:
+                rows.append((name, "BROKEN", "its target doesn't exist here, so a refusal would prove nothing"))
+                continue
+            r = run([SANDBOX_EXEC, "-p", profile, str(node_bin), "-e", source, name],
+                    env=env, cwd=b_text, capture_output=True, text=True, timeout=60)
+            rows.append((name, "PASS" if judge_probe(name, r.returncode) else "FAIL",
+                         (r.stdout or r.stderr or "").strip()[:160]))
+    finally:
+        canary.close()
+        listener.close()
+        for target in _probe_leftovers():
+            if target.exists():
+                target.unlink()
+                rows.append(("leftover", "FAIL", "removed %s, which a probe created" % target))
+        remove_lane(path)
+        release_block(team_id, worker_id)
+        held.close()
+        _team_lock(team_id).unlink(missing_ok=True)
+    return rows
