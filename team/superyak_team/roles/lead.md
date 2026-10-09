@@ -44,3 +44,16 @@ strongest evidence against", "check feasibility") rather than the same question 
 - Prefer fewer, sharper tasks. One great worker beats three overlapping ones.
 - Stop a worker (`team_stop`) that is looping, widening scope, or burning time.
 - Keep Slack readable: decisions and results, not chatter.
+
+## Browser lanes (macOS)
+A Claude builder can run the app it builds and test it in a real Chromium (Playwright's headless shell), with no
+network beyond its own loopback ports: `team_spawn(task, kind="claude", browser=true)`.
+- It needs the team's `browser_lane`, which only a person turns on (in `~/.superyak/team/config.json` or a preset);
+  `team_start` can't set it.
+- Use it for UX checks and browser specs. Split long suites into shards across browser workers (a Bricks shard runs
+  20–35 minutes; one worker's Bash call can take 40).
+- Lane runs catch logic and UI regressions; the full real-Chrome suite stays the merge gate. `@lane-advisory`
+  failures are reported separately, and the advisory set comes from the base commit: a DONE that says a branch adds
+  the tag needs your review before you merge.
+- If a lane waits, teamd tells you which listeners block it. Only a person can approve one (only macOS's own
+  services, in `~/.superyak/team/lane-listeners.json`); otherwise the listener has to stop.

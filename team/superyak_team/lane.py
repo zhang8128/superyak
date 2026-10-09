@@ -1953,3 +1953,19 @@ def lost_turn(pid, cwd, started, now=None):
     r = _run([lsof, "-nP", "-a", "-p", str(pid), "-d", "cwd", "-F", "n"], timeout=10) if lsof else None
     names = [line[1:] for line in (r.stdout.splitlines() if r is not None else []) if line.startswith("n")]
     return bool(names) and os.path.realpath(names[0]) == os.path.realpath(cwd)
+
+
+# ---------- advisory results (spec: What the lane must allow) ----------
+
+def advisory_added(path, base, gitdir):
+    """Lines this branch adds that carry @lane-advisory. The advisory set is the base commit's, so the lead reviews
+    any tag a branch adds before merging. Through teamd's hardened git (no hooks, drivers or textconv)."""
+    out = workers.worker_git(path, gitdir, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", base,
+                             "HEAD", check=False).stdout
+    found, current = [], "?"
+    for line in out.splitlines():
+        if line.startswith("+++ "):
+            current = line[6:] if line.startswith("+++ b/") else line[4:]
+        elif line.startswith("+") and "@lane-advisory" in line:
+            found.append("%s: %s" % (current, line[1:].strip()[:160]))
+    return found

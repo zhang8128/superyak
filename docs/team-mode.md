@@ -42,6 +42,13 @@ Presets `build`, `research`, `review`, `mixed`, plus custom ones in
 `slack_channel`, `engram_tool_prefix`. Presets and `config.json` may also set `browser_lane`
 (`teamlib.PRESET_KEYS`); `team_start` never can.
 
+### Browser lanes (macOS)
+A Claude builder spawned with `browser=true` runs and tests the app it builds in Playwright's
+headless shell, with no network beyond its own block of 32 loopback ports. The browser runs in a
+broker beside the worker, under a deny-default Seatbelt profile teamd owns. Setup, the listener
+rule and the firewall note are in [team/README.md](../team/README.md#browser-lanes-macos); the
+design is [the browser-lane spec](superpowers/specs/2026-10-08-browser-lane-design.md).
+
 ### Slack
 Create the app from `team/superyak_team/slack-manifest.yml` (Superyak Team), invite
 `@superyak-team` to the channel, and store its bot token:

@@ -226,6 +226,10 @@ class Team:
         w = self.state["workers"][wid]
         brief_name = "collaborator.md" if w.get("mode") == "collab" else "worker.md"
         brief = (teamlib.package_dir() / "roles" / brief_name).read_text()
+        lane_brief = ""
+        if w.get("browser"):
+            lane_brief = ("\n---\n%s\nYour base commit (the advisory set is its @lane-advisory tags): %s\n"
+                          % ((teamlib.package_dir() / "roles" / "browser-lane.md").read_text(), w["base"]))
         return ("%s\n\n---\nTeam: %s\nYou are: %s\nTeam goal: %s\nYour worktree (cwd): %s\n"
                 "Your branch: %s\nRepository (read for context): %s\nTeammates: %s\n\nYOUR TASK:\n%s\n\n"
                 "Context from the lead:\n%s\n"
@@ -233,7 +237,7 @@ class Team:
                    w["branch"] or "(none: read-only collaborator)", self.repo,
                    ", ".join("%s (%s, %s)" % (k, v["kind"], v.get("mode", "build"))
                              for k, v in self.state["workers"].items() if k != wid) or "(none yet)",
-                   w["task"], w["context"] or "(none)"))
+                   w["task"], w["context"] or "(none)")) + lane_brief
 
     def _seed_engram_config(self, folder):
         """Engram creates .engram/config.toml in its project root when missing, so the root is
@@ -774,6 +778,10 @@ class Team:
                     summary, (sha or "no changes")[:10], tests or "(not reported)")
             self.say(wid, msg, w["thread_ts"])
             self._to_lead(wid, "DONE:", summary)
+            tagged = lane.advisory_added(w["path"], w["base"], w["gitdir"]) if sha else []
+            if tagged:
+                self._to_lead(wid, "@lane-advisory ADDED:", "this branch tags tests as advisory, but lane runs take "
+                              "the advisory set from the base commit; review before merging:\n" + "\n".join(tagged[:20]))
             if w.get("browser"):
                 proc = self.procs.get(wid)
                 if proc is not None and proc.poll() is None:

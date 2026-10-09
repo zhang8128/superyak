@@ -35,6 +35,7 @@ only-include = [
     "superyak_team/teamlib.py",
     "superyak_team/workers.py",
     "superyak_team/slack-manifest.yml",
+    "superyak_team/roles/browser-lane.md",
     "superyak_team/roles/lead.md",
     "superyak_team/roles/worker.md",
     "superyak_team/roles/collaborator.md",

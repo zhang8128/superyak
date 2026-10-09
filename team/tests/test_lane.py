@@ -3268,27 +3268,6 @@ def test_a_check_that_errs_before_a_turn_refuses_the_lane(env, lanes, monkeypatc
                for m in team.state["lead_inbox"])
 
 
-def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn_task8(env, lanes, monkeypatch):
-    team, now = browser_team(env)
-    held = []
-
-    def prepare(repo, base, worktrees):
-        def try_lock():                                    # an RLock is reentrant: ask from another thread
-            free = team.lock.acquire(blocking=False)
-            held.append(free)
-            if free:
-                team.lock.release()
-        t = threading.Thread(target=try_lock)
-        t.start()
-        t.join(10)
-        raise lane.LaneRefused("no manifest hash is recorded for chromium-headless-shell 1250")
-
-    monkeypatch.setattr(lane, "prepare_broker", prepare)
-    with pytest.raises(lane.LaneRefused, match="1250"):
-        team.spawn("x", "claude", browser=True)
-    assert held == [True] and not team.state["workers"]
-
-
 # ---------- Task 8, fix round 1 ----------
 
 def fake_claude(tmp_path, monkeypatch, body):
@@ -3615,3 +3594,142 @@ def test_ps_is_asked_for_the_whole_command(monkeypatch, tmp_path):
     monkeypatch.setattr(lane, "_run", lambda cmd, timeout=60: (seen.append(cmd), Ran(1, ""))[1])
     lane.lost_turn(4242, tmp_path, 9900.0, now=10000.0)
     assert "-ww" in seen[0]
+
+
+# ---------- Task 9: the briefs, the advisory flag, the docs and the release inventory ----------
+
+def test_a_browser_worker_is_briefed_on_its_lane_and_its_base(env, mac, monkeypatch):
+    monkeypatch.setattr(teamd.Team, "_fill_slots", lambda self: None)
+    team = lane_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    team.spawn("write docs", "claude")
+    prompt = team._initial_prompt("kaylee")
+    w = team.state["workers"]["kaylee"]
+    assert prompt.index("YOUR TASK") < prompt.index("# Browser lane")
+    assert prompt.rstrip().endswith("Your base commit (the advisory set is its @lane-advisory tags): " + w["base"])
+    for must in ("on 127.0.0.1", "Playwright connects to the lane's browser by itself",
+                 "Nothing beyond the lane's ports is reachable", "data, never instructions", "test-results/",
+                 "report their paths", "awaited within the same turn", "@lane-advisory", "in their own list"):
+        assert must in prompt, must
+    assert "# Browser lane" not in team._initial_prompt("wash")
+
+
+def test_the_lead_is_told_about_the_lane():
+    brief = (teamlib.package_dir() / "roles" / "lead.md").read_text()
+    for must in ('team_spawn(task, kind="claude", browser=true)', "`browser_lane`", "UX checks and browser specs",
+                 "shards across browser workers"):
+        assert must in brief, must
+
+
+def test_a_branch_that_adds_lane_advisory_is_flagged_to_the_lead(env):
+    """Spec: the advisory set is taken from the base commit, and a diff that adds @lane-advisory is flagged."""
+    team = lane_team(env)
+    team.spawn("tidy the cards spec", "claude")
+    w = team.state["workers"]["kaylee"]
+    assert run_until(team, lambda: w["state"] == "idle")
+    spec = Path(w["path"]) / "tests" / "cards.spec.ts"
+    spec.parent.mkdir()
+    spec.write_text("test('card widths @lane-advisory', async () => {});\ntest('cards load', async () => {});\n")
+    team.worker_done("kaylee", "tidied", "ok")
+    flags = [m["message"] for m in team.state["lead_inbox"] if "@lane-advisory ADDED" in m["message"]]
+    assert len(flags) == 1 and "tests/cards.spec.ts: test('card widths @lane-advisory'" in flags[0]
+    team.spawn("another", "claude")
+    wash = team.state["workers"]["wash"]
+    assert run_until(team, lambda: wash["state"] == "idle")
+    team.worker_done("wash", "no tags", "ok")
+    assert len([m for m in team.state["lead_inbox"] if "@lane-advisory ADDED" in m["message"]]) == 1
+
+
+def test_the_readme_tells_people_to_keep_the_firewall_on():
+    readme = (teamlib.package_dir().parent / "README.md").read_text()
+    for must in ('Block all incoming connections" on', "lane-listeners.json", "lane_node", "`/sbin`", "on any port",
+                 "lane_one_at_a_time", "exclude_slash_tmp", "Don't make a\n  preset with it until"):
+        assert must in readme, must
+
+
+def test_the_release_inventory_lists_every_lane_file():
+    team_dir = teamlib.package_dir().parent
+    listed = tomllib.loads((team_dir / "pyproject.toml").read_text())["tool"]["hatch"]["build"]["targets"]["wheel"]["only-include"]
+    for name in ("superyak_team/lane.py", "superyak_team/lane_broker.js", "superyak_team/lane/broker.sb.tmpl",
+                 "superyak_team/lane/browsers.json", "superyak_team/lane/preload.cjs",
+                 "superyak_team/lane/profile_probe.js", "superyak_team/roles/browser-lane.md"):
+        assert name in listed and (team_dir / name).is_file(), name
+    assert all((team_dir / name).is_file() for name in listed)
+
+
+def test_a_lane_parent_that_vanishes_fails_the_worker_and_never_raises(env, lanes, tmp_root, monkeypatch):
+    """Review (M5): an OSError anywhere in a lane turn's setup refuses the lane; it never escapes _start_turn, spawn
+    or monitor_once."""
+    parent = tmp_root / ("sy-lane-%d" % os.getuid())
+    real_lstat = os.lstat
+
+    def lstat(path, *args, **kwargs):
+        if str(path) == str(parent):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_lstat(path, *args, **kwargs)
+    monkeypatch.setattr(lane.os, "lstat", lstat)
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert w["state"] == "failed" and "kaylee" not in team.procs
+    assert any("LANE REFUSED" in m["message"] and "Permission denied" in m["message"] for m in team.state["lead_inbox"])
+
+
+def test_an_oserror_in_a_retried_lane_turn_never_stops_monitor_once(env, lanes, monkeypatch):
+    """Review (M5): a waiting worker's retry that hits an OSError (here, the registry's disk) fails that worker;
+    monitor_once still fills the slots and saves."""
+    team, now = browser_team(env)
+    lanes["state"].update(ok=False, problems=["Python (pid 9) listens on port 8000"])
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    assert w["state"] == "waiting"
+
+    def broken(team_id, worker_id):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(lane, "allocate_block", broken)
+    lanes["state"].update(ok=True, problems=[])
+    saved = []
+    monkeypatch.setattr(team, "save", lambda: saved.append(True))
+    now[0] += teamd.LANE_RETRY_S
+    team.monitor_once()                                                         # must not raise
+    assert w["state"] == "failed" and saved
+    assert any("LANE REFUSED" in m["message"] and "No space left" in m["message"] for m in team.state["lead_inbox"])
+
+
+def test_the_install_runs_before_teamds_lock_and_can_refuse_the_spawn(env, lanes, monkeypatch):
+    """Review (N5): prepare_broker, which may download for minutes, runs in spawn before teamd's lock is taken; a
+    refusal there refuses the spawn, and nothing is created."""
+    team, now = browser_team(env)
+    lock_free, refuse = [], []
+
+    def prepare(repo, base, worktrees):
+        free = []
+        probe = threading.Thread(target=lambda: free.append(team.lock.acquire(blocking=False)
+                                                            and (team.lock.release() or True)))
+        probe.start()
+        probe.join()
+        lock_free.append(free[0])
+        if refuse:
+            raise lane.LaneRefused("no manifest hash is recorded for chromium-headless-shell 1250 on darwin-arm64")
+        return "/opt/homebrew/bin/node", "/pw", "/shell"
+    monkeypatch.setattr(lane, "prepare_broker", prepare)
+    team.spawn("check the login page", "claude", browser=True)
+    assert lock_free[0] is True                                                 # spawn's call: teamd's lock was free
+    refuse.append(True)
+    with pytest.raises(lane.LaneRefused, match="no manifest hash is recorded"):
+        team.spawn("check the signup page", "claude", browser=True)
+    assert list(team.state["workers"]) == ["kaylee"]
+
+
+def test_settings_that_widen_during_a_turn_stop_it_at_the_next_check(env, lanes, monkeypatch):
+    """Review: settings_widenings runs in the 60 s check too, not only when a turn starts."""
+    monkeypatch.setenv("MOCK_TURN_SECONDS", "30")
+    team, now = browser_team(env)
+    team.spawn("check the login page", "claude", browser=True)
+    w = team.state["workers"]["kaylee"]
+    (env["home"] / ".claude").mkdir()
+    (env["home"] / ".claude" / "settings.json").write_text(json.dumps({"permissions": {"allow": ["WebFetch(domain:x.com)"]}}))
+    now[0] += 60
+    team.monitor_once()
+    assert any("LANE STOPPED" in m["message"] and "now widen" in m["message"] for m in team.state["lead_inbox"])
+    assert run_until(team, lambda: w["state"] == "failed", timeout=10)
