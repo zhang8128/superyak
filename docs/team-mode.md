@@ -36,10 +36,11 @@ run in one repo). Worker tools: `team_post`, `team_read`, `team_message`, `team_
 
 ### Presets and per-team config
 Presets `build`, `research`, `review`, `mixed`, plus custom ones in
-`~/.superyak/team/presets.json`. Per-team overrides (validated, see `teamlib.TEAM_KEYS`):
+`~/.superyak/team/presets.json`. Per-team overrides (validated, see `teamlib.OVERRIDE_KEYS`):
 `max_workers`, `default_mode`, `default_kind`, `codex_model`, `codex_effort`, `claude_model`,
 `collab_max_turns`, `peer_limit_build`, `peer_limit_collab`, `collab_web_search`,
-`slack_channel`, `engram_tool_prefix`.
+`slack_channel`, `engram_tool_prefix`. Presets and `config.json` may also set `browser_lane`
+(`teamlib.PRESET_KEYS`); `team_start` never can.
 
 ### Slack
 Create the app from `team/superyak_team/slack-manifest.yml` (Superyak Team), invite

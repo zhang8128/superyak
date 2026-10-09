@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import teamlib, workers
+from . import lane, teamlib, workers
 from .slack import Slack, SlackError
 
 ACTIVE = ("running",)
@@ -101,7 +101,9 @@ class Team:
             n += 1
         return "w%d" % n
 
-    def spawn(self, task, kind="codex", context="", mode="build", base=None, prepare=None):
+    def spawn(self, task, kind="codex", context="", mode="build", base=None, prepare=None, browser=False):
+        if type(browser) is not bool:
+            raise teamlib.RejectedMessage("browser must be true or false")
         if prepare and prepare not in workers.PREPARE_COMMANDS:
             raise teamlib.RejectedMessage("prepare must be one of: %s" % ", ".join(sorted(workers.PREPARE_COMMANDS)))
         if prepare and mode != "build":
@@ -110,6 +112,8 @@ class Team:
             raise teamlib.RejectedMessage("kind must be 'codex' or 'claude'")
         if mode not in ("build", "collab"):
             raise teamlib.RejectedMessage("mode must be 'build' or 'collab'")
+        if browser:
+            lane.check_spawn(self.cfg, kind, mode)
         with self.lock:
             wid = self._new_worker_id()
             if mode == "build":
@@ -125,7 +129,7 @@ class Team:
                 wt = {"branch": None, "path": str(room), "base": None}
                 self._seed_engram_config(room)
             teamlib.issue_token(self.team_id, wid)    # only once the worktree/room exists
-            w = {"kind": kind, "mode": mode, "task": task, "context": context, "state": "queued",
+            w = {"kind": kind, "mode": mode, "browser": browser, "task": task, "context": context, "state": "queued",
                  "ident": None, "pid": None, "inbox": [], "turns": 0,
                  "started_at": None, "commit": None, "summary": None, "last_message": "",
                  "thread_ts": None, **wt}
@@ -528,7 +532,7 @@ class Team:
             if op == "spawn":
                 return self.spawn(a.get("task", ""), a.get("kind") or self.cfg.get("default_kind", "codex"),
                                   a.get("context", ""), a.get("mode") or self.cfg.get("default_mode", "build"),
-                                  a.get("base") or None, a.get("prepare") or None)
+                                  a.get("base") or None, a.get("prepare") or None, a.get("browser", False))
             if op == "message":
                 return self.deliver(a["worker"], text, "lead")
             if op == "post":
@@ -574,7 +578,7 @@ class Team:
             self.save()
             return {"team": self.team_id, "goal": self.state["goal"], "slack": bool(self.slack),
                     "preset": self.cfg.get("preset", ""),
-                    "config": {k: self.cfg.get(k) for k in sorted(teamlib.TEAM_KEYS) if k in self.cfg},
+                    "config": {k: self.cfg.get(k) for k in sorted(teamlib.PRESET_KEYS) if k in self.cfg},
                     "workers": {k: {"kind": v["kind"], "mode": v.get("mode", "build"),
                                     "state": v["state"], "turns": v["turns"],
                                     "branch": v["branch"], "commit": v["commit"],

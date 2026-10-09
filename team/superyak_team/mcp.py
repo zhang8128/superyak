@@ -172,6 +172,10 @@ LEAD_TOOLS = [
       "prepare": {"type": "string", "enum": ["npm-ci", "pnpm-install"],
                   "description": "build only: install dependencies (outside the sandbox) before "
                                  "the first turn; workers have no network"},
+      "browser": {"type": "boolean",
+                  "description": "kind='claude', mode='build' only (macOS): run the worker in a browser lane, "
+                                 "with Playwright's headless shell on its own loopback ports. Needs the team's "
+                                 "browser_lane, which only a person sets"},
       "team": {"type": "string"}}, ["task"], lambda a: call("spawn", a)),
     ("team_message", "Send a message to a worker (delivered into its running turn when possible).",
      {"worker": {"type": "string"}, "text": {"type": "string"}, "team": {"type": "string"}}, ["worker", "text"],

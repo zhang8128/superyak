@@ -23,6 +23,7 @@ ignore-vcs = true
 [tool.hatch.build.targets.wheel]
 only-include = [
     "superyak_team/__init__.py",
+    "superyak_team/lane.py",
     "superyak_team/mcp.py",
     "superyak_team/slack.py",
     "superyak_team/teamd.py",

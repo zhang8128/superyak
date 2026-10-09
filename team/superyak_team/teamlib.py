@@ -59,6 +59,7 @@ DEFAULT_CONFIG = {
     # Claude Code names plugin MCP tools mcp__plugin_<plugin>_<server>__<tool>; engram ships as
     # plugin "engram" with server "engram". Change this if the plugin or server is renamed.
     "engram_tool_prefix": "mcp__plugin_engram_engram__",       # Claude collaborators only (Codex can't restrict reads)
+    "browser_lane": False,           # a person turns browser lanes on in config.json or a preset, never team_start
 }
 
 
@@ -67,11 +68,14 @@ class RejectedMessage(ValueError):
 
 
 # Team configurations. A team = defaults (+ ~/.superyak/team/config.json) + a preset + per-team
-# overrides passed to team_start. Only these keys can vary per team.
-TEAM_KEYS = {"max_workers", "worker_timeout_s", "codex_model", "codex_effort", "claude_model",
-             "collab_max_turns", "peer_limit_build", "peer_limit_collab", "default_mode",
-             "default_kind", "slack_channel", "description", "collab_web_search",
-             "engram_tool_prefix"}
+# overrides passed to team_start. Only these keys can vary per team. The two sets belong to
+# different hands: a person writes presets, a lead passes overrides, and browser_lane widens a
+# worker's sandbox, so a lead can never set it for its own team.
+OVERRIDE_KEYS = {"max_workers", "worker_timeout_s", "codex_model", "codex_effort", "claude_model",
+                 "collab_max_turns", "peer_limit_build", "peer_limit_collab", "default_mode",
+                 "default_kind", "slack_channel", "description", "collab_web_search",
+                 "engram_tool_prefix"}
+PRESET_KEYS = OVERRIDE_KEYS | {"browser_lane"}
 BUILTIN_PRESETS = {
     "build":    {"description": "Implementation: builders in worktrees, peer messages pull-only.",
                  "default_mode": "build", "default_kind": "codex", "max_workers": 3},
@@ -127,15 +131,18 @@ def team_config(preset=None, overrides=None):
         presets = load_presets()
         if preset not in presets:
             raise RejectedMessage("unknown preset %r; available: %s" % (preset, ", ".join(sorted(presets))))
-        bad = set(presets[preset]) - TEAM_KEYS
+        bad = set(presets[preset]) - PRESET_KEYS
         if bad:
             raise RejectedMessage("preset %r has unsupported keys: %s" % (preset, ", ".join(sorted(bad))))
         cfg.update(presets[preset])
     overrides = overrides or {}
-    bad = set(overrides) - TEAM_KEYS
+    if "browser_lane" in overrides:
+        raise RejectedMessage("browser_lane can't be set in team_start: a person turns browser lanes "
+                              "on in ~/.superyak/team/config.json or a preset")
+    bad = set(overrides) - OVERRIDE_KEYS
     if bad:
         raise RejectedMessage("unsupported team config keys: %s (allowed: %s)"
-                              % (", ".join(sorted(bad)), ", ".join(sorted(TEAM_KEYS))))
+                              % (", ".join(sorted(bad)), ", ".join(sorted(OVERRIDE_KEYS))))
     cfg.update(overrides)
     if cfg.get("default_mode", "build") not in ("build", "collab"):
         raise RejectedMessage("default_mode must be 'build' or 'collab'")
@@ -160,6 +167,8 @@ def team_config(preset=None, overrides=None):
         raise RejectedMessage("engram_tool_prefix must look like mcp__<name>__")
     if not isinstance(cfg.get("collab_web_search", True), bool):
         raise RejectedMessage("collab_web_search must be true or false")
+    if type(cfg.get("browser_lane", False)) is not bool:
+        raise RejectedMessage("browser_lane must be true or false")
     cfg["preset"] = preset or ""
     return cfg
 
