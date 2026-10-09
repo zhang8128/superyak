@@ -560,3 +560,16 @@ def test_a_full_brief_and_a_full_read_stay_within_the_total(station):
     oldest = call_text(tools, {'room': room, 'oldest': True})
     assert len(oldest) <= 40000 and 'B' * 3999 + 'E' in oldest
     assert re.search(rf'more messages after these; `station_read room={room} start=m\d+` shows them\]$', oldest.rstrip())
+
+
+def test_a_room_view_from_an_old_station_has_no_brief_key_and_reads_fine(station):
+    """Rollout: the agent may deploy before the station, whose room view then carries no brief or brief_revision."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Promenade', andy, jenn, serenity)
+    fake.say(room, jenn, 'only words')
+    real = fake.view
+    fake.view = lambda r: {k: v for k, v in real(r).items() if k not in ('brief', 'brief_revision')}
+    assert 'brief' not in fake.view(fake.rooms[room])
+    for first in ({}, {'oldest': True}):
+        text = call_text(tools_for(fake), {'room': room, **first})
+        assert 'only words' in text and 'Room brief' not in text

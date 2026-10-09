@@ -431,3 +431,14 @@ def test_a_run_prompt_carries_the_room_brief_before_the_history(station, ship_co
     assert not any(line.startswith('=== Instructions') for line in prompt.splitlines())
     fake.brief(room, andy, '')
     assert 'Room brief' not in build_prompt(fake.view(fake.rooms[room]), mention, 'serenity', 'read')
+
+
+def test_a_run_prompt_from_a_view_with_no_brief_key_shows_none(station, ship_config):
+    """Rollout: an old station's room view has no brief or brief_revision key."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    view = {k: v for k, v in fake.view(fake.rooms[room]).items() if k not in ('brief', 'brief_revision')}
+    mention = {'message_id': asked['id'], 'room_id': room, 'author': andy, 'body': asked['body']}
+    prompt = build_prompt(view, mention, 'serenity', 'read')
+    assert 'Room brief' not in prompt and 'fix it' in prompt
