@@ -186,7 +186,7 @@ def main(argv=None):
             return 2
         args.config = args.home / 'station.json'
     if args.command == 'status':
-        from .claims import Unreadable, read_registry, registry_line, stale_claims
+        from .claims import Unreadable, read_json_quiet, read_registry, registry_line, stale_claims, wiring_gaps
         from . import station as station_module
         from .station import StationError, client_for, label
         try:
@@ -194,9 +194,23 @@ def main(argv=None):
         except Unreadable as error:
             print(registry_line(error))
             entries = []
-        for entry, why in stale_claims(entries):   # R15
+        stale = stale_claims(entries)
+        for entry, why in stale:   # R15
             print(f"Superyak: {entry['ship']}'s claim on {entry['root']} is stale: {why}. Both ships stay quiet there; "
                   f"dock {entry['ship']} again (with --project at the repository's new place) to refresh it.")
+        for entry in entries:
+            own = read_json_quiet(Path(entry['home']) / 'claim.json')
+            if own != entry:       # S6: a stop between the registry entry and claim.json
+                print(f"Superyak: {entry['ship']}'s registry entry has no matching {entry['home']}/claim.json, so "
+                      f"{entry['ship']} doesn't act anywhere and the machine ship stays quiet in {entry['root']}; "
+                      f"dock {entry['ship']} again to rewrite both.")
+                continue
+            if any(entry is gone for gone, _ in stale):
+                continue           # below: a full match whose wiring is gone (a re-clone where inodes are reused)
+            gaps = wiring_gaps(entry)
+            if gaps:
+                print(f"Superyak: {entry['ship']}'s claim on {entry['root']} matches, but {'; and '.join(gaps)}. Only "
+                      f"{entry['ship']}'s tools can act there and no hook speaks; dock {entry['ship']} again to rewire it.")
         config = station_module.load_config(args.config)
         client = client_for(config)
         me = client.me()

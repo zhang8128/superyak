@@ -428,3 +428,44 @@ def test_codex_profile_is_never_overwritten(world):
     code, out = world.dock()
     assert code == 2 and 'another home' in out and world.registry() == [], out
     assert profile.read_text().endswith('"/some/other/home/station.json"]\n')
+
+
+def test_status_names_a_claim_whose_wiring_is_missing(world, monkeypatch, capsys):
+    """Review 487c070b, finding 2: a fully matched claim whose settings.local.json lacks the ship's hook, or whose
+    info/exclude lacks the two lines (a re-clone where the file system reused the inode number, a hand edit), is
+    named by status. It reads files only: no git, and no marker inside .git."""
+    from superyak_agent import station as station_module
+    monkeypatch.setattr(station_module, 'load_config', lambda path: (_ for _ in ()).throw(SystemExit('stop')))
+
+    def status():
+        with pytest.raises(SystemExit):
+            cli.main(['status', '--home', str(claims.machine_home())])
+        return capsys.readouterr().out
+    assert world.dock()[0] == 0
+    assert status() == ''
+    settings = world.repo / '.claude' / 'settings.local.json'
+    wired = settings.read_text()
+    settings.write_text('{}')
+    out = status()
+    assert f"{SHIP}'s claim on {world.repo}" in out and 'settings.local.json' in out and "hook" in out, out
+    settings.write_text(wired)
+    exclude = world.repo / '.git' / 'info' / 'exclude'
+    exclude.write_text('# nothing\n')
+    out = status()
+    assert f"{SHIP}'s claim on {world.repo}" in out and 'info/exclude' in out, out
+    before = sorted(str(p) for p in (world.repo / '.git').rglob('*'))
+    status()
+    assert sorted(str(p) for p in (world.repo / '.git').rglob('*')) == before
+
+
+def test_status_names_a_registry_entry_without_its_claim_json(world, monkeypatch, capsys):
+    """S6: a stop between the registry entry and claim.json leaves an entry whose claim.json is missing or unequal;
+    the project ship doesn't act there and status names the mismatch."""
+    from superyak_agent import station as station_module
+    monkeypatch.setattr(station_module, 'load_config', lambda path: (_ for _ in ()).throw(SystemExit('stop')))
+    assert world.dock()[0] == 0
+    (world.home / 'claim.json').unlink()
+    with pytest.raises(SystemExit):
+        cli.main(['status', '--home', str(claims.machine_home())])
+    out = capsys.readouterr().out
+    assert f"{SHIP}'s registry entry" in out and 'claim.json' in out and f'dock {SHIP} again' in out, out

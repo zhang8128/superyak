@@ -366,8 +366,9 @@ measured by the D8 reviewer with an isolated HOME; M9 was reproduced for this re
   and touches no session file.
 - **R14.** A ship's kind comes from its home (S1). The machine ship acts only with no matching claim; a project ship
   only with a full match of its own claim.
-- **R15.** A partial match is a stale claim: both hooks print nothing, both MCP servers refuse naming it, `status`
-  names it, and a project re-dock refreshes it.
+- **R15.** On file systems that don't reuse inode numbers (APFS), a partial match is a stale claim: both hooks print
+  nothing, both MCP servers refuse naming it, `status` names it, and a project re-dock refreshes it. On ext4 a re-clone
+  at the claimed path can match fully (Known limits); `status` then names the claim's missing wiring instead.
 - **R16.** An unreadable registry (S6) gives the fixed SessionStart line, nothing at a prompt, MCP refusals naming the
   file, a dock refusal naming it, and a `status` line naming it before any config read or network call. A missing
   registry is unreadable only while some `~/.superyak/ships/*/claim.json` exists; a project home with only
@@ -458,8 +459,13 @@ directory):
 - `test_project_ship_hook_runs_only_in_its_project`: it runs in its project and its worktree, and is silent elsewhere,
   even when its settings are copied there.
 - `test_a_moved_or_recloned_repository_is_a_stale_claim`: a moved repository (inode kept, path changed) and a
-  re-clone at the same path (path kept, inode changed): both hooks print nothing, both MCP servers refuse naming the
+  re-clone at the same path (path kept, inode changed; the old checkout is renamed to a sibling so its inode number
+  stays taken, since ext4 reuses a deleted folder's): both hooks print nothing, both MCP servers refuse naming the
   claim, `status` names it, and a project re-dock refreshes it (R15).
+- `test_status_names_a_claim_whose_wiring_is_missing`: a fully matched claim whose `settings.local.json` lacks the
+  ship's hook, or whose `info/exclude` lacks the two lines, is named; nothing inside `.git` changes (R15, Known
+  limits).
+- `test_status_names_a_registry_entry_without_its_claim_json` (S6).
 - `test_project_root_reader_layouts`: a worktree through `commondir`, a relative `gitdir:`, a broken back-link, a
   submodule, a bare repository with worktrees and a `--separate-git-dir` checkout give the S6 answers; an unreadable
   `.git` means no repository; `git` is never called (a failing `git` is first on `PATH`) (R17).
@@ -559,7 +565,19 @@ backlog. These change on that day and must be settled first:
 - **teamd workers in a claimed project load that ship's hooks and local tools** (S8). Three layers keep them silent;
   a change to any of them needs this spec re-read.
 - **A branch that tracks `.claude/settings.local.json`** silently replaces the ignored file on checkout (git 2.39).
-  An upstream `.gitignore` negation can un-ignore it. `status` and dock re-run the hardened checks and say so.
+  An upstream `.gitignore` negation can un-ignore it. Dock re-runs the hardened checks (S5) and refuses. `status`
+  runs no git: it reads files only, and names a fully matched claim whose `settings.local.json` lacks the ship's hook
+  or whose `info/exclude` lacks the two lines, a registry entry whose `claim.json` is missing or unequal, a stale
+  claim, and an unreadable registry.
+- **A re-clone can match fully on ext4.** ext4 reuses a deleted folder's inode number (20 of 20 tries on the Pi), so a
+  re-clone at the claimed path keeps both the root and `(dev, ino)` and the claim matches fully; APFS doesn't reuse
+  them. It fails safe: only the claiming ship's tools act there, no hook speaks (the new clone has no
+  `settings.local.json`), and no key is exposed. `status` names the missing hook and exclude lines, and docking the
+  project ship again rewires it. Nothing is written inside `.git` to tell clones apart.
+- **The local collision guard sees only homes under `~/.superyak`.** A ship docked from another home (Odo's, on the
+  Pi) is invisible to it, so `--ship odo --project …` passes it, and the station would treat the docking as a re-dock
+  of odo and revoke odo's keys when it is approved. The lasting fix is on the station: `make station-pending` flags a
+  docking for an existing ship as a RE-DOCK that revokes its keys (Rio Grande's own peer branch).
 - **The stand-down lives in the checkout.** Checking out an older branch of the superyak checkout removes it until
   main is back; R10 checks it only at dock time.
 - **A submodule, a bare repository and a `--separate-git-dir` checkout are "no repository"**, so the machine ship

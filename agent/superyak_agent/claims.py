@@ -368,3 +368,37 @@ def refusal(home, project_dir):
     if acts == 'elsewhere':
         return f"{ship} acts only in {detail['root']}."
     return f'{ship} has no claim in {registry_path()}, so its station tools refuse. Dock it again.'
+
+
+EXCLUDE_LINES = ('/.claude/settings.local.json', '/.claude/.settings.local.json.*')
+
+
+def wiring_gaps(entry):
+    """What a fully matched claim's project is missing, read from files only (no git, nothing written): the ship's
+    hook in <root>/.claude/settings.local.json, and the two exclude lines in <common>/info/exclude. A re-clone where
+    the file system reused the inode number (ext4 does) matches fully but has neither (review 487c070b)."""
+    gaps = []
+    root = Path(entry['root'])
+    config = str(Path(entry['home']) / 'station.json')
+    settings = root / '.claude' / 'settings.local.json'
+    commands = []
+    try:
+        data = json.loads(settings.read_text())
+        events = data.get('hooks') if isinstance(data, dict) else None
+        for entries in (events or {}).values() if isinstance(events, dict) else []:
+            for item in entries if isinstance(entries, list) else []:
+                hooks = item.get('hooks') if isinstance(item, dict) else None
+                commands += [h.get('command') for h in hooks or [] if isinstance(h, dict) and isinstance(h.get('command'), str)]
+    except (OSError, ValueError):
+        pass
+    if not any('run_agent.py' in c and ' hook ' in f' {c} ' and config in c for c in commands):
+        gaps.append(f"{settings} has no hook for {entry['ship']}")
+    repo = project_root(root)
+    try:
+        lines = (repo.common / 'info' / 'exclude').read_text().splitlines() if repo is not None else []
+    except OSError:
+        lines = []
+    if not all(line in lines for line in EXCLUDE_LINES):
+        where = repo.common / 'info' / 'exclude' if repo is not None else root / '.git' / 'info' / 'exclude'
+        gaps.append(f'{where} lacks the lines {", ".join(EXCLUDE_LINES)}')
+    return gaps

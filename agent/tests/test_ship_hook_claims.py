@@ -111,7 +111,9 @@ def test_a_moved_or_recloned_repository_is_a_stale_claim(ships, monkeypatch, tmp
         ships.repo.rename(root)
     else:
         root = ships.repo
-        shutil.rmtree(root)
+        # The old checkout is renamed to a sibling, not deleted, so its inode number stays taken: ext4 reuses a deleted
+        # folder's number (20 of 20 tries on the Pi), and a re-clone would then match fully (Known limits).
+        root.rename(root.parent / 'hyper-bricks-old')
         make_repo(tmp_path / 'hyper-bricks')
     for config in (ships.machine_config, ships.project_config):
         assert ships.run(config, monkeypatch, project_dir=root) == ('', [])

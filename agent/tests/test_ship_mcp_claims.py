@@ -106,7 +106,9 @@ def test_both_servers_refuse_at_a_stale_claim(ships, monkeypatch, tmp_path, how)
         ships.repo.rename(root)
     else:
         root = ships.repo
-        shutil.rmtree(root)
+        # The old checkout is renamed to a sibling, not deleted, so its inode number stays taken: ext4 reuses a deleted
+        # folder's number (20 of 20 tries on the Pi), and a re-clone would then match fully (Known limits).
+        root.rename(root.parent / 'hyper-bricks-old')
         make_repo(tmp_path / 'hyper-bricks')
     monkeypatch.setenv('CLAUDE_PROJECT_DIR', str(root))
     for config, key in ((ships.machine_config, 'serenity-key'), (ships.project_config, 'bricks-key')):
