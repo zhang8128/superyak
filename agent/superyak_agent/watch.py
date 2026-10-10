@@ -98,23 +98,24 @@ class Watcher:
         mid, author = mention['message_id'], mention['author']
         if mid in self.state['answered'] or author['id'] == self.me['id']:
             return True, 0
-        deferred = any(d['message_id'] == mid for d in self.state['deferred'])  # a re-ask spends no ship budget (R37)
-        if author['kind'] == 'ship' and mid not in self.state['replies'] and not deferred and not self._ship_budget(mention):
+        listed = any(d['message_id'] == mid for d in self.state['deferred'])
+        reply = self.state['replies'].get(mid)  # a reply whose post failed is posted as it was, never re-run
+        # R37: a new mention from a ship spends its budget here; a listed one only once the station has answered (below).
+        if author['kind'] == 'ship' and reply is None and not listed and not self._ship_budget(mention):
             return True, self._pause_note(mention)
+        room = None
         try:
-            room = self.client.room(mention['room_id'])
-            if any(m['author_id'] == self.me['id'] and m.get('client_message_id') == f'reply-{mid}' for m in room['messages']):
-                self._finish(mid)
-                self._remember(mid)
-                self.state['replies'].pop(mid, None)
-                self.save()
-                return True, 0
-            reply = self.state['replies'].get(mid)  # a reply whose post failed is posted as it was, never re-run
+            # A listed mention asks for its ticket first and fetches its room only to run (S5), so a mention still
+            # deferred costs one request a cycle.
+            if reply is not None or not listed:
+                room = self.client.room(mention['room_id'])
+                if self._posted(room, mid):
+                    return True, 0
             if reply is None:
                 try:
                     # The station decides the mode now; no ticket, no run. R10: with the deferred list full, a new
                     # mention asks for today's ticket, never a deferral the watcher couldn't keep.
-                    ticket = self.client.ticket(mid, deferred or len(self.state['deferred']) < DEFERRED_MAX)
+                    ticket = self.client.ticket(mid, listed or len(self.state['deferred']) < DEFERRED_MAX)
                 except StationError as error:
                     if error.status == 422:  # R20: a claim or a notice is never answered: done, without a word
                         self.state['failures'].pop(mid, None)
@@ -130,13 +131,26 @@ class Watcher:
                 if decision in ('defer', 'answered'):
                     self.state['failures'].pop(mid, None)
                     if decision == 'answered':
+                        self._finish(mid)  # an earlier run that failed left its ticket running
                         self._remember(mid)  # its session answered it with reply_to: nothing to post
-                    elif not deferred:
+                    elif not listed:
                         self.state['deferred'].append({k: mention[k] for k in ('message_id', 'room_id', 'author', 'seq')})
                     self.save()
                     return True, 0
+                # R37: only the station's answer spares a re-ask: a run resolving a deferral it held carries
+                # `first_deferred`, and a ticket it already issued us was charged when issued. Anything else is new.
+                held = 'first_deferred' in ticket or self.state['tickets'].get(mid) == ticket['id']
                 self.state['tickets'][mid] = ticket['id']
                 self.save()
+                if listed and author['kind'] == 'ship' and not held and not self._ship_budget(mention):
+                    self._finish(mid)
+                    self._remember(mid)
+                    self.save()
+                    return True, self._pause_note(mention)
+                if room is None:
+                    room = self.client.room(mention['room_id'])
+                    if self._posted(room, mid):
+                        return True, 0
                 mode = 'read' if self.resident or ticket.get('mode') != 'build' else 'build'  # never above the ticket
                 result = self.runner.run(mode, build_prompt(room, mention, self.config['ship'], mode), mid,
                                            instructions=ticket.get('blocks') or '')
@@ -156,6 +170,16 @@ class Watcher:
             reply = FALLBACK
         self.state['failures'].pop(mid, None)
         return True, self._reply(mention['room_id'], mid, reply)
+
+    def _posted(self, room, message_id):
+        """True, and the mention done, when this ship's reply to it is already in the room."""
+        if not any(m['author_id'] == self.me['id'] and m.get('client_message_id') == f'reply-{message_id}' for m in room['messages']):
+            return False
+        self._finish(message_id)
+        self._remember(message_id)
+        self.state['replies'].pop(message_id, None)
+        self.save()
+        return True
 
     def _reply(self, room_id, message_id, body):
         body = redact(body)[:20000]

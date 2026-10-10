@@ -186,3 +186,114 @@ def test_a_labelled_reply_names_the_mention_it_answers(station, ship_config, tmp
     watcher(fake, ship_config, tmp_path / 'serenity', FakeRunner()).cycle()
     reply = next(m for m in fake.rooms[room]['messages'] if m['client_message_id'] == f'reply-{asked["id"]}')
     assert fake.sources.get(reply['id']) and fake.replies.get(reply['id']) == asked['id']  # labelled, and answering
+
+
+def _listed(w, fake, *messages):
+    """Put mentions on the watcher's deferred list from its state alone, past the mention cursor, as a restart or a
+    hand-edited state file could: the station holds no deferral for them."""
+    rows = {r['message_id']: r for r in w.client.mentions(0)}
+    w.state['mention_seq'] = max(r['seq'] for r in rows.values())
+    w.state['deferred'] = [{k: rows[m['id']][k] for k in ('message_id', 'room_id', 'author', 'seq')} for m in messages]
+    w.save()
+
+
+def test_a_reask_without_a_station_deferral_is_charged(station, ship_config, tmp_path):
+    """R37 (whole-branch review 137f0a38): only the station's answer spares the five-an-hour ship budget. A listed
+    mention whose run comes back without `first_deferred` is charged as a new mention, so state alone can't bypass
+    the budget; the over-budget ones get the pause note and their tickets are finished, never left running."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = [fake.say(room, defiant, f'@serenity ship question {n}') for n in range(8)]
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, *asked)
+    w.cycle()
+    assert len(runner.calls) == 5 and sum('Pausing my replies' in b for b in bodies(fake, room)) == 1
+    assert all(t['status'] == 'finished' for t in fake.tickets.values() if t['message_id'] in {m['id'] for m in asked[5:]})
+    assert w.state['deferred'] == []
+
+
+def test_a_reask_the_station_held_spends_no_budget(station, ship_config, tmp_path):
+    """R37: a run that carries the station's `first_deferred` resolves a deferral the station held, so it is not
+    charged, however many there are."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = [fake.say(room, defiant, f'@serenity ship question {n}') for n in range(8)]
+    for n, m in enumerate(asked):
+        fake.decide[m['id']] = {'id': f'held-{n}', 'mode': 'read', 'basis': 'none', 'footer': '', 'blocks': '',
+                                'status': 'running', 'decision': 'run', 'first_deferred': 1.0}
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, *asked)
+    w.cycle()
+    assert len(runner.calls) == 8 and not any('Pausing my replies' in b for b in bodies(fake, room))
+
+
+def test_a_reask_asks_for_the_ticket_first_and_fetches_the_room_only_to_run(station, ship_config, tmp_path):
+    """Review minor 2: a listed mention is re-asked without fetching its room; the room is fetched only for a run."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, jenn, '@serenity a question')
+    defer(fake, asked)
+    gets = []
+
+    def counting(method, url, headers, data):
+        if method == 'GET' and url.endswith(f'/api/chats/{room}'):
+            gets.append(url)
+        return fake(method, url, headers, data)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.client = type(w.client)('http://station.test', 'serenity-key', transport=counting)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    gets.clear()
+    for _ in range(3):
+        assert w.cycle() == 0
+    assert gets == []
+    del fake.decide[asked['id']]
+    assert w.cycle() == 1 and len(gets) == 1 and [mid for _, mid, _ in runner.calls] == [asked['id']]
+
+
+def test_answered_finishes_an_earlier_ticket(station, ship_config, tmp_path):
+    """Review minor 3: a run that failed leaves its ticket running; when the station then says `answered` (a session
+    replied with reply_to), the watcher finishes that ticket and forgets it, so no phantom live run stays."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, jenn, '@serenity a question')
+    runner = FakeRunner(error=RuntimeError('the run broke'))
+    w = watcher(fake, ship_config, tmp_path, runner)
+    assert w.cycle() == 0 and asked['id'] in w.state['tickets']
+    earlier = w.state['tickets'][asked['id']]
+    assert fake.tickets[earlier]['status'] == 'running'
+    fake.decide[asked['id']] = {'decision': 'answered', 'message_id': asked['id']}
+    w.cycle()
+    assert fake.tickets[earlier]['status'] == 'finished' and asked['id'] not in w.state['tickets']
+
+
+def test_a_retry_of_a_held_reask_is_not_charged_again(station, ship_config, tmp_path):
+    """R37: the station drops its deferral row when it issues the run's ticket, so a retry after a failed run gets the
+    same running ticket back without `first_deferred`. That ticket was spared when the station issued it, so the
+    retry is not charged as a new mention."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = fake.say(room, defiant, '@serenity a ship question')
+    issued = {'id': 'held-1', 'mode': 'read', 'basis': 'none', 'footer': '', 'blocks': '', 'status': 'running',
+              'decision': 'run'}
+    fake.decide[asked['id']] = dict(issued, first_deferred=1.0)
+    runner = FakeRunner(error=RuntimeError('the run broke'))
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    w.state['ship_exchanges'][f'{room}:{defiant["id"]}'] = [w.clock()] * 5  # the hour's budget is spent
+    w.cycle()
+    assert w.state['tickets'] == {asked['id']: 'held-1'}
+    fake.decide[asked['id']] = issued
+    runner.error = None
+    w.cycle()
+    assert len(runner.calls) == 2 and not any('Pausing my replies' in b for b in bodies(fake, room))
+    assert f'read answer to {asked["id"]}' in '\n'.join(bodies(fake, room))
