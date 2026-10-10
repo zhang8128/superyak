@@ -297,3 +297,26 @@ def test_a_retry_of_a_held_reask_is_not_charged_again(station, ship_config, tmp_
     w.cycle()
     assert len(runner.calls) == 2 and not any('Pausing my replies' in b for b in bodies(fake, room))
     assert f'read answer to {asked["id"]}' in '\n'.join(bodies(fake, room))
+
+
+def test_a_retry_with_a_different_ticket_id_is_charged(station, ship_config, tmp_path):
+    """R37 (Rio Grande, 7d9dad84): only the exact ticket id the station issued for this same mention spares a retry.
+    A `run` under a new ticket id, without `first_deferred`, is a new decision and is charged like a new mention."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = fake.say(room, defiant, '@serenity a ship question')
+    issued = {'id': 'held-1', 'mode': 'read', 'basis': 'none', 'footer': '', 'blocks': '', 'status': 'running',
+              'decision': 'run'}
+    fake.decide[asked['id']] = dict(issued, first_deferred=1.0)
+    runner = FakeRunner(error=RuntimeError('the run broke'))
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    w.state['ship_exchanges'][f'{room}:{defiant["id"]}'] = [w.clock()] * 5  # the hour's budget is spent
+    w.cycle()
+    assert w.state['tickets'] == {asked['id']: 'held-1'}
+    fake.decide[asked['id']] = dict(issued, id='other-2')  # a different ticket, no first_deferred
+    runner.error = None
+    w.cycle()
+    assert len(runner.calls) == 1 and any('Pausing my replies' in b for b in bodies(fake, room))
