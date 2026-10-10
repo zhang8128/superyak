@@ -233,3 +233,66 @@ def test_no_prompt_path_or_branch_reaches_the_table(env):
     stored = repr([tuple(r.values()) for r in got])
     for needle in ('lane-mac-leftovers', '/Users', 'notes', 'summarise'):
         assert needle not in stored
+
+
+def watch(client, **body):
+    return client.post('/api/ships/me/watch', json=body)
+
+
+def test_live_and_on_watch_are_computed_from_times(env):
+    """R5: on watch is watch_until > now with no liveness check, so a session busy in long tool calls stays on watch
+    for its declared minutes, while `live` lapses after 120 s of silence."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'])
+    got = watch(ship_client(app, key, **HEADERS), minutes=20, writable=True).json()
+    assert got['on_watch'] is True and got['watch_until'] == clock[0] + 1200
+    session = lambda: clients[0].get('/api/ships/directory').json()[0]['sessions'][0]
+    clock[0] += 121
+    assert session()['live'] is False and session()['on_watch'] is True
+    clock[0] += 1200 - 121
+    assert session()['on_watch'] is False
+
+
+def test_the_watch_renews_on_each_presence_write(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'])
+    client = ship_client(app, key, **HEADERS)
+    watch(client, minutes=20, writable=True)
+    clock[0] += 900
+    client.get('/api/me')
+    assert rows(store, ship['id'])[0]['watch_until'] == clock[0] + 1200
+
+
+def test_only_sessions_can_watch_and_ended_or_lapsed_watches_stay_ended(env):
+    """R6: no session header, no watch; a person can't call the route; a write after watch(0) can't bring the watch
+    back, and a lease that ran out stays ended until the session declares again."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'])
+    assert watch(ship_client(app, key), minutes=20).status_code == 400
+    assert clients[0].post('/api/ships/me/watch', json={'minutes': 20}).status_code == 403
+    client = ship_client(app, key, **HEADERS)
+    watch(client, minutes=20, writable=True)
+    assert watch(client, minutes=0).json()['on_watch'] is False
+    clock[0] += 31
+    client.get('/api/me')
+    assert rows(store, ship['id'])[0]['watch_until'] is None
+    watch(client, minutes=1, writable=True)
+    clock[0] += 61
+    client.get('/api/me')
+    assert rows(store, ship['id'])[0]['watch_until'] < clock[0]
+
+
+def test_watch_arguments_are_checked(env):
+    """S4: minutes 0-120 (default 20), writable a boolean, a label of 1-40 characters from S2's set. 40 characters
+    can never hold a 43-character ship key, so the label needs no separate key check."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'])
+    client = ship_client(app, key, **HEADERS)
+    assert watch(client).json()['watch_until'] == clock[0] + 1200
+    for bad in ({'minutes': 121}, {'minutes': -1}, {'minutes': 1.5}, {'minutes': True}, {'writable': 'yes'},
+                {'label': 'a\nb'}, {'label': 'x' * 41}, {'label': ''}):
+        assert watch(client, **bad).status_code == 400, bad
+    assert watch(client, minutes=5, label='lead terminal').json()['label'] == 'lead terminal'

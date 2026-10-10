@@ -261,6 +261,12 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = ship_member(request)['id'], await body(request)
         return store.advance(who, data.get('cursor'), data.get('to'))
 
+    @app.post('/api/ships/me/watch')
+    async def ship_watch(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        return store.station_watch(who, parse_presence(request.headers), data.get('minutes'),
+                                   data.get('writable', False), data.get('label'))
+
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
         return store.finish_ticket(ship_member(request)['id'], key, app.state.federation.identity.peer_id)

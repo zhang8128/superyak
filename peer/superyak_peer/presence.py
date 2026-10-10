@@ -71,6 +71,32 @@ class Presence:
         return db.execute('SELECT 1 FROM presence WHERE ship_id=? AND name=? AND watch_until>?',
                           (ship_id, name, self.clock())).fetchone() is not None
 
+    def station_watch(self, ship_id, presence, minutes=None, writable=False, label=None):
+        """S4: declare a watch (1-120 minutes, default 20), declare again to change it, or end it with 0. Only a named
+        session can watch (R6): the header names it, and a run sends none."""
+        if presence is None:
+            raise Problem(400, "Watching needs this session's name in the x-superyak-session header")
+        minutes = WATCH_DEFAULT_MINUTES if minutes is None else minutes
+        if type(minutes) is not int or not 0 <= minutes <= WATCH_MAX_MINUTES:
+            raise Problem(400, f'minutes is a whole number from 0 to {WATCH_MAX_MINUTES}')
+        if type(writable) is not bool:
+            raise Problem(400, 'writable is true or false')
+        if label is not None and (not isinstance(label, str) or not LABEL.fullmatch(label)):
+            raise Problem(400, 'A label is 1-40 letters, digits, spaces, dots, colons, dashes or underscores')
+        with self.transaction() as db:
+            now, name = self.clock(), presence['name']
+            if db.execute('SELECT 1 FROM presence WHERE ship_id=? AND name=?', (ship_id, name)).fetchone() is None:
+                self._record_presence(db, ship_id, presence)
+            if minutes == 0:
+                db.execute('UPDATE presence SET watch_minutes=NULL, watch_until=NULL, watch_writable=0 WHERE ship_id=? AND name=?',
+                           (ship_id, name))
+            else:
+                db.execute('UPDATE presence SET watch_minutes=?, watch_writable=?, watch_until=?, label=COALESCE(?, label) '
+                           'WHERE ship_id=? AND name=?', (minutes, int(writable), now + minutes * 60, label, ship_id, name))
+            row = db.execute('SELECT * FROM presence WHERE ship_id=? AND name=?', (ship_id, name)).fetchone()
+            return {'name': name, 'on_watch': (row['watch_until'] or 0) > now, 'watch_until': row['watch_until'],
+                    'writable': bool(row['watch_writable']), 'label': row['label']}
+
     def directory(self, actor):
         """S7: the caller's own ships and every ship sharing a local room with it; everything to the ship itself, its
         owner and an admin; three ship-level fields to co-members, last_seen rounded down to 15 minutes."""
