@@ -4,7 +4,7 @@ from .common import Problem, text, ids, uid, require
 class Spaces:
     def _known_users(self, db, members):
         for key in members:
-            require(db.execute('SELECT id FROM users WHERE id=?', (key,)).fetchone())
+            require(db.execute("SELECT id FROM users WHERE id=? AND kind!='system'", (key,)).fetchone())  # R34
 
     def contacts(self, actor):
         # Accounts on this explicitly provisioned host are known local contacts.

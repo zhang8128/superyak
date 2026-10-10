@@ -119,3 +119,19 @@ def test_every_users_list_and_count_leaves_out_the_system_author(env, tmp_path, 
     password.write_text('an-explicit-owner-password\n')
     main(['init', '--data-dir', str(fresh), '--username', 'owner', '--name', 'Owner', '--password-file', str(password)])
     assert Store(fresh).login('owner', 'an-explicit-owner-password', 'local')['user']['is_admin'] == 1
+
+
+def test_the_system_author_is_never_a_space_member_or_a_share_audience(env):
+    """R34 (the grep after Task 4): a space's members and a layer's audience never take the system author, so it never
+    shows up as a person in a space or as someone a release is shared with."""
+    app, clients, users, clock, store, ship, serenity, room, system = setup(env)
+    with pytest.raises(Problem) as created:
+        store.create_space(users[0]['id'], 'Circle', 'care-circle', [system])
+    assert created.value.status == 404
+    space = store.create_space(users[0]['id'], 'Circle', 'care-circle', [])
+    with pytest.raises(Problem) as added:
+        store.change_space_member(users[0]['id'], space['id'], system)
+    assert added.value.status == 404
+    with store.transaction() as db, pytest.raises(Problem) as audience:
+        store._known_contacts(db, [system])
+    assert audience.value.status == 404

@@ -17,7 +17,7 @@ INSERT OR IGNORE INTO federation_cursor VALUES(1,0);
 class PeerStore:
     def _known_contacts(self, db, members):
         for key in members:
-            if db.execute('SELECT 1 FROM users WHERE id=?', (key,)).fetchone():
+            if db.execute("SELECT 1 FROM users WHERE id=? AND kind!='system'", (key,)).fetchone():  # R34: never an audience
                 continue
             require(db.execute('SELECT 1 FROM remote_contacts JOIN peers USING(peer_id) WHERE id=? AND paired=1', (key,)).fetchone())
 
