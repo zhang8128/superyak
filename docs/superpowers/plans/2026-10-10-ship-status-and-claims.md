@@ -53,7 +53,9 @@ numbering. Read the spec's S1–S11 and R1–R33 before Task 1. Line references 
     mutated run. Python can reuse stale bytecode when a file's size and modification second are unchanged.
 - **Headers** (spec S1). The names are lowercase:
   - `x-superyak-session`: a cursor name, `[A-Za-z0-9._:-]{1,100}`, never `default`;
-  - `x-superyak-client`: `hook/<version>` or `mcp/<version>`, where version is `[A-Za-z0-9._-]{1,40}`;
+  - `x-superyak-client`: `hook/<version>` or `mcp/<version>`, where version is exactly `client_version()`'s output:
+    12 lowercase hex digits, or `unknown`. Anything else is stored as `unknown`, so a branch name, a path or prompt
+    text can't ride in on this header (R4; tightened at the step 2 gate, cbd8774e);
   - `x-superyak-mode`: `write` or `plan`, sent by the hook only.
   
   A missing or malformed header is ignored, never a 400.
@@ -244,7 +246,7 @@ Create `peer/tests/test_presence.py`:
 the directory. The first test is the guard (R2): requests behave the same with and without the presence headers."""
 from fastapi.testclient import TestClient
 
-HEADERS = {'x-superyak-session': 'session-one', 'x-superyak-client': 'hook/abc123', 'x-superyak-mode': 'write'}
+HEADERS = {'x-superyak-session': 'session-one', 'x-superyak-client': 'hook/0123456789ab', 'x-superyak-mode': 'write'}
 
 
 def ship_client(app, key, **headers):
@@ -396,8 +398,8 @@ def test_presence_stores_no_text_paths_or_raw_mode(env):
 
 
 def test_parse_presence_reads_only_well_formed_headers():
-    assert parse_presence({'x-superyak-session': 's1', 'x-superyak-client': 'mcp/v1.2', 'x-superyak-mode': 'write'}) == {
-        'name': 's1', 'client': 'mcp/v1.2', 'mode': 'write'}
+    assert parse_presence({'x-superyak-session': 's1', 'x-superyak-client': 'mcp/0123456789ab', 'x-superyak-mode': 'write'}) == {
+        'name': 's1', 'client': 'mcp/0123456789ab', 'mode': 'write'}
     assert parse_presence({}) is None and parse_presence({'x-superyak-session': 'default'}) is None
 
 
@@ -444,7 +446,7 @@ def test_the_directory_shows_each_caller_what_s7_allows(env):
     mine = owner_view['serenity']
     assert mine['machine'] == 'test-host' and mine['writable_on_watch'] is True and mine['live_runs'] == 0
     assert [(s['name'], s['mode'], s['on_watch'], s['client']) for s in mine['sessions']] == [
-        ('session-one', 'plan', True, 'hook/abc123')]
+        ('session-one', 'plan', True, 'hook/0123456789ab')]
     co = {s['username']: s for s in ship_client(app, rio_key).get('/api/ships/directory').json()}
     assert set(co['serenity']) == {'id', 'username', 'name', 'owner_name', 'writable_on_watch', 'live_runs', 'last_seen'}
     assert co['serenity']['last_seen'] == 999900.0 and co['serenity']['writable_on_watch'] is True  # 1000420 rounded down
@@ -475,7 +477,7 @@ WATCH_DEFAULT_MINUTES = 20
 WATCH_MAX_MINUTES = 120
 ROUND_SECONDS = 900
 SESSION = re.compile(r'[A-Za-z0-9._:-]{1,100}')
-CLIENT = re.compile(r'(hook|mcp)/[A-Za-z0-9._-]{1,40}')
+CLIENT = re.compile(r'(hook|mcp)/(?:[0-9a-f]{12}|unknown)')
 LABEL = re.compile(r'[A-Za-z0-9 ._:-]{1,40}')
 
 PRESENCE_SCHEMA = '''
@@ -652,6 +654,52 @@ git commit -m "Ship status, step 2: presence written inside the key check, and t
 ```
 
 **Review gate:** post the step 2 diff (Tasks 1–2) in the room for Rio Grande, and wait for the review before Task 3.
+
+---
+
+### Gate notes from Rio Grande (cbd8774e), recorded at the step 2 gate
+
+Spec revision 5 (8afe2606) numbers these as R34–R42: R34 → Task 4; R35 and R36 → Tasks 6 and 9; R37 and R38 → Task 10;
+R39 → Tasks 5 and 10; R40 → Task 11; R41 → Tasks 8 and 14; R42 → Task 2 (done at this gate).
+
+**Added to Task 2, each with its own test** (in `peer/tests/test_presence.py`):
+- `test_a_refused_key_writes_no_presence`: a wrong, malformed or revoked key is 401 and writes no row.
+- `test_calls_racing_inside_the_window_write_once`: eight calls racing inside one window write once, and none fails.
+  It holds because `ship_for_key` runs under `BEGIN IMMEDIATE` behind the dispatch gate.
+- `test_no_prompt_path_or_branch_reaches_the_table`: a path, a branch name or prompt text through the client header,
+  or a label header the station doesn't read, never lands. This test was red until the client grammar was tightened
+  (Global Constraints).
+- Task 1's guard has two more mutations that must turn it red: a header that changes the ticket response, and a
+  header that changes the unread response.
+
+**Required in later tasks (not built in step 2):**
+- **Task 10, the re-ask budget.**
+  - A deferred mention's re-ask is exempt from the five-an-hour ship budget only when the STATION says it holds a
+    deferral row for that mention (its `defer` decision for that message id), never because the watcher's own
+    state lists it.
+  - Test `test_a_reask_without_a_station_deferral_is_charged`: the watcher's state lists the mention as deferred,
+    the station has no deferral row, and the budget is charged.
+- **Task 10, resident DM replies.**
+  - A resident DM reply is recognised by its mention having no `seq`. Every mention from `/api/mentions` carries
+    one, and the deferred list keeps it.
+  - Test `test_a_room_mention_never_passes_as_a_resident_dm_reply`: a room mention re-asked from the deferred list
+    in read mode still gets `READ_ONLY_LINE`.
+- **Tasks 6 and 9, old clients.**
+  - With no watch and no deferral, the unread and post responses have exactly today's keys (`on_watch` and
+    `deferred_here` absent).
+  - Test `test_an_old_client_sees_todays_unread_and_post_responses`, plus an agent test that a response carrying
+    the new keys changes nothing for code that ignores them.
+- **Task 4, users.** Every place that counts or lists users, or looks one up by username for a person's or ship's
+  role, leaves out kind `system`. The grep at 55128a3 (`grep -n "FROM users" peer/superyak_peer/*.py`) finds,
+  beyond `peer_store.py:26` `contacts` and `__main__.py:291` `init`, which are already listed:
+  - `spaces.py:12`: a second `contacts()`, which lists every user;
+  - `ships.py:191`: `_operator(db, username)`, the docking approver's person lookup, must require kind `person`;
+  - `ships.py:171`: `_existing_name`, the docking name check, must count the system author as a taken name;
+  - `__main__.py:279`: the CLI's username lookup must refuse the system author.
+  
+  `auth.py:193` (people only), the directory and `ships.py:350` (ships only) already filter by kind. Test
+  `test_every_users_list_and_count_leaves_out_the_system_author` covers each.
+
 
 ---
 
