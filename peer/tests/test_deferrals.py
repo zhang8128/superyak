@@ -318,6 +318,20 @@ def test_deferred_mentions_reach_the_session_with_their_verified_author_and_woul
     assert 'on_watch' not in session.post('/api/ships/me/unread', json={'cursor': 'other'}).json()  # R35: absent when not on watch
 
 
+def test_only_a_writable_watch_gets_the_on_watch_line(env):
+    """R26 as amended (review 137f0a38, minor 4): the line asks the session to answer its ship's mentions, which only
+    a writable watch holds back from the watcher, so a read-only watch's unread carries no on_watch, a mention in it
+    or not; declaring it writable brings the key back."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session, writable=False)
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert [m['mentions_me'] for m in got['messages'] if m['message_id'] == asked['id']] == [True]
+    assert 'on_watch' not in got
+    on_watch(session, writable=True)
+    assert session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json().get('on_watch') is True
+
+
 def test_a_post_without_reply_to_lists_the_rooms_deferred_mentions(env):
     """R27, station side."""
     app, clients, users, clock, store, ship, session, watcher, room = setup(env)

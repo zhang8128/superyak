@@ -70,8 +70,8 @@ class Presence:
         return db.execute('SELECT 1 FROM presence WHERE ship_id=? AND watch_writable=1 AND watch_until>?',
                           (ship_id, self.clock())).fetchone() is not None
 
-    def _session_on_watch(self, db, ship_id, name):
-        return db.execute('SELECT 1 FROM presence WHERE ship_id=? AND name=? AND watch_until>?',
+    def _session_on_writable_watch(self, db, ship_id, name):
+        return db.execute('SELECT 1 FROM presence WHERE ship_id=? AND name=? AND watch_writable=1 AND watch_until>?',
                           (ship_id, name, self.clock())).fetchone() is not None
 
     def station_watch(self, ship_id, presence, minutes=None, writable=False, label=None):

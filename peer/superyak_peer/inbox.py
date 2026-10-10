@@ -128,7 +128,7 @@ class Inbox:
                 if mentioned and db.execute('SELECT 1 FROM deferrals WHERE ship_id=? AND message_id=?', (actor, found['id'])).fetchone():
                     item['deferred'] = {'author_verified': item['author'], 'would_be': 'read'}  # R26
                 messages.append(item)
-            on_watch = self._session_on_watch(db, actor, name)
+            on_watch = self._session_on_writable_watch(db, actor, name)  # R26: the line asks for answers; only a writable watch takes them
         got = {'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': messages}
         if on_watch:  # R35: present only when it has something to say, so an old client sees today's keys
             got['on_watch'] = True

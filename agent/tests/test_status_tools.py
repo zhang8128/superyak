@@ -80,8 +80,8 @@ def test_deferred_mentions_show_their_mark_in_the_hook_and_station_unread(statio
 
 
 def test_the_on_watch_line_shows_for_any_mention_before_it_is_deferred(station, ship_config, tmp_path, monkeypatch):
-    """R26 (96d55368, edit 3): on watch, a block holding a mention with no deferred mark yet still gets the line; a
-    block with no mention, or a session off watch, gets none."""
+    """R26 (96d55368, edit 3): on a writable watch, a block holding a mention with no deferred mark yet still gets the
+    line; a block with no mention, a session off watch, or one on a read-only watch, gets none."""
     fake, andy, jenn, serenity = station
     config_path = write_config(ship_config, tmp_path)
     monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 's2')
@@ -98,6 +98,10 @@ def test_the_on_watch_line_shows_for_any_mention_before_it_is_deferred(station, 
     assert ON_WATCH_LINE in shown and DEFERRED_MARK not in shown and ON_WATCH_LINE in text
     fake.watches.clear()
     fake.say(room, jenn, '@serenity off watch now')
+    assert ON_WATCH_LINE not in run() and ON_WATCH_LINE not in call(tools, 'station_unread')[0]
+    for key in ((serenity['id'], 's1'), (serenity['id'], 's2')):  # R26 as amended (137f0a38, minor 4): writable only
+        fake.watches[key] = {'minutes': 20, 'writable': False, 'label': None}
+    fake.say(room, jenn, '@serenity on a read-only watch')
     assert ON_WATCH_LINE not in run() and ON_WATCH_LINE not in call(tools, 'station_unread')[0]
 
 

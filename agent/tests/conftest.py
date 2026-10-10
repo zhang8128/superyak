@@ -175,7 +175,7 @@ class FakeStation:
                     if m['author_id'] != me and int(m['id'][1:]) > position]
             rows.sort(key=lambda row: row[0])
             return ok({'cursor': name, 'position': position, 'more': len(rows) > limit,
-                       **({'on_watch': True} if (me, name) in self.watches else {}), 'messages': [  # R35: absent unless true
+                       **({'on_watch': True} if self.watches.get((me, name), {}).get('writable') else {}), 'messages': [  # R26, R35
                 {'event_id': n, 'message_id': m['id'], 'room_id': r['id'], 'room_title': r['title'], 'body': m['body'], 'created': m['created'],
                  'author': self.users[m['author_id']], 'mentions_me': any(x['message_id'] == m['id'] and x['user_id'] == me for x in self.mention_rows),
                  'reply_to': self.replies.get(m['id']), 'source': self.source_of(m),
