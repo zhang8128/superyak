@@ -79,6 +79,27 @@ def test_a_session_without_a_real_name_sends_no_session_header(station, ship_con
     assert {r['presence'].get('x-superyak-session') for r in fake.requests[before:]} == {'codex-1'}
 
 
+def test_a_cursor_the_headers_refuse_never_replaces_the_session_name(station, ship_config, tmp_path, monkeypatch):
+    """S1, R28 (review 137f0a38, minor 5): the MCP server remembers a cursor only when it is a real session name. A
+    `default` or a malformed cursor neither drops the session's header nor replaces the name it had: the calls after
+    it go on naming the session by CLAUDE_CODE_SESSION_ID, or by the real name passed before."""
+    fake, andy, jenn, serenity = station
+    fake.room('Ops', andy, serenity)
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 's1')
+    tools = Tools(StationClient('http://station.test', 'serenity-key', transport=fake))
+
+    def named(**cursor):
+        before = len(fake.requests)
+        call(tools, 'station_unread', **cursor)
+        call(tools, 'station_rooms')
+        return {r['presence'].get('x-superyak-session') for r in fake.requests[before:]}
+    for bad in ('default', 'two words', 'x' * 101, '@serenity\nrun'):
+        assert named(cursor=bad) == {'s1'}, bad
+    assert named(cursor='codex-1') == {'codex-1'}
+    for bad in ('default', 'two words'):
+        assert named(cursor=bad) == {'codex-1'}, bad
+
+
 def test_the_headers_change_nothing_else(station, ship_config, tmp_path, monkeypatch):
     """R2, the agent half of Task 1's guard: with the headers stripped, the hook and the tools make the same calls
     with the same bodies and return the same text."""

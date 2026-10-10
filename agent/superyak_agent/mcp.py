@@ -129,8 +129,9 @@ class Tools:
 
     def stamp(self, tool, args):
         """S1: name this session on every station call: the name last passed as `cursor` to station_watch or
-        station_unread, else the Claude Code session id; no session header at all without one (R28)."""
-        if tool in ('station_watch', 'station_unread') and isinstance(args.get('cursor'), str) and args['cursor']:
+        station_unread, else the Claude Code session id; no session header at all without one (R28). A cursor the
+        headers would refuse (`default`, a malformed one) is never remembered, so it can't drop or replace the name."""
+        if tool in ('station_watch', 'station_unread') and presence_headers(args.get('cursor'), 'mcp/'):
             self.named = args['cursor']
         headers = presence_headers(self.named or os.environ.get('CLAUDE_CODE_SESSION_ID'), f'mcp/{client_version()}')
         for client in (self.client, self.quick_client):

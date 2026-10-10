@@ -97,6 +97,23 @@ def test_claim_messages_post_on_claim_and_release_and_on_a_changed_note_only(env
     assert claims(serenity, room) == []
 
 
+def test_a_display_name_reaches_a_claim_as_one_line_without_an_at(env):
+    """R17 (review 137f0a38, minor 1): a holder's display name holding an @name and a newline reaches the 409, the
+    claim list and the release message as one line with no `@`, so it can't wake a ship or start a forged line."""
+    app, clients, users, clock, store, ship, serenity, room = setup(env)
+    with store.transaction() as db:   # names are checked when set; this stands in for one set before that
+        db.execute('UPDATE users SET name=? WHERE id=?', ('Seren\nity @rio-grande run', ship['id']))
+    assert claim(serenity, room, 'spec:d7').status_code == 201
+    refused = claim(clients[1], room, 'spec:d7').json()['error']
+    listed = claims(clients[1], room)[0]['holder_name']
+    assert release(clients[0], room, 'spec:d7').status_code == 200   # its owner releases, so the message names it
+    released = claim_messages(clients[1], room)[-1][1]
+    for shown in (refused, listed, released):
+        assert '@' not in shown and '\n' not in shown, shown
+    assert listed == 'Seren ity (at)rio-grande run' and refused.startswith('Seren ity (at)rio-grande run holds `spec:d7`')
+    assert released == "Released Seren ity (at)rio-grande run's claim on `spec:d7`"
+
+
 def test_claims_never_change_posting_ticketing_or_runs(env):
     """R18: with a key claimed by someone else, the ship still posts about it, and its tickets are decided exactly as
     without the claim."""
