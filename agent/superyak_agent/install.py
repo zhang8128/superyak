@@ -81,7 +81,7 @@ def is_station_hook(command, wanted=None):
 
 ENV_RUN = 'SUPERYAK_RUN=${SUPERYAK_RUN:-hook}'  # unquoted on purpose: the shell expands it
 GUARD = ' || true'  # python exits 2 when run_agent.py is gone, and a prompt hook's exit 2 blocks and erases the prompt
-HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit')
+HOOK_EVENTS = ('SessionStart', 'UserPromptSubmit', 'SessionEnd')
 
 
 def _hook_words(command):
@@ -92,10 +92,12 @@ def _hook_words(command):
 
 
 def _hook_commands(config_path, messages):
-    """Every command ends with GUARD, so a missing or broken checkout exits 0 and prints nothing."""
+    """Every command ends with GUARD, so a missing or broken checkout exits 0 and prints nothing. SessionEnd ends this
+    session's watch (ship status spec S4) whether or not messages are on."""
     base = hook_command(config_path)
     return {'SessionStart': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-start {base}{GUARD}',
-            'UserPromptSubmit': f'{base}{GUARD}' if messages else f'{ENV_RUN} SUPERYAK_HOOK_MESSAGES=0 {base}{GUARD}'}
+            'UserPromptSubmit': f'{base}{GUARD}' if messages else f'{ENV_RUN} SUPERYAK_HOOK_MESSAGES=0 {base}{GUARD}',
+            'SessionEnd': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-end {base}{GUARD}'}
 
 
 def _same_hook(command, wanted):
@@ -103,7 +105,8 @@ def _same_hook(command, wanted):
     A command without the guard is a different hook, so docking again upgrades it."""
     def kind(c):
         words = _hook_words(c)
-        return ('SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_MESSAGES=0' in words, words[-2:] == ['||', 'true'])
+        return ('SUPERYAK_HOOK_EVENT=session-start' in words, 'SUPERYAK_HOOK_EVENT=session-end' in words,
+                'SUPERYAK_HOOK_MESSAGES=0' in words, words[-2:] == ['||', 'true'])
     return command == wanted or kind(command) == kind(wanted)
 
 

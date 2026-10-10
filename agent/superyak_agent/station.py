@@ -123,6 +123,12 @@ class StationClient:
             payload['reply_to'] = reply_to
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/messages', payload)
 
+    def watch(self, minutes, writable=False, label=None):
+        payload = {'minutes': minutes, 'writable': writable}
+        if label is not None:
+            payload['label'] = label
+        return self.request('POST', '/api/ships/me/watch', payload)
+
     def unread(self, cursor, limit=30, wait=0):
         return self.request('POST', '/api/ships/me/unread', {'cursor': cursor, 'limit': limit, 'wait': wait})
 

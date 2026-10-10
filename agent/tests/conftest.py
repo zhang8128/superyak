@@ -25,6 +25,7 @@ class FakeStation:
         self.briefs = {}  # room id -> the brief as GET /api/chats/{id} shows it, or None
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
         self.requests = []  # every call: method, path, JSON body and its x-superyak-* headers (spec S1)
+        self.watches = {}  # (ship, session) -> {minutes, writable, label}
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -193,6 +194,18 @@ class FakeStation:
                 return 404, b'{"error": "Not found"}'
             ticket['status'] = 'finished'
             return ok(ticket)
+        if method == 'POST' and path == '/api/ships/me/watch':
+            name, payload = headers.get('x-superyak-session'), json.loads(data)
+            if not name:
+                return 400, b'{"error": "Watching needs this session\'s name in the x-superyak-session header"}'
+            minutes = payload.get('minutes', 20)
+            if minutes:
+                self.watches[(me, name)] = {'minutes': minutes, 'writable': payload.get('writable', False), 'label': payload.get('label')}
+            else:
+                self.watches.pop((me, name), None)
+            held = self.watches.get((me, name))
+            return ok({'name': name, 'on_watch': held is not None, 'watch_until': self.clock + minutes * 60 if held else None,
+                       'writable': bool(held and held['writable']), 'label': held['label'] if held else None})
         return 403, b'{"error": "Ship keys cannot use this route"}'
 
 

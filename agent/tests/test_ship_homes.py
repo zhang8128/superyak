@@ -48,6 +48,7 @@ def test_machine_ship_is_byte_for_byte_today(monkeypatch, tmp_path, system):
     settings = machine.home / '.claude' / 'settings.json'
     assert hook_commands(settings, 'SessionStart') == [f'SUPERYAK_RUN=${{SUPERYAK_RUN:-hook}} SUPERYAK_HOOK_EVENT=session-start {base} || true']
     assert hook_commands(settings, 'UserPromptSubmit') == [f'{base} || true']
+    assert hook_commands(settings, 'SessionEnd') == [f'SUPERYAK_RUN=${{SUPERYAK_RUN:-hook}} SUPERYAK_HOOK_EVENT=session-end {base} || true']
     assert not (machine.home / '.claude' / 'settings.json.bak-superyak').exists()   # nothing to back up: a new file
     if system == 'Linux':
         text = unit.read_text()
@@ -70,7 +71,7 @@ def test_machine_ship_is_byte_for_byte_today(monkeypatch, tmp_path, system):
     assert revoked == ['k'] and not config.exists() and not (sy / 'run-mcp.json').exists()
     assert not unit.exists() and not plist.exists()
     assert '[mcp_servers.station]' not in (machine.home / '.codex' / 'config.toml').read_text()
-    assert hook_commands(settings, 'SessionStart') == [] and hook_commands(settings, 'UserPromptSubmit') == []
+    assert hook_commands(settings, 'SessionStart') == hook_commands(settings, 'UserPromptSubmit') == hook_commands(settings, 'SessionEnd') == []
 
 
 class DockSpy:

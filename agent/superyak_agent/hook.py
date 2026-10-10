@@ -30,6 +30,19 @@ INBOX_CALL_TIMEOUT = 3
 INSTRUCTIONS_DEADLINE = 2.5  # seconds from the start of the hook; later, the messages wait for the next prompt
 UNREACHABLE = 'station-unreachable'  # in the sessions folder; holds the time the station last failed to answer
 UNREACHABLE_SECONDS = 60
+SESSION_END_TIMEOUT = 3  # spec S4: best effort; a watch this call misses runs out within its declared minutes
+
+
+def _end_watch(config_path, transport, presence):
+    """S4, M2: the one new client call: end this session's watch. It can only end one (R2), never prints, and fails
+    silently. Without a session name there is nothing to end, so it makes no call."""
+    config = read_json(config_path)
+    if not presence or not config or not config.get('key'):
+        return
+    try:
+        StationClient(config['station'], config['key'], config.get('origin'), transport, presence).watch(0)
+    except Exception:  # noqa: BLE001 - a hook must never break the exit
+        pass
 
 
 def hook_fields(stdin):
@@ -136,6 +149,9 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
         return ''
     link = _Link(transport)
     try:
+        if event == 'session-end':
+            _end_watch(config_path, link(SESSION_END_TIMEOUT), presence)
+            return ''
         text, shown = _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
                                lambda: monotonic() - started > INSTRUCTIONS_DEADLINE, presence)
         _forget_unless(shown, config_path, event, session_id, sessions_dir)
