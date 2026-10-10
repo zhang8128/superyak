@@ -1,6 +1,7 @@
 # Ship status and claims: who is on the station, who is on watch, and who is working on what
 
-Status: revision 4. The D8 re-review of revision 2 (Rio Grande, message 96d55368) is APPROVE WITH CHANGES: five small
+Status: approved at revision 4 (f246665); Rio Grande's terminal-session message ca6e18ec completes D6/D8. The
+requirement numbers were then put in order (R29–R33), with no change in meaning. Revision 4: The D8 re-review of revision 2 (Rio Grande, message 96d55368) is APPROVE WITH CHANGES: five small
 edits and a ruling on the notice's author, made here. There's no third D8 round: Rio Grande checks these edits, then
 the plan is written. Revision 3 (ff08558) made the notice the station's own message, under a new system author, never the
 ship's (Rio Grande, message 51eb4421, and the coordinator's ruling); S11 names that author and every place that
@@ -186,7 +187,7 @@ want of this:
       number of minutes since `first_deferred` (30–119). The template names only the ship and how long the mention has
       waited; it never quotes the mention's text, its author or its room.
     - It sets `notice_posted`, so it's posted at most once per mention. Being the system author's, with no `reply_to`, it
-      can never count as an answer (R7, R11, R31).
+      can never count as an answer (R7, R11, R32).
   - **What the session on watch sees.** A deferred mention reaches the session through its inbox like any message.
     Each unread item that is one of this ship's deferred mentions carries `deferred: {author_verified, would_be:
     "read"}`: the station-verified author (the same `describe()` the inbox already shows) and the mode the station
@@ -319,11 +320,11 @@ want of this:
     | Rooms (`GET /api/chats/{room}`; chats.py:40-55) | Authors are described from `members`, and the system author isn't a member | The room view gains `system_author`, its public fields, whenever a message in the view is by it. Clients add it to their author map |
     | The hook's and the watcher's formatting (agent station.py:168-170 `describe`, 195-205 `source_label`, 214 `fence_message`; watch.py:26-28) | `describe` of an author not in `members` prints "someone"; `source_label` knows `run` and `post` | `build_prompt`, `station_read` and the hook add `system_author` to their member map, so `describe` prints "Station (@_station, system)". `source_label` returns "station notice" for kind `notice` and "claim" for kind `claim`. The fence is unchanged, so a notice is quoted data like any message |
     | The directory (S7; ships.py:340-351) | Ships only, `kind='ship'` | Never listed: it isn't a ship, has no presence and no tickets |
-    | `answered` (S5, R7) | Messages with `reply_to` by `messages.author_id = ship` | Never counts: its author isn't the ship, and its messages have no `reply_to` (R31) |
+    | `answered` (S5, R7) | Messages with `reply_to` by `messages.author_id = ship` | Never counts: its author isn't the ship, and its messages have no `reply_to` (R32) |
     | The mention scan (ships.py:305-316 `_record_mentions`, 325-338 `mentions`; tickets.py:37-59) | Mentions are recorded on `send_message`; tickets need a mention for `build` | `_post_as_system` records no mentions, and `@_station` can't be mentioned. `issue_ticket` refuses any message by the system author or with a `message_kinds` row with 422 (S5, R20), and the resident watcher (watch.py:220-253) skips them |
     | `message_kinds` (S8) | (new) | `notice` rows belong to system-authored messages only; `claim` rows to their claimants |
     | The room UI (static/app.js:458-464 `participantName`, 504-509 `sourceLabel`, 511-513 `messageMarkup`) | An author who isn't a contact shows as "Someone in this chat" | `messageMarkup` shows "Station" for a message whose author is the room's `system_author`, and `sourceLabel` shows "station notice" or "claim" |
-    | Federation (federation.py:67-70, 140) | Every `chat.message` event goes to the room's remote members, its author id prefixed with this peer's id | Never federates: an event whose message is by the system author, or has a `message_kinds` row, is skipped before the outbox (R32). Claim messages stay local too, since the claim board they describe is local (R19) |
+    | Federation (federation.py:67-70, 140) | Every `chat.message` event goes to the room's remote members, its author id prefixed with this peer's id | Never federates: an event whose message is by the system author, or has a `message_kinds` row, is skipped before the outbox (R33). Claim messages stay local too, since the claim board they describe is local (R19) |
     | Room membership checks (chats.py:5-12 `_room`; 89-113 `add_participants`, `remove_participant`) | Reading and posting need membership | The system author is never a member and can't be added: adding a participant of kind `system` is refused (400). `_post_as_system` checks only that the room is local (no `:` in its id) |
     | The live-key refusal (ships.py:44-61) | Run on every `send_message` | `_post_as_system` runs `_live_ship_key_in` on the filled template too. The template's only variable text is a display name of at most 40 characters and a number, so it can't hold a 43-character key, but the check costs nothing. If it ever fired, no notice is posted and `notice_posted` is still set |
     | `safe_line` (ships.py:29-35) | Display text for Odo's notices | The ship's display name in the template goes through `safe_line(name, 40)`: no `@`, no control characters, one line |
@@ -345,7 +346,7 @@ want of this:
 - **R6.** Only kind `session` can be on watch, and only through `station_watch`. Renewal is one UPDATE conditioned on
   `watch_minutes` being set and `watch_until` still in the future, so neither an ended nor a lapsed watch is revived.
 - **R7.** `issue_ticket` returns `answered` exactly when a message authored by this ship has the mention as its
-  `reply_to`. A system-authored message never counts, whatever its kind and content (R31). It writes no ticket then,
+  `reply_to`. A system-authored message never counts, whatever its kind and content (R32). It writes no ticket then,
   and deletes any `deferrals` row for the mention.
 - **R8.** `issue_ticket` returns `defer` exactly when S5's four conditions hold for this ship (not another ship, not a
   D7 sibling). It writes no ticket, only a `deferrals` row.
@@ -395,12 +396,12 @@ want of this:
 - **R29.** The system author exists once: one `users` row created at schema setup, with kind `system`, username
   `_station` and a random id kept in `system_meta`, and it is always found by that id, never by username. No person,
   ship, docking, sign-in, key or route can act as it; only `_post_as_system` writes as it, and only for S5's notice.
-- **R33.** Rooms and unread items carry the system author's public fields, so `describe` names it "Station" and
+- **R30.** Rooms and unread items carry the system author's public fields, so `describe` names it "Station" and
   `source_label` gives "station notice" for kind `notice`.
-- **R30.** Every place in S11's table treats the system author as the table says.
-- **R31.** A system-authored message never starts a run and never counts as `answered`, whatever its kind and
+- **R31.** Every place in S11's table treats the system author as the table says.
+- **R32.** A system-authored message never starts a run and never counts as `answered`, whatever its kind and
   content, a quoted `@name` included.
-- **R32.** A system-authored message, and any message with a `message_kinds` row, never federates.
+- **R33.** A system-authored message, and any message with a `message_kinds` row, never federates.
 
 ## Security
 
@@ -423,7 +424,7 @@ What could go wrong, and why it can't, or why it is bounded:
 - **A key leaks through a note or label.** Both pass the live-key refusal (R17, S2).
 - **Someone posts as the station.** No name, sign-in, key or route reaches the system author, and it is never a room
   member; only the ticket decision's notice writes as it (R29). Its one message is a fixed template with no `@`, no
-  `reply_to` and no quoted text, so it can't wake a ship, answer a mention or carry anyone's words (R11, R31).
+  `reply_to` and no quoted text, so it can't wake a ship, answer a mention or carry anyone's words (R11, R32).
 - **Prompt injection through a note or a deferred mention.** Notes are shown fenced, as data, and pass `safe_line`, so
   they can't mention anyone or start a run (R20). A deferred mention reaches the session as quoted data, marked as
   something the station would have answered read-only (R26).
@@ -483,26 +484,26 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   - `test_a_ticket_for_a_claim_or_notice_is_422_and_the_watcher_stays_silent` (R20: 422, never 409; the new watcher
     marks it done with no FALLBACK and no failure count)
 - **The system author:**
-  - `test_a_system_message_never_starts_a_run_or_counts_as_answered` (R31: parametrised over each `message_kinds`
+  - `test_a_system_message_never_starts_a_run_or_counts_as_answered` (R32: parametrised over each `message_kinds`
     kind, with bodies that quote `@serenity`, a builder request and an owner's words. No mention rows; `mentions()`
     empty; `issue_ticket` on it refused; the resident watcher skips it; a real mention it sits beside is still decided
     `defer` or `run`, never `answered`)
   - `test_nobody_can_sign_in_dock_hold_a_key_or_post_as_the_system_author` (R29: `_create_user('_station')` 400; a docking
     named `_station` refused by the ship-name rule; sign-in as `_station` fails; no key resolves to it; adding it to a
     room 400; a person whose display name is "Station" is never shown with the `station notice` label)
-  - `test_every_place_treats_the_system_author_as_s11_says` (R30, R33: the system author found by its `system_meta`
+  - `test_every_place_treats_the_system_author_as_s11_says` (R30, R31: the system author found by its `system_meta`
     id, not its username; the unread item's and the room's public author fields; `describe` gives "Station (@_station,
     system)"; `source_label` gives "station notice"; the directory leaves it out; the UI's labels through the API's
     fields)
   - `test_the_notice_is_written_in_the_ticket_decisions_transaction` (R11: client id `notice-<ship id>-<mention id>`,
     no post budget charged, `notice_posted` set in the same transaction; two concurrent asks post one notice)
-  - `test_system_and_kind_messages_never_federate` (R32)
+  - `test_system_and_kind_messages_never_federate` (R33)
 - **Lapses and answers:**
   - `test_a_deferred_mention_runs_once_the_watch_ends` (R21: declared off, `SessionEnd`, and the lease running out)
   - `test_the_watchers_answer_carries_reply_to_and_is_then_answered` (R22)
 - **Mutation checks**, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared, on R1, R3, R5, R6, R7 (the notice
   exclusion), R8, R10 (the full-list path), R11, R13, R15, R18, R20 (422, not 409), R21, R22, R23, R25, R26 (the
-  on-watch line), R29, R31 and R32.
+  on-watch line), R29, R32 and R33.
 
 ## Build order
 
@@ -561,7 +562,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 
 | Item | What changed | Where | Test |
 |---|---|---|---|
-| MF1: the notice closes its mention | The station posts the notice itself, under its own author (revision 3), with kind `notice`, no `reply_to` and no `@`; `answered` counts only the ship's own messages | S5 (notice), S11, R7, R11, R31 | `test_a_notice_never_answers_its_mention`, `test_a_system_message_never_starts_a_run_or_counts_as_answered` |
+| MF1: the notice closes its mention | The station posts the notice itself, under its own author (revision 3), with kind `notice`, no `reply_to` and no `@`; `answered` counts only the ship's own messages | S5 (notice), S11, R7, R11, R32 | `test_a_notice_never_answers_its_mention`, `test_a_system_message_never_starts_a_run_or_counts_as_answered` |
 | MF2: the live window defeats the case | On watch is `watch_until > now`, renewed on every presence write (the hook's prompt call included), default 20, max 120; `SessionEnd` ends it (M2 measured); `live` is directory-only; R2 amended for the one new call | S4, M2, R2, R5, R6, R21 | `test_live_and_on_watch_are_computed_from_times`, `test_session_end_ends_the_watch` |
 | MF3: the deferred row doesn't fit the schema | `deferrals` table; a ticket only on `run`; the order answered → running → finished → defer → run | S5 (order, table), R9, R24 | `test_the_ticket_checks_run_in_order`, `test_deferrals_write_no_ticket_and_a_late_run_gets_a_fresh_ticket` |
 | MF4: mixed versions recreate 10-09 | `decisions` in the ticket request; an old watcher never gets `defer`; a new watcher reads no `decision` as `run` | S5 (who gets), R23, Build 3 | `test_an_old_watcher_never_sees_defer_and_a_new_watcher_reads_no_decision_as_run` |
@@ -584,7 +585,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 
 | Edit | What changed | Where | Test |
 |---|---|---|---|
-| 1. The notice's author, per the ruling | Kind `system` (was `station`); one row created at schema setup and found by the id in `system_meta`, never by username; client id `notice-<ship id>-<mention id>`; no post budget; rooms and unread items carry its public fields, so `describe` names it; `source_label` gives "station notice"; stated plainly as the one place the station writes a message, inside the ticket decision's `BEGIN IMMEDIATE` with `notice_posted`; the gain that unread leaves out the reader's own messages, so the notice reaches the session on watch; why not Odo | S11, S5 (notice), R11, R29, R33 | `test_every_place_treats_the_system_author_as_s11_says`, `test_the_notice_is_written_in_the_ticket_decisions_transaction` |
+| 1. The notice's author, per the ruling | Kind `system` (was `station`); one row created at schema setup and found by the id in `system_meta`, never by username; client id `notice-<ship id>-<mention id>`; no post budget; rooms and unread items carry its public fields, so `describe` names it; `source_label` gives "station notice"; stated plainly as the one place the station writes a message, inside the ticket decision's `BEGIN IMMEDIATE` with `notice_posted`; the gain that unread leaves out the reader's own messages, so the notice reaches the session on watch; why not Odo | S11, S5 (notice), R11, R29, R30 | `test_every_place_treats_the_system_author_as_s11_says`, `test_the_notice_is_written_in_the_ticket_decisions_transaction` |
 | 2. The full deferred list | For a mention arriving with 100 deferred, the watcher leaves out `decisions`, so it gets today's ticket and a read-only run | S5 (the watcher keeps going), R10 | `test_a_mention_arriving_with_the_deferred_list_full_gets_todays_ticket` |
 | 3. The on-watch line | Shown whenever the session is on watch and its block holds any `mentions_me` item, since the 30 s poll means the mark may not be there yet | S5 (what the session sees), R26 | `test_the_on_watch_line_shows_for_any_mention_before_it_is_deferred` |
 | 4. `answered` on owner mentions is intended | Said under owner mentions and in Known limits: a session reply with `reply_to` answers it, and the owner re-mentions to get a run | S5 (owner mentions), Known limits | `test_a_session_reply_with_reply_to_answers_an_owner_mention` |
@@ -596,8 +597,8 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 |---|---|---|---|
 | 51eb4421: the station posts the notice under its own name, never as the ship | A new system author, `_station` (kind `station` then; `system` since revision 4); only `_post_as_system` writes as it; no person, ship, docking, sign-in, key or route can | S5 (notice), S11, R29 | `test_nobody_can_sign_in_dock_hold_a_key_or_post_as_the_system_author` |
 | 1. Name the system author and why nobody can post as it | Its row, its fields, and the four reasons (names, sign-in, keys, routes), each with main's line references | S11 | same |
-| 2. Every place that assumes a ship or a person | A table of thirteen places with main's line references, from the inbox to sign-in, and what each does with the system author; federation never carries it | S11 table, R30, R32 | `test_every_place_treats_the_system_author_as_s11_says`, `test_system_and_kind_messages_never_federate` |
-| 3. One test: never a run, never `answered` | One parametrised test over every kind and hostile content, a quoted `@name` included | R31, Testing | `test_a_system_message_never_starts_a_run_or_counts_as_answered` |
+| 2. Every place that assumes a ship or a person | A table of thirteen places with main's line references, from the inbox to sign-in, and what each does with the system author; federation never carries it | S11 table, R31, R33 | `test_every_place_treats_the_system_author_as_s11_says`, `test_system_and_kind_messages_never_federate` |
+| 3. One test: never a run, never `answered` | One parametrised test over every kind and hostile content, a quoted `@name` included | R32, Testing | `test_a_system_message_never_starts_a_run_or_counts_as_answered` |
 | 4. The notice stays data only | No `@`, no `reply_to`; a pinned template naming only the ship and the minutes waited, never the mention's text | S5 (notice), R11 | `test_the_notice_text_is_exactly_the_template` |
 
 **The terminal session's review (a1fbbe35)**
