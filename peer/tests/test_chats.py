@@ -47,3 +47,21 @@ def test_home_orders_authorized_chats_by_latest_activity(env):
     same_time = patient.post('/api/chats', json={'title': 'Same time', 'member_ids': [users[1]['id']]}).json()
     patient.post('/api/chats/' + newer['id'] + '/messages', json={'client_message_id': 'tie', 'body': 'Same timestamp'})
     assert [room['id'] for room in doctor.get('/api/chats').json()][:2] == sorted([same_time['id'], newer['id']])
+
+def test_same_instant_messages_come_back_in_the_order_they_were_sent(env):
+    """Message ids are random, so a frozen clock must not let them reorder a room: one instant, insertion order, for
+    this station's messages and for a paired peer's alike."""
+    import uuid
+    app, clients, users, clock = env
+    for round in range(5):
+        room = clients[0].post('/api/chats', json={'title': f'Same instant {round}', 'member_ids': [users[1]['id']]}).json()
+        sent = [clients[i % 2].post(f"/api/chats/{room['id']}/messages", json={'client_message_id': f'm{i}', 'body': f'message {i}'}).json()['id']
+                for i in range(20)]
+        relayed = [uuid.uuid4().hex for _ in range(20)]
+        with app.state.store.transaction() as db:
+            for i, message_id in enumerate(relayed):
+                db.execute('INSERT INTO peer_messages VALUES(?,?,?,?,?,?,?)',
+                           (message_id, room['id'], f'{"a" * 64}:remote', f'p{i}', f'relayed {i}', room['epoch'], clock[0]))
+        for client in clients[:2]:
+            view = [m['id'] for m in client.get(f"/api/chats/{room['id']}").json()['messages']]
+            assert [i for i in view if i in sent] == sent and [i for i in view if i in relayed] == relayed

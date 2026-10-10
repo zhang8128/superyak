@@ -343,12 +343,13 @@ class ModeRunner:
         return RunResult(f'{mode} reply')
 
 
-@pytest.mark.parametrize('ending', ['declared off', 'session end', 'lease ran out'])
+@pytest.mark.parametrize('ending', ['declared off', 'session end', 'lease ran out', 'bound'])
 def test_a_deferred_mention_runs_once_the_watch_ends(env, tmp_path, monkeypatch, ending):
     """R21, Review Focus 1, and build step 7 in small: a writable watch defers the watcher's read-only run; the
     station posts its notice at 30 minutes; once the watch ends, by station_watch(0), by SessionEnd or by its lease
-    running out, the mention runs read-only, says so first, and answers with reply_to. An owner's mention runs as a
-    builder throughout."""
+    running out, or once the mention has waited 120 minutes under a watch that stays on, the mention runs read-only,
+    says so first, answers with reply_to and leaves the watcher's deferred list. An owner's mention runs as a builder
+    throughout."""
     from superyak_agent import hook
     from superyak_agent.mcp import Tools, handle
     from superyak_agent.station import StationClient
@@ -361,7 +362,6 @@ def test_a_deferred_mention_runs_once_the_watch_ends(env, tmp_path, monkeypatch,
     runner = ModeRunner()
     watcher = Watcher(StationClient('http://testserver', key, transport=transport_for(app)), config, tmp_path / 'state.json', runner)
     asked = clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'q', 'body': '@serenity what does this repo do?'}).json()
-    clock[0] += 1
     owner = clients[0].post(f'/api/chats/{room}/messages', json={'client_message_id': 'o', 'body': '@serenity add a NOTES file'}).json()
     assert watcher.cycle() == 1 and runner.calls == [('build', owner['id'])]
     clock[0] += 1800
@@ -373,13 +373,19 @@ def test_a_deferred_mention_runs_once_the_watch_ends(env, tmp_path, monkeypatch,
         call('station_watch', minutes=0)
     elif ending == 'session end':
         hook.run(config_path, transport=transport_for(app), event='session-end', session_id='lead-session', sessions_dir=tmp_path / 'sessions')
-    else:
+    elif ending == 'lease ran out':
         clock[0] += 3601
-    clock[0] += 1  # the clock is frozen and ids are random: the answer must come after the notice in the view
+    else:
+        for _ in range(3):                                  # the watch stays on: the station's bound ends the wait
+            clock[0] += 1800
+            call('station_rooms')
     assert watcher.cycle() == 1 and runner.calls[-1] == ('read', asked['id'])
     answer = view()[-1]
     assert answer['body'] == f'{READ_ONLY_LINE}\n\nread reply' and answer['reply_to'] == asked['id']
-    assert watcher.cycle() == 0
+    assert watcher.cycle() == 0 and watcher.state['deferred'] == []
+    if ending == 'bound':                                   # it was the bound, not the watch ending: a new one waits
+        fresh = clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'f', 'body': '@serenity and this?'}).json()
+        assert watcher.cycle() == 0 and [d['message_id'] for d in watcher.state['deferred']] == [fresh['id']]
 
 
 def test_the_watchers_answer_carries_reply_to_and_is_then_answered(env, tmp_path, monkeypatch):
@@ -389,7 +395,6 @@ def test_the_watchers_answer_carries_reply_to_and_is_then_answered(env, tmp_path
     from superyak_agent.watch import Watcher
     app, clients, users, clock, ship, key, room, config, config_path = watched_room(env, tmp_path, monkeypatch)
     asked = clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'q', 'body': '@serenity what is this?'}).json()
-    clock[0] += 1  # the clock is frozen and ids are random: the answer must come after the question in the view
     client, runner = StationClient('http://testserver', key, transport=transport_for(app)), ModeRunner()
     assert Watcher(client, config, tmp_path / 'state.json', runner).cycle() == 1
     assert clients[0].get(f'/api/chats/{room}').json()['messages'][-1]['reply_to'] == asked['id']

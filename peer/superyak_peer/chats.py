@@ -44,12 +44,12 @@ class Chats:
             return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
-            room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created,id', (key,))]
+            room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created, rowid', (key,))]
             sources, replies = self._sources(db, key), self._replies(db, key)
             for message in room['messages']:
                 message['source'], message['reply_to'] = sources.get(message['id']), replies.get(message['id'])
-            room['messages'] += [dict(r, reply_to=None) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created,id', (key,))]
-            room['messages'].sort(key=lambda m: (m['created'], m['id']))
+            room['messages'] += [dict(r, reply_to=None) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created, rowid', (key,))]
+            room['messages'].sort(key=lambda m: m['created'])  # stable: ids are random, so one instant keeps insertion order
             room['members'] = [dict(r) for r in db.execute(
                 'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
                 (key,))]

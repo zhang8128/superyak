@@ -1,6 +1,8 @@
 """Ship status, build step 5: the watcher asks the station for decisions, keeps a deferred list and moves on, stays
 silent on claim and notice messages, answers with reply_to, and says first when a mention run was read-only (spec S5,
 S6, R10, R12, R20, R22, R23, R32)."""
+import json
+
 import pytest
 from superyak_agent.runs import RunTimeout
 from superyak_agent.watch import FALLBACK, READ_ONLY_LINE, TIMEOUT_NOTE
@@ -128,3 +130,48 @@ def test_a_system_message_never_starts_a_run_or_counts_as_answered(station, tmp_
     assert w.cycle() == 0 and runner.calls == []
     asked = fake.say(dm, jenn, 'where is the door?')
     assert w.cycle() == 1 and [mid for _, mid, _ in runner.calls] == [asked['id']]
+
+
+def test_a_restarted_watcher_re_asks_every_mention_it_deferred(station, ship_config, tmp_path):
+    """R21: deferrals live in the saved state, so a watcher re-created from it (a restart) re-asks each pending one
+    and drops none, though the mention cursor has moved past them; each answer still says first that it read only,
+    since the saved record keeps the station's seq (R38)."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    held = [fake.say(room, jenn, f'@serenity question {n}') for n in range(3)]
+    defer(fake, *held)
+    assert watcher(fake, ship_config, tmp_path, FakeRunner()).cycle() == 0
+    fake.ticket_bodies.clear()
+    runner = FakeRunner()
+    again = watcher(fake, ship_config, tmp_path, runner)
+    assert again.cycle() == 0 and [b['message_id'] for b in fake.ticket_bodies] == [m['id'] for m in held]
+    assert [d['message_id'] for d in again.state['deferred']] == [m['id'] for m in held] and runner.calls == []
+    for m in held:
+        del fake.decide[m['id']]                           # the watch ended: the station now decides `run`
+    assert watcher(fake, ship_config, tmp_path, runner).cycle() == 3
+    assert [mid for _, mid, _ in runner.calls] == [m['id'] for m in held]
+    assert bodies(fake, room)[-3:] == [f'{READ_ONLY_LINE}\n\nread answer to {m["id"]}' for m in held]
+
+
+@pytest.mark.parametrize('ending', ['run', 'answered', '422'])
+def test_a_deferred_mention_leaves_the_list_however_it_ends(station, ship_config, tmp_path, ending):
+    """R10, R21: a re-ask that ends a deferral, by a run, by `answered` or by a 422 (a claim or a notice), takes the
+    mention off the deferred list for good, so stale entries can never fill it to 100. The station's 120-minute bound
+    comes back as a run: test_ship_agent's `bound` ending checks it against the real station."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, jenn, '@serenity a question')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    assert w.cycle() == 0 and [d['message_id'] for d in w.state['deferred']] == [asked['id']]
+    if ending == 'run':
+        del fake.decide[asked['id']]
+    elif ending == 'answered':
+        fake.decide[asked['id']] = {'decision': 'answered', 'message_id': asked['id']}
+    else:
+        fake.ticket_override[asked['id']] = (422, {'error': 'Claims and notices are never answered'})
+    assert w.cycle() == int(ending == 'run')
+    assert w.state['deferred'] == [] and json.loads((tmp_path / 'state.json').read_text())['deferred'] == []
+    fake.ticket_bodies.clear()
+    assert w.cycle() == 0 and fake.ticket_bodies == [] and len(runner.calls) == int(ending == 'run')
