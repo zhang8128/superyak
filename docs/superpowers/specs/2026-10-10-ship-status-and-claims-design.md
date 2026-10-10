@@ -42,14 +42,16 @@ session of the same ship that is already handling its messages. Four things went
 3. **Law.** Nothing here touches instructions, grants or the charter.
 4. **Provenance.** Every claim message carries its source; every presence row says which kind of client reported it.
 5. **Plurality.** Rooms hosted on this station only, like mentions, tickets and the inbox. Nothing here federates.
-6. **Measured.** Each claim in this spec has a falsifiable check (Testing). M1 is measured before build step 1.
+6. **Measured.** Each claim in this spec has a falsifiable check (Testing). M1 is measured (below).
 
 ## Measured, and to measure
 
-- **M1 (to measure before step 1).** Whether Claude Code 2.1.295's hook stdin carries `permission_mode` for
-  `UserPromptSubmit` and `SessionStart`. If it does, the hook reports the session's mode (S2). If it doesn't, an
-  implicit session's mode is `unknown`, and only an explicit watch (S4) says a session is writable. Nothing else in
-  this spec depends on M1.
+- **M1 (measured 2026-10-09, Claude Code 2.1.296, Mac).** `UserPromptSubmit`'s stdin carries `permission_mode`
+  (a `claude -p --permission-mode plan` session's hook read `"plan"`; its keys were cwd, hook_event_name,
+  permission_mode, prompt, prompt_id, session_id, transcript_path). `SessionStart`'s stdin does not (cwd,
+  hook_event_name, session_id, source, transcript_path). So the hook reports the session's mode from the prompt hook
+  (S2); a session that has started but not yet prompted is `unknown` until its first prompt, and only an explicit watch
+  (S4) says a session is writable. Re-check per Claude Code version in Mac acceptance.
 - **Known today:** the hook reads `session_id` and `cwd` from stdin (hook.py:35-45); the station MCP server reads
   `CLAUDE_CODE_SESSION_ID` (inbox spec I1); watcher runs get no station tools (install.py:41-44, `run_mcp_config`); a run's mode is
   decided by the station when its ticket is issued (tickets.py, `issue_ticket`).
@@ -240,7 +242,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 
 ## Build order
 
-1. Measure M1 on the Mac. Record the result in this spec.
+1. Re-check M1 on the Mac's Claude Code version (measured on 2.1.296; recorded above).
 2. Station: presence table, header handling and coalescing; the directory route (R1–R5, R13).
 3. Station: `station_watch` route; the ticket `decision` (R6–R9).
 4. Agent: the two headers on the hook's and the MCP server's requests; `station_watch` and `station_ships` tools.
