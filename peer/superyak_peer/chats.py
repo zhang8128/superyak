@@ -14,6 +14,8 @@ class Chats:
     def _create_room(self, db, actor, title, members, linked_room_id=None):
         text(title, 'title')
         members = ids([actor] + members)
+        if self.system_author_id(db) in members:
+            raise Problem(400, "The station's system author is never a room member")
         self._known_contacts(db, members)
         key = uid()
         db.execute('INSERT INTO rooms VALUES(?,?,?,1,?)', (key, actor, title, linked_room_id))
@@ -52,6 +54,9 @@ class Chats:
                 'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
                 (key,))]
             room['brief'], room['brief_revision'] = self._room_brief(db, key)
+            system = self.system_author_id(db)
+            if any(m.get('author_id') == system for m in room['messages']):
+                room['system_author'] = self.system_author_public(db)
             return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):

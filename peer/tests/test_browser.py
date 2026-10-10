@@ -1553,6 +1553,27 @@ def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
             expect(page.get_by_text("no run ticket")).to_be_visible()
 
 
+
+def test_a_room_labels_the_station_notice_by_id_never_by_name(browser_peer):
+    """R31, the room UI: the system author's message shows as "Station" with the "station notice" label; a person
+    who calls themselves "Station" gets no label."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    room = store.create_room(users["patient"]["id"], "Ops", [ship["id"], users["doctor"]["id"]])
+    store.rename_user(users["doctor"]["id"], "Station")
+    store.send_message(users["doctor"]["id"], room["id"], "p", "a person called Station")
+    with store.transaction() as db:
+        store._post_as_system(db, room["id"], ship["id"], "m1", "Station notice: the notice itself")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            notice = page.locator(".message", has_text="the notice itself")
+            expect(notice.locator(".message-meta").first).to_contain_text("Station")
+            expect(notice.locator(".message-source")).to_have_text("station notice")
+            expect(page.locator(".message", has_text="a person called Station").locator(".message-source")).to_have_count(0)
+
 def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(browser_peer):
     """Break caught: instructions can't be written for ships, or a ship's draft looks like the person's own."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]

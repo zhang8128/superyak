@@ -88,5 +88,7 @@ class Tickets:
                                     'JOIN messages ON messages.id=message_sources.message_id LEFT JOIN users ON users.id=tickets.root_id '
                                     'WHERE messages.room_id=?', (room_id,))}
         ships = {r[0] for r in db.execute("SELECT id FROM users WHERE kind='ship'")}
-        return {r['id']: runs.get(r['id'], {'kind': 'post'}) if r['author_id'] in ships else None
+        kinds = {r[0]: r[1] for r in db.execute('SELECT message_kinds.message_id, message_kinds.kind FROM message_kinds JOIN messages '
+                                               'ON messages.id=message_kinds.message_id WHERE messages.room_id=?', (room_id,))}
+        return {r['id']: {'kind': kinds[r['id']]} if r['id'] in kinds else runs.get(r['id'], {'kind': 'post'}) if r['author_id'] in ships else None
                 for r in db.execute('SELECT id,author_id FROM messages WHERE room_id=?', (room_id,))}

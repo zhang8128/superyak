@@ -23,7 +23,7 @@ class PeerStore:
 
     def contacts(self, actor):
         with self.transaction() as db:
-            local = [dict(r) for r in db.execute('SELECT id,name FROM users WHERE id!=? ORDER BY name,id', (actor,))]
+            local = [dict(r) for r in db.execute("SELECT id,name FROM users WHERE id!=? AND kind!='system' ORDER BY name,id", (actor,))]
             remote = [dict(r) for r in db.execute('SELECT id,name,peer_id,user_id FROM remote_contacts JOIN peers USING(peer_id) WHERE paired=1 ORDER BY name,id')]
             return local + [{**r, 'remote': True} for r in remote]
 

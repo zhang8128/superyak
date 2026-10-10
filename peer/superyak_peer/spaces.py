@@ -9,7 +9,7 @@ class Spaces:
     def contacts(self, actor):
         # Accounts on this explicitly provisioned host are known local contacts.
         with self.transaction() as db:
-            return [dict(r) for r in db.execute('SELECT id,name FROM users WHERE id!=? ORDER BY name,id', (actor,))]
+            return [dict(r) for r in db.execute("SELECT id,name FROM users WHERE id!=? AND kind!='system' ORDER BY name,id", (actor,))]  # R34
 
     def _space(self, db, key, actor):
         row = require(db.execute('SELECT spaces.* FROM spaces JOIN space_members ON spaces.id=space_members.space_id WHERE spaces.id=? AND user_id=?', (key, actor)).fetchone())
