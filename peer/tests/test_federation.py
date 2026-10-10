@@ -565,3 +565,22 @@ def test_a_paired_origin_cannot_put_words_in_a_local_users_mouth(two_peers):
         assert shown[body]['author_id'] != own, body                        # never shown as this station's user
         assert shown[body]['author_id'].startswith(a[2].identity.peer_id + ':'), body
         assert shown[body].get('unverified') is True, body
+
+
+def test_a_replayed_reply_shows_the_local_author_once(two_peers):
+    """An honest origin holds one copy of each reply (receive keys peer_messages on room, author and client message
+    id), so a second copy in its snapshot is forged. Replayed under a new id, beside a later question, it would put
+    this station's real "yes" where it was never said: only the first copy keeps the local author."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Hostile origin', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    own = b[2].identity.peer_id + ':' + b[1]
+    b[0].send_message(b[1], remote, 'yes-1', 'yes')
+    deliver(b, a)
+    deliver(a, b)
+    assert b[2].receive(_forged_message(a, b, room, 'm-replay', 'yes-1', 'yes', 9e9))['ok']
+    copies = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'yes']
+    assert len(copies) == 2
+    assert [m['author_id'] for m in copies].count(own) == 1
+    assert copies[-1]['id'] == 'm-replay' and copies[-1].get('unverified') is True

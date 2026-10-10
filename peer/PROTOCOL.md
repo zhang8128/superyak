@@ -132,6 +132,11 @@ The origin attests authorship of forwarded replies only after separately verifyi
 the replying peer and its current membership. Message ID collisions with differing
 content fail. Old message bodies already received remain for remaining members.
 Old queued messages are never relabeled with a newer epoch.
+A receiver shows a message attributed to one of its own users only when it matches
+a reply that receiver sent (author, client ID and body), and only the first copy;
+anything else is shown as the origin's, marked unverified. Known limit: the origin
+orders its own room, so it can drop a reply and show it later beside a different
+message, and the receiver cannot detect that.
 
 `room.withdraw`: empty payload. Removes that recipient's hosted room/messages;
 stale/equal events cannot reintroduce them. The same receipt transaction marks
