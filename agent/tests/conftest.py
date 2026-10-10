@@ -26,6 +26,8 @@ class FakeStation:
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
         self.requests = []  # every call: method, path, JSON body and its x-superyak-* headers (spec S1)
         self.watches = {}  # (ship, session) -> {minutes, writable, label}
+        # ship status: deferred mention ids; room id -> deferred ids; message id -> 'claim' or 'notice'; GET /api/ships/directory
+        self.deferred_marks, self.deferred_here, self.kinds, self.directory_rows = set(), {}, {}, []
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -67,12 +69,16 @@ class FakeStation:
 
     def view(self, room):
         last = max([m['created'] for m in room['messages']], default=0.0)
+        system = next((self.users[m['author_id']] for m in room['messages'] if self.users.get(m['author_id'], {}).get('kind') == 'system'), None)
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
                 'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'brief': self.briefs.get(room['id']),
-                'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']]}
+                'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']],
+                **({'system_author': system} if system else {})}
 
     def source_of(self, message):
+        if message['id'] in self.kinds:
+            return {'kind': self.kinds[message['id']]}
         author = self.users.get(message['author_id'], {})
         if author.get('kind') != 'ship':
             return None
@@ -131,7 +137,8 @@ class FakeStation:
                     self.sources[message['id']] = ticket_id
                 if reply_to is not None:
                     self.replies[message['id']] = reply_to
-                return ok(dict(message, replayed=False), 201)
+                waiting = self.deferred_here.get(room['id']) if reply_to is None else None
+                return ok(dict(message, replayed=False, **({'deferred_here': waiting} if waiting else {})), 201)
         if method == 'GET' and path == '/api/mentions':
             after, rows = int(query.get('after', ['0'])[0]), []  # one page holds at most 50, as on the station
             for row in self.mention_rows:
@@ -148,10 +155,13 @@ class FakeStation:
             rows = [(int(m['id'][1:]), r, m) for r in self.rooms.values() if me in r['member_ids'] for m in r['messages']
                     if m['author_id'] != me and int(m['id'][1:]) > position]
             rows.sort(key=lambda row: row[0])
-            return ok({'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': [
+            return ok({'cursor': name, 'position': position, 'more': len(rows) > limit,
+                       **({'on_watch': True} if (me, name) in self.watches else {}), 'messages': [  # R35: absent unless true
                 {'event_id': n, 'message_id': m['id'], 'room_id': r['id'], 'room_title': r['title'], 'body': m['body'], 'created': m['created'],
                  'author': self.users[m['author_id']], 'mentions_me': any(x['message_id'] == m['id'] and x['user_id'] == me for x in self.mention_rows),
-                 'reply_to': self.replies.get(m['id']), 'source': self.source_of(m)} for n, r, m in rows[:limit]]})
+                 'reply_to': self.replies.get(m['id']), 'source': self.source_of(m),
+                 **({'deferred': {'author_verified': self.users[m['author_id']], 'would_be': 'read'}} if m['id'] in self.deferred_marks else {})}
+                for n, r, m in rows[:limit]]})
         if method == 'POST' and path == '/api/ships/me/unread/advance':
             payload = json.loads(data)
             name = payload.get('cursor') or 'default'
@@ -194,6 +204,8 @@ class FakeStation:
                 return 404, b'{"error": "Not found"}'
             ticket['status'] = 'finished'
             return ok(ticket)
+        if method == 'GET' and path == '/api/ships/directory':
+            return ok(self.directory_rows)
         if method == 'POST' and path == '/api/ships/me/watch':
             name, payload = headers.get('x-superyak-session'), json.loads(data)
             if not name:

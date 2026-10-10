@@ -18,6 +18,8 @@ PLAIN_ID = re.compile(r'[A-Za-z0-9:_.-]{1,200}')
 CONFIG = HOME / 'station.json'
 SESSION_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')  # the station's cursor names (inbox spec I1)
 CHECKOUT = Path(__file__).resolve().parents[2]
+ON_WATCH_LINE = 'You are on watch: answer each mention of this ship with station_post reply_to=<its id>.'
+DEFERRED_MARK = '(deferred to you; the station would have given a read-only run)'
 
 
 def presence_headers(name, client, mode=None):
@@ -141,6 +143,9 @@ class StationClient:
     def finish_ticket(self, ticket_id):
         return self.request('POST', f'/api/ships/me/tickets/{quote(ticket_id, safe="")}/finish', {})
 
+    def directory(self):
+        return self.request('GET', '/api/ships/directory')
+
     def instructions(self):
         return self.request('GET', '/api/ships/me/instructions')
 
@@ -245,7 +250,29 @@ def source_label(message):
         if source.get('mode') == 'build':
             return f'builder run for {label(source["root_name"])}' if source.get('root_name') else 'builder run'
         return 'read-only run'
+    if source.get('kind') == 'notice':
+        return 'station notice'
+    if source.get('kind') == 'claim':
+        return 'claim'
     return 'no run ticket' if source.get('kind') == 'post' else ''
+
+
+def utc_time(seconds):
+    """Unix seconds from the station as a UTC minute."""
+    try:
+        return time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(float(seconds)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return 'unknown'
+
+
+def authors(room):
+    """Who wrote a room's messages, by id: its members, and the system author (spec S11) when the room view names it,
+    so describe() names the station's notice "Station (@_station, system)" and never "someone"."""
+    found = {m['id']: m for m in room.get('members', [])} if isinstance(room, dict) else {}
+    system = room.get('system_author') if isinstance(room, dict) else None
+    if isinstance(system, dict) and system.get('id'):
+        found[system['id']] = system
+    return found
 
 
 def defuse(text):

@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 import time
 from . import claims
-from .station import StationClient, client_version, fence_message, label, plain_id, presence_headers, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
+from .station import DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, client_version, fence_message, label, plain_id, presence_headers, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -315,25 +315,30 @@ def _run_inbox(config_path, session_id, transport, presence=None):
         return ''
     client = StationClient(config['station'], config['key'], config.get('origin'), transport, presence)
     got = client.unread(session_id, MAX_MESSAGES)
-    blocks, last = [], None
+    line = [ON_WATCH_LINE] if got.get('on_watch') else []  # its room is kept until we know a mention shows (R26)
+    blocks, shown, last = [], [], None
     for m in got['messages']:
         src = source_label(m)  # provenance, exactly as the old path and station_read show it
         block = (f'Room {label(m.get("room_title"))}, message {shown_id(m["message_id"])}' + (f' ({src})' if src else '')
-                 + (f', reply to {shown_id(m["reply_to"])}' if m.get('reply_to') else '') + ':\n'
+                 + (f', reply to {shown_id(m["reply_to"])}' if m.get('reply_to') else '')
+                 + (f' {DEFERRED_MARK}' if m.get('deferred') else '') + ':\n'
                  + fence_message(m['author'], m['body'], MESSAGE_CHARS, read_hint(m['room_id'], m['message_id'])))
-        if len(HEADER) + sum(len(b) + 2 for b in blocks) + len(block) + 2 + NOTE_ROOM > MAX_CHARS:
+        if len(HEADER) + sum(len(x) + 2 for x in line + blocks) + len(block) + 2 + NOTE_ROOM > MAX_CHARS:
             break
         blocks.append(block)
+        shown.append(m)
         last = m['event_id']
     if last is None:
         return ''
+    if not any(m.get('mentions_me') for m in shown):  # R26: the line goes with a block that holds a mention
+        line = []
     left, more = len(got['messages']) - len(blocks), got.get('more')
     if left:
         count = f'{left}+' if more else str(left)
         blocks.append(INBOX_NOTE.format(count=count, s='' if count == '1' else 's'))
     elif more:  # everything fetched fit, and the station has more after it
         blocks.append('[more unread messages are waiting; `station_unread` shows them]')
-    text = '\n\n'.join([HEADER] + blocks)
+    text = '\n\n'.join([HEADER] + line + blocks)
     client.advance(session_id, last)
     return text
 
@@ -364,7 +369,7 @@ def _run(config_path, state_path, clock, transport):
         if ':' in summary['id'] or (summary.get('last_activity') or 0) <= cursor:
             continue
         room = client.room(summary['id'])
-        members = {m['id']: m for m in room.get('members', [])}
+        members = authors(room)
         items += [(m['created'], room['title'], members.get(m['author_id']), m, room['id'], position)
                   for position, m in enumerate(room['messages']) if m['created'] > cursor and m['author_id'] != me]
     items.sort(key=lambda item: item[0])
