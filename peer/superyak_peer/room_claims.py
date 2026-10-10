@@ -43,7 +43,7 @@ class RoomClaims:
                 'created': row['created'], 'expires': row['expires']}
 
     def _active_claims(self, db, room_id):
-        ids = db.execute('SELECT id FROM claims WHERE room_id=? AND released IS NULL AND expires>? ORDER BY created, id',
+        ids = db.execute('SELECT id FROM claims WHERE room_id=? AND released IS NULL AND expires>? ORDER BY created, rowid',
                          (room_id, self.clock())).fetchall()
         return [self._claim_json(db, r['id']) for r in ids]
 

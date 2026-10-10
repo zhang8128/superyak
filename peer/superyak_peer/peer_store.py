@@ -72,7 +72,9 @@ class PeerStore:
             local = meta['message']
             if not any(m['author_id']==local['author_id'] and m['client_message_id']==local['client_message_id'] for m in result['messages']):
                 result['messages'].append({**local, 'state':delivery['status']})
-        result['messages'].sort(key=lambda m:(m['created'],m['id']))
+        # A stable sort on time alone: the origin's own order and this station's queued replies keep their insertion
+        # order when several share an instant (ids are random, so they can't break the tie).
+        result['messages'].sort(key=lambda m: m['created'])
         result['last_activity'] = max([result['last_activity']] + [m['created'] for m in result['messages']])
         if not messages:
             result.pop('messages', None)

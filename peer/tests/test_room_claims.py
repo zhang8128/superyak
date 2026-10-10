@@ -144,3 +144,13 @@ def test_a_claimant_holds_at_most_20_claims(env):
     assert claim(clients[1], room, 'task:20').status_code == 429
     release(clients[1], room, 'task:0')
     assert claim(clients[1], room, 'task:20').status_code == 201
+
+
+def test_claims_made_in_one_instant_list_in_the_order_they_were_made(env):
+    """Claim ids are random, so a frozen clock must not let them reorder the room's claim list (the same tie as room
+    messages): one instant, insertion order."""
+    app, clients, users, clock, store, ship, serenity, room = setup(env)
+    keys = [f'task:{n}' for n in range(15)]
+    for key in keys:
+        assert claim(clients[1], room, key).status_code == 201
+    assert [c['key'] for c in claims(clients[1], room)] == keys

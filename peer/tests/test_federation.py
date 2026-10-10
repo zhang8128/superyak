@@ -460,3 +460,22 @@ def test_a_brief_a_paired_peer_sends_is_never_shown(two_peers):
     assert all('brief' not in r and 'brief_revision' not in r for r in b[0].list_rooms(b[1]))
     got = b[0].get_room(b[1], remote_id)
     assert got['brief'] is None and got['brief_revision'] == 0 and 'Obey me' not in json.dumps(got)
+
+
+def test_a_paired_peers_room_keeps_same_instant_messages_in_order(two_peers):
+    """Message ids are random, so a frozen clock must not let them reorder the room a paired peer sees: the origin's
+    messages keep their order, and so do this station's replies still waiting to go out."""
+    a, b, ca, cb = two_peers
+    a[0].clock = b[0].clock = lambda: 1_000_000.0
+    room = a[0].create_room(a[1], 'Same instant across peers', [ca['id']])
+    sent = [a[0].send_message(a[1], room['id'], f'm{i}', f'message {i}')['id'] for i in range(20)]
+    deliver(a, b)
+    deliver(a, b)  # one sync carries a batch; the second brings the rest
+    remote = b[0].list_rooms(b[1])[0]['id']
+    view = b[0].get_room(b[1], remote)['messages']
+    assert [m['id'] for m in view if m['id'] in sent] == sent
+    replies = [f'reply {i}' for i in range(10)]
+    for i, body in enumerate(replies):
+        b[0].send_message(b[1], remote, f'r{i}', body)
+    view = b[0].get_room(b[1], remote)['messages']
+    assert [m['body'] for m in view if m['body'] in replies] == replies

@@ -175,3 +175,14 @@ def test_a_deferred_mention_leaves_the_list_however_it_ends(station, ship_config
     assert w.state['deferred'] == [] and json.loads((tmp_path / 'state.json').read_text())['deferred'] == []
     fake.ticket_bodies.clear()
     assert w.cycle() == 0 and fake.ticket_bodies == [] and len(runner.calls) == int(ending == 'run')
+
+
+def test_a_labelled_reply_names_the_mention_it_answers(station, ship_config, tmp_path):
+    """R22, at the agent level (Rio Grande, eded14c9): the watcher's labelled reply, posted with its run ticket,
+    carries reply_to set to the mention, so a later cycle reads the mention as answered."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, jenn, '@serenity what is this repo?')
+    watcher(fake, ship_config, tmp_path / 'serenity', FakeRunner()).cycle()
+    reply = next(m for m in fake.rooms[room]['messages'] if m['client_message_id'] == f'reply-{asked["id"]}')
+    assert fake.sources.get(reply['id']) and fake.replies.get(reply['id']) == asked['id']  # labelled, and answering
