@@ -137,8 +137,11 @@ class StationClient:
     def advance(self, cursor, to):
         return self.request('POST', '/api/ships/me/unread/advance', {'cursor': cursor, 'to': to})
 
-    def ticket(self, message_id):
-        return self.request('POST', '/api/ships/me/tickets', {'message_id': message_id})
+    def ticket(self, message_id, decisions=False):
+        payload = {'message_id': message_id}
+        if decisions:
+            payload['decisions'] = ['defer', 'answered']  # ship status S5; an older station ignores it (R23)
+        return self.request('POST', '/api/ships/me/tickets', payload)
 
     def finish_ticket(self, ticket_id):
         return self.request('POST', f'/api/ships/me/tickets/{quote(ticket_id, safe="")}/finish', {})

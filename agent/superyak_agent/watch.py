@@ -19,6 +19,9 @@ NOTICE_ROOM = 'Ops'
 FALLBACK = "I couldn't answer this one. My owner can check the watcher log on this machine."
 TIMEOUT_NOTE = 'This took longer than my time limit, so I stopped. Try a smaller request.'
 UNKNOWN = {'id': None, 'username': 'unknown', 'name': 'someone', 'kind': 'unknown', 'owner_id': None}
+DEFERRED_PER_CYCLE = 20  # ship status S5: deferred mentions re-asked per cycle, oldest first
+DEFERRED_MAX = 100       # past this a new mention asks for today's ticket, never a deferral it couldn't keep (R10)
+READ_ONLY_LINE = "Read-only run: I can read and search, but I can't run commands, fetch branches or change files."
 
 
 def build_prompt(room, mention, ship, mode):
@@ -58,7 +61,8 @@ class Watcher:
         self.state_path, self.notices_command, self.resident, self.clock = state_path, notices_command, resident, clock
         self.state = read_json(state_path, {}) or {}
         for key, default in (('mention_seq', 0), ('failures', {}), ('answered', []), ('announced', []),
-                             ('ship_exchanges', {}), ('paused', []), ('rooms', {}), ('replies', {}), ('tickets', {})):
+                             ('ship_exchanges', {}), ('paused', []), ('rooms', {}), ('replies', {}), ('tickets', {}),
+                             ('deferred', [])):
             self.state.setdefault(key, default)
         self.me = None
 
@@ -73,6 +77,8 @@ class Watcher:
         except Exception as error:  # noqa: BLE001 - notices must never keep the ship from answering
             log.warning('could not announce notices: %s', redact(str(error)))
             posted = 0
+        for mention in list(self.state['deferred'][:DEFERRED_PER_CYCLE]):  # S5: oldest first; never holds new ones back
+            posted += self._handle(mention)[1]
         for mention in self.client.mentions(self.state['mention_seq']):
             done, sent = self._handle(mention)
             posted += sent
@@ -86,12 +92,14 @@ class Watcher:
 
     def _remember(self, message_id):
         self.state['answered'] = (self.state['answered'] + [message_id])[-ANSWERED_KEPT:]
+        self.state['deferred'] = [d for d in self.state['deferred'] if d['message_id'] != message_id]
 
     def _handle(self, mention):
         mid, author = mention['message_id'], mention['author']
         if mid in self.state['answered'] or author['id'] == self.me['id']:
             return True, 0
-        if author['kind'] == 'ship' and mid not in self.state['replies'] and not self._ship_budget(mention):
+        deferred = any(d['message_id'] == mid for d in self.state['deferred'])  # a re-ask spends no ship budget (R37)
+        if author['kind'] == 'ship' and mid not in self.state['replies'] and not deferred and not self._ship_budget(mention):
             return True, self._pause_note(mention)
         try:
             room = self.client.room(mention['room_id'])
@@ -104,13 +112,29 @@ class Watcher:
             reply = self.state['replies'].get(mid)  # a reply whose post failed is posted as it was, never re-run
             if reply is None:
                 try:
-                    ticket = self.client.ticket(mid)  # the station decides the mode now; no ticket, no run
+                    # The station decides the mode now; no ticket, no run. R10: with the deferred list full, a new
+                    # mention asks for today's ticket, never a deferral the watcher couldn't keep.
+                    ticket = self.client.ticket(mid, deferred or len(self.state['deferred']) < DEFERRED_MAX)
                 except StationError as error:
+                    if error.status == 422:  # R20: a claim or a notice is never answered: done, without a word
+                        self.state['failures'].pop(mid, None)
+                        self._remember(mid)
+                        self.save()
+                        return True, 0
                     if error.status != 409:
                         raise
                     log.warning('mention %s: its ticket is finished but no reply is in the room', mid)
                     self.state['failures'].pop(mid, None)
                     return True, self._reply(mention['room_id'], mid, FALLBACK)
+                decision = ticket.get('decision', 'run')  # R23: a station that sends no decision decides `run`
+                if decision in ('defer', 'answered'):
+                    self.state['failures'].pop(mid, None)
+                    if decision == 'answered':
+                        self._remember(mid)  # its session answered it with reply_to: nothing to post
+                    elif not deferred:
+                        self.state['deferred'].append({k: mention[k] for k in ('message_id', 'room_id', 'author', 'seq')})
+                    self.save()
+                    return True, 0
                 self.state['tickets'][mid] = ticket['id']
                 self.save()
                 mode = 'read' if self.resident or ticket.get('mode') != 'build' else 'build'  # never above the ticket
@@ -118,6 +142,8 @@ class Watcher:
                                            instructions=ticket.get('blocks') or '')
                 footer = label(ticket.get('footer'), 200).replace('@', '(at)') if mode == 'build' and ticket.get('footer') else ''
                 reply = format_reply(result, footer)
+                if mode == 'read' and mention.get('seq') is not None:  # S6: the mode the run used; no resident DM reply
+                    reply = f'{READ_ONLY_LINE}\n\n{reply}'
         except RunTimeout as error:
             log.warning('mention %s timed out: %s', mid, error)
             reply = TIMEOUT_NOTE
@@ -138,7 +164,7 @@ class Watcher:
         self.save()
         posted, ticket_id = 0, self.state['tickets'].get(message_id)
         try:
-            self.client.post(room_id, body, f'reply-{message_id}', ticket_id)
+            self.client.post(room_id, body, f'reply-{message_id}', ticket_id, message_id)  # R22: reply_to the mention
             posted = 1
         except StationError as error:
             if error.status not in (403, 404, 409):
@@ -156,7 +182,7 @@ class Watcher:
     def _post_unlabelled(self, room_id, message_id, body):
         """The ticket can no longer label a reply (finished or expired): the reply still goes out, unlabelled."""
         try:
-            self.client.post(room_id, body, f'reply-{message_id}')
+            self.client.post(room_id, body, f'reply-{message_id}', None, message_id)  # R22
             return 1
         except StationError as error:
             if error.status not in (403, 404, 409):
@@ -245,7 +271,8 @@ class Watcher:
     def _resident_reply(self, room, seen):
         messages, ids = room['messages'], [m['id'] for m in room['messages']]
         start = ids.index(seen['cursor']) + 1 if seen.get('cursor') in ids else 0
-        new = [m for m in messages[start:] if m['author_id'] != self.me['id']]
+        new = [m for m in messages[start:] if m['author_id'] != self.me['id']
+               and (m.get('source') or {}).get('kind') not in ('claim', 'notice')]  # R20, R32: never answered
         if not new:
             return True, 0
         target = new[-1]  # first sight or several new messages: answer only the latest

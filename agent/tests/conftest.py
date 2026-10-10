@@ -28,6 +28,7 @@ class FakeStation:
         self.watches = {}  # (ship, session) -> {minutes, writable, label}
         # ship status: deferred mention ids; room id -> deferred ids; message id -> 'claim' or 'notice'; GET /api/ships/directory
         self.deferred_marks, self.deferred_here, self.kinds, self.directory_rows = set(), {}, {}, []
+        self.ticket_bodies, self.decide = [], {}  # every ticket request's JSON; message id -> its answer when decisions are asked
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -172,16 +173,20 @@ class FakeStation:
             self.keys.pop(key)
             return ok({'ok': True})
         if method == 'POST' and path == '/api/ships/me/tickets':
-            message_id = json.loads(data)['message_id']
+            asked = json.loads(data)
+            self.ticket_bodies.append(asked)
+            message_id, decisions = asked['message_id'], asked.get('decisions') == ['defer', 'answered']
             if message_id in self.ticket_override:
                 status, payload = self.ticket_override[message_id]
                 return status, json.dumps(payload).encode()
+            if decisions and message_id in self.decide:
+                return ok(self.decide[message_id])
             message = next((m for r in self.rooms.values() if me in r['member_ids'] for m in r['messages'] if m['id'] == message_id), None)
             if message is None:
                 return 404, b'{"error": "Not found"}'
             existing = next((t for t in self.tickets.values() if t['ship_id'] == me and t['message_id'] == message_id), None)
             if existing:
-                return (409, b'{"error": "This message has already been answered"}') if existing['status'] == 'finished' else ok(existing)
+                return (409, b'{"error": "This message has already been answered"}') if existing['status'] == 'finished' else ok(dict(existing, decision='run') if decisions else existing)
             ship, author = self.users[me], self.users[message['author_id']]
             mentioned = any(r['message_id'] == message_id and r['user_id'] == me for r in self.mention_rows)
             build = bool(ship['owner_id'] and mentioned and author['kind'] == 'person' and author['id'] == ship['owner_id'])
@@ -191,7 +196,7 @@ class FakeStation:
                       'instructions': [], 'blocks': self.blocks.get(me, ''), 'footer': f'Builder for {self.users[ship["owner_id"]]["name"]} (owner)' if build else '',
                       'status': 'running'}
             self.tickets[ticket['id']] = ticket
-            return ok(ticket)
+            return ok(dict(ticket, decision='run') if decisions else ticket)
         if method == 'GET' and path == '/api/ships/me/instructions':
             return ok(self.instruction_state.get(me) or {'instructions': [], 'layers': [], 'blocks': self.blocks.get(me, '')})
         if method == 'POST' and path == '/api/ships/me/drafts':
