@@ -18,6 +18,10 @@ act also records a session label the client declares, as provenance only, never 
 [many ships on one machine](2026-10-09-many-ships-one-machine-design.md) (one ship per project). Base: `main`
 (55128a3).
 
+Revision 7: the whole-branch review (Rio Grande, 137f0a38) is APPROVE WITH CHANGES, and every ruling is adopted.
+R44 is new (a received room keeps only known keys); R26, R35 and S1 are amended; R37 is unchanged, and the build now
+follows it; Known limits names the rollback cost. The review map's first table walks each item.
+
 ## Goal
 
 A ship, or the person who owns it, can see before acting which ships are on the station, which of them have a session
@@ -90,7 +94,8 @@ want of this:
   - **The name** is the inbox's cursor name: the Claude Code session id, or a name a Codex session passed. A client
     with no real name (no `CLAUDE_CODE_SESSION_ID` and no name given in this process) sends no session header, so
     Codex sessions never share the `default` row (mcp.py:24). The MCP server remembers the name last passed to
-    `station_watch` or `station_unread` as `cursor`, and uses it for its later calls.
+    `station_watch` or `station_unread` as `cursor`, and uses it for its later calls, but only a name the headers
+    accept: a `default` or malformed cursor leaves the name it had, or `CLAUDE_CODE_SESSION_ID` (137f0a38, minor 5).
   - **Recorded only for the authenticated ship.** The station records presence for the ship whose key the request
     presented, and only on a request that authenticated as that ship (`ship_member` or `member` with a ship key,
     app.py:97-107). A request without `x-superyak-session` (the watcher's own calls, scripts) writes no presence. A
@@ -197,11 +202,13 @@ want of this:
     Each unread item that is one of this ship's deferred mentions carries `deferred: {author_verified, would_be:
     "read"}`: the station-verified author (the same `describe()` the inbox already shows) and the mode the station
     would have given. The hook renders it as "(deferred to you; the station would have given a read-only run)".
-    - **The on-watch line.** Whenever the session is on watch and its block holds any item with `mentions_me` (inbox.py
-      126), deferred or not yet, the hook adds one line: "You are on watch: answer each mention of this ship with
+    - **The on-watch line.** Whenever the session is on a writable watch and its block holds any item with
+      `mentions_me` (inbox.py 126), deferred or not yet, the hook adds one line: "You are on watch: answer each mention of this ship with
       station_post reply_to=<its id>." It doesn't wait for the `deferred` mark, because the watcher polls every 30
       seconds (watch.py:11): a prompt inside that window shows the mention before it is deferred, and without the line
-      the session could answer without `reply_to`, so the mention would be answered twice (96d55368, edit 3).
+      the session could answer without `reply_to`, so the mention would be answered twice (96d55368, edit 3). A
+      read-only watch holds nothing back, since the watcher still answers, so it gets no line: the unread response
+      carries `on_watch` only for a writable watch (137f0a38, minor 4).
     - So the session never takes the text as authority (it knows the station would have answered read-only), and it
       knows how to close the mention (a1fbbe35, point 2).
   - **`reply_to` is the only signal of an answer.** Counting any later post by the ship would swallow unrelated
@@ -394,8 +401,8 @@ want of this:
   unchanged, and a `deferrals` row is deleted when its mention is decided `answered` or `run`.
 - **R25.** A mention whose decided mode would be `build` (an owner's mention) is never deferred.
 - **R26.** An unread item that is one of this ship's deferred mentions carries `deferred: {author_verified, would_be}`,
-  and the hook renders it. The hook adds the on-watch reply line whenever the session is on watch and its block holds
-  any item with `mentions_me`, marked deferred or not.
+  and the hook renders it. The hook adds the on-watch reply line whenever the session is on a writable watch and its
+  block holds any item with `mentions_me`, marked deferred or not. A read-only watch gets no line (137f0a38, minor 4).
 - **R27.** `station_post` without `reply_to` lists this ship's deferred mentions in that room in its result.
 - **R28.** A client without a real session name sends no session header, so no two sessions share a row.
 - **R29.** The system author exists once: one `users` row created at schema setup, with kind `system`, username
@@ -416,8 +423,8 @@ want of this:
   - the CLI's username lookup (`__main__.py:279`), which refuses it.
   
   The people list (auth.py:193), the directory and the ships list (ships.py:350) already filter by kind.
-- **R35.** The unread response carries `on_watch` and a ship's post response carries `deferred_here`, each only when it
-  has something to say; with no watch and no deferral both keys are absent.
+- **R35.** The unread response carries `on_watch` (for a writable watch only, R26) and a ship's post response carries
+  `deferred_here`, each only when it has something to say; with no watch and no deferral both keys are absent.
 - **R36.** An old client that ignores `on_watch` and `deferred_here` behaves exactly as today, and with no watch or
   deferral it sees today's responses key for key.
 - **R37.** A re-ask of a deferred mention is exempt from the five-an-hour ship budget only when the station's own
@@ -440,6 +447,12 @@ want of this:
 - **R43.** A ship has at most 10 sessions on watch at once; an eleventh declaration is refused with 429 naming the
   cap. A ship's presence rows never exceed 100: when every row is on watch, a new session's row is not written,
   and its request still succeeds.
+- **R44.** A room received from a paired peer keeps only the keys this station knows, as an allowlist, never a
+  denylist (peer_store.py `REMOTE_ROOM_KEYS` and `REMOTE_MESSAGE_KEYS`). These are the snapshot's own keys
+  (`federation._room_snapshot`), members rebuilt as `{peer, id}`, and each message's own columns. So a remote room
+  never carries `system_author` or `claims`, or a key a later build adds, whatever the peer sent. A remote member never
+  shows as kind `system` or with a name or kind of its own, and its id is always `<peer>:<id>` (federation.py
+  checks it), so it never matches a local person. This is the incoming half of R19 and R33 (137f0a38, IMPORTANT 1).
 
 ## Security
 
@@ -481,6 +494,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   - `test_only_sessions_can_watch_and_ended_or_lapsed_watches_stay_ended` (R6: a delayed write after
     `station_watch(0)`, and after the lease ran out)
   - `test_a_session_without_a_real_name_sends_no_session_header` (R28)
+  - `test_a_cursor_the_headers_refuse_never_replaces_the_session_name` (S1, R28: `default` and malformed cursors)
   - `test_session_end_ends_the_watch` (R2, S4: the hook's `SessionEnd` call, and a station that is down)
 - **Deference:**
   - `test_the_ticket_checks_run_in_order` (S5: answered → running → finished → defer → run)
@@ -503,8 +517,10 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
     newlines and 60 characters comes out through `safe_line(name, 40)`; the mention's own text, author and room never
     appear)
   - `test_deferred_mentions_reach_the_session_with_their_verified_author_and_would_be_mode` (R26)
-  - `test_the_on_watch_line_shows_for_any_mention_before_it_is_deferred` (R26: on watch, a block with a `mentions_me`
-    item that carries no `deferred` mark yet still gets the line; off watch, no line)
+  - `test_the_on_watch_line_shows_for_any_mention_before_it_is_deferred` (R26: on a writable watch, a block with a
+    `mentions_me` item that carries no `deferred` mark yet still gets the line; off watch or on a read-only watch, no
+    line)
+  - `test_only_a_writable_watch_gets_the_on_watch_line` (R26 station side: a read-only watch's unread has no `on_watch`)
   - `test_a_post_without_reply_to_lists_the_rooms_deferred_mentions` (R27)
 - **Read-only line:** `test_the_read_only_line_follows_the_mode_the_run_used` (R12: a downgraded build ticket gets it;
   resident DMs, FALLBACK and timeout don't)
@@ -516,7 +532,10 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   - `test_release_is_for_the_holder_its_owner_and_the_room_owner` (R16)
   - `test_claim_messages_post_on_claim_and_release_and_on_a_changed_note_only` (R17: a 200-character note intact)
   - `test_claims_never_change_posting_ticketing_or_runs` (R18)
+  - `test_a_display_name_reaches_a_claim_as_one_line_without_an_at` (R17: an `@` and a newline in a holder's name)
   - `test_claims_and_presence_stay_local` (R19)
+  - `test_a_paired_peer_cannot_send_a_station_author_claims_or_extra_fields` (R44: two peers; a forged
+    `system_author`, claims and extra keys on a roster and a message; a stored payload with named members)
   - `test_claim_and_notice_messages_never_wake_a_ship` (R20: an @name quoted in a note; a person's claim in a DM with
     Odo)
   - `test_a_ticket_for_a_claim_or_notice_is_422_and_the_watcher_stays_silent` (R20: 422, never 409; the new watcher
@@ -539,9 +558,16 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 - **Lapses and answers:**
   - `test_a_deferred_mention_runs_once_the_watch_ends` (R21: declared off, `SessionEnd`, and the lease running out)
   - `test_the_watchers_answer_carries_reply_to_and_is_then_answered` (R22)
+  - `test_answered_finishes_an_earlier_ticket` (a failed run's ticket is finished once the station says `answered`)
+- **The re-ask budget:**
+  - `test_a_reask_without_a_station_deferral_is_charged` (R37: listed in the watcher's state only, eight re-asks run
+    five and pause the rest, their tickets finished)
+  - `test_a_reask_the_station_held_spends_no_budget` (R37: a run carrying `first_deferred`)
+  - `test_a_retry_of_a_held_reask_is_not_charged_again` (R37: the same running ticket, back without `first_deferred`)
+  - `test_a_reask_asks_for_the_ticket_first_and_fetches_the_room_only_to_run` (S5: no room fetch while deferred)
 - **Mutation checks**, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared, on R1, R3, R5, R6, R7 (the notice
   exclusion), R8, R10 (the full-list path), R11, R13, R15, R18, R20 (422, not 409), R21, R22, R23, R25, R26 (the
-  on-watch line), R29, R32 and R33.
+  on-watch line, writable only), R28 (the remembered cursor), R29, R32, R33, R37 and R44.
 
 ## Build order
 
@@ -590,6 +616,10 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   neither sees the other's (point 5). A station-wide view is out of scope for v1.
 - **Sibling ships on one machine share a Unix user** (Security), so the station's per-ship guarantees don't separate
   them on that machine.
+- **Rolling back after the migration leaves the system author behind** (137f0a38, minor 6). Its `users` row (R29)
+  stays when this branch is reverted. Main's contacts (peer_store.py:24-28 and spaces.py:9-12 there) don't filter
+  kind `system`, so the people picker lists "Station", and main's room creation accepts it as a member. The row
+  can't simply be deleted while its notices reference it, so a rollback is a decision about that row, not a revert.
 
 ## Out of scope
 
@@ -600,6 +630,19 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 - Notifying people outside the room when a claim is made.
 
 ## Review map: revision 2
+
+**Revision 7: the whole-branch review (Rio Grande, 137f0a38), APPROVE WITH CHANGES**
+
+| Item | What changed | Where | Test |
+|---|---|---|---|
+| IMPORTANT 1: a paired peer can spoof `_station` and invent claims | `_remote_room` builds the view from an allowlist: the snapshot's keys, members as `{peer, id}`, a message's own columns; never `system_author` or `claims` | R44 (the incoming half of R19 and R33) | `test_a_paired_peer_cannot_send_a_station_author_claims_or_extra_fields` |
+| IMPORTANT 2: R37 as the spec says | Only the station's answer spares a re-ask: a listed mention asks its ticket first; `defer` and `answered` charge nothing; a `run` without `first_deferred`, for a ticket not already issued to the watcher, is charged as a new mention, and over budget gets the pause note with its ticket finished. The plan's Task 10 text was wrong; the spec wins | R37 | `test_a_reask_without_a_station_deferral_is_charged`, `test_a_reask_the_station_held_spends_no_budget`, `test_a_retry_of_a_held_reask_is_not_charged_again` |
+| Minor 1: R17's display names untested | A holder's name with `@` and a newline, in the 409, the claim list and the release message | R17 | `test_a_display_name_reaches_a_claim_as_one_line_without_an_at` |
+| Minor 2: a re-ask fetched the whole room first | The ticket first; the room only for a run | S5 | `test_a_reask_asks_for_the_ticket_first_and_fetches_the_room_only_to_run` |
+| Minor 3: `answered` left an earlier ticket running | `answered` finishes it and clears it from the watcher's state | S5 | `test_answered_finishes_an_earlier_ticket` |
+| Minor 4: the on-watch line on a read-only watch | `on_watch` on unread only for a writable watch | S5, R26, R35 | `test_only_a_writable_watch_gets_the_on_watch_line`, `test_the_on_watch_line_shows_for_any_mention_before_it_is_deferred` |
+| Minor 5: a bad cursor stuck in the MCP server | Only a cursor `presence_headers` accepts is remembered | S1, R28 | `test_a_cursor_the_headers_refuse_never_replaces_the_session_name` |
+| Minor 6: the rollback cost | Known limits: main lists "Station" after a revert | Known limits | (none; a statement of cost) |
 
 **D8 verdict (98c179f1)**
 

@@ -2954,6 +2954,13 @@ READ_ONLY_LINE = "Read-only run: I can read and search, but I can't run commands
     `deferred = any(d['message_id'] == mid for d in self.state['deferred'])`. The check becomes
     `if author['kind'] == 'ship' and mid not in self.state['replies'] and not deferred and not self._ship_budget(mention):`,
     so a re-ask spends no budget.
+
+    > **Wrong, corrected at the whole-branch review (Rio Grande, 137f0a38, IMPORTANT 2).** This step spares a re-ask
+    > because the watcher's own state lists it, which the gate notes above (Task 10, the re-ask budget) and spec R37
+    > rule out: only the station's answer spares it. The spec wins. A listed mention now asks for its ticket first;
+    > `defer` and `answered` charge nothing; a `run` without `first_deferred`, for a ticket the station didn't already
+    > issue to the watcher, is charged as a new mention. `test_a_reask_without_a_station_deferral_is_charged` and its
+    > siblings in `agent/tests/test_watch_deferral.py` pin it.
   - The ticket block becomes:
 
     ```python
