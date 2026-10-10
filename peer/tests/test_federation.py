@@ -532,3 +532,36 @@ def test_a_paired_peer_cannot_send_a_station_author_claims_or_extra_fields(two_p
     again = b[0].get_room(b[1], remote_id)
     assert [set(m) for m in again['members']] == [{'peer', 'id'}] * len(again['members'])
     assert '_station' not in json.dumps([again, b[0].list_rooms(b[1])])
+
+
+def _forged_message(a, b, room, message_id, client_id, body, created):
+    """A room.message the origin (a) signs itself, attributing words in its own room to b's local user."""
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    message = {'id': message_id, 'room_id': room['id'], 'author_id': b[2].identity.peer_id + ':' + b[1],
+               'client_message_id': client_id, 'body': body, 'epoch': 1, 'created': created}
+    return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                  action='room.message', recipients=[b[1]], payload={**snapshot, 'message': message})
+
+
+def test_a_paired_origin_cannot_put_words_in_a_local_users_mouth(two_peers):
+    """An origin hosts its room, so it can say anything in it, but it can't make this station show one of its own
+    users as having said it. A message attributed to a local user here stands only when this station sent that exact
+    reply (its room.reply outbox row: author, client message id and body); otherwise it is shown as the origin's,
+    unverified, never as "You"."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Hostile origin', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    own = b[2].identity.peer_id + ':' + b[1]
+    b[0].send_message(b[1], remote, 'honest-1', 'my real words')
+    deliver(b, a)
+    deliver(a, b)
+    assert b[2].receive(_forged_message(a, b, room, 'm-forged', 'forged-1', 'I approve the merge', 5.0))['ok']
+    assert b[2].receive(_forged_message(a, b, room, 'm-altered', 'honest-1', 'my altered words', 6.0))['ok']
+    shown = {m['body']: m for m in b[0].get_room(b[1], remote)['messages']}
+    assert shown['my real words']['author_id'] == own                     # an honest reply keeps its local author
+    for body in ('I approve the merge', 'my altered words'):
+        assert shown[body]['author_id'] != own, body                        # never shown as this station's user
+        assert shown[body]['author_id'].startswith(a[2].identity.peer_id + ':'), body
+        assert shown[body].get('unverified') is True, body

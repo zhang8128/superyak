@@ -72,6 +72,7 @@ class PeerStore:
         result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])]
         result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
+        self._unverified_local_authors(db, row, result['messages'])
         pending = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply' AND status!='withdrawn'", (row['resource_id'],row['origin'])).fetchall()
         for delivery in pending:
             meta = json.loads(delivery['metadata'])
@@ -87,6 +88,26 @@ class PeerStore:
         if not messages:
             result.pop('messages', None)
         return result
+
+    def _unverified_local_authors(self, db, row, messages):
+        """The origin hosts its room and can say anything in it, but never as one of this station's users. A message
+        attributed to a local user (<this peer>:<id>) stands only when this station sent that exact reply, its
+        room.reply outbox row (author, client message id and body); anything else is shown as the origin's, marked
+        unverified, so it is never "You" and never a local person's words."""
+        from .identity import PeerIdentity
+        own = PeerIdentity.load_or_create(self.data_dir).peer_id + ':'
+        sent = set()
+        for delivery in db.execute("SELECT outbox.metadata FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id "
+                                   "WHERE resource_id=? AND peer_id=? AND action='room.reply' AND status!='withdrawn'",
+                                   (row['resource_id'], row['origin'])):
+            local = json.loads(delivery['metadata'])['message']
+            sent.add((local['author_id'], local['client_message_id'], local['body']))
+        for message in messages:
+            author = message.get('author_id')
+            if isinstance(author, str) and author.startswith(own) and (
+                    author, message.get('client_message_id'), message.get('body')) not in sent:
+                message['author_id'] = row['origin'] + ':unverified'
+                message['unverified'] = True
 
     def remote_room(self, actor, key):
         with self.transaction() as db:
