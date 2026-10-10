@@ -193,6 +193,12 @@ session of the same ship that is already handling its messages. Four things went
   `safe_line`, and refused if the note holds a live ship key.
 - **R18.** Claims never change the result of posting, ticketing, merging or running.
 - **R19.** Nothing in this spec federates: claims, presence and the directory cover local rooms and local ships only.
+- **R20.** A claim message never wakes a ship: source kind `claim` is excluded from the ticket decision and the
+  watcher's mention scan, so an @name quoted in a claim note starts no run (Rio Grande, 632b7935, point 4).
+- **R21.** A deferred mention is never dropped: when the watch lapses or its session stops calling, the next cycle
+  decides it again and it runs (or is `answered`) like any fresh mention (point 2).
+- **R22.** The watcher's own answer to a mention always carries `reply_to` set to that mention, so a later cycle sees
+  it as `answered` (point 7; interactive sessions still pass `reply_to` themselves).
 
 ## Security
 
@@ -238,6 +244,10 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   - `test_each_claim_action_posts_one_labelled_safe_message` (R17)
   - `test_claims_never_change_posting_ticketing_or_runs` (R18)
   - `test_claims_and_presence_stay_local` (R19)
+  - `test_a_claim_message_never_wakes_a_ship_even_quoting_an_at_name` (R20)
+- **Lapses and answers:**
+  - `test_a_deferred_mention_runs_when_its_session_stops_calling` (R21, the session-ended case beside R9's lapse)
+  - `test_the_watchers_answer_carries_reply_to_and_is_then_answered` (R22)
 - **Mutation checks** on R1, R3, R7, R8, R10, R13, R15 and R18, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared.
 
 ## Build order
@@ -263,6 +273,8 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 - **Presence is approximate within 30 seconds** (R3) and a run's presence is its ticket, so a run that died without
   finishing shows as live until the ticket's lifetime ends (two hours, tickets.py:9).
 - **Claims are honour-system.** They prevent duplicate claims, not duplicate work by someone who never checks.
+- **Claims are per room, but branches are repo-wide.** Two rooms can each hold a claim on the same `branch:` key;
+  neither sees the other's (point 5). A station-wide view is out of scope for v1.
 
 ## Out of scope
 
