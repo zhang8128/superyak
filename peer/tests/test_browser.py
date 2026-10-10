@@ -623,7 +623,8 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             expect(page.get_by_role("heading", name="Account support")).to_be_visible()
             expect(page.get_by_text("Account support does not open private chats or drafts.")).to_be_visible()
             page.get_by_role("button", name="Create invitation").click()
-            expect(page.get_by_text("One-use invitation", exact=True)).to_be_visible()  # not the panel's "Approving creates a one-use invitation …"
+            # Exact: the access-requests panel also reads "Approving creates a one-use invitation …" once it loads.
+            expect(page.get_by_text("One-use invitation", exact=True)).to_be_visible()
             page.get_by_role("button", name="Show my peer card").click()
             expect(
                 page.locator("#main-content").get_by_text(
