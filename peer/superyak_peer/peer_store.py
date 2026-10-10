@@ -102,8 +102,8 @@ class PeerStore:
         room.reply outbox row (author, client message id and body), and only once: an honest origin holds one copy
         (receive keys peer_messages on room, author and client message id), so a later copy is a replay. Anything
         else is shown as the origin's, marked unverified, so it is never "You" and never a local person's words.
-        The origin still orders its own room: it can drop a reply and show it later, beside another message
-        (PROTOCOL.md, room.message)."""
+        The origin still orders and timestamps its own room: it can drop a reply and show it elsewhere, beside another
+        message, and with a replayed copy it chooses which copy comes first (PROTOCOL.md, room.message)."""
         own = self._own_peer_id() + ':'
         sent = set()
         for delivery in replies:

@@ -135,8 +135,9 @@ Old queued messages are never relabeled with a newer epoch.
 A receiver shows a message attributed to one of its own users only when it matches
 a reply that receiver sent (author, client ID and body), and only the first copy;
 anything else is shown as the origin's, marked unverified. Known limit: the origin
-orders its own room, so it can drop a reply and show it later beside a different
-message, and the receiver cannot detect that.
+orders and timestamps its own room, so it can drop a reply and show it elsewhere,
+beside a different message; when it holds a replayed copy, it also chooses which
+copy comes first and is shown as the reply. The receiver cannot detect either.
 
 `room.withdraw`: empty payload. Removes that recipient's hosted room/messages;
 stale/equal events cannot reintroduce them. The same receipt transaction marks

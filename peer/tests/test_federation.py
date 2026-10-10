@@ -584,3 +584,25 @@ def test_a_replayed_reply_shows_the_local_author_once(two_peers):
     assert len(copies) == 2
     assert [m['author_id'] for m in copies].count(own) == 1
     assert copies[-1]['id'] == 'm-replay' and copies[-1].get('unverified') is True
+
+
+def test_a_failed_identity_read_is_not_cached(tmp_path, monkeypatch):
+    """The station's peer id is read once per store and kept, but only a read that worked: a store whose first read
+    fails must not keep a missing id and show every one of its own replies as unverified until a restart."""
+    from superyak_peer.db import Store
+    from superyak_peer.identity import PeerIdentity
+    store = Store(tmp_path / 'fresh')
+    real, reads = PeerIdentity.load_or_create.__func__, []
+
+    def flaky(cls, data_dir, **kwargs):
+        reads.append(data_dir)
+        if len(reads) == 1:
+            raise OSError('identity.json unreadable')
+        return real(cls, data_dir, **kwargs)
+
+    monkeypatch.setattr(PeerIdentity, 'load_or_create', classmethod(flaky))
+    with pytest.raises(OSError):
+        store._own_peer_id()
+    first = store._own_peer_id()
+    assert first == real(PeerIdentity, store.data_dir).peer_id
+    assert store._own_peer_id() == first and len(reads) == 2        # kept after the read that worked
