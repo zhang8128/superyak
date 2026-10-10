@@ -69,6 +69,7 @@ numbering. Read the spec's S1–S11 and R1–R33 before Task 1. Line references 
   | `PRESENCE_ROWS_PER_SHIP` | 100 | the most presence rows a ship keeps |
   | `WATCH_DEFAULT_MINUTES` | 20 | the default watch lease |
   | `WATCH_MAX_MINUTES` | 120 | the longest watch lease |
+  | `WATCH_SESSIONS_PER_SHIP` | 10 | sessions on watch at once per ship (R43; the commit review's resource cap) |
   | `DEFER_BOUND_SECONDS` | 7200 | a deferral ends as a run after this long |
   | `NOTICE_AFTER_SECONDS` | 1800 | the notice is posted after this long |
   | `DEFERRED_PER_CYCLE` | 20 | deferred mentions re-asked per watcher cycle |

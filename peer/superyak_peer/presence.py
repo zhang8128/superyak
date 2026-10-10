@@ -10,6 +10,7 @@ PRESENCE_IDLE_SECONDS = 86400
 PRESENCE_ROWS_PER_SHIP = 100
 WATCH_DEFAULT_MINUTES = 20
 WATCH_MAX_MINUTES = 120
+WATCH_SESSIONS_PER_SHIP = 10   # sessions on watch at once per ship (S4): pruning never removes one, so it is capped
 ROUND_SECONDS = 900
 SESSION = re.compile(r'[A-Za-z0-9._:-]{1,100}')
 # The agent's version is client_version(): the checkout's commit as 12 hex digits, or 'unknown'. Nothing freer, so a
@@ -47,6 +48,8 @@ class Presence:
             return
         if row is None:
             self._prune_presence(db, ship_id, now)
+            if db.execute('SELECT count(*) FROM presence WHERE ship_id=?', (ship_id,)).fetchone()[0] >= PRESENCE_ROWS_PER_SHIP:
+                return  # every row left is on watch: presence is best effort, so this session goes unrecorded (S2)
             db.execute('INSERT INTO presence(ship_id,name,client,mode,first_seen,last_seen) VALUES(?,?,?,?,?,?)',
                        (ship_id, name, presence['client'], presence['mode'] or 'unknown', now, now))
         else:
@@ -85,8 +88,13 @@ class Presence:
             raise Problem(400, 'A label is 1-40 letters, digits, spaces, dots, colons, dashes or underscores')
         with self.transaction() as db:
             now, name = self.clock(), presence['name']
+            if minutes and db.execute('SELECT count(*) FROM presence WHERE ship_id=? AND name!=? AND watch_until>?',
+                                      (ship_id, name, now)).fetchone()[0] >= WATCH_SESSIONS_PER_SHIP:
+                raise Problem(429, f'A ship can have at most {WATCH_SESSIONS_PER_SHIP} sessions on watch; end one first')
             if db.execute('SELECT 1 FROM presence WHERE ship_id=? AND name=?', (ship_id, name)).fetchone() is None:
                 self._record_presence(db, ship_id, presence)
+                if db.execute('SELECT 1 FROM presence WHERE ship_id=? AND name=?', (ship_id, name)).fetchone() is None:
+                    raise Problem(429, f'This ship already has {PRESENCE_ROWS_PER_SHIP} sessions recorded, all on watch')
             if minutes == 0:
                 db.execute('UPDATE presence SET watch_minutes=NULL, watch_until=NULL, watch_writable=0 WHERE ship_id=? AND name=?',
                            (ship_id, name))

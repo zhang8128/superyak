@@ -111,7 +111,9 @@ want of this:
   - **Live.** A session is **live** while its last seen is within 120 seconds. `live` is shown in the directory and
     decides nothing else.
   - **Pruning.** Rows not seen for 24 hours are pruned when any row of that ship is written. A ship keeps at most 100
-    rows; the least recently seen goes first, never a row on watch.
+    rows; the least recently seen goes first, never a row on watch. If pruning can't free a slot because every row
+    left is on watch, the new session's row is not written: presence is best effort, so its request still succeeds
+    (R43).
 - **S3. Runs are shown from tickets.** A ticket in `running` within its lifetime (tickets.py:9, 24-25) is a live run,
   in mode `build` or `read` from the ticket, started at its `created`. Finished tickets aren't presence.
 - **S4. "On watch" is a renewable lease that an interactive session declares. It never depends on the 120-second live
@@ -130,6 +132,9 @@ want of this:
     (M2). It is the one new client call in this spec and it only ever ends a watch (R2). A session that crashes stops
     renewing, and its watch runs out within its declared minutes, 120 at most.
   - **Only kind `session` can be on watch,** and only through `station_watch`. A run can't.
+  - **At most 10 sessions of one ship are on watch at once.** Declaring an eleventh is refused with 429, naming the
+    cap; renewing or ending one already on watch is not a new watch (R43). Pruning never removes a session on
+    watch, so without this cap a ship could grow its rows without limit (commit review, resource cap).
   - **Why explicit:** a session that happens to be active (a person typing about something else, or a session on
     ten-minute ticks) isn't necessarily reading the ship's mentions. Declaring takes one call, the lease bounds what a
     forgotten or crashed watch costs, and it ends with the session.
@@ -429,6 +434,9 @@ want of this:
 - **R42.** `x-superyak-client` is `hook/` or `mcp/` followed by exactly `client_version()`'s output, 12 lowercase hex
   digits or `unknown`; anything else is stored as `unknown`, so a branch name, a path or prompt text can't reach a
   presence row through it (R4; tightened at the step 2 gate, cbd8774e).
+- **R43.** A ship has at most 10 sessions on watch at once; an eleventh declaration is refused with 429 naming the
+  cap. A ship's presence rows never exceed 100: when every row is on watch, a new session's row is not written,
+  and its request still succeeds.
 
 ## Security
 
@@ -622,6 +630,12 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 | 3. The on-watch line | Shown whenever the session is on watch and its block holds any `mentions_me` item, since the 30 s poll means the mark may not be there yet | S5 (what the session sees), R26 | `test_the_on_watch_line_shows_for_any_mention_before_it_is_deferred` |
 | 4. `answered` on owner mentions is intended | Said under owner mentions and in Known limits: a session reply with `reply_to` answers it, and the owner re-mentions to get a run | S5 (owner mentions), Known limits | `test_a_session_reply_with_reply_to_answers_an_owner_mention` |
 | 5. The refusal status | Step 0 of the order: 422, "Station notices and claim messages are never answered", never 409 (which posts FALLBACK, watch.py:108-113); a new watcher treats it as done; Odo's watcher ships with build step 6 on the Pi | S5 (order), R20, S11 table, Build 6 | `test_a_ticket_for_a_claim_or_notice_is_422_and_the_watcher_stays_silent` |
+
+**Revision 6: the watch cap (an automated commit review, resource cap, via the coordinator)**
+
+| Item | What changed | Where | Test |
+|---|---|---|---|
+| Unbounded rows through watches | At most 10 sessions on watch per ship (429 beyond, naming the cap); the 100-row cap holds even when every row is on watch | S2 (pruning), S4, R43 | `test_a_ship_has_at_most_ten_sessions_on_watch`, `test_a_full_table_never_grows_even_when_every_row_is_on_watch` |
 
 **Revision 5: gaps found while planning and at the step 2 gate (Rio Grande, 8afe2606 and cbd8774e)**
 

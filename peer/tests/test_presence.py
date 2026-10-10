@@ -296,3 +296,39 @@ def test_watch_arguments_are_checked(env):
                 {'label': 'a\nb'}, {'label': 'x' * 41}, {'label': ''}):
         assert watch(client, **bad).status_code == 400, bad
     assert watch(client, minutes=5, label='lead terminal').json()['label'] == 'lead terminal'
+
+
+def test_a_full_table_never_grows_even_when_every_row_is_on_watch(env):
+    """Commit review (resource cap): pruning never deletes a session on watch, so with every one of a ship's 100 rows on
+    watch a new session's row is not written; presence is best effort, so its request still succeeds. With some rows
+    off watch, the least recently seen of those makes room as before."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'])
+    with store.transaction() as db:
+        for n in range(100):
+            db.execute('INSERT INTO presence(ship_id,name,client,mode,first_seen,last_seen,watch_minutes,watch_writable,watch_until) '
+                       'VALUES(?,?,?,?,?,?,20,1,?)', (ship['id'], f'w{n:03d}', 'unknown', 'unknown', clock[0], clock[0], clock[0] + 1200))
+    assert ship_client(app, key, **{**HEADERS, 'x-superyak-session': 'newcomer'}).get('/api/me').status_code == 200
+    names = [r['name'] for r in rows(store, ship['id'])]
+    assert len(names) == 100 and 'newcomer' not in names
+    with store.transaction() as db:
+        db.execute("UPDATE presence SET watch_until=NULL, watch_minutes=NULL WHERE ship_id=? AND name='w000'", (ship['id'],))
+    assert ship_client(app, key, **{**HEADERS, 'x-superyak-session': 'newcomer'}).get('/api/me').status_code == 200
+    names = [r['name'] for r in rows(store, ship['id'])]
+    assert len(names) == 100 and 'newcomer' in names and 'w000' not in names
+
+
+def test_a_ship_has_at_most_ten_sessions_on_watch(env):
+    """Commit review (resource cap): the eleventh session to declare a watch is refused, naming the cap; renewing one
+    already on watch is not a new watch; once one ends, another may start."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'])
+    on = lambda n, minutes=20: watch(ship_client(app, key, **{**HEADERS, 'x-superyak-session': f's{n}'}), minutes=minutes)
+    assert all(on(n).status_code == 200 for n in range(10))
+    refused = on(10)
+    assert refused.status_code == 429 and '10' in refused.json()['error']
+    assert on(3, 30).status_code == 200                     # a renewal, not a new watch
+    assert on(4, 0).status_code == 200                      # one ends
+    assert on(10).status_code == 200
