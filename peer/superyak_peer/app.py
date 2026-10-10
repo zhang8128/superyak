@@ -234,7 +234,9 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.post('/api/ships/me/tickets')
     async def ticket_issue(request: Request):
         who, data = ship_member(request)['id'], await body(request)
-        return store.issue_ticket(who, data.get('message_id'), app.state.federation.identity.peer_id)
+        asked = data.get('decisions')
+        decisions = isinstance(asked, list) and {'defer', 'answered'} <= {d for d in asked if isinstance(d, str)}
+        return store.issue_ticket(who, data.get('message_id'), app.state.federation.identity.peer_id, decisions=decisions)
 
     @app.post('/api/ships/me/unread')
     async def inbox_unread(request: Request):

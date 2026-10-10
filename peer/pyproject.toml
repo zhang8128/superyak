@@ -83,6 +83,7 @@ only-include = [
     "tests/test_chats.py",
     "tests/test_cli.py",
     "tests/test_data_sources.py",
+    "tests/test_deferrals.py",
     "tests/test_dockings.py",
     "tests/test_door.py",
     "tests/test_federation.py",

@@ -422,6 +422,9 @@ want of this:
   deferral it sees today's responses key for key.
 - **R37.** A re-ask of a deferred mention is exempt from the five-an-hour ship budget only when the station's own
   `deferrals` row exists for that mention (the station's `defer` decision), never because the watcher's state says so.
+  The station says so in its answer: a `defer`, and a `run` that resolves a deferral it held, carry that row's
+  `first_deferred`; a run for a mention it never deferred carries none. The budget is the watcher's
+  (watch.py:15, 175), so the watcher spares a re-ask only when the answer carries `first_deferred`.
 - **R38.** A resident DM reply is recognised by its mention having no `seq`. Every mention from `/api/mentions` carries
   one and the deferred list keeps it, so a room mention can never pass as a DM reply and always gets the read-only
   line in a read run.

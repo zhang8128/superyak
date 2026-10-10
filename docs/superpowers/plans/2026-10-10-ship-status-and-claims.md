@@ -680,6 +680,9 @@ R39 → Tasks 5 and 10; R40 → Task 11; R41 → Tasks 8 and 14; R42 → Task 2 
     state lists it.
   - Test `test_a_reask_without_a_station_deferral_is_charged`: the watcher's state lists the mention as deferred,
     the station has no deferral row, and the budget is charged.
+  - Station half, built in Task 5: a `defer`, and a `run` resolving a deferral the station held, carry
+    `first_deferred`; a fresh run carries none (`test_only_the_stations_own_deferral_row_marks_a_reask`). The watcher
+    spares a re-ask from its budget only when the station's answer carries `first_deferred`.
 - **Task 10, resident DM replies.**
   - A resident DM reply is recognised by its mention having no `seq`. Every mention from `/api/mentions` carries
     one, and the deferred list keeps it.
