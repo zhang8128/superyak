@@ -554,6 +554,11 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 
 ## Known limits
 
+- **A ship can keep its own watch alive with any authenticated request** (Rio Grande, 7cb526a8). Presence is
+  written inside the key check (S1), before a route's own checks, so a request that authenticates and is then
+  refused still renews that ship's own presence and, once a watch is declared, its lease. It can never touch
+  another ship's rows (R1), and the effect stays inside the ship's own trust boundary: at worst a ship keeps its
+  own watcher deferring, which the 120-minute bound on every deferral (R21) caps.
 - **A session that answers without `reply_to` isn't seen as having answered.** When its watch ends, the watcher runs
   the mention and may answer it a second time. The hook's on-watch line and `station_post`'s reminder (R26, R27) ask
   for `reply_to`.
