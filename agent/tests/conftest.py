@@ -24,6 +24,12 @@ class FakeStation:
         self.blocks, self.instruction_state, self.drafts = {}, {}, []
         self.briefs = {}  # room id -> the brief as GET /api/chats/{id} shows it, or None
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
+        self.requests = []  # every call: method, path, JSON body and its x-superyak-* headers (spec S1)
+        self.watches = {}  # (ship, session) -> {minutes, writable, label}
+        # ship status: deferred mention ids; room id -> deferred ids; message id -> 'claim' or 'notice'; GET /api/ships/directory
+        self.deferred_marks, self.deferred_here, self.kinds, self.directory_rows = set(), {}, {}, []
+        self.claims = {}  # room id -> active claims, as GET /api/chats/{id}/claims shows them
+        self.ticket_bodies, self.decide = [], {}  # every ticket request's JSON; message id -> its answer when decisions are asked
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -65,12 +71,17 @@ class FakeStation:
 
     def view(self, room):
         last = max([m['created'] for m in room['messages']], default=0.0)
+        system = next((self.users[m['author_id']] for m in room['messages'] if self.users.get(m['author_id'], {}).get('kind') == 'system'), None)
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
                 'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'brief': self.briefs.get(room['id']),
-                'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']]}
+                'claims': self.claims.get(room['id'], []),
+                'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']],
+                **({'system_author': system} if system else {})}
 
     def source_of(self, message):
+        if message['id'] in self.kinds:
+            return {'kind': self.kinds[message['id']]}
         author = self.users.get(message['author_id'], {})
         if author.get('kind') != 'ship':
             return None
@@ -82,6 +93,8 @@ class FakeStation:
     def __call__(self, method, url, headers, data):
         if self.down:
             raise OSError('station unreachable')
+        self.requests.append({'method': method, 'path': urlsplit(url).path, 'body': json.loads(data) if data else None,
+                              'presence': {k: v for k, v in headers.items() if k.startswith('x-superyak-')}})
         parts = urlsplit(url)
         path, query = parts.path, parse_qs(parts.query)
         key = headers.get('authorization', '').removeprefix('Bearer ')
@@ -127,7 +140,24 @@ class FakeStation:
                     self.sources[message['id']] = ticket_id
                 if reply_to is not None:
                     self.replies[message['id']] = reply_to
-                return ok(dict(message, replayed=False), 201)
+                waiting = self.deferred_here.get(room['id']) if reply_to is None else None
+                return ok(dict(message, replayed=False, **({'deferred_here': waiting} if waiting else {})), 201)
+            if segments[3:] == ['claims']:
+                if method == 'GET':
+                    return ok(self.claims.get(room['id'], []))
+                payload = json.loads(data)
+                key = payload['key'].lower()
+                held = next((c for c in self.claims.get(room['id'], []) if c['key'] == key), None)
+                if held and held['holder_id'] != me:
+                    return 409, json.dumps({'error': f'{held["holder_name"]} holds `{key}` until 18:00 UTC'}).encode()
+                made = {'id': f'c-{key}', 'room_id': room['id'], 'key': key, 'holder_id': me, 'holder_name': self.users[me]['name'],
+                        'note': payload.get('note') or '', 'created': self.clock, 'expires': self.clock + 60 * payload.get('minutes', 240)}
+                self.claims[room['id']] = [c for c in self.claims.get(room['id'], []) if c['key'] != key] + [made]
+                return ok(made, 201)
+            if method == 'POST' and segments[3:] == ['claims', 'release']:
+                key = json.loads(data)['key'].lower()
+                self.claims[room['id']] = [c for c in self.claims.get(room['id'], []) if c['key'] != key]
+                return ok({'released': key})
         if method == 'GET' and path == '/api/mentions':
             after, rows = int(query.get('after', ['0'])[0]), []  # one page holds at most 50, as on the station
             for row in self.mention_rows:
@@ -144,10 +174,13 @@ class FakeStation:
             rows = [(int(m['id'][1:]), r, m) for r in self.rooms.values() if me in r['member_ids'] for m in r['messages']
                     if m['author_id'] != me and int(m['id'][1:]) > position]
             rows.sort(key=lambda row: row[0])
-            return ok({'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': [
+            return ok({'cursor': name, 'position': position, 'more': len(rows) > limit,
+                       **({'on_watch': True} if self.watches.get((me, name), {}).get('writable') else {}), 'messages': [  # R26, R35
                 {'event_id': n, 'message_id': m['id'], 'room_id': r['id'], 'room_title': r['title'], 'body': m['body'], 'created': m['created'],
                  'author': self.users[m['author_id']], 'mentions_me': any(x['message_id'] == m['id'] and x['user_id'] == me for x in self.mention_rows),
-                 'reply_to': self.replies.get(m['id']), 'source': self.source_of(m)} for n, r, m in rows[:limit]]})
+                 'reply_to': self.replies.get(m['id']), 'source': self.source_of(m),
+                 **({'deferred': {'author_verified': self.users[m['author_id']], 'would_be': 'read'}} if m['id'] in self.deferred_marks else {})}
+                for n, r, m in rows[:limit]]})
         if method == 'POST' and path == '/api/ships/me/unread/advance':
             payload = json.loads(data)
             name = payload.get('cursor') or 'default'
@@ -158,16 +191,20 @@ class FakeStation:
             self.keys.pop(key)
             return ok({'ok': True})
         if method == 'POST' and path == '/api/ships/me/tickets':
-            message_id = json.loads(data)['message_id']
+            asked = json.loads(data)
+            self.ticket_bodies.append(asked)
+            message_id, decisions = asked['message_id'], asked.get('decisions') == ['defer', 'answered']
             if message_id in self.ticket_override:
                 status, payload = self.ticket_override[message_id]
                 return status, json.dumps(payload).encode()
+            if decisions and message_id in self.decide:
+                return ok(self.decide[message_id])
             message = next((m for r in self.rooms.values() if me in r['member_ids'] for m in r['messages'] if m['id'] == message_id), None)
             if message is None:
                 return 404, b'{"error": "Not found"}'
             existing = next((t for t in self.tickets.values() if t['ship_id'] == me and t['message_id'] == message_id), None)
             if existing:
-                return (409, b'{"error": "This message has already been answered"}') if existing['status'] == 'finished' else ok(existing)
+                return (409, b'{"error": "This message has already been answered"}') if existing['status'] == 'finished' else ok(dict(existing, decision='run') if decisions else existing)
             ship, author = self.users[me], self.users[message['author_id']]
             mentioned = any(r['message_id'] == message_id and r['user_id'] == me for r in self.mention_rows)
             build = bool(ship['owner_id'] and mentioned and author['kind'] == 'person' and author['id'] == ship['owner_id'])
@@ -177,7 +214,7 @@ class FakeStation:
                       'instructions': [], 'blocks': self.blocks.get(me, ''), 'footer': f'Builder for {self.users[ship["owner_id"]]["name"]} (owner)' if build else '',
                       'status': 'running'}
             self.tickets[ticket['id']] = ticket
-            return ok(ticket)
+            return ok(dict(ticket, decision='run') if decisions else ticket)
         if method == 'GET' and path == '/api/ships/me/instructions':
             return ok(self.instruction_state.get(me) or {'instructions': [], 'layers': [], 'blocks': self.blocks.get(me, '')})
         if method == 'POST' and path == '/api/ships/me/drafts':
@@ -190,6 +227,20 @@ class FakeStation:
                 return 404, b'{"error": "Not found"}'
             ticket['status'] = 'finished'
             return ok(ticket)
+        if method == 'GET' and path == '/api/ships/directory':
+            return ok(self.directory_rows)
+        if method == 'POST' and path == '/api/ships/me/watch':
+            name, payload = headers.get('x-superyak-session'), json.loads(data)
+            if not name:
+                return 400, b'{"error": "Watching needs this session\'s name in the x-superyak-session header"}'
+            minutes = payload.get('minutes', 20)
+            if minutes:
+                self.watches[(me, name)] = {'minutes': minutes, 'writable': payload.get('writable', False), 'label': payload.get('label')}
+            else:
+                self.watches.pop((me, name), None)
+            held = self.watches.get((me, name))
+            return ok({'name': name, 'on_watch': held is not None, 'watch_until': self.clock + minutes * 60 if held else None,
+                       'writable': bool(held and held['writable']), 'label': held['label'] if held else None})
         return 403, b'{"error": "Ship keys cannot use this route"}'
 
 

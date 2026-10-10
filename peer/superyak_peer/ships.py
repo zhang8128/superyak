@@ -76,7 +76,7 @@ class Ships:
             require(db.execute("SELECT id FROM users WHERE id=? AND kind='ship'", (ship_id,)).fetchone())
             return self._new_ship_key(db, ship_id)
 
-    def ship_for_key(self, key):
+    def ship_for_key(self, key, presence=None):
         if not isinstance(key, str) or not 0 < len(key) <= 128:
             raise Problem(401, 'Invalid ship key')
         with self.transaction() as db:
@@ -87,6 +87,8 @@ class Ships:
             if not row:
                 raise Problem(401, 'Invalid ship key')
             db.execute('UPDATE ship_keys SET last_used=? WHERE key_hash=?', (self.clock(), token_hash(key)))
+            if presence:  # S1: inside this transaction, so no new contention and no race (R3)
+                self._record_presence(db, row['id'], presence)
             return public_user(row)
 
     def revoke_presented_key(self, key):

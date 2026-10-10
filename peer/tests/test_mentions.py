@@ -84,3 +84,23 @@ def test_ships_post_at_most_thirty_messages_a_minute_and_retries_do_not_count(en
     assert odo.post(f'/api/chats/{room}/messages', json={'client_message_id': 'm30', 'body': '30'}).status_code == 429
     clock[0] += 61
     assert odo.post(f'/api/chats/{room}/messages', json={'client_message_id': 'm30', 'body': '30'}).status_code == 201
+
+
+def test_every_room_mention_carries_the_stations_seq(env):
+    """R38: the station numbers each room mention as it records it (mentions.seq, INTEGER PRIMARY KEY AUTOINCREMENT)
+    and /api/mentions hands every row out with it, from people and ships, in every room, page after page. A mention
+    with no seq is the resident's own DM reply and only that, so a room mention never loses the read-only line."""
+    app, clients, users, clock, ship, odo, room = setup(env)
+    store = app.state.store
+    other = store.create_station_ship('worf', 'Worf')
+    worf = TestClient(app, base_url='http://testserver', headers={'origin': 'http://testserver', 'authorization': f'Bearer {store.issue_ship_key(other["id"])}'})
+    bridge = clients[0].post('/api/chats', json={'title': 'Bridge', 'member_ids': [ship['id'], other['id']]}).json()['id']
+    speakers = [(clients[0], room), (clients[1], room), (clients[0], bridge), (worf, bridge)]
+    for n in range(24):
+        client, where = speakers[n % 4]
+        say(client, where, f'm{n}', f'@odo question {n}')
+    seqs, after = [], 0
+    while page := odo.get('/api/mentions', params={'after': after, 'limit': 7}).json():
+        assert all(type(m['seq']) is int and m['seq'] > 0 for m in page)
+        seqs, after = seqs + [m['seq'] for m in page], page[-1]['seq']
+    assert len(seqs) == 24 and seqs == sorted(set(seqs))

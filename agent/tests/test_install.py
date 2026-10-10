@@ -125,8 +125,8 @@ def test_every_installed_hook_exits_0_and_prints_nothing_when_the_checkout_is_go
     assert subprocess.run([sys.executable, str(gone)], capture_output=True).returncode == 2  # what the guard is for
     settings = tmp_path / 'settings.json'
     install.install_hooks(settings, tmp_path / 'station.json', messages=messages)
-    commands = hook_commands(settings, 'SessionStart') + hook_commands(settings, 'UserPromptSubmit')
-    assert len(commands) == 2
+    commands = hook_commands(settings, 'SessionStart') + hook_commands(settings, 'UserPromptSubmit') + hook_commands(settings, 'SessionEnd')
+    assert len(commands) == 3
     for command in commands:
         done = subprocess.run(['sh', '-c', command], capture_output=True, input=b'{"session_id": "s1"}', timeout=30)
         assert (done.returncode, done.stdout) == (0, b''), command
@@ -141,12 +141,13 @@ def test_docking_again_upgrades_unguarded_hooks_without_adding_a_second(tmp_path
     old = unguarded(SETTINGS_CONFIG, messages)
     settings.write_text(json.dumps({'hooks': {event: [{'hooks': [mine, {'type': 'command', 'command': command, 'timeout': 10}]}]
                                               for event, command in old.items()}}))
-    assert sorted(install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)) == ['SessionStart', 'UserPromptSubmit']
+    assert sorted(install.install_hooks(settings, SETTINGS_CONFIG, messages=messages)) == ['SessionEnd', 'SessionStart', 'UserPromptSubmit']
     for event, wanted in install._hook_commands(SETTINGS_CONFIG, messages).items():
         assert hook_commands(settings, event) == ['notify-me', wanted]
     assert install.install_hooks(settings, SETTINGS_CONFIG, messages=messages) == []
     assert install.remove_hooks(settings) is True
     assert hook_commands(settings, 'SessionStart') == ['notify-me'] and hook_commands(settings, 'UserPromptSubmit') == ['notify-me']
+    assert hook_commands(settings, 'SessionEnd') == ['notify-me']
 
 
 def test_remove_hooks_skips_what_it_cannot_read_and_drops_emptied_events(tmp_path):

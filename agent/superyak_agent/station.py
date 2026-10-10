@@ -1,4 +1,5 @@
 """Ship-side station client and the machine's private ship configuration."""
+import functools
 import http.client
 import json
 import os
@@ -15,6 +16,42 @@ HOME = Path.home() / '.superyak'
 MESSAGE_LIMIT = 20000  # the station's longest message
 PLAIN_ID = re.compile(r'[A-Za-z0-9:_.-]{1,200}')
 CONFIG = HOME / 'station.json'
+SESSION_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')  # the station's cursor names (inbox spec I1)
+CHECKOUT = Path(__file__).resolve().parents[2]
+ON_WATCH_LINE = 'You are on watch: answer each mention of this ship with station_post reply_to=<its id>.'
+DEFERRED_MARK = '(deferred to you; the station would have given a read-only run)'
+
+
+def presence_headers(name, client, mode=None):
+    """S1: the headers that name this session to the station, or {} for a client without a real session name; never
+    `default`, so two sessions never share a presence row (R28). The station ignores malformed ones."""
+    if not isinstance(name, str) or not SESSION_NAME.fullmatch(name) or name == 'default':
+        return {}
+    headers = {'x-superyak-session': name, 'x-superyak-client': client}
+    if mode in ('write', 'plan'):
+        headers['x-superyak-mode'] = mode
+    return headers
+
+
+@functools.lru_cache(maxsize=1)
+def client_version(root=CHECKOUT):
+    """This checkout's commit as 12 hex digits, read once from git's own files (no subprocess: the hook must stay
+    fast); 'unknown' when it can't be read. The directory shows it to a ship's owner, who can see which sessions run
+    code older than a fix and restart them (spec Known limits)."""
+    try:
+        git = root / '.git'
+        if git.is_file():  # a worktree: .git names its own git directory
+            git = (root / git.read_text().split('gitdir:', 1)[1].strip()).resolve()
+        common = (git / (git / 'commondir').read_text().strip()).resolve() if (git / 'commondir').is_file() else git
+        head = (git / 'HEAD').read_text().strip()
+        if head.startswith('ref: '):
+            ref = head[5:]
+            found = next((p for p in (git / ref, common / ref) if p.is_file()), None)
+            head = (found.read_text().strip() if found else
+                    next(line.split()[0] for line in (common / 'packed-refs').read_text().splitlines() if line.endswith(' ' + ref)))
+        return head[:12] if re.fullmatch(r'[0-9a-f]{40,64}', head) else 'unknown'
+    except (OSError, ValueError, IndexError, StopIteration):
+        return 'unknown'
 
 
 class StationError(Exception):
@@ -40,10 +77,11 @@ def urllib_transport(timeout=30):
 class StationClient:
     """HTTP client for one ship. `origin` is the station's public origin when `base_url` is the
     loopback address behind `tailscale serve` (Odo on the Pi)."""
-    def __init__(self, base_url, key=None, origin=None, transport=None):
+    def __init__(self, base_url, key=None, origin=None, transport=None, presence=None):
         self.base = base_url.rstrip('/')
         self.origin = (origin or self.base).rstrip('/')
         self.key, self.transport = key, transport or urllib_transport()
+        self.presence = dict(presence or {})  # spec S1: names the session on every call; {} sends nothing new
 
     def request(self, method, path, body=None):
         headers = {'origin': self.origin, 'accept': 'application/json'}
@@ -52,6 +90,7 @@ class StationClient:
             headers.update({'host': host, 'x-forwarded-proto': scheme})
         if self.key:
             headers['authorization'] = f'Bearer {self.key}'
+        headers.update(self.presence)
         data = None
         if body is not None:
             headers['content-type'] = 'application/json'
@@ -86,17 +125,43 @@ class StationClient:
             payload['reply_to'] = reply_to
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/messages', payload)
 
+    def watch(self, minutes, writable=False, label=None):
+        payload = {'minutes': minutes, 'writable': writable}
+        if label is not None:
+            payload['label'] = label
+        return self.request('POST', '/api/ships/me/watch', payload)
+
+    def claim(self, room_id, key, note=None, minutes=None):
+        payload = {'key': key}
+        if note is not None:
+            payload['note'] = note
+        if minutes is not None:
+            payload['minutes'] = minutes
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims', payload)
+
+    def claims(self, room_id):
+        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}/claims')
+
+    def release(self, room_id, key):
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims/release', {'key': key})
+
     def unread(self, cursor, limit=30, wait=0):
         return self.request('POST', '/api/ships/me/unread', {'cursor': cursor, 'limit': limit, 'wait': wait})
 
     def advance(self, cursor, to):
         return self.request('POST', '/api/ships/me/unread/advance', {'cursor': cursor, 'to': to})
 
-    def ticket(self, message_id):
-        return self.request('POST', '/api/ships/me/tickets', {'message_id': message_id})
+    def ticket(self, message_id, decisions=False):
+        payload = {'message_id': message_id}
+        if decisions:
+            payload['decisions'] = ['defer', 'answered']  # ship status S5; an older station ignores it (R23)
+        return self.request('POST', '/api/ships/me/tickets', payload)
 
     def finish_ticket(self, ticket_id):
         return self.request('POST', f'/api/ships/me/tickets/{quote(ticket_id, safe="")}/finish', {})
+
+    def directory(self):
+        return self.request('GET', '/api/ships/directory')
 
     def instructions(self):
         return self.request('GET', '/api/ships/me/instructions')
@@ -202,7 +267,29 @@ def source_label(message):
         if source.get('mode') == 'build':
             return f'builder run for {label(source["root_name"])}' if source.get('root_name') else 'builder run'
         return 'read-only run'
+    if source.get('kind') == 'notice':
+        return 'station notice'
+    if source.get('kind') == 'claim':
+        return 'claim'
     return 'no run ticket' if source.get('kind') == 'post' else ''
+
+
+def utc_time(seconds):
+    """Unix seconds from the station as a UTC minute."""
+    try:
+        return time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(float(seconds)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return 'unknown'
+
+
+def authors(room):
+    """Who wrote a room's messages, by id: its members, and the system author (spec S11) when the room view names it,
+    so describe() names the station's notice "Station (@_station, system)" and never "someone"."""
+    found = {m['id']: m for m in room.get('members', [])} if isinstance(room, dict) else {}
+    system = room.get('system_author') if isinstance(room, dict) else None
+    if isinstance(system, dict) and system.get('id'):
+        found[system['id']] = system
+    return found
 
 
 def defuse(text):
@@ -239,3 +326,15 @@ def brief_block(room):
     members = {m['id']: m for m in room.get('members', [])}
     return (f'Room brief (revision {revision}, updated {brief_date(brief.get("updated"))})\n'
             + fence_message(members.get(brief.get('author_id')), brief['body'], len(brief['body'])))
+
+
+def claims_block(room):
+    """S8: a room's active claims under one header line, fenced like a message: holders' names and notes are quoted
+    data, never instructions. '' when there are none, or from a station older than claims."""
+    claims = room.get('claims') if isinstance(room, dict) else None
+    lines = [f'- `{label(c.get("key"), 100)}` held by {label(c.get("holder_name"))} until {utc_time(c.get("expires"))}'
+             + (f': {label(c.get("note"), 200)}' if c.get('note') else '') for c in claims or [] if isinstance(c, dict)]
+    if not lines:
+        return ''
+    body = defuse('\n'.join(lines))
+    return f'Active claims ({len(lines)})\n' + fence_external('the station (claims in this room)', body, limit=len(body))

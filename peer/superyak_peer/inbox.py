@@ -121,11 +121,18 @@ class Inbox:
                 mentioned = db.execute('SELECT 1 FROM mentions WHERE message_id=? AND user_id=?', (found['id'], actor)).fetchone()
                 if row['resource_id'] not in sources:  # labelled exactly as get_room labels them (spec A)
                     sources[row['resource_id']] = self._sources(db, row['resource_id'])
-                messages.append({'event_id': row['id'], 'message_id': found['id'], 'room_id': row['resource_id'],
-                                 'room_title': row['title'], 'body': found['body'], 'created': found['created'],
-                                 'author': self._inbox_author(db, found['author_id']), 'mentions_me': bool(mentioned),
-                                 'reply_to': self._reply_to(db, found['id']), 'source': sources[row['resource_id']].get(found['id'])})
-        return {'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': messages}
+                item = {'event_id': row['id'], 'message_id': found['id'], 'room_id': row['resource_id'],
+                        'room_title': row['title'], 'body': found['body'], 'created': found['created'],
+                        'author': self._inbox_author(db, found['author_id']), 'mentions_me': bool(mentioned),
+                        'reply_to': self._reply_to(db, found['id']), 'source': sources[row['resource_id']].get(found['id'])}
+                if mentioned and db.execute('SELECT 1 FROM deferrals WHERE ship_id=? AND message_id=?', (actor, found['id'])).fetchone():
+                    item['deferred'] = {'author_verified': item['author'], 'would_be': 'read'}  # R26
+                messages.append(item)
+            on_watch = self._session_on_writable_watch(db, actor, name)  # R26: the line asks for answers; only a writable watch takes them
+        got = {'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': messages}
+        if on_watch:  # R35: present only when it has something to say, so an old client sees today's keys
+            got['on_watch'] = True
+        return got
 
     def _reply_to(self, db, message_id):
         row = db.execute('SELECT reply_to FROM message_replies WHERE message_id=?', (message_id,)).fetchone()

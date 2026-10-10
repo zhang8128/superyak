@@ -505,12 +505,16 @@ function sourceLabel(message) {
   const source = message.source;
   if (!source) return "";
   if (source.kind === "run") return source.mode === "build" ? (source.root_name ? `builder run for ${source.root_name}` : "builder run") : "read-only run";
+  if (source.kind === "notice") return "station notice";
+  if (source.kind === "claim") return "claim";
   return source.kind === "post" ? "no run ticket" : "";
 }
 
 function messageMarkup(message) {
   const mine = isSelf(message.author_id);
-  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(mine ? "You" : participantName(message.author_id))}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
+  const system = state.room?.system_author;  // the station's own author, known by id, never by display name (R31)
+  const author = mine ? "You" : system && message.author_id === system.id ? "Station" : participantName(message.author_id);
+  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
 }
 
 function briefMeta(brief) {

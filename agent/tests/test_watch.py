@@ -3,7 +3,7 @@ import sys
 import pytest
 from superyak_agent.runs import RunResult, RunTimeout
 from superyak_agent.station import StationClient, StationError
-from superyak_agent.watch import FALLBACK, Watcher, build_prompt
+from superyak_agent.watch import FALLBACK, READ_ONLY_LINE, Watcher, build_prompt
 
 
 class FakeRunner:
@@ -39,7 +39,7 @@ def test_owner_gets_a_builder_run_and_others_read_only_once_each(station, ship_c
     assert w.cycle() == 2
     assert [(mode, mid) for mode, mid, _ in runner.calls] == [('build', asked['id']), ('read', question['id'])]
     assert bodies(fake, room)[-2].startswith('Added notes\n\nBranch `lighthouse/serenity/') and 'not pushed' in bodies(fake, room)[-2]
-    assert bodies(fake, room)[-1] == f'read answer to {question["id"]}'
+    assert bodies(fake, room)[-1] == f'{READ_ONLY_LINE}\n\nread answer to {question["id"]}'
     assert [m['client_message_id'] for m in fake.rooms[room]['messages'][-2:]] == [f'reply-{asked["id"]}', f'reply-{question["id"]}']
     assert w.cycle() == 0 and watcher(fake, ship_config, tmp_path, runner).cycle() == 0
 

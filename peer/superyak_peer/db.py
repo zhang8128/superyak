@@ -16,6 +16,9 @@ from .tickets import Tickets, TICKET_SCHEMA
 from .instructions import Instructions
 from .inbox import Inbox, INBOX_SCHEMA
 from .briefs import Briefs, BRIEF_SCHEMA
+from .presence import Presence, PRESENCE_SCHEMA
+from .system_author import SystemAuthor, SYSTEM_SCHEMA
+from .room_claims import RoomClaims, CLAIM_SCHEMA
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
 from .dispatch import DispatchGate
@@ -40,7 +43,7 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims):
     def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None):
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
@@ -54,7 +57,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         os.close(fd)
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA)
         # Additive migration preserves every existing identity and credential.
         with self.transaction() as db:
             columns = {row['name'] for row in db.execute('PRAGMA table_info(users)')}
@@ -68,6 +71,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             for name in ('share_url', 'share_status'):
                 if name not in request_columns:
                     db.execute(f'ALTER TABLE access_requests ADD COLUMN {name} TEXT')
+        self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):

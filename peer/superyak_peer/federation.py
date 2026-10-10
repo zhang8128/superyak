@@ -65,6 +65,8 @@ class Federation:
                     contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action LIKE 'layer.%'", (rid,)))
                     action = 'layer.withdraw' if kind == 'layer.withdrawn' else 'layer.release'
                 elif kind in ('chat.message', 'chat.membership'):
+                    if kind == 'chat.message' and self.store._never_federates(db, json.loads(event['payload']).get('message_id')):
+                        continue  # R33: system and kind messages stay on this station
                     contacts.update(r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (rid,)))
                     contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action IN ('room.roster','room.message','room.withdraw')", (rid,)))
                     action = 'room.message' if kind == 'chat.message' else 'room.roster'

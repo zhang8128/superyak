@@ -2,6 +2,11 @@
 import json
 from .common import Problem, require, uid, text, ids, encode
 
+# What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
+# columns (plus this station's delivery state for a queued reply). An allowlist, never a denylist (R44).
+REMOTE_ROOM_KEYS = ('title', 'owner_id', 'member_ids', 'linked_room_id', 'created', 'last_activity')
+REMOTE_MESSAGE_KEYS = ('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'state')
+
 PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS remote_contacts(id TEXT PRIMARY KEY, peer_id TEXT NOT NULL REFERENCES peers(peer_id), user_id TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(peer_id,user_id));
@@ -17,13 +22,13 @@ INSERT OR IGNORE INTO federation_cursor VALUES(1,0);
 class PeerStore:
     def _known_contacts(self, db, members):
         for key in members:
-            if db.execute('SELECT 1 FROM users WHERE id=?', (key,)).fetchone():
+            if db.execute("SELECT 1 FROM users WHERE id=? AND kind!='system'", (key,)).fetchone():  # R34: never an audience
                 continue
             require(db.execute('SELECT 1 FROM remote_contacts JOIN peers USING(peer_id) WHERE id=? AND paired=1', (key,)).fetchone())
 
     def contacts(self, actor):
         with self.transaction() as db:
-            local = [dict(r) for r in db.execute('SELECT id,name FROM users WHERE id!=? ORDER BY name,id', (actor,))]
+            local = [dict(r) for r in db.execute("SELECT id,name FROM users WHERE id!=? AND kind!='system' ORDER BY name,id", (actor,))]
             remote = [dict(r) for r in db.execute('SELECT id,name,peer_id,user_id FROM remote_contacts JOIN peers USING(peer_id) WHERE paired=1 ORDER BY name,id')]
             return local + [{**r, 'remote': True} for r in remote]
 
@@ -61,9 +66,12 @@ class PeerStore:
 
     def _remote_room(self, db, actor, key, *, messages=True):
         row, value = self._remote_inbox(db, actor, key, 'room')
-        result = {**value, 'id':key, 'origin':row['origin'], 'epoch':row['revision']}
-        for key_name in ('brief', 'brief_revision'):  # briefs never cross stations: what a paired peer sends is dropped
-            result.pop(key_name, None)
+        # Only the keys a room snapshot has (federation._room_snapshot), as an allowlist: whatever else a paired peer
+        # sends -- a brief, a system author, claims, anything new -- never reaches this station's room view (R44).
+        result = {k: value[k] for k in REMOTE_ROOM_KEYS if k in value}
+        result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])]
+        result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
+        result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
         pending = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply' AND status!='withdrawn'", (row['resource_id'],row['origin'])).fetchall()
         for delivery in pending:
             meta = json.loads(delivery['metadata'])
@@ -72,7 +80,9 @@ class PeerStore:
             local = meta['message']
             if not any(m['author_id']==local['author_id'] and m['client_message_id']==local['client_message_id'] for m in result['messages']):
                 result['messages'].append({**local, 'state':delivery['status']})
-        result['messages'].sort(key=lambda m:(m['created'],m['id']))
+        # A stable sort on time alone: the origin's own order and this station's queued replies keep their insertion
+        # order when several share an instant (ids are random, so they can't break the tie).
+        result['messages'].sort(key=lambda m: m['created'])
         result['last_activity'] = max([result['last_activity']] + [m['created'] for m in result['messages']])
         if not messages:
             result.pop('messages', None)

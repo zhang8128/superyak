@@ -1,7 +1,7 @@
 import socket
 import threading
 import pytest
-from superyak_agent.station import StationClient, StationError, describe, label, read_json, urllib_transport, write_private
+from superyak_agent.station import StationClient, StationError, describe, label, read_json, source_label, urllib_transport, write_private
 
 
 def test_client_sends_key_and_origin_and_reads_rooms(station):
@@ -128,3 +128,16 @@ def test_concurrent_private_writers_never_leave_invalid_json(tmp_path):
     for thread in threads:
         thread.join()
     assert errors == [] and read_json(path) in values and [p.name for p in path.parent.iterdir()] == ['hook-state.json']
+
+
+def test_labels_never_raise_on_a_source_kind_or_author_kind_they_do_not_know():
+    """Rio Grande (8cd296f1): a station may add a source kind or a user kind later; an agent's views must not break.
+    An unknown source kind, or a source of an odd shape, labels as '' (no claim about where it came from), and a
+    system author, or one of a kind not invented yet, is described plainly."""
+    assert source_label({'source': {'kind': 'some-future-kind'}}) == ''
+    for message in ({'source': {}}, {'source': {'kind': None}}, {'source': {'kind': ['list']}}, {'source': 'notice'},
+                    {'source': None}, {}, None, 'not a message'):
+        assert source_label(message) == '', message
+    assert source_label({'source': {'kind': 'notice'}}) == 'station notice' and source_label({'source': {'kind': 'claim'}}) == 'claim'
+    assert describe({'id': 's', 'username': '_station', 'name': 'Station', 'kind': 'system'}) == 'Station (@_station, system)'
+    assert describe({'kind': 'some-future-kind'}) == 'unknown (@unknown, some-future-kind)'

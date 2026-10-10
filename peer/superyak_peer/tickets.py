@@ -7,10 +7,16 @@ from .instructions import render_blocks
 from .ships import safe_line
 
 TICKET_LIFETIME = 7200  # outlives the watcher's three tries of 20 minutes each
+DEFER_BOUND_SECONDS = 7200   # S5: a mention first deferred this long ago runs even while a watch is on (R21)
+NOTICE_AFTER_SECONDS = 1800  # S5: the station's notice, at most once per mention (Task 6)
+NOTICE_TEMPLATE = ("Station notice: a mention of {ship} has waited {waited} minutes for {ship}'s session on watch. "
+                   "A run will answer it when that watch ends, or once it has waited 120 minutes.")
+NEVER_ANSWERED = 'Station notices and claim messages are never answered'
 
 TICKET_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS tickets(id TEXT PRIMARY KEY, ship_id TEXT NOT NULL REFERENCES users(id), message_id TEXT NOT NULL REFERENCES messages(id), direct_id TEXT, mode TEXT NOT NULL, basis TEXT NOT NULL, root_id TEXT REFERENCES users(id), chain TEXT NOT NULL DEFAULT '[]', hops INTEGER NOT NULL DEFAULT 0, instructions TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL, created REAL NOT NULL, finished REAL, UNIQUE(ship_id, message_id));
 CREATE TABLE IF NOT EXISTS message_sources(message_id TEXT PRIMARY KEY REFERENCES messages(id), ticket_id TEXT UNIQUE NOT NULL REFERENCES tickets(id));
+CREATE TABLE IF NOT EXISTS deferrals(ship_id TEXT NOT NULL REFERENCES users(id), message_id TEXT NOT NULL REFERENCES messages(id), first_deferred REAL NOT NULL, notice_posted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(ship_id, message_id));
 '''
 
 
@@ -34,29 +40,77 @@ class Tickets:
                 'blocks': render_blocks(self._layers_for(db, json.loads(row['instructions'])), station), 'footer': footer,
                 'status': 'running' if self._ticket_running(row) else 'finished', 'created': row['created']}
 
-    def issue_ticket(self, actor, message_id, station=''):
+    def issue_ticket(self, actor, message_id, station='', decisions=False):
+        """S5's order: 0 never answered (422), 1 answered, 2 running, 3 finished (409), 4 defer, 5 run. Steps 1 and 4
+        only for a watcher that asked for them (R23); without them the answer is exactly today's."""
         text(message_id, 'message ID', 100)
         with self.transaction() as db:
             ship = self._ticket_ship(db, actor)
             message = require(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
             require(db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (message['room_id'], actor)).fetchone())
+            if self._never_answered(db, message):
+                raise Problem(422, NEVER_ANSWERED)
+            if decisions and self._answered(db, actor, message_id):
+                db.execute('DELETE FROM deferrals WHERE ship_id=? AND message_id=?', (actor, message_id))
+                return {'decision': 'answered', 'message_id': message_id}
             existing = db.execute('SELECT * FROM tickets WHERE ship_id=? AND message_id=?', (actor, message_id)).fetchone()
             if existing:
                 if self._ticket_running(existing):
-                    return self._ticket_json(db, existing, station)
+                    return self._decided(db, existing, station, decisions)
                 raise Problem(409, 'This message has already been answered')
-            author = require(db.execute('SELECT id,kind FROM users WHERE id=?', (message['author_id'],)).fetchone())
-            mentioned = db.execute('SELECT 1 FROM mentions WHERE message_id=? AND user_id=?', (message_id, actor)).fetchone()
-            owner = ship['owner_id']
-            if owner and mentioned and author['kind'] == 'person' and author['id'] == owner:
-                mode, basis, root = 'build', 'owner', owner
-            else:
-                mode, basis, root = 'read', 'none', None
+            mode, basis, root = self._mode_for(db, ship, message)
+            if decisions and mode == 'read' and self._writable_on_watch(db, actor):
+                deferred = self._defer(db, ship, message)
+                if deferred is not None:
+                    return deferred
+            held = db.execute('SELECT first_deferred FROM deferrals WHERE ship_id=? AND message_id=?', (actor, message_id)).fetchone()
+            db.execute('DELETE FROM deferrals WHERE ship_id=? AND message_id=?', (actor, message_id))
             key = uid()
             bound = json.dumps([[l['layer_id'], l['revision']] for l in self._binding_layers(db, actor)])
             db.execute('INSERT INTO tickets(id,ship_id,message_id,mode,basis,root_id,instructions,status,created) VALUES(?,?,?,?,?,?,?,?,?)',
                        (key, actor, message_id, mode, basis, root, bound, 'running', self.clock()))
-            return self._ticket_json(db, db.execute('SELECT * FROM tickets WHERE id=?', (key,)).fetchone(), station)
+            decided = self._decided(db, db.execute('SELECT * FROM tickets WHERE id=?', (key,)).fetchone(), station, decisions)
+            if decisions and held is not None:  # R37: only the station's own row says this run resolves a deferral
+                decided['first_deferred'] = held['first_deferred']
+            return decided
+
+    def _decided(self, db, row, station, decisions):
+        ticket = self._ticket_json(db, row, station)
+        return dict(ticket, decision='run') if decisions else ticket
+
+    def _mode_for(self, db, ship, message):
+        """Today's rule, unchanged: the owner's own mention builds; everything else reads."""
+        author = require(db.execute('SELECT id,kind FROM users WHERE id=?', (message['author_id'],)).fetchone())
+        mentioned = db.execute('SELECT 1 FROM mentions WHERE message_id=? AND user_id=?', (message['id'], ship['id'])).fetchone()
+        owner = ship['owner_id']
+        if owner and mentioned and author['kind'] == 'person' and author['id'] == owner:
+            return 'build', 'owner', owner
+        return 'read', 'none', None
+
+    def _answered(self, db, ship_id, message_id):
+        """R7: a message by this ship whose reply_to is the mention. A kind message never counts, and the system
+        author's can't, since its author isn't the ship (R32)."""
+        return db.execute('''SELECT 1 FROM message_replies JOIN messages ON messages.id=message_replies.message_id
+            WHERE message_replies.reply_to=? AND messages.author_id=?
+            AND message_replies.message_id NOT IN (SELECT message_id FROM message_kinds)''', (message_id, ship_id)).fetchone() is not None
+
+    def _defer(self, db, ship, message):
+        """S5 step 4: keep or start the deferral. None once it has waited DEFER_BOUND_SECONDS, so the mention runs."""
+        now = self.clock()
+        db.execute('INSERT OR IGNORE INTO deferrals(ship_id,message_id,first_deferred) VALUES(?,?,?)', (ship['id'], message['id'], now))
+        row = db.execute('SELECT * FROM deferrals WHERE ship_id=? AND message_id=?', (ship['id'], message['id'])).fetchone()
+        if now - row['first_deferred'] >= DEFER_BOUND_SECONDS:
+            return None
+        if not row['notice_posted'] and now - row['first_deferred'] >= NOTICE_AFTER_SECONDS:
+            self._post_notice(db, ship, message, row['first_deferred'], now)
+            db.execute('UPDATE deferrals SET notice_posted=1 WHERE ship_id=? AND message_id=?', (ship['id'], message['id']))
+        return {'decision': 'defer', 'message_id': message['id'], 'first_deferred': row['first_deferred']}
+
+    def _post_notice(self, db, ship, message, first, now):
+        """S5, S11: the one message the station writes, in this transaction under BEGIN IMMEDIATE, together with
+        notice_posted, so it is posted at most once. It names only the ship and the minutes waited (R11)."""
+        body = NOTICE_TEMPLATE.format(ship=safe_line(ship['name'], 40), waited=int((now - first) // 60))
+        self._post_as_system(db, message['room_id'], ship['id'], message['id'], body)
 
     def finish_ticket(self, actor, ticket_id, station=''):
         text(ticket_id, 'ticket ID', 100)
@@ -88,5 +142,7 @@ class Tickets:
                                     'JOIN messages ON messages.id=message_sources.message_id LEFT JOIN users ON users.id=tickets.root_id '
                                     'WHERE messages.room_id=?', (room_id,))}
         ships = {r[0] for r in db.execute("SELECT id FROM users WHERE kind='ship'")}
-        return {r['id']: runs.get(r['id'], {'kind': 'post'}) if r['author_id'] in ships else None
+        kinds = {r[0]: r[1] for r in db.execute('SELECT message_kinds.message_id, message_kinds.kind FROM message_kinds JOIN messages '
+                                               'ON messages.id=message_kinds.message_id WHERE messages.room_id=?', (room_id,))}
+        return {r['id']: {'kind': kinds[r['id']]} if r['id'] in kinds else runs.get(r['id'], {'kind': 'post'}) if r['author_id'] in ships else None
                 for r in db.execute('SELECT id,author_id FROM messages WHERE room_id=?', (room_id,))}

@@ -276,7 +276,7 @@ def main(argv=None):
             from urllib.parse import urlsplit
             store = Store(args.data_dir)
             with store.transaction() as db:
-                user = db.execute('SELECT id FROM users WHERE username=?', (args.username,)).fetchone()
+                user = db.execute("SELECT id FROM users WHERE username=? AND kind!='system'", (args.username,)).fetchone()  # R34
                 if not user:
                     raise ValueError('Unknown local account')
             host = urlsplit(args.endpoint).hostname
@@ -288,7 +288,7 @@ def main(argv=None):
         elif args.command == 'init':
             store = Store(args.data_dir)
             with store.transaction() as db:
-                if db.execute('SELECT 1 FROM users LIMIT 1').fetchone():
+                if db.execute("SELECT 1 FROM users WHERE kind!='system' LIMIT 1").fetchone():  # R34: the system author isn't an account
                     raise ValueError('Peer already has accounts; use an owner invitation')
                 password = args.password_file.read_text().rstrip('\r\n') if args.password_file else getpass.getpass('Owner password (12+ characters): ')
                 store._create_user(db, args.username, args.name, password, True)

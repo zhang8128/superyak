@@ -14,6 +14,8 @@ class Chats:
     def _create_room(self, db, actor, title, members, linked_room_id=None):
         text(title, 'title')
         members = ids([actor] + members)
+        if self.system_author_id(db) in members:
+            raise Problem(400, "The station's system author is never a room member")
         self._known_contacts(db, members)
         key = uid()
         db.execute('INSERT INTO rooms VALUES(?,?,?,1,?)', (key, actor, title, linked_room_id))
@@ -42,16 +44,20 @@ class Chats:
             return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
-            room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created,id', (key,))]
+            room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created, rowid', (key,))]
             sources, replies = self._sources(db, key), self._replies(db, key)
             for message in room['messages']:
                 message['source'], message['reply_to'] = sources.get(message['id']), replies.get(message['id'])
-            room['messages'] += [dict(r, reply_to=None) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created,id', (key,))]
-            room['messages'].sort(key=lambda m: (m['created'], m['id']))
+            room['messages'] += [dict(r, reply_to=None) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created, rowid', (key,))]
+            room['messages'].sort(key=lambda m: m['created'])  # stable: ids are random, so one instant keeps insertion order
             room['members'] = [dict(r) for r in db.execute(
                 'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
                 (key,))]
             room['brief'], room['brief_revision'] = self._room_brief(db, key)
+            system = self.system_author_id(db)
+            if any(m.get('author_id') == system for m in room['messages']):
+                room['system_author'] = self.system_author_public(db)
+            room['claims'] = self._active_claims(db, key)
             return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):
@@ -84,7 +90,14 @@ class Chats:
                 db.execute('INSERT INTO message_replies VALUES(?,?)', (message_id, reply_to))
             self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
-            return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
+            sent = dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
+            if reply_to is None:  # R27: this ship's deferred mentions here that still wait for a reply_to
+                waiting = [r[0] for r in db.execute('''SELECT deferrals.message_id FROM deferrals JOIN messages
+                    ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?
+                    ORDER BY deferrals.first_deferred''', (actor, key))]
+                if waiting:  # R35: present only when it has something to say
+                    sent['deferred_here'] = waiting
+            return sent
 
     def add_participants(self, actor, key, member_ids, carry_brief=None):
         if carry_brief is not None and type(carry_brief) is not int:
