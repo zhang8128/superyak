@@ -76,8 +76,8 @@ def _hook(parser, argv):
         import os
         from . import hook
         args, _ = parser.parse_known_args(argv)
-        session_id, cwd = (None, None) if sys.stdin.isatty() else hook.hook_input(sys.stdin)
-        text = hook.run(args.config, session_id=session_id, cwd=cwd,
+        session_id, cwd, mode = (None, None, None) if sys.stdin.isatty() else hook.hook_fields(sys.stdin)
+        text = hook.run(args.config, session_id=session_id, cwd=cwd, mode=mode,
                    event='session-start' if os.environ.get('SUPERYAK_HOOK_EVENT') == 'session-start' else 'prompt',
                    messages=os.environ.get('SUPERYAK_HOOK_MESSAGES') != '0')
         if text:

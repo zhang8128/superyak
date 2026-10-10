@@ -1,4 +1,5 @@
 """Ship-side station client and the machine's private ship configuration."""
+import functools
 import http.client
 import json
 import os
@@ -15,6 +16,40 @@ HOME = Path.home() / '.superyak'
 MESSAGE_LIMIT = 20000  # the station's longest message
 PLAIN_ID = re.compile(r'[A-Za-z0-9:_.-]{1,200}')
 CONFIG = HOME / 'station.json'
+SESSION_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')  # the station's cursor names (inbox spec I1)
+CHECKOUT = Path(__file__).resolve().parents[2]
+
+
+def presence_headers(name, client, mode=None):
+    """S1: the headers that name this session to the station, or {} for a client without a real session name; never
+    `default`, so two sessions never share a presence row (R28). The station ignores malformed ones."""
+    if not isinstance(name, str) or not SESSION_NAME.fullmatch(name) or name == 'default':
+        return {}
+    headers = {'x-superyak-session': name, 'x-superyak-client': client}
+    if mode in ('write', 'plan'):
+        headers['x-superyak-mode'] = mode
+    return headers
+
+
+@functools.lru_cache(maxsize=1)
+def client_version(root=CHECKOUT):
+    """This checkout's commit as 12 hex digits, read once from git's own files (no subprocess: the hook must stay
+    fast); 'unknown' when it can't be read. The directory shows it to a ship's owner, who can see which sessions run
+    code older than a fix and restart them (spec Known limits)."""
+    try:
+        git = root / '.git'
+        if git.is_file():  # a worktree: .git names its own git directory
+            git = (root / git.read_text().split('gitdir:', 1)[1].strip()).resolve()
+        common = (git / (git / 'commondir').read_text().strip()).resolve() if (git / 'commondir').is_file() else git
+        head = (git / 'HEAD').read_text().strip()
+        if head.startswith('ref: '):
+            ref = head[5:]
+            found = next((p for p in (git / ref, common / ref) if p.is_file()), None)
+            head = (found.read_text().strip() if found else
+                    next(line.split()[0] for line in (common / 'packed-refs').read_text().splitlines() if line.endswith(' ' + ref)))
+        return head[:12] if re.fullmatch(r'[0-9a-f]{40,64}', head) else 'unknown'
+    except (OSError, ValueError, IndexError, StopIteration):
+        return 'unknown'
 
 
 class StationError(Exception):
@@ -40,10 +75,11 @@ def urllib_transport(timeout=30):
 class StationClient:
     """HTTP client for one ship. `origin` is the station's public origin when `base_url` is the
     loopback address behind `tailscale serve` (Odo on the Pi)."""
-    def __init__(self, base_url, key=None, origin=None, transport=None):
+    def __init__(self, base_url, key=None, origin=None, transport=None, presence=None):
         self.base = base_url.rstrip('/')
         self.origin = (origin or self.base).rstrip('/')
         self.key, self.transport = key, transport or urllib_transport()
+        self.presence = dict(presence or {})  # spec S1: names the session on every call; {} sends nothing new
 
     def request(self, method, path, body=None):
         headers = {'origin': self.origin, 'accept': 'application/json'}
@@ -52,6 +88,7 @@ class StationClient:
             headers.update({'host': host, 'x-forwarded-proto': scheme})
         if self.key:
             headers['authorization'] = f'Bearer {self.key}'
+        headers.update(self.presence)
         data = None
         if body is not None:
             headers['content-type'] = 'application/json'

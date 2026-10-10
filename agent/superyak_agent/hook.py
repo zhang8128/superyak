@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 import time
 from . import claims
-from .station import StationClient, fence_message, label, plain_id, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
+from .station import StationClient, client_version, fence_message, label, plain_id, presence_headers, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -32,17 +32,24 @@ UNREACHABLE = 'station-unreachable'  # in the sessions folder; holds the time th
 UNREACHABLE_SECONDS = 60
 
 
-def hook_input(stdin):
-    """(session id, cwd) from the hook's stdin JSON, each None when absent or odd. The one reader of stdin (it can be
-    read once, R12); it must never break the prompt."""
+def hook_fields(stdin):
+    """(session id, cwd, mode) from the hook's stdin JSON, each None when absent or odd. mode is 'plan' in plan mode
+    and 'write' for any other permission_mode; only UserPromptSubmit carries it (M1). The one reader of stdin (it can
+    be read once, R12); it must never break the prompt."""
     try:
         value = json.loads(stdin.read() or 'null')
     except (ValueError, OSError, RecursionError):
-        return None, None
+        return None, None, None
     if not isinstance(value, dict):
-        return None, None
-    session, cwd = value.get('session_id'), value.get('cwd')
-    return (session if isinstance(session, str) and session else None, cwd if isinstance(cwd, str) and cwd else None)
+        return None, None, None
+    session, cwd, mode = value.get('session_id'), value.get('cwd'), value.get('permission_mode')
+    return (session if isinstance(session, str) and session else None, cwd if isinstance(cwd, str) and cwd else None,
+            ('plan' if mode == 'plan' else 'write') if isinstance(mode, str) and mode else None)
+
+
+def hook_input(stdin):
+    """(session id, cwd): hook_fields without the mode."""
+    return hook_fields(stdin)[:2]
 
 
 def session_from_stdin(stdin):
@@ -104,7 +111,7 @@ def _note_reachability(marker, link, now):
 
 
 def run(config_path, state_path=None, clock=time.time, transport=None, session_id=None,
-        event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic, cwd=None):
+        event='prompt', messages=True, sessions_dir=None, monotonic=time.monotonic, cwd=None, mode=None):
     """The ship's instructions (session start; changes at a prompt), then the new room messages (prompt, when on).
     With a Claude Code session id the messages use that session's cursor on the station (station inbox spec, I8);
     without one they keep the machine-wide time cursor and no instruction notices are given.
@@ -121,6 +128,7 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
         return claims.LOUD if event == 'session-start' else ''
     if acts != 'act':
         return ''
+    presence = presence_headers(session_id, f'hook/{client_version()}', mode)  # S1; {} without a session id (R28)
     started = monotonic()
     marker = Path(sessions_dir or config_path.parent / 'sessions') / UNREACHABLE
     if _recently_unreachable(marker, clock()):
@@ -129,7 +137,7 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
     link = _Link(transport)
     try:
         text, shown = _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
-                               lambda: monotonic() - started > INSTRUCTIONS_DEADLINE)
+                               lambda: monotonic() - started > INSTRUCTIONS_DEADLINE, presence)
         _forget_unless(shown, config_path, event, session_id, sessions_dir)
         return text
     finally:
@@ -148,20 +156,20 @@ def _forget_unless(shown, config_path, event, session_id, sessions_dir):
         pass
 
 
-def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, late):
+def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, late, presence=None):
     """(text, shown): shown is whether the instructions step ran to the end, so the session's state matches its context."""
     data, text, shown = None, '', False
     wants = event == 'session-start' or bool(session_id)
     if wants:
         try:
-            data = _fetch_instructions(config_path, link(INBOX_CALL_TIMEOUT))
+            data = _fetch_instructions(config_path, link(INBOX_CALL_TIMEOUT), presence)
         except OSError:
             return '', False  # the station is down: do not spend a second timeout on the messages
         except Exception:  # noqa: BLE001 - a hook must never break the prompt
             data = None
     if event != 'session-start' and messages and not late():
         try:
-            text = (_run_inbox(config_path, session_id, link(INBOX_CALL_TIMEOUT)) if session_id
+            text = (_run_inbox(config_path, session_id, link(INBOX_CALL_TIMEOUT), presence) if session_id
                     else _run(config_path, state_path, clock, link(5)))
         except Exception:  # noqa: BLE001
             text = ''
@@ -210,11 +218,11 @@ def _header(layer):
     return f'- {layer["title"]} · revision {layer["revision"]} · signed by {layer["signer_name"]}'
 
 
-def _fetch_instructions(config_path, transport):
+def _fetch_instructions(config_path, transport, presence=None):
     config = read_json(config_path)
     if not config or not config.get('key'):
         return None
-    return StationClient(config['station'], config['key'], config.get('origin'), transport).instructions()
+    return StationClient(config['station'], config['key'], config.get('origin'), transport, presence).instructions()
 
 
 def _with_withdrawals(parts, withdrawn, budget):
@@ -283,13 +291,13 @@ def _instructions(data, config_path, event, session_id, clock, sessions_dir, bud
     return _with_withdrawals(parts, withdrawn, budget)
 
 
-def _run_inbox(config_path, session_id, transport):
+def _run_inbox(config_path, session_id, transport, presence=None):
     """Oldest first, within the budget. The whole text is built before the cursor moves, and the advance is the last
     thing that can fail: if it fails, nothing is printed and every message stays unread for the next turn (R4)."""
     config = read_json(config_path)
     if not config or not config.get('key'):
         return ''
-    client = StationClient(config['station'], config['key'], config.get('origin'), transport)
+    client = StationClient(config['station'], config['key'], config.get('origin'), transport, presence)
     got = client.unread(session_id, MAX_MESSAGES)
     blocks, last = [], None
     for m in got['messages']:

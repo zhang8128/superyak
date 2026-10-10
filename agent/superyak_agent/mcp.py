@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from superyak_team.teamlib import redact
 from . import claims
-from .station import MESSAGE_LIMIT, StationError, brief_block, client_for, fence_message, label, load_config, plain_id, read_hint, shown_id, source_label
+from .station import MESSAGE_LIMIT, StationError, brief_block, client_for, client_version, fence_message, label, load_config, plain_id, presence_headers, read_hint, shown_id, source_label
 
 DEFAULT_CHARS = 2000
 TOTAL_CHARS = 40000  # one tool result, about; one message alone can be longer once quoted
@@ -124,6 +124,17 @@ class Tools:
         # Without a Claude Code session id (Codex, scripts) posts are keyed to this process, so two sessions'
         # identical posts never collapse into one; a retry within the process still posts once.
         self.salt, self.current, self.cancelled = f'proc-{uuid.uuid4().hex[:12]}', None, set()
+        self.named = None  # the name last passed as cursor to station_watch or station_unread (spec S1)
+        self.stamp(None, {})
+
+    def stamp(self, tool, args):
+        """S1: name this session on every station call: the name last passed as `cursor` to station_watch or
+        station_unread, else the Claude Code session id; no session header at all without one (R28)."""
+        if tool in ('station_watch', 'station_unread') and isinstance(args.get('cursor'), str) and args['cursor']:
+            self.named = args['cursor']
+        headers = presence_headers(self.named or os.environ.get('CLAUDE_CODE_SESSION_ID'), f'mcp/{client_version()}')
+        for client in (self.client, self.quick_client):
+            client.presence = headers
 
     def cancel(self, request_id):
         """notifications/cancelled for a request: whatever it read is not marked read (spec I5)."""
@@ -314,6 +325,8 @@ def handle(tools, msg):
         try:
             if not isinstance(arguments, dict):
                 raise ValueError('tool arguments must be an object')
+            if hasattr(tools, 'stamp'):
+                tools.stamp(name, arguments)
             text, error = getattr(tools, name)(arguments), False
         except StationError as exc:
             text, error = f'station error: {exc}', True

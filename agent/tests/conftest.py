@@ -24,6 +24,7 @@ class FakeStation:
         self.blocks, self.instruction_state, self.drafts = {}, {}, []
         self.briefs = {}  # room id -> the brief as GET /api/chats/{id} shows it, or None
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
+        self.requests = []  # every call: method, path, JSON body and its x-superyak-* headers (spec S1)
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
         user = {'id': f'u-{username}', 'username': username, 'name': name, 'kind': kind, 'owner_id': owner_id}
@@ -82,6 +83,8 @@ class FakeStation:
     def __call__(self, method, url, headers, data):
         if self.down:
             raise OSError('station unreachable')
+        self.requests.append({'method': method, 'path': urlsplit(url).path, 'body': json.loads(data) if data else None,
+                              'presence': {k: v for k, v in headers.items() if k.startswith('x-superyak-')}})
         parts = urlsplit(url)
         path, query = parts.path, parse_qs(parts.query)
         key = headers.get('authorization', '').removeprefix('Bearer ')
