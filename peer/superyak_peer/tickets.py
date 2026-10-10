@@ -9,6 +9,8 @@ from .ships import safe_line
 TICKET_LIFETIME = 7200  # outlives the watcher's three tries of 20 minutes each
 DEFER_BOUND_SECONDS = 7200   # S5: a mention first deferred this long ago runs even while a watch is on (R21)
 NOTICE_AFTER_SECONDS = 1800  # S5: the station's notice, at most once per mention (Task 6)
+NOTICE_TEMPLATE = ("Station notice: a mention of {ship} has waited {waited} minutes for {ship}'s session on watch. "
+                   "A run will answer it when that watch ends, or once it has waited 120 minutes.")
 NEVER_ANSWERED = 'Station notices and claim messages are never answered'
 
 TICKET_SCHEMA = '''
@@ -99,7 +101,16 @@ class Tickets:
         row = db.execute('SELECT * FROM deferrals WHERE ship_id=? AND message_id=?', (ship['id'], message['id'])).fetchone()
         if now - row['first_deferred'] >= DEFER_BOUND_SECONDS:
             return None
+        if not row['notice_posted'] and now - row['first_deferred'] >= NOTICE_AFTER_SECONDS:
+            self._post_notice(db, ship, message, row['first_deferred'], now)
+            db.execute('UPDATE deferrals SET notice_posted=1 WHERE ship_id=? AND message_id=?', (ship['id'], message['id']))
         return {'decision': 'defer', 'message_id': message['id'], 'first_deferred': row['first_deferred']}
+
+    def _post_notice(self, db, ship, message, first, now):
+        """S5, S11: the one message the station writes, in this transaction under BEGIN IMMEDIATE, together with
+        notice_posted, so it is posted at most once. It names only the ship and the minutes waited (R11)."""
+        body = NOTICE_TEMPLATE.format(ship=safe_line(ship['name'], 40), waited=int((now - first) // 60))
+        self._post_as_system(db, message['room_id'], ship['id'], message['id'], body)
 
     def finish_ticket(self, actor, ticket_id, station=''):
         text(ticket_id, 'ticket ID', 100)

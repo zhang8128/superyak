@@ -89,7 +89,14 @@ class Chats:
                 db.execute('INSERT INTO message_replies VALUES(?,?)', (message_id, reply_to))
             self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
-            return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
+            sent = dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
+            if reply_to is None:  # R27: this ship's deferred mentions here that still wait for a reply_to
+                waiting = [r[0] for r in db.execute('''SELECT deferrals.message_id FROM deferrals JOIN messages
+                    ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?
+                    ORDER BY deferrals.first_deferred''', (actor, key))]
+                if waiting:  # R35: present only when it has something to say
+                    sent['deferred_here'] = waiting
+            return sent
 
     def add_participants(self, actor, key, member_ids, carry_brief=None):
         if carry_brief is not None and type(carry_brief) is not int:

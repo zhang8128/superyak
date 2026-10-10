@@ -1,8 +1,10 @@
 """Deference (spec S5): the station decides, in order: never answered (422), answered, running, finished (409),
 defer, run. Only a would-be read-only run defers, only to the same ship's writable session on watch, and for at most
 120 minutes."""
+import concurrent.futures
 import pytest
 from superyak_peer.common import uid
+from superyak_peer.tickets import NOTICE_TEMPLATE
 from test_presence import HEADERS, docked, say, ship_client
 
 DECISIONS = ['defer', 'answered']
@@ -204,3 +206,135 @@ def test_decisions_must_list_both_defer_and_answered(env):
         got = watcher.post('/api/ships/me/tickets', json={'message_id': asked['id'], 'decisions': decisions}).json()
         assert 'decision' not in got and got['mode'] == 'read', decisions
     assert table(store, 'deferrals') == []
+
+
+
+def notices(clients, room):
+    return [m for m in clients[0].get(f'/api/chats/{room}').json()['messages'] if (m['source'] or {}).get('kind') == 'notice']
+
+
+def test_the_notice_is_posted_once_by_the_station_without_reply_to_or_an_at(env):
+    """R11."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session, minutes=120)
+    ask(watcher, asked['id'])
+    clock[0] += 1799
+    session.get('/api/me')
+    ask(watcher, asked['id'])
+    assert notices(clients, room) == []
+    clock[0] += 1
+    ask(watcher, asked['id'])
+    clock[0] += 60
+    session.get('/api/me')
+    ask(watcher, asked['id'])
+    got, view = notices(clients, room), clients[0].get(f'/api/chats/{room}').json()
+    assert len(got) == 1 and got[0]['author_id'] == view['system_author']['id'] and got[0]['reply_to'] is None
+    assert '@' not in got[0]['body'] and got[0]['client_message_id'] == f'notice-{ship["id"]}-{asked["id"]}'
+    assert [r['notice_posted'] for r in table(store, 'deferrals')] == [1]
+
+
+def test_the_notice_text_is_exactly_the_template(env):
+    """R11: the filled template, byte for byte. A display name with @, a newline and 60 more characters comes out
+    through safe_line(name, 40); the mention's text, its author and its room never appear."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    with store.transaction() as db:
+        db.execute('UPDATE users SET name=? WHERE id=?', ('@odo\nboss ' + 'x' * 60, ship['id']))
+    asked = say(clients[1], room, 'a', '@serenity the secret plan')
+    on_watch(session, minutes=120)
+    ask(watcher, asked['id'])
+    clock[0] += 47 * 60 + 30
+    session.get('/api/me')
+    ask(watcher, asked['id'])
+    body = notices(clients, room)[0]['body']
+    assert body == NOTICE_TEMPLATE.format(ship=('(at)odo boss ' + 'x' * 60)[:40].rstrip(), waited=47)
+    assert 'secret plan' not in body and 'Doctor' not in body and 'Ops' not in body
+
+
+def test_the_notice_is_written_in_the_ticket_decisions_transaction(env):
+    """R11, Review Focus 2: two asks at the same moment both get `defer` and post one notice; the notice is posted
+    while the ship's own post budget is spent, because no budget applies to it; notice_posted is set with it."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session, minutes=120)
+    ask(watcher, asked['id'])
+    clock[0] += 1800
+    for n in range(30):
+        say(session, room, f'n{n}', f'note {n}')
+    assert session.post(f'/api/chats/{room}/messages', json={'client_message_id': 'over', 'body': 'one too many'}).status_code == 429
+    with concurrent.futures.ThreadPoolExecutor(2) as pool:
+        got = list(pool.map(lambda _: store.issue_ticket(ship['id'], asked['id'], '', decisions=True), range(2)))
+    assert [g['decision'] for g in got] == ['defer', 'defer'] and len(notices(clients, room)) == 1
+    assert table(store, 'deferrals')[0]['notice_posted'] == 1
+
+
+def test_notice_posted_stops_any_second_attempt(env):
+    """R11: notice_posted, set with the notice, is what keeps it to one; later deferrals never try again (the system
+    author's idempotent client id is a second guard, not the first)."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session, minutes=120)
+    ask(watcher, asked['id'])
+    clock[0] += 1800
+    session.get('/api/me')
+    ask(watcher, asked['id'])
+    calls, real = [], store._post_as_system
+    store._post_as_system = lambda *a, **k: (calls.append(a), real(*a, **k))[1]
+    for _ in range(3):
+        clock[0] += 60
+        session.get('/api/me')
+        assert ask(watcher, asked['id']).json()['decision'] == 'defer'
+    assert calls == [] and len(notices(clients, room)) == 1
+
+
+def test_a_notice_never_answers_its_mention(env):
+    """R7, R11 (D8 must-fix 1): after the notice, the watch lapses and the mention runs."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session, minutes=60)
+    ask(watcher, asked['id'])
+    clock[0] += 1800
+    session.get('/api/me')
+    assert ask(watcher, asked['id']).json()['decision'] == 'defer' and len(notices(clients, room)) == 1
+    clock[0] += 3601
+    assert ask(watcher, asked['id']).json()['decision'] == 'run'
+
+
+def test_deferred_mentions_reach_the_session_with_their_verified_author_and_would_be_mode(env):
+    """R26, station side: the mark is on this ship's deferred mentions only, never on a plain message or on a
+    mention that wasn't deferred; on_watch says whether the cursor's session is on watch."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    plain = say(clients[1], room, 'b', 'not a mention')
+    owner = say(clients[0], room, 'c', '@serenity build it')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    ask(watcher, owner['id'])
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    by_id = {m['message_id']: m for m in got['messages']}
+    assert got['on_watch'] is True
+    assert by_id[asked['id']]['deferred'] == {'author_verified': by_id[asked['id']]['author'], 'would_be': 'read'}
+    assert 'deferred' not in by_id[plain['id']] and 'deferred' not in by_id[owner['id']]
+    assert 'on_watch' not in session.post('/api/ships/me/unread', json={'cursor': 'other'}).json()  # R35: absent when not on watch
+
+
+def test_a_post_without_reply_to_lists_the_rooms_deferred_mentions(env):
+    """R27, station side."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    assert say(session, room, 'p', 'thinking')['deferred_here'] == [asked['id']]
+    assert 'deferred_here' not in reply(session, room, 'r', 'answer', asked['id'])
+    assert 'deferred_here' not in say(clients[1], room, 'q', 'a person posts')
+
+
+def test_an_old_client_sees_todays_unread_and_post_responses(env):
+    """R35, R36, station side: with no watch and no deferral, the unread and post responses carry exactly today's keys,
+    so an old client that ignores on_watch and deferred_here sees nothing new."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    say(clients[1], room, 'a', '@serenity a question')
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert set(got) == {'cursor', 'position', 'more', 'messages'} and all('deferred' not in m for m in got['messages'])
+    posted = say(session, room, 'p', 'a plain post')
+    assert set(posted) == {'id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'replayed'}
