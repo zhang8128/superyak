@@ -2,6 +2,11 @@
 import json
 from .common import Problem, require, uid, text, ids, encode
 
+# What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
+# columns (plus this station's delivery state for a queued reply). An allowlist, never a denylist (R44).
+REMOTE_ROOM_KEYS = ('title', 'owner_id', 'member_ids', 'linked_room_id', 'created', 'last_activity')
+REMOTE_MESSAGE_KEYS = ('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'state')
+
 PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS remote_contacts(id TEXT PRIMARY KEY, peer_id TEXT NOT NULL REFERENCES peers(peer_id), user_id TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(peer_id,user_id));
@@ -61,9 +66,12 @@ class PeerStore:
 
     def _remote_room(self, db, actor, key, *, messages=True):
         row, value = self._remote_inbox(db, actor, key, 'room')
-        result = {**value, 'id':key, 'origin':row['origin'], 'epoch':row['revision']}
-        for key_name in ('brief', 'brief_revision'):  # briefs never cross stations: what a paired peer sends is dropped
-            result.pop(key_name, None)
+        # Only the keys a room snapshot has (federation._room_snapshot), as an allowlist: whatever else a paired peer
+        # sends -- a brief, a system author, claims, anything new -- never reaches this station's room view (R44).
+        result = {k: value[k] for k in REMOTE_ROOM_KEYS if k in value}
+        result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])]
+        result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
+        result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
         pending = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply' AND status!='withdrawn'", (row['resource_id'],row['origin'])).fetchall()
         for delivery in pending:
             meta = json.loads(delivery['metadata'])

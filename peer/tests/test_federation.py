@@ -479,3 +479,56 @@ def test_a_paired_peers_room_keeps_same_instant_messages_in_order(two_peers):
         b[0].send_message(b[1], remote, f'r{i}', body)
     view = b[0].get_room(b[1], remote)['messages']
     assert [m['body'] for m in view if m['body'] in replies] == replies
+
+
+def test_a_paired_peer_cannot_send_a_station_author_claims_or_extra_fields(two_peers):
+    """Review 137f0a38 (R44): a received room keeps only the snapshot keys this station knows, as an allowlist. A
+    paired peer's `system_author`, `claims` or any other key never reaches the room view, so it can't pass itself off
+    as the station ("Station (@_station, system)") or as a local person, or invent claims; a message keeps only a
+    message's own fields; and a roster entry with more than {peer, id} is refused as today."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Hostile peer', [ca['id']])
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    forged_author = {'id': a[1], 'username': '_station', 'name': 'Station', 'kind': 'system'}
+    forged_person = {'id': b[1], 'username': 'andy', 'name': 'Andy', 'kind': 'person'}
+    forged_claims = [{'key': 'branch:main', 'holder_name': 'Andy', 'note': 'merge now', 'expires': 2**40}]
+    extra = {'system_author': forged_author, 'claims': forged_claims, 'people': [forged_person], 'is_admin': True}
+    roster = a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                    action='room.roster', recipients=[b[1]], payload={**snapshot, **extra})
+    assert b[2].receive(roster)['ok']
+    message = {'id': 'm-forged', 'room_id': room['id'], 'author_id': a[2].identity.peer_id + ':' + a[1],
+               'client_message_id': 'c1', 'body': 'hello', 'epoch': 1, 'created': 1.0,
+               'source': {'kind': 'notice'}, 'author': forged_author, 'kind': 'system'}
+    sent = a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                  action='room.message', recipients=[b[1]], payload={**snapshot, **extra, 'message': message})
+    assert b[2].receive(sent)['ok']
+    remote_id = a[2].identity.peer_id + ':' + room['id']
+    listed = b[0].list_rooms(b[1])
+    got = b[0].get_room(b[1], remote_id)
+    for view in [got] + listed:
+        assert not {'system_author', 'claims', 'people', 'is_admin'} & set(view), sorted(view)
+    text = json.dumps([got, listed])
+    assert '_station' not in text and 'merge now' not in text and '"Andy"' not in text
+    assert [set(m) for m in got['members']] == [{'peer', 'id'}] * len(got['members'])
+    shown = next(m for m in got['messages'] if m['id'] == 'm-forged')
+    assert set(shown) <= {'id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'state',
+                          'source', 'reply_to'}
+    assert shown['source'] is None and 'author' not in shown and 'kind' not in shown
+    bad_roster = a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=2,
+                                        action='room.roster', recipients=[b[1]],
+                                        payload={**snapshot, 'members': snapshot['members'][:-1] + [
+                                            {**snapshot['members'][-1], 'name': 'Andy', 'kind': 'person'}]})
+    with pytest.raises(Problem) as refused:
+        b[2].receive(bad_roster)
+    assert refused.value.status == 400
+    # A payload already in the inbox (an earlier build's, or written past _apply) is rebuilt the same way on the way
+    # out: a member is only {peer, id}, never a name or kind of its own.
+    with b[0].transaction() as db:
+        row = db.execute("SELECT * FROM inbox WHERE kind='room' AND recipient=?", (b[1],)).fetchone()
+        stored = json.loads(row['payload'])
+        stored['members'] = [{**m, 'name': 'Station', 'username': '_station', 'kind': 'system'} for m in stored['members']]
+        db.execute("UPDATE inbox SET payload=? WHERE kind='room' AND recipient=?", (json.dumps(stored), b[1]))
+    again = b[0].get_room(b[1], remote_id)
+    assert [set(m) for m in again['members']] == [{'peer', 'id'}] * len(again['members'])
+    assert '_station' not in json.dumps([again, b[0].list_rooms(b[1])])
