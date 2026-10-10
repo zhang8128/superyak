@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .common import Problem, valid_utf8
 from .db import Store
 from .inbox import wait_seconds
+from .presence import parse_presence
 
 MAX_REQUEST = 6 * 1024 * 1024
 COOKIE = 'superyak_session'
@@ -97,14 +98,14 @@ def current_user(request: Request):
 def member(request: Request):
     """Room routes: a signed-in person, or a ship presenting its key."""
     key = bearer_key(request)
-    return current_user(request) if key is None else request.app.state.store.ship_for_key(key)
+    return current_user(request) if key is None else request.app.state.store.ship_for_key(key, parse_presence(request.headers))
 
 def ship_member(request: Request):
     """Ship-only routes: the ship that presented its key. A signed-in person gets 403."""
     key = bearer_key(request)
     if key is None:
         raise Problem(403, 'Only a ship key can use this route')
-    return request.app.state.store.ship_for_key(key)
+    return request.app.state.store.ship_for_key(key, parse_presence(request.headers))
 
 def actor(request):
     return current_user(request)['id']
@@ -225,6 +226,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     async def ship_draft(request: Request):
         who, data = ship_member(request)['id'], await body(request)
         return store.ship_draft(who, data)
+
+    @app.get('/api/ships/directory')
+    def ship_directory(request: Request):
+        return store.directory(member(request)['id'])
 
     @app.post('/api/ships/me/tickets')
     async def ticket_issue(request: Request):
