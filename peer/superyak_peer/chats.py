@@ -57,6 +57,7 @@ class Chats:
             system = self.system_author_id(db)
             if any(m.get('author_id') == system for m in room['messages']):
                 room['system_author'] = self.system_author_public(db)
+            room['claims'] = self._active_claims(db, key)
             return room
 
     def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):

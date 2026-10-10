@@ -494,6 +494,20 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = member(request)['id'], await body(request)
         return store.send_message(who, key, data.get('client_message_id'), data.get('body'), data.get('ticket_id'), data.get('reply_to'))
 
+    @app.get('/api/chats/{key}/claims')
+    def chat_claims(key: str, request: Request):
+        return store.room_claims(member(request)['id'], key)
+
+    @app.post('/api/chats/{key}/claims', status_code=201)
+    async def chat_claim(key: str, request: Request):
+        who, data = member(request)['id'], await body(request)
+        return store.claim(who, key, data.get('key'), data.get('note'), data.get('minutes'))
+
+    @app.post('/api/chats/{key}/claims/release')
+    async def chat_release(key: str, request: Request):
+        who, data = member(request)['id'], await body(request)
+        return store.release(who, key, data.get('key'))
+
     @app.put('/api/chats/{key}/brief')
     async def chat_brief(key: str, request: Request):
         who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
