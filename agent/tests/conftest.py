@@ -28,6 +28,7 @@ class FakeStation:
         self.watches = {}  # (ship, session) -> {minutes, writable, label}
         # ship status: deferred mention ids; room id -> deferred ids; message id -> 'claim' or 'notice'; GET /api/ships/directory
         self.deferred_marks, self.deferred_here, self.kinds, self.directory_rows = set(), {}, {}, []
+        self.claims = {}  # room id -> active claims, as GET /api/chats/{id}/claims shows them
         self.ticket_bodies, self.decide = [], {}  # every ticket request's JSON; message id -> its answer when decisions are asked
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
@@ -74,6 +75,7 @@ class FakeStation:
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
                 'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'brief': self.briefs.get(room['id']),
+                'claims': self.claims.get(room['id'], []),
                 'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']],
                 **({'system_author': system} if system else {})}
 
@@ -140,6 +142,22 @@ class FakeStation:
                     self.replies[message['id']] = reply_to
                 waiting = self.deferred_here.get(room['id']) if reply_to is None else None
                 return ok(dict(message, replayed=False, **({'deferred_here': waiting} if waiting else {})), 201)
+            if segments[3:] == ['claims']:
+                if method == 'GET':
+                    return ok(self.claims.get(room['id'], []))
+                payload = json.loads(data)
+                key = payload['key'].lower()
+                held = next((c for c in self.claims.get(room['id'], []) if c['key'] == key), None)
+                if held and held['holder_id'] != me:
+                    return 409, json.dumps({'error': f'{held["holder_name"]} holds `{key}` until 18:00 UTC'}).encode()
+                made = {'id': f'c-{key}', 'room_id': room['id'], 'key': key, 'holder_id': me, 'holder_name': self.users[me]['name'],
+                        'note': payload.get('note') or '', 'created': self.clock, 'expires': self.clock + 60 * payload.get('minutes', 240)}
+                self.claims[room['id']] = [c for c in self.claims.get(room['id'], []) if c['key'] != key] + [made]
+                return ok(made, 201)
+            if method == 'POST' and segments[3:] == ['claims', 'release']:
+                key = json.loads(data)['key'].lower()
+                self.claims[room['id']] = [c for c in self.claims.get(room['id'], []) if c['key'] != key]
+                return ok({'released': key})
         if method == 'GET' and path == '/api/mentions':
             after, rows = int(query.get('after', ['0'])[0]), []  # one page holds at most 50, as on the station
             for row in self.mention_rows:

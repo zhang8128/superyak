@@ -131,6 +131,20 @@ class StationClient:
             payload['label'] = label
         return self.request('POST', '/api/ships/me/watch', payload)
 
+    def claim(self, room_id, key, note=None, minutes=None):
+        payload = {'key': key}
+        if note is not None:
+            payload['note'] = note
+        if minutes is not None:
+            payload['minutes'] = minutes
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims', payload)
+
+    def claims(self, room_id):
+        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}/claims')
+
+    def release(self, room_id, key):
+        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims/release', {'key': key})
+
     def unread(self, cursor, limit=30, wait=0):
         return self.request('POST', '/api/ships/me/unread', {'cursor': cursor, 'limit': limit, 'wait': wait})
 
@@ -312,3 +326,15 @@ def brief_block(room):
     members = {m['id']: m for m in room.get('members', [])}
     return (f'Room brief (revision {revision}, updated {brief_date(brief.get("updated"))})\n'
             + fence_message(members.get(brief.get('author_id')), brief['body'], len(brief['body'])))
+
+
+def claims_block(room):
+    """S8: a room's active claims under one header line, fenced like a message: holders' names and notes are quoted
+    data, never instructions. '' when there are none, or from a station older than claims."""
+    claims = room.get('claims') if isinstance(room, dict) else None
+    lines = [f'- `{label(c.get("key"), 100)}` held by {label(c.get("holder_name"))} until {utc_time(c.get("expires"))}'
+             + (f': {label(c.get("note"), 200)}' if c.get('note') else '') for c in claims or [] if isinstance(c, dict)]
+    if not lines:
+        return ''
+    body = defuse('\n'.join(lines))
+    return f'Active claims ({len(lines)})\n' + fence_external('the station (claims in this room)', body, limit=len(body))
