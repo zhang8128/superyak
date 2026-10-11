@@ -146,3 +146,77 @@ def test_the_hooks_two_station_calls_fit_inside_claude_codes_hook_timeout():
     # unread then advance: each call's timeout times two must stay well under the 10 s hook timeout, or Claude Code
     # could stop the hook after the advance and before the text is printed (R4).
     assert 2 * hook.INBOX_CALL_TIMEOUT <= 7
+
+
+def fleet(fake, andy, serenity):
+    """Andy's ships put together in a room he owns, as in "Superyak: all hands"."""
+    rio = fake.user('rio-grande', 'Rio Grande', 'ship', andy['id'], key='rio-key')
+    tardis = fake.user('tardis', 'Tardis', 'ship', andy['id'], key='tardis-key')
+    return rio, tardis, fake.room('Superyak: all hands', andy, serenity, rio, tardis)
+
+
+def test_breakout_noise_never_holds_back_a_persons_message(station, ship_config, tmp_path):
+    """R13, the hook's half (breakouts S6): 30 messages in two breakouts, then a person's message. The hook sends
+    breakouts=mentions, so the person's message shows at the first prompt, and one line per breakout counts what the
+    station left out and names the call that shows it. Counted once: the next prompt is silent."""
+    fake, andy, jenn, serenity = station
+    config_path = write_config(ship_config, tmp_path)
+    rio, tardis, hands = fleet(fake, andy, serenity)
+    alpha, beta = fake.breakout('Alpha', rio, serenity), fake.breakout('Beta', tardis, serenity)
+    for n in range(15):
+        fake.say(alpha, rio, f'alpha {n}')
+        fake.say(beta, tardis, f'beta {n}')
+    person = fake.say(hands, andy, 'Serenity, a question from Andy')
+    text = run(fake, config_path, 's1')
+    assert [r['query'] for r in fake.requests if r['path'] == '/api/ships/me/unread'] == ['breakouts=mentions']
+    assert person['body'] in text and 'alpha 0' not in text and 'beta 14' not in text
+    assert text.endswith(f'\n\n15 new in breakout Alpha; `station_read room={alpha}` shows them\n\n'
+                         f'15 new in breakout Beta; `station_read room={beta}` shows them')
+    assert run(fake, config_path, 's1') == ''
+
+
+def test_a_breakout_message_is_labelled_ships_only(station, ship_config, tmp_path):
+    """Breakouts S6: a breakout message that mentions the ship shows, labelled "breakout, ships only"; a message from
+    any other room keeps today's header."""
+    fake, andy, jenn, serenity = station
+    config_path = write_config(ship_config, tmp_path)
+    rio, tardis, hands = fleet(fake, andy, serenity)
+    alpha = fake.breakout('Alpha', rio, serenity)
+    asked = fake.say(alpha, rio, '@serenity over to you')
+    said = fake.say(hands, andy, 'and from me')
+    text = run(fake, config_path, 's1')
+    assert f'Room Alpha (breakout, ships only), message {asked["id"]} (no run ticket):\n' in text
+    assert f'Room Superyak: all hands, message {said["id"]}:\n' in text
+
+
+def test_breakout_counts_show_even_when_no_message_does(station, ship_config, tmp_path):
+    """Breakouts S6: when every new message is breakout noise, the station has already passed it, so the hook still
+    says how many, and has nothing to advance through."""
+    fake, andy, jenn, serenity = station
+    config_path = write_config(ship_config, tmp_path)
+    rio, tardis, hands = fleet(fake, andy, serenity)
+    alpha = fake.breakout('Alpha', rio, serenity)
+    for n in range(3):
+        fake.say(alpha, rio, f'alpha {n}')
+    text = run(fake, config_path, 's1')
+    assert text == hook.HEADER + f'\n\n3 new in breakout Alpha; `station_read room={alpha}` shows them'
+    assert not any(r['path'].endswith('/advance') for r in fake.requests)
+    assert run(fake, config_path, 's1') == ''
+
+
+def test_the_breakout_count_lines_fit_the_hooks_budget(station, ship_config, tmp_path):
+    """Breakouts S6: at most five count lines, then one line for the rest, and the person's messages still lead, all
+    inside the hook's 4,000 characters; what doesn't fit stays unread."""
+    fake, andy, jenn, serenity = station
+    config_path = write_config(ship_config, tmp_path)
+    rio, tardis, hands = fleet(fake, andy, serenity)
+    for n in range(8):
+        fake.say(fake.breakout(f'{n} ' + 'B' * 78, rio, serenity), rio, 'noise')
+    for n in range(25):
+        fake.say(hands, andy, f'note {n:02d} ' + 'y' * 300)
+    text = run(fake, config_path, 's1')
+    assert len(text) <= hook.MAX_CHARS and 'note 00 ' in text and '`station_unread`' in text
+    assert [line[:5] for line in text.splitlines() if ' new in breakout ' in line] == ['1 new'] * 5
+    assert text.endswith('\n\n3 more breakouts have new messages; `station_rooms` lists them')
+    shown = [n for n in range(25) if f'note {n:02d} ' in text]
+    assert f'note {len(shown):02d} ' in run(fake, config_path, 's1')
