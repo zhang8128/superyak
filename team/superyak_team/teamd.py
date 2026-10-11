@@ -63,9 +63,13 @@ class Team:
         with open(self.dir / "teamd.log", "a") as f:
             f.write("%s %s\n" % (time.strftime("%H:%M:%S"), self._scrub(msg)))
 
+    def crew(self):
+        """(lead name, worker names). Teams started before crews were configurable are Serenity's."""
+        return teamlib.CREWS[self.cfg.get("crew", "serenity")]
+
     def display_name(self, who):
         if who == "lead":
-            return "Mal (lead) · %s" % ("Codex" if self.state.get("lead_kind") == "codex" else "Claude")
+            return "%s (lead) · %s" % (self.crew()[0], "Codex" if self.state.get("lead_kind") == "codex" else "Claude")
         w = self.state["workers"].get(who, {})
         return "%s · %s" % (who.capitalize(), "Codex Sol" if w.get("kind") == "codex" else "Claude")
 
@@ -97,11 +101,8 @@ class Team:
             self.save()
 
     # ---------- workers ----------
-    # Workers are named for Serenity's crew (the lead is Mal); past eight, w9, w10, ...
-    CREW = ("kaylee", "wash", "zoe", "simon", "river", "jayne", "inara", "book")
-
     def _new_worker_id(self):
-        for name in self.CREW:
+        for name in self.crew()[1]:
             if name not in self.state["workers"]:
                 return name
         n = len(self.state["workers"]) + 1
@@ -841,7 +842,7 @@ class Team:
         if to not in self.state["workers"]:
             raise teamlib.RejectedMessage("no teammate %r (use team_status to see the team)" % to)
         self._peer_guard(sender, to)
-        self.say(sender, ":speech_balloon: *→ %s:* %s" % (("Mal" if to == "lead" else to.capitalize()), text),
+        self.say(sender, ":speech_balloon: *→ %s:* %s" % ((self.crew()[0] if to == "lead" else to.capitalize()), text),
                  self.state["workers"][to]["thread_ts"])
         # Live delivery only to read-only collaborators: a steered collaborator can only say
         # things. Builders (who can write code) keep peer messages pull-only.

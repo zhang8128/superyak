@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import time
 import pytest
-from superyak_agent.runs import ClaudeRunner, RunTimeout
+from superyak_agent.runs import ClaudeRunner, RunTimeout, persona
 
 FAKE_CLAUDE = '''#!/usr/bin/env python3
 import json, os, subprocess, sys, time
@@ -312,3 +312,10 @@ def test_run_settings_are_what_they_were_before_browser_lanes(monkeypatch):
     monkeypatch.setenv('HOME', '/home/u')
     assert json.dumps(builder_settings('/r/wt', '/r/repo'), indent=1) + '\n' == (SNAPSHOTS / 'builder-settings.json').read_text()
     assert json.dumps(read_only_settings('/r/ws'), indent=1) + '\n' == (SNAPSHOTS / 'answer-settings.json').read_text()
+
+
+def test_tardis_answers_as_the_doctor_and_other_ships_as_themselves():
+    tardis = persona({'ship': 'tardis', 'ship_name': 'Tardis', 'owner_id': 'u-andy', 'machine': 'tardis'})
+    assert tardis.startswith('You are the Doctor, answering for Tardis') and 'only the message that mentions you' in tardis
+    serenity = persona({'ship': 'serenity', 'ship_name': 'Serenity', 'owner_id': 'u-andy', 'machine': 'andy-mac'})
+    assert serenity.startswith('You are Serenity,') and 'plain, concise, friendly' in serenity

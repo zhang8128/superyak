@@ -964,6 +964,24 @@ def test_workers_are_named_for_the_crew_and_the_lead_is_mal(env):
     assert team.display_name("lead").startswith("Mal (lead)")
 
 
+def test_tardis_is_crewed_by_the_doctors(env):
+    env["tmp"].joinpath("cfg.json").write_text(json.dumps({"crew": "tardis"}))
+    team = teamd.Team("t1", env["repo"], "toy goal", teamlib.team_config("build"))
+    names = [team.spawn("t%d" % i, "codex")["worker"] for i in range(3)]
+    assert names == ["ninth", "tenth", "eleventh"]
+    assert team.display_name("tenth") == "Tenth · Codex Sol"
+    assert team.display_name("lead") == "The Doctor (lead) · Claude"
+
+
+def test_crew_comes_from_the_config_file_only(env):
+    env["tmp"].joinpath("cfg.json").write_text(json.dumps({"crew": "enterprise"}))
+    with pytest.raises(teamlib.RejectedMessage, match="crew must be one of"):
+        teamlib.team_config(None)
+    env["tmp"].joinpath("cfg.json").write_text("{}")
+    with pytest.raises(teamlib.RejectedMessage, match="unsupported"):
+        teamlib.team_config(None, {"crew": "tardis"})
+
+
 def test_any_non_lead_role_runs_the_mcp_in_worker_mode(monkeypatch):
     import importlib
     from superyak_team import mcp

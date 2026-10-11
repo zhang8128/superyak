@@ -60,11 +60,21 @@ DEFAULT_CONFIG = {
     # plugin "engram" with server "engram". Change this if the plugin or server is renamed.
     "engram_tool_prefix": "mcp__plugin_engram_engram__",       # Claude collaborators only (Codex can't restrict reads)
     "browser_lane": False,           # a person turns browser lanes on in a preset, never team_start
+    "crew": "serenity",              # this machine's crew (CREWS); config file only, never per team
 }
 
 
 class RejectedMessage(ValueError):
     pass
+
+
+# Each machine's teams take the crew of its ship: the lead's name, then workers in spawn order
+# (past the crew, w9, w10, ...). Worker names become branch names, so they stay lowercase words.
+CREWS = {
+    "serenity": ("Mal", ("kaylee", "wash", "zoe", "simon", "river", "jayne", "inara", "book")),
+    "tardis":   ("The Doctor", ("ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourth",
+                                "fifth", "eighth")),
+}
 
 
 # Team configurations. A team = defaults (+ ~/.superyak/team/config.json) + a preset + per-team
@@ -169,6 +179,8 @@ def team_config(preset=None, overrides=None):
         raise RejectedMessage("collab_web_search must be true or false")
     if type(cfg.get("browser_lane", False)) is not bool:
         raise RejectedMessage("browser_lane must be true or false")
+    if cfg.get("crew") not in CREWS:
+        raise RejectedMessage("crew must be one of: %s" % ", ".join(sorted(CREWS)))
     cfg["preset"] = preset or ""
     return cfg
 

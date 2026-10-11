@@ -8,9 +8,13 @@ carry patient or participant data. Slack is off unless configured.
 
 ## Using it
 
-The lead posts as **Mal**; workers are named for Serenity's crew in spawn order (kaylee, wash, zoe,
-simon, river, jayne, inara, book, then w9, w10, ...). Use those names wherever a worker is addressed
-(`team message worker=kaylee`, Slack threads, branches `team/<team>/kaylee`).
+Each machine's teams take its ship's crew, set by `crew` in `~/.superyak/team/config.json` (config
+file only, never a per-team override). The default, `serenity`: the lead posts as **Mal** and workers
+are named for Serenity's crew in spawn order (kaylee, wash, zoe, simon, river, jayne, inara, book).
+With `"crew": "tardis"` the lead is **The Doctor** and workers are the Doctor's regenerations (ninth,
+tenth, eleventh, twelfth, thirteenth, fourth, fifth, eighth). Past the crew come w9, w10, ... Use
+those names wherever a worker is addressed (`team message worker=kaylee`, Slack threads, branches
+`team/<team>/kaylee`). A running team keeps the crew it started with.
 
 | From | How |
 |---|---|
