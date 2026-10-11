@@ -362,7 +362,7 @@ def test_one_closed_check_on_every_path(env, first_look):
     fleet.clock[0] = ends - 1
     assert fleet.ship('tardis').get(f'/api/chats/{room}').json()['breakout']['closed'] is None
     assert len(deferrals(fleet, room)) == 2
-    fleet.clock[0] = ends
+    fleet.clock[0] = ends + 3600                                              # the first look comes an hour late
     first_look(fleet, room, asked, ends)
     assert fleet.rows('SELECT closed FROM breakouts WHERE room_id=?', room) == [(ends,)]
     assert deferrals(fleet, room) == []
@@ -399,6 +399,11 @@ def test_the_owner_closes_a_breakout_and_only_the_owner(env):
     assert again.status_code == 200 and again.json()['breakout']['closed'] == closed_at
     assert say_refused(fleet.ship('rio-grande'), room).json() == CLOSED
     assert ticket(fleet.ship('rio-grande'), asked['id']).json() == CLOSED
+    with fleet.store.transaction() as db:   # behind the refusals: a closed breakout records no mention, gets no notice
+        fleet.store._record_mentions(db, room, asked['id'], '@tardis again')
+        notice = fleet.store._post_as_system(db, room, fleet.id('rio-grande'), asked['id'], 'Station notice: waited')
+    assert notice is None and fleet.rows('SELECT user_id FROM mentions WHERE room_id=?', room) == [(fleet.id('rio-grande'),)]
+    assert fleet.rows('SELECT count(*) FROM messages WHERE room_id=?', room) == [(1,)]
     assert fleet.ship('serenity').post(f'/api/ships/me/rooms/{room}/leave').json()['closed'] == closed_at
 
 
@@ -542,6 +547,12 @@ def test_breakout_noise_never_holds_back_a_persons_message(env):
     assert (trailing['messages'], trailing['breakout_counts']) == ([], {alpha: 3})
     assert flagged(tardis, cursor='new')['breakout_counts'] == {}
     assert tardis.post('/api/ships/me/unread', json={'cursor': 'new'}).json()['messages'] == []
+    later = say(fleet.andy, fleet.hands, 'q', 'and another')   # noise after the page's last message waits for the next
+    say(fleet.ship('serenity'), alpha, 'after', 'noise after it')
+    page = flagged(tardis, cursor='new')
+    assert ([m['message_id'] for m in page['messages']], page['breakout_counts']) == ([later['id']], {})
+    tardis.post('/api/ships/me/unread/advance', json={'cursor': 'new', 'to': page['messages'][-1]['event_id']})
+    assert flagged(tardis, cursor='new')['breakout_counts'] == {alpha: 1}
 
 
 def test_a_flagged_wait_counts_the_noise_it_passed(env):
