@@ -170,8 +170,8 @@ def test_breakout_noise_never_holds_back_a_persons_message(station, ship_config,
     text = run(fake, config_path, 's1')
     assert [r['query'] for r in fake.requests if r['path'] == '/api/ships/me/unread'] == ['breakouts=mentions']
     assert person['body'] in text and 'alpha 0' not in text and 'beta 14' not in text
-    assert text.endswith(f'\n\n15 new in breakout Alpha; `station_read room={alpha}` shows them\n\n'
-                         f'15 new in breakout Beta; `station_read room={beta}` shows them')
+    assert text.endswith(f'\n\n15 new in breakout \"Alpha\" (title set by a ship); `station_read room={alpha}` shows them\n\n'
+                         f'15 new in breakout \"Beta\" (title set by a ship); `station_read room={beta}` shows them')
     assert run(fake, config_path, 's1') == ''
 
 
@@ -199,7 +199,7 @@ def test_breakout_counts_show_even_when_no_message_does(station, ship_config, tm
     for n in range(3):
         fake.say(alpha, rio, f'alpha {n}')
     text = run(fake, config_path, 's1')
-    assert text == hook.HEADER + f'\n\n3 new in breakout Alpha; `station_read room={alpha}` shows them'
+    assert text == hook.HEADER + f'\n\n3 new in breakout \"Alpha\" (title set by a ship); `station_read room={alpha}` shows them'
     assert not any(r['path'].endswith('/advance') for r in fake.requests)
     assert run(fake, config_path, 's1') == ''
 

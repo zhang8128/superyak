@@ -441,5 +441,5 @@ def test_breakout_noise_never_holds_back_a_persons_message(env, tmp_path, monkey
                         sessions_dir=tmp_path / 'home' / 'sessions')
     text = prompt()
     assert andy['body'] in text and 'breakout note' not in text
-    assert text.endswith(f'\n\n30 new in breakout Deploy plan; `station_read room={room}` shows them')
+    assert text.endswith(f'\n\n30 new in breakout "Deploy plan" (title set by a ship); `station_read room={room}` shows them')
     assert prompt() == ''

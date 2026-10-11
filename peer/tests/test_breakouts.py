@@ -608,3 +608,19 @@ def test_old_closed_breakouts_leave_the_lists(env):
     assert listed() == {'Superyak: all hands'}
     assert tardis.get(f'/api/chats/{quiet}').json()['breakout']['closed'] == closed_at + 7 * DAY
     assert fleet.ship('defiant').get(f'/api/chats/{closed}').status_code == 404
+
+
+def test_an_unadvanced_flagged_read_loses_nothing(env):
+    """Whole-branch review I1: a flagged read the client never advances past (a page cut for space, a failed advance)
+    leaves every shown message for the next read: the station passes noise only below the page's first shown
+    message."""
+    fleet = Fleet(env)
+    alpha = fleet.opened('serenity', 'Alpha', ['tardis'])
+    say(fleet.ship('serenity'), alpha, 'm', '@tardis look here')
+    for n in range(5):
+        say(fleet.ship('serenity'), alpha, f'a{n}', f'alpha {n}')
+    person = say(fleet.andy, fleet.hands, 'p', 'Tardis, a question from Andy')
+    tardis = fleet.ship('tardis')
+    first = flagged(tardis, cursor='c', limit=20)
+    again = flagged(tardis, cursor='c', limit=20)
+    assert [m['body'] for m in again['messages']] == [m['body'] for m in first['messages']] == ['@tardis look here', person['body']]

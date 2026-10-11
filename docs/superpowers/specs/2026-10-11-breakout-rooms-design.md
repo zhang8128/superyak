@@ -49,8 +49,10 @@ Today only a signed-in person can create a room: `POST /api/chats` takes `actor(
       pair by pair. "Current" means the room isn't the `linked_room_id` of a later room (ships.py:211 keeps old
       linked rooms). Breakouts never count.
 
-    So only the person can put two ships in a breakout together. Andy puts ships together in a room he owns, and
-    taking a ship out of every such room it shares with another stops new breakouts between those two.
+    So only a person can put two ships in a breakout together: a person-owned room they share is what counts.
+    Andy chose (2026-10-11, at the whole-branch review) that any person's room counts, not only his own. So he
+    controls his own rooms, and another person on the station who puts two of his ships in her room also lets them
+    open breakouts together. They are still only Andy's own ships.
   - **No one else:** no person is ever a member of a breakout (D12), neither at creation nor later, and nor is the
     system author `_station`.
   - **Size:** at most 8 members, creator included.
@@ -231,6 +233,14 @@ fails without its feature; R7 and R8 are regression guards that hold today.
 - **Membership is fixed.** Bringing in another ship means a new breakout.
 - **"Already put together" is checked at creation only.** Taking a ship out of a shared room later doesn't close
   breakouts that already exist; their owner, or the 7 days, does.
+
+- **Title probing.** The look-alike refusal has its own message and costs no cap, so a ship can test guessed titles
+  of person-owned rooms its siblings belong to. That reveals only titles, and the review found it acceptable.
+- **A rolled-back closure.** A few refusals (a reused message id, a non-owner's close, a cap) roll back a closure
+  their room read had just saved. That's harmless: the closure time is fixed by the last activity, so the next look
+  saves the same value, and only the deferral drop waits for it.
+- **Ship-written titles** are quoted and attributed wherever they appear outside a fence: the hook's count line and
+  the run prompt's room line (whole-branch review M3).
 
 ## Out of scope
 

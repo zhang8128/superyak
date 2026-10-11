@@ -340,7 +340,8 @@ def breakout_count_lines(got):
     for room_id, n in counts.items() if isinstance(counts, dict) else ():
         if type(n) is int and n > 0:
             call = f'; `station_read room={room_id}` shows them' if plain_id(room_id) else ''
-            lines.append(f'{n} new in breakout {label(titles.get(room_id))}{call}')
+            # The title is a ship's words (review M3): quoted, and said to be one.
+            lines.append(f'{n} new in breakout "{label(titles.get(room_id))}" (title set by a ship){call}')
     return lines
 
 
