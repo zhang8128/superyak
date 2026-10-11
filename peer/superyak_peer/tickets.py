@@ -48,6 +48,7 @@ class Tickets:
             ship = self._ticket_ship(db, actor)
             message = require(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
             require(db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (message['room_id'], actor)).fetchone())
+            self._refuse_closed_breakout(db, message['room_id'], 422)  # any of its messages: done, silently
             if self._never_answered(db, message):
                 raise Problem(422, NEVER_ANSWERED)
             if decisions and self._answered(db, actor, message_id):

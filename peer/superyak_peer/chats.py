@@ -9,7 +9,11 @@ class Chats:
         activity = db.execute('SELECT (SELECT created FROM room_activity WHERE room_id=?) AS created, (SELECT MAX(created) FROM messages WHERE room_id=?) AS latest_message', (key, key)).fetchone()
         remote_activity = db.execute('SELECT MAX(created) FROM peer_messages WHERE room_id=?', (key,)).fetchone()[0] or 0.0
         created = activity['created'] or 0.0
-        return {**dict(row), 'member_ids': members, 'created': created, 'last_activity': max(created, activity['latest_message'] or 0.0, remote_activity)}
+        room = {**dict(row), 'member_ids': members, 'created': created, 'last_activity': max(created, activity['latest_message'] or 0.0, remote_activity)}
+        breakout = self._breakout_mark(db, key)
+        if breakout is not None:  # S6: only a breakout carries the key, so every other room is unchanged (R10)
+            room['breakout'] = breakout
+        return room
 
     def _create_room(self, db, actor, title, members, linked_room_id=None):
         text(title, 'title')
@@ -32,6 +36,7 @@ class Chats:
     def list_rooms(self, actor):
         with self.transaction() as db:
             rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
+        rooms = [room for room in rooms if not self._off_the_lists(room)]  # breakouts S12: still readable by id
         return sorted(rooms + self.remote_rooms(actor), key=lambda room: (-room['last_activity'], room['id']))
 
     def get_room(self, actor, key):
@@ -77,6 +82,7 @@ class Chats:
                 if existing['body'] != body or self._reply_to(db, existing['id']) != reply_to:
                     raise Problem(409, 'Message ID already used with different text')
                 return dict(existing, replayed=True)  # a retry: nothing new was posted
+            self._refuse_closed_breakout(db, key)
             if reply_to is not None:
                 self._check_reply_to(db, key, reply_to)
             self._ship_post_budget(db, actor)

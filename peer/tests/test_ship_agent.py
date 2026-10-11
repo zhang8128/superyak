@@ -400,3 +400,46 @@ def test_the_watchers_answer_carries_reply_to_and_is_then_answered(env, tmp_path
     assert clients[0].get(f'/api/chats/{room}').json()['messages'][-1]['reply_to'] == asked['id']
     assert client.ticket(asked['id'], decisions=True) == {'decision': 'answered', 'message_id': asked['id']}
     assert Watcher(client, config, tmp_path / 'lost.json', runner).cycle() == 0 and len(runner.calls) == 1
+
+
+def test_breakout_noise_never_holds_back_a_persons_message(env, tmp_path, monkeypatch):
+    """Breakouts R13 end to end (build step 2): Serenity opens a breakout with its sibling Tardis through
+    station_open_room; 30 breakout messages, then Andy's message in the room he owns. Tardis's hook, through the real
+    station, shows Andy's message at the first prompt with a count line for the breakout, and is silent at the next;
+    the unflagged read is today's, its page all breakout."""
+    from superyak_agent import hook
+    from superyak_agent.mcp import Tools, handle
+    from superyak_agent.station import StationClient, write_private
+    app, clients, users, clock = env
+    serenity, serenity_key = docked_ship(app.state.store, users[0]['id'], 'serenity')
+    tardis, tardis_key = docked_ship(app.state.store, users[0]['id'], 'tardis')
+    hands = clients[0].post('/api/chats', json={'title': 'Superyak: all hands', 'member_ids': [serenity['id'], tardis['id']]}).json()['id']
+    for name in ('CLAUDE_PROJECT_DIR', 'SUPERYAK_RUN'):  # the hook acts as the machine ship of an empty home (D7)
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('HOME', str(tmp_path / 'user-home'))
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'serenity-session')
+    tools = Tools(StationClient('http://testserver', serenity_key, transport=transport_for(app)))
+    call = lambda name, **args: handle(tools, {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}})['result']
+    opened = call('station_open_room', title='Deploy plan', ships=['tardis'])
+    room = next(r['id'] for r in tools.client.rooms() if r.get('breakout'))
+    assert not opened['isError'] and f'room {room} (short id {room[:6]})' in opened['content'][0]['text']
+    for n in range(30):
+        clock[0] += 3  # inside the station's 30 posts a minute
+        assert call('station_post', room=room, text=f'breakout note {n}')['isError'] is False
+    clock[0] += 1
+    andy = clients[0].post(f'/api/chats/{hands}/messages', json={'client_message_id': 'p', 'body': 'Tardis, a question from Andy'}).json()
+    tardis_client = StationClient('http://testserver', tardis_key, transport=transport_for(app))
+    today = tardis_client.unread('old', 20)
+    assert set(today) == {'cursor', 'position', 'more', 'messages'} and today['more'] is True
+    assert [m['body'] for m in today['messages']] == [f'breakout note {n}' for n in range(20)]
+    config_path = tmp_path / 'home' / 'station.json'
+    write_private(config_path, {'station': 'http://testserver', 'origin': None, 'ship': 'tardis', 'ship_id': tardis['id'], 'key': tardis_key,
+                                'owner_id': users[0]['id'], 'workspace': str(tmp_path), 'machine': 'test-host'})
+
+    def prompt():
+        return hook.run(config_path, transport=transport_for(app), clock=lambda: clock[0], session_id='tardis-session',
+                        sessions_dir=tmp_path / 'home' / 'sessions')
+    text = prompt()
+    assert andy['body'] in text and 'breakout note' not in text
+    assert text.endswith(f'\n\n30 new in breakout "Deploy plan" (title set by a ship); `station_read room={room}` shows them')
+    assert prompt() == ''

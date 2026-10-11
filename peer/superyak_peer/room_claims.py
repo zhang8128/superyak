@@ -76,6 +76,7 @@ class RoomClaims:
         self._refuse_live_ship_keys(note or '', 'note')
         with self.transaction() as db:
             self._room(db, actor, room_id)
+            self._refuse_closed_breakout(db, room_id)
             now = self.clock()
             held, expires = self._active_claim(db, room_id, key, now), now + minutes * 60
             if held is not None and held['holder_id'] != actor:
@@ -105,6 +106,7 @@ class RoomClaims:
         key = claim_key(key)
         with self.transaction() as db:
             room = self._room(db, actor, room_id)
+            self._refuse_closed_breakout(db, room_id)
             held = require(self._active_claim(db, room_id, key, self.clock()))
             holder = db.execute('SELECT id,name,owner_id FROM users WHERE id=?', (held['holder_id'],)).fetchone()
             if actor not in (holder['id'], holder['owner_id'], room['owner_id']):
