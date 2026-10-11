@@ -14,7 +14,13 @@ instead, and says INFO "no ssh-agent socket on this machine; nothing to protect"
 
 Prerequisites (the spec's, plus this script's):
 - lane_node in ~/.superyak/team/config.json, and no browser_lane anywhere yet: the run makes its own preset, with
-  browser_lane on, and removes it when it ends, so no lead can open a lane before the acceptance has passed;
+  browser_lane on, and removes it when it ends, so no lead can open a lane before the acceptance has passed.
+  check_lane_node now also checks every library the binary loads (lane.py, "Its node"); on a stock Homebrew
+  install, Cellar and opt are usually group-writable, so first run `chmod g-w /opt/homebrew/Cellar /opt/homebrew/opt`
+  (the refusal names this if it's still needed). Better still, skip Homebrew: unpack a plain nodejs.org tarball,
+  root-owned, into its own folder such as /usr/local/lib/nodejs/node-vX/, and point lane_node at the node inside it
+  — never the .pkg installer, which puts node in /usr/local/bin and would make all of /usr/local the broker's
+  readable prefix;
 - ~/.superyak/team/lane-listeners.json filled in (--list-listeners shows what is listening now), and nothing else
   listening: dev servers, Ollama, Postgres and Serena dashboards stopped;
 - the Bricks checkout on the branch with the Bricks change (lane ports in the Playwright config and fixtures);

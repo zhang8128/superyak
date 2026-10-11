@@ -510,6 +510,10 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 
 ## Known limits
 
+- **check_lane_node's library check only covers what `otool -L` lists** (lane-node-libs). A library node loads at
+  runtime with `dlopen` instead of at load time never appears in `otool -L`'s output, so it isn't checked, as the
+  path it's loaded under or at its realpath. Nothing in a stock Homebrew or nodejs.org-tarball node does this; it
+  would need its own control if a future node build did.
 - Inside the broker, Chrome runs without its own sandbox. The broker's deny-default profile is the wall. A page that
   takes over a renderer gets the profile's powers:
   - the lane's ports, `<lane>/b`, and reads of the headless shell, Playwright and node;
@@ -779,6 +783,11 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
 11. **Preload.** Run under node, `listen(0)`, `listen(0, '0.0.0.0')` and `listen(0, '::')` all bind `127.0.0.1`.
 
 **Mac acceptance** (Serenity runs it at a time the Bricks lead picks). The prerequisites are:
+- `lane_node` set (see "Its node"), and on a stock Homebrew install, `chmod g-w /opt/homebrew/Cellar /opt/homebrew/opt`
+  first — otherwise check_lane_node's library check (below) refuses it and names the same fix. Simplest: skip
+  Homebrew and point `lane_node` at a plain nodejs.org tarball, unpacked root-owned into its own folder such as
+  `/usr/local/lib/nodejs/node-vX/` — never the `.pkg`, which installs into `/usr/local/bin` and widens the broker's
+  readable prefix to all of `/usr/local`;
 - a team with `browser_lane: true` set in a preset;
 - the approved-listener list filled in;
 - the worktree prepared, so `npx` needs no registry.
