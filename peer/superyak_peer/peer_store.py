@@ -5,6 +5,7 @@ from .common import Problem, require, uid, text, ids, encode
 # What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
 # columns (plus this station's delivery state for a queued reply). An allowlist, never a denylist (R44).
 REMOTE_ROOM_KEYS = ('title', 'owner_id', 'member_ids', 'linked_room_id', 'created', 'last_activity')
+UNVERIFIED = ':(unverified)'  # a forged local author's stand-in; no participant id can hold parentheses
 REMOTE_MESSAGE_KEYS = ('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'state')
 
 PEER_SCHEMA = '''
@@ -72,11 +73,13 @@ class PeerStore:
         result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])]
         result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
-        replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply' AND status!='withdrawn'", (row['resource_id'],row['origin'])).fetchall()
+        replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply'", (row['resource_id'],row['origin'])).fetchall()
+        # Every reply this station sent proves its own words, withdrawn ones too: a reply can reach the origin and then
+        # be withdrawn here when its acknowledgement was lost (review of e9a6712). Only queued ones are shown below.
         self._unverified_local_authors(replies, row['origin'], result['messages'])
         for delivery in replies:
             meta = json.loads(delivery['metadata'])
-            if meta['actor'] != actor:
+            if meta['actor'] != actor or delivery['status'] == 'withdrawn':
                 continue
             local = meta['message']
             if not any(m['author_id']==local['author_id'] and m['client_message_id']==local['client_message_id'] for m in result['messages']):
@@ -117,7 +120,7 @@ class PeerStore:
             if reply in sent:
                 sent.discard(reply)
             else:
-                message['author_id'] = origin + ':unverified'
+                message['author_id'] = origin + UNVERIFIED  # outside the participant id grammar: matches no contact
                 message['unverified'] = True
 
     def remote_room(self, actor, key):

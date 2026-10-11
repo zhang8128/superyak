@@ -1,3 +1,4 @@
+import re
 import json
 
 import pytest
@@ -534,11 +535,12 @@ def test_a_paired_peer_cannot_send_a_station_author_claims_or_extra_fields(two_p
     assert '_station' not in json.dumps([again, b[0].list_rooms(b[1])])
 
 
-def _forged_message(a, b, room, message_id, client_id, body, created):
-    """A room.message the origin (a) signs itself, attributing words in its own room to b's local user."""
+def _forged_message(a, b, room, message_id, client_id, body, created, author=None):
+    """A room.message the origin (a) signs itself, attributing words in its own room to one of b's local users (b's
+    first user unless `author` names another)."""
     with a[0].transaction() as db:
         snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
-    message = {'id': message_id, 'room_id': room['id'], 'author_id': b[2].identity.peer_id + ':' + b[1],
+    message = {'id': message_id, 'room_id': room['id'], 'author_id': b[2].identity.peer_id + ':' + (author or b[1]),
                'client_message_id': client_id, 'body': body, 'epoch': 1, 'created': created}
     return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
                                   action='room.message', recipients=[b[1]], payload={**snapshot, 'message': message})
@@ -606,3 +608,69 @@ def test_a_failed_identity_read_is_not_cached(tmp_path, monkeypatch):
     first = store._own_peer_id()
     assert first == real(PeerIdentity, store.data_dir).peer_id
     assert store._own_peer_id() == first and len(reads) == 2        # kept after the read that worked
+
+
+def test_an_echoed_reply_whose_outbox_row_was_withdrawn_keeps_its_local_author(two_peers):
+    """Review of e9a6712, finding 1: the reply reached the origin, but its acknowledgement was lost, and a later revision
+    made this station withdraw the row. The words were still this station's, so the echo keeps its local author: the
+    proof is the row's content, not its delivery status."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Lost ack', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'acked-late', 'my real words')
+    deliver(b, a)
+    with b[0].transaction() as db:
+        db.execute("UPDATE outbox SET status='withdrawn' WHERE action='room.reply'")
+    deliver(a, b)
+    shown = {m['body']: m for m in b[0].get_room(b[1], remote)['messages']}
+    assert shown['my real words']['author_id'] == b[2].identity.peer_id + ':' + b[1]
+    assert not shown['my real words'].get('unverified')
+
+
+def test_one_local_users_reply_never_verifies_as_another(two_peers):
+    """Review of e9a6712, finding 3: the author is part of the proof, so the origin can't give one local user's real
+    reply to another local user."""
+    a, b, ca, cb = two_peers
+    second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
+    c2 = a[2].pair(a[1], b[2].card(second))
+    b[2].pair(second, a[2].card(a[1]))
+    room = a[0].create_room(a[1], 'Two local users', [ca['id'], c2['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'same-id', 'yes')        # queued here; the origin hasn't echoed it yet
+    # The forgery arrives before any honest echo, so only the author binding stands between it and `second`.
+    assert b[2].receive(_forged_message(a, b, room, 'm-given', 'same-id', 'yes', 7.0, author=second))['ok']
+    copies = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'yes']   # the forgery's recipient
+    assert not any(m['author_id'] == b[2].identity.peer_id + ':' + second for m in copies)  # never given to second
+    assert any(m.get('unverified') for m in copies)
+    assert [m['author_id'] for m in copies].count(b[2].identity.peer_id + ':' + b[1]) == 1   # the real one, queued
+
+
+def test_a_reply_in_one_room_never_verifies_in_another(two_peers):
+    """Review of e9a6712, finding 3: the room is part of the proof, so a real reply in one room can't stand for a copy
+    the origin shows in another."""
+    a, b, ca, cb = two_peers
+    first = a[0].create_room(a[1], 'First room', [ca['id']])
+    other = a[0].create_room(a[1], 'Other room', [ca['id']])
+    deliver(a, b)
+    rooms = {r['title']: r['id'] for r in b[0].list_rooms(b[1])}
+    b[0].send_message(b[1], rooms['First room'], 'cross', 'yes')
+    deliver(b, a)
+    assert b[2].receive(_forged_message(a, b, other, 'm-cross', 'cross', 'yes', 8.0))['ok']
+    shown = [m for m in b[0].get_room(b[1], rooms['Other room'])['messages'] if m['body'] == 'yes']
+    assert shown and all(m.get('unverified') for m in shown)
+    assert all(m['author_id'] != b[2].identity.peer_id + ':' + b[1] for m in shown)
+
+
+def test_the_unverified_author_is_outside_the_participant_id_grammar(two_peers):
+    """Review of e9a6712, finding 5: a forged message's author can't collide with a real contact, even one paired with
+    the participant id 'unverified', because the marker uses characters no participant id can hold."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Marker', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    assert b[2].receive(_forged_message(a, b, room, 'm-mark', 'mark-1', 'not mine', 9.0))['ok']
+    forged = next(m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'not mine')
+    participant = forged['author_id'].split(':', 1)[1]
+    assert not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', participant), forged['author_id']
