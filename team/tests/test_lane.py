@@ -2530,6 +2530,262 @@ def test_lane_node_is_an_owned_absolute_binary_outside_home_and_worktrees(env, t
         assert lane.check_lane_node(system_node, [str(worktree)]) == Path(os.path.realpath(system_node))
 
 
+# ---------- lane-node-libs: node's own dynamic libraries, on macOS ----------
+
+def otool_L_text(bin_path, entries):
+    """Fake `otool -L <bin_path>` stdout for the given dependent-library entries, in otool's own format."""
+    lines = ["%s:" % bin_path]
+    lines += ["\t%s (compatibility version 1.0.0, current version 1.0.0)" % e for e in entries]
+    return "\n".join(lines) + "\n"
+
+
+def otool_l_rpaths_text(rpaths):
+    """Fake `otool -l <bin_path>` stdout holding one LC_RPATH load command per entry in rpaths, in order."""
+    lines = []
+    for i, rp in enumerate(rpaths):
+        lines += ["Load command %d" % i, "          cmd LC_RPATH", "      cmdsize 32",
+                  "         path %s (offset 12)" % rp]
+    return "\n".join(lines) + "\n"
+
+
+def fake_otool(monkeypatch, deps=None, rpaths=None, fail_L=False, fail_l=False):
+    """Stands in for lane._run, answering only `otool -L` and `otool -l` on lane.OTOOL; anything else (there
+    shouldn't be any in these tests) goes to the real seam. fail_L/fail_l may be True (otool exits non-zero) or
+    "timeout" (the seam itself returns None, as it does when otool can't run or times out)."""
+    real_run = lane._run
+
+    def run(cmd, timeout=60):
+        if cmd[:1] != [lane.OTOOL]:
+            return real_run(cmd, timeout)
+        flag = cmd[1]
+        if flag == "-L":
+            if fail_L == "timeout":
+                return None
+            if fail_L:
+                return Ran(1, "", "not an object file")
+            return Ran(0, otool_L_text(cmd[2], deps or []))
+        if flag == "-l":
+            if fail_l == "timeout":
+                return None
+            if fail_l:
+                return Ran(1, "", "truncated")
+            return Ran(0, otool_l_rpaths_text(rpaths or []))
+        return real_run(cmd, timeout)
+    monkeypatch.setattr(lane, "_run", run)
+
+
+def homebrew_like_tree(root):
+    """A small Homebrew-shaped tree under root: Cellar/node/26.11.1/bin/node, two more libraries it can load — one
+    straight (Cellar/icu4c@77/..., reached from opt/icu4c@77, a symlink) and one in node's own lib/ (for @rpath and
+    @executable_path) — each a plain owned file. Returns (node_bin, icu_lib_as_loaded, node_lib_dir)."""
+    cellar_node = root / "Cellar" / "node" / "26.11.1"
+    bin_dir = cellar_node / "bin"
+    bin_dir.mkdir(parents=True)
+    node_bin = bin_dir / "node"
+    node_bin.write_text("#!/bin/sh\n")
+    node_bin.chmod(0o755)
+    lib_dir = cellar_node / "lib"
+    lib_dir.mkdir()
+    (lib_dir / "libnode.147.dylib").write_bytes(b"fake")
+    (lib_dir / "libother.dylib").write_bytes(b"fake")
+    icu_real = root / "Cellar" / "icu4c@77" / "77.1" / "lib"
+    icu_real.mkdir(parents=True)
+    (icu_real / "libicui18n.77.1.dylib").write_bytes(b"fake")
+    opt_dir = root / "opt"
+    opt_dir.mkdir()
+    (opt_dir / "icu4c@77").symlink_to(root / "Cellar" / "icu4c@77" / "77.1")
+    icu_as_loaded = opt_dir / "icu4c@77" / "lib" / "libicui18n.77.1.dylib"
+    return node_bin, icu_as_loaded, lib_dir
+
+
+def test_node_libraries_pass_on_a_clean_homebrew_like_tree(env, tmp_path, monkeypatch):
+    """Spec a: the binary's own owner-and-ancestors check, run again for every non-system library it loads — an
+    absolute one (through a symlinked opt/ folder), an @rpath/ one and an @executable_path/ one — passes when the
+    tree is clean. /usr/lib is never touched even though the entry names a real file."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    deps = [str(icu_as_loaded), "@rpath/libnode.147.dylib", "@executable_path/../lib/libother.dylib",
+            "/usr/lib/libc++.1.dylib", "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"]
+    fake_otool(monkeypatch, deps=deps, rpaths=["@loader_path/../lib"])
+    assert lane.check_lane_node(str(node_bin), []) == Path(os.path.realpath(node_bin))
+
+
+def test_a_group_writable_opt_folder_is_refused_through_the_symlink_it_holds(env, tmp_path, monkeypatch):
+    """Spec a: the library is checked as loaded (lstat, never resolved first), so a group-writable opt/ is caught by
+    its own mode even though the symlink it holds still points at a cleanly-owned Cellar folder, which is all the
+    realpath check alone would ever see. Spec b: under /opt/homebrew, the refusal also names the chmod fix."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "opt" / "homebrew"                  # so the refused path literally reads .../opt/homebrew/...
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    opt_dir = root / "opt"
+    os.chmod(opt_dir, 0o775)
+    try:
+        fake_otool(monkeypatch, deps=[str(icu_as_loaded)])
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner") as exc:
+            lane.check_lane_node(str(node_bin), [])
+        assert "chmod g-w /opt/homebrew/Cellar /opt/homebrew/opt" in str(exc.value)
+    finally:
+        os.chmod(opt_dir, 0o755)
+
+
+def test_a_group_writable_folder_in_the_librarys_realpath_is_refused(env, tmp_path, monkeypatch):
+    """Spec a: the library is also checked at its realpath, ancestors included (_check_ancestors) — a group-writable
+    folder that only shows up once the opt/ symlink is resolved (never on the as-loaded path) is still refused."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    cellar_icu = root / "Cellar" / "icu4c@77"
+    os.chmod(cellar_icu, 0o775)
+    try:
+        fake_otool(monkeypatch, deps=[str(icu_as_loaded)])
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(node_bin), [])
+    finally:
+        os.chmod(cellar_icu, 0o755)
+
+
+def test_a_librarys_realpath_owned_by_another_uid_is_refused(env, tmp_path, monkeypatch):
+    """Spec a: the library is also checked at its realpath (the same owner-or-root rule as the binary), catching a
+    symlink whose target belongs to someone else even though every folder along the way looks fine."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    real_target = str(Path(os.path.realpath(icu_as_loaded)))
+    real_stat, mine = os.stat, os.getuid()
+
+    class Theirs:
+        def __init__(self, st):
+            self._st = st
+
+        def __getattr__(self, name):
+            return mine + 1 if name == "st_uid" else getattr(self._st, name)
+    monkeypatch.setattr(lane.os, "stat",
+                        lambda p, *a, **kw: Theirs(real_stat(p, *a, **kw)) if str(p) == real_target
+                        else real_stat(p, *a, **kw))
+    fake_otool(monkeypatch, deps=[str(icu_as_loaded)])
+    with pytest.raises(lane.LaneRefused, match="belongs to another user"):
+        lane.check_lane_node(str(node_bin), [])
+
+
+def test_an_rpath_library_outside_nodes_prefix_is_refused(env, tmp_path, monkeypatch):
+    """Spec a: an @rpath/ entry must resolve, through the binary's own LC_RPATH, to a file inside node's own prefix
+    (its grandparent folder). One that resolves to a real file somewhere else entirely is refused."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    elsewhere = root / "Cellar" / "other-package" / "lib"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "libnode.147.dylib").write_bytes(b"fake")
+    fake_otool(monkeypatch, deps=["@rpath/libnode.147.dylib"], rpaths=["@loader_path/../../../other-package/lib"])
+    with pytest.raises(lane.LaneRefused, match="doesn't resolve to a file inside"):
+        lane.check_lane_node(str(node_bin), [])
+
+
+@pytest.mark.parametrize("which,how", [("-L", "timeout"), ("-L", True), ("-l", "timeout"), ("-l", True)])
+def test_otool_failing_or_timing_out_refuses_the_node(env, tmp_path, monkeypatch, which, how):
+    """Spec a: otool not running (a timeout counts the same as any other failure, through lane._run's own seam) or
+    exiting non-zero refuses closed, whether it's -L itself or -l for an @rpath/ entry -L named."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    kwargs = {"fail_L": how} if which == "-L" else {"fail_l": how}
+    fake_otool(monkeypatch, deps=["@rpath/libnode.147.dylib"], rpaths=["@loader_path/../lib"], **kwargs)
+    with pytest.raises(lane.LaneRefused, match="otool %s couldn't be read" % which):
+        lane.check_lane_node(str(node_bin), [])
+
+
+def test_usr_lib_and_system_libraries_are_never_checked(env, tmp_path, monkeypatch):
+    """Spec a: /usr/lib and /System libraries are Apple's own and skipped outright — not even stat'd, or these two,
+    which don't exist, would refuse the node."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    fake_otool(monkeypatch, deps=["/usr/lib/does-not-exist-xyz.dylib",
+                                 "/System/Library/Frameworks/Nope.framework/Versions/A/Nope"])
+    assert lane.check_lane_node(str(node_bin), []) == Path(os.path.realpath(node_bin))
+
+
+def test_linux_skips_the_library_check_entirely(env, tmp_path, monkeypatch):
+    """Spec a: off macOS, check_lane_node never runs otool at all (there is none on the Pi) — only the binary's own
+    owner-and-ancestors check applies."""
+    monkeypatch.setattr(lane.sys, "platform", "linux")
+
+    def boom(cmd, timeout=60):
+        raise AssertionError("nothing should run a command checking lane_node on Linux: %r" % cmd)
+    monkeypatch.setattr(lane, "_run", boom)
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    assert lane.check_lane_node(str(node_bin), []) == Path(os.path.realpath(node_bin))
+
+
+def test_a_sticky_ancestor_in_the_librarys_as_loaded_path_is_allowed(env, tmp_path, monkeypatch):
+    """Spec a: _check_lstat_path's walk allows a sticky folder above the library (like /tmp), the same allowance
+    _check_ancestors gives the binary's own folders — only the library file itself may not be sticky (moot: it's
+    never a directory)."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    opt_dir = root / "opt"
+    os.chmod(opt_dir, 0o1777)
+    try:
+        fake_otool(monkeypatch, deps=[str(icu_as_loaded)])
+        assert lane.check_lane_node(str(node_bin), []) == Path(os.path.realpath(node_bin))
+    finally:
+        os.chmod(opt_dir, 0o755)
+
+
+def test_otool_L_output_that_doesnt_parse_refuses(env, tmp_path, monkeypatch):
+    """Spec a: otool -L exiting 0 with something this can't read as a library list refuses closed, same as it not
+    running at all."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+
+    def run(cmd, timeout=60):
+        if cmd[:2] == [lane.OTOOL, "-L"]:
+            return Ran(0, "not what otool -L usually prints\n")
+        return lane._run(cmd, timeout)
+    monkeypatch.setattr(lane, "_run", run)
+    with pytest.raises(lane.LaneRefused, match="otool -L couldn't be read"):
+        lane.check_lane_node(str(node_bin), [])
+
+
+def test_otool_L_output_with_one_unparseable_line_refuses(env, tmp_path, monkeypatch):
+    """Spec a: otool -L's header may parse while one dependent-library line still doesn't (a stray architecture
+    note, say) — that single bad line refuses the whole list closed too."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+
+    def run(cmd, timeout=60):
+        if cmd[:2] == [lane.OTOOL, "-L"]:
+            return Ran(0, "%s:\n\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0, current version 1.0.0)\n"
+                         "\tsomething otool never actually prints\n" % cmd[2])
+        return lane._run(cmd, timeout)
+    monkeypatch.setattr(lane, "_run", run)
+    with pytest.raises(lane.LaneRefused, match="otool -L couldn't be read"):
+        lane.check_lane_node(str(node_bin), [])
+
+
+def test_otool_l_output_missing_a_path_line_refuses(env, tmp_path, monkeypatch):
+    """Spec a: an @rpath/ entry needs otool -l's LC_RPATH path read; a load command with none refuses closed."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    root = tmp_path / "hb"
+    node_bin, icu_as_loaded, lib_dir = homebrew_like_tree(root)
+    real_run = lane._run
+
+    def run(cmd, timeout=60):
+        if cmd[:2] == [lane.OTOOL, "-L"]:
+            return Ran(0, otool_L_text(cmd[2], ["@rpath/libnode.147.dylib"]))
+        if cmd[:2] == [lane.OTOOL, "-l"]:
+            return Ran(0, "Load command 0\n          cmd LC_RPATH\n      cmdsize 32\n")   # no path line
+        return real_run(cmd, timeout)
+    monkeypatch.setattr(lane, "_run", run)
+    with pytest.raises(lane.LaneRefused, match="otool -l couldn't be read"):
+        lane.check_lane_node(str(node_bin), [])
+
+
 # ---------- Task 5, fix round 1 ----------
 
 def test_a_symlinked_browser_folder_or_browsers_root_is_refused(env, manifests, tmp_path):

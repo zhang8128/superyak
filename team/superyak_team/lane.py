@@ -2043,10 +2043,160 @@ def check_manifest(folder, revision):
     return actual
 
 
+OTOOL = "/usr/bin/otool"
+
+# Spec b: a stock Homebrew install leaves Cellar and opt group-writable; named whenever a refusal is under them.
+HOMEBREW_HINT = "; on a stock Homebrew install run: chmod g-w /opt/homebrew/Cellar /opt/homebrew/opt"
+
+
+def _homebrew_hint(message):
+    """message, with HOMEBREW_HINT appended when it refuses a folder under /opt/homebrew (spec b)."""
+    return message + HOMEBREW_HINT if "/opt/homebrew" in message else message
+
+
+def _check_lstat_path(path):
+    """Like _check_ancestors, but for path exactly as given, never resolved first: every component from "/" down is
+    lstat'd on its own, so a symlink is seen as the symlink it is before anything follows it. That is what catches a
+    symlink sitting in a folder that has turned group-writable (Homebrew's opt/, say) — the realpath check alone
+    would only ever see wherever the symlink currently points, never the folder that holds it. Only the folders
+    above the last component may be sticky."""
+    try:
+        parts = Path(path).parts
+        for i in range(1, len(parts) + 1):
+            prefix = Path(*parts[:i])
+            _check_owner(prefix, os.lstat(prefix), sticky_ok=(i < len(parts)))
+    except OSError as e:
+        raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
+
+
+def _otool_lines(flag, real_bin, timeout=10):
+    """`otool <flag> <real_bin>`'s stdout, or None when otool can't run, times out or exits non-zero. Always this
+    one absolute otool, no shell, through lane._run (the tests' seam) — never a `otool` found on PATH."""
+    r = _run([OTOOL, flag, str(real_bin)], timeout=timeout)
+    if r is None or r.returncode != 0:
+        return None
+    return r.stdout
+
+
+def _otool_dependencies(real_bin):
+    """Every library `otool -L` says real_bin loads, exactly as it names them (never resolved here) — or None when
+    otool can't run or its output doesn't parse the way otool -L always does, so the caller refuses closed."""
+    out = _otool_lines("-L", real_bin)
+    if out is None:
+        return None
+    lines = [l for l in out.splitlines() if l.strip()]
+    if not lines or not lines[0].rstrip().endswith(":"):
+        return None
+    libs = []
+    for line in lines[1:]:
+        m = re.match(r"^\s*(\S+) \(compatibility version [0-9.]+, current version [0-9.]+\)\s*$", line)
+        if not m:
+            return None
+        libs.append(m.group(1))
+    return libs
+
+
+def _otool_rpaths(real_bin):
+    """Every LC_RPATH `otool -l` lists for real_bin, in order — or None when otool can't run or a load command's
+    path line doesn't parse, so the caller refuses closed."""
+    out = _otool_lines("-l", real_bin)
+    if out is None:
+        return None
+    lines = out.splitlines()
+    rpaths = []
+    for i, line in enumerate(lines):
+        if line.strip() != "cmd LC_RPATH":
+            continue
+        for j in range(i + 1, min(i + 5, len(lines))):
+            m = re.match(r"^\s*path (.+) \(offset \d+\)\s*$", lines[j])
+            if m:
+                rpaths.append(m.group(1))
+                break
+        else:
+            return None
+    return rpaths
+
+
+def _resolve_special_lib(entry, real_bin, rpaths):
+    """Where dyld would actually look for an @rpath/, @loader_path/ or @executable_path/ dependency: the latter two
+    both mean real_bin's own folder (node loads no one else); @rpath tries each of real_bin's LC_RPATH entries in
+    turn, itself expanded the same way, until one holds a file. Returns that path, or None when none of them do."""
+    folder = real_bin.parent
+    if entry.startswith("@rpath/"):
+        rest = entry[len("@rpath/"):]
+        for rp in rpaths:
+            expanded = rp.replace("@loader_path", str(folder)).replace("@executable_path", str(folder))
+            candidate = Path(expanded) / rest
+            if candidate.exists():
+                return candidate
+        return None
+    for prefix in ("@loader_path/", "@executable_path/"):
+        if entry.startswith(prefix):
+            candidate = folder / entry[len(prefix):]
+            return candidate if candidate.exists() else None
+    return None
+
+
+def _check_library(entry, path, real_bin):
+    """One library real_bin loads (entry, exactly as otool -L names it; path is where that resolves to, as loaded):
+    the binary's own owner-or-root, nobody-else-writable rule, checked both as loaded (_check_lstat_path) and at
+    its realpath (_check_owner plus _check_ancestors) — sticky allowed only for folders above it. Refuses naming
+    the library; under /opt/homebrew, also naming the fix."""
+    try:
+        _check_lstat_path(path)
+        real = Path(os.path.realpath(path))
+        _check_owner(real, os.stat(real))
+        _check_ancestors(real)
+    except LaneRefused as e:
+        raise LaneRefused(_homebrew_hint("lane_node %s's library %s: %s" % (real_bin, entry, e))) from e
+    except OSError as e:
+        raise LaneRefused("lane_node %s's library %s can't be checked (%s)" % (real_bin, entry, e.strerror or e))
+
+
+def _check_node_libraries(real_bin):
+    """macOS only (spec a; Linux has no otool and skips this entirely — the Pi suites cover the binary check alone).
+    Every library `otool -L` says real_bin loads, apart from Apple's own under /usr/lib and /System, gets the same
+    check as the binary itself: as the path it's loaded under and at its realpath (_check_library). An @rpath/,
+    @loader_path/ or @executable_path/ entry is resolved through the binary's own LC_RPATH (otool -l) first, and
+    must land on a file inside node's own prefix (its grandparent folder, e.g. Cellar/node/26.11.1); anywhere else,
+    or nowhere at all, is refused. otool failing, timing out, or printing something this can't parse refuses closed.
+    Known limits: this only covers what otool -L lists — a library loaded at runtime with dlopen, never listed
+    there, isn't checked."""
+    libs = _otool_dependencies(real_bin)
+    if libs is None:
+        raise LaneRefused("lane_node %s: otool -L couldn't be read" % real_bin)
+    try:
+        prefix = real_bin.parents[1]
+    except IndexError:
+        raise LaneRefused("lane_node %s has no folder to check its libraries against" % real_bin)
+    rpaths = None
+    for entry in libs:
+        if entry.startswith("/usr/lib/") or entry.startswith("/System/"):
+            continue
+        if entry.startswith(("@rpath/", "@loader_path/", "@executable_path/")):
+            if rpaths is None:
+                rpaths = _otool_rpaths(real_bin)
+                if rpaths is None:
+                    raise LaneRefused("lane_node %s: otool -l couldn't be read" % real_bin)
+            resolved = _resolve_special_lib(entry, real_bin, rpaths)
+            if resolved is None or prefix not in Path(os.path.realpath(resolved)).parents:
+                raise LaneRefused("lane_node %s loads %s, which doesn't resolve to a file inside %s"
+                                  % (real_bin, entry, prefix))
+            path = resolved
+        elif entry.startswith("/"):
+            path = Path(entry)
+        else:
+            raise LaneRefused("lane_node %s: its library %r isn't a path otool -L usually gives" % (real_bin, entry))
+        _check_library(entry, path, real_bin)
+
+
 def check_lane_node(value, worktrees):
     """The broker's node: an absolute path in the person's config.json (`lane_node`), never `which node`. Refused
     under a worktree, under $HOME (the broker's profile reads nothing there but the pinned Playwright and browsers),
-    or writable by anyone but its owner, itself or any folder above it. Returns the resolved binary."""
+    or writable by anyone but its owner, itself or any folder above it (on a stock Homebrew install, Cellar and opt
+    are usually group-writable; the refusal then says to `chmod g-w` them). On macOS, every library `otool -L` says
+    the binary loads, apart from /usr/lib and /System's own, gets that same check — see _check_node_libraries.
+    Linux has no otool and skips the library check. Returns the resolved binary."""
     if not isinstance(value, str) or not os.path.isabs(value):
         raise LaneRefused("set lane_node in ~/.superyak/team/config.json to the absolute path of the node binary the "
                           "lane's broker runs (for example /opt/homebrew/bin/node)")
@@ -2060,8 +2210,13 @@ def check_lane_node(value, worktrees):
         tree = Path(os.path.realpath(tree))
         if real == tree or tree in real.parents:
             raise LaneRefused("lane_node %s lies under the worktree %s" % (real, tree))
-    _check_owner(real, os.stat(real))
-    _check_ancestors(real)
+    try:
+        _check_owner(real, os.stat(real))
+        _check_ancestors(real)
+    except LaneRefused as e:
+        raise LaneRefused(_homebrew_hint(str(e))) from e
+    if sys.platform == "darwin":
+        _check_node_libraries(real)
     return real
 
 
