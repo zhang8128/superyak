@@ -330,6 +330,12 @@ def breakout_note(room):
     return f', {BREAKOUT_MARK}' + (f', closed {utc_time(mark["closed"])}' if mark.get('closed') is not None else '')
 
 
+def quoted_title(title):
+    """A ship-written breakout title, ready to sit inside double quotes: one label() line with every double quote made
+    single, so the title can't end its own quote and fake an attribution after it (re-check nit 1)."""
+    return label(title).replace('"', "'")
+
+
 def breakout_count_lines(got):
     """Breakouts S6: one line per breakout a breakouts=mentions read left messages out of, in the station's order: how
     many, the room's title as one line, and the call that shows them. [] for a read without the flag."""
@@ -341,7 +347,7 @@ def breakout_count_lines(got):
         if type(n) is int and n > 0:
             call = f'; `station_read room={room_id}` shows them' if plain_id(room_id) else ''
             # The title is a ship's words (review M3): quoted, and said to be one.
-            lines.append(f'{n} new in breakout "{label(titles.get(room_id))}" (title set by a ship){call}')
+            lines.append(f'{n} new in breakout "{quoted_title(titles.get(room_id))}" (title set by a ship){call}')
     return lines
 
 
