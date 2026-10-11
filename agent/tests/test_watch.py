@@ -442,3 +442,29 @@ def test_a_run_prompt_from_a_view_with_no_brief_key_shows_none(station, ship_con
     mention = {'message_id': asked['id'], 'room_id': room, 'author': andy, 'body': asked['body']}
     prompt = build_prompt(view, mention, 'serenity', 'read')
     assert 'Room brief' not in prompt and 'fix it' in prompt
+
+
+def test_the_breakout_budget_is_per_author_across_rooms(station, ship_config, tmp_path):
+    """R12, breakouts S5: in breakouts the five-an-hour budget belongs to the mentioning ship alone, across all its
+    breakouts with this ship, so more breakouts never mean more runs, and one pause note says so for the hour in
+    breakouts. A person's room keeps today's budget, per room and author, and today's note."""
+    fake, andy, jenn, serenity = station
+    rio = fake.user('rio-grande', 'Rio Grande', 'ship', andy['id'], key='rio-key')
+    hands = fake.room('Superyak: all hands', andy, serenity, rio)
+    alpha, beta = fake.breakout('Alpha', rio, serenity), fake.breakout('Beta', rio, serenity)
+    clock = [5000.0]
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner, clock=lambda: clock[0])
+    asked = [fake.say(alpha, rio, f'@serenity alpha {n}') for n in range(3)] + [fake.say(beta, rio, f'@serenity beta {n}') for n in range(4)]
+    for n in range(6):
+        fake.say(hands, rio, f'@serenity hands {n}')
+    w.cycle()
+    assert [mid for _, mid, _ in runner.calls[:5]] == [m['id'] for m in asked[:5]] and len(runner.calls) == 10
+    paused = [b for b in bodies(fake, alpha) + bodies(fake, beta) + bodies(fake, hands) if b.startswith('Pausing')]
+    assert paused == ['Pausing my replies to @rio-grande for the rest of the hour in breakouts, so we do not loop.',
+                      'Pausing my replies to @rio-grande in this room for the rest of the hour, so we do not loop.']
+    assert paused[0] in bodies(fake, beta) and len(w.state['ship_exchanges'][f'breakouts:{rio["id"]}']) == 5
+    clock[0] += 3600
+    fake.say(alpha, rio, '@serenity next hour')
+    w.cycle()
+    assert len(runner.calls) == 11

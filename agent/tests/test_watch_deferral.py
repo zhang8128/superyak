@@ -320,3 +320,64 @@ def test_a_retry_with_a_different_ticket_id_is_charged(station, ship_config, tmp
     runner.error = None
     w.cycle()
     assert len(runner.calls) == 1 and any('Pausing my replies' in b for b in bodies(fake, room))
+
+
+def _siblings(fake, andy, serenity):
+    rio = fake.user('rio-grande', 'Rio Grande', 'ship', andy['id'], key='rio-key')
+    tardis = fake.user('tardis', 'Tardis', 'ship', andy['id'], key='tardis-key')
+    fake.room('Superyak: all hands', andy, serenity, rio, tardis)
+    return rio, tardis
+
+
+def test_a_deferred_breakout_mention_keeps_its_mark_and_its_budget(station, ship_config, tmp_path):
+    """Breakouts R12: a breakout mention on the deferred list keeps its mark, so a re-ask the station didn't hold is
+    charged to the mentioning ship's budget across breakouts, never to a room's."""
+    fake, andy, jenn, serenity = station
+    rio, tardis = _siblings(fake, andy, serenity)
+    room = fake.breakout('Sync', rio, serenity)
+    asked = fake.say(room, rio, '@serenity can you check?')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    assert w.cycle() == 0 and w.state['deferred'] == [
+        {'message_id': asked['id'], 'room_id': room, 'author': rio, 'seq': 1, 'breakout': True}]
+    del fake.decide[asked['id']]                       # the station decides `run`, holding no deferral: charged
+    w.state['ship_exchanges'][f'breakouts:{rio["id"]}'] = [w.clock()] * 5
+    assert w.cycle() == 1 and runner.calls == [] and w.state['deferred'] == []
+    assert bodies(fake, room)[-1] == 'Pausing my replies to @rio-grande for the rest of the hour in breakouts, so we do not loop.'
+
+
+def test_membership_is_fixed_and_leaving_works(station, ship_config, tmp_path):
+    """R5, the watcher's half (breakouts S3): once this ship has left a breakout, a ticket for a mention there gets 404,
+    and the watcher treats it as a 422: done, silently, with no run, no post and no failure counted, and off the
+    deferred list for good."""
+    fake, andy, jenn, serenity = station
+    rio, tardis = _siblings(fake, andy, serenity)
+    room = fake.breakout('Sync', rio, serenity, tardis)
+    asked = fake.say(room, rio, '@serenity @tardis can you check?')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    assert w.cycle() == 0 and [d['message_id'] for d in w.state['deferred']] == [asked['id']]
+    del fake.decide[asked['id']]
+    w.client.leave_room(room)
+    said = len(fake.rooms[room]['messages'])
+    assert w.cycle() == 0 and runner.calls == [] and len(fake.rooms[room]['messages']) == said
+    assert w.state['deferred'] == [] and w.state['failures'] == {} and asked['id'] in w.state['answered']
+    fake.ticket_bodies.clear()
+    assert w.cycle() == 0 and fake.ticket_bodies == []
+
+
+def test_a_ticket_404_outside_a_breakout_is_still_a_failure(station, ship_config, tmp_path):
+    """Breakouts R5 changes nothing elsewhere: a mention in a person's room whose ticket gets 404 (the ship was taken
+    out of the room) is a failure, retried on later cycles, as before."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, jenn, '@serenity a question')
+    defer(fake, asked)
+    w = watcher(fake, ship_config, tmp_path, FakeRunner())
+    assert w.cycle() == 0
+    del fake.decide[asked['id']]
+    fake.rooms[room]['member_ids'].remove(serenity['id'])
+    assert w.cycle() == 0 and w.state['failures'] == {asked['id']: 1}
+    assert [d['message_id'] for d in w.state['deferred']] == [asked['id']]
