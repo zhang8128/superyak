@@ -13,6 +13,7 @@ MAX_MEMBERS = 8
 OPEN_PER_SHIP = 10
 OPENED_PER_DAY = 20
 QUIET_SECONDS = 7 * 86400
+LISTED_AFTER_CLOSING = 7 * 86400
 CLOSED = 'This breakout is closed'
 INVITEE_REFUSED = "Every invited ship must be one of your owner's ships that already shares a room with you"
 # A person-owned room that a later room (added members) has not replaced. Ship-owned rooms, breakouts, never count.
@@ -64,6 +65,11 @@ class Breakouts:
         """S6: a breakout's room views carry its creator and when it closed; other rooms get nothing (R10)."""
         row = self._breakout(db, room_id)
         return None if row is None else {'creator': row['creator_id'], 'closed': self._breakout_closed(db, room_id)}
+
+    def _off_the_lists(self, room):
+        """S12: a breakout closed more than 7 days ago leaves the room lists; its members still read it by id."""
+        closed = room.get('breakout', {}).get('closed')
+        return closed is not None and self.clock() - closed > LISTED_AFTER_CLOSING
 
     def _shares_current_room(self, db, a, b):
         return db.execute(f'''SELECT 1 FROM room_members AS x JOIN room_members AS y ON x.room_id=y.room_id

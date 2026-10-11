@@ -337,10 +337,12 @@ class Ships:
                 JOIN room_members ON room_members.room_id=mentions.room_id AND room_members.user_id=mentions.user_id
                 WHERE mentions.user_id=? AND mentions.seq>? ORDER BY mentions.seq LIMIT ?''',
                 (actor, after, min(100, max(1, limit)))).fetchall()
-            for room_id in {r['room_id'] for r in rows}:
-                self._breakout_closed(db, room_id)  # breakouts S4: a closure is saved on first sight
+            breakouts = {room for room in {r['room_id'] for r in rows} if self._breakout(db, room) is not None}
+            for room in breakouts:
+                self._breakout_closed(db, room)  # breakouts S4: a closure is saved on first sight
         return [{'seq': r['seq'], 'message_id': r['message_id'], 'room_id': r['room_id'], 'body': r['body'], 'created': r['created'],
-                 'author': {'id': r['author_id'], 'username': r['username'], 'name': r['name'], 'kind': r['kind'], 'owner_id': r['owner_id']}}
+                 'author': {'id': r['author_id'], 'username': r['username'], 'name': r['name'], 'kind': r['kind'], 'owner_id': r['owner_id']},
+                 **({'breakout': True} if r['room_id'] in breakouts else {})}  # breakouts S6: only a breakout's carry it
                 for r in rows]
 
     def ships(self, actor):

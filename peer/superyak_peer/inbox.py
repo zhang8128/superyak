@@ -13,6 +13,13 @@ CURSORS_PER_SHIP = 100
 MAX_WAIT = 25
 WAITS_PER_SHIP = 2
 CURSOR_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')
+UNREAD_FROM = '''FROM events
+    JOIN room_members ON room_members.room_id=events.resource_id AND room_members.user_id=?
+    JOIN rooms ON rooms.id=events.resource_id
+    WHERE events.kind='chat.message' AND events.id>? AND json_extract(events.payload,'$.author_id')!=?'''
+# Breakouts S6: what breakouts=mentions leaves out, a breakout message that doesn't mention the reader.
+NOISE = '''events.resource_id IN (SELECT room_id FROM breakouts) AND NOT EXISTS (SELECT 1 FROM mentions
+    WHERE mentions.message_id=json_extract(events.payload,'$.message_id') AND mentions.user_id=?)'''
 
 INBOX_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS read_cursors(ship_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, position INTEGER NOT NULL, updated REAL NOT NULL, PRIMARY KEY(ship_id, name));
@@ -37,6 +44,22 @@ def wait_seconds(value):
     if type(value) not in (int, float) or not 0 <= value <= MAX_WAIT:
         raise Problem(400, f'wait is a number of seconds from 0 to {MAX_WAIT}')
     return value
+
+
+def breakout_filter(value):
+    """Breakouts S6: the opt-in `breakouts=mentions`; without it, unread is exactly today's (R10)."""
+    if value not in (None, 'mentions'):
+        raise Problem(400, 'breakouts is mentions, or left out')
+    return value == 'mentions'
+
+
+def with_earlier_noise(earlier, later):
+    """A wait with breakouts=mentions passes noise at each check, so its answer counts what every check passed."""
+    if 'breakout_counts' in later:
+        for room, n in earlier['breakout_counts'].items():
+            later['breakout_counts'][room] = later['breakout_counts'].get(room, 0) + n
+        later['breakout_titles'] = {**earlier['breakout_titles'], **later['breakout_titles']}
+    return later
 
 
 class Inbox:
@@ -97,7 +120,9 @@ class Inbox:
         contact = db.execute('SELECT name FROM remote_contacts WHERE peer_id=? AND user_id=?', (peer, actor)).fetchone()
         return {'id': author_id, 'username': None, 'name': contact['name'] if contact else None, 'kind': 'remote', 'owner_id': None}
 
-    def unread(self, actor, cursor=None, limit=30, counted=True):
+    def unread(self, actor, cursor=None, limit=30, counted=True, breakouts=False):
+        """breakouts: breakouts=mentions (breakouts S6). The page then holds only what the session shows: breakout
+        messages that don't mention the reader are left out, counted in breakout_counts, and passed."""
         name = cursor_name(cursor)
         if type(limit) is not int or not 1 <= limit <= 100:
             raise Problem(400, 'limit is a whole number from 1 to 100')
@@ -106,12 +131,12 @@ class Inbox:
             if counted:  # a wait's later checks don't count: a wait is one read
                 self._inbox_budget(actor)
             position = self._cursor(db, actor, name)
-            rows = db.execute('''SELECT events.id, events.resource_id, events.payload, rooms.title FROM events
-                JOIN room_members ON room_members.room_id=events.resource_id AND room_members.user_id=?
-                JOIN rooms ON rooms.id=events.resource_id
-                WHERE events.kind='chat.message' AND events.id>? AND json_extract(events.payload,'$.author_id')!=?
-                ORDER BY events.id LIMIT ?''', (actor, position, actor, limit + 1)).fetchall()
-            messages, sources = [], {}
+            shown_only = f' AND NOT ({NOISE})' if breakouts else ''
+            rows = db.execute(f'SELECT events.id, events.resource_id, events.payload, rooms.title {UNREAD_FROM}{shown_only} '
+                              'ORDER BY events.id LIMIT ?', (actor, position, actor, *([actor] if breakouts else []), limit + 1)).fetchall()
+            if breakouts:
+                position, counts, titles = self._left_out(db, actor, name, position, rows[:limit])
+            messages, sources, breakout_rooms = [], {}, set()
             for row in rows[:limit]:
                 payload = json.loads(row['payload'])
                 found = (db.execute('SELECT * FROM messages WHERE id=?', (payload['message_id'],)).fetchone()
@@ -120,12 +145,16 @@ class Inbox:
                     continue
                 mentioned = db.execute('SELECT 1 FROM mentions WHERE message_id=? AND user_id=?', (found['id'], actor)).fetchone()
                 if row['resource_id'] not in sources:  # labelled exactly as get_room labels them (spec A)
-                    self._breakout_closed(db, row['resource_id'])  # breakouts S4: saved on first sight, deferrals dropped
                     sources[row['resource_id']] = self._sources(db, row['resource_id'])
+                    if self._breakout(db, row['resource_id']) is not None:
+                        breakout_rooms.add(row['resource_id'])
+                        self._breakout_closed(db, row['resource_id'])  # S4: saved on first sight, deferrals dropped
                 item = {'event_id': row['id'], 'message_id': found['id'], 'room_id': row['resource_id'],
                         'room_title': row['title'], 'body': found['body'], 'created': found['created'],
                         'author': self._inbox_author(db, found['author_id']), 'mentions_me': bool(mentioned),
                         'reply_to': self._reply_to(db, found['id']), 'source': sources[row['resource_id']].get(found['id'])}
+                if row['resource_id'] in breakout_rooms:  # breakouts S6: only a breakout's items carry the key
+                    item['breakout'] = True
                 if mentioned and db.execute('SELECT 1 FROM deferrals WHERE ship_id=? AND message_id=?', (actor, found['id'])).fetchone():
                     item['deferred'] = {'author_verified': item['author'], 'would_be': 'read'}  # R26
                 messages.append(item)
@@ -133,7 +162,30 @@ class Inbox:
         got = {'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': messages}
         if on_watch:  # R35: present only when it has something to say, so an old client sees today's keys
             got['on_watch'] = True
+        if breakouts:
+            got['breakout_counts'], got['breakout_titles'] = counts, titles
         return got
+
+    def _left_out(self, db, actor, name, position, page):
+        """Breakouts S6: the breakout messages a breakouts=mentions page leaves out, up to its last message (all of
+        them when the page is empty), counted per room with the room's title. Those before the page's first message
+        are passed here, so the cursor never stops in front of noise; the rest are passed when the reader advances
+        through the page, as it does past any message it showed. Returns (position, counts, titles)."""
+        bound = page[-1]['id'] if page else None
+        rows = db.execute(f'SELECT events.id, events.resource_id, rooms.title {UNREAD_FROM} AND {NOISE}'
+                          + ('' if bound is None else ' AND events.id<=?') + ' ORDER BY events.id',
+                          (actor, position, actor, actor, *([] if bound is None else [bound]))).fetchall()
+        counts, titles = {}, {}
+        for row in rows:
+            counts[row['resource_id']] = counts.get(row['resource_id'], 0) + 1
+            titles[row['resource_id']] = row['title']
+        passed = [row['id'] for row in rows if not page or row['id'] < page[0]['id']]
+        if passed:
+            position = passed[-1]
+            db.execute('UPDATE read_cursors SET position=?, updated=? WHERE ship_id=? AND name=?', (position, self.clock(), actor, name))
+        for room in counts:
+            self._breakout_closed(db, room)  # S4: saved on first sight
+        return position, counts, titles
 
     def _reply_to(self, db, message_id):
         row = db.execute('SELECT reply_to FROM message_replies WHERE message_id=?', (message_id,)).fetchone()

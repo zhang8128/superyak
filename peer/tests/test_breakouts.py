@@ -4,6 +4,7 @@ member. Membership is fixed at creation; a member may leave, the owner leaving c
 whether a breakout is closed."""
 import pytest
 from fastapi.testclient import TestClient
+from test_federation import deliver, two_peers  # noqa: F401 - two_peers is a fixture
 from test_presence import HEADERS, docked, say, ship_client
 
 DAY = 86400
@@ -399,3 +400,196 @@ def test_the_owner_closes_a_breakout_and_only_the_owner(env):
     assert say_refused(fleet.ship('rio-grande'), room).json() == CLOSED
     assert ticket(fleet.ship('rio-grande'), asked['id']).json() == CLOSED
     assert fleet.ship('serenity').post(f'/api/ships/me/rooms/{room}/leave').json()['closed'] == closed_at
+
+
+# R7, R8 (regression guards) ---------------------------------------------------------------------------------------
+
+def test_breakouts_never_federate_list_or_bridge(two_peers):
+    """R7: alice's ships share a room with a paired peer's member, so that room federates; their breakout does not.
+    It never appears in station-rooms, and station-bridge can't find it."""
+    from superyak_peer.common import Problem
+    a, b, ca, cb = two_peers
+    store = a[0]
+    serenity, _ = docked(store, a[1])
+    rio, _ = docked(store, a[1], 'rio-grande')
+    store.create_station_ship('wormhole', 'Wormhole')
+    across = store.create_room(a[1], 'Across', [serenity['id'], rio['id'], ca['id']])
+    side = store.open_breakout(serenity['id'], 'Side', ['rio-grande'])
+    store.send_message(serenity['id'], across['id'], 'a', 'in the shared room')
+    store.send_message(serenity['id'], side['id'], 'b', 'in the breakout @rio-grande')
+    deliver(a, b)
+    assert [r['title'] for r in b[0].list_rooms(b[1])] == ['Across']
+    with store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM outbox WHERE resource_id=?', (side['id'],)).fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM outbox WHERE resource_id=?', (across['id'],)).fetchone()[0] > 0
+    assert [r['id'] for r in store.station_rooms('alice')] == [across['id']]
+    with pytest.raises(Problem) as refused:
+        store.station_bridge('alice', side['id'][:8], True)
+    assert refused.value.status == 404
+    assert 'wormhole' not in [m['username'] for m in store.get_room(serenity['id'], side['id'])['members']]
+
+
+def test_a_ship_owner_is_never_an_owner_mention(env):
+    """R8: a mention by the ship that owns a breakout gets a read-only ticket, exactly as the same mention in a
+    person's room does; only the person owner's mention builds, as today."""
+    fleet = Fleet(env)
+    room = fleet.opened('serenity', 'Sync', ['rio-grande'])
+    rio = fleet.ship('rio-grande')
+    in_breakout = say(fleet.ship('serenity'), room, 'a', '@rio-grande build the fix')
+    in_hands = say(fleet.ship('serenity'), fleet.hands, 'b', '@rio-grande build the fix')
+    by_owner = say(fleet.andy, fleet.hands, 'c', '@rio-grande build the fix')
+    modes = [ticket(rio, m['id'], decisions=False).json() for m in (in_breakout, in_hands, by_owner)]
+    assert [(t['mode'], t['basis'], t['root_id'], t['footer']) for t in modes] == [
+        ('read', 'none', None, ''), ('read', 'none', None, ''), ('build', 'owner', fleet.users[0]['id'], 'Builder for Patient (owner)')]
+
+
+# R10 --------------------------------------------------------------------------------------------------------------
+
+def views(fleet, cursor):
+    """Every view R10 names, as each side sees it: list, get, unread, mentions, the directory and station-rooms."""
+    serenity = fleet.ship('serenity')
+    return {
+        'list': serenity.get('/api/chats').json(),
+        'get': serenity.get(f'/api/chats/{fleet.hands}').content,
+        'unread': serenity.post('/api/ships/me/unread', json={'cursor': cursor, 'limit': 100}).json(),
+        'mentions': serenity.get('/api/mentions').json(),
+        'directory': serenity.get('/api/ships/directory').content,
+        'person list': fleet.andy.get('/api/chats').content,
+        'person get': fleet.andy.get(f'/api/chats/{fleet.hands}').content,
+        'home': fleet.andy.get('/api/home').content,
+        'person directory': fleet.andy.get('/api/ships/directory').content,
+        'station-rooms': fleet.store.station_rooms('patient'),
+    }
+
+
+def test_other_rooms_are_unchanged_in_every_view(env):
+    """R10: with a busy breakout beside them, rooms that aren't breakouts, and their messages and mentions, look
+    exactly as before, with no breakout key; unread without the flag keeps today's keys."""
+    fleet = Fleet(env)
+    say(fleet.andy, fleet.hands, 'a', '@serenity what changed?')
+    say(fleet.ship('rio-grande'), fleet.hands, 'b', 'a ship in the room @serenity')
+    fleet.ship('tardis').get('/api/me')                  # every ship seen, so the directory's last_seen is settled
+    before = views(fleet, 'before')
+    room = fleet.opened('rio-grande', 'Sync', ['serenity', 'tardis'])
+    say(fleet.ship('rio-grande'), room, 'c', '@serenity in the breakout')
+    say(fleet.ship('tardis'), room, 'd', 'noise')
+    fleet.ship('tardis').post(f'/api/chats/{room}/claims', json={'key': 'spec:d7'})
+    after = views(fleet, 'after')
+    assert {r['id'] for r in after['list']} - {r['id'] for r in before['list']} == {room}
+    assert [r for r in after['list'] if r['id'] != room] == before['list']
+    unread = dict(after['unread'], cursor='before', messages=[m for m in after['unread']['messages'] if m['room_id'] != room])
+    assert unread == before['unread'] and set(after['unread']) == {'cursor', 'position', 'more', 'messages'}
+    assert all(set(m) == set(before['unread']['messages'][0]) for m in unread['messages'])
+    assert [m for m in after['mentions'] if m['room_id'] != room] == before['mentions']
+    assert all('breakout' not in m for m in before['mentions'] + before['list'] + before['unread']['messages'])
+    for view in ('get', 'directory', 'person list', 'person get', 'home', 'person directory', 'station-rooms'):
+        assert after[view] == before[view], view
+
+
+# R12 and R13, the station's half ----------------------------------------------------------------------------------
+
+def test_the_breakout_budget_is_per_author_across_rooms(env):
+    """R12, the station's half: a mention item from a breakout carries breakout: true, so the watcher (build step 2)
+    can key its ship-to-ship budget by author alone there; a mention elsewhere carries no such key. Unread items are
+    marked the same way (R13)."""
+    fleet = Fleet(env)
+    alpha = fleet.opened('serenity', 'Alpha', ['tardis'])
+    beta = fleet.opened('serenity', 'Beta', ['tardis', 'rio-grande'])
+    for cid, room in (('a', alpha), ('b', beta), ('c', fleet.hands)):
+        say(fleet.ship('serenity'), room, cid, '@tardis over to you')
+    say(fleet.andy, fleet.hands, 'd', '@tardis and from me')
+    tardis = fleet.ship('tardis')
+    marks = [(m['room_id'], m.get('breakout')) for m in tardis.get('/api/mentions').json()]
+    assert marks == [(alpha, True), (beta, True), (fleet.hands, None), (fleet.hands, None)]
+    assert all('breakout' not in m for m in tardis.get('/api/mentions').json() if m['room_id'] == fleet.hands)
+    unread = tardis.post('/api/ships/me/unread', json={'cursor': 's'}).json()['messages']
+    assert [(m['room_id'], m.get('breakout')) for m in unread] == marks
+
+
+def flagged(client, **body):
+    response = client.post('/api/ships/me/unread?breakouts=mentions', json=body)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_breakout_noise_never_holds_back_a_persons_message(env):
+    """R13, the station's half: 30 breakout messages, one mentioning the reader, then a person's message. Without the
+    flag, unread is today's and the first page of 20 is all breakout. With breakouts=mentions, the page holds only
+    what the session shows: the breakout mention and the person's message, with breakout_counts naming each breakout
+    for what it left out. The cursor passes the left-out messages, so they are counted once."""
+    fleet = Fleet(env)
+    alpha = fleet.opened('serenity', 'Alpha', ['tardis'])
+    beta = fleet.opened('rio-grande', 'Beta', ['tardis'])
+    for n in range(15):
+        say(fleet.ship('serenity'), alpha, f'a{n}', '@tardis look here' if n == 9 else f'alpha {n}')
+        say(fleet.ship('rio-grande'), beta, f'b{n}', f'beta {n}')
+    person = say(fleet.andy, fleet.hands, 'p', 'Tardis, a question from Andy')
+    tardis = fleet.ship('tardis')
+    today = tardis.post('/api/ships/me/unread', json={'cursor': 'old', 'limit': 20}).json()
+    assert set(today) == {'cursor', 'position', 'more', 'messages'} and today['more'] is True
+    assert len(today['messages']) == 20 and all(m['breakout'] is True for m in today['messages'])
+    assert tardis.post('/api/ships/me/unread?breakouts=everything', json={'cursor': 'x'}).status_code == 400
+    got = flagged(tardis, cursor='new', limit=20)
+    assert [(m['body'], m.get('breakout')) for m in got['messages']] == [('@tardis look here', True), (person['body'], None)]
+    assert got['more'] is False and got['breakout_counts'] == {alpha: 14, beta: 15}
+    assert got['breakout_titles'] == {alpha: 'Alpha', beta: 'Beta'}
+    assert tardis.post('/api/ships/me/unread/advance', json={'cursor': 'new', 'to': got['messages'][-1]['event_id']}).status_code == 200
+    assert flagged(tardis, cursor='new') == {'cursor': 'new', 'position': got['messages'][-1]['event_id'], 'more': False,
+                                             'messages': [], 'breakout_counts': {}, 'breakout_titles': {}}
+    for n in range(3):                                    # noise with nothing after it: counted once, then passed
+        say(fleet.ship('serenity'), alpha, f'late{n}', 'more noise')
+    trailing = flagged(tardis, cursor='new')
+    assert (trailing['messages'], trailing['breakout_counts']) == ([], {alpha: 3})
+    assert flagged(tardis, cursor='new')['breakout_counts'] == {}
+    assert tardis.post('/api/ships/me/unread', json={'cursor': 'new'}).json()['messages'] == []
+
+
+def test_a_flagged_wait_counts_the_noise_it_passed(env):
+    """R13: a wait with breakouts=mentions keeps waiting through breakout noise, and its answer counts what it
+    passed while waiting."""
+    import asyncio
+    import httpx
+    fleet = Fleet(env)
+    alpha = fleet.opened('serenity', 'Alpha', ['tardis'])
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=fleet.app), base_url='http://testserver',
+                                     headers={'origin': 'http://testserver', 'authorization': f'Bearer {fleet.keys["tardis"]}'}) as tardis:
+            waiting = asyncio.create_task(tardis.post('/api/ships/me/unread?breakouts=mentions', json={'cursor': 'w', 'wait': 5}))
+            await asyncio.sleep(0.3)
+            fleet.store.send_message(fleet.id('serenity'), alpha, 'n', 'noise while you wait')
+            await asyncio.sleep(1.2)
+            fleet.store.send_message(fleet.users[0]['id'], fleet.hands, 'p', 'a person, after the noise')
+            return await waiting
+    got = asyncio.run(scenario()).json()
+    assert [m['body'] for m in got['messages']] == ['a person, after the noise']
+    assert got['breakout_counts'] == {alpha: 1} and got['breakout_titles'] == {alpha: 'Alpha'}
+
+
+# R15, the station's half ------------------------------------------------------------------------------------------
+
+def test_old_closed_breakouts_leave_the_lists(env):
+    """R15: a breakout closed more than 7 days ago leaves GET /api/chats and stays readable by id for its members
+    (the agent's resolve_room fallback to that route is build step 2); open breakouts and recently closed ones stay."""
+    fleet = Fleet(env)
+    fleet.dock('defiant')
+    fleet.room(fleet.andy, 'Lab', ['defiant'])
+    closed = fleet.opened('serenity', 'Closed', ['tardis'])
+    quiet = fleet.opened('serenity', 'Quiet', ['tardis'])
+    say(fleet.ship('serenity'), closed, 'a', 'done here')
+    fleet.ship('serenity').post(f'/api/ships/me/rooms/{closed}/close')
+    closed_at = fleet.clock[0]
+    tardis = fleet.ship('tardis')
+
+    def listed():
+        return {r['title'] for r in tardis.get('/api/chats').json()}
+    fleet.clock[0] = closed_at + 7 * DAY
+    assert listed() == {'Superyak: all hands', 'Closed', 'Quiet'}
+    fleet.clock[0] = closed_at + 7 * DAY + 1
+    assert listed() == {'Superyak: all hands', 'Quiet'}
+    shown = tardis.get(f'/api/chats/{closed}').json()
+    assert shown['breakout']['closed'] == closed_at and [m['body'] for m in shown['messages']] == ['done here']
+    fleet.clock[0] = closed_at + 14 * DAY + 1                 # Quiet closed itself at day 7, so it has gone too
+    assert listed() == {'Superyak: all hands'}
+    assert tardis.get(f'/api/chats/{quiet}').json()['breakout']['closed'] == closed_at + 7 * DAY
+    assert fleet.ship('defiant').get(f'/api/chats/{closed}').status_code == 404

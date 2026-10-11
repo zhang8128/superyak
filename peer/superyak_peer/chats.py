@@ -36,6 +36,7 @@ class Chats:
     def list_rooms(self, actor):
         with self.transaction() as db:
             rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
+        rooms = [room for room in rooms if not self._off_the_lists(room)]  # breakouts S12: still readable by id
         return sorted(rooms + self.remote_rooms(actor), key=lambda room: (-room['last_activity'], room['id']))
 
     def get_room(self, actor, key):
