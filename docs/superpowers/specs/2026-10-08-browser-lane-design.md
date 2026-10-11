@@ -510,10 +510,19 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 
 ## Known limits
 
-- **check_lane_node's library check only covers what `otool -L` lists** (lane-node-libs). A library node loads at
-  runtime with `dlopen` instead of at load time never appears in `otool -L`'s output, so it isn't checked, as the
-  path it's loaded under or at its realpath. Nothing in a stock Homebrew or nodejs.org-tarball node does this; it
-  would need its own control if a future node build did.
+- **check_lane_node's library check only covers what `otool -l`'s load commands list** (lane-node-libs), walked
+  breadth-first from node through every library it loads, directly or transitively. A library loaded at runtime
+  with `dlopen` instead of at load time never appears there, so it isn't checked, as the path it's loaded under or
+  at its realpath. Nothing in a stock Homebrew or nodejs.org-tarball node does this; it would need its own control
+  if a future node build did.
+- **A small window remains between check_lane_node's last look and the actual exec** (lane-node-libs, review round
+  2). The binary itself can't drift once checked, because the broker always runs the resolved path teamd already
+  holds (`lane.py`, `start_broker`, the `subprocess.Popen` call), but node's libraries live on disk and could
+  change between the check and dyld loading them. `prepare_broker`'s `verify=True` call (the one teamd hands
+  straight to `start_broker`, with nothing of its own in between) re-checks right before it returns, so the only
+  window left is `start_broker`'s own setup (ending every other process still using `b/`, rendering the profile,
+  opening the stderr file) before the `Popen`. Closing that last sliver would mean re-checking inside
+  `start_broker` itself, which this doesn't do.
 - Inside the broker, Chrome runs without its own sandbox. The broker's deny-default profile is the wall. A page that
   takes over a renderer gets the profile's powers:
   - the lane's ports, `<lane>/b`, and reads of the headless shell, Playwright and node;
