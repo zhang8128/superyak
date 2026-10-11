@@ -170,6 +170,10 @@ def test_no_person_is_ever_a_breakout_member(env):
     assert owner.post(f'/api/chats/{room}/participants', json={'member_ids': [doctor]}).status_code == 403
     assert owner.delete(f'/api/chats/{room}/participants/{fleet.id("rio-grande")}').status_code == 403
     assert owner.post('/api/chats', json={'title': 'Mine', 'member_ids': [andy]}).status_code == 403
+    with fleet.store.transaction() as db:  # a row edited by hand: a person or `_station` with an owner is still refused
+        db.execute("UPDATE users SET owner_id=? WHERE username IN ('doctor', '_station')", (andy,))
+    for person in ('doctor', '_station'):
+        assert fleet.open('serenity', 'Sync', [person]).json() == {'error': REFUSED}
     assert fleet.rows('''SELECT users.kind FROM room_members JOIN users ON users.id=room_members.user_id
                          WHERE room_members.room_id IN (SELECT room_id FROM breakouts)''') == [('ship',), ('ship',)]
     assert room not in {r['id'] for r in fleet.andy.get('/api/chats').json()}
