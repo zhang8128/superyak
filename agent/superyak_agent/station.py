@@ -20,6 +20,7 @@ SESSION_NAME = re.compile(r'[A-Za-z0-9._:-]{1,100}')  # the station's cursor nam
 CHECKOUT = Path(__file__).resolve().parents[2]
 ON_WATCH_LINE = 'You are on watch: answer each mention of this ship with station_post reply_to=<its id>.'
 DEFERRED_MARK = '(deferred to you; the station would have given a read-only run)'
+BREAKOUT_MARK = 'breakout, ships only'  # breakouts S6: beside a breakout's room wherever its messages appear
 
 
 def presence_headers(name, client, mode=None):
@@ -145,8 +146,11 @@ class StationClient:
     def release(self, room_id, key):
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims/release', {'key': key})
 
-    def unread(self, cursor, limit=30, wait=0):
-        return self.request('POST', '/api/ships/me/unread', {'cursor': cursor, 'limit': limit, 'wait': wait})
+    def unread(self, cursor, limit=30, wait=0, breakouts=None):
+        """breakouts='mentions' (breakouts S6): the station leaves out breakout messages that don't mention this ship and
+        counts them; without it the call is today's."""
+        query = f'?breakouts={quote(breakouts, safe="")}' if breakouts else ''
+        return self.request('POST', '/api/ships/me/unread' + query, {'cursor': cursor, 'limit': limit, 'wait': wait})
 
     def advance(self, cursor, to):
         return self.request('POST', '/api/ships/me/unread/advance', {'cursor': cursor, 'to': to})
@@ -159,6 +163,16 @@ class StationClient:
 
     def finish_ticket(self, ticket_id):
         return self.request('POST', f'/api/ships/me/tickets/{quote(ticket_id, safe="")}/finish', {})
+
+    def open_room(self, title, ships):
+        """Breakouts S1: a room this ship owns, with sibling ships named by username."""
+        return self.request('POST', '/api/ships/me/rooms', {'title': title, 'ships': list(ships)})
+
+    def close_room(self, room_id):
+        return self.request('POST', f'/api/ships/me/rooms/{quote(room_id, safe="")}/close', {})
+
+    def leave_room(self, room_id):
+        return self.request('POST', f'/api/ships/me/rooms/{quote(room_id, safe="")}/leave', {})
 
     def directory(self):
         return self.request('GET', '/api/ships/directory')
@@ -305,6 +319,29 @@ def fence_message(member, body, limit, hint='', source=''):
     quoted = defuse(body[:limit])
     text = fence_external(sender, quoted, limit=max(len(quoted), 1))
     return text + f'\n[cut at {limit:,} of {len(body):,} characters{hint}]' if len(body) > limit else text
+
+
+def breakout_note(room):
+    """Breakouts S6, S9: ', breakout, ships only' for a breakout's view or list item, with when it closed; '' for every
+    other room, so their lines are today's."""
+    mark = room.get('breakout') if isinstance(room, dict) else None
+    if not isinstance(mark, dict):
+        return ''
+    return f', {BREAKOUT_MARK}' + (f', closed {utc_time(mark["closed"])}' if mark.get('closed') is not None else '')
+
+
+def breakout_count_lines(got):
+    """Breakouts S6: one line per breakout a breakouts=mentions read left messages out of, in the station's order: how
+    many, the room's title as one line, and the call that shows them. [] for a read without the flag."""
+    counts = got.get('breakout_counts') if isinstance(got, dict) else None
+    titles = got.get('breakout_titles') if isinstance(got, dict) else None
+    titles = titles if isinstance(titles, dict) else {}
+    lines = []
+    for room_id, n in counts.items() if isinstance(counts, dict) else ():
+        if type(n) is int and n > 0:
+            call = f'; `station_read room={room_id}` shows them' if plain_id(room_id) else ''
+            lines.append(f'{n} new in breakout {label(titles.get(room_id))}{call}')
+    return lines
 
 
 def brief_date(updated):
