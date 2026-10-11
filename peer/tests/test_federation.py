@@ -1,3 +1,4 @@
+import re
 import json
 
 import pytest
@@ -532,3 +533,175 @@ def test_a_paired_peer_cannot_send_a_station_author_claims_or_extra_fields(two_p
     again = b[0].get_room(b[1], remote_id)
     assert [set(m) for m in again['members']] == [{'peer', 'id'}] * len(again['members'])
     assert '_station' not in json.dumps([again, b[0].list_rooms(b[1])])
+
+
+def _forged_message(a, b, room, message_id, client_id, body, created, author=None):
+    """A room.message the origin (a) signs itself, attributing words in its own room to one of b's local users (b's
+    first user unless `author` names another)."""
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    message = {'id': message_id, 'room_id': room['id'], 'author_id': b[2].identity.peer_id + ':' + (author or b[1]),
+               'client_message_id': client_id, 'body': body, 'epoch': 1, 'created': created}
+    return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                  action='room.message', recipients=[b[1]], payload={**snapshot, 'message': message})
+
+
+def test_a_paired_origin_cannot_put_words_in_a_local_users_mouth(two_peers):
+    """An origin hosts its room, so it can say anything in it, but it can't make this station show one of its own
+    users as having said it. A message attributed to a local user here stands only when this station sent that exact
+    reply (its room.reply outbox row: author, client message id and body); otherwise it is shown as the origin's,
+    unverified, never as "You"."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Hostile origin', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    own = b[2].identity.peer_id + ':' + b[1]
+    b[0].send_message(b[1], remote, 'honest-1', 'my real words')
+    deliver(b, a)
+    deliver(a, b)
+    assert b[2].receive(_forged_message(a, b, room, 'm-forged', 'forged-1', 'I approve the merge', 5.0))['ok']
+    assert b[2].receive(_forged_message(a, b, room, 'm-altered', 'honest-1', 'my altered words', 6.0))['ok']
+    shown = {m['body']: m for m in b[0].get_room(b[1], remote)['messages']}
+    assert shown['my real words']['author_id'] == own                     # an honest reply keeps its local author
+    for body in ('I approve the merge', 'my altered words'):
+        assert shown[body]['author_id'] != own, body                        # never shown as this station's user
+        assert shown[body]['author_id'].startswith(a[2].identity.peer_id + ':'), body
+        assert shown[body].get('unverified') is True, body
+
+
+def test_a_replayed_reply_shows_the_local_author_once(two_peers):
+    """An honest origin holds one copy of each reply (receive keys peer_messages on room, author and client message
+    id), so a second copy in its snapshot is forged. Replayed under a new id, beside a later question, it would put
+    this station's real "yes" where it was never said: only the first copy keeps the local author."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Hostile origin', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    own = b[2].identity.peer_id + ':' + b[1]
+    b[0].send_message(b[1], remote, 'yes-1', 'yes')
+    deliver(b, a)
+    deliver(a, b)
+    assert b[2].receive(_forged_message(a, b, room, 'm-replay', 'yes-1', 'yes', 9e9))['ok']
+    copies = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'yes']
+    assert len(copies) == 2
+    assert [m['author_id'] for m in copies].count(own) == 1
+    assert copies[-1]['id'] == 'm-replay' and copies[-1].get('unverified') is True
+
+
+def test_a_failed_identity_read_is_not_cached(tmp_path, monkeypatch):
+    """The station's peer id is read once per store and kept, but only a read that worked: a store whose first read
+    fails must not keep a missing id and show every one of its own replies as unverified until a restart."""
+    from superyak_peer.db import Store
+    from superyak_peer.identity import PeerIdentity
+    store = Store(tmp_path / 'fresh')
+    real, reads = PeerIdentity.load_or_create.__func__, []
+
+    def flaky(cls, data_dir, **kwargs):
+        reads.append(data_dir)
+        if len(reads) == 1:
+            raise OSError('identity.json unreadable')
+        return real(cls, data_dir, **kwargs)
+
+    monkeypatch.setattr(PeerIdentity, 'load_or_create', classmethod(flaky))
+    with pytest.raises(OSError):
+        store._own_peer_id()
+    first = store._own_peer_id()
+    assert first == real(PeerIdentity, store.data_dir).peer_id
+    assert store._own_peer_id() == first and len(reads) == 2        # kept after the read that worked
+
+
+def test_an_echoed_reply_whose_outbox_row_was_withdrawn_keeps_its_local_author(two_peers):
+    """Review of e9a6712, finding 1: the reply reached the origin, but its acknowledgement was lost, and a later revision
+    made this station withdraw the row. The words were still this station's, so the echo keeps its local author: the
+    proof is the row's content, not its delivery status."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Lost ack', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'acked-late', 'my real words')
+    deliver(b, a)
+    with b[0].transaction() as db:
+        db.execute("UPDATE outbox SET status='withdrawn' WHERE action='room.reply'")
+    deliver(a, b)
+    shown = {m['body']: m for m in b[0].get_room(b[1], remote)['messages']}
+    assert shown['my real words']['author_id'] == b[2].identity.peer_id + ':' + b[1]
+    assert not shown['my real words'].get('unverified')
+
+
+def test_one_local_users_reply_never_verifies_as_another(two_peers):
+    """Review of e9a6712, finding 3: the author is part of the proof, so the origin can't give one local user's real
+    reply to another local user."""
+    a, b, ca, cb = two_peers
+    second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
+    c2 = a[2].pair(a[1], b[2].card(second))
+    b[2].pair(second, a[2].card(a[1]))
+    room = a[0].create_room(a[1], 'Two local users', [ca['id'], c2['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'same-id', 'yes')        # queued here; the origin hasn't echoed it yet
+    # The forgery arrives before any honest echo, so only the author binding stands between it and `second`.
+    assert b[2].receive(_forged_message(a, b, room, 'm-given', 'same-id', 'yes', 7.0, author=second))['ok']
+    copies = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'yes']   # the forgery's recipient
+    assert not any(m['author_id'] == b[2].identity.peer_id + ':' + second for m in copies)  # never given to second
+    assert any(m.get('unverified') for m in copies)
+    assert [m['author_id'] for m in copies].count(b[2].identity.peer_id + ':' + b[1]) == 1   # the real one, queued
+
+
+def test_a_reply_in_one_room_never_verifies_in_another(two_peers):
+    """Review of e9a6712, finding 3: the room is part of the proof, so a real reply in one room can't stand for a copy
+    the origin shows in another."""
+    a, b, ca, cb = two_peers
+    first = a[0].create_room(a[1], 'First room', [ca['id']])
+    other = a[0].create_room(a[1], 'Other room', [ca['id']])
+    deliver(a, b)
+    rooms = {r['title']: r['id'] for r in b[0].list_rooms(b[1])}
+    b[0].send_message(b[1], rooms['First room'], 'cross', 'yes')
+    deliver(b, a)
+    assert b[2].receive(_forged_message(a, b, other, 'm-cross', 'cross', 'yes', 8.0))['ok']
+    shown = [m for m in b[0].get_room(b[1], rooms['Other room'])['messages'] if m['body'] == 'yes']
+    assert shown and all(m.get('unverified') for m in shown)
+    assert all(m['author_id'] != b[2].identity.peer_id + ':' + b[1] for m in shown)
+
+
+def test_the_unverified_author_is_outside_the_participant_id_grammar(two_peers):
+    """Review of e9a6712, finding 5: a forged message's author can't collide with a real contact, even one paired with
+    the participant id 'unverified', because the marker uses characters no participant id can hold."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Marker', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    assert b[2].receive(_forged_message(a, b, room, 'm-mark', 'mark-1', 'not mine', 9.0))['ok']
+    forged = next(m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'not mine')
+    participant = forged['author_id'].split(':', 1)[1]
+    assert not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', participant), forged['author_id']
+
+
+def test_an_altered_copy_before_any_honest_echo_is_unverified(two_peers):
+    """Re-review of 3d497ae: the words are part of the proof. The reply reached the origin, which then sends only an
+    altered copy under the same client id, before any honest echo, so the first-copy rule can't be what catches it."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Altered first', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'said-once', 'my real words')
+    deliver(b, a)
+    assert b[2].receive(_forged_message(a, b, room, 'm-altered-first', 'said-once', 'my altered words', 5.0))['ok']
+    shown = {m['body']: m for m in b[0].get_room(b[1], remote)['messages']}
+    assert shown['my altered words'].get('unverified') is True
+    assert shown['my altered words']['author_id'] != b[2].identity.peer_id + ':' + b[1]
+
+
+def test_two_replies_with_the_same_words_both_keep_the_local_author(two_peers):
+    """Re-review of 3d497ae: the client id is part of the proof, so saying "yes" twice, under two client ids, gives two
+    honest echoes that both stand."""
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Twice yes', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'yes-1', 'yes')
+    b[0].send_message(b[1], remote, 'yes-2', 'yes')
+    deliver(b, a)
+    deliver(a, b)
+    yes = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'yes']
+    assert len(yes) == 2
+    assert all(m['author_id'] == b[2].identity.peer_id + ':' + b[1] and not m.get('unverified') for m in yes)

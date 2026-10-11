@@ -5,6 +5,7 @@ from .common import Problem, require, uid, text, ids, encode
 # What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
 # columns (plus this station's delivery state for a queued reply). An allowlist, never a denylist (R44).
 REMOTE_ROOM_KEYS = ('title', 'owner_id', 'member_ids', 'linked_room_id', 'created', 'last_activity')
+UNVERIFIED = ':(unverified)'  # a forged local author's stand-in; no participant id can hold parentheses
 REMOTE_MESSAGE_KEYS = ('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'state')
 
 PEER_SCHEMA = '''
@@ -72,10 +73,13 @@ class PeerStore:
         result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])]
         result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
-        pending = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply' AND status!='withdrawn'", (row['resource_id'],row['origin'])).fetchall()
-        for delivery in pending:
+        replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply'", (row['resource_id'],row['origin'])).fetchall()
+        # Every reply this station sent proves its own words, withdrawn ones too: a reply can reach the origin and then
+        # be withdrawn here when its acknowledgement was lost (review of e9a6712). Only queued ones are shown below.
+        self._unverified_local_authors(replies, row['origin'], result['messages'])
+        for delivery in replies:
             meta = json.loads(delivery['metadata'])
-            if meta['actor'] != actor:
+            if meta['actor'] != actor or delivery['status'] == 'withdrawn':
                 continue
             local = meta['message']
             if not any(m['author_id']==local['author_id'] and m['client_message_id']==local['client_message_id'] for m in result['messages']):
@@ -88,6 +92,37 @@ class PeerStore:
             result.pop('messages', None)
         return result
 
+    def _own_peer_id(self):
+        """This station's peer id, read from its identity file once: the id never changes for a data directory."""
+        if not hasattr(self, '_peer_id_cache'):
+            from .identity import PeerIdentity
+            self._peer_id_cache = PeerIdentity.load_or_create(self.data_dir).peer_id
+        return self._peer_id_cache
+
+    def _unverified_local_authors(self, replies, origin, messages):
+        """The origin hosts its room and can say anything in it, but never as one of this station's users. A message
+        attributed to a local user (<this peer>:<id>) stands only when this station sent that exact reply, its
+        room.reply outbox row (author, client message id and body), and only once: an honest origin holds one copy
+        (receive keys peer_messages on room, author and client message id), so a later copy is a replay. Anything
+        else is shown as the origin's, marked unverified, so it is never "You" and never a local person's words.
+        The origin still orders and timestamps its own room: it can drop a reply and show it elsewhere, beside another
+        message, and with a replayed copy it chooses which copy comes first (PROTOCOL.md, room.message)."""
+        own = self._own_peer_id() + ':'
+        sent = set()
+        for delivery in replies:
+            local = json.loads(delivery['metadata'])['message']
+            sent.add((local['author_id'], local['client_message_id'], local['body']))
+        for message in messages:
+            author = message.get('author_id')
+            if not (isinstance(author, str) and author.startswith(own)):
+                continue
+            reply = (author, message.get('client_message_id'), message.get('body'))
+            if reply in sent:
+                sent.discard(reply)
+            else:
+                message['author_id'] = origin + UNVERIFIED  # outside the participant id grammar: matches no contact
+                message['unverified'] = True
+
     def remote_room(self, actor, key):
         with self.transaction() as db:
             return self._remote_room(db, actor, key)
@@ -95,8 +130,7 @@ class PeerStore:
     def remote_send(self, actor, key, client_message_id, body):
         text(client_message_id, 'client message ID', 100)
         text(body, 'message', 20000)
-        from .identity import PeerIdentity
-        own_peer = PeerIdentity.load_or_create(self.data_dir).peer_id
+        own_peer = self._own_peer_id()
         with self.transaction() as db:
             row, room = self._remote_inbox(db, actor, key, 'room')
             contact = require(db.execute('SELECT * FROM remote_contacts WHERE peer_id=? AND user_id=?', (row['origin'],row['actor'])).fetchone())
