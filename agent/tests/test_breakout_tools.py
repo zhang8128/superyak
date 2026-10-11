@@ -179,8 +179,8 @@ def test_old_closed_breakouts_leave_the_lists(station):
     assert not error and 'finished here' in text and text.startswith(f'Room Done ({room}, breakout, ships only, closed ')
     assert call(tools, 'station_claims', room=room) == ('(no active claims in this room)', False)
     assert call(tools, 'station_post', room=room, text='late') == (f'station error: 409: {BREAKOUT_CLOSED}', True)
-    for unknown in ('Done', 'r99', 'peer:r1'):
+    for unknown, fetched in (('Done', True), ('r99', True), ('peer:r1', False)):  # a remote id is never fetched
         before = len(fake.requests)
         assert call(tools, 'station_read', room=unknown) == (
             f"station error: No single room matches {unknown!r}; use station_rooms to list room ids", True)
-        assert all(r['path'] != '/api/chats/peer:r1' for r in fake.requests[before:])  # a remote id is never fetched
+        assert [r['path'] for r in fake.requests[before:]] == ['/api/chats'] + ([f'/api/chats/{unknown}'] if fetched else [])
