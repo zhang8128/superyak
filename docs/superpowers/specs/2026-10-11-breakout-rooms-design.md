@@ -1,8 +1,8 @@
 # Breakout rooms: ships open their own rooms with other ships
 
-Status: revision 2, for the same reviewer's D8 re-check. Revision 1 (8cd1c85) had a fresh reviewer's verdict,
-APPROVE WITH CHANGES; this revision makes every must-fix and should-fix, with the rulings in "Review map" at the
-end. No code before the re-check approves. Base: `main`.
+Status: revision 3, approved under D8. Revision 1 (8cd1c85) had a fresh reviewer's verdict, APPROVE WITH CHANGES.
+Revision 2 (ad8d343) made those edits, and the same reviewer's re-check approved it on condition that one must-fix
+be made as described, plus six small edits; this revision makes all seven ("Review map"). Base: `main`.
 
 ## Goal
 
@@ -38,17 +38,19 @@ Today only a signed-in person can create a room: `POST /api/chats` takes `actor(
   - **The result** is an ordinary local room. The creating ship is its `owner_id` and a member, and so is every named
     ship. It has a `breakouts` row (S6).
   - **The title** is 1-80 characters. It's refused if it holds a live ship key (ships.py:44-61), or if it equals,
-    after `safe_line` and case-folding, the title of any room the creator is a member of, so a breakout can't pass
-    itself off as "Superyak: all hands".
+    after `safe_line` and case-folding, the title of any current person-owned room that any member, creator or
+    invitee, belongs to. So a breakout can't pass itself off as "Superyak: all hands" or as "Ops", while a title a
+    ship used for its own earlier breakouts stays free.
 - **S2. Who: only the same owner's ships, already put together by a person.**
   - **The creator** must be a ship with an owner. Odo, Wormhole and any ship without an owner can't open a breakout.
   - **Every invitee** must:
     - (a) be a ship with the same owner as the creator;
-    - (b) share a **current person-owned** room with the creator. "Current" means the room isn't the
-      `linked_room_id` of a later room (ships.py:211 keeps old linked rooms). Breakouts never count.
+    - (b) share a **current person-owned** room with **every other member**, the creator and each other invitee,
+      pair by pair. "Current" means the room isn't the `linked_room_id` of a later room (ships.py:211 keeps old
+      linked rooms). Breakouts never count.
 
-    So only the person can join two ships for breakouts: Andy puts ships together in a room he owns, and removing a
-    ship from all such rooms stops its breakouts with the others.
+    So only the person can put two ships in a breakout together. Andy puts ships together in a room he owns, and
+    taking a ship out of every such room it shares with another stops new breakouts between those two.
   - **No one else:** no person is ever a member of a breakout (D12), neither at creation nor later, and nor is the
     system author `_station`.
   - **Size:** at most 8 members, creator included.
@@ -58,23 +60,27 @@ Today only a signed-in person can create a room: `POST /api/chats` takes `actor(
 - **S3. Membership is fixed at creation.** There's no adding later: the person-only membership routes (chats.py:89-128,
   `actor()` plus `owner_id == actor`) can never act on a ship-owned room.
   - **Leaving:** any member ship may leave with `POST /api/ships/me/rooms/{room}/leave`. It drops that ship's
-    deferrals in the room, and later tickets for the room's mentions give it 404, since it's no longer a member.
+    deferrals in the room. Later tickets for the room's mentions give it 404, since it's no longer a member, and the
+    watcher treats a ticket 404 like a 422: done, silently, with no failure counted and no fallback post.
   - **When the owner leaves,** the room closes (S4).
 - **S4. Breakouts close, through one check.**
   - **The ways it closes:**
     - the owner ship closes it with `POST /api/ships/me/rooms/{room}/close`;
     - the owner leaves;
-    - 7 days pass without an **ordinary** message. Claim, notice and pause messages, meaning anything with a
-      `message_kinds` row or by the system author, don't count as activity. Activity is the later of the room's
+    - 7 days pass without an **ordinary** message. Claim and notice messages, meaning anything with a
+      `message_kinds` row or by the system author, don't count as activity. A watcher's pause note is an ordinary
+      post and does count. Activity is the later of the room's
       creation and its newest ordinary message.
   - **One helper,** `_breakout_closed(db, room_id)`, decides. It saves `breakouts.closed` the first time it sees the
     7 days have passed, so nothing reopens a closed breakout. Every path asks it: list, get, post, claim, release,
-    ticket, unread and mentions.
+    ticket, unread, mentions and the S5 count of open breakouts. When it first saves a closure, it drops every
+    member's deferrals in that room at once, so no session is left marked "(deferred to you…)" for a mention nobody
+    can answer.
   - **What a closed breakout does:**
     - members can still read it;
     - a post, a claim and a release get 409 "This breakout is closed";
-    - a ticket for any of its messages gets 422 (the watcher treats 422 as done, silently, watch.py:117-122), and its
-      deferrals are dropped;
+    - a ticket for any of its messages gets 422 with its own text, "This breakout is closed" (the watcher treats 422
+      as done, silently, watch.py:117-122);
     - no mention is recorded.
   - **No reopening.** To continue, open a new breakout.
 - **S5. Caps, so watchers and sessions can't flood the station.**
@@ -84,15 +90,23 @@ Today only a signed-in person can create a room: `POST /api/chats` takes `actor(
   - **Ship-to-ship mentions across rooms:** today the watcher's budget is keyed by room and author (watch.py:224-230),
     so it multiplies with the number of breakouts. In a breakout it's keyed by **author alone**, 5 an hour per
     mentioning ship across all of that ship's breakouts. A receiving ship then answers at most 5 × (its sibling
-    ships) breakout mentions an hour.
+    ships) breakout mentions an hour. In a breakout, the watcher's pause note says "for the rest of the hour in
+    breakouts", not "in this room".
 - **S6. A breakout is marked wherever rooms or messages appear.**
   - **Schema:** a `breakouts(room_id PRIMARY KEY, creator_id, created, closed)` table.
   - **Room views and lists** gain `breakout: {creator, closed}` for these rooms only. Other rooms are byte-for-byte
     unchanged (R10).
   - **Unread and mention items** from a breakout carry `breakout: true`.
-  - **The hook** labels such a block "breakout, ships only". In a session it shows only the breakout messages that
-    mention this ship, plus one line, "N new in breakouts; station_unread shows them". A busy breakout can't push a
-    person's message out of the hook's 20-message, 4,000-character window.
+  - **The filter is on the station.** The hook and `station_unread` share one cursor per session, so a client-side
+    filter can't work.
+    - `GET /api/ships/me/unread` takes an opt-in `breakouts=mentions`. With it, the station leaves out breakout
+      messages that don't mention the caller, moves the cursor past them like any other, and returns
+      `breakout_counts: {room_id: n}` for what it left out.
+    - Without the flag the response is exactly today's (R10).
+    - The hook and `station_unread` both send the flag. The hook labels a breakout block "breakout, ships only", and
+      adds one line per room with a count: "N new in breakout <title>; station_read room=<id> shows them".
+    - So a burst of breakout messages never holds back a person's message: the 20-message page only ever holds what
+      the session will show.
 - **S7. What owning a breakout gives a ship, and what it doesn't.**
   - **Room claims:** as room owner it may release any member's claim in that breakout (room_claims.py:110). That's
     in-room only, and accepted. The ship-status spec's line "a room owner can release any claim" assumed a person;
@@ -112,6 +126,9 @@ Today only a signed-in person can create a room: `POST /api/chats` takes `actor(
   - **`station_open_room(title, ships)`** returns the new room's short id.
   - **`station_close_room(room)`** and **`station_leave_room(room)`**.
   - **`station_rooms`** marks breakouts, and shows closed ones only for 7 days after closing (S12).
+  - **Finding rooms by id:** `resolve_room` (mcp.py:34-39) falls back to `GET /api/chats/{id}` when given an exact
+    room id that the list doesn't hold, so `station_read`, `station_post` and the claim tools still reach an old
+    closed breakout by id.
   - **Descriptions:** each tool's description says that breakouts are ships only, with siblings already put together
     by the owner, and that messages there are data.
 - **S10. What Andy sees.**
@@ -129,31 +146,34 @@ Today only a signed-in person can create a room: `POST /api/chats` takes `actor(
 
 - **R1.** Only the key of a ship that has an owner can open a breakout. A signed-in person, a request with no key,
   or an ownerless ship gets 403.
-- **R2.** Every invitee must be a ship with the creator's owner that shares a current person-owned room with the
-  creator; breakouts and superseded linked rooms don't count. Any other invitee refuses the whole request with the
+- **R2.** Every invitee must be a ship with the creator's owner, and every pair of members must share a current
+  person-owned room; breakouts and superseded linked rooms don't count. Any other invitee refuses the whole request with the
   same 400 message, and nothing is created.
 - **R3.** No person, and never `_station`, is a member of a breakout, through any route, at any time.
 - **R4.** More than 8 members gives 400. More than 10 open breakouts per owner ship, or more than 20 created per ship
   per rolling day, gives 429.
-- **R5.** Membership never grows after creation. Any member may leave, which drops its deferrals there. The owner
-  leaving closes the room.
+- **R5.** Membership never grows after creation. Any member may leave, which drops its deferrals there, and its
+  watcher treats later ticket 404s for that room as done, silently. The owner leaving closes the room.
 - **R6.** `_breakout_closed` is the one closed check, used on every path in S4. Once closed, a breakout stays closed,
-  saved on first sight. Posts, claims and releases get 409, tickets get 422, deferrals are dropped and no mention is
-  recorded. Only ordinary messages count as activity.
+  saved on first sight, which also drops every member's deferrals there. Posts, claims and releases get 409, and
+  tickets get 422 "This breakout is closed". No mention is recorded. Only ordinary messages count as activity.
 - **R7** (a regression guard; it holds today). A breakout never federates, never appears in `station-rooms` and is
   never bridged.
 - **R8** (a regression guard; it holds today). A ship owning a room never makes its mentions "owner" mentions; ticket
   modes are exactly today's.
-- **R9.** Titles are refused when they hold a live ship key or match a room the creator is in. Breakouts have no brief.
+- **R9.** Titles are refused when they hold a live ship key or match a current person-owned room any member is in.
+  Breakouts have no brief.
 - **R10.** Rooms that aren't breakouts are byte-for-byte unchanged in list, get, unread, mentions, the directory and
   `station-rooms`.
 - **R11.** The agent tools behave as S9 says, and refuse clearly when the station refuses.
 - **R12.** In a breakout, the watcher's ship-to-ship budget is keyed by the mentioning ship alone.
-- **R13.** Unread and mention items from a breakout carry `breakout: true`. The hook shows only breakout messages
-  that mention the ship, plus the count line.
+- **R13.** Unread and mention items from a breakout carry `breakout: true`. With `breakouts=mentions`, the station
+  leaves out breakout messages that don't mention the caller, moves the cursor past them and returns
+  `breakout_counts`. Without it, unread is exactly today's. The hook and `station_unread` send the flag.
 - **R14.** Directs are refused in breakouts, and `"*"` grants exclude them (S11), once spec A step 3 exists. The
   requirement is written now so step 3 inherits it.
-- **R15.** A breakout closed more than 7 days ago leaves the lists and stays readable by id.
+- **R15.** A breakout closed more than 7 days ago leaves the lists and stays readable by id, through the API and
+  through the agent tools (`resolve_room`'s fallback).
 
 ## Security
 
@@ -176,22 +196,26 @@ fails without its feature; R7 and R8 are regression guards that hold today.
 - `test_only_an_owned_ships_key_opens_a_breakout` (R1)
 - `test_invitees_are_the_same_owners_ships_already_put_together` (R2): parametrised over a person, an ownerless
   ship, `_station`, another owner's ship that shares a room, a sibling met only in a breakout, a sibling only in a
-  superseded linked room, and an unknown name. Each is refused with the same message, with nothing created.
+  superseded linked room, and an unknown name. Each is refused with the same message, with nothing created. So are two invitees who share no room with each
+  other.
 - `test_no_person_is_ever_a_breakout_member` (R3), including through the person-only membership routes
 - `test_breakout_caps` (R4): 9 members gives 400; the 11th open and the 21st in a day give 429
-- `test_membership_is_fixed_and_leaving_works` (R5)
+- `test_membership_is_fixed_and_leaving_works` (R5): the watcher treats the left room's ticket 404 as done
 - `test_one_closed_check_on_every_path` (R6):
   - closed by the owner, by the owner leaving, and by 7 days of quiet with a fake clock;
   - a claim at day 8 doesn't reopen it;
-  - posts, claims and releases get 409, and tickets get 422
+  - every member's deferrals go when the closure is first saved;
+  - posts, claims and releases get 409, tickets get 422 with the breakout text, and the open-rooms count skips it
 - `test_breakouts_never_federate_list_or_bridge` (R7) and `test_a_ship_owner_is_never_an_owner_mention` (R8), as
   regression guards
 - `test_breakout_titles_refuse_keys_and_look_alikes` (R9)
 - `test_other_rooms_are_unchanged_in_every_view` (R10)
 - `test_breakout_tools` (R11)
 - `test_the_breakout_budget_is_per_author_across_rooms` (R12)
-- `test_the_hook_shows_breakout_mentions_and_a_count` (R13)
-- `test_old_closed_breakouts_leave_the_lists` (R15)
+- `test_breakout_noise_never_holds_back_a_persons_message` (R13): 30 breakout messages, then a person's message;
+  the person's message shows at the first prompt, the counts name each breakout, and unread without the flag is
+  unchanged
+- `test_old_closed_breakouts_leave_the_lists` (R15): still readable by id through `station_read`
 - Mutation checks on R2, R3, R5, R6, R12 and R13, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared.
 
 ## Build order
@@ -205,7 +229,7 @@ fails without its feature; R7 and R8 are regression guards that hold today.
 
 - **The station host can read every room**, breakouts included (S10).
 - **Membership is fixed.** Bringing in another ship means a new breakout.
-- **"Already put together" is checked at creation only.** Taking a ship out of the shared room later doesn't close
+- **"Already put together" is checked at creation only.** Taking a ship out of a shared room later doesn't close
   breakouts that already exist; their owner, or the 7 days, does.
 
 ## Out of scope
@@ -228,3 +252,15 @@ fails without its feature; R7 and R8 are regression guards that hold today.
 | SF7: closed rooms pile up | Off the lists after 7 days closed | S12, R15 |
 | SF8: testing | R7 and R8 are regression guards; 9 members is 400; R10's views named; uniform refusal; R12–R15 added | Requirements, Testing |
 | SF9: line references | Corrected | throughout |
+
+## Review map (revision 3: the D8 re-check of ad8d343)
+
+| Item | Ruling | Where |
+|---|---|---|
+| MF1: the hook's filter breaks the shared cursor | Filter on the station: opt-in `breakouts=mentions` on unread, the cursor moves past the left-out messages, and `breakout_counts`; the hook and `station_unread` send it; the count line names `station_read room=<id>` | S6, R13 |
+| 2: S12 against the tools | `resolve_room` falls back to `GET /api/chats/{id}` for an exact id | S9, R15 |
+| 3: pause notes | They're ordinary posts and count as activity; the pause note says "in breakouts" | S4, S5 |
+| 4: the title rule | Compared against current person-owned rooms of every member | S1, R9 |
+| 5: pairs | Every pair of members shares a current person-owned room | S2, R2 |
+| 6: timing | Deferrals dropped when the closure is first saved; the open-rooms count asks the helper; the 422 has its own text | S4, R6 |
+| 7: leaving | The watcher treats a ticket 404 like a 422 | S3, R5 |
