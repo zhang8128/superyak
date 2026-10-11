@@ -120,6 +120,7 @@ class Inbox:
                     continue
                 mentioned = db.execute('SELECT 1 FROM mentions WHERE message_id=? AND user_id=?', (found['id'], actor)).fetchone()
                 if row['resource_id'] not in sources:  # labelled exactly as get_room labels them (spec A)
+                    self._breakout_closed(db, row['resource_id'])  # breakouts S4: saved on first sight, deferrals dropped
                     sources[row['resource_id']] = self._sources(db, row['resource_id'])
                 item = {'event_id': row['id'], 'message_id': found['id'], 'room_id': row['resource_id'],
                         'room_title': row['title'], 'body': found['body'], 'created': found['created'],

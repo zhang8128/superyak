@@ -36,8 +36,8 @@ class SystemAuthor:
         notice_posted). A retry for the same mention returns the message already posted."""
         if ':' in room_id:
             raise ValueError('The system author posts in local rooms only')
-        if self._live_ship_key_in(db, text):
-            return None
+        if self._live_ship_key_in(db, text) or self._breakout_closed(db, room_id) is not None:
+            return None  # a closed breakout gets no notice
         author, client_id = self.system_author_id(db), f'notice-{ship_id}-{message_id}'
         existing = db.execute('SELECT id FROM messages WHERE room_id=? AND author_id=? AND client_message_id=?',
                               (room_id, author, client_id)).fetchone()

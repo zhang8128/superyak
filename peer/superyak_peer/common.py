@@ -3,8 +3,9 @@ import json
 import uuid
 
 class Problem(Exception):
-    def __init__(self, status, message):
-        self.status, self.message = status, message
+    def __init__(self, status, message, *, keep=False):
+        # keep: the transaction keeps what it saved before this refusal (a breakout's closure, saved on first sight)
+        self.status, self.message, self.keep = status, message, keep
         super().__init__(message)
 
 def uid():

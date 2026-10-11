@@ -269,6 +269,19 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         return store.station_watch(who, parse_presence(request.headers), data.get('minutes'),
                                    data.get('writable', False), data.get('label'))
 
+    @app.post('/api/ships/me/rooms', status_code=201)
+    async def breakout_open(request: Request):
+        who, data = ship_member(request)['id'], await body(request)
+        return store.open_breakout(who, data.get('title'), data.get('ships'))
+
+    @app.post('/api/ships/me/rooms/{key}/leave')
+    def breakout_leave(key: str, request: Request):
+        return store.leave_breakout(ship_member(request)['id'], key)
+
+    @app.post('/api/ships/me/rooms/{key}/close')
+    def breakout_close(key: str, request: Request):
+        return store.close_breakout(ship_member(request)['id'], key)
+
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
         return store.finish_ticket(ship_member(request)['id'], key, app.state.federation.identity.peer_id)

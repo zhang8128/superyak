@@ -305,6 +305,8 @@ class Ships:
             return result
 
     def _record_mentions(self, db, room_id, message_id, body):
+        if self._breakout_closed(db, room_id) is not None:
+            return  # breakouts S4: a closed breakout records no mention
         addressed = NOT_ADDRESSED.sub(' ', body)
         names = list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(addressed)))[:20]
         if not names:
@@ -335,6 +337,8 @@ class Ships:
                 JOIN room_members ON room_members.room_id=mentions.room_id AND room_members.user_id=mentions.user_id
                 WHERE mentions.user_id=? AND mentions.seq>? ORDER BY mentions.seq LIMIT ?''',
                 (actor, after, min(100, max(1, limit)))).fetchall()
+            for room_id in {r['room_id'] for r in rows}:
+                self._breakout_closed(db, room_id)  # breakouts S4: a closure is saved on first sight
         return [{'seq': r['seq'], 'message_id': r['message_id'], 'room_id': r['room_id'], 'body': r['body'], 'created': r['created'],
                  'author': {'id': r['author_id'], 'username': r['username'], 'name': r['name'], 'kind': r['kind'], 'owner_id': r['owner_id']}}
                 for r in rows]
