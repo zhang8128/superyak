@@ -5,7 +5,7 @@ import subprocess
 import time
 from superyak_team.teamlib import redact
 from .runs import RunTimeout
-from .station import MESSAGE_LIMIT, StationError, authors, brief_block, describe, fence_message, label, read_json, source_label, write_private
+from .station import BREAKOUT_MARK, MESSAGE_LIMIT, StationError, authors, brief_block, describe, fence_message, label, read_json, source_label, write_private
 
 log = logging.getLogger('superyak.agent')
 POLL_SECONDS = 30
@@ -41,7 +41,8 @@ def build_prompt(room, mention, ship, mode):
                 f'you cannot run commands or change files. If the request needs changes, say what you would do and that '
                 f'{label(author["name"])} can ask the ship\'s owner.')
     brief = brief_block(room)  # the owner's brief about the room, whole and fenced like a message, before the history
-    return (f'Room: {label(room["title"])}\n\n' + (brief + '\n\n' if brief else '') + 'Recent messages, oldest first:\n\n'
+    mark = f' ({BREAKOUT_MARK})' if isinstance(room.get('breakout'), dict) else ''  # breakouts S6
+    return (f'Room: {label(room["title"])}{mark}\n\n' + (brief + '\n\n' if brief else '') + 'Recent messages, oldest first:\n\n'
             + '\n\n'.join(quoted) + f'\n\nThe last message, from {describe(author)}, mentions you (@{ship}). {task}\n')
 
 

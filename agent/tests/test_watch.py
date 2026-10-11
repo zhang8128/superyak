@@ -468,3 +468,15 @@ def test_the_breakout_budget_is_per_author_across_rooms(station, ship_config, tm
     fake.say(alpha, rio, '@serenity next hour')
     w.cycle()
     assert len(runner.calls) == 11
+
+
+def test_a_run_prompt_marks_a_breakout(station, ship_config):
+    """Breakouts S6: a run's prompt says its room is a breakout, ships only; any other room's prompt is today's."""
+    fake, andy, jenn, serenity = station
+    rio = fake.user('rio-grande', 'Rio Grande', 'ship', andy['id'], key='rio-key')
+    hands, room = fake.room('Superyak: all hands', andy, serenity, rio), fake.breakout('Sync', rio, serenity)
+    for where in (hands, room):
+        asked = fake.say(where, rio, '@serenity check this')
+        mention = {'message_id': asked['id'], 'room_id': where, 'author': rio, 'body': asked['body']}
+        prompt = build_prompt(fake.view(fake.rooms[where]), mention, 'serenity', 'read')
+        assert prompt.startswith('Room: Sync (breakout, ships only)\n\n' if where == room else 'Room: Superyak: all hands\n\n')
