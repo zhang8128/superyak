@@ -674,3 +674,34 @@ def test_the_unverified_author_is_outside_the_participant_id_grammar(two_peers):
     forged = next(m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'not mine')
     participant = forged['author_id'].split(':', 1)[1]
     assert not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', participant), forged['author_id']
+
+
+def test_an_altered_copy_before_any_honest_echo_is_unverified(two_peers):
+    """Re-review of 3d497ae: the words are part of the proof. The reply reached the origin, which then sends only an
+    altered copy under the same client id, before any honest echo, so the first-copy rule can't be what catches it."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Altered first', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'said-once', 'my real words')
+    deliver(b, a)
+    assert b[2].receive(_forged_message(a, b, room, 'm-altered-first', 'said-once', 'my altered words', 5.0))['ok']
+    shown = {m['body']: m for m in b[0].get_room(b[1], remote)['messages']}
+    assert shown['my altered words'].get('unverified') is True
+    assert shown['my altered words']['author_id'] != b[2].identity.peer_id + ':' + b[1]
+
+
+def test_two_replies_with_the_same_words_both_keep_the_local_author(two_peers):
+    """Re-review of 3d497ae: the client id is part of the proof, so saying "yes" twice, under two client ids, gives two
+    honest echoes that both stand."""
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Twice yes', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'yes-1', 'yes')
+    b[0].send_message(b[1], remote, 'yes-2', 'yes')
+    deliver(b, a)
+    deliver(a, b)
+    yes = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'yes']
+    assert len(yes) == 2
+    assert all(m['author_id'] == b[2].identity.peer_id + ':' + b[1] and not m.get('unverified') for m in yes)
