@@ -515,14 +515,16 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   with `dlopen` instead of at load time never appears there, so it isn't checked, as the path it's loaded under or
   at its realpath. Nothing in a stock Homebrew or nodejs.org-tarball node does this; it would need its own control
   if a future node build did.
-- **A small window remains between check_lane_node's last look and the actual exec** (lane-node-libs, review round
-  2). The binary itself can't drift once checked, because the broker always runs the resolved path teamd already
-  holds (`lane.py`, `start_broker`, the `subprocess.Popen` call), but node's libraries live on disk and could
-  change between the check and dyld loading them. `prepare_broker`'s `verify=True` call (the one teamd hands
-  straight to `start_broker`, with nothing of its own in between) re-checks right before it returns, so the only
-  window left is `start_broker`'s own setup (ending every other process still using `b/`, rendering the profile,
-  opening the stderr file) before the `Popen`. Closing that last sliver would mean re-checking inside
-  `start_broker` itself, which this doesn't do.
+- **The exec-time window is now closed down to the syscall boundary** (lane-node-libs, review rounds 2-3).
+  `prepare_broker`'s `verify=True` call re-checks `lane_node` right before it returns to teamd, and `start_broker`
+  re-checks it again itself, on `node_bin` directly (never re-read from config), immediately before the
+  `subprocess.Popen` call (`lane.py`, `start_broker`). A fresh refusal, or a path that no longer matches `node_bin`,
+  stops the broker before anything is spawned. What's left is `start_broker`'s own few lines of Python between
+  that check and the `Popen` call (building the argv list; no filesystem access of its own), which is as close to
+  atomic as a plain Python process can get without the kernel's help.
+- **The device-based `_apple_sealed` check (review round 3) still trusts `otool -l`'s own output.** If `otool`
+  itself were compromised or its output were tampered with in transit, nothing here would notice; `_run`'s
+  absolute path and timeout guard against a hijacked `otool` on `PATH`, not a broken one.
 - Inside the broker, Chrome runs without its own sandbox. The broker's deny-default profile is the wall. A page that
   takes over a renderer gets the profile's powers:
   - the lane's ports, `<lane>/b`, and reads of the headless shell, Playwright and node;
