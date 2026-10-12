@@ -396,7 +396,7 @@ class Team:
                 lane.stop_broker(self.brokers.pop(wid))
             node_bin, pw_dir, shell_dir = prepared
             broker = lane.start_broker(path, base, node_bin, pw_dir, shell_dir,
-                                       self.dir / "workers" / wid / "broker-stderr.log")
+                                       self.dir / "workers" / wid / "broker-stderr.log", self._worktrees())
             self.brokers[wid] = broker
             self.lane_secrets.add(broker.secret)
         self.lane_checked[wid] = checked

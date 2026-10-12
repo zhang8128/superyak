@@ -2607,6 +2607,8 @@ def test_node_libraries_pass_on_a_clean_homebrew_like_tree(env, tmp_path, monkey
     which is fine: only @-relative entries must land inside it) — passes when the tree is clean. /usr/lib and
     /System are never touched even though the entries name real files."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_device", lambda path: 1)   # everything "on the sealed device" (finding 4): no
+                                                           # dependence on exactly which real files this Mac has
     t = homebrew_like_tree(tmp_path / "hb")
     fake_otool(monkeypatch, {
         str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"])), ("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"),
@@ -2843,6 +2845,7 @@ def test_usr_lib_and_system_libraries_are_never_checked(env, tmp_path, monkeypat
     """Spec a: /usr/lib and /System libraries are Apple's own and skipped outright — not even stat'd, or these two,
     which don't exist, would refuse the node."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_device", lambda path: 1)   # everything "on the sealed device" (finding 4)
     t = homebrew_like_tree(tmp_path / "hb")
     fake_otool(monkeypatch, {str(t["node_bin"]): [
         ("LC_LOAD_DYLIB", "/usr/lib/does-not-exist-xyz.dylib"),
@@ -2862,16 +2865,23 @@ def test_a_path_under_the_data_volume_that_looks_like_system_is_still_checked(en
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
-def test_apple_sealed_skip_rules(tmp_path):
-    """Spec b (review round 2, finding 2), as a plain unit check of _apple_sealed itself: /usr/lib and /System are
-    skipped only when normalized (so a ../ trick that only looks like it starts there isn't) and only when not also
-    under NOT_SEALED (the writable Data volume and firmlink targets Apple's own sealed-volume check never covers)."""
+def test_apple_sealed_skip_rules(monkeypatch):
+    """Spec b (review round 2 finding 2; round 3 finding 4), as a plain unit check of _apple_sealed itself:
+    /usr/lib and /System are skipped only when normalized (so a ../ trick that only looks like it starts there
+    isn't), only when not also under NOT_SEALED textually (the writable Data volume and firmlink targets), and
+    only when the device actually matches /usr/sbin's sealed one — a string prefix alone, on a case-insensitive
+    volume, could be dodged by a path spelled in a different case. A path that can't be stat'd is never sealed."""
+    monkeypatch.setattr(lane, "_device", lambda path: 1 if path == "/usr/sbin" else 2)
+    assert not lane._apple_sealed("/usr/lib/libc++.1.dylib")                   # a real name, but the wrong device
+    monkeypatch.setattr(lane, "_device", lambda path: 1)                       # now everything is "the" sealed device
     assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
     assert lane._apple_sealed("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
-    assert not lane._apple_sealed("/System/Volumes/Data/opt/homebrew/opt/foo/lib/x.dylib")
+    assert not lane._apple_sealed("/System/Volumes/Data/opt/homebrew/opt/foo/lib/x.dylib")   # NOT_SEALED, textual
     assert not lane._apple_sealed("/usr/lib/../../opt/x")                      # normpath(entry) != entry
     assert not lane._apple_sealed("/usr/libexec/cups/foo")                    # not under /usr/lib/ at all
-    assert not lane._apple_sealed("/opt/homebrew/opt/foo/lib/x.dylib")
+    assert not lane._apple_sealed("/opt/homebrew/opt/foo/lib/x.dylib")         # not under APPLE_DIRS at all
+    monkeypatch.undo()                                                        # the real _device, for a real miss
+    assert not lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
 
 
 def test_linux_skips_the_library_check_entirely(env, tmp_path, monkeypatch):
@@ -2974,6 +2984,103 @@ def test_prepare_broker_rechecks_lane_node_fresh_right_before_returning(env, man
     calls.clear()
     lane.prepare_broker(env["repo"], base, [], verify=False)
     assert len(calls) == 1                                      # the throwaway pass (discarded by the caller) once
+
+
+# ---------- lane-node-libs, review round 3 ----------
+
+def test_an_earlier_writable_rpath_folder_is_refused_even_when_a_later_one_holds_the_file(env, tmp_path, monkeypatch):
+    """Spec a (review round 3, finding 1): dyld repeats the identical, ordered rpath search at exec time. An
+    earlier candidate folder that's writable by someone else matters even though it holds nothing today and a
+    later, real file is the only thing that answers right now — a file planted there later would win instead, so
+    returning just the winner and checking only it is not enough; every folder tried before it must be safe too."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    earlier = t["node_bin"].parents[1] / "earlier"              # .../26.11.1/earlier: empty, but group-writable
+    earlier.mkdir()
+    os.chmod(earlier, 0o775)
+    try:
+        fake_otool(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
+            str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget3.dylib"),
+                                ("LC_RPATH", "@loader_path/../earlier"), ("LC_RPATH", "@loader_path")],
+            str(t["lib_dir"] / "libtarget3.dylib"): [],
+        })
+        (t["lib_dir"] / "libtarget3.dylib").write_bytes(b"fake")     # only the LATER candidate actually has it
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(earlier, 0o755)
+
+
+def test_an_earlier_rpath_folder_thats_merely_unreadable_above_it_is_also_refused(env, tmp_path, monkeypatch):
+    """Spec a (review round 3, finding 1): the same earlier-folder check applies to its own ancestors too, not
+    just the folder itself — an earlier candidate's parent being group-writable is just as real a way to replace
+    it later."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    holder = t["node_bin"].parents[1] / "holder"
+    holder.mkdir()
+    os.chmod(holder, 0o775)
+    try:
+        fake_otool(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
+            str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget3.dylib"),
+                                ("LC_RPATH", "@loader_path/../holder/earlier"), ("LC_RPATH", "@loader_path")],
+            str(t["lib_dir"] / "libtarget3.dylib"): [],
+        })
+        (t["lib_dir"] / "libtarget3.dylib").write_bytes(b"fake")
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(holder, 0o755)
+
+
+def test_a_sticky_earlier_rpath_folder_is_allowed(env, tmp_path, monkeypatch):
+    """Spec a (review round 3, finding 1): _check_search_directory allows sticky throughout, the same as any of a
+    library's own ancestors — an earlier, empty rpath folder that's merely sticky (like /tmp) is fine."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    earlier = t["node_bin"].parents[1] / "earlier"
+    earlier.mkdir()
+    os.chmod(earlier, 0o1777)
+    try:
+        fake_otool(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
+            str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget3.dylib"),
+                                ("LC_RPATH", "@loader_path/../earlier"), ("LC_RPATH", "@loader_path")],
+            str(t["lib_dir"] / "libtarget3.dylib"): [],
+        })
+        (t["lib_dir"] / "libtarget3.dylib").write_bytes(b"fake")
+        assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+    finally:
+        os.chmod(earlier, 0o755)
+
+
+def test_lc_dyld_environment_on_any_walked_image_refuses(env, tmp_path, monkeypatch):
+    """Spec a (review round 3, finding 3): LC_DYLD_ENVIRONMENT lets a binary embed its own DYLD_* overrides, which
+    dyld honors unless the process is hardened; any walked image carrying one refuses, naming it."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_DYLD_ENVIRONMENT", "DYLD_LIBRARY_PATH=/tmp/evil")]})
+    with pytest.raises(lane.LaneRefused, match="LC_DYLD_ENVIRONMENT"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_an_unexpected_dynamic_linker_refuses(env, tmp_path, monkeypatch):
+    """Spec a (review round 3, finding 3): LC_LOAD_DYLINKER must name /usr/lib/dyld; anything else refuses."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLINKER", "/tmp/evil-dyld")]})
+    with pytest.raises(lane.LaneRefused, match="dynamic linker"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_the_standard_dynamic_linker_is_fine(env, tmp_path, monkeypatch):
+    """The normal case: LC_LOAD_DYLINKER naming /usr/lib/dyld, exactly, passes."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLINKER", lane.DYLD_LINKER)]})
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
 
 
 # ---------- Task 5, fix round 1 ----------
@@ -3874,6 +3981,11 @@ def broker_parts(env, tmp_root, held, monkeypatch):
     fake.chmod(0o755)
     monkeypatch.setattr(lane, "SANDBOX_EXEC", str(fake))
     monkeypatch.setattr(lane, "KILL_GRACE_S", 1)
+    # start_broker's own fresh re-check (review round 3, finding 2) otherwise runs the real owner/ancestor/library
+    # checks against this machine's real Homebrew node — whatever that machine's real permissions happen to be,
+    # which isn't what these tests are about. A plain pass-through here; the dedicated tests for that re-check
+    # override it again themselves.
+    monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: Path(os.path.realpath(value)))
     pw = env["tmp"] / "playwright-core-1.55.0"
     pw.mkdir()
     (pw / "index.js").write_text(FAKE_PLAYWRIGHT)
@@ -3890,8 +4002,41 @@ def broker_parts(env, tmp_root, held, monkeypatch):
             "stderr": stderr, "profile": env["tmp"] / "profile.sb"}
 
 
-def start(parts):
-    return lane.start_broker(parts["path"], parts["base"], parts["node"], parts["pw"], parts["shell"], parts["stderr"])
+def start(parts, worktrees=()):
+    return lane.start_broker(parts["path"], parts["base"], parts["node"], parts["pw"], parts["shell"],
+                             parts["stderr"], worktrees)
+
+
+def _never_sandbox_exec(*a, **kw):
+    if a and a[0] and a[0][0] == lane.SANDBOX_EXEC:
+        raise AssertionError("sandbox-exec must never run once the fresh lane_node check has refused")
+    return REAL_POPEN(*a, **kw)
+
+
+REAL_POPEN = subprocess.Popen
+
+
+def test_start_broker_refuses_when_lane_node_fails_right_before_the_exec(env, broker_parts, monkeypatch):
+    """Spec (review round 3, finding 2): check_lane_node runs again immediately before the Popen, on the exact
+    path about to be handed to it; a refusal there stops the broker before anything is spawned."""
+    def boom(value, worktrees):
+        raise lane.LaneRefused("gone just before the exec")
+    monkeypatch.setattr(lane, "check_lane_node", boom)
+    monkeypatch.setattr(lane, "cleanup_processes", lambda path, base, broker=None, env=None, extra=None: True)
+    monkeypatch.setattr(lane.subprocess, "Popen", _never_sandbox_exec)
+    with pytest.raises(lane.LaneRefused, match="gone just before the exec"):
+        start(broker_parts)
+
+
+def test_start_broker_refuses_when_lane_node_now_resolves_elsewhere(env, broker_parts, monkeypatch):
+    """Spec (review round 3, finding 2): even when the fresh check itself passes, a path different from the one
+    this was about to exec is refused rather than silently swapped in (the Seatbelt profile was already built for
+    the original path)."""
+    monkeypatch.setattr(lane, "check_lane_node", lambda value, worktrees: Path("/opt/homebrew/bin/node-different"))
+    monkeypatch.setattr(lane, "cleanup_processes", lambda path, base, broker=None, env=None, extra=None: True)
+    monkeypatch.setattr(lane.subprocess, "Popen", _never_sandbox_exec)
+    with pytest.raises(lane.LaneRefused, match="now resolves to"):
+        start(broker_parts)
 
 
 def running(pid):
@@ -4751,7 +4896,7 @@ def lanes(env, mac, tmp_root, monkeypatch):
         calls["listeners"] += 1
         return state["ok"], list(state["problems"])
 
-    def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path):
+    def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path, worktrees):
         broker = FakeBroker(base)
         calls["started"].append((path, base, broker, stderr_path))
         return broker
@@ -6471,7 +6616,7 @@ def test_a_failed_start_walks_the_brokers_family_before_it_polls(broker_parts, m
     monkeypatch.setattr(lane.subprocess, "Popen", StartFails)
     monkeypatch.setattr(lane, "family", lambda pid: (StartFails.order.append("family"), (set(), set()))[1])
     monkeypatch.setattr(lane, "stop_broker", lambda broker: None)
-    monkeypatch.setattr(lane, "cleanup_processes", lambda path, base, broker=None, env=None: True)
+    monkeypatch.setattr(lane, "cleanup_processes", lambda path, base, broker=None, env=None, extra=None: True)
     with pytest.raises(lane.LaneRefused, match="exited"):
         start(broker_parts)
     assert StartFails.order[:2] == ["family", "poll"], StartFails.order
