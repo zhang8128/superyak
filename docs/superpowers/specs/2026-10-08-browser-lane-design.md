@@ -248,11 +248,14 @@ With `lane=None`, the output is byte-for-byte what it is today.
   `DYLD_*` overrides or names anything but the standard dynamic linker. Every existing candidate an `@rpath`,
   `@loader_path` or `@executable_path` load could resolve to — on any chain that reaches the loading image, not
   just the one this walk's own traversal happened to use — is checked and prefix-checked, never just the first
-  one found, so dyld's own depth-first resolution can't map a file past the check (round 5's R-M2). That prefix
-  is the loading image's own Homebrew keg when its realpath is one, since that's an equally Homebrew-managed,
-  equally checked boundary as node's own; otherwise it's node's own prefix. A universal binary's architecture
-  slices are each walked separately, by their own cputype, never merged, and a dependency missing the needed
-  slice refuses.
+  one found, so dyld's own depth-first resolution can't map a file past the check. An `@rpath` load also runs
+  dyld's own fallback search (`/usr/local/lib`, then `/usr/lib`) unless an existing or sealed candidate lies in
+  the loading image's own rpaths or node's own — the only folders guaranteed to be on every chain dyld could
+  use — since a candidate some other loader merely contributed isn't actually on the loading image's real
+  load-time chain. That prefix is the loading image's own Homebrew keg when its realpath is one, since that's
+  an equally Homebrew-managed, equally checked boundary as node's own; otherwise it's node's own prefix. A
+  universal binary's architecture slices are each walked separately, by their own cputype, never merged, and a
+  dependency missing the needed slice refuses.
 - **When it stops:** teamd stops it in the same four places that remove the lane. The broker runs in its own process
   group, and teamd kills that group.
 - **Its Playwright:** `~/.superyak/team/broker/playwright-core-<version>/`. `<version>` and its integrity hash are read from the lockfile at the
@@ -538,26 +541,31 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   a walk that reads one image after another in sequence, all the way to dyld's open in the child, well after
   `sandbox-exec` has started. Re-checking later only shrinks how long the window is open before the walk even
   starts; it can't make the walk itself instantaneous. That window is harmless wherever nobody but this user or
-  root could write in the first place — but the per-keg prefix ("Its node", above) and the ACL blind spot (just
-  below) are exactly the places where someone else could, and the profile (below) is what actually bounds the
-  damage, not the timing.
+  root could write in the first place — but the ACL blind spot (just below) is exactly a place where someone
+  else could, and the profile (below) is what actually bounds the damage, not the timing.
+- **An `@`-relative load is contained per keg, not per node.** An image whose own realpath lies in a Homebrew
+  keg (`Cellar/<name>/<version>/`) may resolve such a load anywhere inside its own keg, not only inside node's;
+  an image outside any keg is still held to node's own prefix. This is a containment *scope*, not a gap: every
+  file a load resolves to, inside whichever keg admitted it, still gets the full owner-and-ancestors check, and
+  every Homebrew keg the profile could ever read already lies inside the trees it reads (`/opt/homebrew/Cellar`,
+  `/usr/local/Cellar`), so widening the scope from "node's keg only" to "any keg" admits nothing the profile
+  didn't already have to answer for.
 - **The library check reads mode bits only, never ACLs.** `_check_owner` (`lane.py`) decides "writable by nobody
   else" from `st_mode` alone. A macOS ACL (`chmod +a "group:staff allow add_file" <folder>`) can make a folder
   writable by others while its mode still shows `0755`, which the check would read as clean. This predates
   lane-node-libs; an ACL check (`/bin/ls -lde`, or the ACL syscalls directly) is a follow-up, not part of this
   branch.
 - **`@loader_path` and `@executable_path` are expanded, and an `@loader_path/`-named dependency is searched for,
-  against each image's realpath folder only, never the as-loaded (possibly symlinked) path's own folder**
-  (lane-node-libs, review round 4, N7). If a library is ever reached through a symlink and dyld actually expands
-  `@loader_path` from the symlink's own folder rather than its target's, a folder dyld would search is never
-  checked, and a file sitting beside the symlink (not beside the realpath) wouldn't be found by this walk either
-  — the likelier failure mode is this code wrongly refusing a load that dyld would have resolved, not missing a
-  real one, but it wasn't confirmed which way dyld actually behaves. Checking both folders would cost nothing;
-  it just wasn't done this round.
+  against each image's realpath folder only, never the as-loaded (possibly symlinked) path's own folder.** If a
+  library is ever reached through a symlink and dyld actually expands `@loader_path` from the symlink's own
+  folder rather than its target's, a folder dyld would search is never checked, and a file sitting beside the
+  symlink (not beside the realpath) wouldn't be found by this walk either — the likelier failure mode is this
+  code wrongly refusing a load that dyld would have resolved, not missing a real one, but it wasn't confirmed
+  which way dyld actually behaves. Checking both folders would cost nothing; it just hasn't been done.
 - **The broker's profile — `b/`, node's own prefix, `/opt/homebrew/{Cellar,opt}` and `/usr/local/{Cellar,opt}`,
   Playwright and its browsers, and whatever `system.sb` allows — is the second wall, not a detail.** Wherever the
-  library check above has a real window or gap (the exec-time window; the per-keg prefix; the ACL blind spot
-  just above), what actually keeps a bad outcome from mattering is that dyld, inside the broker, can only ever map a
+  library check above has a real window or gap (the exec-time window; the ACL blind spot just above), what
+  actually keeps a bad outcome from mattering is that dyld, inside the broker, can only ever map a
   file from one of those trees. A library outside them can't load no matter what the check said about it, and a
   library the check refused but that lives outside those trees was never reachable anyway. The check and the
   profile are both walls; neither one alone is the whole story.

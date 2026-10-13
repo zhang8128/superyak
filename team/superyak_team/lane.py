@@ -2079,9 +2079,10 @@ def _shared_cache_contains(entry):
     libSystem (which teamd, on the same OS the broker runs under, already shares): exactly the test dyld itself
     uses, not a guess about which names are "known" system libraries. Returns True or False when the predicate
     actually answered, or None when it couldn't be asked at all — off macOS, the symbol failing to load, or any
-    error asking it. _apple_sealed needs that distinction: a definite "not cached" still leaves room to check
-    whether entry genuinely exists on the sealed volume some other way (_on_the_sealed_volume); "couldn't ask at
-    all" is the only time it falls back to the cruder nearest-existing-ancestor heuristic instead (R-S2)."""
+    error asking it. _apple_sealed needs that distinction: both a definite "not cached" and "couldn't ask at
+    all" on a real Mac leave room to check whether entry genuinely exists on the sealed volume some other way
+    (_on_the_sealed_volume); only off macOS entirely does "couldn't ask at all" fall back to the cruder
+    nearest-existing-ancestor heuristic instead."""
     if not _on_macos():
         return None
     if "fn" not in _DYLD_SHARED_CACHE:
@@ -2106,7 +2107,7 @@ def _on_the_sealed_volume(entry):
     """entry itself (never an ancestor): a real file, directory or symlink that's actually there, on the sealed
     system volume's own device — asked directly, once the shared-cache predicate ran and gave a definite "not
     cached" for entry, since some genuinely Apple-shipped files (non-dylib resources, say) are sealed without
-    ever going into the cache at all (R-S2). A symlink is followed to its target first, the way dyld would; a
+    ever going into the cache at all. A symlink is followed to its target first, the way dyld would; a
     target that's still a symlink after one realpath resolve, or that errors, is never treated as sealed."""
     try:
         st = os.lstat(entry)
@@ -2194,7 +2195,7 @@ def _apple_sealed(entry):
 
 def _under_apple_dirs(entry):
     """Whether entry is in APPLE_DIRS's textual territory at all (not whether it's sealed — _apple_sealed decides
-    that); used only to pick a clearer refusal message for a name that's genuinely missing there (R-S2)."""
+    that); used only to pick a clearer refusal message for a name that's genuinely missing there."""
     return (isinstance(entry, str) and os.path.normpath(entry) == entry and entry.startswith(APPLE_DIRS)
             and not entry.startswith(NOT_SEALED))
 
@@ -2233,7 +2234,7 @@ FAT_CIGAM, FAT_CIGAM_64 = 0xbebafeca, 0xbfbafeca
 LC_LOAD_DYLIB, LC_ID_DYLIB, LC_LOAD_DYLINKER, LC_DYLD_ENVIRONMENT = 0xc, 0xd, 0xe, 0x27
 LC_RPATH, LC_LOAD_WEAK_DYLIB = 0x8000001c, 0x80000018
 LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB = 0x8000001f, 0x80000023
-LC_LAZY_LOAD_DYLIB = 0x20            # legacy lazy-binding dependency; refused outright (nit 1), never just skipped
+LC_LAZY_LOAD_DYLIB = 0x20            # legacy lazy-binding dependency; refused outright, never just skipped
 # Every load command the walk reads; everything else in a Mach-O file (LC_SEGMENT, LC_UUID, and so on) is skipped.
 # All of these share one shape — cmd, cmdsize, then a uint32 offset to a NUL-terminated name within the command —
 # so one reader (_macho_lc_str) serves them all.
@@ -2289,7 +2290,7 @@ def _macho_load_commands_in_slice(fd, base, size):
     """Every load command this cares about in the thin Mach-O slice at [base, base + size), and that slice's own
     cputype, read from its own mach_header -- a fat_arch table's own cputype, when there is one, is what the
     caller (_macho_commands_by_arch) actually keys an architecture by, the same field dyld itself uses to pick a
-    slice (R-S3); this one is only ever a plain, consistent read of the slice's own header. A thin header's
+    slice; this one is only ever a plain, consistent read of the slice's own header. A thin header's
     magic is native byte order, not big-endian (only a fat header's own is always big-endian)."""
     magic = struct.unpack("<I", _read_exact(fd, base, 4))[0]
     if magic == MH_MAGIC_64:
@@ -2404,7 +2405,7 @@ def _macho_commands_by_arch(path):
 def _macho_load_commands(path):
     """Every load command path's own Mach-O bytes give, across every architecture slice merged into one list —
     used to confirm path parses as a Mach-O at all, and by callers that don't care which slice a command came
-    from. The per-architecture walk (R-S3) uses _macho_commands_by_arch directly instead, since dyld never
+    from. The per-architecture walk uses _macho_commands_by_arch directly instead, since dyld never
     merges one slice's rpaths or dependencies with another's."""
     commands = []
     for cmds in _macho_commands_by_arch(path).values():
@@ -2532,7 +2533,7 @@ def _rpath_candidates(name, real_image, chain, guaranteed_folders, real_bin):
     targets is every existing, non-Apple-sealed candidate (plural, R-M2) across chain -- own_rpaths union
     U(real_image), every rpath folder on any chain that reaches real_image, not just the one chain a
     breadth-first or worklist walk happened to use to get here -- to check and recurse into; resolved is True
-    once at least one candidate (checked, or Apple-sealed, nit 3) answers the load at all; guaranteed is True
+    once at least one candidate (checked, or Apple-sealed) answers the load at all; guaranteed is True
     only when such a candidate lies in guaranteed_folders (real_image's own rpaths union node's own, R5-S1) --
     the two sets dyld's own depth-first resolution is guaranteed to search on EVERY possible chain into
     real_image, unlike a folder some OTHER loader merely happened to contribute to U. A name with a subfolder
@@ -2564,7 +2565,7 @@ def _loader_or_executable_candidate(name, real_image, node_folder, real_bin):
     (target_or_none, resolved). @loader_path means real_image's own folder, @executable_path node's -- exactly
     one candidate either way, unambiguous regardless of chain, so "resolved" and "guaranteed" are the same
     thing here (unlike @rpath, R5-S1): both are always on every chain dyld could use. Its own folder is checked
-    here too (nit 6), not only as the intermediate ancestor it already was when real_image's own path got
+    here too, not only as the intermediate ancestor it already was when real_image's own path got
     resolved (sticky allowed there; not here, this being the search folder in its own right). Returns (None,
     False) when name is neither token."""
     for prefix, folder in (("@loader_path/", real_image.parent), ("@executable_path/", node_folder)):
@@ -2605,19 +2606,19 @@ def _check_fallback(name, real_image, real_bin):
 def _dependency_targets(cmd, name, real_bin, real_image, node_folder, chain, prefix, guaranteed_folders):
     """Every place a dependency name (one of real_image's, loaded by cmd) could actually lead, as a list of
     (path, as-loaded name) pairs for the walk to check, prefix-check and recurse into. An @rpath/, @loader_path/
-    or @executable_path/ load can give more than one (R-M2): every existing candidate real_image's own rpath
+    or @executable_path/ load can give more than one: every existing candidate real_image's own rpath
     chain could carry, on any chain that reaches real_image, not just the one chain this walk's own traversal
     order happened to use, is a possible winner on dyld's own depth-first resolution — see _rpath_candidates.
     An @rpath/ load also runs dyld's own fallback search (_check_fallback) unless an existing or sealed
     candidate lies in guaranteed_folders -- real_image's own rpaths union node's own, the only folders
-    guaranteed to be on EVERY chain dyld could use to resolve it (R5-S1): a candidate some OTHER loader merely
+    guaranteed to be on EVERY chain dyld could use to resolve it: a candidate some OTHER loader merely
     contributed to U isn't actually on real_image's own load-time chain, so dyld's own fallback search is still
     live, and still has to be checked, regardless of whether a load is weak or required. Empty when it's
     Apple's own (_apple_sealed, or a sealed @-relative candidate) or a weak dependency that isn't at its own
     path either, once its own folder and dyld's fallback search are both checked (a weak load never "shrugs"
     past a folder someone else could plant a file in). Raises when a required dependency doesn't exist
     anywhere (or is a dangling symlink, which is worse than not existing: its target can still be created), any
-    candidate doesn't resolve inside prefix (_image_prefix, departure a), or the name isn't a path a load
+    candidate doesn't resolve inside prefix (_image_prefix), or the name isn't a path a load
     command actually gives."""
     weak = DYLIB_LOAD_CMDS.get(cmd) == "weak"
     if name.startswith("@rpath/"):
@@ -2679,7 +2680,7 @@ HOMEBREW_KEG_RE = re.compile(r"^/(?:opt/homebrew|usr/local)/Cellar/[^/]+/[^/]+/"
 
 
 def _image_prefix(real_image, real_bin):
-    """The boundary an @-relative load of real_image must resolve inside (departure a, ruled): real_image's own
+    """The boundary an @-relative load of real_image must resolve inside: real_image's own
     Homebrew keg (Cellar/<name>/<version>/) when its realpath matches HOMEBREW_KEG_RE -- an equally
     Homebrew-managed, equally checked boundary as node's own, and the actual shape of a real dependency graph
     (libnode loading Homebrew's OpenSSL, which loads Homebrew's abseil, whose own libraries stay inside
@@ -2702,13 +2703,13 @@ def _image_prefix(real_image, real_bin):
 
 
 def _own_image_data(real, real_bin, node_folder, cputype, seed_commands=None):
-    """real's own load commands for exactly cputype's slice (R-S3; refuses outright if real has no such slice,
+    """real's own load commands for exactly cputype's slice (refuses outright if real has no such slice,
     since dyld would fail to load it for that architecture too), split into its own rpath folders (each
     expanded and checked right away, _check_search_directory, whether or not any @rpath/ load of this image or
     any other actually resolves through it -- dyld builds each image's full rpath list the moment it's loaded)
     and everything else it depends on. Refuses outright for LC_DYLD_ENVIRONMENT (its own embedded DYLD_*
     override, which dyld would honor), an LC_LOAD_DYLINKER naming anything but DYLD_LINKER, or an
-    LC_LAZY_LOAD_DYLIB (nit 1, cheap to refuse outright regardless of whether this dyld still honours lazy
+    LC_LAZY_LOAD_DYLIB (cheap to refuse outright regardless of whether this dyld still honours lazy
     binding). A load command that can't be read refuses closed. Read once per realpath -- real's own bytes, and
     so this, never change for a given cputype."""
     if seed_commands is not None:
@@ -2752,7 +2753,7 @@ def _walk_one_architecture(real_bin, node_folder, checked_names, cputype, seed_c
     resolved the same load through a DIFFERENT chain into the same image, mapping a different file neither this
     walk's own traversal order nor a per-image realpath dedupe would otherwise have reached.
 
-    Each image's own bytes (own_rpaths, dependencies, and _image_prefix, departure a) are read exactly once per
+    Each image's own bytes (own_rpaths, dependencies, and _image_prefix) are read exactly once per
     realpath, cached in own_data; recursion itself is still deduped on realpath (a cycle, already closed by the
     cache, or a very large graph, can't make this run forever) -- deduping by (realpath, chain) instead, as a
     literal reading of the fix would have it, revisits a shared library once per distinct chain that reaches
@@ -2808,7 +2809,7 @@ def _check_node_libraries(real_bin):
     across every architecture's walk, since the ownership check doesn't depend on which slice asked for it.
 
     Known limits: a library loaded at runtime with dlopen, never listed in any load command, isn't checked.
-    Each walked image's own prefix (_image_prefix, departure a) is its own Homebrew keg when its realpath
+    Each walked image's own prefix (_image_prefix) is its own Homebrew keg when its realpath
     matches one, since that's an equally Homebrew-managed, equally checked boundary as node's own -- a real
     Homebrew node's libnode links OpenSSL, which links abseil, whose own libraries stay inside abseil's own
     keg, never node's, and requiring every @-relative load anywhere in the tree to land inside node's own keg
@@ -2825,7 +2826,7 @@ def check_lane_node(value, worktrees):
     browsers), or writable by anyone but its owner, itself or any folder above it, symlinks spliced in along the
     way and their own holding folders checked too (_resolve_path) — on a stock Homebrew install, bin, Cellar and
     opt are usually group-writable; the refusal then says to `chmod g-w` them. _resolve_path walks the
-    configured value as given, never its realpath (nit 4): the broker execs the realpath, but the as-given path
+    configured value as given, never its realpath: the broker execs the realpath, but the as-given path
     can hold its own symlinks _resolve_path would otherwise never see or check (S4) — resolving value instead
     of real is stricter, never looser, so this is deliberate, not an oversight. On macOS, every library it
     loads, directly or transitively (most of Homebrew's node's libraries load through libnode, not node
@@ -2883,7 +2884,7 @@ SHARED_ROOTS = ("/Users", "/Volumes", "/private/tmp", "/private/var/folders", "/
 def _too_wide(prefix):
     """Whether prefix equals, holds or lies under $HOME or any of SHARED_ROOTS (/Users, /Volumes, /private/tmp,
     /private/var/folders, /System/Volumes); so /, /private and /private/var go too, since they hold those.
-    Factored out of node_prefix so _image_prefix (departure a) can refuse by the same rule."""
+    Factored out of node_prefix so _image_prefix can refuse by the same rule."""
     roots = [Path(os.path.realpath(Path.home()))] + [Path(r) for r in SHARED_ROOTS]
     return any(prefix == root or root in prefix.parents or prefix in root.parents for root in roots)
 
