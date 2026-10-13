@@ -2966,6 +2966,33 @@ def test_probe2_dylds_chain_winner_is_never_checked_with_realpath_only_dedupe(en
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
+def test_probe3_resolved_only_via_U_skips_dylds_fallback_search(env, tmp_path, monkeypatch):
+    """R5-S1 (round 6 re-review probe, inverted to the fixed behaviour): node -> [A, B]; A -> D -> C; B (rpath
+    lib/) -> C; C -> @rpath/libx (required); libx exists only in lib/. dyld's depth-first chain for C is C, D,
+    A, node: none of those carries lib/ (neither C's own rpaths nor node's are declared at all here), so dyld
+    finds nothing on its own chain and runs its fallback search (/usr/local/lib/libx.dylib, /usr/lib/libx.dylib).
+    On 6037fee the walk counted the load as resolved merely because lib/ is in U(C) -- contributed by B, which
+    isn't on C's real load-time chain at all -- and never ran _check_fallback. Fixed, since no candidate lies in
+    own_rpaths(C) union own_rpaths(node) (both empty here), _check_fallback must run too."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(lane, "_check_fallback", lambda *a: calls.append(a[0]))
+    t = homebrew_like_tree(tmp_path / "hb")
+    lib = t["lib_dir"]
+    for n in ("libA", "libB", "libC", "libD", "libx"):
+        (lib / (n + ".dylib")).write_bytes(b"fake")
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", str(lib / "libA.dylib")), ("LC_LOAD_DYLIB", str(lib / "libB.dylib"))],
+        str(lib / "libA.dylib"): [("LC_LOAD_DYLIB", str(lib / "libD.dylib"))],
+        str(lib / "libD.dylib"): [("LC_LOAD_DYLIB", str(lib / "libC.dylib"))],
+        str(lib / "libB.dylib"): [("LC_LOAD_DYLIB", str(lib / "libC.dylib")), ("LC_RPATH", "@loader_path")],
+        str(lib / "libC.dylib"): [("LC_LOAD_DYLIB", "@rpath/libx.dylib")],
+        str(lib / "libx.dylib"): [],
+    })
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+    assert calls == ["@rpath/libx.dylib"]
+
+
 def test_probe2_per_image_prefix_is_just_the_grandparent(env, tmp_path, monkeypatch):
     """R-S1/departure (a) (round 5 re-review probe, inverted to the fixed behaviour): a library loaded absolutely
     from a shallow folder, <root>/x/libshallow.dylib, isn't itself inside a Homebrew keg, so its own prefix falls

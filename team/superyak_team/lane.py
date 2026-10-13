@@ -2518,42 +2518,46 @@ def _expand_rpath(value, real_image, node_folder, real_bin):
     return Path(expanded)
 
 
-def _resolve_special_libs(name, real_image, node_folder, chain, real_bin):
-    """Where dyld could look for a dependency name (@rpath/, @loader_path/ or @executable_path/) of real_image,
-    as (targets, resolved): targets is every existing, non-Apple-sealed candidate (plural, R-M2) to check and
-    recurse into; resolved is True once at least one candidate actually answers the load, whether or not it's
-    in targets -- an Apple-sealed one (nit 3: a candidate that only ever ships in the dyld shared cache, such as
-    something under an rpath folder that happens to be /usr/lib/swift, used to read as plain "missing") counts
-    as resolved too, just never checked or recursed into, the same as an absolute Apple-sealed load.
+def _rpath_candidates(name, real_image, chain, guaranteed_folders, real_bin):
+    """Where dyld could look for an @rpath/ dependency name of real_image, as (targets, resolved, guaranteed):
+    targets is every existing, non-Apple-sealed candidate (plural, R-M2) across chain -- own_rpaths union
+    U(real_image), every rpath folder on any chain that reaches real_image, not just the one chain a
+    breadth-first or worklist walk happened to use to get here -- to check and recurse into; resolved is True
+    once at least one candidate (checked, or Apple-sealed, nit 3) answers the load at all; guaranteed is True
+    only when such a candidate lies in guaranteed_folders (real_image's own rpaths union node's own, R5-S1) --
+    the two sets dyld's own depth-first resolution is guaranteed to search on EVERY possible chain into
+    real_image, unlike a folder some OTHER loader merely happened to contribute to U. A name with a subfolder
+    (a framework path, say) also gets that subfolder checked, the same way, since only the top search folder
+    was checked when the image was walked."""
+    rest = name[len("@rpath/"):]
+    targets, resolved, guaranteed = [], False, False
+    for folder in sorted(chain, key=str):
+        candidate = folder / rest
+        if candidate.parent != folder:
+            _check_search_directory(candidate.parent, name, real_image, real_bin)
+        if _apple_sealed(str(candidate)):
+            resolved = True
+            guaranteed = guaranteed or folder in guaranteed_folders
+            continue
+        found = _lib_candidate(candidate, real_bin)
+        if found == "dangling":
+            raise LaneRefused("lane_node %s loads %s (from %s), which is a symlink at %s with no target"
+                              % (real_bin, name, real_image, candidate))
+        if found is not None:
+            targets.append(found)
+            resolved = True
+            guaranteed = guaranteed or folder in guaranteed_folders
+    return targets, resolved, guaranteed
 
-    @loader_path and @executable_path mean real_image's own folder and node's, the same as for an LC_RPATH value
-    (every one of chain's folders was expanded that way already, when its own image was walked, and checked then
-    too — _check_search_directory — whether or not anything actually uses it); exactly one candidate either way,
-    and its own folder is checked here too (nit 6), not only as the intermediate ancestor it already was when
-    real_image's own path got resolved (sticky allowed there; not here, this being the search folder in its own
-    right). @rpath tries every folder in chain — own_rpaths union U(real_image), every rpath folder on any chain
-    that reaches real_image, not just the one chain a breadth-first or worklist walk happened to use to get here
-    (R-M2) — since dyld's own depth-first resolution could map the load through any of them, on some other
-    chain into real_image. A name with a subfolder (a framework path, say) also gets that subfolder checked, the
-    same way, since only the top search folder was checked when the image was walked."""
-    if name.startswith("@rpath/"):
-        rest = name[len("@rpath/"):]
-        targets, resolved = [], False
-        for folder in sorted(chain, key=str):
-            candidate = folder / rest
-            if candidate.parent != folder:
-                _check_search_directory(candidate.parent, name, real_image, real_bin)
-            if _apple_sealed(str(candidate)):
-                resolved = True
-                continue
-            found = _lib_candidate(candidate, real_bin)
-            if found == "dangling":
-                raise LaneRefused("lane_node %s loads %s (from %s), which is a symlink at %s with no target"
-                                  % (real_bin, name, real_image, candidate))
-            if found is not None:
-                targets.append(found)
-                resolved = True
-        return targets, resolved
+
+def _loader_or_executable_candidate(name, real_image, node_folder, real_bin):
+    """Where dyld could look for an @loader_path/ or @executable_path/ dependency name of real_image, as
+    (target_or_none, resolved). @loader_path means real_image's own folder, @executable_path node's -- exactly
+    one candidate either way, unambiguous regardless of chain, so "resolved" and "guaranteed" are the same
+    thing here (unlike @rpath, R5-S1): both are always on every chain dyld could use. Its own folder is checked
+    here too (nit 6), not only as the intermediate ancestor it already was when real_image's own path got
+    resolved (sticky allowed there; not here, this being the search folder in its own right). Returns (None,
+    False) when name is neither token."""
     for prefix, folder in (("@loader_path/", real_image.parent), ("@executable_path/", node_folder)):
         if name.startswith(prefix):
             candidate = folder / name[len(prefix):]
@@ -2561,13 +2565,13 @@ def _resolve_special_libs(name, real_image, node_folder, chain, real_bin):
             if candidate.parent != folder:
                 _check_search_directory(candidate.parent, name, real_image, real_bin)
             if _apple_sealed(str(candidate)):
-                return [], True
+                return None, True
             found = _lib_candidate(candidate, real_bin)
             if found == "dangling":
                 raise LaneRefused("lane_node %s loads %s (from %s), which is a symlink at %s with no target"
                                   % (real_bin, name, real_image, candidate))
-            return ([found], True) if found is not None else ([], False)
-    return [], False
+            return (found, True) if found is not None else (None, False)
+    return None, False
 
 
 def _check_fallback(name, real_image, real_bin):
@@ -2589,34 +2593,57 @@ def _check_fallback(name, real_image, real_bin):
     return None
 
 
-def _dependency_targets(cmd, name, real_bin, real_image, node_folder, chain, prefix):
+def _dependency_targets(cmd, name, real_bin, real_image, node_folder, chain, prefix, guaranteed_folders):
     """Every place a dependency name (one of real_image's, loaded by cmd) could actually lead, as a list of
     (path, as-loaded name) pairs for the walk to check, prefix-check and recurse into. An @rpath/, @loader_path/
     or @executable_path/ load can give more than one (R-M2): every existing candidate real_image's own rpath
     chain could carry, on any chain that reaches real_image, not just the one chain this walk's own traversal
-    order happened to use, is a possible winner on dyld's own depth-first resolution — see
-    _resolve_special_libs. Empty when it's Apple's own (_apple_sealed, or a sealed @-relative candidate) or a
-    weak dependency that isn't at its own path either, once its own folder and dyld's fallback search are both
-    checked (a weak load never "shrugs" past a folder someone else could plant a file in). Raises when a
-    required dependency doesn't exist anywhere (or is a dangling symlink, which is worse than not existing: its
-    target can still be created), any candidate doesn't resolve inside prefix (_image_prefix, departure a), or
-    the name isn't a path a load command actually gives."""
+    order happened to use, is a possible winner on dyld's own depth-first resolution — see _rpath_candidates.
+    An @rpath/ load also runs dyld's own fallback search (_check_fallback) unless an existing or sealed
+    candidate lies in guaranteed_folders -- real_image's own rpaths union node's own, the only folders
+    guaranteed to be on EVERY chain dyld could use to resolve it (R5-S1): a candidate some OTHER loader merely
+    contributed to U isn't actually on real_image's own load-time chain, so dyld's own fallback search is still
+    live, and still has to be checked, regardless of whether a load is weak or required. Empty when it's
+    Apple's own (_apple_sealed, or a sealed @-relative candidate) or a weak dependency that isn't at its own
+    path either, once its own folder and dyld's fallback search are both checked (a weak load never "shrugs"
+    past a folder someone else could plant a file in). Raises when a required dependency doesn't exist
+    anywhere (or is a dangling symlink, which is worse than not existing: its target can still be created), any
+    candidate doesn't resolve inside prefix (_image_prefix, departure a), or the name isn't a path a load
+    command actually gives."""
     weak = DYLIB_LOAD_CMDS.get(cmd) == "weak"
-    if name.startswith(("@rpath/", "@loader_path/", "@executable_path/")):
-        candidates, resolved = _resolve_special_libs(name, real_image, node_folder, chain, real_bin)
-        if not resolved:
-            if weak:
-                fallback = _check_fallback(name, real_image, real_bin)
-                return [(fallback, name)] if fallback is not None else []
-            raise LaneRefused("lane_node %s loads %s (from %s), which doesn't resolve to any file"
-                              % (real_bin, name, real_image))
+    if name.startswith("@rpath/"):
+        candidates, resolved, guaranteed = _rpath_candidates(name, real_image, chain, guaranteed_folders, real_bin)
         targets = []
         for found in candidates:
             if prefix not in Path(os.path.realpath(found)).parents:
                 raise LaneRefused("lane_node %s loads %s (from %s), which doesn't resolve to a file inside %s"
                                   % (real_bin, name, real_image, prefix))
             targets.append((found, name))
+        if not guaranteed:
+            fallback = _check_fallback(name, real_image, real_bin)
+            if fallback is not None:
+                targets.append((fallback, name))
+                resolved = True
+        if not resolved:
+            if weak:
+                return []
+            raise LaneRefused("lane_node %s loads %s (from %s), which doesn't resolve to any file"
+                              % (real_bin, name, real_image))
         return targets
+    if name.startswith(("@loader_path/", "@executable_path/")):
+        found, resolved = _loader_or_executable_candidate(name, real_image, node_folder, real_bin)
+        if not resolved:
+            if weak:
+                fallback = _check_fallback(name, real_image, real_bin)
+                return [(fallback, name)] if fallback is not None else []
+            raise LaneRefused("lane_node %s loads %s (from %s), which doesn't resolve to any file"
+                              % (real_bin, name, real_image))
+        if found is None:
+            return []
+        if prefix not in Path(os.path.realpath(found)).parents:
+            raise LaneRefused("lane_node %s loads %s (from %s), which doesn't resolve to a file inside %s"
+                              % (real_bin, name, real_image, prefix))
+        return [(found, name)]
     if not name.startswith("/"):
         raise LaneRefused("lane_node %s: its library %r (from %s) isn't a path a load command actually gives"
                           % (real_bin, name, real_image))
@@ -2746,9 +2773,10 @@ def _walk_one_architecture(real_bin, node_folder, checked_names, cputype, seed_c
             raise LaneRefused("lane_node %s: its library chains need more re-resolving than this allows; "
                               "refusing rather than guessing" % real_bin)
         done_chain[real] = effective_chain
+        guaranteed_folders = frozenset(own_rpaths) | frozenset(own_data[real_bin][0])
         for cmd, dep_name in deps:
             for target, as_loaded_name in _dependency_targets(cmd, dep_name, real_bin, real, node_folder,
-                                                               effective_chain, prefix):
+                                                               effective_chain, prefix, guaranteed_folders):
                 key = str(target)
                 if key not in checked_names:
                     checked_names.add(key)
