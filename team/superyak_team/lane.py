@@ -2043,193 +2043,461 @@ def check_manifest(folder, revision):
     return actual
 
 
-OTOOL = "/usr/bin/otool"
+# Spec b: a stock Homebrew install leaves Cellar and opt group-writable; named whenever a refusal names a path
+# under it.
+HOMEBREW_HINT = "; on a stock Homebrew install run: chmod g-w /opt/homebrew/bin /opt/homebrew/Cellar /opt/homebrew/opt"
 
-# Spec b: a stock Homebrew install leaves Cellar and opt group-writable; named whenever a refusal is under them.
-HOMEBREW_HINT = "; on a stock Homebrew install run: chmod g-w /opt/homebrew/Cellar /opt/homebrew/opt"
-
-# otool -l's dylib-loading load commands, by name -> "weak" (LC_LOAD_WEAK_DYLIB: a missing one is fine) or
-# "required" (anything else refuses). LC_ID_DYLIB, a dylib's own install name, is deliberately not one of these:
-# reading load commands instead of otool -L's text is what keeps a dylib's self-name from ever being read as one
-# of its own dependencies (review round 2, finding 1).
+# A loaded image's dependency-loading commands, by name -> "weak" (a missing load is fine, once the fallback
+# search is checked too) or "required" (a missing load refuses). LC_ID_DYLIB, a dylib's own install name, is
+# deliberately not one of these: the Mach-O reader below hands back only the commands it was asked to, so a
+# dylib's self-name can never be read as one of its own dependencies.
 DYLIB_LOAD_CMDS = {"LC_LOAD_DYLIB": "required", "LC_REEXPORT_DYLIB": "required", "LC_LOAD_UPWARD_DYLIB": "required",
                    "LC_LOAD_WEAK_DYLIB": "weak"}
 
-APPLE_DIRS = ("/usr/lib/", "/System/")              # Apple's own; _apple_sealed skips these outright
-MAX_IMAGES = 1024                                    # the library walk's cap (review round 2, finding 1)
-DYLD_LINKER = "/usr/lib/dyld"                       # the only LC_LOAD_DYLINKER a walked image may name (round 3)
+APPLE_DIRS = ("/usr/lib/", "/System/")              # Apple's own; _apple_sealed may skip these outright
+MAX_IMAGES = 1024                                    # the library walk's cap, counted on (realpath, chain) visits
+DYLD_LINKER = "/usr/lib/dyld"                       # the only LC_LOAD_DYLINKER a walked image may name
+# dyld's own documented fallback search (man dyld), tried once a load's own path and rpath search both fail, by
+# the load's leaf name alone, in an unrestricted process such as Homebrew's ad-hoc-signed node.
+DYLD_FALLBACK_LIBRARY_PATH = ("/usr/local/lib", "/usr/lib")
+MAX_SYMLINK_HOPS = 32                                # a hop cap on resolving a path, the same order as realpath's own
 
 
 def _homebrew_hint(message):
-    """message, with HOMEBREW_HINT appended when it refuses a folder under /opt/homebrew (spec b)."""
-    return message + HOMEBREW_HINT if "/opt/homebrew" in message else message
+    """The chmod-fix suffix, when message — the specific failure text alone, never a composed refusal that also
+    carries real_bin or some other path folded in around it — names a path under /opt/homebrew; "" otherwise."""
+    return HOMEBREW_HINT if "/opt/homebrew" in message else ""
 
 
-def _apple_sealed(entry):
-    """entry is on the sealed system volume — the same device as /usr/sbin, exactly as _sealed checks a program
-    — and not on the writable Data volume or a firmlink target (NOT_SEALED, lane.py's own load_approved uses it
-    the same way) or reached through a ../ trick (os.path.normpath(entry) == entry): skipped outright, the
-    broker's profile never reaches anything else there anyway. Sealed-ness itself is a device comparison, not a
-    string prefix: on a case-insensitive volume a path can spell its way past NOT_SEALED's exact case, or borrow
-    /usr/lib's or /System's own prefix, without actually living there (review round 3, finding 4) — the device it
-    is actually on can't be spelled around. A path that can't even be stat'd is never treated as sealed."""
-    if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPLE_DIRS):
+_DYLD_SHARED_CACHE = {}                 # {"fn": the typed _dyld_shared_cache_contains_path, or None}, loaded once
+
+
+def _shared_cache_contains(entry):
+    """Whether entry is one of the libraries baked into the dyld shared cache: since Big Sur, every system
+    library — libSystem itself included — ships only in the cache, never as a separate file on disk (Apple's
+    11.0.1 release notes). Asks dyld's own predicate, _dyld_shared_cache_contains_path, exported by libSystem
+    (which teamd, on the same OS the broker runs under, already shares): exactly the test dyld itself uses, not a
+    guess about which names are "known" system libraries. False off macOS, if the symbol can't load, or on any
+    error asking it; _apple_sealed then falls back to the nearest existing ancestor's own device."""
+    if not _on_macos():
         return False
-    if entry.startswith(NOT_SEALED):
+    if "fn" not in _DYLD_SHARED_CACHE:
+        try:
+            libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+            fn = libc._dyld_shared_cache_contains_path
+            fn.restype = ctypes.c_bool
+            fn.argtypes = [ctypes.c_char_p]
+        except (OSError, AttributeError):
+            fn = None
+        _DYLD_SHARED_CACHE["fn"] = fn
+    fn = _DYLD_SHARED_CACHE["fn"]
+    if fn is None:
         return False
     try:
-        return _device(entry) == _device("/usr/sbin")
+        return bool(fn(os.fsencode(entry)))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _nearest_sealed_ancestor(entry):
+    """Fallback for _apple_sealed when the shared-cache predicate says no, or can't run: walk entry's own
+    components from "/" down to the nearest one that actually exists. No INTERMEDIATE component may be a symlink
+    (a symlink could lead anywhere, including off the sealed volume, and dyld would follow it); the entry itself
+    may be one (a framework's own Foo.framework/Foo -> Versions/Current/Foo is normal and still fully on the
+    sealed volume), in which case its realpath is what gets checked. The nearest existing one must be a
+    directory on /usr/sbin's own device. The sealed system volume is read-only and its mounts need root, so
+    nothing can be created below it — but a firmlinked ancestor such as CoreTypes.bundle/Contents/Library or
+    /System/Volumes/* shows the Data device, and still correctly refuses. A symlink's own target can itself be
+    missing (a framework's Versions/Current, say, is sealed-only too) — realpath can only ever remove symlinks,
+    never add one, so trying this walk at most twice (entry, then once more on its fully resolved form) is
+    enough."""
+    try:
+        for _ in range(2):
+            parts = Path(entry).parts
+            existing = None
+            complete = False
+            for i in range(1, len(parts) + 1):
+                prefix = Path(*parts[:i])
+                try:
+                    st = os.lstat(prefix)
+                except FileNotFoundError:
+                    break
+                complete = i == len(parts)
+                if stat.S_ISLNK(st.st_mode) and not complete:
+                    return False
+                existing = prefix
+            if existing is None:
+                return False
+            if complete and stat.S_ISLNK(os.lstat(existing).st_mode):
+                entry = os.path.realpath(existing)
+                continue
+            return stat.S_ISDIR(os.lstat(existing).st_mode) and _device(existing) == _device("/usr/sbin")
+        return False
     except OSError:
         return False
 
 
-def _check_lstat_path(path):
-    """Like _check_ancestors, but for path exactly as given, never resolved first: every component from "/" down is
-    lstat'd on its own, so a symlink is seen as the symlink it is before anything follows it. That is what catches a
-    symlink sitting in a folder that has turned group-writable (Homebrew's opt/, say) — the realpath check alone
-    would only ever see wherever the symlink currently points, never the folder that holds it. Only the folders
-    above the last component may be sticky."""
+def _apple_sealed(entry):
+    """entry is Apple's own: under /usr/lib or /System (APPLE_DIRS), normalized (os.path.normpath(entry) == entry,
+    so a ../ trick can't borrow the prefix), not on the writable Data volume or a firmlink target (NOT_SEALED,
+    lane.py's own load_approved uses it the same way), and either baked into the dyld shared cache
+    (_shared_cache_contains) or rooted under the nearest existing ancestor's own sealed device
+    (_nearest_sealed_ancestor, for whatever the cache predicate doesn't cover). Skipped outright when true: the
+    broker's profile never reaches anything else there anyway."""
+    if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPLE_DIRS):
+        return False
+    if entry.startswith(NOT_SEALED):
+        return False
+    if _shared_cache_contains(entry):
+        return True
+    return _nearest_sealed_ancestor(entry)
+
+
+def _exists(path, real_bin):
+    """path.exists(), with any OSError it can still raise (EACCES: Path.exists() only swallows ENOENT, ENOTDIR,
+    EBADF and ELOOP) turned into LaneRefused naming path, so a folder this user can't search never escapes
+    check_lane_node as a bare exception."""
     try:
-        parts = Path(path).parts
-        for i in range(1, len(parts) + 1):
-            prefix = Path(*parts[:i])
-            _check_owner(prefix, os.lstat(prefix), sticky_ok=(i < len(parts)))
+        return path.exists()
     except OSError as e:
-        raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
+        raise LaneRefused("lane_node %s: %s can't be checked (%s)" % (real_bin, path, e.strerror or e))
 
 
-def _otool_lines(flag, image, timeout=10):
-    """`otool <flag> <image>`'s stdout, or None when otool can't run, times out or exits non-zero. Always this one
-    absolute otool, no shell, through lane._run (the tests' seam) — never a `otool` found on PATH."""
-    r = _run([OTOOL, flag, str(image)], timeout=timeout)
-    if r is None or r.returncode != 0:
-        return None
-    return r.stdout
+def _lib_candidate(path, real_bin):
+    """path, as a library candidate dyld would try: None when nothing at all is there, the string "dangling" when
+    a symlink sits there but its own target doesn't exist (that target can still be created later by whoever
+    controls wherever it points — worse than nothing being there at all, so never treated as merely absent), or
+    path itself when a real file answers. Any OSError Path.exists()/is_symlink() can still raise becomes
+    LaneRefused naming path."""
+    if _exists(path, real_bin):
+        return path
+    try:
+        dangling = path.is_symlink()
+    except OSError as e:
+        raise LaneRefused("lane_node %s: %s can't be checked (%s)" % (real_bin, path, e.strerror or e))
+    return "dangling" if dangling else None
 
 
-def _otool_load_commands(image):
-    """Every load command `otool -l` lists for image that the library walk cares about: the four dylib-loading
-    commands (DYLIB_LOAD_CMDS), LC_RPATH, and two more the walk checks directly rather than treats as a dependency
-    — LC_DYLD_ENVIRONMENT (a binary's own embedded DYLD_* overrides, which dyld would honor) and LC_LOAD_DYLINKER
-    (which dynamic linker runs it) — as (cmd, value) pairs in file order — "name" read for every one but LC_RPATH,
-    which reads "path" — or None when otool can't run or a load command's own name/path line doesn't parse, so
-    the caller refuses closed. LC_ID_DYLIB (a dylib's own install name) is deliberately never one of these."""
-    out = _otool_lines("-l", image)
-    if out is None:
-        return None
-    lines = out.splitlines()
-    fields = dict.fromkeys(DYLIB_LOAD_CMDS, "name")
-    fields["LC_RPATH"] = "path"
-    fields["LC_DYLD_ENVIRONMENT"] = "name"
-    fields["LC_LOAD_DYLINKER"] = "name"
-    commands = []
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped.startswith("cmd "):
-            continue
-        cmd = stripped[len("cmd "):]
-        field = fields.get(cmd)
-        if field is None:
-            continue
-        for j in range(i + 1, min(i + 6, len(lines))):
-            m = re.match(r"^\s*%s (.+) \(offset \d+\)\s*$" % field, lines[j])
-            if m:
-                commands.append((cmd, m.group(1)))
-                break
-        else:
-            return None
+# ---------- reading a Mach-O image directly, in place of otool -l (no otool, no xcrun or DEVELOPER_DIR trust) ----
+
+MH_MAGIC, MH_MAGIC_64 = 0xfeedface, 0xfeedfacf
+MH_CIGAM, MH_CIGAM_64 = 0xcefaedfe, 0xcffaedfe
+FAT_MAGIC, FAT_MAGIC_64 = 0xcafebabe, 0xcafebabf
+FAT_CIGAM, FAT_CIGAM_64 = 0xbebafeca, 0xbfbafeca
+LC_LOAD_DYLIB, LC_ID_DYLIB, LC_LOAD_DYLINKER, LC_DYLD_ENVIRONMENT = 0xc, 0xd, 0xe, 0x27
+LC_RPATH, LC_LOAD_WEAK_DYLIB = 0x8000001c, 0x80000018
+LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB = 0x8000001f, 0x80000023
+# Every load command the walk reads; everything else in a Mach-O file (LC_SEGMENT, LC_UUID, and so on) is skipped.
+# All of these share one shape — cmd, cmdsize, then a uint32 offset to a NUL-terminated name within the command —
+# so one reader (_macho_lc_str) serves them all.
+_LC_NAMES = {LC_LOAD_DYLIB: "LC_LOAD_DYLIB", LC_ID_DYLIB: "LC_ID_DYLIB", LC_LOAD_DYLINKER: "LC_LOAD_DYLINKER",
+             LC_DYLD_ENVIRONMENT: "LC_DYLD_ENVIRONMENT", LC_RPATH: "LC_RPATH",
+             LC_LOAD_WEAK_DYLIB: "LC_LOAD_WEAK_DYLIB", LC_REEXPORT_DYLIB: "LC_REEXPORT_DYLIB",
+             LC_LOAD_UPWARD_DYLIB: "LC_LOAD_UPWARD_DYLIB"}
+MAX_MACHO_BYTES = 64 * 1024 * 1024          # real binaries never approach this; a sanity cap, not a real limit
+
+
+class _MachOError(Exception):
+    """Internal only: a reason, never a path. _macho_load_commands catches this (and struct/index errors) once,
+    at the top, and wraps it with the path as LaneRefused."""
+
+
+def _read_exact(fd, offset, length):
+    data = os.pread(fd, length, offset)
+    if len(data) != length:
+        raise _MachOError("is truncated (expected %d bytes at offset %d)" % (length, offset))
+    return data
+
+
+def _macho_lc_str(fd, cmd_start, cmdsize):
+    """The name an LC_STR-shaped load command points to (LC_LOAD_DYLIB and its three siblings, LC_ID_DYLIB,
+    LC_RPATH, LC_LOAD_DYLINKER and LC_DYLD_ENVIRONMENT all share this layout), as plain text. Refuses a bad
+    offset, a string that runs past the command, one with no terminating NUL, or one that isn't valid UTF-8 —
+    otool's own text report used to turn a bad byte into a silently-fine U+FFFD — or that holds an embedded
+    newline (which could make a one-line refusal misleading)."""
+    (offset,) = struct.unpack("<I", _read_exact(fd, cmd_start + 8, 4))
+    if offset < 8 or offset >= cmdsize:
+        raise _MachOError("has a load command whose name offset is out of range")
+    raw = _read_exact(fd, cmd_start + offset, cmdsize - offset)
+    nul = raw.find(b"\x00")
+    if nul == -1:
+        raise _MachOError("has a load command name with no terminating NUL")
+    raw = raw[:nul]
+    if b"\n" in raw or b"\r" in raw:
+        raise _MachOError("has a load command name with an embedded newline")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise _MachOError("has a load command name that isn't valid UTF-8")
+
+
+def _macho_load_commands_in_slice(fd, base, size):
+    """Every load command this cares about in the thin Mach-O slice at [base, base + size). A thin header's
+    magic is native byte order, not big-endian (only a fat header's own is always big-endian)."""
+    magic = struct.unpack("<I", _read_exact(fd, base, 4))[0]
+    if magic == MH_MAGIC_64:
+        _, _, _, _, ncmds, sizeofcmds, _, _ = struct.unpack("<IiiIIIII", _read_exact(fd, base, 32))
+        cmds_start = base + 32
+    elif magic == MH_MAGIC:
+        _, _, _, _, ncmds, sizeofcmds, _ = struct.unpack("<IiiIIII", _read_exact(fd, base, 28))
+        cmds_start = base + 28
+    else:
+        raise _MachOError("has a slice at offset %d with no thin Mach-O magic" % base)
+    if sizeofcmds > size or cmds_start + sizeofcmds > base + size:
+        raise _MachOError("has a slice at offset %d whose load commands run past its own end" % base)
+    commands, pos, end = [], cmds_start, cmds_start + sizeofcmds
+    for _ in range(ncmds):
+        if pos + 8 > end:
+            raise _MachOError("has a slice at offset %d with fewer load commands than it claims" % base)
+        cmd, cmdsize = struct.unpack("<II", _read_exact(fd, pos, 8))
+        if cmdsize < 8 or pos + cmdsize > end:
+            raise _MachOError("has a slice at offset %d with a load command of a bad size" % base)
+        name = _LC_NAMES.get(cmd)
+        if name is not None:
+            commands.append((name, _macho_lc_str(fd, pos, cmdsize)))
+        pos += cmdsize
+    if pos != end:
+        raise _MachOError("has a slice at offset %d whose load commands don't add up to sizeofcmds" % base)
     return commands
 
 
-def _check_search_directory(directory, name, real_image, real_bin):
-    """A folder @rpath's search tries for name (a dependency of real_image), checked whether or not a file is
-    there now: dyld repeats the identical, ordered search at exec time, so a folder earlier in that order that's
-    writable by someone else matters even when it holds nothing today and a later, real file is the only thing
-    that answers right now — a file planted in the earlier one later would win instead (review round 3,
-    finding 1). Every existing component is lstat'd, sticky allowed throughout (a search folder is itself more
-    like one of a library's own ancestors than the library itself); a component that doesn't exist yet stops the
-    walk there, since nothing below it exists either, and isn't itself refused — but what does exist above it
-    still is. The longest existing prefix's realpath (and that path's own ancestors) is checked too, the same
-    two-sided check a library's own path gets. Refuses naming the library and the folder; under /opt/homebrew,
-    also naming the fix."""
+def _macho_slices(fd, size):
+    """Every Mach-O slice's (offset, size) in the file at fd: the whole file for a thin Mach-O, or every
+    fat_arch's own region for a fat one (the nodejs.org tarball ships a universal x86_64+arm64 binary). Every
+    slice is checked, not just the host's: under Rosetta, or wherever the kernel's arch choice could differ from
+    this process's own, dyld might map a slice a single-arch report would never have shown. Refuses a
+    foreign-endian magic (never a native Mac binary) or a header that doesn't fit. A thin Mach-O's magic is read
+    native (every current Mac is little-endian); a fat header's is always big-endian on disk, a leftover from
+    PowerPC days that has nothing to do with the host — both conventions are read here, from the same four
+    bytes, rather than guessing one endianness for everything."""
+    raw = _read_exact(fd, 0, 4)
+    native = struct.unpack("<I", raw)[0]
+    big = struct.unpack(">I", raw)[0]
+    if native in (MH_MAGIC, MH_MAGIC_64):
+        return [(0, size)]
+    if native in (MH_CIGAM, MH_CIGAM_64) or big in (FAT_CIGAM, FAT_CIGAM_64):
+        raise _MachOError("has foreign-endian Mach-O magic, which no native Mac binary has")
+    if big == FAT_MAGIC:
+        (nfat,) = struct.unpack(">I", _read_exact(fd, 4, 4))
+        return [struct.unpack(">iiIII", _read_exact(fd, 8 + i * 20, 20))[2:4] for i in range(nfat)]
+    if big == FAT_MAGIC_64:
+        (nfat,) = struct.unpack(">I", _read_exact(fd, 4, 4))
+        return [struct.unpack(">iiQQII", _read_exact(fd, 8 + i * 32, 32))[2:4] for i in range(nfat)]
+    raise _MachOError("doesn't start with a Mach-O or fat-binary magic number")
+
+
+def _macho_load_commands(path):
+    """Every load command that matters, read directly from path's own Mach-O bytes: no otool, so no xcrun shim,
+    no DEVELOPER_DIR or xcode-select trust, and no text format to misparse; no arch-slice guessing, since every
+    slice of a fat binary is checked. fstat runs on the very fd the bytes are read from, so what gets parsed is
+    confirmed, atomically, to be a plain file — closing the gap between checking a path and opening something
+    else there. Raises LaneRefused, naming path, on anything that doesn't parse, including a file too small, too
+    large, or not a Mach-O at all."""
     try:
-        parts = Path(directory).parts
-        existing = None
-        for i in range(1, len(parts) + 1):
-            prefix = Path(*parts[:i])
-            try:
-                st = os.lstat(prefix)
-            except FileNotFoundError:
-                break
-            _check_owner(prefix, st, sticky_ok=True)
-            existing = prefix
-        if existing is not None:
-            real_dir = Path(os.path.realpath(existing))
-            _check_owner(real_dir, os.stat(real_dir), sticky_ok=True)
-            _check_ancestors(real_dir)
-    except LaneRefused as e:
-        raise LaneRefused(_homebrew_hint("lane_node %s's library %s (from %s): an earlier rpath folder, %s: %s"
-                                         % (real_bin, name, real_image, directory, e))) from e
+        fd = os.open(str(path), os.O_RDONLY)
     except OSError as e:
-        raise LaneRefused("lane_node %s's library %s (from %s): an earlier rpath folder %s can't be checked (%s)"
-                          % (real_bin, name, real_image, directory, e.strerror or e))
+        raise LaneRefused("%s can't be opened (%s)" % (path, e.strerror or e))
+    try:
+        try:
+            st = os.fstat(fd)
+        except OSError as e:
+            raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
+        if not stat.S_ISREG(st.st_mode):
+            raise LaneRefused("%s isn't a plain file" % path)
+        if st.st_size < 28 or st.st_size > MAX_MACHO_BYTES:
+            raise LaneRefused("%s is too small or too large to be a node binary or library" % path)
+        try:
+            commands = []
+            for offset, size in _macho_slices(fd, st.st_size):
+                commands += _macho_load_commands_in_slice(fd, offset, size)
+            return commands
+        except (_MachOError, struct.error, IndexError) as e:
+            raise LaneRefused("%s %s" % (path, e))
+    finally:
+        os.close(fd)
 
 
-def _resolve_special_lib(name, real_image, node_folder, chain, real_bin):
-    """Where dyld would look for a dependency name (@rpath/, @loader_path/ or @executable_path/) of real_image:
-    @loader_path always means real_image's own folder; @executable_path always means node's. @rpath walks chain in
-    turn — real_image's own LC_RPATH entries first, then its loader's, up to node's own (dyld's rule) — each rpath
-    string itself expanded the same way, using whichever image declared that one entry (chain's own folder, paired
-    with each rpath). Every folder tried, up to and including the one that finally holds the file, is checked the
-    same way a library itself is (_check_search_directory) before its existence is even tested, since dyld would
-    try that exact folder too, in the same order, whether or not anything is in it right now. Returns the first
-    real file any candidate names, or None when none do."""
-    if name.startswith("@rpath/"):
-        rest = name[len("@rpath/"):]
-        for rpath, declaring_folder in chain:
-            expanded = rpath.replace("@loader_path", str(declaring_folder)).replace("@executable_path",
-                                                                                     str(node_folder))
-            directory = Path(expanded)
-            _check_search_directory(directory, name, real_image, real_bin)
-            candidate = directory / rest
-            if candidate.exists():
-                return candidate
-        return None
-    for prefix, folder in (("@loader_path/", real_image.parent), ("@executable_path/", node_folder)):
-        if name.startswith(prefix):
-            candidate = folder / name[len(prefix):]
-            return candidate if candidate.exists() else None
-    return None
+# ---------- resolving a path exactly as the kernel would, with every folder touched along the way checked -------
+
+def _resolve_path(path, must_exist=True):
+    """path, resolved one component at a time — splicing in a symlink's own target and continuing, the way the
+    kernel does — with every folder touched along the way checked as it's touched: not just the components of
+    the given string (which only ever sees a symlink's holding folder when that folder happens to be a literal
+    prefix of the string) and not just the final realpath's own ancestors (which never sees a folder that only
+    held an INTERMEDIATE symlink, since the symlink is already gone by the time realpath names its parents). One
+    resolver serves the binary, every library, and every rpath search folder.
+
+    Every folder may be sticky except the last one actually reached (the file itself, or — when must_exist is
+    False and something's missing — the last existing folder before the gap, since creating a new name there is
+    exactly the threat a sticky folder like /tmp doesn't stop). A symlink's own uid is checked, never its mode
+    (there is nothing meaningful to check there); the folder holding it is checked like any other folder, before
+    the walk ever looks inside it. A chain longer than MAX_SYMLINK_HOPS refuses closed, the same kind of limit the
+    kernel itself enforces.
+
+    Returns the fully resolved Path when must_exist, or when must_exist is False and the whole path exists;
+    returns None when must_exist is False and some component is missing (after checking the boundary around the
+    gap, per the paragraph above)."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise LaneRefused("%s can't be checked (it isn't absolute)" % path)
+    todo = list(path.parts[1:])
+    current = Path(path.anchor)
+    try:
+        _check_owner(current, os.stat(current), sticky_ok=True)
+    except OSError as e:
+        raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
+    hops = 0
+    try:
+        while todo:
+            name = todo.pop(0)
+            if name in ("", "."):
+                continue
+            if name == "..":
+                current = current.parent
+                continue
+            candidate = current / name
+            try:
+                st = os.lstat(candidate)
+            except FileNotFoundError:
+                if must_exist:
+                    raise LaneRefused("%s doesn't exist" % path)
+                _check_owner(current, os.stat(current), sticky_ok=False)
+                return None
+            if stat.S_ISLNK(st.st_mode):
+                hops += 1
+                if hops > MAX_SYMLINK_HOPS:
+                    raise LaneRefused("%s has more than %d symlinks in its chain" % (path, MAX_SYMLINK_HOPS))
+                _check_owner(candidate, st, sticky_ok=True)
+                target = Path(os.readlink(candidate))
+                if target.is_absolute():
+                    todo = list(target.parts[1:]) + todo
+                    current = Path(target.anchor)
+                    _check_owner(current, os.stat(current), sticky_ok=True)
+                else:
+                    todo = list(target.parts) + todo
+                continue
+            is_last = not todo
+            _check_owner(candidate, st, sticky_ok=not is_last)
+            current = candidate
+    except OSError as e:
+        raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
+    return current
+
+
+def _check_search_directory(directory, name, real_image, real_bin):
+    """A folder a load's search tries for name (a dependency of real_image), checked whether or not a file is
+    there now: dyld repeats the identical, ordered search at exec time, so a folder that's writable by someone
+    else matters even when it holds nothing today — a file planted there later would win instead. Refuses naming
+    the library and the folder; under /opt/homebrew, also naming the fix."""
+    try:
+        _resolve_path(directory, must_exist=False)
+    except LaneRefused as e:
+        message = "lane_node %s's library %s (from %s): an rpath folder, %s: %s" % (
+            real_bin, name, real_image, directory, e)
+        raise LaneRefused(message + _homebrew_hint(str(e))) from e
 
 
 def _check_library(entry, path, real_bin):
-    """One library the walk reaches (entry, exactly as otool -l names it; path is where that resolves to, as
-    loaded): the binary's own owner-or-root, nobody-else-writable rule, checked both as loaded (_check_lstat_path)
-    and at its realpath (_check_owner plus _check_ancestors) — sticky allowed only for folders above it. Refuses
-    naming the library; under /opt/homebrew, also naming the fix."""
+    """One library the walk reaches (entry, exactly as its load command names it; path is where that resolves to,
+    as loaded): the same owner-or-root, nobody-else-writable rule as the binary, checked the whole way from "/"
+    down, symlinks spliced in and their own holding folders checked too (_resolve_path). Refuses naming the
+    library; under /opt/homebrew, also naming the fix. Returns the fully resolved real path."""
     try:
-        _check_lstat_path(path)
-        real = Path(os.path.realpath(path))
-        _check_owner(real, os.stat(real))
-        _check_ancestors(real)
+        return _resolve_path(path, must_exist=True)
     except LaneRefused as e:
-        raise LaneRefused(_homebrew_hint("lane_node %s's library %s: %s" % (real_bin, entry, e))) from e
-    except OSError as e:
-        raise LaneRefused("lane_node %s's library %s can't be checked (%s)" % (real_bin, entry, e.strerror or e))
+        message = "lane_node %s's library %s: %s" % (real_bin, entry, e)
+        raise LaneRefused(message + _homebrew_hint(str(e))) from e
+
+
+def _expand_rpath(value, real_image, node_folder, real_bin):
+    """One LC_RPATH value, expanded the way dyld actually does: only a LEADING @loader_path or @executable_path
+    token counts (dyld expands these only at the very start of the string; a plain str.replace, expanding
+    anywhere, is wrong). @loader_path always means real_image's own folder; @executable_path always means node's.
+    Any other leading @ (@rpath makes no sense inside an LC_RPATH, and nothing else is defined there either)
+    refuses. What's left after expansion must be absolute: a relative rpath would resolve against the broker's
+    own working directory — the lane's b/, which hostile processes can write — not teamd's, so a relative result
+    refuses too, naming the image and the raw value."""
+    if value == "@loader_path" or value.startswith("@loader_path/"):
+        expanded = str(real_image.parent) + value[len("@loader_path"):]
+    elif value == "@executable_path" or value.startswith("@executable_path/"):
+        expanded = str(node_folder) + value[len("@executable_path"):]
+    elif value.startswith("@"):
+        raise LaneRefused("lane_node %s: %s has an LC_RPATH of %r, which isn't a token this allows"
+                          % (real_bin, real_image, value))
+    else:
+        expanded = value
+    if not os.path.isabs(expanded):
+        raise LaneRefused("lane_node %s: %s has an LC_RPATH of %r, which isn't absolute after expansion"
+                          % (real_bin, real_image, value))
+    return Path(expanded)
+
+
+def _resolve_special_lib(name, real_image, node_folder, chain, real_bin):
+    """Where dyld would look for a dependency name (@rpath/, @loader_path/ or @executable_path/) of real_image.
+    @loader_path and @executable_path mean real_image's own folder and node's, the same as for an LC_RPATH value
+    (every one of chain's folders was expanded that way already, when its own image was walked, and checked then
+    too — _check_search_directory — whether or not anything actually uses it). @rpath tries chain in turn — the
+    loading image's own LC_RPATH folders first, then its loader's, up to node's own, dyld's rule. A name with a
+    subfolder (a framework path, say) also gets that subfolder checked, the same way, since only the top search
+    folder was checked when the image was walked. Returns the first real file any candidate names, or None when
+    none do."""
+    if name.startswith("@rpath/"):
+        rest = name[len("@rpath/"):]
+        candidates = [(folder, folder / rest) for folder in chain]
+    else:
+        candidates = []
+        for prefix, folder in (("@loader_path/", real_image.parent), ("@executable_path/", node_folder)):
+            if name.startswith(prefix):
+                candidates = [(folder, folder / name[len(prefix):])]
+                break
+        else:
+            return None
+    for folder, candidate in candidates:
+        if candidate.parent != folder:
+            _check_search_directory(candidate.parent, name, real_image, real_bin)
+        found = _lib_candidate(candidate, real_bin)
+        if found == "dangling":
+            raise LaneRefused("lane_node %s loads %s (from %s), which is a symlink at %s with no target"
+                              % (real_bin, name, real_image, candidate))
+        if found is not None:
+            return found
+    return None
+
+
+def _check_fallback(name, real_image, real_bin):
+    """dyld's documented fallback search (DYLD_FALLBACK_LIBRARY_PATH's default, man dyld), tried once a load's own
+    path fails to resolve: /usr/local/lib, then /usr/lib, by the load's leaf name — checked the same way any
+    other search folder is, and the file itself checked in full if one is actually sitting there, since dyld
+    would really load it then, whether or not the original load was weak."""
+    leaf = Path(name).name
+    for folder in DYLD_FALLBACK_LIBRARY_PATH:
+        folder = Path(folder)
+        _check_search_directory(folder, name, real_image, real_bin)
+        candidate = folder / leaf
+        found = _lib_candidate(candidate, real_bin)
+        if found == "dangling":
+            raise LaneRefused("lane_node %s loads %s (from %s), whose fallback at %s is a symlink with no target"
+                              % (real_bin, name, real_image, candidate))
+        if found is not None:
+            return found
+    return None
 
 
 def _dependency_target(cmd, name, real_bin, real_image, node_folder, chain, prefix):
-    """Where otool -l's name (one dependency of real_image, loaded by cmd) leads, as a path for the walk to check
-    and recurse into — or None when it's Apple's own (_apple_sealed, skipped outright) or a weak dependency
-    (LC_LOAD_WEAK_DYLIB) that doesn't exist (fine; dyld shrugs too). Raises when a required dependency doesn't
-    exist, an @-relative one doesn't resolve inside node's own prefix at all, or the entry isn't a path otool -l
-    actually gives."""
+    """Where a dependency name (one of real_image's, loaded by cmd) leads, as a path for the walk to check and
+    recurse into — or None when it's Apple's own (_apple_sealed, skipped outright) or a weak dependency
+    (LC_LOAD_WEAK_DYLIB) that isn't at its own path either, once its own folder and dyld's fallback search are
+    both checked (a weak load never "shrugs" past a folder someone else could plant a file in). Raises when a
+    required dependency doesn't exist (or is a dangling symlink, which is worse than not existing: its target can
+    still be created), an @-relative one doesn't resolve inside prefix at all (real_image's own grandparent
+    folder, not necessarily node's — see _check_node_libraries), or the name isn't a path a load command actually
+    gives."""
     weak = DYLIB_LOAD_CMDS.get(cmd) == "weak"
     if name.startswith(("@rpath/", "@loader_path/", "@executable_path/")):
         resolved = _resolve_special_lib(name, real_image, node_folder, chain, real_bin)
         if resolved is None:
             if weak:
-                return None
+                return _check_fallback(name, real_image, real_bin)
             raise LaneRefused("lane_node %s loads %s (from %s), which doesn't resolve to any file"
                               % (real_bin, name, real_image))
         if prefix not in Path(os.path.realpath(resolved)).parents:
@@ -2237,59 +2505,95 @@ def _dependency_target(cmd, name, real_bin, real_image, node_folder, chain, pref
                               % (real_bin, name, real_image, prefix))
         return resolved
     if not name.startswith("/"):
-        raise LaneRefused("lane_node %s: its library %r (from %s) isn't a path otool -l usually gives"
+        raise LaneRefused("lane_node %s: its library %r (from %s) isn't a path a load command actually gives"
                           % (real_bin, name, real_image))
     if _apple_sealed(name):
         return None
     resolved = Path(name)
-    if not resolved.exists():
-        if weak:
-            return None
-        raise LaneRefused("lane_node %s loads %s (from %s), which doesn't exist" % (real_bin, name, real_image))
-    return resolved
+    found = _lib_candidate(resolved, real_bin)
+    if found == "dangling":
+        raise LaneRefused("lane_node %s loads %s (from %s), which is a symlink with no target"
+                          % (real_bin, name, real_image))
+    if found is None:
+        if not weak:
+            raise LaneRefused("lane_node %s loads %s (from %s), which doesn't exist" % (real_bin, name, real_image))
+        _check_search_directory(resolved.parent, name, real_image, real_bin)
+        return _check_fallback(name, real_image, real_bin)
+    return found
 
 
 def _check_node_libraries(real_bin):
-    """macOS only (spec a; Linux has no otool and skips this entirely — the Pi suites cover the binary check
-    alone). Breadth-first over every image real_bin loads, directly or transitively: `otool -L` on node alone only
-    ever shows node's own direct dependencies, and most of Homebrew's node's libraries actually load through
-    libnode, not node itself (review round 2, finding 1). Each distinct image, by realpath, is checked once
-    (_check_library): as the path it's loaded under and at its realpath, apart from Apple's own under /usr/lib or
-    /System (_apple_sealed) skipped outright. Dependencies come from otool -l's load commands (LC_LOAD_DYLIB,
-    LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB), never otool -L's text, so a dylib's own install
-    name (LC_ID_DYLIB) can never be mistaken for one of its dependencies. A weak dependency that doesn't exist is
-    fine; any other missing one refuses. An @rpath/, @loader_path/ or @executable_path/ entry is resolved the way
-    dyld actually does: the loading image's own LC_RPATH entries first, then those of whatever loaded it, up to
-    node itself, and the result must land inside node's own prefix (its grandparent folder); an absolute entry
-    only gets the owner-and-writable check, wherever it actually lives. otool failing, timing out, or printing
-    something this can't parse refuses closed, as does crossing MAX_IMAGES distinct images — a cycle is already
-    closed by the visited set, but a very large or adversarial graph isn't, so this refuses rather than walking
-    forever. Every walked image is also refused for carrying LC_DYLD_ENVIRONMENT (its own embedded DYLD_* override,
-    which dyld would honor) or an LC_LOAD_DYLINKER naming anything but DYLD_LINKER (review round 3, finding 3).
-    Known limits: a library loaded at runtime with dlopen, never listed by otool -l, isn't checked."""
+    """macOS only (Linux has no shared cache in the sense this cares about, and skips this entirely — the Pi
+    suites cover the binary check alone). Breadth-first over every image real_bin loads, directly or
+    transitively, reading each one's own Mach-O load commands directly (_macho_load_commands) rather than asking
+    otool. Every distinct as-loaded name is checked in full (_check_library) exactly once — deduped on the name
+    itself, before any realpath dedupe, so a second name for a file already seen under a different one still gets
+    its own as-loaded check. Recursing into an image's own dependencies is deduped on realpath alone, and that
+    dedupe is what MAX_IMAGES counts against, so a cycle (already closed by the dedupe itself) or a very large or
+    adversarial graph can't make this run forever.
+
+    Every LC_RPATH of every walked image is expanded (_expand_rpath: only a leading @loader_path/@executable_path
+    token, anything else absolute already, everything else refused) and checked (_check_search_directory) right
+    away, whether or not any @rpath/ load of that image or any other actually resolves through it — dyld builds
+    each image's full rpath list the moment it's loaded, and a folder on it matters to whatever gets searched
+    through that image's own chain later, not only to that image's own direct loads. This is what actually closes
+    the breadth-first-vs-dyld's-depth-first-chain gap: a shared image's rpath folder gets checked the moment that
+    image itself is walked, regardless of which chain reached it first, so deduping recursion by realpath alone —
+    rather than by (realpath, chain), which real Homebrew dependency graphs (OpenSSL pulling in abseil, icu4c,
+    and their own cross-dependencies) blow up combinatorially, past any MAX_IMAGES a real node could pass — costs
+    nothing here. What it can cost is resolving one image's own @rpath dependency to a technically different file
+    than the one some OTHER chain would have found, if that image's own rpaths don't already cover it; both ends
+    of that are still Homebrew-managed and get the full owner-and-ancestors check either way, so this narrows
+    exactness, never safety.
+
+    A weak dependency that isn't at its own path still gets its own folder, and dyld's fallback search, checked
+    (_check_fallback) before being waved through; any other missing one refuses, and so does a dangling symlink
+    anywhere (its target can still be created). An @rpath/, @loader_path/ or @executable_path/ load must resolve
+    inside the LOADING image's own prefix (its grandparent folder — node's own prefix when node itself is doing
+    the loading, but a transitive library's own keg when it isn't, since that's an equally Homebrew-managed,
+    equally checked boundary); an absolute one only gets the owner-and-writable check, wherever it actually
+    lives. A load command that can't be read refuses closed. Every walked image is also
+    refused for carrying LC_DYLD_ENVIRONMENT (its own embedded DYLD_* override, which dyld would honor) or an
+    LC_LOAD_DYLINKER naming anything but DYLD_LINKER.
+
+    Known limits: a library loaded at runtime with dlopen, never listed in any load command, isn't checked. Each
+    walked image's "own prefix" (see above) is that image's own grandparent folder, not always node's: a real
+    Homebrew node's libnode links Homebrew's OpenSSL, which links Homebrew's abseil, and abseil's own libraries
+    load each other through @rpath entries scoped to abseil's own keg (Cellar/abseil/<version>), never node's.
+    Requiring every @-relative load anywhere in the tree to land inside node's own keg specifically refused a real
+    node outright; each image's own keg is an equally Homebrew-managed, equally checked boundary, so this is not
+    a narrower guarantee against escaping to somewhere untrusted, only a correctly-scoped one."""
     node_folder = real_bin.parent
-    try:
-        prefix = real_bin.parents[1]
-    except IndexError:
-        raise LaneRefused("lane_node %s has no folder to check its libraries against" % real_bin)
-    visited = set()
-    queue = [(real_bin, [], None)]
+    checked_names = set()
+    recursed = set()
+    queue = [(real_bin, (), None)]
     while queue:
-        path, parent_chain, name = queue.pop(0)
+        path, chain, name = queue.pop(0)
+        path_key = str(path)
+        if path_key not in checked_names:
+            checked_names.add(path_key)
+            if path != real_bin:
+                _check_library(name, path, real_bin)
         real = Path(os.path.realpath(path))
-        key = str(real)
-        if key in visited:
+        recurse_key = str(real)
+        if recurse_key in recursed:
             continue
-        if len(visited) >= MAX_IMAGES:
+        if len(recursed) >= MAX_IMAGES:
             raise LaneRefused("lane_node %s loads more than %d distinct libraries; refusing rather than guessing"
                               % (real_bin, MAX_IMAGES))
-        visited.add(key)
-        if real != real_bin:
-            _check_library(name, path, real_bin)
-        commands = _otool_load_commands(real)
-        if commands is None:
-            raise LaneRefused("lane_node %s: otool -l on %s couldn't be read" % (real_bin, real))
-        chain = [(value, real.parent) for cmd, value in commands if cmd == "LC_RPATH"] + parent_chain
+        recursed.add(recurse_key)
+        try:
+            prefix = real.parents[1]
+        except IndexError:
+            raise LaneRefused("lane_node %s has no folder to check %s's libraries against" % (real_bin, real))
+        commands = _macho_load_commands(real)
+        own_rpaths = []
+        for cmd, value in commands:
+            if cmd == "LC_RPATH":
+                folder = _expand_rpath(value, real, node_folder, real_bin)
+                _check_search_directory(folder, value, real, real_bin)
+                own_rpaths.append(folder)
+        chain_here = tuple(own_rpaths) + chain
         for cmd, dep_name in commands:
             if cmd == "LC_RPATH":
                 continue
@@ -2301,19 +2605,20 @@ def _check_node_libraries(real_bin):
                     raise LaneRefused("lane_node %s: %s names %s as its dynamic linker, not %s"
                                       % (real_bin, real, dep_name, DYLD_LINKER))
                 continue
-            target = _dependency_target(cmd, dep_name, real_bin, real, node_folder, chain, prefix)
+            target = _dependency_target(cmd, dep_name, real_bin, real, node_folder, chain_here, prefix)
             if target is not None:
-                queue.append((target, chain, dep_name))
+                queue.append((target, chain_here, dep_name))
 
 
 def check_lane_node(value, worktrees):
     """The broker's node: an absolute path in the person's config.json (`lane_node`), never `which node`. Refused
-    under a worktree, under $HOME (the broker's profile reads nothing there but the pinned Playwright and browsers),
-    or writable by anyone but its owner, itself or any folder above it (on a stock Homebrew install, Cellar and opt
-    are usually group-writable; the refusal then says to `chmod g-w` them). On macOS, every library it loads,
+    under a worktree, under $HOME (the broker's profile reads nothing there but the pinned Playwright and
+    browsers), or writable by anyone but its owner, itself or any folder above it, symlinks spliced in along the
+    way and their own holding folders checked too (_resolve_path) — on a stock Homebrew install, Cellar and opt
+    are usually group-writable; the refusal then says to `chmod g-w` them. On macOS, every library it loads,
     directly or transitively (most of Homebrew's node's libraries load through libnode, not node itself), apart
-    from /usr/lib and /System's own, gets that same check — see _check_node_libraries. Linux has no otool and skips
-    the library check. Returns the resolved binary."""
+    from Apple's own sealed ones, gets that same checking — see _check_node_libraries. Linux skips the library
+    check. Returns the resolved binary."""
     if not isinstance(value, str) or not os.path.isabs(value):
         raise LaneRefused("set lane_node in ~/.superyak/team/config.json to the absolute path of the node binary the "
                           "lane's broker runs (for example /opt/homebrew/bin/node)")
@@ -2328,10 +2633,9 @@ def check_lane_node(value, worktrees):
         if real == tree or tree in real.parents:
             raise LaneRefused("lane_node %s lies under the worktree %s" % (real, tree))
     try:
-        _check_owner(real, os.stat(real))
-        _check_ancestors(real)
+        _resolve_path(value, must_exist=True)
     except LaneRefused as e:
-        raise LaneRefused(_homebrew_hint(str(e))) from e
+        raise LaneRefused(str(e) + _homebrew_hint(str(e))) from e
     if sys.platform == "darwin":
         _check_node_libraries(real)
     return real
@@ -2627,9 +2931,11 @@ def prepare_broker(repo, base_commit, worktrees, fetch=None, verify=True):
     every 30 s) an install that is already there is made sure of without hashing it; the hashing runs with
     verify=True, once the check has passed and just before the broker starts. check_lane_node runs again, fresh,
     right before this returns when verify=True — that result is the one teamd hands straight to start_broker, with
-    nothing of its own in between, so the binary and its libraries are checked as close to the exec as this can get
-    (review round 2, finding 3; the verify=False call is thrown away by the caller, so it checks only once).
-    Returns (node_bin, pw_dir, shell_dir)."""
+    nothing of its own in between, so the binary and its libraries are checked as close to the exec as this can get.
+    If that fresh check now resolves somewhere else, this refuses rather than silently using the new path: the
+    headless shell was installed, and its manifest hashed, with the first one (the verify=False call is thrown
+    away by the caller, so it checks only once, and a mismatch there doesn't matter). Returns
+    (node_bin, pw_dir, shell_dir)."""
     value = teamlib.load_config().get("lane_node")
     node_bin = check_lane_node(value, worktrees)
     with install_lock():  # Task 5 fix round: reentrant; teamlib.locked on the same file would deadlock
@@ -2638,7 +2944,10 @@ def prepare_broker(repo, base_commit, worktrees, fetch=None, verify=True):
         if verify:
             check_manifest(shell_dir, revision)
     if verify:
-        node_bin = check_lane_node(value, worktrees)
+        checked = check_lane_node(value, worktrees)
+        if checked != node_bin:
+            raise LaneRefused("lane_node now resolves to %s, not %s, the one its headless shell was installed "
+                              "with; refusing" % (checked, node_bin))
     return node_bin, pw_dir, shell_dir
 
 
@@ -2657,8 +2966,8 @@ def start_broker(path, base, node_bin, pw_dir, shell_dir, stderr_path, worktrees
     exact path about to be handed to it, never re-read from config (so this never depends on the person's config
     still naming the same lane_node; it depends only on node_bin still being safe) — and refuses on a fresh
     problem, or if that somehow resolves to a different path than node_bin, rather than silently running whatever
-    it now finds (review round 3, finding 2; prepare_broker's own re-check, review round 2, still runs earlier,
-    before the manifest hash and before any old broker is stopped). Its stderr goes to stderr_path, in teamd's own
+    it now finds (prepare_broker's own re-check still runs earlier, before the manifest hash and before any old
+    broker is stopped). Its stderr goes to stderr_path, in teamd's own
     folder, never the lane. A broker that doesn't start is stopped, and LaneRefused carries the last lines of its
     stderr, scrubbed of the secret, plus its sandbox denials (details)."""
     b = Path(path) / "b"

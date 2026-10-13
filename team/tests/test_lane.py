@@ -22,6 +22,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import struct
 import threading
 import time
 import tomllib
@@ -2532,36 +2533,69 @@ def test_lane_node_is_an_owned_absolute_binary_outside_home_and_worktrees(env, t
 
 # ---------- lane-node-libs: node's own dynamic libraries, on macOS ----------
 
-def otool_l_text(load_commands):
-    """Fake `otool -l` stdout holding one load command per (cmd, value) pair, in otool's own format: LC_RPATH gets
-    a "path" line, every other cmd (LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB,
-    or anything else a test wants to check is ignored, like LC_ID_DYLIB) gets a "name" line."""
-    lines = []
-    for i, (cmd, value) in enumerate(load_commands):
-        field = "path" if cmd == "LC_RPATH" else "name"
-        lines += ["Load command %d" % i, "          cmd %s" % cmd, "      cmdsize 32",
-                  "         %s %s (offset 12)" % (field, value)]
-    return "\n".join(lines) + "\n"
+_LC_CONST_BY_NAME = {"LC_LOAD_DYLIB": lane.LC_LOAD_DYLIB, "LC_ID_DYLIB": lane.LC_ID_DYLIB,
+                     "LC_LOAD_DYLINKER": lane.LC_LOAD_DYLINKER, "LC_DYLD_ENVIRONMENT": lane.LC_DYLD_ENVIRONMENT,
+                     "LC_RPATH": lane.LC_RPATH, "LC_LOAD_WEAK_DYLIB": lane.LC_LOAD_WEAK_DYLIB,
+                     "LC_REEXPORT_DYLIB": lane.LC_REEXPORT_DYLIB, "LC_LOAD_UPWARD_DYLIB": lane.LC_LOAD_UPWARD_DYLIB}
 
 
-def fake_otool(monkeypatch, images):
-    """Stands in for lane._run, answering `otool -l <path>` for each path in images: its load commands (a list of
-    (cmd, value) pairs), "fail" (otool exits non-zero) or "timeout" (the seam itself returns None). A path otool
-    -l is run on but that isn't in images is an error in the test, not a silent pass-through. Anything that isn't
-    `otool -l` goes to the real seam."""
-    real_run = lane._run
+def macho_command_bytes(cmd_name, value):
+    """One real LC_STR-shaped load command's bytes (cmd, cmdsize, a uint32 offset of 12, then the NUL-terminated
+    name) — the same shape lane._macho_lc_str reads for every command this cares about."""
+    raw = value.encode("utf-8") + b"\x00"
+    cmdsize = 12 + len(raw)
+    return struct.pack("<III", _LC_CONST_BY_NAME[cmd_name], cmdsize, 12) + raw
 
-    def run(cmd, timeout=60):
-        if cmd[:2] != [lane.OTOOL, "-l"]:
-            return real_run(cmd, timeout)
-        assert cmd[2] in images, "no fake otool -l response for %r; images has %r" % (cmd[2], sorted(images))
-        resp = images[cmd[2]]
-        if resp == "timeout":
-            return None
-        if resp == "fail":
-            return Ran(1, "", "not an object file")
-        return Ran(0, otool_l_text(resp))
-    monkeypatch.setattr(lane, "_run", run)
+
+def macho_bytes(load_commands, magic=None):
+    """A minimal, real little-endian Mach-O's bytes (64-bit by default) holding exactly load_commands (a list of
+    (cmd_name, value) pairs) — enough for lane._macho_load_commands to read, nothing else a real binary has."""
+    magic = lane.MH_MAGIC_64 if magic is None else magic
+    body = b"".join(macho_command_bytes(cmd, value) for cmd, value in load_commands)
+    if magic == lane.MH_MAGIC:
+        header = struct.pack("<IiiIIII", magic, 0, 0, 2, len(load_commands), len(body), 0)
+    else:
+        header = struct.pack("<IiiIIIII", magic, 0, 0, 2, len(load_commands), len(body), 0, 0)
+    return header + body
+
+
+def fat_macho_bytes(slices):
+    """A minimal fat/universal binary's bytes holding one thin Mach-O per entry in slices (each a list of
+    (cmd_name, value) pairs), 16-byte aligned — enough for lane._macho_load_commands to read every slice, the
+    way a universal nodejs.org tarball binary (x86_64 and arm64 both) would be read."""
+    thins = [macho_bytes(s) for s in slices]
+    offset = 8 + 20 * len(thins)
+    arches, body = b"", b""
+    for thin in thins:
+        pad = (-offset) % 16
+        offset += pad
+        body += b"\x00" * pad
+        arches += struct.pack(">iiIII", 0x0100000c, 0, offset, len(thin), 4)
+        body += thin
+        offset += len(thin)
+    return struct.pack(">II", lane.FAT_MAGIC, len(thins)) + arches + body
+
+
+def fake_macho(monkeypatch, images):
+    """Stands in for lane._macho_load_commands, answering for each path in images: its load commands (a list of
+    (cmd, value) pairs, same shape as before — no real Mach-O bytes needed for walk-logic tests). A path this is
+    asked about but that isn't in images is an error in the test, not a silent pass-through."""
+    def fake(path):
+        key = str(path)
+        assert key in images, "no fake Mach-O load commands for %r; images has %r" % (key, sorted(images))
+        return images[key]
+    monkeypatch.setattr(lane, "_macho_load_commands", fake)
+
+
+def fake_node_only(monkeypatch, node_bin, commands):
+    """Fakes just node_bin's own load commands (node_bin, from homebrew_like_tree, is a plain shell script, never
+    a real Mach-O); every other path still goes through the real lane._macho_load_commands, reading whatever
+    bytes a parser test wrote to its own library's file."""
+    real = lane._macho_load_commands
+
+    def fake(path):
+        return commands if str(path) == str(node_bin) else real(path)
+    monkeypatch.setattr(lane, "_macho_load_commands", fake)
 
 
 def homebrew_like_tree(root):
@@ -2607,10 +2641,10 @@ def test_node_libraries_pass_on_a_clean_homebrew_like_tree(env, tmp_path, monkey
     which is fine: only @-relative entries must land inside it) — passes when the tree is clean. /usr/lib and
     /System are never touched even though the entries name real files."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
-    monkeypatch.setattr(lane, "_device", lambda path: 1)   # everything "on the sealed device" (finding 4): no
-                                                           # dependence on exactly which real files this Mac has
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: True)   # no dependence on exactly which
+                                                                              # real files this Mac's cache has
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {
+    fake_macho(monkeypatch, {
         str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"])), ("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"),
                              ("LC_LOAD_DYLIB", "@executable_path/../lib/libother.dylib"),
                              ("LC_LOAD_DYLIB", "/usr/lib/libc++.1.dylib"),
@@ -2633,7 +2667,7 @@ def test_a_library_loaded_only_through_libnode_is_checked_too(env, tmp_path, mon
     t = homebrew_like_tree(tmp_path / "hb")
     os.chmod(t["libuv_dir"], 0o775)
     try:
-        fake_otool(monkeypatch, {
+        fake_macho(monkeypatch, {
             str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
             str(t["libnode"]): [("LC_LOAD_DYLIB", str(t["libuv"]))],
             str(t["libuv"]): [],
@@ -2650,11 +2684,44 @@ def test_a_weak_dependency_that_doesnt_exist_is_fine(env, tmp_path, monkeypatch)
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     missing = str(t["lib_dir"] / "libdoesnotexist.dylib")
-    fake_otool(monkeypatch, {
+    fake_macho(monkeypatch, {
         str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
         str(t["libnode"]): [("LC_LOAD_WEAK_DYLIB", missing)],
     })
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
+def test_a_missing_weak_dependencys_own_folder_is_still_checked(env, tmp_path, monkeypatch):
+    """Spec a (S5): a weak load missing today doesn't just get waved through — its own folder is checked the
+    same way any other search folder is (a group member could create the file there, which the profile can
+    read, before the broker starts), so a group-writable one refuses even though dyld would otherwise shrug at
+    the load being absent."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    newkeg = t["node_bin"].parents[3] / "newkeg" / "lib"
+    newkeg.mkdir(parents=True)
+    os.chmod(newkeg, 0o775)
+    try:
+        fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_WEAK_DYLIB", str(newkeg / "libnew.dylib"))]})
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(newkeg, 0o755)
+
+
+def test_a_missing_weak_dependency_found_via_the_fallback_search_is_checked_in_full(tmp_path, monkeypatch):
+    """Spec a (S5), as a direct unit check of _check_fallback: dyld's own fallback search tries each of
+    DYLD_FALLBACK_LIBRARY_PATH's folders by the load's leaf name once its own path fails. If a file is actually
+    sitting there, dyld really loads it — so it's checked in full (and refuses, here, since the folder holding
+    it is group-writable), not waved through just because the original load was weak."""
+    fallback = tmp_path / "fallback-lib"
+    fallback.mkdir()
+    os.chmod(fallback, 0o775)
+    (fallback / "libmissing.dylib").write_bytes(b"fake")
+    monkeypatch.setattr(lane, "DYLD_FALLBACK_LIBRARY_PATH", (str(fallback),))
+    with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+        lane._check_fallback("/opt/homebrew/opt/x/lib/libmissing.dylib", Path("/opt/homebrew/bin/node"),
+                             Path("/opt/homebrew/bin/node"))
 
 
 def test_a_missing_required_dependency_refuses(env, tmp_path, monkeypatch):
@@ -2663,7 +2730,7 @@ def test_a_missing_required_dependency_refuses(env, tmp_path, monkeypatch):
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     missing = str(t["lib_dir"] / "libdoesnotexist.dylib")
-    fake_otool(monkeypatch, {
+    fake_macho(monkeypatch, {
         str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
         str(t["libnode"]): [("LC_LOAD_DYLIB", missing)],
     })
@@ -2677,7 +2744,7 @@ def test_rpath_resolution_falls_back_up_the_load_chain_to_node(env, tmp_path, mo
     passes if node's is tried too."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {
+    fake_macho(monkeypatch, {
         str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
         str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libother.dylib"), ("LC_RPATH", "@loader_path/../nowhere")],
         str(t["libother"]): [],
@@ -2687,24 +2754,22 @@ def test_rpath_resolution_falls_back_up_the_load_chain_to_node(env, tmp_path, mo
 
 def test_rpath_resolution_tries_the_loading_images_own_rpaths_before_its_loaders(env, tmp_path, monkeypatch):
     """Spec a, dyld's own rule: @rpath searches the loading image's own LC_RPATH entries before whatever loaded
-    it. libnode's own rpath finds a clean libtarget.dylib right in node's lib/; node's own rpath (tried only as a
-    fallback) would instead find a same-named one in a group-writable folder. The clean one must win."""
+    it. libnode's own rpath finds libtarget.dylib right in node's own lib/, inside node's prefix; node's own
+    rpath (tried only as a fallback) would instead find a same-named file in a completely different Cellar keg,
+    outside node's prefix. If resolution tried the inherited chain first, the outside-prefix one would win and
+    refuse; the inside one must win instead."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    (t["lib_dir"] / "libtarget.dylib").write_bytes(b"fake")
-    bad_dir = t["node_bin"].parents[1] / "badlib"
-    bad_dir.mkdir()
-    (bad_dir / "libtarget.dylib").write_bytes(b"fake")
-    os.chmod(bad_dir, 0o775)
-    try:
-        fake_otool(monkeypatch, {
-            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"])), ("LC_RPATH", "@loader_path/../badlib")],
-            str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget.dylib"), ("LC_RPATH", "@loader_path")],
-            str(t["lib_dir"] / "libtarget.dylib"): [],
-        })
-        assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
-    finally:
-        os.chmod(bad_dir, 0o755)
+    (t["lib_dir"] / "libtarget.dylib").write_bytes(b"fake")                # inside node's prefix: the right one
+    outside_dir = t["node_bin"].parents[3] / "other-package" / "lib"       # a different Cellar keg entirely
+    outside_dir.mkdir(parents=True)
+    (outside_dir / "libtarget.dylib").write_bytes(b"fake")                 # outside node's prefix: the wrong one
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"])), ("LC_RPATH", str(outside_dir))],
+        str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget.dylib"), ("LC_RPATH", "@loader_path")],
+        str(t["lib_dir"] / "libtarget.dylib"): [],
+    })
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
 
 
 def test_a_direct_loader_path_dependency_resolves_against_its_own_image_not_node(env, tmp_path, monkeypatch):
@@ -2713,7 +2778,7 @@ def test_a_direct_loader_path_dependency_resolves_against_its_own_image_not_node
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     (t["lib_dir"] / "libtarget2.dylib").write_bytes(b"fake")
-    fake_otool(monkeypatch, {
+    fake_macho(monkeypatch, {
         str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
         str(t["libnode"]): [("LC_LOAD_DYLIB", "@loader_path/libtarget2.dylib")],
         str(t["lib_dir"] / "libtarget2.dylib"): [],
@@ -2727,8 +2792,8 @@ def test_a_library_name_thats_neither_absolute_nor_at_relative_refuses(env, tmp_
     wherever this process happens to be running from."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", "weird-name-no-slash")]})
-    with pytest.raises(lane.LaneRefused, match="isn't a path otool -l usually gives"):
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", "weird-name-no-slash")]})
+    with pytest.raises(lane.LaneRefused, match="isn't a path a load command actually gives"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
@@ -2737,11 +2802,72 @@ def test_an_absolute_library_outside_nodes_prefix_is_fine(env, tmp_path, monkeyp
     plain absolute path (as libnode really loads libuv, a separate Homebrew keg) is fine wherever it lives."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {
+    fake_macho(monkeypatch, {
         str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
         str(t["libnode"]): [("LC_LOAD_DYLIB", str(t["libuv"]))],
         str(t["libuv"]): [],
     })
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
+
+def test_a_transitive_librarys_own_rpath_load_resolves_inside_its_own_keg_not_nodes(env, tmp_path, monkeypatch):
+    """Spec a (real-Mac run, review round 4): a real Homebrew node's libnode links OpenSSL, which links abseil,
+    whose own libraries load each other through @rpath entries scoped to abseil's own keg -- never node's.
+    Requiring every @-relative load anywhere in the tree to land inside node's own keg specifically refused a
+    real node outright. Each walked image's "own prefix" is now that image's own grandparent folder, so libuv's
+    @rpath load of a sibling, resolved through libuv's own LC_RPATH and landing inside libuv's own keg (a
+    different Cellar formula than node's), is fine."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    libuv_sibling = t["libuv_dir"] / "libuv_sibling.dylib"
+    libuv_sibling.write_bytes(b"fake")
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
+        str(t["libnode"]): [("LC_LOAD_DYLIB", str(t["libuv"]))],
+        str(t["libuv"]): [("LC_LOAD_DYLIB", "@rpath/libuv_sibling.dylib"), ("LC_RPATH", "@loader_path")],
+        str(libuv_sibling): [],
+    })
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
+def test_recursion_dedup_by_realpath_alone_avoids_the_combinatorial_blowup_a_real_homebrew_tree_hits(
+        env, tmp_path, monkeypatch):
+    """Spec a (real-Mac run, review round 4): deduping recursion by realpath alone, not by (realpath, chain), is
+    what lets a real Homebrew node's dependency graph (OpenSSL pulling in abseil and icu4c, which cross-depend on
+    each other) finish at all -- (realpath, chain) dedup revisits a shared library once per distinct chain that
+    reaches it, and a few layers of two-way fan-out is already exponential. Five layers of two libraries each, all
+    fanning out to both of the next layer's libraries, is only 11 distinct files -- comfortably inside a
+    deliberately tiny MAX_IMAGES=20 when recursion is deduped on realpath alone, but (realpath, chain) dedup would
+    revisit the last layer 32 times on the way there, long before it got there."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "MAX_IMAGES", 20)
+    t = homebrew_like_tree(tmp_path / "hb")
+    depth = 5
+    layers = []
+    for i in range(depth):
+        pair = []
+        for j in range(2):
+            folder = tmp_path / ("layer%d_%d" % (i, j))
+            folder.mkdir()
+            lib = folder / ("lib%d_%d.dylib" % (i, j))
+            lib.write_bytes(b"fake")
+            pair.append((lib, folder))
+        layers.append(pair)
+    images = {str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"),
+                                    ("LC_RPATH", "@loader_path/../lib")],
+              str(t["libnode"]): [("LC_LOAD_DYLIB", str(layers[0][0][0])),
+                                   ("LC_LOAD_DYLIB", str(layers[0][1][0]))]}
+    for i in range(depth):
+        next_pair = layers[i + 1] if i + 1 < depth else None
+        for j in range(2):
+            lib, folder = layers[i][j]
+            commands = [("LC_RPATH", str(folder))]
+            if next_pair is not None:
+                commands.append(("LC_LOAD_DYLIB", str(next_pair[0][0])))
+                commands.append(("LC_LOAD_DYLIB", str(next_pair[1][0])))
+            images[str(lib)] = commands
+    fake_macho(monkeypatch, images)
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
 
 
@@ -2752,7 +2878,7 @@ def test_a_reexported_or_upward_library_is_checked_too(env, tmp_path, monkeypatc
     t = homebrew_like_tree(tmp_path / "hb")
     os.chmod(t["libuv_dir"], 0o775)
     try:
-        fake_otool(monkeypatch, {
+        fake_macho(monkeypatch, {
             str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
             str(t["libnode"]): [("LC_REEXPORT_DYLIB", str(t["libuv"]))],
         })
@@ -2770,10 +2896,10 @@ def test_a_group_writable_opt_folder_is_refused_through_the_symlink_it_holds(env
     t = homebrew_like_tree(tmp_path / "opt" / "homebrew")   # so the refused path literally reads .../opt/homebrew/...
     os.chmod(t["opt_dir"], 0o775)
     try:
-        fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))]})
+        fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))]})
         with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner") as exc:
             lane.check_lane_node(str(t["node_bin"]), [])
-        assert "chmod g-w /opt/homebrew/Cellar /opt/homebrew/opt" in str(exc.value)
+        assert "chmod g-w /opt/homebrew/bin /opt/homebrew/Cellar /opt/homebrew/opt" in str(exc.value)
     finally:
         os.chmod(t["opt_dir"], 0o755)
 
@@ -2785,7 +2911,7 @@ def test_a_group_writable_folder_in_the_librarys_realpath_is_refused(env, tmp_pa
     t = homebrew_like_tree(tmp_path / "hb")
     os.chmod(t["cellar_icu"], 0o775)
     try:
-        fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))]})
+        fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))]})
         with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
             lane.check_lane_node(str(t["node_bin"]), [])
     finally:
@@ -2798,7 +2924,7 @@ def test_a_librarys_realpath_owned_by_another_uid_is_refused(env, tmp_path, monk
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     real_target = str(Path(os.path.realpath(t["icu_as_loaded"])))
-    real_stat, mine = os.stat, os.getuid()
+    real_lstat, mine = os.lstat, os.getuid()
 
     class Theirs:
         def __init__(self, st):
@@ -2806,10 +2932,10 @@ def test_a_librarys_realpath_owned_by_another_uid_is_refused(env, tmp_path, monk
 
         def __getattr__(self, name):
             return mine + 1 if name == "st_uid" else getattr(self._st, name)
-    monkeypatch.setattr(lane.os, "stat",
-                        lambda p, *a, **kw: Theirs(real_stat(p, *a, **kw)) if str(p) == real_target
-                        else real_stat(p, *a, **kw))
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))]})
+    monkeypatch.setattr(lane.os, "lstat",
+                        lambda p, *a, **kw: Theirs(real_lstat(p, *a, **kw)) if str(p) == real_target
+                        else real_lstat(p, *a, **kw))
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))]})
     with pytest.raises(lane.LaneRefused, match="belongs to another user"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
@@ -2822,22 +2948,71 @@ def test_an_rpath_library_outside_nodes_prefix_is_refused(env, tmp_path, monkeyp
     elsewhere = t["node_bin"].parents[3] / "other-package" / "lib"            # parents[3] is the Cellar folder
     elsewhere.mkdir(parents=True)
     (elsewhere / "libnode.147.dylib").write_bytes(b"fake")
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"),
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"),
                                                   ("LC_RPATH", "@loader_path/../../../other-package/lib")]})
     with pytest.raises(lane.LaneRefused, match="doesn't resolve to a file inside"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
-@pytest.mark.parametrize("how", ["timeout", "fail"])
-def test_otool_failing_or_timing_out_refuses_the_node(env, tmp_path, monkeypatch, how):
-    """Spec a: otool not running (a timeout counts the same as any other failure, through lane._run's own seam) or
-    exiting non-zero refuses closed, for any image the walk reaches, not only node itself."""
+def test_a_non_macho_file_refuses(env, tmp_path, monkeypatch):
+    """Spec a: a load that resolves to a real file that isn't a Mach-O at all (no magic number otool's text
+    report could paper over) refuses closed, for any image the walk reaches, not only node itself."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"),
-                                                  ("LC_RPATH", "@loader_path/../lib")],
-                            str(t["libnode"]): how})
-    with pytest.raises(lane.LaneRefused, match="otool -l on .*libnode.*couldn't be read"):
+    t["libnode"].write_bytes(b"not a mach-o file, just text\n")
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="libnode.*doesn't start with a Mach-O"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_a_directory_in_place_of_a_library_refuses(env, tmp_path, monkeypatch):
+    """Spec a: a load that resolves to a real directory (never a Mach-O) refuses as "isn't a plain file" — caught
+    by fstat on the very fd the bytes would be read from, not by a separate, racy stat-then-open."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    t["libnode"].unlink()
+    t["libnode"].mkdir()
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="libnode.*isn't a plain file"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_truncated_load_commands_refuse(env, tmp_path, monkeypatch):
+    """Spec a: sizeofcmds naming more bytes than the file actually holds refuses closed."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    header = struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, 1000, 0, 0)   # claims 1000 bytes of commands
+    t["libnode"].write_bytes(header)
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="libnode.*load commands run past"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_a_non_utf8_load_command_name_refuses(env, tmp_path, monkeypatch):
+    """Spec a (S6.3): a load command name with an invalid UTF-8 byte refuses, rather than otool's own text report
+    silently turning it into a harmless-looking U+FFFD."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    bad = b"/opt/homebrew/opt/x/lib/\xffbad.dylib\x00"
+    body = struct.pack("<III", lane.LC_LOAD_DYLIB, 12 + len(bad), 12) + bad
+    header = struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, len(body), 0, 0)
+    t["libnode"].write_bytes(header + body)
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="libnode.*isn't valid UTF-8"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_a_fat_binary_checks_every_slice(env, tmp_path, monkeypatch):
+    """Spec a (S6.2): a universal (fat) binary, like the nodejs.org tarball's, is checked slice by slice, not
+    just the host's — a problem in either slice refuses, even one the running kernel would never actually pick."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    missing = str(t["lib_dir"] / "does-not-exist-in-either-slice.dylib")
+    fat = fat_macho_bytes([[("LC_LOAD_DYLIB", str(t["libother"]))],             # slice 1: a clean, real dependency
+                           [("LC_LOAD_DYLIB", missing)]])                      # slice 2: a required, missing one
+    t["libnode"].write_bytes(fat)
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="doesn't exist"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
@@ -2845,9 +3020,9 @@ def test_usr_lib_and_system_libraries_are_never_checked(env, tmp_path, monkeypat
     """Spec a: /usr/lib and /System libraries are Apple's own and skipped outright — not even stat'd, or these two,
     which don't exist, would refuse the node."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
-    monkeypatch.setattr(lane, "_device", lambda path: 1)   # everything "on the sealed device" (finding 4)
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: True)
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {str(t["node_bin"]): [
+    fake_macho(monkeypatch, {str(t["node_bin"]): [
         ("LC_LOAD_DYLIB", "/usr/lib/does-not-exist-xyz.dylib"),
         ("LC_LOAD_DYLIB", "/System/Library/Frameworks/Nope.framework/Versions/A/Nope")]})
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
@@ -2860,83 +3035,85 @@ def test_a_path_under_the_data_volume_that_looks_like_system_is_still_checked(en
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     missing = "/System/Volumes/Data/opt/homebrew/opt/does-not-exist-xyz/lib/x.dylib"
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", missing)]})
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", missing)]})
     with pytest.raises(lane.LaneRefused, match="doesn't exist"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
 def test_apple_sealed_skip_rules(monkeypatch):
-    """Spec b (review round 2 finding 2; round 3 finding 4), as a plain unit check of _apple_sealed itself:
-    /usr/lib and /System are skipped only when normalized (so a ../ trick that only looks like it starts there
-    isn't), only when not also under NOT_SEALED textually (the writable Data volume and firmlink targets), and
-    only when the device actually matches /usr/sbin's sealed one — a string prefix alone, on a case-insensitive
-    volume, could be dodged by a path spelled in a different case. A path that can't be stat'd is never sealed."""
+    """A plain unit check of _apple_sealed itself: /usr/lib and /System are skipped only when normalized (so a
+    ../ trick that only looks like it starts there isn't), only when not also under NOT_SEALED textually (the
+    writable Data volume and firmlink targets), and only then — first by asking dyld's own shared-cache predicate
+    (_shared_cache_contains), and if that says no, by the nearest existing ancestor's own device
+    (_nearest_sealed_ancestor) — never by a string prefix alone, which a case-insensitive volume could let a path
+    dodge by spelling itself in a different case. A path that can't be stat'd by either tier is never sealed."""
+    assert not lane._apple_sealed("/usr/lib/../../opt/x")                      # normpath(entry) != entry
+    assert not lane._apple_sealed("/usr/libexec/cups/foo")                    # not under /usr/lib/ or /System/
+    assert not lane._apple_sealed("/opt/homebrew/opt/foo/lib/x.dylib")         # not under APPLE_DIRS at all
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: True)
+    assert not lane._apple_sealed("/System/Volumes/Data/opt/homebrew/opt/foo/lib/x.dylib")   # NOT_SEALED wins first
+    assert lane._apple_sealed("/usr/lib/libc++.1.dylib")                      # dyld's own predicate is enough alone
+    monkeypatch.setattr(lane, "_device", lambda path: 1 if path == "/usr/sbin" else 2)   # tier 2 alone would fail
+    assert lane._apple_sealed("/usr/lib/libc++.1.dylib")                      # tier 1 alone is still enough
+    monkeypatch.undo()
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: False)  # the predicate says no: fall back
     monkeypatch.setattr(lane, "_device", lambda path: 1 if path == "/usr/sbin" else 2)
     assert not lane._apple_sealed("/usr/lib/libc++.1.dylib")                   # a real name, but the wrong device
     monkeypatch.setattr(lane, "_device", lambda path: 1)                       # now everything is "the" sealed device
     assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
     assert lane._apple_sealed("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
-    assert not lane._apple_sealed("/System/Volumes/Data/opt/homebrew/opt/foo/lib/x.dylib")   # NOT_SEALED, textual
-    assert not lane._apple_sealed("/usr/lib/../../opt/x")                      # normpath(entry) != entry
-    assert not lane._apple_sealed("/usr/libexec/cups/foo")                    # not under /usr/lib/ at all
-    assert not lane._apple_sealed("/opt/homebrew/opt/foo/lib/x.dylib")         # not under APPLE_DIRS at all
-    monkeypatch.undo()                                                        # the real _device, for a real miss
-    assert not lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
+
+
+def test_nearest_sealed_ancestor_rejects_a_symlink_in_the_chain(tmp_path, monkeypatch):
+    """_nearest_sealed_ancestor's own rule, unit-tested directly (APPLE_DIRS would otherwise force a real
+    /usr/lib or /System path to exercise this at all): none of the existing components down to the nearest one
+    may be a symlink, even one sitting on the sealed device — a symlink could lead anywhere, and dyld follows
+    it."""
+    monkeypatch.setattr(lane, "_device", lambda path: 1)
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    link = tmp_path / "linked"
+    link.symlink_to(real_dir)
+    assert not lane._nearest_sealed_ancestor(str(link / "missing.dylib"))
 
 
 def test_linux_skips_the_library_check_entirely(env, tmp_path, monkeypatch):
-    """Spec a: off macOS, check_lane_node never runs otool at all (there is none on the Pi) — only the binary's own
-    owner-and-ancestors check applies."""
+    """Spec a: off macOS, check_lane_node never reads a single load command (there is no dyld shared cache on the
+    Pi either) — only the binary's own owner-and-ancestors check applies."""
     monkeypatch.setattr(lane.sys, "platform", "linux")
 
-    def boom(cmd, timeout=60):
-        raise AssertionError("nothing should run a command checking lane_node on Linux: %r" % cmd)
-    monkeypatch.setattr(lane, "_run", boom)
+    def boom(path):
+        raise AssertionError("nothing should read a node binary's load commands on Linux: %r" % path)
+    monkeypatch.setattr(lane, "_macho_load_commands", boom)
     t = homebrew_like_tree(tmp_path / "hb")
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
 
 
 def test_a_sticky_ancestor_in_the_librarys_as_loaded_path_is_allowed(env, tmp_path, monkeypatch):
-    """Spec a: _check_lstat_path's walk allows a sticky folder above the library (like /tmp), the same allowance
-    _check_ancestors gives the binary's own folders — only the library file itself may not be sticky (moot: it's
-    never a directory)."""
+    """Spec a: _resolve_path's walk allows a sticky folder above the library (like /tmp), the same allowance the
+    binary's own folders get — only the last folder actually reached (the file itself, here) may not be sticky,
+    which is moot for a file: it's never a directory."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     os.chmod(t["opt_dir"], 0o1777)
     try:
-        fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))],
+        fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))],
                                 str(Path(os.path.realpath(t["icu_as_loaded"]))): []})
         assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
     finally:
         os.chmod(t["opt_dir"], 0o755)
 
 
-def test_otool_l_output_with_an_unparseable_name_line_refuses(env, tmp_path, monkeypatch):
-    """Spec a: otool -l exiting 0 with a load command whose name line this can't read refuses closed, same as it
-    not running at all."""
+def test_a_load_command_with_a_bad_name_offset_refuses(env, tmp_path, monkeypatch):
+    """Spec a: a load command whose own name offset points outside the command (cmdsize too small for any real
+    name to fit) refuses closed, the direct-read analog of otool printing a line this couldn't parse."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-
-    def run(cmd, timeout=60):
-        if cmd[:2] == [lane.OTOOL, "-l"]:
-            return Ran(0, "Load command 0\n          cmd LC_LOAD_DYLIB\n      cmdsize 32\n")   # no name line
-        return lane._run(cmd, timeout)
-    monkeypatch.setattr(lane, "_run", run)
-    with pytest.raises(lane.LaneRefused, match="otool -l on .* couldn't be read"):
-        lane.check_lane_node(str(t["node_bin"]), [])
-
-
-def test_otool_l_output_missing_a_path_line_refuses(env, tmp_path, monkeypatch):
-    """Spec a: an @rpath/ entry needs otool -l's LC_RPATH path read; a load command with none refuses closed."""
-    monkeypatch.setattr(lane.sys, "platform", "darwin")
-    t = homebrew_like_tree(tmp_path / "hb")
-
-    def run(cmd, timeout=60):
-        if cmd[:2] == [lane.OTOOL, "-l"]:
-            return Ran(0, "Load command 0\n          cmd LC_RPATH\n      cmdsize 32\n")   # no path line
-        return lane._run(cmd, timeout)
-    monkeypatch.setattr(lane, "_run", run)
-    with pytest.raises(lane.LaneRefused, match="otool -l on .* couldn't be read"):
+    body = struct.pack("<III", lane.LC_LOAD_DYLIB, 12, 20)              # offset 20 >= cmdsize 12: out of range
+    header = struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, len(body), 0, 0)
+    t["libnode"].write_bytes(header + body)
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="libnode.*name offset is out of range"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
@@ -2955,16 +3132,42 @@ def test_the_walk_is_capped_and_refuses_above_it(env, tmp_path, monkeypatch):
     for i in range(len(libs) - 1):
         images[str(libs[i])] = [("LC_LOAD_DYLIB", str(libs[i + 1]))]
     images[str(libs[-1])] = []
-    fake_otool(monkeypatch, images)
+    fake_macho(monkeypatch, images)
     with pytest.raises(lane.LaneRefused, match="more than 2 distinct libraries"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
 def test_prepare_broker_rechecks_lane_node_fresh_right_before_returning(env, manifests, unpack, monkeypatch):
-    """Spec, review round 2, finding 3: the binary can't drift (the broker runs the resolved path), but the
-    libraries can change between the check and dyld loading them. The verify=True call — the one whose result
-    teamd hands straight to start_broker — re-checks lane_node once more right before it returns, so what it hands
-    off reflects the tree as it is at that moment, not back when prepare_broker started installing Playwright."""
+    """The binary can't drift (the broker runs the resolved path), but the libraries can change between the check
+    and dyld loading them. The verify=True call — the one whose result teamd hands straight to start_broker —
+    re-checks lane_node once more right before it returns, so what it hands off reflects the tree as it is at
+    that moment, not back when prepare_broker started installing Playwright."""
+    tarball = npm_tarball(PW_FILES)
+    base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
+    node = Path("/opt/homebrew/bin/node-1")
+    calls = []
+
+    def check_lane_node(value, worktrees):
+        calls.append(value)
+        return node
+    monkeypatch.setattr(lane, "check_lane_node", check_lane_node)
+    monkeypatch.setattr(lane, "_run_env", lambda cmd, e, cwd, timeout=900: (
+        fake_shell(lane.browsers_root() / "chromium_headless_shell-1243"), Ran(0, ""))[1])
+    probe = env["tmp"] / "shellprobe"
+    fake_shell(probe)
+    record(manifests, "1243", lane.manifest_hash(probe))
+    node_bin, pw_dir, shell_dir = lane.prepare_broker(env["repo"], base, [], fetch=Registry(tarball))
+    assert node_bin == node and len(calls) == 2                # checked once early, once again right before return
+    calls.clear()
+    lane.prepare_broker(env["repo"], base, [], verify=False)
+    assert len(calls) == 1                                      # the throwaway pass (discarded by the caller) once
+
+
+def test_prepare_broker_refuses_rather_than_use_a_lane_node_that_changed_underneath_it(env, manifests, unpack,
+                                                                                        monkeypatch):
+    """N4: if the fresh re-check (right before prepare_broker returns) now resolves somewhere else, this refuses
+    rather than silently handing teamd a different node_bin than the one its headless shell was actually
+    installed with."""
     tarball = npm_tarball(PW_FILES)
     base = commit_lockfile(env["repo"], {"version": "1.55.0", "integrity": sri(tarball)})
     nodes = [Path("/opt/homebrew/bin/node-1"), Path("/opt/homebrew/bin/node-2")]
@@ -2979,11 +3182,8 @@ def test_prepare_broker_rechecks_lane_node_fresh_right_before_returning(env, man
     probe = env["tmp"] / "shellprobe"
     fake_shell(probe)
     record(manifests, "1243", lane.manifest_hash(probe))
-    node_bin, pw_dir, shell_dir = lane.prepare_broker(env["repo"], base, [], fetch=Registry(tarball))
-    assert node_bin == nodes[1] and len(calls) == 2            # checked once early, once again right before return
-    calls.clear()
-    lane.prepare_broker(env["repo"], base, [], verify=False)
-    assert len(calls) == 1                                      # the throwaway pass (discarded by the caller) once
+    with pytest.raises(lane.LaneRefused, match="now resolves to"):
+        lane.prepare_broker(env["repo"], base, [], fetch=Registry(tarball))
 
 
 # ---------- lane-node-libs, review round 3 ----------
@@ -2999,7 +3199,7 @@ def test_an_earlier_writable_rpath_folder_is_refused_even_when_a_later_one_holds
     earlier.mkdir()
     os.chmod(earlier, 0o775)
     try:
-        fake_otool(monkeypatch, {
+        fake_macho(monkeypatch, {
             str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
             str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget3.dylib"),
                                 ("LC_RPATH", "@loader_path/../earlier"), ("LC_RPATH", "@loader_path")],
@@ -3022,7 +3222,7 @@ def test_an_earlier_rpath_folder_thats_merely_unreadable_above_it_is_also_refuse
     holder.mkdir()
     os.chmod(holder, 0o775)
     try:
-        fake_otool(monkeypatch, {
+        fake_macho(monkeypatch, {
             str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
             str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget3.dylib"),
                                 ("LC_RPATH", "@loader_path/../holder/earlier"), ("LC_RPATH", "@loader_path")],
@@ -3035,25 +3235,71 @@ def test_an_earlier_rpath_folder_thats_merely_unreadable_above_it_is_also_refuse
         os.chmod(holder, 0o755)
 
 
-def test_a_sticky_earlier_rpath_folder_is_allowed(env, tmp_path, monkeypatch):
-    """Spec a (review round 3, finding 1): _check_search_directory allows sticky throughout, the same as any of a
-    library's own ancestors — an earlier, empty rpath folder that's merely sticky (like /tmp) is fine."""
+def test_a_sticky_rpath_search_folder_itself_refuses(env, tmp_path, monkeypatch):
+    """Spec a (S1): a sticky, world-writable rpath search folder (like /tmp) refuses, even though it's empty
+    today and a later, real file answers — sticky only stops renaming or deleting another user's own entries, not
+    creating a brand new one, which is exactly the threat a search folder faces. Sticky stays allowed only for
+    ancestors above the folder actually searched, never for the folder being searched itself."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     earlier = t["node_bin"].parents[1] / "earlier"
     earlier.mkdir()
     os.chmod(earlier, 0o1777)
     try:
-        fake_otool(monkeypatch, {
+        fake_macho(monkeypatch, {
             str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
             str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget3.dylib"),
                                 ("LC_RPATH", "@loader_path/../earlier"), ("LC_RPATH", "@loader_path")],
             str(t["lib_dir"] / "libtarget3.dylib"): [],
         })
         (t["lib_dir"] / "libtarget3.dylib").write_bytes(b"fake")
-        assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
     finally:
         os.chmod(earlier, 0o755)
+
+
+def test_a_sticky_world_writable_parent_of_a_missing_search_folder_refuses(env, tmp_path, monkeypatch):
+    """Spec a (S1): the rpath search folder itself doesn't exist, but its existing parent is sticky and
+    world-writable (like /tmp itself). Creating the missing folder there — and the file dyld would then find in
+    it — is exactly what sticky doesn't stop (only renaming or deleting another user's own entries), so this
+    boundary may not be sticky either, even though it's technically just an "ancestor" of the (missing) target."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    holder = t["node_bin"].parents[1] / "holder"
+    holder.mkdir()
+    os.chmod(holder, 0o1777)
+    try:
+        fake_macho(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
+            str(t["libnode"]): [("LC_LOAD_WEAK_DYLIB", "@rpath/libnowhere.dylib"),
+                                ("LC_RPATH", "@loader_path/../holder/missing")],  # "missing" doesn't exist
+        })
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(holder, 0o755)
+
+
+def test_a_sticky_ancestor_above_an_rpath_search_folder_is_allowed(env, tmp_path, monkeypatch):
+    """Spec a (S1): sticky is still fine for a folder ABOVE the one actually searched — only the search folder
+    itself (and the last existing folder before a gap) may not be sticky."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    holder = t["node_bin"].parents[1] / "holder"
+    (holder / "earlier").mkdir(parents=True)
+    os.chmod(holder, 0o1777)
+    try:
+        fake_macho(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
+            str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget3.dylib"),
+                                ("LC_RPATH", "@loader_path/../holder/earlier"), ("LC_RPATH", "@loader_path")],
+            str(t["lib_dir"] / "libtarget3.dylib"): [],
+        })
+        (t["lib_dir"] / "libtarget3.dylib").write_bytes(b"fake")
+        assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+    finally:
+        os.chmod(holder, 0o755)
 
 
 def test_lc_dyld_environment_on_any_walked_image_refuses(env, tmp_path, monkeypatch):
@@ -3061,7 +3307,7 @@ def test_lc_dyld_environment_on_any_walked_image_refuses(env, tmp_path, monkeypa
     dyld honors unless the process is hardened; any walked image carrying one refuses, naming it."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_DYLD_ENVIRONMENT", "DYLD_LIBRARY_PATH=/tmp/evil")]})
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_DYLD_ENVIRONMENT", "DYLD_LIBRARY_PATH=/tmp/evil")]})
     with pytest.raises(lane.LaneRefused, match="LC_DYLD_ENVIRONMENT"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
@@ -3070,7 +3316,7 @@ def test_an_unexpected_dynamic_linker_refuses(env, tmp_path, monkeypatch):
     """Spec a (review round 3, finding 3): LC_LOAD_DYLINKER must name /usr/lib/dyld; anything else refuses."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLINKER", "/tmp/evil-dyld")]})
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLINKER", "/tmp/evil-dyld")]})
     with pytest.raises(lane.LaneRefused, match="dynamic linker"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
@@ -3079,7 +3325,7 @@ def test_the_standard_dynamic_linker_is_fine(env, tmp_path, monkeypatch):
     """The normal case: LC_LOAD_DYLINKER naming /usr/lib/dyld, exactly, passes."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
-    fake_otool(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLINKER", lane.DYLD_LINKER)]})
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLINKER", lane.DYLD_LINKER)]})
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
 
 
@@ -7616,3 +7862,192 @@ def test_r3_dot_components_in_a_name_are_never_walked_out_of_b(env, tmp_root, sh
     assert lane.lane_pids(path, None) == set()
     lsof_stub(monkeypatch, f_record(777, "3", "REG", st, "%s/b/./held.db" % path))
     assert lane.lane_pids(path, None) == set()
+
+# ---------- review round 4 regressions (each failed on 930381c; see the round-4 report for the red run) ---------
+
+@pytest.mark.skipif(REAL_PLATFORM != "darwin", reason="exercises the real dyld shared cache, Mac only")
+def test_m1_real_shared_cache_libraries_are_recognized_without_mocking():
+    """M1, run for real, no mocking at all: on a real Mac, /usr/lib/libSystem.B.dylib and libc++.1.dylib exist
+    only in the dyld shared cache (Big Sur+) — a plain lstat refuses them as missing, but the real
+    _dyld_shared_cache_contains_path recognizes them as sealed. A made-up name under /usr/lib, not in the cache
+    either, still resolves through the fallback: /usr/lib's own nearest existing, non-symlink ancestor really is
+    on the sealed system volume, which is read-only, so nothing could ever be planted at that made-up name."""
+    assert lane._apple_sealed("/usr/lib/libSystem.B.dylib")
+    assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
+    assert lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
+    assert not lane._apple_sealed("/opt/homebrew/this-path-really-does-not-exist-anywhere-xyz.dylib")
+
+
+def test_m1_shared_cache_only_system_libs_are_skipped_not_refused(env, tmp_path, monkeypatch):
+    """M1: since Big Sur, /usr/lib/libSystem.B.dylib etc. exist only in the dyld shared cache. _apple_sealed asks
+    dyld's own predicate first, so these are skipped (not refused as missing) even without a real libSystem to
+    check against."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: True)
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_macho(monkeypatch, {str(t["node_bin"]): [
+        ("LC_LOAD_DYLINKER", "/usr/lib/dyld"),
+        ("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib"),
+        ("LC_LOAD_DYLIB", "/usr/lib/libc++.1.dylib"),
+        ("LC_LOAD_DYLIB", "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation")]})
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
+def test_m2_same_realpath_under_a_second_name_is_still_checked(env, tmp_path, monkeypatch):
+    """M2: node names icu by its Cellar path (clean); libnode names the same file through opt/ (group-writable).
+    Deduping _check_library on str(path), before any realpath dedupe, means the opt/ name still gets its own
+    as-loaded check and refuses, even though the Cellar name (reached first) was already checked clean."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    cellar_icu = str(Path(os.path.realpath(t["icu_as_loaded"])))
+    os.chmod(t["opt_dir"], 0o775)
+    try:
+        fake_macho(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", cellar_icu), ("LC_LOAD_DYLIB", str(t["libnode"]))],
+            cellar_icu: [],
+            str(t["libnode"]): [("LC_LOAD_DYLIB", str(t["icu_as_loaded"]))],
+        })
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(t["opt_dir"], 0o755)
+
+
+def test_m3_a_relative_rpath_refuses(env, tmp_path, monkeypatch):
+    """M3: a relative LC_RPATH (no @ token at all) would be resolved by dyld against the broker's own cwd (the
+    lane's b/, which hostile processes can write), never teamd's — so it's refused outright, naming the image
+    and the raw value, rather than silently lstat'd relative to wherever this process happens to be running
+    from."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
+        str(t["libnode"]): [("LC_LOAD_WEAK_DYLIB", "@rpath/libnowhere.dylib"), ("LC_RPATH", "lib")],
+    })
+    with pytest.raises(lane.LaneRefused, match="isn't absolute after expansion"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+@pytest.mark.parametrize("token", ["@rpath", "@weird_token/x", "@"])
+def test_m3_an_unrecognized_leading_token_in_an_rpath_refuses(env, tmp_path, monkeypatch, token):
+    """M3/N3: only a LEADING @loader_path or @executable_path token is expanded in an LC_RPATH value; any other
+    leading @ (including @rpath itself, which makes no sense inside an LC_RPATH) refuses outright."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"])), ("LC_RPATH", token)]})
+    with pytest.raises(lane.LaneRefused, match="isn't a token this allows"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_m3_a_token_name_with_extra_characters_is_not_treated_as_the_token(env, tmp_path, monkeypatch):
+    """M3/N3: "@loader_pathological" is not the @loader_path token followed by a suffix — dyld only expands the
+    token when the string is exactly it or starts with it immediately followed by "/". This must refuse as an
+    unrecognized leading @, not be silently expanded as if @loader_path meant something halfway through a word."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"])),
+                                                  ("LC_RPATH", "@loader_pathological/lib")]})
+    with pytest.raises(lane.LaneRefused, match="isn't a token this allows"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_s2_every_rpath_of_every_walked_image_is_checked_whether_or_not_used(env, tmp_path, monkeypatch):
+    """S2: node -> [A, B]; A -> D, and D has an LC_RPATH to a group-writable, empty folder; D -> C, and B
+    (rpath @loader_path) -> C; C -> @rpath/libx. dyld's depth-first loader would search C's load with D's
+    writable folder on the chain (through A); a breadth-first walk reaches C through B first and, if it only
+    checked folders actually used for a resolution, would dedupe the route through D and never check D's rpath.
+    Every LC_RPATH of every walked image is now checked unconditionally, so D's folder refuses regardless."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    lib_dir = t["lib_dir"]
+    libA, libB, libC, libD = (lib_dir / n for n in ("libA.dylib", "libB.dylib", "libC.dylib", "libD.dylib"))
+    for lib in (libA, libB, libC, libD):
+        lib.write_bytes(b"fake")
+    (lib_dir / "libx.dylib").write_bytes(b"fake")       # the real target, reachable cleanly via B's rpath
+    writable = t["node_bin"].parents[4] / "writable-empty"
+    writable.mkdir(parents=True)
+    os.chmod(writable, 0o777)
+    try:
+        fake_macho(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(libA)), ("LC_LOAD_DYLIB", str(libB))],
+            str(libA): [("LC_LOAD_DYLIB", str(libD))],
+            str(libB): [("LC_LOAD_DYLIB", str(libC)), ("LC_RPATH", "@loader_path")],
+            str(libD): [("LC_LOAD_DYLIB", str(libC)), ("LC_RPATH", str(writable))],
+            str(libC): [("LC_LOAD_DYLIB", "@rpath/libx.dylib")],
+            str(lib_dir / "libx.dylib"): [],
+        })
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(writable, 0o755)
+
+
+def test_s3_a_subfolder_between_an_earlier_search_folder_and_the_file_is_checked(env, tmp_path, monkeypatch):
+    """S3: @rpath/sub/lib.dylib, two rpath folders. folderA (tried first) is itself clean, but folderA/sub is
+    world-writable and empty; folderB (tried second) has a clean sub/ with the real file. dyld would try
+    folderA/sub first too, and anyone could plant a file there — so it must be checked even though the eventual
+    winner comes from folderB."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    folder_a = t["lib_dir"] / "folderA"
+    folder_b = t["lib_dir"] / "folderB"
+    (folder_a / "sub").mkdir(parents=True)
+    os.chmod(folder_a / "sub", 0o777)                     # empty: nothing planted there yet, but writable by anyone
+    (folder_b / "sub").mkdir(parents=True)
+    (folder_b / "sub" / "libframework.dylib").write_bytes(b"fake")
+    try:
+        fake_macho(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
+            str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/sub/libframework.dylib"),
+                                ("LC_RPATH", str(folder_a)), ("LC_RPATH", str(folder_b))],
+            str(folder_b / "sub" / "libframework.dylib"): [],
+        })
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(folder_a / "sub", 0o755)
+
+
+def test_s4_a_two_hop_symlink_through_a_writable_folder_refuses(env, tmp_path, monkeypatch):
+    """S4: opt/icu2 -> var/icu-link -> Cellar/icu2/77.1, with var/ group-writable. _resolve_path splices in each
+    symlink's target and keeps walking, so it sees opt/ (clean), the opt/icu2 link, var/ itself (the folder
+    holding the SECOND link — group-writable) and the Cellar target, all in one pass, catching var/ even though
+    neither the as-loaded string nor the final realpath's own ancestors ever literally contain it."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    root = t["node_bin"].parents[4]
+    real_icu_dir = root / "Cellar" / "icu2" / "77.1"
+    (real_icu_dir / "lib").mkdir(parents=True)
+    (real_icu_dir / "lib" / "libicu2.dylib").write_bytes(b"fake")
+    var_dir = root / "var"
+    var_dir.mkdir()
+    icu_link_mid = var_dir / "icu-link"
+    icu_link_mid.symlink_to(real_icu_dir)
+    (t["opt_dir"] / "icu2").symlink_to(icu_link_mid)
+    os.chmod(var_dir, 0o775)
+    try:
+        as_loaded = t["opt_dir"] / "icu2" / "lib" / "libicu2.dylib"
+        fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", str(as_loaded))]})
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(var_dir, 0o755)
+
+
+def test_s7_a_permission_error_is_wrapped_as_lanerefused(env, tmp_path, monkeypatch):
+    """S7: an rpath folder this user can't search (mode 000) is caught by _resolve_path's own try/except OSError
+    and turned into LaneRefused, naming the path — never a bare PermissionError out of check_lane_node."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    noaccess = tmp_path / "noaccess"
+    noaccess.mkdir()
+    os.chmod(noaccess, 0o000)
+    try:
+        fake_macho(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"])), ("LC_RPATH", str(noaccess))],
+            str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libx.dylib")],
+        })
+        with pytest.raises(lane.LaneRefused, match="noaccess.*can't be checked"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(noaccess, 0o755)
