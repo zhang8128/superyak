@@ -2269,7 +2269,10 @@ def _macho_slices(fd, size):
     foreign-endian magic (never a native Mac binary) or a header that doesn't fit. A thin Mach-O's magic is read
     native (every current Mac is little-endian); a fat header's is always big-endian on disk, a leftover from
     PowerPC days that has nothing to do with the host — both conventions are read here, from the same four
-    bytes, rather than guessing one endianness for everything."""
+    bytes, rather than guessing one endianness for everything. A fat header naming zero architectures refuses
+    outright rather than returning an empty list: silently reading as "nothing to check" would wave an image
+    through with no rpaths and no dependencies checked at all, dyld's own refusal to load anything with no
+    matching slice notwithstanding -- this check doesn't lean on dyld's exec-time behavior to catch that."""
     raw = _read_exact(fd, 0, 4)
     native = struct.unpack("<I", raw)[0]
     big = struct.unpack(">I", raw)[0]
@@ -2279,11 +2282,15 @@ def _macho_slices(fd, size):
         raise _MachOError("has foreign-endian Mach-O magic, which no native Mac binary has")
     if big == FAT_MAGIC:
         (nfat,) = struct.unpack(">I", _read_exact(fd, 4, 4))
-        return [struct.unpack(">iiIII", _read_exact(fd, 8 + i * 20, 20))[2:4] for i in range(nfat)]
-    if big == FAT_MAGIC_64:
+        slices = [struct.unpack(">iiIII", _read_exact(fd, 8 + i * 20, 20))[2:4] for i in range(nfat)]
+    elif big == FAT_MAGIC_64:
         (nfat,) = struct.unpack(">I", _read_exact(fd, 4, 4))
-        return [struct.unpack(">iiQQII", _read_exact(fd, 8 + i * 32, 32))[2:4] for i in range(nfat)]
-    raise _MachOError("doesn't start with a Mach-O or fat-binary magic number")
+        slices = [struct.unpack(">iiQQII", _read_exact(fd, 8 + i * 32, 32))[2:4] for i in range(nfat)]
+    else:
+        raise _MachOError("doesn't start with a Mach-O or fat-binary magic number")
+    if not slices:
+        raise _MachOError("is a fat binary naming no architecture slices at all")
+    return slices
 
 
 def _macho_load_commands(path):

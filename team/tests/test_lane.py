@@ -3016,6 +3016,39 @@ def test_a_fat_binary_checks_every_slice(env, tmp_path, monkeypatch):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
+def test_a_fat_binary_naming_zero_slices_refuses_rather_than_reading_as_empty(env, tmp_path, monkeypatch):
+    """Spec a (commit review, round 4 follow-up): a fat header can claim zero architecture slices (nfat_arch=0)
+    and still be large enough to clear the minimum-size floor. Reading that as "no load commands at all" would
+    wave the image through with no rpaths and no dependencies checked -- dyld would refuse to load anything with
+    no matching slice, but this check doesn't lean on that; it refuses on its own."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    t["libnode"].write_bytes(struct.pack(">II", lane.FAT_MAGIC, 0) + b"\x00" * 24)
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="no architecture slices"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_the_dyld_fallback_search_checks_every_folder_even_when_none_holds_the_file(tmp_path, monkeypatch):
+    """Spec a (commit review, round 4 follow-up), as a direct unit check of _check_fallback: dyld repeats the
+    identical, ordered search at exec time regardless of what's there right now, so every DYLD_FALLBACK_LIBRARY_PATH
+    folder must be checked for writability even when the file sits in none of them -- not just the first one, and
+    not skipped outright just because nothing is found. The first folder here is clean and empty; only the
+    second, also empty, is group-writable, and that alone must still refuse."""
+    clean = tmp_path / "clean-fallback"
+    clean.mkdir()
+    writable_empty = tmp_path / "writable-empty-fallback"
+    writable_empty.mkdir()
+    os.chmod(writable_empty, 0o775)
+    try:
+        monkeypatch.setattr(lane, "DYLD_FALLBACK_LIBRARY_PATH", (str(clean), str(writable_empty)))
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane._check_fallback("/opt/homebrew/opt/x/lib/libmissing.dylib", Path("/opt/homebrew/bin/node"),
+                                 Path("/opt/homebrew/bin/node"))
+    finally:
+        os.chmod(writable_empty, 0o755)
+
+
 def test_usr_lib_and_system_libraries_are_never_checked(env, tmp_path, monkeypatch):
     """Spec a: /usr/lib and /System libraries are Apple's own and skipped outright — not even stat'd, or these two,
     which don't exist, would refuse the node."""
