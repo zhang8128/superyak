@@ -240,7 +240,11 @@ With `lane=None`, the output is byte-for-byte what it is today.
 - **The command:** sandbox-exec is given the resolved node binary, never a bare `node`. A deny-default profile refuses
   the PATH search (spike 5).
 - **Its node** is an absolute path in teamd's own config (`lane_node`). It is refused if it lies under any worktree or
-  is writable by anyone but its owner. It is never `which node`.
+  is writable by anyone but its owner. It is never `which node`. `check_lane_node` (`lane.py`, lane-node-libs) also
+  walks every library the binary loads, directly or transitively, reading each one's own Mach-O load commands:
+  each is checked both under the path it's loaded by and at its realpath, every `@rpath` folder it could search
+  is checked whether or not anything resolves through it, and the walk refuses a binary that embeds its own
+  `DYLD_*` overrides or names anything but the standard dynamic linker.
 - **When it stops:** teamd stops it in the same four places that remove the lane. The broker runs in its own process
   group, and teamd kills that group.
 - **Its Playwright:** `~/.superyak/team/broker/playwright-core-<version>/`. `<version>` and its integrity hash are read from the lockfile at the
@@ -510,21 +514,48 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
 
 ## Known limits
 
-- **check_lane_node's library check only covers what `otool -l`'s load commands list** (lane-node-libs), walked
-  breadth-first from node through every library it loads, directly or transitively. A library loaded at runtime
-  with `dlopen` instead of at load time never appears there, so it isn't checked, as the path it's loaded under or
-  at its realpath. Nothing in a stock Homebrew or nodejs.org-tarball node does this; it would need its own control
-  if a future node build did.
-- **The exec-time window is now closed down to the syscall boundary** (lane-node-libs, review rounds 2-3).
-  `prepare_broker`'s `verify=True` call re-checks `lane_node` right before it returns to teamd, and `start_broker`
-  re-checks it again itself, on `node_bin` directly (never re-read from config), immediately before the
-  `subprocess.Popen` call (`lane.py`, `start_broker`). A fresh refusal, or a path that no longer matches `node_bin`,
-  stops the broker before anything is spawned. What's left is `start_broker`'s own few lines of Python between
-  that check and the `Popen` call (building the argv list; no filesystem access of its own), which is as close to
-  atomic as a plain Python process can get without the kernel's help.
-- **The device-based `_apple_sealed` check (review round 3) still trusts `otool -l`'s own output.** If `otool`
-  itself were compromised or its output were tampered with in transit, nothing here would notice; `_run`'s
-  absolute path and timeout guard against a hijacked `otool` on `PATH`, not a broken one.
+- **check_lane_node's library check only covers what a load command actually lists** (lane-node-libs), walked
+  breadth-first from node through every library it loads, directly or transitively, read directly from each
+  image's own Mach-O bytes. A library loaded at runtime with `dlopen` instead of at load time never appears in a
+  load command, so it isn't checked, as the path it's loaded under or at its realpath. Homebrew's node links
+  Homebrew's own OpenSSL 3, which does exactly this: it `dlopen`s whatever provider or engine its config file
+  names, and that config (the `nodejs_conf` section of `openssl.cnf` by default) lives under
+  `/opt/homebrew/etc`, which is admin-group-writable. What actually bounds this is the broker's profile, not the
+  check: the broker can't read `/opt/homebrew/etc` at all, and `broker_env` sets no `OPENSSL_CONF`, so it can only
+  ever map a dlopen target from the trees the profile already allows.
+- **The window between a check and dyld's own load in the broker's child isn't closed, and can't be, by any
+  check-then-use design.** `prepare_broker`'s `verify=True` call re-checks `lane_node` right before it returns to
+  teamd, and `start_broker` re-checks it again itself, on `node_bin` directly, immediately before the
+  `subprocess.Popen` call — but the window that matters runs from when each folder is actually checked, early in
+  a walk that reads one image after another in sequence, all the way to dyld's open in the child, well after
+  `sandbox-exec` has started. Re-checking later only shrinks how long the window is open before the walk even
+  starts; it can't make the walk itself instantaneous. That window is harmless wherever nobody but this user or
+  root could write in the first place — but S1 through S5 (lane-node-libs, review round 4) are exactly the places
+  where someone else could, and the profile (below) is what actually bounds the damage, not the timing.
+- **check_lane_node now reads every load command directly from a binary's own Mach-O bytes**, never `otool`, so
+  there's no `otool`/`xcrun` process, no `DEVELOPER_DIR` or `xcode-select` trust, and no text format to misparse
+  (lane-node-libs, review round 4, S6). This removes a Known-limits entry an earlier draft had here about trusting
+  `otool`'s own output.
+- **The library check reads mode bits only, never ACLs.** `_check_owner` (`lane.py`) decides "writable by nobody
+  else" from `st_mode` alone. A macOS ACL (`chmod +a "group:staff allow add_file" <folder>`) can make a folder
+  writable by others while its mode still shows `0755`, which the check would read as clean. This predates
+  lane-node-libs; an ACL check (`/bin/ls -lde`, or the ACL syscalls directly) is a follow-up, not part of this
+  branch.
+- **`@loader_path` and `@executable_path` are expanded, and an `@loader_path/`-named dependency is searched for,
+  against each image's realpath folder only, never the as-loaded (possibly symlinked) path's own folder**
+  (lane-node-libs, review round 4, N7). If a library is ever reached through a symlink and dyld actually expands
+  `@loader_path` from the symlink's own folder rather than its target's, a folder dyld would search is never
+  checked, and a file sitting beside the symlink (not beside the realpath) wouldn't be found by this walk either
+  — the likelier failure mode is this code wrongly refusing a load that dyld would have resolved, not missing a
+  real one, but it wasn't confirmed which way dyld actually behaves. Checking both folders would cost nothing;
+  it just wasn't done this round.
+- **The broker's profile — `b/`, node's own prefix, `/opt/homebrew/{Cellar,opt}` and `/usr/local/{Cellar,opt}`,
+  Playwright and its browsers, and whatever `system.sb` allows — is the second wall, not a detail.** Wherever the
+  library check above has a real window or gap (the exec-time window; S1 through S5; the ACL blind spot just
+  above), what actually keeps a bad outcome from mattering is that dyld, inside the broker, can only ever map a
+  file from one of those trees. A library outside them can't load no matter what the check said about it, and a
+  library the check refused but that lives outside those trees was never reachable anyway. The check and the
+  profile are both walls; neither one alone is the whole story.
 - Inside the broker, Chrome runs without its own sandbox. The broker's deny-default profile is the wall. A page that
   takes over a renderer gets the profile's powers:
   - the lane's ports, `<lane>/b`, and reads of the headless shell, Playwright and node;
@@ -794,11 +825,37 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
 11. **Preload.** Run under node, `listen(0)`, `listen(0, '0.0.0.0')` and `listen(0, '::')` all bind `127.0.0.1`.
 
 **Mac acceptance** (Serenity runs it at a time the Bricks lead picks). The prerequisites are:
-- `lane_node` set (see "Its node"), and on a stock Homebrew install, `chmod g-w /opt/homebrew/Cellar /opt/homebrew/opt`
-  first — otherwise check_lane_node's library check (below) refuses it and names the same fix. Simplest: skip
-  Homebrew and point `lane_node` at a plain nodejs.org tarball, unpacked root-owned into its own folder such as
-  `/usr/local/lib/nodejs/node-vX/` — never the `.pkg`, which installs into `/usr/local/bin` and widens the broker's
-  readable prefix to all of `/usr/local`;
+- `lane_node` set (see "Its node"). On a stock Homebrew install:
+  1. `chmod g-w /opt/homebrew/bin /opt/homebrew/Cellar /opt/homebrew/opt`;
+  2. confirm it took, and that `/opt/homebrew` and the keg folders node actually uses are also `755`:
+     `stat -f '%Lp %N' /opt/homebrew /opt/homebrew/bin /opt/homebrew/Cellar /opt/homebrew/opt` (every line should
+     print `755`) — a stock install leaves `bin` group-writable too, not just `Cellar` and `opt`;
+  3. nothing further to confirm here: `check_lane_node`'s prefix rule is scoped per image, not fixed to node's own
+     keg, so libnode loading Homebrew's OpenSSL, which loads Homebrew's abseil, is fine as long as each `@rpath`/
+     `@loader_path`/`@executable_path` load lands inside *that loading image's own* grandparent (keg) folder —
+     abseil's own libraries loading each other inside abseil's keg, never node's, is the normal case, not a
+     violation. What still refuses is an `@`-relative load that escapes its OWN image's keg into anything else.
+
+  Without the chmod, `check_lane_node`'s library check (below) refuses the node and names the same fix.
+
+  Simpler and more durable: skip Homebrew for the broker's own node, and use a self-contained nodejs.org tarball,
+  unpacked root-owned into its own folder — never the `.pkg`, which installs into `/usr/local/bin` and widens the
+  broker's readable prefix to all of `/usr/local` (and `/usr/local/lib` itself is admin-group-writable on any Mac
+  that ever had Intel Homebrew, so check its ancestors, or pick a folder that was never touched by Homebrew, if
+  reusing `/usr/local/lib/nodejs/...`). For example, from `https://nodejs.org/dist/`:
+  ```
+  curl -LO https://nodejs.org/dist/vX.Y.Z/node-vX.Y.Z-darwin-arm64.tar.xz
+  curl -LO https://nodejs.org/dist/vX.Y.Z/SHASUMS256.txt
+  curl -LO https://nodejs.org/dist/vX.Y.Z/SHASUMS256.txt.sig
+  gpg --verify SHASUMS256.txt.sig SHASUMS256.txt   # against a key fetched from the Node.js release keyring
+  grep node-vX.Y.Z-darwin-arm64.tar.xz SHASUMS256.txt | shasum -a 256 -c -
+  sudo mkdir -p /usr/local/lib/nodejs/node-vX.Y.Z
+  sudo tar -xJf node-vX.Y.Z-darwin-arm64.tar.xz -C /usr/local/lib/nodejs/node-vX.Y.Z --strip-components 1
+  sudo chown -R root:wheel /usr/local/lib/nodejs/node-vX.Y.Z
+  sudo chmod -R go-w /usr/local/lib/nodejs/node-vX.Y.Z
+  ```
+  then set `lane_node` to `/usr/local/lib/nodejs/node-vX.Y.Z/bin/node` and run `check_lane_node` (see the lane-node-
+  libs report for the exact command) to confirm it passes unmocked;
 - a team with `browser_lane: true` set in a preset;
 - the approved-listener list filled in;
 - the worktree prepared, so `npx` needs no registry.
