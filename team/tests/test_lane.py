@@ -2742,14 +2742,19 @@ def test_r5_nit6_a_missing_weak_loader_paths_own_folder_is_checked_as_a_search_f
     """Nit 6: a missing weak @loader_path/ candidate still gets its own folder checked as a search folder in its
     own right (sticky disallowed, S1's own rule for the last folder actually reached), not merely as the
     intermediate ancestor it already was when the loading image's own path got resolved (sticky allowed there).
-    libnode's own lib/ is sticky AND group-writable: that passes as a mere intermediate when libnode itself is
-    checked, but must still refuse once asked about as @loader_path/'s own search folder."""
+    node_bin loads libnode by its ABSOLUTE path here, never through an @rpath that would also name lib/ as one
+    of node_bin's own LC_RPATH folders -- node_bin's own rpath folders are already checked unconditionally
+    (S2), regardless of nit 6, so this isolates nit 6's own guard: the only way lib/ gets checked here is as
+    libnode's own intermediate ancestor (sticky allowed) and, if nit 6 holds, as @loader_path/'s own search
+    folder (sticky disallowed) when libnode's weak dependency turns out to be missing. libnode's own lib/ is
+    sticky AND group-writable: that passes as a mere intermediate when libnode itself is checked, but must
+    still refuse once asked about as @loader_path/'s own search folder."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     t = homebrew_like_tree(tmp_path / "hb")
     os.chmod(t["lib_dir"], 0o1775)
     try:
         fake_macho(monkeypatch, {
-            str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"]))],
             str(t["libnode"]): [("LC_LOAD_WEAK_DYLIB", "@loader_path/libmissing-weak.dylib")],
         })
         with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
@@ -2942,7 +2947,10 @@ def test_probe2_dylds_chain_winner_is_never_checked_with_realpath_only_dedupe(en
     lib = t["lib_dir"]
     for n in ("libA", "libB", "libC", "libD", "libx"):
         (lib / (n + ".dylib")).write_bytes(b"fake")
-    f1 = t["node_bin"].parents[1] / "f1"
+    # named to sort AFTER lib_dir: a mutation that stops at the first matching candidate (sorted(chain, key=str))
+    # would find lib_dir's own clean libx first and never reach this one, so this folder's own writability is
+    # exactly what distinguishes "every candidate checked" from "only the first" -- not merely "some folder is".
+    f1 = t["node_bin"].parents[1] / "zzz-world-writable-rpath"
     f1.mkdir()
     (f1 / "libx.dylib").write_bytes(b"fake")
     os.chmod(f1 / "libx.dylib", 0o666)
