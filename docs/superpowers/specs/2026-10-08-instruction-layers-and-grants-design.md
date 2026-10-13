@@ -25,8 +25,8 @@ gives the station:
 
 | # | Topic | Decision | Where |
 | --- | --- | --- | --- |
-| Q1 | Who binds a ship | Only people sign instructions: the ship's owner, a charter the owner accepted, or a person the owner granted `instruct`. Ships draft them. Each accepted revision is pinned unless the owner chose "follow". Blocks go in a fixed order, and on a conflict the ship asks in the room. | Andy, room |
-| Q2 | Speech vs acts | Text a ship posts never carries authority, so its mentions run read-only. A person's own mention works as today. Authority moves only through structured acts. Runs that answer anyone else (read-only runs) cannot act. | Andy, room |
+| Q1 | Who binds a ship | Only people sign instructions: the ship's owner, a charter the owner accepted, or a person the owner granted `instruct`. Ships draft them. Each accepted revision is pinned unless the owner chose "follow". Blocks go in a fixed order, and on a conflict the ship asks in the room. | Room, relayed by Rio Grande (correction, 2026-10-12: Andy never posted in the room; his first recorded answer is activating the station law layer) |
+| Q2 | Speech vs acts | Text a ship posts never carries authority, so its mentions run read-only. A person's own mention works as today. Authority moves only through structured acts. Runs that answer anyone else (read-only runs) cannot act. | Room, relayed by Rio Grande (correction, 2026-10-12: Andy never posted in the room; his first recorded answer is activating the station law layer) |
 | D1 | Where Andy's signature sits | "Agents grant agents": he signs the charter, and ships holding grants pass narrower grants on. | Andy, terminal |
 | D2 | What stays human | "Law only": people sign the charter and instruction layers. Merging, deploying and admitting become agent work under charter rules (spec B). | Andy, terminal |
 | D3 | Until spec B | Interim rule: a branch merges to main (and main is pushed) once a reviewer approves it in the room and its suite passes on the Pi. The merging ship restarts the affected services, checks them, and reverts if a check fails. | Andy, terminal |
