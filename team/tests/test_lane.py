@@ -3319,16 +3319,33 @@ def test_a_fat_binary_naming_zero_slices_refuses_rather_than_reading_as_empty(en
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
-def test_probe2_a_valid_macho_over_64_mib_is_refused(tmp_path):
-    """R-M1 (round 5 re-review), kept under the reviewer's own name though the assertion is now the opposite of
-    its old title: the probe demonstrated that a valid, merely large Mach-O WAS refused on 69d1962 (the nodejs.org
-    node binary is ~100 MB+; the same release's linux-arm64 binary is 117 MB), though the parser only ever preads
-    its header and load commands -- it never reads the whole file, so a 64 MiB cap guarded against nothing and
-    would have refused the exact binary the docs recommend installing. Fixed, it parses fine."""
+def test_a_file_too_small_to_hold_a_macho_header_refuses(tmp_path):
+    """Round 6: the st_size < 28 floor stays even though the upper bound (MAX_MACHO_BYTES) is gone -- a file too
+    small to hold even a 32-bit thin mach_header can never be a real Mach-O, and reading one at all would run
+    past its own end."""
+    p = tmp_path / "tiny"
+    p.write_bytes(b"x" * 27)
+    with pytest.raises(lane.LaneRefused, match="too small"):
+        lane._macho_load_commands(p)
+
+
+def test_probe3_parser_reads_only_headers_of_a_huge_sparse_file(tmp_path):
+    """Round 6 re-review: the size cap (MAX_MACHO_BYTES, round 5's R-M1 departure) is dropped outright -- the
+    parser never reads the whole file at all, only the header, load commands and (nit 1) each recognized
+    command's own bounded name, so file size by itself can never be used to make this slow or memory-hungry. A
+    3 GiB sparse file with a valid header parses in well under a second, with peak memory barely moving.
+    Supersedes test_probe2_a_valid_macho_over_64_mib_is_refused (dropped per Rio Grande's ruling), which only
+    ever proved the cap didn't matter at one size; this proves why no cap is needed at all."""
+    import resource
+    import time
     p = tmp_path / "node"
     p.write_bytes(macho_bytes([("LC_LOAD_DYLINKER", "/usr/lib/dyld"), ("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib")]))
-    os.truncate(p, 100 * 1024 * 1024)                    # sparse: same header, 100 MiB file
+    os.truncate(p, 3 * 1024 * 1024 * 1024)
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    t0 = time.monotonic()
     assert lane._macho_load_commands(p)
+    assert time.monotonic() - t0 < 1.0
+    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before < 50 * 1024      # KiB on Linux: < 50 MiB
 
 
 def test_r5_m1_nfat_above_16_refuses_without_looping_to_the_end_of_the_file(tmp_path):

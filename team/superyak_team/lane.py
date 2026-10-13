@@ -2238,9 +2238,6 @@ _LC_NAMES = {LC_LOAD_DYLIB: "LC_LOAD_DYLIB", LC_ID_DYLIB: "LC_ID_DYLIB", LC_LOAD
              LC_DYLD_ENVIRONMENT: "LC_DYLD_ENVIRONMENT", LC_RPATH: "LC_RPATH",
              LC_LOAD_WEAK_DYLIB: "LC_LOAD_WEAK_DYLIB", LC_REEXPORT_DYLIB: "LC_REEXPORT_DYLIB",
              LC_LOAD_UPWARD_DYLIB: "LC_LOAD_UPWARD_DYLIB", LC_LAZY_LOAD_DYLIB: "LC_LAZY_LOAD_DYLIB"}
-MAX_MACHO_BYTES = 4 * 1024 * 1024 * 1024    # a sanity cap only: the parser only ever preads the header and load
-                                             # commands, never the whole file, so this guards against nothing a
-                                             # real node binary would hit -- the nodejs.org tarball's is 90-120 MB
 MAX_FAT_ARCHES = 16                         # real universal binaries have 2-4 slices; this is already generous
 
 
@@ -2359,14 +2356,16 @@ def _macho_slices(fd, size):
 def _macho_commands_by_arch(path):
     """Every load command path's own Mach-O bytes give, kept separate per architecture slice -- {cputype:
     [(cmd, value), ...]}. dyld maps exactly one slice per image, by the running architecture, and never merges
-    one slice's rpaths or dependencies with another's (R-S3); a thin Mach-O is a single-entry dict, keyed by its
-    own mach_header's cputype (no fat_arch table names one). fstat runs on the very fd the bytes are read from,
-    so what gets parsed is confirmed, atomically, to be a plain file — closing the gap between checking a path
-    and opening something else there. The open itself passes O_NONBLOCK (nit 2): without it, a FIFO with no
-    writer waiting on the other end blocks forever inside the open call itself, before fstat ever gets a chance
-    to refuse it as not a plain file; a regular file opens exactly the same either way. Raises LaneRefused,
-    naming path, on anything that doesn't parse, including a file too small, too large, or not a Mach-O at
-    all."""
+    one slice's rpaths or dependencies with another's; a thin Mach-O is a single-entry dict, keyed by its own
+    mach_header's cputype (no fat_arch table names one). fstat runs on the very fd the bytes are read from, so
+    what gets parsed is confirmed, atomically, to be a plain file — closing the gap between checking a path and
+    opening something else there. The open itself passes O_NONBLOCK: without it, a FIFO with no writer waiting
+    on the other end blocks forever inside the open call itself, before fstat ever gets a chance to refuse it
+    as not a plain file; a regular file opens exactly the same either way. No upper size bound: every read here
+    is a small, fixed-size pread (the header, up to 16 fat_arch records, each slice's own header, 8 bytes per
+    load command, and each recognized command's own bounded name), never the whole file, so file size alone
+    can't make this slow or memory-hungry. Raises LaneRefused, naming path, on anything that doesn't parse,
+    including a file too small to hold a Mach-O header at all, or not a Mach-O at all."""
     try:
         fd = os.open(str(path), os.O_RDONLY | os.O_NONBLOCK)
     except OSError as e:
@@ -2378,8 +2377,8 @@ def _macho_commands_by_arch(path):
             raise LaneRefused("%s can't be checked (%s)" % (path, e.strerror or e))
         if not stat.S_ISREG(st.st_mode):
             raise LaneRefused("%s isn't a plain file" % path)
-        if st.st_size < 28 or st.st_size > MAX_MACHO_BYTES:
-            raise LaneRefused("%s is too small or too large to be a node binary or library" % path)
+        if st.st_size < 28:
+            raise LaneRefused("%s is too small to be a node binary or library" % path)
         try:
             by_arch = {}
             for hint, offset, size in _macho_slices(fd, st.st_size):
