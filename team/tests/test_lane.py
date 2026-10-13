@@ -3319,6 +3319,31 @@ def test_a_fat_binary_naming_zero_slices_refuses_rather_than_reading_as_empty(en
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
+def test_probe3_one_huge_name_command_is_read_whole(tmp_path):
+    """Nit 1 (round 6 re-review probe, inverted to the fixed behaviour): the one read in the whole parser that
+    scales with the file -- a recognized command's own name, read as cmdsize - offset bytes -- used to be read
+    in full no matter how large: a 64 MiB LC_RPATH was read whole into memory on 6037fee. dyld itself rejects
+    paths over PATH_MAX (1024 bytes), so capping this read at about 4 KiB is the one memory bound the parser
+    actually needs, now that the whole-file size cap is gone. Fixed, a name this large refuses instead."""
+    big = 64 * 1024 * 1024
+    raw = b"/x" + b"a" * (big - 3) + b"\x00"
+    cmd = struct.pack("<III", lane.LC_RPATH, 12 + len(raw), 12) + raw
+    p = tmp_path / "lib"
+    p.write_bytes(struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, len(cmd), 0, 0) + cmd)
+    with pytest.raises(lane.LaneRefused, match="longer than"):
+        lane._macho_load_commands(p)
+
+
+def test_a_name_just_under_the_cap_still_reads_fine(tmp_path):
+    """Nit 1: the cap is generous (about 4 KiB; dyld itself rejects paths over PATH_MAX, 1024), not a trap for
+    any real path -- a name comfortably under it still reads correctly."""
+    raw = b"/opt/homebrew/Cellar/node/26.11.1/lib/libnode.147.dylib\x00"
+    cmd = struct.pack("<III", lane.LC_LOAD_DYLIB, 12 + len(raw), 12) + raw
+    p = tmp_path / "lib"
+    p.write_bytes(struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, len(cmd), 0, 0) + cmd)
+    assert lane._macho_load_commands(p) == [("LC_LOAD_DYLIB", raw[:-1].decode())]
+
+
 def test_a_file_too_small_to_hold_a_macho_header_refuses(tmp_path):
     """Round 6: the st_size < 28 floor stays even though the upper bound (MAX_MACHO_BYTES) is gone -- a file too
     small to hold even a 32-bit thin mach_header can never be a real Mach-O, and reading one at all would run

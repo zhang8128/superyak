@@ -2253,15 +2253,22 @@ def _read_exact(fd, offset, length):
     return data
 
 
+MAX_LC_STR_BYTES = 4096              # dyld itself rejects any path over PATH_MAX (1024); generous headroom above
+                                      # that is the one memory bound the parser needs, now there's no whole-file cap
+
+
 def _macho_lc_str(fd, cmd_start, cmdsize):
     """The name an LC_STR-shaped load command points to (LC_LOAD_DYLIB and its three siblings, LC_ID_DYLIB,
     LC_RPATH, LC_LOAD_DYLINKER and LC_DYLD_ENVIRONMENT all share this layout), as plain text. Refuses a bad
-    offset, a string that runs past the command, one with no terminating NUL, or one that isn't valid UTF-8 —
+    offset, a string that runs past the command, one longer than MAX_LC_STR_BYTES (the only read in this whole
+    parser that scales with its input at all), one with no terminating NUL, or one that isn't valid UTF-8 —
     otool's own text report used to turn a bad byte into a silently-fine U+FFFD — or that holds an embedded
     newline (which could make a one-line refusal misleading)."""
     (offset,) = struct.unpack("<I", _read_exact(fd, cmd_start + 8, 4))
     if offset < 8 or offset >= cmdsize:
         raise _MachOError("has a load command whose name offset is out of range")
+    if cmdsize - offset > MAX_LC_STR_BYTES:
+        raise _MachOError("has a load command name longer than %d bytes" % MAX_LC_STR_BYTES)
     raw = _read_exact(fd, cmd_start + offset, cmdsize - offset)
     nul = raw.find(b"\x00")
     if nul == -1:
