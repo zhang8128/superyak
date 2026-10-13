@@ -3366,11 +3366,13 @@ def test_probe3_parser_reads_only_headers_of_a_huge_sparse_file(tmp_path):
     p = tmp_path / "node"
     p.write_bytes(macho_bytes([("LC_LOAD_DYLINKER", "/usr/lib/dyld"), ("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib")]))
     os.truncate(p, 3 * 1024 * 1024 * 1024)
+    ru_maxrss_unit = 1 if sys.platform == "darwin" else 1024      # bytes on macOS, KiB on Linux (man getrusage)
     before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     t0 = time.monotonic()
     assert lane._macho_load_commands(p)
     assert time.monotonic() - t0 < 1.0
-    assert resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before < 50 * 1024      # KiB on Linux: < 50 MiB
+    grown = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) * ru_maxrss_unit
+    assert grown < 50 * 1024 * 1024
 
 
 def test_r5_m1_nfat_above_16_refuses_without_looping_to_the_end_of_the_file(tmp_path):
