@@ -3154,10 +3154,12 @@ def test_a_path_under_the_data_volume_that_looks_like_system_is_still_checked(en
 def test_apple_sealed_skip_rules(monkeypatch):
     """A plain unit check of _apple_sealed itself: /usr/lib and /System are skipped only when normalized (so a
     ../ trick that only looks like it starts there isn't), only when not also under NOT_SEALED textually (the
-    writable Data volume and firmlink targets), and only then — first by asking dyld's own shared-cache predicate
-    (_shared_cache_contains), and if that says no, by the nearest existing ancestor's own device
-    (_nearest_sealed_ancestor) — never by a string prefix alone, which a case-insensitive volume could let a path
-    dodge by spelling itself in a different case. A path that can't be stat'd by either tier is never sealed."""
+    writable Data volume and firmlink targets), and only then: first by asking dyld's own shared-cache predicate
+    (_shared_cache_contains); if that predicate ran and definitely said no, by whether entry itself genuinely
+    exists on the sealed device (_on_the_sealed_volume, R-S2 -- never by a nearby ancestor's device alone, which
+    says nothing about entry or dyld's own fallback search for it); and only when the predicate couldn't be asked
+    at all (None) does the cruder nearest-existing-ancestor heuristic (_nearest_sealed_ancestor) apply. Never a
+    string prefix alone, which a case-insensitive volume could let a path dodge by spelling itself differently."""
     assert not lane._apple_sealed("/usr/lib/../../opt/x")                      # normpath(entry) != entry
     assert not lane._apple_sealed("/usr/libexec/cups/foo")                    # not under /usr/lib/ or /System/
     assert not lane._apple_sealed("/opt/homebrew/opt/foo/lib/x.dylib")         # not under APPLE_DIRS at all
@@ -3167,12 +3169,90 @@ def test_apple_sealed_skip_rules(monkeypatch):
     monkeypatch.setattr(lane, "_device", lambda path: 1 if path == "/usr/sbin" else 2)   # tier 2 alone would fail
     assert lane._apple_sealed("/usr/lib/libc++.1.dylib")                      # tier 1 alone is still enough
     monkeypatch.undo()
-    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: False)  # the predicate says no: fall back
+    # the predicate ran and gave a DEFINITE no: tier 2 is now _on_the_sealed_volume, asked about entry directly,
+    # never _nearest_sealed_ancestor -- a made-up name that doesn't exist anywhere is never sealed this way, no
+    # matter what device its ancestor sits on (R-S2).
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: False)
+    monkeypatch.setattr(lane, "_device", lambda path: 1)
+    assert not lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
+    monkeypatch.undo()
+    # the predicate couldn't be asked at all (None): only then does the degraded ancestor-walk heuristic apply.
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: None)
     monkeypatch.setattr(lane, "_device", lambda path: 1 if path == "/usr/sbin" else 2)
     assert not lane._apple_sealed("/usr/lib/libc++.1.dylib")                   # a real name, but the wrong device
     monkeypatch.setattr(lane, "_device", lambda path: 1)                       # now everything is "the" sealed device
     assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
     assert lane._apple_sealed("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+
+
+def test_r5_s2_a_file_that_genuinely_exists_on_the_sealed_volume_but_isnt_cached_is_still_sealed(tmp_path, monkeypatch):
+    """R-S2's direct tier 2, unit-tested on its own (_on_the_sealed_volume): once the shared-cache predicate ran
+    and said entry isn't cached, a file that's nonetheless genuinely there, on the sealed device, is still
+    sealed -- some real Apple-shipped files (non-dylib resources, say) never go into the cache at all. Checked
+    directly on entry itself, never by an ancestor's own device alone."""
+    monkeypatch.setattr(lane, "_device", lambda path: 1)
+    real = tmp_path / "really-here.plist"
+    real.write_bytes(b"fake")
+    assert lane._on_the_sealed_volume(str(real))
+    assert not lane._on_the_sealed_volume(str(tmp_path / "not-here-at-all.plist"))
+    monkeypatch.setattr(lane, "_device", lambda path: 1 if path == "/usr/sbin" else 2)
+    assert not lane._on_the_sealed_volume(str(real))                           # exists, but the wrong device
+
+
+def test_r5_s2_on_the_sealed_volume_follows_a_symlink_to_its_target(tmp_path, monkeypatch):
+    """_on_the_sealed_volume follows a symlink to what it actually points at (dyld would too), rather than
+    judging the symlink's own device -- and refuses to call it sealed if the target is itself still a symlink
+    after one realpath resolve (which should never happen; realpath only ever removes symlinks)."""
+    monkeypatch.setattr(lane, "_device", lambda path: 1)
+    real = tmp_path / "real.dylib"
+    real.write_bytes(b"fake")
+    link = tmp_path / "link.dylib"
+    link.symlink_to(real)
+    assert lane._on_the_sealed_volume(str(link))
+    dangling = tmp_path / "dangling.dylib"
+    dangling.symlink_to(tmp_path / "nope")
+    assert not lane._on_the_sealed_volume(str(dangling))
+
+
+def test_r5_s2_the_nearest_ancestor_fallback_runs_only_when_the_predicate_cant_be_asked_at_all(monkeypatch):
+    """R-S2: _nearest_sealed_ancestor's own cruder heuristic is now reserved for when the shared-cache predicate
+    couldn't be asked at all (_shared_cache_contains returning None) -- never when it ran and gave a definite
+    answer, which _on_the_sealed_volume handles instead. Off macOS is exactly this degraded case."""
+    monkeypatch.setattr(lane, "_on_macos", lambda: False)
+    monkeypatch.setattr(lane, "_device", lambda path: 1)
+    assert lane._shared_cache_contains("/usr/lib/libc++.1.dylib") is None
+    assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
+
+
+def test_r5_s2_a_required_missing_name_under_apple_dirs_refuses_with_a_specific_message(env, tmp_path, monkeypatch):
+    """R-S2 (round 5 re-review), the probe's own shape: a REQUIRED load of a /usr/lib name that's neither in the
+    shared cache nor actually on disk must refuse, naming why, rather than being waved through because some
+    ancestor folder happens to sit on the sealed device."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: False)
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", "/usr/lib/libgone-from-this-os-xyz.dylib")]})
+    with pytest.raises(lane.LaneRefused, match="neither in the shared cache nor on disk"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_r5_s2_a_weak_missing_name_under_apple_dirs_runs_the_fallback_check(env, tmp_path, monkeypatch):
+    """R-S2: the same genuinely-missing /usr/lib name, but weak-linked, isn't refused outright -- dyld would
+    still try its own fallback search for it, so _check_fallback runs (and, here, refuses on its own, since the
+    fallback folder is group-writable) rather than the load being skipped as if it were sealed."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: False)
+    fallback = tmp_path / "fallback-lib"
+    fallback.mkdir()
+    os.chmod(fallback, 0o775)
+    try:
+        monkeypatch.setattr(lane, "DYLD_FALLBACK_LIBRARY_PATH", (str(fallback),))
+        t = homebrew_like_tree(tmp_path / "hb")
+        fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_WEAK_DYLIB", "/usr/lib/libgone-from-this-os-xyz.dylib")]})
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(fallback, 0o755)
 
 
 def test_nearest_sealed_ancestor_rejects_a_symlink_in_the_chain(tmp_path, monkeypatch):
@@ -7981,11 +8061,13 @@ def test_m1_real_shared_cache_libraries_are_recognized_without_mocking():
     """M1, run for real, no mocking at all: on a real Mac, /usr/lib/libSystem.B.dylib and libc++.1.dylib exist
     only in the dyld shared cache (Big Sur+) — a plain lstat refuses them as missing, but the real
     _dyld_shared_cache_contains_path recognizes them as sealed. A made-up name under /usr/lib, not in the cache
-    either, still resolves through the fallback: /usr/lib's own nearest existing, non-symlink ancestor really is
-    on the sealed system volume, which is read-only, so nothing could ever be planted at that made-up name."""
+    and not actually on disk either, is NOT sealed (R-S2, round 5 re-review): the predicate ran and gave a
+    definite no, and nothing is really there, so this is genuinely missing, not "trust the ancestor's device" --
+    dyld's own fallback search (DYLD_FALLBACK_LIBRARY_PATH) is what would actually run for a load like this, and
+    that must still be checked, not skipped."""
     assert lane._apple_sealed("/usr/lib/libSystem.B.dylib")
     assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
-    assert lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
+    assert not lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
     assert not lane._apple_sealed("/opt/homebrew/this-path-really-does-not-exist-anywhere-xyz.dylib")
 
 

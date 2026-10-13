@@ -2073,14 +2073,17 @@ _DYLD_SHARED_CACHE = {}                 # {"fn": the typed _dyld_shared_cache_co
 
 
 def _shared_cache_contains(entry):
-    """Whether entry is one of the libraries baked into the dyld shared cache: since Big Sur, every system
-    library — libSystem itself included — ships only in the cache, never as a separate file on disk (Apple's
-    11.0.1 release notes). Asks dyld's own predicate, _dyld_shared_cache_contains_path, exported by libSystem
-    (which teamd, on the same OS the broker runs under, already shares): exactly the test dyld itself uses, not a
-    guess about which names are "known" system libraries. False off macOS, if the symbol can't load, or on any
-    error asking it; _apple_sealed then falls back to the nearest existing ancestor's own device."""
+    """Whether dyld's own shared-cache predicate says entry is one of the libraries baked into the dyld shared
+    cache: since Big Sur, every system library — libSystem itself included — ships only in the cache, never as a
+    separate file on disk (Apple's 11.0.1 release notes). Asks _dyld_shared_cache_contains_path, exported by
+    libSystem (which teamd, on the same OS the broker runs under, already shares): exactly the test dyld itself
+    uses, not a guess about which names are "known" system libraries. Returns True or False when the predicate
+    actually answered, or None when it couldn't be asked at all — off macOS, the symbol failing to load, or any
+    error asking it. _apple_sealed needs that distinction: a definite "not cached" still leaves room to check
+    whether entry genuinely exists on the sealed volume some other way (_on_the_sealed_volume); "couldn't ask at
+    all" is the only time it falls back to the cruder nearest-existing-ancestor heuristic instead (R-S2)."""
     if not _on_macos():
-        return False
+        return None
     if "fn" not in _DYLD_SHARED_CACHE:
         try:
             libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
@@ -2092,25 +2095,51 @@ def _shared_cache_contains(entry):
         _DYLD_SHARED_CACHE["fn"] = fn
     fn = _DYLD_SHARED_CACHE["fn"]
     if fn is None:
-        return False
+        return None
     try:
         return bool(fn(os.fsencode(entry)))
     except (OSError, ValueError, TypeError):
+        return None
+
+
+def _on_the_sealed_volume(entry):
+    """entry itself (never an ancestor): a real file, directory or symlink that's actually there, on the sealed
+    system volume's own device — asked directly, once the shared-cache predicate ran and gave a definite "not
+    cached" for entry, since some genuinely Apple-shipped files (non-dylib resources, say) are sealed without
+    ever going into the cache at all (R-S2). A symlink is followed to its target first, the way dyld would; a
+    target that's still a symlink after one realpath resolve, or that errors, is never treated as sealed."""
+    try:
+        st = os.lstat(entry)
+    except OSError:
         return False
+    checked = entry
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            checked = os.path.realpath(entry)
+            st = os.lstat(checked)
+        except OSError:
+            return False
+        if stat.S_ISLNK(st.st_mode):
+            return False
+    return _device(checked) == _device("/usr/sbin")
 
 
 def _nearest_sealed_ancestor(entry):
-    """Fallback for _apple_sealed when the shared-cache predicate says no, or can't run: walk entry's own
-    components from "/" down to the nearest one that actually exists. No INTERMEDIATE component may be a symlink
-    (a symlink could lead anywhere, including off the sealed volume, and dyld would follow it); the entry itself
-    may be one (a framework's own Foo.framework/Foo -> Versions/Current/Foo is normal and still fully on the
-    sealed volume), in which case its realpath is what gets checked. The nearest existing one must be a
-    directory on /usr/sbin's own device. The sealed system volume is read-only and its mounts need root, so
-    nothing can be created below it — but a firmlinked ancestor such as CoreTypes.bundle/Contents/Library or
-    /System/Volumes/* shows the Data device, and still correctly refuses. A symlink's own target can itself be
-    missing (a framework's Versions/Current, say, is sealed-only too) — realpath can only ever remove symlinks,
-    never add one, so trying this walk at most twice (entry, then once more on its fully resolved form) is
-    enough."""
+    """Degraded fallback for _apple_sealed, used only when the shared-cache predicate couldn't be asked about
+    entry at all (off macOS, or the ctypes symbol failing to load) — never when it ran and gave a definite
+    answer, which _on_the_sealed_volume checks directly instead (R-S2). Walk entry's own components from "/"
+    down to the nearest one that actually exists. No INTERMEDIATE component may be a symlink (a symlink could
+    lead anywhere, including off the sealed volume, and dyld would follow it); the entry itself may be one (a
+    framework's own Foo.framework/Foo -> Versions/Current/Foo is normal and still fully on the sealed volume), in
+    which case its realpath is what gets checked. The nearest existing one must be a directory on /usr/sbin's
+    own device — a plain existing FILE there (never a directory) is walked normally instead of being recognized
+    as sealed, which only means some extra, harmless checking, not a gap, since this degraded tier already can't
+    tell a merely-nearby sealed folder from one that actually holds entry. The sealed system volume is read-only
+    and its mounts need root, so nothing can be created below it — but a firmlinked ancestor such as
+    CoreTypes.bundle/Contents/Library or /System/Volumes/* shows the Data device, and still correctly refuses. A
+    symlink's own target can itself be missing (a framework's Versions/Current, say, is sealed-only too) —
+    realpath can only ever remove symlinks, never add one, so trying this walk at most twice (entry, then once
+    more on its fully resolved form) is enough."""
     try:
         for _ in range(2):
             parts = Path(entry).parts
@@ -2140,17 +2169,31 @@ def _nearest_sealed_ancestor(entry):
 def _apple_sealed(entry):
     """entry is Apple's own: under /usr/lib or /System (APPLE_DIRS), normalized (os.path.normpath(entry) == entry,
     so a ../ trick can't borrow the prefix), not on the writable Data volume or a firmlink target (NOT_SEALED,
-    lane.py's own load_approved uses it the same way), and either baked into the dyld shared cache
-    (_shared_cache_contains) or rooted under the nearest existing ancestor's own sealed device
-    (_nearest_sealed_ancestor, for whatever the cache predicate doesn't cover). Skipped outright when true: the
-    broker's profile never reaches anything else there anyway."""
+    lane.py's own load_approved uses it the same way), and then: sealed if dyld's own shared-cache predicate says
+    so; when the predicate ran and gave a definite no, sealed only if entry itself genuinely exists on the sealed
+    volume (_on_the_sealed_volume) — never merely because some ancestor folder happens to sit there, which says
+    nothing about entry or about dyld's own fallback search for it (R-S2); and only when the predicate couldn't
+    be asked at all does the cruder nearest-existing-ancestor heuristic (_nearest_sealed_ancestor) apply. Skipped
+    outright when true: the broker's profile never reaches anything else there anyway. Not sealed — ordinary
+    missing-dependency handling, which refuses a required load or runs dyld's own fallback search for a weak one
+    — when entry is genuinely missing from both the cache and the disk."""
     if not isinstance(entry, str) or os.path.normpath(entry) != entry or not entry.startswith(APPLE_DIRS):
         return False
     if entry.startswith(NOT_SEALED):
         return False
-    if _shared_cache_contains(entry):
+    cached = _shared_cache_contains(entry)
+    if cached is True:
         return True
+    if cached is False:
+        return _on_the_sealed_volume(entry)
     return _nearest_sealed_ancestor(entry)
+
+
+def _under_apple_dirs(entry):
+    """Whether entry is in APPLE_DIRS's textual territory at all (not whether it's sealed — _apple_sealed decides
+    that); used only to pick a clearer refusal message for a name that's genuinely missing there (R-S2)."""
+    return (isinstance(entry, str) and os.path.normpath(entry) == entry and entry.startswith(APPLE_DIRS)
+            and not entry.startswith(NOT_SEALED))
 
 
 def _exists(path, real_bin):
@@ -2536,6 +2579,9 @@ def _dependency_target(cmd, name, real_bin, real_image, node_folder, chain, pref
                           % (real_bin, name, real_image))
     if found is None:
         if not weak:
+            if _under_apple_dirs(name):
+                raise LaneRefused("lane_node %s loads %s (from %s), which is neither in the shared cache nor on "
+                                  "disk" % (real_bin, name, real_image))
             raise LaneRefused("lane_node %s loads %s (from %s), which doesn't exist" % (real_bin, name, real_image))
         _check_search_directory(resolved.parent, name, real_image, real_bin)
         return _check_fallback(name, real_image, real_bin)
