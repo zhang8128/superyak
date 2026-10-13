@@ -2530,11 +2530,11 @@ def _expand_rpath(value, real_image, node_folder, real_bin):
 
 def _rpath_candidates(name, real_image, chain, guaranteed_folders, real_bin):
     """Where dyld could look for an @rpath/ dependency name of real_image, as (targets, resolved, guaranteed):
-    targets is every existing, non-Apple-sealed candidate (plural, R-M2) across chain -- own_rpaths union
+    targets is every existing, non-Apple-sealed candidate (plural) across chain -- own_rpaths union
     U(real_image), every rpath folder on any chain that reaches real_image, not just the one chain a
     breadth-first or worklist walk happened to use to get here -- to check and recurse into; resolved is True
     once at least one candidate (checked, or Apple-sealed) answers the load at all; guaranteed is True
-    only when such a candidate lies in guaranteed_folders (real_image's own rpaths union node's own, R5-S1) --
+    only when such a candidate lies in guaranteed_folders (real_image's own rpaths union node's own) --
     the two sets dyld's own depth-first resolution is guaranteed to search on EVERY possible chain into
     real_image, unlike a folder some OTHER loader merely happened to contribute to U. A name with a subfolder
     (a framework path, say) also gets that subfolder checked, the same way, since only the top search folder
@@ -2564,7 +2564,7 @@ def _loader_or_executable_candidate(name, real_image, node_folder, real_bin):
     """Where dyld could look for an @loader_path/ or @executable_path/ dependency name of real_image, as
     (target_or_none, resolved). @loader_path means real_image's own folder, @executable_path node's -- exactly
     one candidate either way, unambiguous regardless of chain, so "resolved" and "guaranteed" are the same
-    thing here (unlike @rpath, R5-S1): both are always on every chain dyld could use. Its own folder is checked
+    thing here (unlike @rpath): both are always on every chain dyld could use. Its own folder is checked
     here too, not only as the intermediate ancestor it already was when real_image's own path got
     resolved (sticky allowed there; not here, this being the search folder in its own right). Returns (None,
     False) when name is neither token."""
@@ -2742,9 +2742,9 @@ def _own_image_data(real, real_bin, node_folder, cputype, seed_commands=None):
 
 
 def _walk_one_architecture(real_bin, node_folder, checked_names, cputype, seed_commands):
-    """R-M2's fixpoint, over every image real_bin loads for one architecture, directly or transitively. For
+    """A fixpoint over every image real_bin loads for one architecture, directly or transitively. For
     each image, U(image) is the union of every rpath folder on any chain that reaches it -- the loader's own
-    rpaths, plus U(loader) -- grown to a fixpoint (the reviewer's own fix): each union only grows, and is
+    rpaths, plus U(loader) -- grown to a fixpoint: each union only grows, and is
     bounded by the whole graph's own rpath folders, so each image is re-resolved at most that many times, never
     forever. For every @-relative load, every existing candidate in own_rpaths union U(image) is treated as a
     possible winner -- checked, prefix-checked and recursed into (_dependency_targets) -- not just whichever
@@ -2803,9 +2803,9 @@ def _check_node_libraries(real_bin):
     suites cover the binary check alone). real_bin's own Mach-O bytes may hold more than one architecture
     slice (a universal binary); dyld maps exactly one per image, by the running architecture, and never merges
     one slice's rpaths or dependencies with another's, so each of real_bin's own architectures gets its own,
-    separate walk (_walk_one_architecture, R-S3) -- reading every OTHER image's matching slice by the same
+    separate walk (_walk_one_architecture) -- reading every OTHER image's matching slice by the same
     cputype, and refusing one that lacks it outright (dyld would fail to load it for that architecture too).
-    checked_names (M2: every distinct as-loaded name checked in full, _check_library, exactly once) is shared
+    checked_names (every distinct as-loaded name checked in full, _check_library, exactly once) is shared
     across every architecture's walk, since the ownership check doesn't depend on which slice asked for it.
 
     Known limits: a library loaded at runtime with dlopen, never listed in any load command, isn't checked.
@@ -2827,7 +2827,7 @@ def check_lane_node(value, worktrees):
     way and their own holding folders checked too (_resolve_path) — on a stock Homebrew install, bin, Cellar and
     opt are usually group-writable; the refusal then says to `chmod g-w` them. _resolve_path walks the
     configured value as given, never its realpath: the broker execs the realpath, but the as-given path
-    can hold its own symlinks _resolve_path would otherwise never see or check (S4) — resolving value instead
+    can hold its own symlinks _resolve_path would otherwise never see or check — resolving value instead
     of real is stricter, never looser, so this is deliberate, not an oversight. On macOS, every library it
     loads, directly or transitively (most of Homebrew's node's libraries load through libnode, not node
     itself), apart from Apple's own sealed ones, gets that same checking, reading each image's own Mach-O load
