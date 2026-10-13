@@ -124,7 +124,7 @@ def signed_in_browser(playwright, peer, username, *, viewport=None):
     page.get_by_label("Username", exact=True).fill(username)
     page.get_by_label("Password", exact=True).fill(peer["password"])
     page.get_by_role("button", name="Sign in").click()
-    expect(page.get_by_role("heading", name="Your home")).to_be_visible()
+    expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
     page.evaluate("scrollTo(0, 0)")
     page.wait_for_timeout(100)
     try:
@@ -295,7 +295,7 @@ def test_space_context_and_display_preferences_work_on_mobile(browser_peer):
         page.get_by_label('Quieter view', exact=True).check()
         page.get_by_role('button', name='Back to my home', exact=True).click()
         page.reload()
-        expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+        expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
         assert page.evaluate("document.documentElement.classList.contains('large-text')")
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         assert page.locator('nav[aria-label="Main navigation"] a').evaluate_all("nodes => nodes.every(node => node.getBoundingClientRect().bottom <= innerHeight)")
@@ -383,7 +383,7 @@ def test_late_home_refresh_cannot_replace_the_next_accounts_data(browser_peer):
         page.get_by_label('Username', exact=True).fill('doctor')
         page.get_by_label('Password', exact=True).fill(browser_peer['password'])
         page.get_by_role('button', name='Sign in', exact=True).click()
-        expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+        expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
         page.evaluate('async () => { window.__releaseHome(); await window.__oldRefresh; render(); }')
         expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Dr. Morgan')
         assert 'Patient-only private title' not in page.content()
@@ -443,7 +443,7 @@ def test_local_demo_opens_without_password_switches_accounts_and_renews_session(
     with sync_playwright() as playwright:
         with signed_out_browser(playwright) as page:
             page.goto(browser_peer['base_url'] + '/')
-            expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+            expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
             expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Alex Patient')
             page.get_by_role('link', name='My sharing layers').click()
             page.get_by_role('button', name='New layer').click()
@@ -451,7 +451,7 @@ def test_local_demo_opens_without_password_switches_accounts_and_renews_session(
             page.get_by_label('What do you want to share?').fill('Patient unsaved words')
             page.get_by_role('button', name='Account and sign out').click()
             page.get_by_role('button', name='Try doctor', exact=True).click()
-            expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+            expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
             expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Dr. Morgan')
             assert 'Patient unsaved words' not in page.content()
             assert page.request.get(browser_peer['base_url'] + '/api/me').json()['username'] == 'doctor'
@@ -614,7 +614,7 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             "organizer",
             viewport={"width": 390, "height": 844},
         ) as (page, _):
-            expect(page.get_by_role("heading", name="Your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             page.evaluate("scrollTo(0, 0)")
             page.wait_for_timeout(100)
@@ -798,7 +798,7 @@ def test_invited_participant_chooses_local_account_details(browser_peer):
             page.get_by_label("Username", exact=True).fill("newperson")
             page.get_by_label("Password", exact=True).fill("another-long-password")
             page.get_by_role("button", name="Sign in").click()
-            expect(page.get_by_role("heading", name="Your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
 
 
 def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
@@ -1272,7 +1272,7 @@ def test_assistant_suggestion_stays_with_initiating_layer_and_is_cleared_on_logo
                 page.get_by_label('Username', exact=True).fill('doctor')
                 page.get_by_label('Password', exact=True).fill(browser_peer['password'])
                 page.get_by_role('button', name='Sign in', exact=True).click()
-                expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+                expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
                 with page.expect_response(lambda r: r.url.endswith('/api/assistant') and r.request.method == 'POST'):
                     finish.set()
                 # Wait for the completed real response to be consumed by the app.
