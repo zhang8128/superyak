@@ -3249,6 +3249,36 @@ def test_r5_s3_a_dependency_missing_the_needed_architecture_slice_refuses(env, t
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
+def test_probe2_parser_edge_cases(tmp_path):
+    """Round 5 re-review, kept verbatim from Rio Grande's own probe: these already refuse closed on 69d1962 (a
+    confirmation, not a red/green regression) and continue to after round 5's changes. Bounds: a fat slice past
+    EOF, cmdsize 0, a name offset past cmdsize, and a fat header claiming 2^20 slices all refuse; a misaligned
+    cmdsize (dyld rejects these) is accepted -- harmless, since dyld refuses the image either way, and not
+    something this round changes."""
+    def write(name, data):
+        p = tmp_path / name
+        p.write_bytes(data)
+        return p
+    thin = macho_bytes([("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib")])
+    fat_past_eof = struct.pack(">II", lane.FAT_MAGIC, 1) + struct.pack(">iiIII", 0x0100000c, 0, 4096, len(thin), 4)
+    with pytest.raises(lane.LaneRefused):
+        lane._macho_load_commands(write("fat-eof", fat_past_eof + b"\x00" * 64))
+    zero = struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, 8, 0, 0) + struct.pack("<II", lane.LC_LOAD_DYLIB, 0)
+    with pytest.raises(lane.LaneRefused):
+        lane._macho_load_commands(write("zero", zero))
+    bad_off = (struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, 16, 0, 0)
+               + struct.pack("<III", lane.LC_RPATH, 16, 40) + b"/x\x00\x00")
+    with pytest.raises(lane.LaneRefused):
+        lane._macho_load_commands(write("badoff", bad_off))
+    many = struct.pack(">II", lane.FAT_MAGIC, 1 << 20) + b"\x00" * 64
+    with pytest.raises(lane.LaneRefused):
+        lane._macho_load_commands(write("many", many))
+    raw = b"/usr/lib/libSystem.B.dylib\x00"
+    odd = struct.pack("<III", lane.LC_LOAD_DYLIB, 12 + len(raw), 12) + raw       # cmdsize 39: not a multiple of 8
+    mis = struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, len(odd), 0, 0) + odd
+    assert lane._macho_load_commands(write("misaligned", mis)) == [("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib")]
+
+
 def test_a_fat_binary_naming_zero_slices_refuses_rather_than_reading_as_empty(env, tmp_path, monkeypatch):
     """Spec a (commit review, round 4 follow-up): a fat header can claim zero architecture slices (nfat_arch=0)
     and still be large enough to clear the minimum-size floor. Reading that as "no load commands at all" would
@@ -3262,10 +3292,12 @@ def test_a_fat_binary_naming_zero_slices_refuses_rather_than_reading_as_empty(en
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
-def test_r5_m1_a_valid_macho_over_64_mib_parses_fine(tmp_path):
-    """R-M1 (round 5 re-review): the nodejs.org node binary is ~100 MB+ (the same release's linux-arm64 binary is
-    117 MB), and the parser only ever preads its header and load commands -- it never reads the whole file, so a
-    size cap of 64 MiB guards against nothing and would refuse the exact binary the docs recommend installing."""
+def test_probe2_a_valid_macho_over_64_mib_is_refused(tmp_path):
+    """R-M1 (round 5 re-review), kept under the reviewer's own name though the assertion is now the opposite of
+    its old title: the probe demonstrated that a valid, merely large Mach-O WAS refused on 69d1962 (the nodejs.org
+    node binary is ~100 MB+; the same release's linux-arm64 binary is 117 MB), though the parser only ever preads
+    its header and load commands -- it never reads the whole file, so a 64 MiB cap guarded against nothing and
+    would have refused the exact binary the docs recommend installing. Fixed, it parses fine."""
     p = tmp_path / "node"
     p.write_bytes(macho_bytes([("LC_LOAD_DYLINKER", "/usr/lib/dyld"), ("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib")]))
     os.truncate(p, 100 * 1024 * 1024)                    # sparse: same header, 100 MiB file
@@ -3411,10 +3443,11 @@ def test_r5_s2_the_nearest_ancestor_fallback_runs_only_when_the_predicate_cant_b
     assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
 
 
-def test_r5_s2_a_required_missing_name_under_apple_dirs_refuses_with_a_specific_message(env, tmp_path, monkeypatch):
-    """R-S2 (round 5 re-review), the probe's own shape: a REQUIRED load of a /usr/lib name that's neither in the
-    shared cache nor actually on disk must refuse, naming why, rather than being waved through because some
-    ancestor folder happens to sit on the sealed device."""
+def test_probe2_missing_non_cache_usr_lib_load_is_skipped_without_the_fallback_check(env, tmp_path, monkeypatch):
+    """R-S2 (round 5 re-review), kept under the reviewer's own name though the assertion no longer matches its
+    old title: on 69d1962, a REQUIRED load of a /usr/lib name that's neither in the shared cache nor actually
+    on disk was waved through, called sealed because some ancestor folder happened to sit on the sealed device.
+    Fixed, it refuses with a specific message instead."""
     monkeypatch.setattr(lane.sys, "platform", "darwin")
     monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: False)
     t = homebrew_like_tree(tmp_path / "hb")
