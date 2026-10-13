@@ -2194,7 +2194,10 @@ _LC_NAMES = {LC_LOAD_DYLIB: "LC_LOAD_DYLIB", LC_ID_DYLIB: "LC_ID_DYLIB", LC_LOAD
              LC_DYLD_ENVIRONMENT: "LC_DYLD_ENVIRONMENT", LC_RPATH: "LC_RPATH",
              LC_LOAD_WEAK_DYLIB: "LC_LOAD_WEAK_DYLIB", LC_REEXPORT_DYLIB: "LC_REEXPORT_DYLIB",
              LC_LOAD_UPWARD_DYLIB: "LC_LOAD_UPWARD_DYLIB"}
-MAX_MACHO_BYTES = 64 * 1024 * 1024          # real binaries never approach this; a sanity cap, not a real limit
+MAX_MACHO_BYTES = 4 * 1024 * 1024 * 1024    # a sanity cap only: the parser only ever preads the header and load
+                                             # commands, never the whole file, so this guards against nothing a
+                                             # real node binary would hit -- the nodejs.org tarball's is 90-120 MB
+MAX_FAT_ARCHES = 16                         # real universal binaries have 2-4 slices; this is already generous
 
 
 class _MachOError(Exception):
@@ -2272,7 +2275,10 @@ def _macho_slices(fd, size):
     bytes, rather than guessing one endianness for everything. A fat header naming zero architectures refuses
     outright rather than returning an empty list: silently reading as "nothing to check" would wave an image
     through with no rpaths and no dependencies checked at all, dyld's own refusal to load anything with no
-    matching slice notwithstanding -- this check doesn't lean on dyld's exec-time behavior to catch that."""
+    matching slice notwithstanding -- this check doesn't lean on dyld's exec-time behavior to catch that. nfat
+    above MAX_FAT_ARCHES refuses directly too (real universal binaries have 2-4 slices), rather than looping one
+    pread per record out past wherever the file actually ends; and every fat_arch's own (offset, size) must lie
+    inside size, checked here rather than left to whatever eventually preads short inside it."""
     raw = _read_exact(fd, 0, 4)
     native = struct.unpack("<I", raw)[0]
     big = struct.unpack(">I", raw)[0]
@@ -2282,14 +2288,21 @@ def _macho_slices(fd, size):
         raise _MachOError("has foreign-endian Mach-O magic, which no native Mac binary has")
     if big == FAT_MAGIC:
         (nfat,) = struct.unpack(">I", _read_exact(fd, 4, 4))
+        if nfat > MAX_FAT_ARCHES:
+            raise _MachOError("names more than %d architecture slices" % MAX_FAT_ARCHES)
         slices = [struct.unpack(">iiIII", _read_exact(fd, 8 + i * 20, 20))[2:4] for i in range(nfat)]
     elif big == FAT_MAGIC_64:
         (nfat,) = struct.unpack(">I", _read_exact(fd, 4, 4))
+        if nfat > MAX_FAT_ARCHES:
+            raise _MachOError("names more than %d architecture slices" % MAX_FAT_ARCHES)
         slices = [struct.unpack(">iiQQII", _read_exact(fd, 8 + i * 32, 32))[2:4] for i in range(nfat)]
     else:
         raise _MachOError("doesn't start with a Mach-O or fat-binary magic number")
     if not slices:
         raise _MachOError("is a fat binary naming no architecture slices at all")
+    for offset, slice_size in slices:
+        if offset < 0 or slice_size < 0 or offset + slice_size > size:
+            raise _MachOError("names a slice whose (offset, size) runs past the end of the file")
     return slices
 
 

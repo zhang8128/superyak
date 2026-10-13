@@ -3075,6 +3075,38 @@ def test_a_fat_binary_naming_zero_slices_refuses_rather_than_reading_as_empty(en
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
+def test_r5_m1_a_valid_macho_over_64_mib_parses_fine(tmp_path):
+    """R-M1 (round 5 re-review): the nodejs.org node binary is ~100 MB+ (the same release's linux-arm64 binary is
+    117 MB), and the parser only ever preads its header and load commands -- it never reads the whole file, so a
+    size cap of 64 MiB guards against nothing and would refuse the exact binary the docs recommend installing."""
+    p = tmp_path / "node"
+    p.write_bytes(macho_bytes([("LC_LOAD_DYLINKER", "/usr/lib/dyld"), ("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib")]))
+    os.truncate(p, 100 * 1024 * 1024)                    # sparse: same header, 100 MiB file
+    assert lane._macho_load_commands(p)
+
+
+def test_r5_m1_nfat_above_16_refuses_without_looping_to_the_end_of_the_file(tmp_path):
+    """R-M1: a fat header naming more than 16 architecture slices refuses outright -- real fat files have 2-4;
+    16 is already generous. Each fat_arch entry here points well inside a large sparse file, so without an
+    explicit cap this would pread one record after another, all the way out past a real binary's natural end,
+    before anything else ever caught it."""
+    p = tmp_path / "manyarch"
+    p.write_bytes(struct.pack(">II", lane.FAT_MAGIC, 17) + struct.pack(">iiIII", 0x0100000c, 0, 1024, 32, 4) * 17)
+    os.truncate(p, 4096)
+    with pytest.raises(lane.LaneRefused, match="more than 16"):
+        lane._macho_load_commands(p)
+
+
+def test_r5_m1_a_fat_arch_region_past_the_end_of_the_file_refuses(tmp_path):
+    """R-M1: a fat_arch entry naming an (offset, size) region that runs past the file's own st_size refuses
+    directly, rather than relying on the eventual pread inside that region coming up short."""
+    p = tmp_path / "pasteof"
+    p.write_bytes(struct.pack(">II", lane.FAT_MAGIC, 1) + struct.pack(">iiIII", 0x0100000c, 0, 100, 50, 4))
+    os.truncate(p, 120)                                   # offset 100 + size 50 = 150, past the 120-byte file
+    with pytest.raises(lane.LaneRefused, match="runs past"):
+        lane._macho_load_commands(p)
+
+
 def test_the_dyld_fallback_search_checks_every_folder_even_when_none_holds_the_file(tmp_path, monkeypatch):
     """Spec a (commit review, round 4 follow-up), as a direct unit check of _check_fallback: dyld repeats the
     identical, ordered search at exec time regardless of what's there right now, so every DYLD_FALLBACK_LIBRARY_PATH
