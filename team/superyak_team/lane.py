@@ -2055,7 +2055,7 @@ DYLIB_LOAD_CMDS = {"LC_LOAD_DYLIB": "required", "LC_REEXPORT_DYLIB": "required",
                    "LC_LOAD_WEAK_DYLIB": "weak"}
 
 APPLE_DIRS = ("/usr/lib/", "/System/")              # Apple's own; _apple_sealed may skip these outright
-MAX_IMAGES = 1024                                    # the library walk's cap, counted on (realpath, chain) visits
+MAX_IMAGES = 1024                                    # the library walk's cap, counted on distinct realpaths seen
 DYLD_LINKER = "/usr/lib/dyld"                       # the only LC_LOAD_DYLINKER a walked image may name
 # dyld's own documented fallback search (man dyld), tried once a load's own path and rpath search both fail, by
 # the load's leaf name alone, in an unrestricted process such as Homebrew's ad-hoc-signed node.
