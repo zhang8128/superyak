@@ -60,6 +60,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(lane, "MANAGED_SETTINGS", tmp_path / "managed-settings.json")
     monkeypatch.setattr(lane, "MANAGED_MCP", tmp_path / "managed-mcp.json")
     monkeypatch.setattr(lane, "UNSAFE_ROOTS", ())          # the tests' own folders are under /tmp
+    monkeypatch.setattr(lane, "SHARED_ROOTS", ())          # ditto: tmp_path is under /private/var/folders
     return {"repo": repo, "tmp": tmp_path, "home": home}
 
 
@@ -2559,43 +2560,56 @@ def macho_bytes(load_commands, magic=None):
     return header + body
 
 
-def fat_macho_bytes(slices):
+def fat_macho_bytes(slices, cputypes=None):
     """A minimal fat/universal binary's bytes holding one thin Mach-O per entry in slices (each a list of
-    (cmd_name, value) pairs), 16-byte aligned — enough for lane._macho_load_commands to read every slice, the
-    way a universal nodejs.org tarball binary (x86_64 and arm64 both) would be read."""
+    (cmd_name, value) pairs), 16-byte aligned — enough for lane._macho_commands_by_arch to read every slice, the
+    way a universal nodejs.org tarball binary (x86_64 and arm64 both) would be read. cputypes, if given, is one
+    cputype per slice, read from the fat_arch table the way dyld itself picks a slice (R-S3); it defaults to 0
+    for every slice, matching macho_bytes' own thin cputype, so a fake walk's single implied architecture
+    (FAKE_CPUTYPE, also 0) still finds every slice by default -- a test that wants genuinely separate
+    architectures (R-S3's own) passes distinct ones explicitly."""
     thins = [macho_bytes(s) for s in slices]
+    cputypes = list(cputypes) if cputypes is not None else [0] * len(thins)
     offset = 8 + 20 * len(thins)
     arches, body = b"", b""
-    for thin in thins:
+    for thin, cputype in zip(thins, cputypes):
         pad = (-offset) % 16
         offset += pad
         body += b"\x00" * pad
-        arches += struct.pack(">iiIII", 0x0100000c, 0, offset, len(thin), 4)
+        arches += struct.pack(">iiIII", cputype, 0, offset, len(thin), 4)
         body += thin
         offset += len(thin)
     return struct.pack(">II", lane.FAT_MAGIC, len(thins)) + arches + body
 
 
+FAKE_CPUTYPE = 0   # the single architecture every fake_macho/fake_node_only entry answers for -- real byte-built
+                    # Mach-O test fixtures (macho_bytes) hardcode this same cputype in their own mach_header, so a
+                    # fake walk and a real-bytes walk always agree on "the" architecture unless a test deliberately
+                    # picks a different one (R-S3's own tests exercise more than one on purpose).
+
+
 def fake_macho(monkeypatch, images):
-    """Stands in for lane._macho_load_commands, answering for each path in images: its load commands (a list of
-    (cmd, value) pairs, same shape as before — no real Mach-O bytes needed for walk-logic tests). A path this is
-    asked about but that isn't in images is an error in the test, not a silent pass-through."""
+    """Stands in for lane._macho_commands_by_arch, answering for each path in images: its load commands (a list
+    of (cmd, value) pairs, same shape as before — no real Mach-O bytes needed for walk-logic tests), as the
+    single architecture FAKE_CPUTYPE. lane._macho_load_commands (which merges every architecture's commands) is
+    left real, and delegates to this through the same patched seam, so direct callers of either still work. A
+    path this is asked about but that isn't in images is an error in the test, not a silent pass-through."""
     def fake(path):
         key = str(path)
         assert key in images, "no fake Mach-O load commands for %r; images has %r" % (key, sorted(images))
-        return images[key]
-    monkeypatch.setattr(lane, "_macho_load_commands", fake)
+        return {FAKE_CPUTYPE: images[key]}
+    monkeypatch.setattr(lane, "_macho_commands_by_arch", fake)
 
 
 def fake_node_only(monkeypatch, node_bin, commands):
-    """Fakes just node_bin's own load commands (node_bin, from homebrew_like_tree, is a plain shell script, never
-    a real Mach-O); every other path still goes through the real lane._macho_load_commands, reading whatever
-    bytes a parser test wrote to its own library's file."""
-    real = lane._macho_load_commands
+    """Fakes just node_bin's own load commands, as the single architecture FAKE_CPUTYPE (node_bin, from
+    homebrew_like_tree, is a plain shell script, never a real Mach-O); every other path still goes through the
+    real lane._macho_commands_by_arch, reading whatever bytes a parser test wrote to its own library's file."""
+    real = lane._macho_commands_by_arch
 
     def fake(path):
-        return commands if str(path) == str(node_bin) else real(path)
-    monkeypatch.setattr(lane, "_macho_load_commands", fake)
+        return {FAKE_CPUTYPE: commands} if str(path) == str(node_bin) else real(path)
+    monkeypatch.setattr(lane, "_macho_commands_by_arch", fake)
 
 
 def homebrew_like_tree(root):
@@ -2724,6 +2738,73 @@ def test_a_missing_weak_dependency_found_via_the_fallback_search_is_checked_in_f
                              Path("/opt/homebrew/bin/node"))
 
 
+def test_r5_nit6_a_missing_weak_loader_paths_own_folder_is_checked_as_a_search_folder(env, tmp_path, monkeypatch):
+    """Nit 6: a missing weak @loader_path/ candidate still gets its own folder checked as a search folder in its
+    own right (sticky disallowed, S1's own rule for the last folder actually reached), not merely as the
+    intermediate ancestor it already was when the loading image's own path got resolved (sticky allowed there).
+    libnode's own lib/ is sticky AND group-writable: that passes as a mere intermediate when libnode itself is
+    checked, but must still refuse once asked about as @loader_path/'s own search folder."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    os.chmod(t["lib_dir"], 0o1775)
+    try:
+        fake_macho(monkeypatch, {
+            str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
+            str(t["libnode"]): [("LC_LOAD_WEAK_DYLIB", "@loader_path/libmissing-weak.dylib")],
+        })
+        with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+            lane.check_lane_node(str(t["node_bin"]), [])
+    finally:
+        os.chmod(t["lib_dir"], 0o755)
+
+
+def test_r5_nit1_lc_lazy_load_dylib_refuses_outright(env, tmp_path, monkeypatch):
+    """Nit 1: LC_LAZY_LOAD_DYLIB (0x20), a legacy lazy-binding dependency command _LC_NAMES otherwise ignores
+    entirely, is refused outright rather than silently skipped as an unrecognized command this walk doesn't
+    care about -- cheap to check, and doesn't depend on whether this dyld still honours lazy binding."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LAZY_LOAD_DYLIB", str(t["libother"]))]})
+    with pytest.raises(lane.LaneRefused, match="LC_LAZY_LOAD_DYLIB"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_r5_nit2_opening_a_fifo_does_not_block(tmp_path):
+    """Nit 2: os.open(path, O_RDONLY) blocks forever on a FIFO with no writer waiting on the other end. Bounded
+    in a background daemon thread so a regression times this test out instead of hanging the whole suite; fixed,
+    it returns almost at once with a plain "isn't a plain file" refusal."""
+    fifo_path = tmp_path / "afifo"
+    os.mkfifo(fifo_path)
+    result = {}
+
+    def run():
+        try:
+            lane._macho_commands_by_arch(fifo_path)
+        except lane.LaneRefused as e:
+            result["error"] = str(e)
+        except Exception as e:
+            result["error"] = repr(e)
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "opening a FIFO blocked for more than 5 seconds"
+    assert "isn't a plain file" in result.get("error", "")
+
+
+def test_r5_nit3_an_rpath_candidate_that_only_lives_in_the_shared_cache_still_resolves(env, tmp_path, monkeypatch):
+    """Nit 3 (left to my own judgment; fixed, since it's a cheap, pure usability win with no security downside):
+    an @rpath candidate that exists only in the dyld shared cache (something under an rpath folder that happens
+    to be /usr/lib/swift, say) used to read as plain "missing" -- a false refusal, never a pass. Each candidate
+    is now also asked of _apple_sealed, the same as an absolute load already was."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: entry == "/usr/lib/libswift_only_in_cache.dylib")
+    t = homebrew_like_tree(tmp_path / "hb")
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libswift_only_in_cache.dylib"), ("LC_RPATH", "/usr/lib")],
+    })
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
 def test_a_missing_required_dependency_refuses(env, tmp_path, monkeypatch):
     """Spec a (review round 2, finding 1): the same missing file, but as an ordinary LC_LOAD_DYLIB (not weak),
     refuses — dyld wouldn't shrug this one off."""
@@ -2752,24 +2833,13 @@ def test_rpath_resolution_falls_back_up_the_load_chain_to_node(env, tmp_path, mo
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
 
 
-def test_rpath_resolution_tries_the_loading_images_own_rpaths_before_its_loaders(env, tmp_path, monkeypatch):
-    """Spec a, dyld's own rule: @rpath searches the loading image's own LC_RPATH entries before whatever loaded
-    it. libnode's own rpath finds libtarget.dylib right in node's own lib/, inside node's prefix; node's own
-    rpath (tried only as a fallback) would instead find a same-named file in a completely different Cellar keg,
-    outside node's prefix. If resolution tried the inherited chain first, the outside-prefix one would win and
-    refuse; the inside one must win instead."""
-    monkeypatch.setattr(lane.sys, "platform", "darwin")
-    t = homebrew_like_tree(tmp_path / "hb")
-    (t["lib_dir"] / "libtarget.dylib").write_bytes(b"fake")                # inside node's prefix: the right one
-    outside_dir = t["node_bin"].parents[3] / "other-package" / "lib"       # a different Cellar keg entirely
-    outside_dir.mkdir(parents=True)
-    (outside_dir / "libtarget.dylib").write_bytes(b"fake")                 # outside node's prefix: the wrong one
-    fake_macho(monkeypatch, {
-        str(t["node_bin"]): [("LC_LOAD_DYLIB", str(t["libnode"])), ("LC_RPATH", str(outside_dir))],
-        str(t["libnode"]): [("LC_LOAD_DYLIB", "@rpath/libtarget.dylib"), ("LC_RPATH", "@loader_path")],
-        str(t["lib_dir"] / "libtarget.dylib"): [],
-    })
-    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+# NOTE: the round-4/round-5-pre-fix test that used to live here (dyld's @rpath order means the loading image's
+# own rpath wins over its loader's, so an outside-prefix candidate on the inherited chain never gets a chance
+# to refuse) tested a priority-ordering premise R-M2 makes moot: every existing candidate across own_rpaths
+# union U(image) is now checked and prefix-checked regardless of which one dyld's own depth-first order would
+# actually pick, so an outside-prefix candidate refuses the walk no matter which chain found it first. See
+# test_probe2_dylds_chain_winner_is_never_checked_with_realpath_only_dedupe for the replacement property this
+# fix is actually about (a candidate the walk's own traversal order would have missed must still be caught).
 
 
 def test_a_direct_loader_path_dependency_resolves_against_its_own_image_not_node(env, tmp_path, monkeypatch):
@@ -2810,25 +2880,14 @@ def test_an_absolute_library_outside_nodes_prefix_is_fine(env, tmp_path, monkeyp
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
 
 
-
-def test_a_transitive_librarys_own_rpath_load_resolves_inside_its_own_keg_not_nodes(env, tmp_path, monkeypatch):
-    """Spec a (real-Mac run, review round 4): a real Homebrew node's libnode links OpenSSL, which links abseil,
-    whose own libraries load each other through @rpath entries scoped to abseil's own keg -- never node's.
-    Requiring every @-relative load anywhere in the tree to land inside node's own keg specifically refused a
-    real node outright. Each walked image's "own prefix" is now that image's own grandparent folder, so libuv's
-    @rpath load of a sibling, resolved through libuv's own LC_RPATH and landing inside libuv's own keg (a
-    different Cellar formula than node's), is fine."""
-    monkeypatch.setattr(lane.sys, "platform", "darwin")
-    t = homebrew_like_tree(tmp_path / "hb")
-    libuv_sibling = t["libuv_dir"] / "libuv_sibling.dylib"
-    libuv_sibling.write_bytes(b"fake")
-    fake_macho(monkeypatch, {
-        str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
-        str(t["libnode"]): [("LC_LOAD_DYLIB", str(t["libuv"]))],
-        str(t["libuv"]): [("LC_LOAD_DYLIB", "@rpath/libuv_sibling.dylib"), ("LC_RPATH", "@loader_path")],
-        str(libuv_sibling): [],
-    })
-    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+# NOTE: the round-4 test that used to live here (a transitive library's own @rpath load resolving inside its
+# own grandparent folder, unconditionally) tested a premise departure (a) narrows: round 5's _image_prefix only
+# grants an image its OWN keg as prefix when its realpath literally matches a Homebrew Cellar path; anything
+# else -- including the shallow-grandparent case that test built under an arbitrary tmp_path -- now falls back
+# to node's own prefix instead. See test_image_prefix_matches_a_literal_homebrew_keg_regardless_of_node and
+# test_r5_departure_a_a_transitive_homebrew_kegs_own_rpath_load_still_passes, above, for the replacement
+# coverage (the second with HOMEBREW_KEG_RE monkeypatched onto this fixture's own tmp_path-rooted layout, since
+# no test fixture can put real files under literal /opt/homebrew or /usr/local).
 
 
 def test_recursion_dedup_by_realpath_alone_avoids_the_combinatorial_blowup_a_real_homebrew_tree_hits(
@@ -2869,6 +2928,109 @@ def test_recursion_dedup_by_realpath_alone_avoids_the_combinatorial_blowup_a_rea
             images[str(lib)] = commands
     fake_macho(monkeypatch, images)
     assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
+def test_probe2_dylds_chain_winner_is_never_checked_with_realpath_only_dedupe(env, tmp_path, monkeypatch):
+    """R-M2 (round 5 re-review probe, inverted to the fixed behaviour): node -> [A, B]; A -> D; D's LC_RPATH is a
+    clean folder F1 holding a WORLD-WRITABLE libx; B's rpath is lib/ (clean libx); B -> C, D -> C; C ->
+    @rpath/libx. dyld resolves C's load on the A->D chain (F1 first) and maps F1/libx. A walk that dedupes C's
+    second visit by realpath alone, and only ever resolves @rpath against whichever chain reached C first, never
+    checks F1/libx at all. R-M2's fixpoint (every existing candidate in own_rpaths union U(image), not just the
+    first chain to arrive) must still check it -- and refuse it, since it's world-writable."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    lib = t["lib_dir"]
+    for n in ("libA", "libB", "libC", "libD", "libx"):
+        (lib / (n + ".dylib")).write_bytes(b"fake")
+    f1 = t["node_bin"].parents[1] / "f1"
+    f1.mkdir()
+    (f1 / "libx.dylib").write_bytes(b"fake")
+    os.chmod(f1 / "libx.dylib", 0o666)
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", str(lib / "libA.dylib")), ("LC_LOAD_DYLIB", str(lib / "libB.dylib"))],
+        str(lib / "libA.dylib"): [("LC_LOAD_DYLIB", str(lib / "libD.dylib"))],
+        str(lib / "libD.dylib"): [("LC_LOAD_DYLIB", str(lib / "libC.dylib")), ("LC_RPATH", str(f1))],
+        str(lib / "libB.dylib"): [("LC_LOAD_DYLIB", str(lib / "libC.dylib")), ("LC_RPATH", "@loader_path")],
+        str(lib / "libC.dylib"): [("LC_LOAD_DYLIB", "@rpath/libx.dylib")],
+        str(lib / "libx.dylib"): [],
+    })
+    with pytest.raises(lane.LaneRefused, match="writable by someone other than its owner"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_probe2_per_image_prefix_is_just_the_grandparent(env, tmp_path, monkeypatch):
+    """R-S1/departure (a) (round 5 re-review probe, inverted to the fixed behaviour): a library loaded absolutely
+    from a shallow folder, <root>/x/libshallow.dylib, isn't itself inside a Homebrew keg, so its own prefix falls
+    back to node's -- and its @rpath load landing in an unrelated keg, nowhere near node's own, must now refuse
+    rather than pass, since shallow's own grandparent (<root>) does cover <root>/hb/Cellar/node/26.11.1 only by
+    rough coincidence of this test's own layout, not by any real containment rule."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    shallow = tmp_path / "x" / "libshallow.dylib"
+    shallow.parent.mkdir()
+    shallow.write_bytes(b"fake")
+    far = tmp_path / "hb" / "Cellar" / "unrelated" / "9" / "lib"
+    far.mkdir(parents=True)
+    (far / "libfar.dylib").write_bytes(b"fake")
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", str(shallow))],
+        str(shallow): [("LC_LOAD_DYLIB", "@rpath/libfar.dylib"), ("LC_RPATH", str(far))],
+        str(far / "libfar.dylib"): [],
+    })
+    with pytest.raises(lane.LaneRefused, match="doesn't resolve to a file inside"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_image_prefix_matches_a_literal_homebrew_keg_regardless_of_node(tmp_path):
+    """_image_prefix, unit-tested directly with fabricated (never-written) paths, since the ruled regex anchors
+    to literal /opt/homebrew or /usr/local -- no test fixture can put real files there. A library's own realpath
+    under either tree's Cellar gets exactly its own keg folder as its prefix, regardless of where node itself
+    is; anything else falls back to node's own prefix."""
+    node_bin = Path("/opt/homebrew/bin/node")
+    keg_lib = Path("/opt/homebrew/Cellar/abseil/20260817.0/lib/libabsl_x.dylib")
+    assert lane._image_prefix(keg_lib, node_bin) == Path("/opt/homebrew/Cellar/abseil/20260817.0")
+    intel_keg_lib = Path("/usr/local/Cellar/icu4c/77.1/lib/libicu.dylib")
+    assert lane._image_prefix(intel_keg_lib, node_bin) == Path("/usr/local/Cellar/icu4c/77.1")
+    not_a_keg = Path("/opt/homebrew/opt/icu4c@77/lib/libicui18n.77.1.dylib")       # a symlink's own path, not its
+    assert lane._image_prefix(not_a_keg, node_bin) == node_bin.parents[1]         # realpath -- falls back to node's
+
+
+def test_r5_departure_a_a_transitive_homebrew_kegs_own_rpath_load_still_passes(env, tmp_path, monkeypatch):
+    """Departure (a)'s actual positive case, through the full check_lane_node walk: a library whose own realpath
+    matches a Homebrew keg (Cellar/<name>/<version>/) gets THAT keg as its prefix, not node's -- here libuv's own
+    @rpath load of a sibling inside libuv's own keg, a different Cellar formula than node's, is fine. The ruled
+    regex anchors to literal /opt/homebrew or /usr/local, which no test fixture can put real files under, so
+    HOMEBREW_KEG_RE is monkeypatched to this fixture's own tmp_path-rooted Cellar layout instead -- the same
+    mechanism, exercised on a tree this test actually controls."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    monkeypatch.setattr(lane, "HOMEBREW_KEG_RE",
+                        re.compile(r"^" + re.escape(str(tmp_path)) + r"/hb/Cellar/[^/]+/[^/]+/"))
+    t = homebrew_like_tree(tmp_path / "hb")
+    libuv_sibling = t["libuv_dir"] / "libuv_sibling.dylib"
+    libuv_sibling.write_bytes(b"fake")
+    fake_macho(monkeypatch, {
+        str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"), ("LC_RPATH", "@loader_path/../lib")],
+        str(t["libnode"]): [("LC_LOAD_DYLIB", str(t["libuv"]))],
+        str(t["libuv"]): [("LC_LOAD_DYLIB", "@rpath/libuv_sibling.dylib"), ("LC_RPATH", "@loader_path")],
+        str(libuv_sibling): [],
+    })
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
+def test_r5_departure_a_a_too_wide_fallback_prefix_refuses(env, tmp_path, monkeypatch):
+    """Departure (a)'s "refuse any prefix node_prefix() would call too wide": node's own prefix -- the fallback
+    for any image that isn't itself inside a Homebrew keg -- gets the SAME too-wide check node_prefix() applies
+    for the sandbox profile, enforced here too, during the library walk itself, not only later when the profile
+    gets built."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    monkeypatch.setattr(lane, "SHARED_ROOTS", ("/Users", "/Volumes", "/private/tmp", "/private/var/folders",
+                                                "/System/Volumes", str(t["node_bin"].parents[1])))
+    fake_macho(monkeypatch, {str(t["node_bin"]): [("LC_LOAD_DYLIB", "@rpath/libnode.147.dylib"),
+                                                   ("LC_RPATH", "@loader_path/../lib")],
+                              str(t["libnode"]): []})
+    with pytest.raises(lane.LaneRefused, match="too wide"):
+        lane.check_lane_node(str(t["node_bin"]), [])
 
 
 def test_a_reexported_or_upward_library_is_checked_too(env, tmp_path, monkeypatch):
@@ -3059,6 +3221,23 @@ def test_a_fat_binary_checks_every_slice(env, tmp_path, monkeypatch):
     t["libnode"].write_bytes(fat)
     fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
     with pytest.raises(lane.LaneRefused, match="doesn't exist"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_r5_s3_a_dependency_missing_the_needed_architecture_slice_refuses(env, tmp_path, monkeypatch):
+    """R-S3: node's own two architectures (arm64 and x86_64) each need libshared -- but libshared is thin,
+    arm64-only. Walking x86_64 and finding no matching slice in libshared must refuse (dyld would fail to load
+    it for that architecture too), rather than silently skipping it or reading whichever slice happens to be
+    there regardless of architecture."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    libshared = t["lib_dir"] / "libshared.dylib"
+    libshared.write_bytes(macho_bytes([]))                # thin: cputype 0 in its own header, not a real match
+    fat = fat_macho_bytes([[("LC_LOAD_DYLIB", str(libshared))],
+                           [("LC_LOAD_DYLIB", str(libshared))]],
+                          cputypes=[0x0100000c, 0x01000007])
+    t["node_bin"].write_bytes(fat)
+    with pytest.raises(lane.LaneRefused, match="has no slice for architecture"):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
@@ -4007,9 +4186,11 @@ def test_a_profile_never_names_the_target_of_a_planted_link(profile_paths, env):
 
 @pytest.mark.parametrize("where", ["root", "home", "above home", "/Users", "/Volumes", "/private", "/private/tmp",
                                    "/private/var/folders"])
-def test_a_node_prefix_that_reads_too_much_is_refused(env, where):
+def test_a_node_prefix_that_reads_too_much_is_refused(env, where, monkeypatch):
     """Review: the broker reads node's prefix (of the resolved binary) whole, so /, /private, $HOME and above, and
     anything under /Users, /Volumes, /private/tmp or /private/var/folders are out."""
+    monkeypatch.setattr(lane, "SHARED_ROOTS",                     # env clears this (tmp_path lives under one of
+                        ("/Users", "/Volumes", "/private/tmp", "/private/var/folders", "/System/Volumes"))
     home = Path(os.path.realpath(env["home"]))
     node = {"root": Path("/nodebin/node"), "home": home / "bin" / "node", "above home": home.parent / "bin" / "node",
             "/Users": Path("/Users/me/node/bin/node"), "/Volumes": Path("/Volumes/usb/node/bin/node"),
@@ -4239,7 +4420,9 @@ def test_every_rendered_rule_is_its_template_rule_with_only_values_filled_in(pro
 @pytest.mark.parametrize("node", [
     "/private/var/bin/node", "/System/Volumes/Data/Users/me/node/bin/node", "/System/Volumes/Data/opt/node/bin/node",
     "/System/Volumes/x/bin/node", "/Users/node/bin/node", "/private/tmp/bin/node", "/Volumes/node/bin/node"])
-def test_a_node_prefix_that_holds_or_sits_in_a_shared_area_is_refused(env, node):
+def test_a_node_prefix_that_holds_or_sits_in_a_shared_area_is_refused(env, node, monkeypatch):
+    monkeypatch.setattr(lane, "SHARED_ROOTS",                     # env clears this (tmp_path lives under one of
+                        ("/Users", "/Volumes", "/private/tmp", "/private/var/folders", "/System/Volumes"))
     with pytest.raises(lane.LaneRefused, match="too wide"):
         lane.node_prefix(Path(node))
 
