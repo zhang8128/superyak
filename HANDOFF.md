@@ -29,13 +29,15 @@ one question at a time, fastest through AskUserQuestion in the Pi terminal.
   - Q1, Q2 and D1–D7 are in spec A's Decisions table
     (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`).
   - D8–D11 are in the browser-lane spec and the room. D12 is in the breakout-rooms spec.
-  - His exact answers are in the session record. Phase 0 of the roadmap turns them into a "station law" instructions
-    layer, which Andy activates himself.
+  - His exact answers are in the session record. Phase 0 of the roadmap turned them into the "Station law for Andy's
+    ships" instructions layer (c879372542444e4c8f95f2c0db69f8fb, reviewed by a fresh reviewer), which binds once Andy
+    activates it with Serenity, Tardis and Defiant in its audience.
   - In short:
     - only people sign instructions, and text never carries authority (Q1, Q2);
     - "agents grant agents" and "law only" (D1, D2);
-    - until the charter exists, a branch merges when the other ship approves it in the room, or, for Rio Grande's
-      branches, a fresh reviewer agent does, and the Pi suites pass. Safety code included. The merger restarts the
+    - until the charter exists, a Superyak branch by Rio Grande or Serenity merges when the other ship approves it in
+      the room, or, for Rio Grande's branches, a fresh reviewer agent does, and the Pi suites pass. Other ships'
+      branches wait for Andy's decision, and only Andy admits ships. Safety code included. The merger restarts the
       affected services, checks them, reverts on failure and announces the merge (D3–D5);
     - a fresh reviewer approves every spec. Bricks production, Guyana data and other people's repos stay with a
       person (D6, D8);
