@@ -3002,6 +3002,52 @@ def test_a_non_utf8_load_command_name_refuses(env, tmp_path, monkeypatch):
         lane.check_lane_node(str(t["node_bin"]), [])
 
 
+def test_an_unrecognized_load_command_is_skipped_without_disrupting_the_ones_after_it(env, tmp_path, monkeypatch):
+    """Spec a (commit review, round 4 follow-up): a load command this walk doesn't care about (LC_SEGMENT_64, say)
+    is only ever skipped past by its own cmdsize -- never read as a name -- so a real LC_LOAD_DYLIB immediately
+    after one is still found and checked; "unrecognized" must never mean "the rest of the file goes unread"."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    unknown = struct.pack("<II", 0x19, 16) + b"\x00" * 8             # LC_SEGMENT_64: not in _LC_NAMES, skipped
+    real_dep = macho_command_bytes("LC_LOAD_DYLIB", str(t["libother"]))
+    body = unknown + real_dep
+    header = struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 2, len(body), 0, 0)
+    t["libnode"].write_bytes(header + body)
+    t["libother"].write_bytes(macho_bytes([]))                       # a real, minimal, dependency-free Mach-O
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    assert lane.check_lane_node(str(t["node_bin"]), []) == Path(os.path.realpath(t["node_bin"]))
+
+
+def test_an_unrecognized_load_command_with_a_bad_size_still_refuses(env, tmp_path, monkeypatch):
+    """Spec a (commit review, round 4 follow-up): the cmdsize>=8 and within-bounds checks apply to every load
+    command, recognized or not -- a malformed one can't hide just because this walk doesn't otherwise care what
+    it says."""
+    monkeypatch.setattr(lane.sys, "platform", "darwin")
+    t = homebrew_like_tree(tmp_path / "hb")
+    bad_unknown = struct.pack("<II", 0x19, 4)                        # cmdsize=4 < 8: malformed regardless of cmd
+    header = struct.pack("<IiiIIIII", lane.MH_MAGIC_64, 0, 0, 2, 1, len(bad_unknown), 0, 0)
+    t["libnode"].write_bytes(header + bad_unknown)
+    fake_node_only(monkeypatch, t["node_bin"], [("LC_LOAD_DYLIB", str(t["libnode"]))])
+    with pytest.raises(lane.LaneRefused, match="libnode.*bad size"):
+        lane.check_lane_node(str(t["node_bin"]), [])
+
+
+def test_the_hop_cap_refuses_a_symlink_chain_past_it(tmp_path, monkeypatch):
+    """Spec a (commit review, round 4 follow-up), as a direct unit check of _resolve_path: a chain of symlinks
+    longer than MAX_SYMLINK_HOPS refuses outright, the same kind of limit the kernel's own ELOOP enforces --
+    never an infinite loop, and never silently stopping partway through without refusing."""
+    monkeypatch.setattr(lane, "MAX_SYMLINK_HOPS", 2)
+    real = tmp_path / "real.dylib"
+    real.write_bytes(b"fake")
+    target = real
+    for i in range(4):
+        link = tmp_path / ("link%d" % i)
+        link.symlink_to(target)
+        target = link
+    with pytest.raises(lane.LaneRefused, match="more than 2 symlinks"):
+        lane._resolve_path(target)
+
+
 def test_a_fat_binary_checks_every_slice(env, tmp_path, monkeypatch):
     """Spec a (S6.2): a universal (fat) binary, like the nodejs.org tarball's, is checked slice by slice, not
     just the host's — a problem in either slice refuses, even one the running kernel would never actually pick."""
