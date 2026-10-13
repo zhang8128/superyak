@@ -18,8 +18,8 @@ Prerequisites (the spec's, plus this script's):
   check_lane_node also checks every library the binary loads, transitively, reading each one's own Mach-O load
   commands directly (lane.py, "Its node"); on a stock Homebrew install, Cellar and opt are usually group-writable,
   so first run `chmod g-w /opt/homebrew/bin /opt/homebrew/Cellar /opt/homebrew/opt` (the refusal names this if it's still needed),
-  then confirm it took with `stat -f '%Lp %N' /opt/homebrew /opt/homebrew/Cellar /opt/homebrew/opt` (each should
-  print 755). Better still, skip Homebrew: download a nodejs.org tarball, verify it against SHASUMS256.txt and its
+  then confirm it took with `stat -f '%Lp %N' /opt/homebrew /opt/homebrew/bin /opt/homebrew/Cellar /opt/homebrew/opt`
+  (each should print 755). Better still, skip Homebrew: download a nodejs.org tarball, verify it against SHASUMS256.txt and its
   signature, and unpack it root-owned into its own folder such as /usr/local/lib/nodejs/node-vX/ (sudo tar, then
   sudo chown -R root:wheel and sudo chmod -R go-w on that folder — see the spec's Mac acceptance prerequisites for
   the exact commands), and point lane_node at the node inside it — never the .pkg installer, which puts node in

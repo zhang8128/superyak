@@ -241,10 +241,18 @@ With `lane=None`, the output is byte-for-byte what it is today.
   the PATH search (spike 5).
 - **Its node** is an absolute path in teamd's own config (`lane_node`). It is refused if it lies under any worktree or
   is writable by anyone but its owner. It is never `which node`. `check_lane_node` (`lane.py`, lane-node-libs) also
-  walks every library the binary loads, directly or transitively, reading each one's own Mach-O load commands:
+  walks every library the binary loads, directly or transitively, reading each one's own Mach-O load commands
+  directly from its bytes (never `otool`, so no `xcrun`/`DEVELOPER_DIR` trust and no text format to misparse):
   each is checked both under the path it's loaded by and at its realpath, every `@rpath` folder it could search
   is checked whether or not anything resolves through it, and the walk refuses a binary that embeds its own
-  `DYLD_*` overrides or names anything but the standard dynamic linker.
+  `DYLD_*` overrides or names anything but the standard dynamic linker. Every existing candidate an `@rpath`,
+  `@loader_path` or `@executable_path` load could resolve to — on any chain that reaches the loading image, not
+  just the one this walk's own traversal happened to use — is checked and prefix-checked, never just the first
+  one found, so dyld's own depth-first resolution can't map a file past the check (round 5's R-M2). That prefix
+  is the loading image's own Homebrew keg when its realpath is one, since that's an equally Homebrew-managed,
+  equally checked boundary as node's own; otherwise it's node's own prefix. A universal binary's architecture
+  slices are each walked separately, by their own cputype, never merged, and a dependency missing the needed
+  slice refuses.
 - **When it stops:** teamd stops it in the same four places that remove the lane. The broker runs in its own process
   group, and teamd kills that group.
 - **Its Playwright:** `~/.superyak/team/broker/playwright-core-<version>/`. `<version>` and its integrity hash are read from the lockfile at the
@@ -530,12 +538,9 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   a walk that reads one image after another in sequence, all the way to dyld's open in the child, well after
   `sandbox-exec` has started. Re-checking later only shrinks how long the window is open before the walk even
   starts; it can't make the walk itself instantaneous. That window is harmless wherever nobody but this user or
-  root could write in the first place — but S1 through S5 (lane-node-libs, review round 4) are exactly the places
-  where someone else could, and the profile (below) is what actually bounds the damage, not the timing.
-- **check_lane_node now reads every load command directly from a binary's own Mach-O bytes**, never `otool`, so
-  there's no `otool`/`xcrun` process, no `DEVELOPER_DIR` or `xcode-select` trust, and no text format to misparse
-  (lane-node-libs, review round 4, S6). This removes a Known-limits entry an earlier draft had here about trusting
-  `otool`'s own output.
+  root could write in the first place — but the per-keg prefix ("Its node", above) and the ACL blind spot (just
+  below) are exactly the places where someone else could, and the profile (below) is what actually bounds the
+  damage, not the timing.
 - **The library check reads mode bits only, never ACLs.** `_check_owner` (`lane.py`) decides "writable by nobody
   else" from `st_mode` alone. A macOS ACL (`chmod +a "group:staff allow add_file" <folder>`) can make a folder
   writable by others while its mode still shows `0755`, which the check would read as clean. This predates
@@ -551,8 +556,8 @@ Google and the child hosts. No `listen(0)` remains. Nothing else changes, becaus
   it just wasn't done this round.
 - **The broker's profile — `b/`, node's own prefix, `/opt/homebrew/{Cellar,opt}` and `/usr/local/{Cellar,opt}`,
   Playwright and its browsers, and whatever `system.sb` allows — is the second wall, not a detail.** Wherever the
-  library check above has a real window or gap (the exec-time window; S1 through S5; the ACL blind spot just
-  above), what actually keeps a bad outcome from mattering is that dyld, inside the broker, can only ever map a
+  library check above has a real window or gap (the exec-time window; the per-keg prefix; the ACL blind spot
+  just above), what actually keeps a bad outcome from mattering is that dyld, inside the broker, can only ever map a
   file from one of those trees. A library outside them can't load no matter what the check said about it, and a
   library the check refused but that lives outside those trees was never reachable anyway. The check and the
   profile are both walls; neither one alone is the whole story.
@@ -854,8 +859,16 @@ Each check is a test, or a step of the Mac acceptance run, written before the co
   sudo chown -R root:wheel /usr/local/lib/nodejs/node-vX.Y.Z
   sudo chmod -R go-w /usr/local/lib/nodejs/node-vX.Y.Z
   ```
-  then set `lane_node` to `/usr/local/lib/nodejs/node-vX.Y.Z/bin/node` and run `check_lane_node` (see the lane-node-
-  libs report for the exact command) to confirm it passes unmocked;
+  then set `lane_node` to `/usr/local/lib/nodejs/node-vX.Y.Z/bin/node` and confirm it passes unmocked:
+  ```
+  cd team && uv run --locked python3 -c "
+  from superyak_team import lane
+  try:
+      print('PASSED:', lane.check_lane_node('/usr/local/lib/nodejs/node-vX.Y.Z/bin/node', []))
+  except lane.LaneRefused as e:
+      print('REFUSED:', e)
+  "
+  ```
 - a team with `browser_lane: true` set in a preset;
 - the approved-listener list filled in;
 - the worktree prepared, so `npx` needs no registry.
