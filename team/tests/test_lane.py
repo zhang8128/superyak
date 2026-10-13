@@ -3443,11 +3443,12 @@ def test_apple_sealed_skip_rules(monkeypatch):
     """A plain unit check of _apple_sealed itself: /usr/lib and /System are skipped only when normalized (so a
     ../ trick that only looks like it starts there isn't), only when not also under NOT_SEALED textually (the
     writable Data volume and firmlink targets), and only then: first by asking dyld's own shared-cache predicate
-    (_shared_cache_contains); if that predicate ran and definitely said no, by whether entry itself genuinely
-    exists on the sealed device (_on_the_sealed_volume, R-S2 -- never by a nearby ancestor's device alone, which
-    says nothing about entry or dyld's own fallback search for it); and only when the predicate couldn't be asked
-    at all (None) does the cruder nearest-existing-ancestor heuristic (_nearest_sealed_ancestor) apply. Never a
-    string prefix alone, which a case-insensitive volume could let a path dodge by spelling itself differently."""
+    (_shared_cache_contains); if that predicate ran and definitely said no, or on a real Mac couldn't even be
+    asked, by whether entry itself genuinely exists on the sealed device (_on_the_sealed_volume -- never by a
+    nearby ancestor's device alone, which says nothing about entry or dyld's own fallback search for it); and
+    only off macOS entirely, where there's no shared cache or sealed volume to ask about directly at all, does
+    the cruder nearest-existing-ancestor heuristic (_nearest_sealed_ancestor) apply. Never a string prefix
+    alone, which a case-insensitive volume could let a path dodge by spelling itself differently."""
     assert not lane._apple_sealed("/usr/lib/../../opt/x")                      # normpath(entry) != entry
     assert not lane._apple_sealed("/usr/libexec/cups/foo")                    # not under /usr/lib/ or /System/
     assert not lane._apple_sealed("/opt/homebrew/opt/foo/lib/x.dylib")         # not under APPLE_DIRS at all
@@ -3464,7 +3465,11 @@ def test_apple_sealed_skip_rules(monkeypatch):
     monkeypatch.setattr(lane, "_device", lambda path: 1)
     assert not lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
     monkeypatch.undo()
-    # the predicate couldn't be asked at all (None): only then does the degraded ancestor-walk heuristic apply.
+    # the predicate couldn't be asked at all (None) AND this isn't even a Mac (nit 2, round 6): only then does
+    # the degraded ancestor-walk heuristic apply. On a real Mac, None instead means the ctypes symbol itself
+    # failed, and _on_the_sealed_volume -- a direct check, not an ancestor's device -- runs there too; see
+    # test_r6_nit2_on_macos_the_predicate_being_unaskable_still_uses_the_direct_check.
+    monkeypatch.setattr(lane, "_on_macos", lambda: False)
     monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: None)
     monkeypatch.setattr(lane, "_device", lambda path: 1 if path == "/usr/sbin" else 2)
     assert not lane._apple_sealed("/usr/lib/libc++.1.dylib")                   # a real name, but the wrong device
@@ -3510,6 +3515,17 @@ def test_r5_s2_the_nearest_ancestor_fallback_runs_only_when_the_predicate_cant_b
     monkeypatch.setattr(lane, "_device", lambda path: 1)
     assert lane._shared_cache_contains("/usr/lib/libc++.1.dylib") is None
     assert lane._apple_sealed("/usr/lib/libc++.1.dylib")
+
+
+def test_r6_nit2_on_macos_the_predicate_being_unaskable_still_uses_the_direct_check(monkeypatch):
+    """Nit 2 (round 6): when _shared_cache_contains returns None ON MACOS, the ctypes symbol itself failed to
+    load, not "this isn't a Mac" -- _on_the_sealed_volume (a direct check of entry itself) must still run, never
+    _nearest_sealed_ancestor, which R-S2 already showed is unsound for a name that's genuinely missing. The
+    cruder heuristic is now reserved for the non-Mac test case alone (the test just above)."""
+    monkeypatch.setattr(lane, "_on_macos", lambda: True)
+    monkeypatch.setattr(lane, "_shared_cache_contains", lambda entry: None)
+    monkeypatch.setattr(lane, "_device", lambda path: 1)       # would make the ancestor heuristic say "sealed"
+    assert not lane._apple_sealed("/usr/lib/this-path-really-does-not-exist-anywhere-xyz.dylib")
 
 
 def test_probe2_missing_non_cache_usr_lib_load_is_skipped_without_the_fallback_check(env, tmp_path, monkeypatch):

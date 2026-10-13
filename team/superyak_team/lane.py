@@ -2125,11 +2125,12 @@ def _on_the_sealed_volume(entry):
 
 
 def _nearest_sealed_ancestor(entry):
-    """Degraded fallback for _apple_sealed, used only when the shared-cache predicate couldn't be asked about
-    entry at all (off macOS, or the ctypes symbol failing to load) — never when it ran and gave a definite
-    answer, which _on_the_sealed_volume checks directly instead (R-S2). Walk entry's own components from "/"
-    down to the nearest one that actually exists. No INTERMEDIATE component may be a symlink (a symlink could
-    lead anywhere, including off the sealed volume, and dyld would follow it); the entry itself may be one (a
+    """Degraded fallback for _apple_sealed, used only off macOS (there's no real shared cache or sealed volume
+    to ask about directly there at all) — never on a real Mac, where _on_the_sealed_volume checks entry
+    directly instead, whether the shared-cache predicate ran and gave a definite no or couldn't be asked at
+    all. Walk entry's own components from "/" down to the nearest one that actually exists. No INTERMEDIATE
+    component may be a symlink (a symlink could lead anywhere, including off the sealed volume, and dyld would
+    follow it); the entry itself may be one (a
     framework's own Foo.framework/Foo -> Versions/Current/Foo is normal and still fully on the sealed volume), in
     which case its realpath is what gets checked. The nearest existing one must be a directory on /usr/sbin's
     own device — a plain existing FILE there (never a directory) is walked normally instead of being recognized
@@ -2170,10 +2171,12 @@ def _apple_sealed(entry):
     """entry is Apple's own: under /usr/lib or /System (APPLE_DIRS), normalized (os.path.normpath(entry) == entry,
     so a ../ trick can't borrow the prefix), not on the writable Data volume or a firmlink target (NOT_SEALED,
     lane.py's own load_approved uses it the same way), and then: sealed if dyld's own shared-cache predicate says
-    so; when the predicate ran and gave a definite no, sealed only if entry itself genuinely exists on the sealed
-    volume (_on_the_sealed_volume) — never merely because some ancestor folder happens to sit there, which says
-    nothing about entry or about dyld's own fallback search for it (R-S2); and only when the predicate couldn't
-    be asked at all does the cruder nearest-existing-ancestor heuristic (_nearest_sealed_ancestor) apply. Skipped
+    so; otherwise, on macOS, sealed only if entry itself genuinely exists on the sealed volume
+    (_on_the_sealed_volume) — never merely because some ancestor folder happens to sit there, which says nothing
+    about entry or about dyld's own fallback search for it — whether the predicate ran and gave a definite no,
+    or couldn't even be asked (the ctypes symbol itself failing to load, on a real Mac, is the only way that
+    happens). The cruder nearest-existing-ancestor heuristic (_nearest_sealed_ancestor) is reserved for off
+    macOS entirely, where there is no shared cache or sealed volume to ask about directly at all. Skipped
     outright when true: the broker's profile never reaches anything else there anyway. Not sealed — ordinary
     missing-dependency handling, which refuses a required load or runs dyld's own fallback search for a weak one
     — when entry is genuinely missing from both the cache and the disk."""
@@ -2184,7 +2187,7 @@ def _apple_sealed(entry):
     cached = _shared_cache_contains(entry)
     if cached is True:
         return True
-    if cached is False:
+    if cached is False or _on_macos():
         return _on_the_sealed_volume(entry)
     return _nearest_sealed_ancestor(entry)
 
