@@ -269,11 +269,12 @@ def _watch_client(config_path, transport, presence):
 
 
 def _read_object(path):
+    """The JSON object in path: {} when the file is absent, None when it is there but isn't one."""
     try:
-        value = read_json(path)
-    except Exception:  # noqa: BLE001 - damaged counts as absent
-        return {}
-    return value if isinstance(value, dict) else {}
+        value = read_json(path, {})
+    except Exception:  # noqa: BLE001 - damaged: the caller decides what that means
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock, presence):
@@ -287,11 +288,12 @@ def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock
     folder = Path(sessions_dir or Path(config_path).parent / 'sessions')
     key = session_key(session_id)
     choice = _read_object(folder / f'{key}.watch')
-    if choice.get('choice') == 'off':
-        return
-    own = choice.get('choice') if type(choice.get('choice')) is int and 1 <= choice['choice'] <= 120 else None
+    raw = (choice or {}).get('choice')
+    own = raw if type(raw) is int and 1 <= raw <= 120 else None
+    if choice is None or ('choice' in choice and own is None):
+        return  # the session's "off", or a choice the hook can't read, which counts as "off" so an opt-out sticks
     prompted_path = folder / f'{key}.prompted'
-    prompted = _read_object(prompted_path)
+    prompted = _read_object(prompted_path) or {}  # damaged counts as absent: at worst one extra declare
     now, seen = clock(), prompted.get('seen')
     held = prompted.get('held') is True
     if mode == 'plan':

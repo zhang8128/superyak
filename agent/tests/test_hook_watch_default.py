@@ -2,6 +2,8 @@
 """Watch by default (docs/superpowers/specs/2026-10-14-watch-default-design.md, W1-W6, requirements 1-9)."""
 import json
 
+import pytest
+
 from superyak_agent import hook
 from superyak_agent.station import ON_WATCH_LINE, session_key, write_private
 
@@ -69,6 +71,18 @@ def test_an_opt_out_sticks(station, ship_config, tmp_path):
     assert declared(fake) == []
 
 
+@pytest.mark.parametrize('text', ['{not json', '[1]', '{"choice": 500}', '{"choice": true}', '{"choice": "on"}'])
+def test_a_choice_the_hook_cannot_read_counts_as_off(station, ship_config, tmp_path, text):
+    """Security review of 68bcd23: the opt-out must stick, so a .watch file that isn't a JSON object, or holds a
+    choice that is neither "off" nor 1-120 minutes, counts as "off". Only a missing file means the default."""
+    fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
+    sessions.mkdir(parents=True)
+    (sessions / f'{session_key("cc-1")}.watch').write_text(text)
+    prompt(fake, config, sessions, 1000.0)
+    prompt(fake, config, sessions, 1000.0 + 3600)
+    assert declared(fake) == []
+
+
 def test_the_sessions_own_choice_sets_minutes_and_writable(station, ship_config, tmp_path):
     fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
     choose(sessions, {'choice': 45, 'writable': False})
@@ -104,10 +118,9 @@ def test_a_seen_in_the_future_declares(station, ship_config, tmp_path):
     assert len(declared(fake)) == 1
 
 
-def test_damaged_files_count_as_absent(station, ship_config, tmp_path):
+def test_a_damaged_prompted_file_counts_as_absent(station, ship_config, tmp_path):
     fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
     sessions.mkdir(parents=True)
-    (sessions / f'{session_key("cc-1")}.watch').write_text('not json')
     (sessions / f'{session_key("cc-1")}.prompted').write_text('[1, 2]')
     prompt(fake, config, sessions, 1000.0)
     assert declared(fake) == [{'minutes': 20, 'writable': True}]
