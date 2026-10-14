@@ -400,3 +400,17 @@ def test_a_ships_kind_message_never_counts_as_its_answer(env):
     assert say(session, room, 'p', 'still thinking')['deferred_here'] == [asked['id']]
     got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
     assert {m['message_id']: m for m in got['messages']}[asked['id']]['deferred']['would_be'] == 'read'
+
+
+def test_deferred_here_lists_the_oldest_deferral_first(env):
+    """Stale deferrals (plan review of e62be36, should-fix 2): R27 lists waiting deferrals oldest first. The mention
+    whose id sorts last is deferred first, so an order by id would come out the other way on every run."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    one = say(clients[1], room, 'a', '@serenity first question')
+    two = say(clients[1], room, 'b', '@serenity second question')
+    earlier, later = sorted([one['id'], two['id']], reverse=True)
+    on_watch(session)
+    ask(watcher, earlier)
+    clock[0] += 10
+    ask(watcher, later)
+    assert say(session, room, 'p', 'thinking')['deferred_here'] == [earlier, later]
