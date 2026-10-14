@@ -479,3 +479,17 @@ def test_the_tickets_column_is_added_once(tmp_path):
     with store.transaction() as db:
         names = [r['name'] for r in db.execute('PRAGMA table_info(tickets)')]
     assert names.count('first_deferred') == 1
+
+
+def test_answered_searches_replies_by_an_index(tmp_path):
+    """Reply-to index (the stale-deferrals section 2 review, stake 4): `_answered` runs on every read with a waiting
+    deferral and on every re-ask, so message_replies is searched by reply_to through an index, not scanned whole. The
+    index is made at every start, idempotently."""
+    from superyak_peer.db import Store
+    Store(tmp_path / 'peer')
+    store = Store(tmp_path / 'peer')
+    with store.transaction() as db:
+        leading = [db.execute(f"PRAGMA index_info('{r[1]}')").fetchone()[2] for r in db.execute("PRAGMA index_list('message_replies')")]
+        plan = [tuple(r)[3] for r in db.execute('EXPLAIN QUERY PLAN SELECT 1 FROM message_replies WHERE reply_to=?', ('m',))]
+    assert leading.count('reply_to') == 1
+    assert any(step.startswith('SEARCH message_replies USING INDEX') for step in plan)
