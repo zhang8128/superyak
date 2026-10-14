@@ -43,16 +43,18 @@ sticks.
     in the lease's last minute (RENEWAL_MARGIN, 60 s), and a session that keeps prompting keeps the watch.
   - A session that goes idle stops renewing. The lease lapses within its minutes, and the watcher then answers the
     waiting mention read-only (the existing 'lease ran out' test).
-  - The hook declares again only when it may have lapsed. It records each qualifying prompt's time in its **own**
+  - The hook declares at the first qualifying prompt, again at least once per lease less a minute while the session is
+    active, and at the first prompt after an idle gap. `seen` in `.prompted` is when the hook last declared (S2).
+  - The hook declares again only when it may have lapsed. It records the time of each declaration in its **own**
     file, `<home>/sessions/<key>.prompted` = `{"seen": <time>, "held": true|false}`. Only the hook writes it.
-    - A **qualifying prompt** passes every W1 check, write mode included. At it the hook writes `seen` = now, and
-      `held` = whether it declared or still holds the default.
+    - A **qualifying prompt** passes every W1 check, write mode included. When it declares, the hook writes `seen` = now and
+      `held` = true; a prompt that only trusts the lease writes nothing (S2).
     - A plan-mode prompt writes `.prompted` only when it ends a default the hook held (`held: false`).
     - An opted-out prompt, or one W1 excludes for any other reason, doesn't write it.
     - It declares when that file is missing, when `held` is false, or when `seen` is more than the lease, less RENEWAL_MARGIN (60 s), ago.
       The station renews a running lease at most once per 30 s, so a prompt before that last minute keeps it.
     - A lapsed watch is never revived by presence (R6). This is a fresh declaration, so R6 holds.
-  - At most one extra station call per session, at its first prompt and after each idle gap, never at every prompt.
+  - At most one extra station call per lease less a minute while active, and one after each idle gap, never at every prompt.
   - **Where it runs** (should-fix 4): after the instructions call and before the inbox call. That keeps the inbox
     advance the last network call (R4). It runs only if the hook isn't yet past `INSTRUCTIONS_DEADLINE`, with
     `INBOX_CALL_TIMEOUT`. A slow declaration can push the inbox past the deadline, as a slow instructions call can
@@ -176,6 +178,12 @@ sessions; the version check prompts them, since `agent/superyak_agent` is a runt
   sessions after pulling.
 - A session living longer than 14 days, or resumed under the same id, can have its `.watch` opt-out pruned by another
   session's prune and get the default back (requirement 6 allows it).
+- After /clear the hook has a new session id while the MCP server keeps the old one, so `station_watch minutes=0` ends
+  and records the old id's watch while the new id keeps the default (and the tool says "not on watch"). After /clear,
+  restart the session to opt out.
+- A declare the station applied but whose answer was lost (a read timeout) leaves `.prompted` unwritten, so a plan-mode
+  prompt then sees `held` false and does not let go until the next write-mode prompt. Narrow, and bounded by the
+  120-minute deferral bound.
 - Headless `claude -p` runs on a machine docked with `--hook` that don't set `SUPERYAK_RUN` (for example
   engram/local_agent.py's spawn) take the watch while they run; set `SUPERYAK_RUN=1` in such spawns.
 - **The ship's cap of 10 sessions on watch** (WATCH_SESSIONS_PER_SHIP, presence.py:13; should-fix 9): with the default,

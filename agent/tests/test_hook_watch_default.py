@@ -185,3 +185,68 @@ def test_a_prompt_in_the_lease_s_last_minute_declares_again(station, ship_config
     prompt(fake, config, sessions, 1000.0)
     prompt(fake, config, sessions, 1000.0 + 20 * 60 - 30)
     assert len(declared(fake)) == 2
+
+
+def _minutes(fake):
+    return [b['minutes'] for b in declared(fake)]
+
+
+def test_a_session_resumed_after_its_end_takes_the_default_back(station, ship_config, tmp_path):
+    """Section 2 review of bbb85a8, S1 (probe P1): SessionEnd ends the watch, so a session resumed under the same id
+    (claude --continue) declares again at its first prompt instead of trusting the old .prompted."""
+    fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
+    prompt(fake, config, sessions, 1000.0)
+    hook.run(config, transport=fake, event='session-end', session_id='cc-1', sessions_dir=sessions,
+             clock=lambda: 1060.0)
+    prompt(fake, config, sessions, 1120.0)
+    assert _minutes(fake) == [20, 0, 20]
+
+
+def test_a_busy_session_declares_once_per_lease_so_a_lost_lease_comes_back(station, ship_config, tmp_path):
+    """Section 2 review of bbb85a8, S2 (probe P2): .prompted's seen is when the hook last declared, so a session
+    prompting every five minutes declares again within each lease less the margin, and a lease that lapsed unseen
+    comes back, while still never one call per prompt."""
+    fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
+    for m in (0, 5, 10, 15, 20, 25):
+        prompt(fake, config, sessions, 1000.0 + m * 60)
+    assert _minutes(fake) == [20, 20]
+
+
+def test_another_sessions_prune_keeps_an_unreadable_choice(station, ship_config, tmp_path):
+    """Section 2 review of bbb85a8, N1: the hook reads an unreadable .watch as "off", so another session's prune must
+    not delete it (that would turn an opt-out back into the default); it ages by the file's own mtime instead."""
+    fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
+    sessions.mkdir(parents=True)
+    watch = sessions / f'{session_key("cc-1")}.watch'
+    watch.write_text('{not json')
+    hook._prune(sessions, hook._session_file(sessions, 'cc-2'), watch.lstat().st_mtime + 60)
+    assert watch.exists()
+    prompt(fake, config, sessions, 1000.0)
+    assert declared(fake) == []
+
+
+def test_a_dangling_choice_link_counts_as_off(station, ship_config, tmp_path):
+    """Section 2 review of bbb85a8, N2: a .watch that is a dangling symlink reads as absent, which would mean the
+    default; it counts as an unreadable choice, so "off"."""
+    import os
+    fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
+    sessions.mkdir(parents=True)
+    os.symlink(tmp_path / 'missing', sessions / f'{session_key("cc-1")}.watch')
+    prompt(fake, config, sessions, 1000.0)
+    assert declared(fake) == []
+
+
+def test_a_refused_plan_release_is_sent_again(station, ship_config, tmp_path):
+    """Section 2 review of bbb85a8, N4: a plan-mode prompt whose ending call is refused leaves the hook holding the
+    default, so the next plan-mode prompt sends minutes=0 again."""
+    fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
+    prompt(fake, config, sessions, 1000.0)
+
+    def refusing(method, url, headers, data):
+        if method == 'POST' and url.endswith('/api/ships/me/watch') and json.loads(data).get('minutes') == 0:
+            fake.requests.append({'method': method, 'path': '/api/ships/me/watch', 'body': json.loads(data)})
+            return 502, b'{"error": "down"}'
+        return fake(method, url, headers, data)
+    prompt(fake, config, sessions, 1060.0, mode='plan', transport=refusing)
+    prompt(fake, config, sessions, 1120.0, mode='plan')
+    assert _minutes(fake) == [20, 0, 0]

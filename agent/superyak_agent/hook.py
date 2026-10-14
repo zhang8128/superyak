@@ -37,14 +37,15 @@ SESSION_END_TIMEOUT = 3  # spec S4: best effort; a watch this call misses runs o
 
 def _end_watch(config_path, transport, presence):
     """S4, M2: the one new client call: end this session's watch. It can only end one (R2), never prints, and fails
-    silently. Without a session name there is nothing to end, so it makes no call."""
+    silently. Without a session name there is nothing to end, so it makes no call. True once watch(0) succeeded."""
     config = read_json(config_path)
     if not presence or not config or not config.get('key'):
-        return
+        return False
     try:
         StationClient(config['station'], config['key'], config.get('origin'), transport, presence).watch(0)
+        return True
     except Exception:  # noqa: BLE001 - a hook must never break the exit
-        pass
+        return False
 
 
 def hook_fields(stdin):
@@ -156,7 +157,12 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
     link = _Link(transport)
     try:
         if event == 'session-end':
-            _end_watch(config_path, link(SESSION_END_TIMEOUT), presence)
+            if _end_watch(config_path, link(SESSION_END_TIMEOUT), presence) and session_id:
+                try:  # S1: a session resumed under this id must take the default again, so forget what it held
+                    (Path(sessions_dir or config_path.parent / 'sessions') / (session_key(session_id) + '.prompted')
+                     ).unlink(missing_ok=True)
+                except OSError:
+                    pass
             return ''
         text, shown = _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
                                lambda: monotonic() - started > INSTRUCTIONS_DEADLINE, presence, mode)
@@ -241,7 +247,12 @@ def _prune(sessions_dir, keep, now):
         if not STATE_NAME.fullmatch(path.name) or path.name[:16] == keep_key:
             continue
         try:
-            seen = read_json(path).get('seen')
+            try:
+                seen = read_json(path).get('seen')
+            except Exception:  # noqa: BLE001 - unreadable
+                seen = None
+            if not (type(seen) in (int, float) and math.isfinite(seen)) and path.suffix == '.watch':
+                seen = path.lstat().st_mtime  # N2: the hook reads an unreadable choice as "off"; age it, don't undo it
             if not (type(seen) in (int, float) and math.isfinite(seen)) or seen < now - STATE_DAYS * 86400:
                 path.unlink()
         except Exception:  # noqa: BLE001 - damaged: delete it
@@ -280,7 +291,9 @@ def _read_object(path):
 
 def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock, presence):
     """Watch by default (spec 2026-10-14-watch-default-design.md, W1-W4). A write-mode prompt holds the watch: declared
-    at the first prompt and again after a gap longer than its lease. A plan-mode prompt lets go of a default the hook
+    at the first prompt and again once its lease less RENEWAL_MARGIN has passed since the last declaration (`seen` in
+    `.prompted` is when the hook last declared, so an active session declares about once per 19 minutes, never once per
+    prompt, and a lease that lapsed unseen comes back). A plan-mode prompt lets go of a default the hook
     holds. The session's own choice (`.watch`, written by station_watch) always wins. Prints nothing; the caller makes
     any failure silent, and `.prompted` is written only after the station answered."""
     client = _watch_client(config_path, transport, presence)
@@ -288,7 +301,8 @@ def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock
         return
     folder = Path(sessions_dir or Path(config_path).parent / 'sessions')
     key = session_key(session_id)
-    choice = _read_object(folder / f'{key}.watch')
+    watch_path = folder / f'{key}.watch'
+    choice = None if watch_path.is_symlink() and not watch_path.exists() else _read_object(watch_path)  # N2
     raw = (choice or {}).get('choice')
     own = raw if type(raw) is int and 1 <= raw <= 120 else None
     if choice is None or ('choice' in choice and own is None):
@@ -307,7 +321,7 @@ def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock
     fresh = held and type(seen) in (int, float) and math.isfinite(seen) and 0 <= now - seen <= minutes * 60 - RENEWAL_MARGIN
     if not fresh:
         client.watch(minutes, writable)
-    write_private(prompted_path, {'seen': now, 'held': True})
+        write_private(prompted_path, {'seen': now, 'held': True})
 
 
 def _with_withdrawals(parts, withdrawn, budget):
