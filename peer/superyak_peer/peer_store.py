@@ -70,7 +70,9 @@ class PeerStore:
         # Only the keys a room snapshot has (federation._room_snapshot), as an allowlist: whatever else a paired peer
         # sends -- a brief, a system author, claims, anything new -- never reaches this station's room view (R44).
         result = {k: value[k] for k in REMOTE_ROOM_KEYS if k in value}
-        result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])]
+        # receive() refuses a malformed roster; a hand-edited inbox row must not break this view or list_rooms either.
+        result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])
+                             if isinstance(m, dict) and isinstance(m.get('peer'), str) and isinstance(m.get('id'), str)]
         result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
         replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply'", (row['resource_id'],row['origin'])).fetchall()
