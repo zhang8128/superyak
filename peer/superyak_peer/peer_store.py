@@ -1,5 +1,6 @@
 """Remote contacts and received resources never become local accounts."""
 import json
+import re
 from .common import Problem, require, uid, text, ids, encode
 
 # What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
@@ -8,6 +9,14 @@ REMOTE_ROOM_KEYS = ('title', 'owner_id', 'member_ids', 'linked_room_id', 'create
 UNVERIFIED = ':(unverified)'  # a forged local author's stand-in; no participant id can hold parentheses
 # No `state` and no `unverified`: a received message's delivery state and mark are this station's word alone.
 REMOTE_MESSAGE_KEYS = ('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created')
+PARTICIPANT_ID = re.compile(r'[0-9a-f]{64}:[A-Za-z0-9_-]{1,64}')
+
+
+def _stored_message_ok(m):
+    # The view's backstop for whatever is already stored (section 2 review of 96030b0, SF1), beside receive-time checks.
+    return (isinstance(m, dict) and isinstance(m.get('author_id'), str) and PARTICIPANT_ID.fullmatch(m['author_id']) is not None
+            and all(isinstance(m.get(k), str) for k in ('id', 'body', 'client_message_id'))
+            and type(m.get('created')) in (int, float))
 
 PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
@@ -74,7 +83,7 @@ class PeerStore:
         # receive() refuses a malformed roster; a hand-edited member must not break this view or list_rooms either.
         result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])
                              if isinstance(m, dict) and isinstance(m.get('peer'), str) and isinstance(m.get('id'), str)]
-        result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
+        result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', []) if _stored_message_ok(m)]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
         replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply'", (row['resource_id'],row['origin'])).fetchall()
         # Every reply this station sent proves its own words, withdrawn ones too: a reply can reach the origin and then

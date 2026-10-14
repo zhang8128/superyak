@@ -571,6 +571,61 @@ def test_a_paired_origin_cannot_put_words_in_a_local_users_mouth(two_peers):
         assert shown[body].get('unverified') is True, body
 
 
+def _roster_with_message(a, b, room, **message):
+    """A room.roster the origin (a) signs, with a message in its payload: only room.message may add one."""
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                  action='room.roster', recipients=[b[1]], payload={**snapshot, 'message': message})
+
+
+def test_a_roster_event_cannot_add_a_message(two_peers):
+    """Only a room.message is validated (author, epoch, timestamp, text), so only a room.message may add to the
+    history. A roster carrying a message with a bare local author would show as "You"; a list body or a string
+    `created` would break get_room and list_rooms (section 2 review of 96030b0, MF1)."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Hostile roster', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    base = {'room_id': room['id'], 'client_message_id': 'c', 'epoch': 1}
+    bare = _roster_with_message(a, b, room, id='m-bare', author_id=b[1], body='bare author', created=5.0, **base)
+    broken = _roster_with_message(a, b, room, id='m-broken', author_id=a[2].identity.peer_id + ':' + a[1],
+                                  body=['not', 'text'], created='x', **base)
+    assert b[2].receive(bare)['ok'] and b[2].receive(broken)['ok']
+    ids = [m['id'] for m in b[0].get_room(b[1], remote)['messages']]
+    assert 'm-bare' not in ids and 'm-broken' not in ids
+    assert b[0].list_rooms(b[1])
+
+
+def test_a_stored_malformed_message_is_left_out_of_the_view(two_peers):
+    """The view's backstop for whatever is already stored (section 2 review of 96030b0, SF1): a station that took
+    such a message before MF1's fix still leaves it out, and keeps the honest ones."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Old store', [ca['id']])
+    deliver(a, b)
+    assert b[2].receive(_forged_message(a, b, room, 'm-honest', 'h-1', 'honest words', 4.0,
+                                          author=a[2].identity.peer_id + ':' + a[1]))['ok']
+    remote = b[0].list_rooms(b[1])[0]['id']
+    author = a[2].identity.peer_id + ':' + a[1]
+    ok = {'room_id': room['id'], 'client_message_id': 'c', 'epoch': 1}
+    smuggled = [{'id': 'm-bare', 'author_id': b[1], 'body': 'bare', 'created': 1.0, **ok},
+                {'id': 'm-list', 'author_id': author, 'body': ['x'], 'created': 1.0, **ok},
+                {'id': 'm-time', 'author_id': author, 'body': 'x', 'created': 'x', **ok},
+                {'id': 'm-bool', 'author_id': author, 'body': 'x', 'created': True, **ok},
+                {'id': 7, 'author_id': author, 'body': 'x', 'created': 1.0, **ok},
+                {'id': 'm-client', 'author_id': author, 'body': 'x', 'created': 1.0, **{**ok, 'client_message_id': None}},
+                {'id': 'm-long', 'author_id': author + ':extra', 'body': 'x', 'created': 1.0, **ok},
+                'not a dict']
+    with b[0].transaction() as db:
+        row = db.execute("SELECT * FROM inbox WHERE kind='room' AND recipient=?", (b[1],)).fetchone()
+        stored = json.loads(row['payload'])
+        stored['messages'] += smuggled
+        db.execute("UPDATE inbox SET payload=? WHERE kind='room' AND recipient=?", (json.dumps(stored), b[1]))
+    shown = [m['id'] for m in b[0].get_room(b[1], remote)['messages']]
+    assert shown == ['m-honest']
+    assert b[0].list_rooms(b[1])
+
+
 def test_a_replayed_reply_shows_the_local_author_once(two_peers):
     """An honest origin holds one copy of each reply (receive keys peer_messages on room, author and client message
     id), so a second copy in its snapshot is forged. Replayed under a new id, beside a later question, it would put
@@ -761,9 +816,10 @@ def test_another_local_users_echoed_reply_carries_no_state_in_this_view(two_peer
 
 
 @pytest.mark.parametrize('status', ('pending', 'failed', 'withdrawn'))
-def test_an_echoed_reply_shows_delivered_even_while_its_row_says_failed(two_peers, status):
+def test_an_echoed_reply_shows_delivered_whatever_its_row_says(two_peers, status):
     """The same follow-up (plan review of 6816f43, nit 3): the origin holding the exact words proves delivery, so an
-    honest echo shows "delivered" even when the acknowledgement was lost and the outbox row still says failed."""
+    honest echo shows "delivered" whatever its outbox row says: pending or failed when the acknowledgement was lost, or
+    withdrawn when it was lost and the reply then withdrawn (S7)."""
     a, b, ca, cb = two_peers
     a[0].create_room(a[1], 'Lost acknowledgement', [ca['id']])
     deliver(a, b)

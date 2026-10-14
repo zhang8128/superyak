@@ -2030,6 +2030,8 @@ def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_del
             expect(forged.locator(".message-meta").first).to_have_text(
                 "Unverified: the room's host says this is from someone on this station")
             expect(forged).to_have_class("message unverified")
+            expect(forged).to_have_css("border-top-style", "dashed")
+            expect(forged).to_have_css("border-top-width", "1px")
             expect(forged.locator(".message-meta").last).not_to_contain_text("Delivered")
             expect(forged.locator(".message-meta").last).not_to_contain_text("Saved here")
             claims = page.locator(".message", has_text="the host's own words")
