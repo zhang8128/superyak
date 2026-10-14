@@ -25,6 +25,10 @@ NO_OUTCOME = 'Done needs an outcome link, like commit:<sha> or message:<id>'
 LINK_SHAPE = 'A link is message:<id>, branch:<name>, commit:<sha>, path:<path> or claim:<key>'
 AT_NAME = "A board item can't name anyone with @; write the name without it"
 NOT_HERE = 'message:<id> must name a message in this room'
+BREAKOUT = 'Breakouts hold no board'
+WRITER = "Only this room's owner and the owner's own ships can post on its board"
+DONE_BY = "Only the room's owner, the item's poster, or a holder who can post on this board can mark it done"
+DROP_BY = "Only the item's poster or the room's owner can drop it"
 BRANCH = re.compile(r'[A-Za-z0-9._/-]{1,100}')
 PATH = re.compile(r'[A-Za-z0-9._/+-]{1,200}')
 COMMIT = re.compile(r'[0-9a-f]{7,40}')
@@ -75,8 +79,20 @@ class RoomBoard:
             raise Problem(400, REMOTE)
 
     def _board_room(self, db, actor, room_id, write=False):
-        """Membership first: a non-member gets 404 and learns nothing about the room."""
-        return self._room(db, actor, room_id)
+        """Membership first (404, so a non-member learns nothing), then breakouts (400). A breakout's 400 keeps what
+        _room saved on first sight, a closure, as _refuse_closed_breakout does (breakouts.py:58-63)."""
+        room = self._room(db, actor, room_id)
+        if 'breakout' in room:
+            raise Problem(400, BREAKOUT, keep=True)
+        return room
+
+    def _board_writer(self, db, room, actor):
+        """6.1: a board writer is the room's owner, or a ship whose owner_id is the room's owner. Other people, other
+        owners' ships and ownerless ships (Odo, the wormhole) are not."""
+        if actor == room['owner_id']:
+            return True
+        row = db.execute('SELECT kind, owner_id FROM users WHERE id=?', (actor,)).fetchone()
+        return row is not None and row['kind'] == 'ship' and row['owner_id'] == room['owner_id']
 
     def _board_item(self, db, room_id, key):
         return db.execute('SELECT * FROM board_items WHERE room_id=? AND key=?', (room_id, key)).fetchone()
@@ -128,7 +144,9 @@ class RoomBoard:
         self._refuse_live_ship_keys(title, 'title')
         no_at_name(title)
         with self.transaction() as db:
-            self._board_room(db, actor, room_id, write=True)
+            room = self._board_room(db, actor, room_id, write=True)
+            if not self._board_writer(db, room, actor):
+                raise Problem(403, WRITER)
             now = self.clock()
             db.execute('INSERT INTO board_items(id,room_id,key,title,kind,posted_by,created) VALUES(?,?,?,?,?,?,?)',
                        (uid(), room_id, key, title, kind, actor, now))
@@ -143,9 +161,13 @@ class RoomBoard:
         self._refuse_live_ship_keys(raw, 'link')
         no_at_name(raw)  # a backstop: no link form can hold @
         with self.transaction() as db:
-            self._board_room(db, actor, room_id, write=True)
+            room = self._board_room(db, actor, room_id, write=True)
             item = require(self._board_item(db, room_id, key))
             self._message_here(db, room_id, link)
+            if item['state'] != 'open':
+                raise Problem(409, f'`{key}` is already {item["state"]}')
+            if not self._board_writer(db, room, actor):
+                raise Problem(403, WRITER)
             db.execute('INSERT INTO board_links VALUES(?,?,?,?)', (item['id'], link, actor, self.clock()))
             self._post_claim(db, actor, room_id, f'Linked `{key}`: {safe_line(link, LINK_CHARS)}')
             return {**self._item_json(db, item), 'added': True}
@@ -167,16 +189,26 @@ class RoomBoard:
         return self._close_item(actor, room_id, claim_key(key), 'dropped', None)
 
     def _close_item(self, actor, room_id, key, state, outcome):
-        """4.4: done or dropped, for good. Closing releases the active claim on the key, whoever holds it, in this same
-        transaction, with released_by the closer. The close's own line names a holder other than the closer (R16 and R17,
-        widened through closing only)."""
+        """4.4: done or dropped, for good. Done is for the room's owner, the poster, or a holder who is a board writer:
+        without that last condition a member who may not post could claim someone's item and close it for good. Drop is
+        for the poster or the owner. Closing releases the active claim on the key, whoever holds it, in this same
+        transaction, with released_by the closer; the close's own line names a holder other than the closer (R16 and
+        R17, widened through closing only)."""
         with self.transaction() as db:
-            self._board_room(db, actor, room_id, write=True)
+            room = self._board_room(db, actor, room_id, write=True)
             item = require(self._board_item(db, room_id, key))
             if outcome is not None:
                 self._message_here(db, room_id, outcome)
+            if item['state'] != 'open':
+                raise Problem(409, f'`{key}` is already {item["state"]}')
             now = self.clock()
             held = self._active_claim(db, room_id, key, now)
+            if state == 'done':
+                holder_writes = held is not None and held['holder_id'] == actor and self._board_writer(db, room, actor)
+                if actor not in (room['owner_id'], item['posted_by']) and not holder_writes:
+                    raise Problem(403, DONE_BY)
+            elif actor not in (room['owner_id'], item['posted_by']):
+                raise Problem(403, DROP_BY)
             db.execute('UPDATE board_items SET state=?, closed=?, closed_by=?, outcome=? WHERE id=?', (state, now, actor, outcome, item['id']))
             released = None
             if held is not None:

@@ -206,6 +206,11 @@ def not_a_member(s):  # row 10: a person asking about a breakout gets 404, not 4
             404, 'Not found')
 
 
+def breakout(s):  # row 11: a member ship, who isn't a board writer there either
+    return (s.ship('rio-grande'), 'POST', f'/api/chats/{open_breakout(s)}/board', {'key': 'build:x', 'title': 'Side work', 'kind': 'build'},
+            400, 'Breakouts hold no board')
+
+
 def no_item(s):  # row 13: a non-writer, linking a message from another room
     return (s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board/link',
             {'key': 'build:none', 'link': f'message:{elsewhere_message(s)}'}, 404, 'Not found')
@@ -217,14 +222,40 @@ def message_elsewhere(s):  # row 14: on a closed item, from a non-writer
             400, NOT_HERE)
 
 
+def closed(s):  # row 16: a holder's retried done gets 409, not 403
+    rio = s.ship('rio-grande')
+    insert_item(s, s.room, 'build:x')
+    assert claim(rio, s.room, 'build:x').status_code == 201 and done(rio, s.room, 'build:x').status_code == 200
+    return rio, 'POST', f'/api/chats/{s.room}/board/done', {'key': 'build:x', 'outcome': 'commit:1ff0efb'}, 409, '`build:x` is already done'
+
+
+def not_a_writer(s):  # row 17: another owner's ship, on a full board, over its post budget
+    fill(s, s.room, 100)
+    over_budget(s, 'defiant')
+    return s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:new', 'title': 'Mine', 'kind': 'build'}, 403, WRITER
+
+
+def done_by_a_non_writer(s):  # row 18: the holder isn't a board writer, and is over its post budget
+    insert_item(s, s.room, 'build:x')
+    assert claim(s.ship('defiant'), s.room, 'build:x').status_code == 201
+    over_budget(s, 'defiant')
+    return s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board/done', {'key': 'build:x', 'outcome': 'commit:1ff0efb'}, 403, DONE_BY
+
+
+def drop_by_a_non_poster(s):  # row 19: a board writer who neither posted it nor owns the room, over its post budget
+    insert_item(s, s.room, 'build:x')
+    over_budget(s, 'rio-grande')
+    return s.ship('rio-grande'), 'POST', f'/api/chats/{s.room}/board/drop', {'key': 'build:x'}, 403, DROP_BY
+
+
 def post_budget(s):  # row 24
     over_budget(s, 'serenity')
     return (s.ship('serenity'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:new', 'title': 'One more', 'kind': 'build'},
             429, 'This ship is posting too fast; wait a minute')
 
 
-REFUSALS = [remote_room, bad_key, bad_title, bad_kind, done_without_outcome, bad_link, live_key, at_name, not_a_member, no_item,
-            message_elsewhere, post_budget]
+REFUSALS = [remote_room, bad_key, bad_title, bad_kind, done_without_outcome, bad_link, live_key, at_name, not_a_member, breakout,
+            no_item, message_elsewhere, closed, not_a_writer, done_by_a_non_writer, drop_by_a_non_poster, post_budget]
 
 
 @pytest.mark.parametrize('case', REFUSALS, ids=lambda case: case.__name__)
@@ -494,3 +525,119 @@ def test_a_non_member_cannot_read_a_board(env):
     s = Station(env)
     assert post(s.ship('serenity'), s.room, 'build:a').status_code == 201
     assert refused(board(s.outsider, s.room)) == (404, 'Not found')
+
+
+@pytest.mark.parametrize('who, writes', [('andy', True), ('serenity', True), ('doctor', False), ('defiant', False),
+                                         ('odo', False), ('wormhole', False)])
+def test_only_the_owner_and_the_owners_ships_post_and_link(env, who, writes):
+    """6.1: the room's owner and a ship he owns are board writers; another person in the room, another owner's ship and
+    the ownerless Odo and wormhole get 403, for post and for link."""
+    s = Station(env)
+    client = s.client(who)
+    insert_item(s, s.room, 'build:a', poster='andy')
+    posted, linked = post(client, s.room, 'build:new'), link(client, s.room, 'build:a', 'branch:x')
+    if writes:
+        assert (posted.status_code, linked.status_code) == (201, 200)
+    else:
+        assert refused(posted) == refused(linked) == (403, WRITER)
+
+
+def test_done_needs_an_outcome_link_and_a_writer(env):
+    """4.4, 6.1: without an outcome, 400. The room's owner, the poster, and a holder who is a board writer may mark it
+    done; a holder who isn't one (another owner's ship) and a writer who is neither poster nor holder get 403."""
+    s = Station(env)
+    serenity, rio, defiant = s.ship('serenity'), s.ship('rio-grande'), s.ship('defiant')
+    insert_item(s, s.room, 'build:x')
+    assert refused(done(serenity, s.room, 'build:x', None)) == (400, 'Done needs an outcome link, like commit:<sha> or message:<id>')
+    for closer, client in (('owner', s.andy), ('poster', serenity), ('holder', rio)):
+        insert_item(s, s.room, f'build:{closer}')
+        if closer == 'holder':
+            assert claim(rio, s.room, 'build:holder').status_code == 201
+        assert done(client, s.room, f'build:{closer}').status_code == 200, closer
+    insert_item(s, s.room, 'build:held')
+    assert claim(defiant, s.room, 'build:held').status_code == 201
+    insert_item(s, s.room, 'build:other')
+    assert refused(done(defiant, s.room, 'build:held')) == (403, DONE_BY)
+    assert refused(done(rio, s.room, 'build:other')) == (403, DONE_BY)
+
+
+def test_drop_is_for_the_poster_and_the_owner(env):
+    """4.4: the poster or the room's owner drops an item; its holder, another owner's ship and another person get 403."""
+    s = Station(env)
+    serenity, rio = s.ship('serenity'), s.ship('rio-grande')
+    for key in ('build:a', 'build:b', 'build:c'):
+        insert_item(s, s.room, key)
+    assert claim(rio, s.room, 'build:c').status_code == 201
+    for client, key in ((rio, 'build:c'), (s.ship('defiant'), 'build:a'), (s.doctor, 'build:a')):
+        assert refused(drop(client, s.room, key)) == (403, DROP_BY)
+    assert drop(serenity, s.room, 'build:a').status_code == 200
+    assert drop(s.andy, s.room, 'build:b').status_code == 200
+
+
+def test_any_member_reads_and_takes(env):
+    """6.1: members who aren't board writers read the board and claim a key. (It passes before Step 3 too: it pins that
+    the writer rules leave reading and taking open.)"""
+    s = Station(env)
+    insert_item(s, s.room, 'build:a', poster='andy')
+    for client in (s.doctor, s.ship('defiant'), s.ship('odo')):
+        response = board(client, s.room)
+        assert response.status_code == 200 and [i['key'] for i in response.json()] == ['build:a']
+    assert claim(s.ship('defiant'), s.room, 'build:a').status_code == 201
+    assert board(s.doctor, s.room).json()[0]['claim']['holder_id'] == s.id('defiant')
+
+
+def test_done_and_dropped_are_final(env):
+    """4.4: link, done and drop on a closed item get 409 naming its state, from the room's owner too. Claiming its key
+    afterwards works and reopens nothing."""
+    s = Station(env)
+    serenity = s.ship('serenity')
+    insert_item(s, s.room, 'build:done')
+    insert_item(s, s.room, 'build:dropped')
+    assert done(serenity, s.room, 'build:done').status_code == 200 and drop(serenity, s.room, 'build:dropped').status_code == 200
+    for key, state in (('build:done', 'done'), ('build:dropped', 'dropped')):
+        for response in (link(s.andy, s.room, key, 'branch:x'), done(s.andy, s.room, key), drop(s.andy, s.room, key)):
+            assert refused(response) == (409, f'`{key}` is already {state}')
+    assert claim(s.ship('rio-grande'), s.room, 'build:done').status_code == 201
+    assert {i['key']: i['state'] for i in board(s.andy, s.room).json()} == {'build:done': 'done', 'build:dropped': 'dropped'}
+
+
+def test_breakouts_hold_no_board(env):
+    """6: every board route on an open and on a closed breakout gets 400, and a non-member gets 404; nothing is written,
+    except that a breakout closed by quiet and seen first by a board route keeps the closure _room saved (keep=True).
+    Claims in a breakout work as before."""
+    s = Station(env)
+    serenity, rio = s.ship('serenity'), s.ship('rio-grande')
+    side = open_breakout(s)
+
+    def every_route(client, room):
+        return [board(client, room), post(client, room, 'build:a'), link(client, room, 'build:a', 'branch:x'),
+                done(client, room, 'build:a'), drop(client, room, 'build:a')]
+    before = s.snapshot()
+    assert all(refused(r) == (400, 'Breakouts hold no board') for r in every_route(rio, side))
+    assert all(refused(r) == (404, 'Not found') for r in every_route(s.andy, side))
+    assert serenity.post(f'/api/ships/me/rooms/{side}/close').status_code == 200
+    assert all(refused(r) == (400, 'Breakouts hold no board') for r in every_route(rio, side))
+    assert s.snapshot() == before
+    quiet = open_breakout(s, 'Quiet side')
+    s.tick(8 * DAY)
+    assert s.rows('SELECT closed FROM breakouts WHERE room_id=?', quiet) == [(None,)]
+    assert refused(board(rio, quiet)) == (400, 'Breakouts hold no board')
+    assert s.rows('SELECT closed FROM breakouts WHERE room_id=?', quiet) != [(None,)]
+    assert claim(rio, open_breakout(s, 'Claims side'), 'build:a').status_code == 201
+
+
+def test_claims_mark_board_items(env):
+    """5.6, station half: _claim_json carries `board`, the item's state, only when the room has an item with that key, in
+    the claim route's answer, the claims list and the room view. A plain claim has exactly today's keys. (The tools
+    half is agent/tests/test_board_tools.py, step 2.)"""
+    s = Station(env)
+    rio = s.ship('rio-grande')
+    for key in ('build:open', 'build:done', 'build:dropped'):
+        insert_item(s, s.room, key, poster='andy')
+    assert done(s.andy, s.room, 'build:done').status_code == 200 and drop(s.andy, s.room, 'build:dropped').status_code == 200
+    answers = {key: claim(rio, s.room, key).json() for key in ('build:open', 'build:done', 'build:dropped', 'adhoc:x')}
+    expected = {'build:open': 'open', 'build:done': 'done', 'build:dropped': 'dropped', 'adhoc:x': None}
+    assert {key: answer.get('board') for key, answer in answers.items()} == expected
+    assert set(answers['adhoc:x']) == CLAIM_FIELDS
+    assert {c['key']: c.get('board') for c in claims(rio, s.room)} == expected
+    assert {c['key']: c.get('board') for c in s.andy.get(f'/api/chats/{s.room}').json()['claims']} == expected
