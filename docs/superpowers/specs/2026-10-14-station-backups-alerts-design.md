@@ -1,10 +1,10 @@
 # Station backups, a restore test and service alerts
 
-Status: revision 2. Revision 1 (11e488b) had a fresh reviewer's D8 verdict, APPROVE WITH CHANGES: 3 must-fix, 14
-should-fix and rulings on Q1–Q6. Rio Grande ruled to apply all of it, and this revision does; the review map at the
-end walks each item. **M2's text needs a fresh re-check before the plan is written.** It is S16, R18, the restore
-runbook (steps 3–9), Security's "A restore brings back old access" bullet, S7's reconcile step and exit 24, and the
-three `test_reconcile_*` tests. The other changes need no re-check. Roadmap items 1.1 and 1.3
+Status: revision 3, approved under D8. Revision 1 (11e488b) had a fresh reviewer's verdict, APPROVE WITH CHANGES: 3
+must-fix, 14 should-fix and rulings on Q1–Q6. Revision 2 (14234fd) applied all of it. The same reviewer's re-check of
+revision 2 was APPROVE WITH CHANGES, with 2 must-fix (R-M1, R-M2) and 6 should-fix (S-R1 to S-R6), and said that
+applied as written the spec passes D8 and goes to planning with no further review. Rio Grande ruled to apply all of it
+exactly as written, and this revision does. The review maps at the end walk each item. Roadmap items 1.1 and 1.3
 ([roadmap](../plans/2026-10-12-station-roadmap.md)), with a seam for 1.2. Base: `main` (7cdbb1f). Written by a Rio
 Grande crew member.
 
@@ -151,7 +151,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
        taken under the rotation's `.lock`, so a concurrent backup's pruning can't remove the file mid-copy.
     4. Read three counts, read-only: users that aren't the system author, rooms, and messages. Then run
        `station-restore-reconcile` (S16) on the scratch copy, without `--replaced`, so a schema change that breaks it
-       fails a restore test within a month. It changes none of the three counts.
+       fails a restore test within a month. It changes none of the three counts. The scratch directory holds no
+       `dispatch.lock` until step 5, so S16's live-directory rule doesn't refuse it; the reconcile must stay before the
+       server's start.
     5. Start `sys.executable -I -m superyak_peer serve --data-dir <scratch> --host 127.0.0.1 --port P`. P comes from
        binding port 0 and closing it; the start is tried up to 3 times if the server exits during start-up.
     6. Wait up to 60 s for `http://127.0.0.1:P/api/health` to answer 200.
@@ -272,10 +274,12 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 - **S12. At most one `stopped` line per unit per window: 30 minutes, doubling up to 6 hours in a burst.**
   - **Held back, then counted.** A `stopped` failure inside the window adds to a count in `alerts/rate.json`. The next
     `stopped` alert for that unit reports the count, and then the count resets.
-  - **Giving up is never held back.** `down` and `failed` are always queued. An earlier `stopped` line can't hold them
-    back, and they aren't windowed among themselves: neither can repeat unless a person or a timer starts the unit
+  - **Giving up isn't windowed.** `down` and `failed` are always queued, up to the backstop below. An earlier
+    `stopped` line can't hold them back, and they aren't windowed among themselves: neither can repeat unless a person or a timer starts the unit
     again, so they can't loop. (Revision 1 windowed them per unit and kind; the reviewer's deploy check, "a second run
     queues only the `down` line", needs them unwindowed.)
+  - **A backstop.** As a backstop, more than 6 `down` or `failed` lines for one unit in a day are held back and
+    counted like stops. This is not needed for any path known today.
   - **Locking.** Records are written under a flock on `alerts/.lock`. If 5 s pass without the lock, the alert is
     queued anyway: a duplicate is better than a lost alert.
   - **Backing off.** Inside an unbroken burst, each further window for the same unit doubles, from 30 minutes up to
@@ -327,8 +331,13 @@ The decisions below rest on these facts, each checked on 2026-10-14.
       `$(STATION_DATA)`), and any directory holding a `dispatch.lock`, which every directory a station has opened
       holds.
     - It refuses a symlink, and a copy that fails `integrity_check`.
+    - **An older copy.** A copy taken before a later migration lacks some tables or columns. A step whose table or
+      column the staged copy doesn't have is skipped and named in the report: migrations only add, empty or at a
+      default that grants nothing, so there is nothing there to take back. A missing table or column is never an
+      error. The same holds for the replaced file: what it lacks is not compared.
     - It opens `--replaced` read-only (`mode=ro`), and uses it only when its `quick_check` passes. A replaced file that
-      won't open or fails its check is treated as absent, and the report says so: the command fails closed.
+      won't open or fails its check is treated as absent, and the report says so: the command fails closed. The report
+      gives the reason, such as a hot journal beside the replaced file.
   - **Always, in one transaction.** Each step only takes access away:
     1. delete every session;
     2. mark every unused invitation and account activation used;
@@ -346,7 +355,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     ships, which have no owner (Odo, Wormhole), keep their keys.
   - **Reported, never applied,** since a bad replaced file may be the reason for the restore: users whose password hash
     differs, instruction layers whose active revision differs, and peers whose pairing differs.
-  - **What it prints:** counts and short ids only. It prints no names, hashes or tokens.
+  - **What it prints:** counts, and for each reported or revoked item the username (users and ships), the layer's
+    short id and title, the room's short id and title, or the peer's short id, under station-pending's header that
+    names and titles come from people and are data, not instructions. It prints no hashes, keys or tokens.
   - **The monthly restore test** runs it, without `--replaced`, on its scratch copy before booting it (S7), so a schema
     change that breaks it fails a restore test within a month.
   - **It never writes the live database.** It writes only the staged copy, and if any step fails the transaction rolls
@@ -366,7 +377,8 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 5. **Stage and reconcile the copy:** `install -m 600 <copy> <replaced dir>/restored.sqlite3`, then
    `make station-restore-reconcile DB=<replaced dir>/restored.sqlite3 REPLACED=<replaced dir>/peer.sqlite3`. Leave out
    `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those machines dock
-   again. Read its report.
+   again. Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent (for example
+   "hot journal"), the room and space members, admins and law layers weren't compared: check them by hand in step 8.
 6. **Put it in place:**
    `install -m 600 <replaced dir>/restored.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3`.
    The peer identity files stay where they are; nothing here moves them.
@@ -374,9 +386,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
    still wanted. Tell the owners of ships whose keys were revoked to dock again. Requests and dockings since the copy
    were expired; their senders ask again, and nothing is approved from memory. If your own account comes back waiting
    for activation, renew it with `bootstrap-super-admin --renew-activation`.
-8. **Start the services** in order: lighthouse, door, ship and odo. Run `make station-rooms`, and check the `bridged`
-   column before starting wormhole. Check each with `is-active`. After the start, set the law layers the report listed
-   as they should be, then start both timers.
+8. **Start the lighthouse and the door.** Set the law layers the report listed as they should be, in the browser.
+   Then start ship and odo, run `make station-rooms` and check the `bridged` column before starting wormhole. Check
+   each with `is-active`, then start both timers.
 9. **Say in the room** what was restored and from when. Everything said after the copy's time is gone.
 
 ## Requirements
@@ -406,8 +418,8 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   other result queues an alert. The backup and restore-test units alert through `OnFailure=`.
 - **R11.** There is at most one `stopped` alert per unit per window. The window is 30 minutes and doubles, up to 6
   hours, with each further window of an unbroken burst; a full window without a failure ends the burst. Held-back
-  failures are counted in the next `stopped` alert. `down` and `failed` are always queued. When the lock can't be had
-  within 5 s, the alert is queued anyway.
+  failures are counted in the next `stopped` alert. `down` and `failed` are always queued, up to the backstop of 6 per
+  unit in a day. When the lock can't be had within 5 s, the alert is queued anyway.
 - **R12.** An alert is one line from S11's templates, with checked values only. It has no journal lines, no
   environment and no at sign, and an invalid unit is refused with nothing queued.
 - **R13.** Alerts are queued as 0600 files in `<data-dir>/alerts/`. `station-notices` lists, from the last 7 days,
@@ -423,9 +435,11 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 - **R17.** `make station-backup [OUTPUT=…]`, `make station-restore-test [BACKUP=…]`, `make station-alerts` and
   `make station-restore-reconcile DB=… [REPLACED=…]` run the same commands by hand.
 - **R18.** `station-restore-reconcile` works as S16 says. It refuses the live data dir, symlinks and a copy that fails
-  its check, applies only changes that take access away, in one transaction, and prints counts and short ids only.
-  With a usable replaced file it takes back the keys, memberships and roles taken away there; without one it revokes
-  every owned ship's keys.
+  its check, and applies only changes that take access away, in one transaction. It prints counts, and the usernames,
+  short ids and titles S16 names under the data-not-instructions header, never hashes, keys or tokens. With a usable
+  replaced file it takes back the keys, memberships and roles taken away there; without one, or with one that fails
+  its check, it revokes every owned ship's keys and says why. A step whose table or column the copy lacks is skipped
+  and named, never an error.
 
 ## Error handling
 
@@ -444,7 +458,7 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 | restore test | 24 | `station-restore-reconcile` failed on the scratch copy | "the restore's reconcile step failed" |
 | restore test | 1 | Anything else | "see the log" |
 | alert | 2 | A run outside systemd (no `SERVICE_RESULT` or `--monitor` variables), or an invalid unit | Nothing queued; a usage message |
-| reconcile | 1 | A refused FILE (live data dir, symlink, failed check) or any error during the transaction | The staged copy is unchanged |
+| reconcile | 1 | A refused FILE (live data dir, symlink, failed check) or any error during the transaction; a missing table or column is skipped and named, never an error | The staged copy is unchanged; go on in the runbook only after exit 0 |
 
 - **Every failing timer run** fails its unit. `OnFailure=` then queues the reason that matches the exit status, or
   S11's words for a systemd result.
@@ -464,9 +478,10 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   an approved request's invitation token and the reusable Tailscale share link. A copy keeps them for up to 8 weeks
   after the live file has cleared them. Copies are 0600 in 0700 directories, owned by andy, on the Pi's own disk.
   Anyone who can read them can already read the live file, the ships' key files and the share-link file, so a copy on
-  the Pi adds little: the old docking keys and invitation tokens it keeps were revoked or expired in the live file, and
-  S16 takes them back if a copy is ever restored. The copy off the Pi does add exposure, and it stays off until Andy
-  decides (S5).
+  the Pi adds little. A docking key a copy keeps can still be live: once a machine collects it, the live file holds
+  only its hash, while the ship goes on using the key until it is revoked. So a copy can hold a working key for a
+  remote machine's ship. That is why the copy off the Pi waits for Andy's decision on encryption (S5); on a restore,
+  S16 revokes every key the restored copy still holds.
 - **A restore brings back old access:** ended sessions, revoked keys, used invitations and activations, uncollected
   docking keys and invitation tokens, decided requests, removed room and space members, higher roles, old passwords
   and old law layers. Restoring is a person's step. `station-restore-reconcile` (S16) takes back everything that only
@@ -528,9 +543,15 @@ without its feature.
     - the invitation and the request can't be used;
     - no session is left, and the next mention's seq is past B's;
     - a changed password and a changed active layer are reported, not applied;
-    - the output contains no name, hash or token.
+    - the output names the user whose password changed and contains no hash, key or token.
   - `test_reconcile_without_the_replaced_file_fails_closed` (R18): every owned ship's keys are revoked, and the station
-    ships keep theirs.
+    ships keep theirs. A replaced file of junk bytes gives the same result as none, and the report says it was treated
+    as absent.
+  - `test_reconcile_rolls_back_when_a_step_fails` (R18): a later step raises (monkeypatched), the staged file's bytes
+    are unchanged and the exit is 1.
+  - `test_reconcile_skips_what_an_older_copy_lacks` (R18): a copy without `access_requests.share_url` and without
+    `space_members` reconciles with exit 0, takes back its sessions, invitations and keys, and names the two skipped
+    steps.
   - `test_reconcile_refuses_the_live_data_dir_and_symlinks` (R18): the `--live-data-dir`, a directory holding
     `dispatch.lock`, a symlink and a copy that fails its check are each refused, and the file is unchanged.
 - **`peer/tests/test_alerts.py`:**
@@ -541,7 +562,8 @@ without its feature.
     - 6 crashes in 10 minutes queue one file;
     - one at 31 minutes is queued, saying "5 more stops since …";
     - one at 61 minutes is still held, because the second window is 60 minutes;
-    - a `down` inside the window is queued, and so is a second `down` a minute later;
+    - a `down` inside the window is queued, and so is a second `down` a minute later; a seventh `down` for the
+      same unit in a day is held back and counted (the S12 backstop);
     - a full window without a failure ends the burst, and the window is 30 minutes again.
   - `test_the_lock_fallback_queues_anyway` (R11): with `alerts/.lock` held by another process, the alert is queued
     after 5 s.
@@ -689,3 +711,16 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | SF14: future Deploy sections | Applied | S2 ("After a schema change") |
 | Q1–Q6 | Adopted as ruled | Rulings on the open questions |
 | Q3's decision list | "A channel for when the station is down" added beside 1.2 | [roadmap](../plans/2026-10-12-station-roadmap.md), "What Andy does" |
+
+## Review map (revision 3: the re-check of 14234fd)
+
+| Item | Ruling | Where |
+|---|---|---|
+| R-M1: a report Andy can't act on | Applied as written: usernames, layer and room short ids and titles, and peer short ids under station-pending's data-not-instructions header; never hashes, keys or tokens | S16 ("What it prints"), R18, `test_reconcile_takes_back_what_the_restore_revived` |
+| R-M2: an older copy makes the reconcile fail | Applied as written: a missing table or column is skipped and named, never an error, in the staged copy and the replaced file | S16 ("An older copy"), R18, Error handling, `test_reconcile_skips_what_an_older_copy_lacks` |
+| S-R1: say why the replaced file was treated as absent | Applied | S16 (the replaced-file bullet), runbook step 5 |
+| S-R2: fix the law before the ships start | Applied | Runbook step 8 |
+| S-R3: tests for the writer's additions | Applied; exit 24 was already tested | `test_reconcile_without_the_replaced_file_fails_closed` (junk replaced file), `test_reconcile_rolls_back_when_a_step_fails`, `test_restore_test_failures_clean_up_and_exit_with_their_code` (24) |
+| S-R4: a copy can hold a working key | Applied | Security ("What a copy holds") |
+| S-R5: the reconcile stays before the server's start | Applied | S7 step 4 |
+| S-R6: a backstop for `down` and `failed` | Applied | S12, R11, `test_stopped_alerts_are_held_back_and_back_off_per_unit` |
