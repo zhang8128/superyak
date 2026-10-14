@@ -126,24 +126,36 @@ def test_the_deploys_first_start_backfills_each_room_once(env):
 
 def test_pruning_keeps_fifty_the_last_day_and_the_owners_last_act(env):
     """R11: after each write a room keeps its newest 50 revisions, everything from the last 24 hours, and the owner's
-    newest revision, a removal included. Anything else goes, so text the owner removed ages out like any other."""
+    newest revision, a removal included. Anything else goes, so text the owner removed ages out like any other. Pruning
+    is per room: a write to one room never deletes, or changes what is kept of, another room's history (a missing
+    room_id filter in the DELETE or in either subquery fails this)."""
     app, clients, users, clock = env
     store, patient = app.state.store, users[0]['id']
     ship, key = docked(store, patient, 'rio-grande')
     room = new_room(clients[0], users[1], ship)
     put_brief(clients[0], room, 'The owner wrote this.', 0)    # r1, at 1,000,000
     put_brief(clients[0], room, '', 1)                         # r2: he removed it
+    other = new_room(clients[0], users[1], ship, title='Other room')
+    put_brief(clients[0], other, 'Owner one.', 0)              # other r1, at 1,000,000
+    put_brief(clients[0], other, 'Owner two.', 1)              # r2
+    put_brief(clients[0], other, 'Owner three.', 2)            # r3: his last act, numbered above the first room's r2
+    for n in range(4, 71):                                     # r4-r70: ship saves numbered above the first room's r62
+        assert wrote(store, ship['id'], other, f'Other ship text {n}.') == n
+    others = history(app, other)
+    assert [r[0] for r in others] == list(range(1, 71))
     for n in range(3, 63):                                     # r3-r62: a ship save every 72 minutes, for three days
         clock[0] += 72 * 60
         assert wrote(store, ship['id'], room, f'Ship text {n}.') == n
     # The newest 50 are r13-r62 (the last day, r42-r62, is among them). r2 is the owner's last act; r1 aged out.
     assert revisions(app, room) == [2] + list(range(13, 63))
     assert history(app, room)[0] == (2, '', patient, None)
+    assert history(app, other) == others                       # three days old, yet this room's writes left it whole
     for n in range(63, 118):                                   # r63-r117: 55 saves, 361 s apart, in 5.5 hours
         clock[0] += 361
         wrote(store, ship['id'], room, f'Ship text {n}.')
     # The newest 50 are r68-r117. The last day also keeps r47-r67, so 71 ship revisions stay, more than 50.
     assert revisions(app, room) == [2] + list(range(47, 118))
+    assert history(app, other) == others
 
 
 def test_the_brief_names_its_authors_kind_and_username(env):
