@@ -13,7 +13,7 @@ page after its loop; chats.py calls it for the room's deferrals. Reads stay read
 
 **Spec:** `docs/superpowers/specs/2026-10-14-stale-deferrals-design.md`, revision 2, approved under D8 (d40d1f7).
 
-**Status:** revision 2, for the same reviewer's re-check. Revision 1 (e62be36) had the fresh reviewer's verdict, APPROVE
+**Status:** revision 3, for the same reviewer's re-check. Revision 1 (e62be36) had the fresh reviewer's verdict, APPROVE
 WITH CHANGES (2 should-fix, 4 nits; room message 6752a4a7): see "Review map".
 
 ## Global Constraints
@@ -34,9 +34,10 @@ WITH CHANGES (2 should-fix, 4 nits; room message 6752a4a7): see "Review map".
 2. A person's reply to the mention: it still waits (test 2's first half).
 3. The ship's claim message replying to the mention: it still waits (test 3, a guard).
 4. A breakout closed on first sight in the same unread page: the helper runs after the loop, so a closure's dropped rows
-   are gone first. No test can tell the order apart, and none is needed: a waiting deferral means a mention (an
-   ordinary message) under two hours old in that room, and a breakout closes only after seven days without one, so the
-   two never meet on one read. The order is kept as defence.
+   are gone first. The bound counts from the watcher's first ask, not from the mention, so a mention posted early in a
+   quiet week and first asked about near its end still waits when the closing read comes. Test 5
+   (`test_the_read_that_closes_a_breakout_marks_no_fresh_deferral_in_it`, test_breakouts.py, 6e6809f) pins it: a guard
+   that the helper-before-the-loop mutation fails.
 6. Two waiting deferrals in a room: `deferred_here` lists the older first (test 4, a guard; the order-by-id mutation
    fails it).
 5. A ship in several rooms: `deferred_here` lists only this room's (the chats query filters by room, unchanged).
@@ -49,6 +50,7 @@ WITH CHANGES (2 should-fix, 4 nits; room message 6752a4a7): see "Review map".
 - Modify: `peer/superyak_peer/tickets.py` (a new `_waiting_deferrals`, right before `_defer`)
 - Modify: `peer/superyak_peer/chats.py` (the R27 block in `send_message`, about lines 100-105)
 - Modify: `peer/superyak_peer/inbox.py` (the unread loop, about lines 139-160)
+- Test: `peer/tests/test_breakouts.py`: test 5 at the end, already committed (6e6809f).
 - Test: `peer/tests/test_deferrals.py`: the four tests at the end are already committed (8e93d0f, 8ed1d48, f67b893). No
   test changes in this task.
 - Modify: `docs/superpowers/specs/2026-10-10-ship-status-and-claims-design.md` (R26, R27 wording)
@@ -146,7 +148,7 @@ In `docs/superpowers/specs/2026-10-10-ship-status-and-claims-design.md`:
 - [ ] **Step 3: Run the tests**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_deferrals.py tests/test_inbox.py tests/test_breakouts.py`
-Expected: all pass (72).
+Expected: all pass (73).
 
 - [ ] **Step 4: Mutation checks**, one at a time, each restored before the next (set `PYTHONDONTWRITEBYTECODE=1`; run
   `tests/test_deferrals.py`):
@@ -157,11 +159,13 @@ Expected: all pass (72).
     fails;
   - make inbox.py's `waiting` the set of all this ship's deferral rows: tests 1 and 2 fail;
   - make chats.py's `waiting = held`: tests 1 and 2 fail;
-  - change the helper's `ORDER BY first_deferred` to `ORDER BY message_id`: test 4 fails.
+  - change the helper's `ORDER BY first_deferred` to `ORDER BY message_id`: test 4 fails;
+  - in inbox.py, compute `waiting` before the loop (from the page's rows' message ids) instead of after it: test 5 fails
+    (run `tests/test_breakouts.py` for this one).
 
 - [ ] **Step 5: The peer suite**
 
-Run: `make check-peer`. Expected: every test passes (main's 574 on this Mac, plus 4: 578). Name any failure.
+Run: `make check-peer`. Expected: every test passes (main's 574 on this Mac, plus 5: 579). Name any failure.
 
 - [ ] **Step 6: Commit**
 
@@ -185,7 +189,8 @@ git commit -m "Stale deferrals: a deferral past the bound or answered by the shi
 - **Dry run:** every block applied as written in a scratch worktree (revision 1 at d40d1f7, reproduced by the plan
   reviewer at e62be36): RED 2 failed and 22 passed; GREEN 71; all six mutations fail exactly the tests named;
   `make check-peer` 577. Revision 2 adds test 4 (f67b893): it passes before and after the change, and the order-by-id
-  mutation fails it; the counts become 23, 72 and 578.
+  mutation fails it; the counts become 23, 72 and 578. Revision 3 adds test 5 (6e6809f): it passes before and after the
+  change, and the helper-before-the-loop mutation fails it; the counts become 73 and 579.
 - **Merge note:** ship-status-fixes changes tickets.py's `_decided` and the INSERT, not `_defer` or `_answered`; the two
   branches should merge cleanly in either order.
 
@@ -194,7 +199,7 @@ git commit -m "Stale deferrals: a deferral past the bound or answered by the shi
 
 | # | Finding | Change |
 |---|---|---|
-| S1 | the after-the-loop order untested | Review Focus 4 explains why no read can tell it apart (a waiting deferral means a mention under 2 h; a breakout closes after 7 days without one); kept as defence |
+| S1 | the after-the-loop order untested | test 5 (revision 3): revision 2's argument measured the mention's age, but the bound counts from the first ask, so the case is real (re-check of d02fd26); Step 4's eighth mutation |
 | S2 | oldest-first untested | test 4, a guard whose ids sort the other way; Step 4's seventh mutation |
 | N3 | the indentation sentence | given in spaces |
 | N4 | no setup line | Step 1 starts with `uv sync` |
