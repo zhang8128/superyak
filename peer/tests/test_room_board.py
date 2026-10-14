@@ -641,3 +641,111 @@ def test_claims_mark_board_items(env):
     assert set(answers['adhoc:x']) == CLAIM_FIELDS
     assert {c['key']: c.get('board') for c in claims(rio, s.room)} == expected
     assert {c['key']: c.get('board') for c in s.andy.get(f'/api/chats/{s.room}').json()['claims']} == expected
+
+
+def test_adding_members_carries_open_items_and_leaves_the_record(env):
+    """5.x: the new room holds the open items with their ids, keys, posters, created times and links; add_participants
+    answers board_carried and the carry posts nothing. A taken item stays taken there by the same holder until the same
+    expiry, through the same claim row; the old room holds no active claim on its key, and the holder's count is
+    unchanged. Done and dropped items stay as the record. A claim whose holder isn't in the new room stays behind."""
+    s = Station(env)
+    serenity, rio, defiant = s.ship('serenity'), s.ship('rio-grande'), s.ship('defiant')
+    for key in ('build:waiting', 'build:taken', 'build:done', 'build:dropped', 'build:left'):
+        assert post(serenity, s.room, key).status_code == 201
+        s.tick()
+    assert link(serenity, s.room, 'build:taken', 'branch:work-board-station').status_code == 200
+    assert claim(rio, s.room, 'build:taken', note='on it', minutes=60).status_code == 201
+    assert done(serenity, s.room, 'build:done').status_code == 200 and drop(serenity, s.room, 'build:dropped').status_code == 200
+    assert claim(defiant, s.room, 'build:left').status_code == 201
+    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200
+    was = {i['key']: i for i in board(s.andy, s.room).json()}
+    rio_holds = s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande'))
+    messages = s.rows('SELECT count(*) FROM messages')
+    added = s.andy.post(f'/api/chats/{s.room}/participants', json={'member_ids': [s.users[3]['id']]})
+    assert added.status_code == 201 and added.json()['board_carried'] == 3
+    new = added.json()['id']
+    assert s.rows('SELECT count(*) FROM messages') == messages
+    moved = {i['key']: i for i in board(s.andy, new).json()}
+    assert list(moved) == ['build:waiting', 'build:taken', 'build:left']
+    same = ('id', 'key', 'title', 'kind', 'posted_by', 'created', 'links')
+    for key, item in moved.items():
+        assert {f: item[f] for f in same} == {f: was[key][f] for f in same} and item['room_id'] == new
+    assert moved['build:waiting']['claim'] is None and moved['build:left']['claim'] is None
+    taken, held = moved['build:taken']['claim'], was['build:taken']['claim']
+    assert (taken['id'], taken['room_id'], taken['holder_id'], taken['note'], taken['expires']) == (
+        held['id'], new, s.id('rio-grande'), 'on it', held['expires'])
+    assert s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande')) == rio_holds
+    assert [c['key'] for c in claims(s.andy, s.room)] == ['build:left']
+    assert {i['key']: i['state'] for i in board(s.andy, s.room).json()} == {'build:done': 'done', 'build:dropped': 'dropped'}
+
+
+def test_bridging_carries_open_items_and_unbridging_moves_none(tmp_path, capsys):
+    """5.x: station-bridge carries them through add_participants, and describe_bridge says the replaced room keeps its
+    messages and closed board items, then how many open items came along, or that there were none. Unbridging keeps
+    the room and its board."""
+    store = Store(tmp_path / 'station')  # the CLI opens its own Store with the real clock, so the state is made with it too
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    store.create_station_ship('wormhole', 'Wormhole')
+
+    def run(*args):
+        cli([args[0], '--data-dir', str(store.data_dir), *args[1:]])
+        return capsys.readouterr().out
+    gamma = store.create_room(andy['id'], 'Gamma Quadrant', [])['id']
+    for key in ('spec:a', 'spec:b', 'spec:c'):
+        store.post_item(andy['id'], gamma, key, 'Gamma work', 'spec')
+    store.drop_item(andy['id'], gamma, 'spec:c')
+    out = run('station-bridge', '--id', gamma[:6], '--as', 'andy')
+    assert 'keeps its messages and closed board items but is no longer the current room' in out
+    assert out.rstrip().endswith('2 open board items came along.')
+    new = next(r['id'] for r in store.list_rooms(andy['id']) if r['linked_room_id'] == gamma)
+    assert [i['key'] for i in store.room_board(andy['id'], new)] == ['spec:a', 'spec:b']
+    assert [i['key'] for i in store.room_board(andy['id'], gamma)] == ['spec:c']
+    assert 'Unbridged' in run('station-unbridge', '--id', new[:6], '--as', 'andy')
+    assert [i['key'] for i in store.room_board(andy['id'], new)] == ['spec:a', 'spec:b']
+    one = store.create_room(andy['id'], 'One item', [])['id']
+    store.post_item(andy['id'], one, 'spec:one', 'Just one', 'spec')
+    assert run('station-bridge', '--id', one[:6], '--as', 'andy').rstrip().endswith('1 open board item came along.')
+    quiet = store.create_room(andy['id'], 'Quiet', [])['id']
+    assert run('station-bridge', '--id', quiet[:6], '--as', 'andy').rstrip().endswith('The room had no open board items.')
+
+
+def test_a_failed_carry_rolls_the_whole_add_back(env, monkeypatch):
+    """5.x: the brief's carry and the board's carry run in add_participants' own transaction. If the board carry fails
+    after moving the items (the brief is already written by then), nothing is added: no new room, no carried brief, and
+    the open items, their claims and the old room's brief stay where they were."""
+    s = Station(env)
+    assert post(s.ship('serenity'), s.room, 'build:a').status_code == 201
+    assert claim(s.ship('rio-grande'), s.room, 'build:a').status_code == 201
+    assert s.andy.put(f'/api/chats/{s.room}/brief', json={'body': 'Keep the lights on.', 'revision': 0}).status_code == 200
+    briefs = 'SELECT * FROM room_briefs ORDER BY room_id'
+    history = 'SELECT * FROM room_brief_revisions ORDER BY room_id, revision'
+    before = s.snapshot(), s.rows('SELECT id FROM rooms ORDER BY id'), s.rows(briefs), s.rows(history)
+    assert len(before[2]) == 1
+    real = Store._carry_board
+
+    def carry_then_fail(self, db, old, new):
+        real(self, db, old, new)
+        raise RuntimeError('the carry failed after moving the items')
+    monkeypatch.setattr(Store, '_carry_board', carry_then_fail)
+    with pytest.raises(RuntimeError):
+        s.store.add_participants(s.id('andy'), s.room, [s.users[3]['id']], 1)
+    assert (s.snapshot(), s.rows('SELECT id FROM rooms ORDER BY id'), s.rows(briefs), s.rows(history)) == before
+
+
+def test_a_non_writer_linking_a_done_item_gets_the_409_before_the_403(env):
+    """Link's refusals run in 5.1's order: row 16 (already done) comes before row 17 (a board writer), so a member who
+    couldn't link an open item is told the item is closed, not that they may not."""
+    s = Station(env)
+    assert post(s.ship('serenity'), s.room, 'build:a').status_code == 201
+    assert done(s.andy, s.room, 'build:a').status_code == 200
+    assert refused(link(s.ship('defiant'), s.room, 'build:a', 'branch:x')) == (409, '`build:a` is already done')
+
+
+def test_the_board_mark_on_a_claim_is_scoped_to_its_room(env):
+    """5.6: `board` comes from an item in the claim's own room. An item with the same key in another room doesn't mark
+    a claim here, where the key is not an item."""
+    s = Station(env)
+    insert_item(s, s.make_room('Another room'), 'adhoc:x', poster='andy')
+    answer = claim(s.ship('rio-grande'), s.room, 'adhoc:x')
+    assert answer.status_code == 201 and 'board' not in answer.json()
+    assert all('board' not in c for c in claims(s.andy, s.room))

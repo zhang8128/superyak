@@ -1647,7 +1647,7 @@ def test_the_owner_writes_a_brief_and_carries_it_into_a_new_linked_chat(browser_
             carry = dialog.get_by_role("checkbox", name="Carry the room brief into the new room")
             expect(carry).not_to_be_checked()
             expect(dialog.locator(".carry-brief-text")).to_have_text(brief)
-            expect(dialog.get_by_text("Only the brief is carried. Earlier messages stay with their original participants.")).to_be_visible()
+            expect(dialog.get_by_text("Only the brief, if ticked, and the board's open items are carried. Earlier messages stay with their original participants.")).to_be_visible()
             dialog.get_by_role("checkbox", name="Dr. Morgan").check()
             carry.check()
             dialog.get_by_role("button", name="Start a new linked chat").click()
@@ -1685,6 +1685,29 @@ def test_without_a_brief_the_carry_box_is_hidden(browser_peer):
             expect(page.locator(".room-brief .room-brief-body")).to_have_text("Back again.")
     assert store.get_room(patient, removed["id"])["brief"]["revision"] == 3
 
+
+
+
+def test_the_add_dialog_says_open_items_are_carried_without_a_brief(browser_peer):
+    """Review Focus 1: the help text lived inside the brief's checkbox, which a room without a brief doesn't show, yet
+    open board items are carried all the same (work board 5.x). A room with neither shows no help text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    busy = store.create_room(patient, "Busy room", [users["family"]["id"]])
+    store.post_item(patient, busy["id"], "build:panel", "Build the panel", "build")
+    quiet = store.create_room(patient, "Quiet room", [users["family"]["id"]])
+    carried = "Only the brief, if ticked, and the board's open items are carried. Earlier messages stay with their original participants."
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            for room, count in ((busy, 1), (quiet, 0)):
+                page.goto(f"{base}/#chats/{room['id']}")
+                page.reload()
+                page.get_by_role("button", name="Change participants").click()
+                dialog = page.locator("dialog")
+                expect(dialog.get_by_role("checkbox", name="Dr. Morgan")).to_be_visible()
+                expect(dialog.get_by_text("The new room starts with no messages.", exact=True)).to_be_visible()
+                expect(dialog.get_by_text(carried)).to_have_count(count)
+                dialog.get_by_role("button", name="Cancel").click()
 
 def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
     """Break caught: a member who is not the owner can change the brief, or cannot see it."""

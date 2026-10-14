@@ -118,6 +118,22 @@ class RoomBoard:
                 'links': [{'link': safe_line(l['link'], LINK_CHARS), 'added_by': l['added_by'], 'added': l['added']} for l in links],
                 'claim': self._claim_json(db, held['id']) if held is not None else None}
 
+    def _carry_board(self, db, old, new):
+        """5.x: when adding members (or bridging) makes a new room, the old room's open items move to it in the caller's
+        transaction, with their ids, keys, posters, created times and links unchanged. Each takes its active claim along
+        when the holder is a member of the new room, the same row with its holder, note and expiry: nothing is claimed
+        anew and nothing is posted in anyone's name. Done and dropped items stay as the record. The new room is empty,
+        so UNIQUE(room_id, key) is the guard: a collision would roll the whole add back. Returns how many moved."""
+        now = self.clock()
+        members = {r[0] for r in db.execute('SELECT user_id FROM room_members WHERE room_id=?', (new,))}
+        keys = [r[0] for r in db.execute("SELECT key FROM board_items WHERE room_id=? AND state='open'", (old,))]
+        for key in keys:
+            held = self._active_claim(db, old, key, now)
+            if held is not None and held['holder_id'] in members:
+                db.execute('UPDATE claims SET room_id=? WHERE id=?', (new, held['id']))
+        db.execute("UPDATE board_items SET room_id=? WHERE room_id=? AND state='open'", (new, old))
+        return len(keys)
+
     def _board_list(self, db, room_id):
         """4.6: open items oldest first, then at most the 50 most recently closed in the last 7 days, newest closed first.
         The open cap and this limit bound what any view lists; done and dropped rows stay in the table as the record."""

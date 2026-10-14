@@ -290,7 +290,7 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | GET/POST `/api/chats` | POST `{title,member_ids:[]}` | Accessible summaries / created room, 201 |
 | GET `/api/chats/{id}` | — | Room plus `messages`, `members`, `brief` and `brief_revision` |
 | POST `/api/chats/{id}/messages` | `{client_message_id,body}` | Message, 201 |
-| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room, 201; owner only |
+| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room plus `board_carried`, 201; owner only |
 | DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
 | PUT `/api/chats/{id}/brief` | `{body,revision}` | The brief, or null once removed; owner only (a person, with CSRF) |
 | GET `/api/chats/{id}/brief/revisions` | — | The brief's history, newest first; the room's owner only |
@@ -306,7 +306,7 @@ personal room; one additional member a direct room; more members a group.
 Creator is always a member. Account/organization admin status gives no read/send
 permission. The first slice reserves audience changes to the room creator, who
 cannot remove themselves. Adding participants creates a linked, message-free room with
-old and added participants; old room/messages stay unchanged. `linked_room_id`
+old and added participants; old messages stay in the old room; its open board items move to the new room with their claims (work board 5.x). `linked_room_id`
 may refer to an inaccessible room; it grants no ability to fetch it.
 
 Message: `{id,room_id,author_id,client_message_id,body,epoch,created,source,reply_to}`. A post may

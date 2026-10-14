@@ -584,7 +584,24 @@ function roomBrief(room) {
 function carryBriefChoice(room) {
   const brief = room && !room.origin ? room.brief : null;
   if (!brief) return "";
-  return `<fieldset class="field"><legend>Room brief</legend><label class="choice"><input type="checkbox" name="carry-brief" value="${escapeHtml(brief.revision)}"><span class="choice-copy"><strong>Carry the room brief into the new room</strong><small>Only the brief is carried. Earlier messages stay with their original participants.</small></span></label>${briefAuthor(room, brief, "carry-brief-author")}<div class="carry-brief-text">${escapeHtml(brief.body)}</div></fieldset>`;
+  return `<fieldset class="field"><legend>Room brief</legend><label class="choice"><input type="checkbox" name="carry-brief" value="${escapeHtml(brief.revision)}"><span class="choice-copy"><strong>Carry the room brief into the new room</strong></span></label>${briefAuthor(room, brief, "carry-brief-author")}<div class="carry-brief-text">${escapeHtml(brief.body)}</div></fieldset>`;
+}
+
+const CARRY_HELP = "Only the brief, if ticked, and the board's open items are carried. Earlier messages stay with their original participants.";
+
+// Work board 5.x: adding members carries the room's open board items, so the dialog says what is carried whenever the
+// room has a brief or an open item. The items are read when the dialog opens: null when they couldn't be read, and
+// then the dialog says it anyway.
+async function openBoardItems(room) {
+  if (!room || room.origin) return [];
+  try { return (await api(`/api/chats/${pathPart(room.id)}/board`)).filter((item) => item.state === "open"); }
+  catch (_) { return null; }
+}
+
+function carryHelp(room) {
+  const items = state.chatBoard;
+  if (!room?.brief && items !== null && !items?.length) return "";
+  return `<p class="meta carry-help">${CARRY_HELP}</p>`;
 }
 
 function roomDetail(room) {
@@ -602,7 +619,7 @@ function chatDialog() {
   const existing = new Set(state.chatDialog === "linked" ? room?.member_ids || [] : []);
   const picked = new Set(state.chatPicked || []);
   const title = state.chatDialog === "new" ? "Start a private chat" : "Start a new linked chat";
-  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts empty. Earlier messages stay with their original participants."}</p>${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
+  return `<dialog aria-labelledby="chat-dialog-title"><div class="dialog-body"><h2 id="chat-dialog-title">${title}</h2><p>${state.chatDialog === "new" ? "Choose nobody for a personal room, one person for a direct room, or several people for a group." : "The new room starts with no messages."}</p>${state.chatError ? `<p role="alert">${escapeHtml(state.chatError)}</p>` : ""}<form id="chat-form">${state.chatDialog === "new" ? '<div class="field"><label for="chat-title">Chat title</label><input class="input" id="chat-title" name="title" maxlength="200" required></div>' : ""}<fieldset class="field"><legend>Participants</legend><div class="choices">${state.contacts.map((contact) => `<label class="choice"><input type="checkbox" name="chat-member" value="${escapeHtml(contact.id)}" ${existing.has(contact.id) ? "checked disabled" : picked.has(contact.id) ? "checked" : ""}><span class="choice-copy"><strong>${escapeHtml(contact.name)}</strong><small>${existing.has(contact.id) ? "Already in this room" : contact.remote ? "Paired contact" : "Local contact"}</small></span></label>`).join("")}</div></fieldset>${state.chatDialog === "linked" ? `<div class="carry-help-slot">${carryHelp(room)}</div>` + carryBriefChoice(room) : ""}<div class="button-row"><button class="button" type="submit">${state.chatDialog === "new" ? "Create chat" : "Start a new linked chat"}</button><button class="button secondary" type="button" data-action="close-dialog">Cancel</button></div></form></div></dialog>`;
 }
 
 function chatsView() {
@@ -1541,7 +1558,15 @@ document.addEventListener("click", async (event) => {
   if (action === "open-shared") { state.selectedSharedId = target.dataset.id; location.hash = `shared/${pathPart(target.dataset.id)}`; render(); }
   if (action === "new-chat") { state.chatDialog = "new"; state.chatPicked = null; state.chatError = null; render(); }
   if (action === "open-chat") await openChat(target.dataset.id);
-  if (action === "change-participants") { state.chatDialog = "linked"; state.chatPicked = null; state.chatError = null; render(); }
+  if (action === "change-participants") {
+    state.chatDialog = "linked"; state.chatPicked = null; state.chatError = null; state.chatBoard = undefined;
+    render();  // the dialog opens at once, with the help text only if there is a brief
+    const room = state.room, items = await openBoardItems(room);
+    if (state.chatDialog !== "linked" || state.room !== room) return;
+    state.chatBoard = items;  // fill in the slot only, so nothing the owner already ticked is redrawn
+    const slot = document.querySelector("dialog .carry-help-slot");
+    if (slot) slot.innerHTML = carryHelp(room);
+  }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
