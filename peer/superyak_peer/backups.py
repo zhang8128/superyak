@@ -2,14 +2,21 @@
 S14, S16). Trusted local commands, standard library only. station-backup never constructs Store and never takes the
 dispatch gate: it reads the live file through a read-only connection, and SQLite's backup API copies a consistent
 snapshot of committed data on its own (S2)."""
+import calendar
 from contextlib import closing, contextmanager
+import datetime
 import fcntl
 import os
 from pathlib import Path
+import re
 import sqlite3
 import time
 
 STAMP = '%Y%m%dT%H%M%SZ'
+COPY_NAME = re.compile(r'peer-(\d{8}T\d{6}Z)\.sqlite3')
+TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal)?')
+KEEP_DAYS, KEEP_WEEKS = 14, 8
+TEMP_MAX_AGE = 86400
 SEE_LOG = 'see the log'
 REASONS = {  # spec, Error handling: the words the CLI prints and the Ops line carries
     10: 'not enough disk space',
@@ -38,6 +45,62 @@ def default_backup_dir(data_dir):
 
 def copy_stamp(now):
     return time.strftime(STAMP, time.gmtime(now))
+
+
+def copy_time(path):
+    """A copy's UTC time, from its name."""
+    return calendar.timegm(time.strptime(COPY_NAME.fullmatch(Path(path).name)[1], STAMP))
+
+
+def _stamp_ok(name):
+    """A name that matches COPY_NAME and holds a real UTC time; peer-20261399T000000Z.sqlite3 only looks like one. A
+    stray one would otherwise sort newest: every backup would fail on the clock check and station-notices would crash."""
+    try:
+        time.strptime(COPY_NAME.fullmatch(name)[1], STAMP)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def rotation(directory):
+    """The copies with a final name, oldest first. Symlinks and every other name are never read, moved or pruned."""
+    try:
+        entries = list(os.scandir(directory))
+    except FileNotFoundError:
+        return []
+    return sorted((Path(entry.path) for entry in entries
+                   if _stamp_ok(entry.name) and entry.is_file(follow_symlinks=False)), key=lambda path: path.name)
+
+
+def newest_copy(directory):
+    copies = rotation(directory)
+    return copies[-1] if copies else None
+
+
+def keep(names):
+    """S3: the newest copy of each of the 14 most recent UTC days that have a copy, and of each of the 8 most recent ISO
+    weeks that have one. Only days and weeks with a copy count, so a Pi that was off never ages out its last copies."""
+    days, weeks = {}, {}
+    for name in sorted(names, reverse=True):
+        when = datetime.datetime.strptime(COPY_NAME.fullmatch(name)[1], STAMP)
+        days.setdefault(when.date(), name)
+        weeks.setdefault(when.isocalendar()[:2], name)
+    return ({days[day] for day in sorted(days, reverse=True)[:KEEP_DAYS]}
+            | {weeks[week] for week in sorted(weeks, reverse=True)[:KEEP_WEEKS]})
+
+
+def prune(directory, now):
+    """S3, R3: run only once a new checked copy is in place. Deletes the copies S3 doesn't keep, and temporary files
+    (.tmp and .tmp-journal) over a day old. Nothing else in the directory is touched."""
+    copies = rotation(directory)
+    kept = keep([path.name for path in copies])
+    for path in copies:
+        if path.name not in kept:
+            path.unlink()
+    for entry in list(os.scandir(directory)):
+        if (TEMP_NAME.fullmatch(entry.name) and entry.is_file(follow_symlinks=False)
+                and now - entry.stat(follow_symlinks=False).st_mtime > TEMP_MAX_AGE):
+            os.unlink(entry.path)
 
 
 def _read_only(path):
@@ -127,8 +190,13 @@ def run_backup(data_dir, backup_dir, *, clock=time.time, sleep=time.sleep):
     try:
         backup_dir = _rotation_dir(backup_dir)
         with rotation_lock(backup_dir):
-            stamp = copy_stamp(clock())
-            # Two runs in the same second share this name; the later replaces the earlier, and both are checked copies.
+            now = clock()
+            stamp, newest = copy_stamp(now), newest_copy(backup_dir)
+            if newest is not None and stamp < COPY_NAME.fullmatch(newest.name)[1]:
+                # S3: a clock behind would give the copy an old name that pruning could delete at once; a clock that
+                # was ahead left a future name "newest". Either way: nothing written, nothing pruned, every night.
+                raise BackupError(1, f"the Pi's clock is behind the newest copy ({newest.name}); if the clock is right, "
+                                     f'move that copy out of {backup_dir}')
             final, tmp = backup_dir / f'peer-{stamp}.sqlite3', backup_dir / f'.peer-{stamp}-{os.getpid()}.tmp'
             _checked_copy(database, tmp, clock, sleep)
             try:
@@ -136,6 +204,7 @@ def run_backup(data_dir, backup_dir, *, clock=time.time, sleep=time.sleep):
             except BaseException:
                 _remove_temporary(tmp)
                 raise
+            prune(backup_dir, now)
         return final
     finally:
         os.umask(old_umask)

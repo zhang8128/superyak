@@ -137,3 +137,53 @@ def test_a_failed_integrity_check_leaves_nothing_behind(tmp_path, monkeypatch):
     monkeypatch.setattr(backups, '_check', lambda db, pragma: False)
     assert backup(store, rotation) == 11
     assert names(rotation) == []
+
+
+NOW = calendar.timegm((2026, 10, 17, 3, 30, 0))
+# Worked out by hand, not by the code under test. The test makes copies at 03:30 UTC on the 200 days 2026-03-31 to
+# 2026-10-16, except September (the Pi was off) and 2026-10-10 (a failed night), plus 2026-10-16 03:31:10 and 15:00:00;
+# the run adds 2026-10-17 03:30:00. S3 then keeps:
+# - the newest copy of the 14 most recent days that have one: 10-03 to 10-09 and 10-11 to 10-17 (10-16 keeps 15:00);
+# - the newest copy of the 8 most recent ISO weeks that have one: weeks 42 (10-17), 41 (10-11), 40 (10-04), then,
+#   since weeks 37-39 have none, 36 (08-31), 35 (08-30), 34 (08-23), 33 (08-16) and 32 (08-09).
+KEPT = ['20260809T033000Z', '20260816T033000Z', '20260823T033000Z', '20260830T033000Z', '20260831T033000Z',
+        '20261003T033000Z', '20261004T033000Z', '20261005T033000Z', '20261006T033000Z', '20261007T033000Z',
+        '20261008T033000Z', '20261009T033000Z', '20261011T033000Z', '20261012T033000Z', '20261013T033000Z',
+        '20261014T033000Z', '20261015T033000Z', '20261016T150000Z', '20261017T033000Z']
+
+
+def test_retention_keeps_14_days_and_8_weeks_and_nothing_else(tmp_path):
+    """R3: S3's rule over 200 days with gaps, several copies in one day and a month off. Hand-made names and other files
+    are never touched; stale temporary files go; a clock behind the newest name writes and prunes nothing, exit 1."""
+    store, rotation = station(tmp_path)
+    rotation.mkdir(parents=True, mode=0o700)
+    day = datetime.date(2026, 3, 31)
+    for _ in range(200):
+        if day.month != 9 and day != datetime.date(2026, 10, 10):
+            (rotation / f'peer-{day:%Y%m%d}T033000Z.sqlite3').write_bytes(b'copy')
+        day += datetime.timedelta(days=1)
+    for extra in ('20261016T033110Z', '20261016T150000Z'):
+        (rotation / f'peer-{extra}.sqlite3').write_bytes(b'copy')
+    others = ['peer-20261007-083623-before-andy-password.sqlite3', 'peer.sqlite3.pre-instruction-layers-20261008-163222',
+              'peer-20260101T000000Z.sqlite3.bak', 'notes.txt',
+              'peer-20261399T000000Z.sqlite3']        # matches the pattern but isn't a time: never newest, never pruned
+    for name in others:
+        (rotation / name).write_bytes(b'not a rotation copy')
+    stale = [rotation / '.peer-20261001T033000Z-41.tmp', rotation / '.peer-20261001T033000Z-41.tmp-journal']
+    fresh = rotation / '.peer-20261017T030000Z-42.tmp'
+    for path in [*stale, fresh]:
+        path.write_bytes(b'temporary')
+    for path in stale:
+        os.utime(path, (NOW - 2 * 86400, NOW - 2 * 86400))
+    os.utime(fresh, (NOW - 3600, NOW - 3600))
+    before = names(rotation)
+    with pytest.raises(backups.BackupError) as behind:
+        backups.run_backup(store.data_dir, rotation, clock=lambda: calendar.timegm((2026, 10, 16, 14, 0, 0)))
+    assert behind.value.code == 1
+    assert "the Pi's clock is behind the newest copy (peer-20261016T150000Z.sqlite3)" in behind.value.reason
+    assert names(rotation) == before
+    written = backups.run_backup(store.data_dir, rotation, clock=lambda: NOW)
+    assert written.name == 'peer-20261017T033000Z.sqlite3' and ok(written)
+    assert [path.name for path in backups.rotation(rotation)] == [f'peer-{stamp}.sqlite3' for stamp in KEPT]
+    assert all((rotation / name).read_bytes() == b'not a rotation copy' for name in others)
+    assert not any(path.exists() for path in stale) and fresh.exists()
