@@ -725,15 +725,35 @@ def test_an_origin_cannot_set_a_messages_delivery_state_or_mark(two_peers):
 
 def test_this_stations_echoed_reply_shows_delivered_whatever_state_the_origin_adds(two_peers):
     """The same follow-up: this station's reply, once the origin's copy matches its outbox row (author, client id and
-    body), shows "delivered". The origin's added state doesn't reach the view, and the browser no longer guesses a
-    state from client ids."""
+    body), shows "delivered". Neither the origin's added state nor its added mark reaches the view: the rewrite in
+    _unverified_local_authors stays the only source of `unverified`."""
     a, b, ca, cb = two_peers
     room = a[0].create_room(a[1], 'Echo', [ca['id']])
     deliver(a, b)
     remote = b[0].list_rooms(b[1])[0]['id']
     b[0].send_message(b[1], remote, 'mine-1', 'my words')
     deliver(b, a)
-    assert b[2].receive(_forged_message(a, b, room, 'm-echo', 'mine-1', 'my words', 5.0, state='failed'))['ok']
+    assert b[2].receive(_forged_message(a, b, room, 'm-echo', 'mine-1', 'my words', 5.0, state='failed',
+                                        unverified=True))['ok']
     [echo] = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'my words']
     assert echo['author_id'] == b[2].identity.peer_id + ':' + b[1] and not echo.get('unverified')
     assert echo.get('state') == 'delivered'
+
+
+def test_another_local_users_echoed_reply_carries_no_state_in_this_view(two_peers):
+    """The same follow-up (D8 review of 5507c0e, nit 5): "delivered" is the viewer's own outbox speaking, so a second
+    local user's echoed reply shows it to that user and carries no state for anyone else."""
+    a, b, ca, cb = two_peers
+    second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
+    c2 = a[2].pair(a[1], b[2].card(second))
+    b[2].pair(second, a[2].card(a[1]))
+    a[0].create_room(a[1], 'Two local users', [ca['id'], c2['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(second, remote, 'theirs-1', 'their words')
+    deliver(b, a)
+    deliver(a, b)
+    [seen] = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'their words']
+    assert seen['author_id'] == b[2].identity.peer_id + ':' + second and 'state' not in seen
+    [own] = [m for m in b[0].get_room(second, remote)['messages'] if m['body'] == 'their words']
+    assert own.get('state') == 'delivered'
