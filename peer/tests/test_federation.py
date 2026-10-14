@@ -976,3 +976,48 @@ def test_this_stations_queued_reply_still_moves_a_received_room(two_peers):
     sent = b[0].send_message(b[1], remote, 'q-1', 'my reply')
     [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Busy']
     assert listed['last_activity'] == sent['created']
+
+
+def _received(store, origin, rid, recipient):
+    with store.transaction() as db:
+        row = db.execute('SELECT received FROM inbox_received WHERE origin=? AND resource_id=? AND recipient=?',
+                         (origin, rid, recipient)).fetchone()
+    return row[0] if row else None
+
+
+def test_a_room_stored_before_the_change_is_clamped_after_the_next_start(two_peers):
+    """Remote room fields (plan review of fd22b65, should-fix 1): a room received before inbox_received existed has no
+    row; the next start's backfill gives it one, so a room already pinned at 2**53 is clamped from then on."""
+    from superyak_peer.db import Store
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Old pin', [ca['id']])
+    deliver(a, b)
+    assert b[2].receive(_roster_with(a, b, room, last_activity=2**53))['ok']
+    with b[0].transaction() as db:  # as a station that stored it before this change would hold it
+        db.execute('DELETE FROM inbox_received')
+    reopened = Store(b[0].data_dir)
+    started = time.time()
+    assert _received(reopened, a[2].identity.peer_id, room['id'], b[1]) is not None
+    [listed] = [r for r in reopened.list_rooms(b[1]) if r['title'] == 'Old pin']
+    assert listed['last_activity'] <= started
+
+
+def test_received_follows_each_event_and_a_restart_leaves_it(two_peers):
+    """Remote room fields (plan review of fd22b65, should-fix 2): each room event refreshes this station's receive time,
+    so an honest room's later message counts; a restart's backfill touches only rooms without a row."""
+    from superyak_peer.db import Store
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Steady', [ca['id']])
+    deliver(a, b)
+    author = a[2].identity.peer_id + ':' + a[1]
+    assert b[2].receive(_forged_message(a, b, room, 'm-one', 'one', 'first words', time.time() - 100, author=author))['ok']
+    time.sleep(0.02)
+    later = time.time()
+    assert b[2].receive(_forged_message(a, b, room, 'm-two', 'two', 'later words', later, author=author))['ok']
+    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Steady']
+    before = _received(b[0], a[2].identity.peer_id, room['id'], b[1])
+    # the honest snapshot's own last_activity is the origin's clock a moment after `later`, and before this receive
+    assert later <= listed['last_activity'] <= before
+    reopened = Store(b[0].data_dir)
+    assert _received(reopened, a[2].identity.peer_id, room['id'], b[1]) == before
+    assert [r['last_activity'] for r in reopened.list_rooms(b[1]) if r['title'] == 'Steady'] == [listed['last_activity']]
