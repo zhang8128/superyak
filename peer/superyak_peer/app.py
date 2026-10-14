@@ -170,7 +170,8 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     @app.get('/api/health')
     def health():
         """Spec 2026-10-14 S6: one database read, no session, nothing but ok. A database error goes to the 500 handler
-        above. It sits behind tailscale serve on the tailnet; the public door has no such route."""
+        above. It says only that the station is up: the main app is public through Tailscale Funnel by Andy's choice
+        (2026-10-14), so this route is public too and must never say more. The access-request door has no such route."""
         with store.transaction() as db:
             db.execute('SELECT 1 FROM system_meta').fetchone()
         return {'ok': True}
