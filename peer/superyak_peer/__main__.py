@@ -218,6 +218,10 @@ def main(argv=None):
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
     restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
+    alert_cmd = commands.add_parser('station-alert', help='Run by systemd only: queue one alert line for Odo to post in Ops')
+    alert_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    alert_cmd.add_argument('--unit', required=True)
+    alert_cmd.add_argument('--monitor', action='store_true', help="As an OnFailure= handler: read systemd's MONITOR_* variables")
     door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
@@ -319,6 +323,12 @@ def main(argv=None):
             users, rooms, messages = tested['counts']
             print(f'Restore test passed: {tested["backup"].name} booted on 127.0.0.1:{tested["port"]}; '
                   f'users {users}, rooms {rooms}, messages {messages}.')
+        elif args.command == 'station-alert':
+            from .alerts import Refused, station_alert
+            try:
+                station_alert(args.data_dir, args.unit, monitor=args.monitor, environ=os.environ)
+            except Refused as refused:
+                parser.exit(2, f'station-alert: {refused}\n')
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
