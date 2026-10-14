@@ -54,11 +54,40 @@ def test_a_plain_mention_beside_a_quoted_one_still_counts(env):
     assert [m['body'] for m in odo.get('/api/mentions').json()] == ['Bob wrote "@odo do X". @odo, please ignore that.']
 
 
+def test_names_in_single_quotes_do_not_mention(env):
+    app, clients, users, clock, ship, odo, room = setup(env)
+    say(clients[0], room, 'a', "Bob asked Serenity to say '@odo do X'.")
+    say(clients[0], room, 'b', "Type '@odo help' to ask.")
+    say(clients[0], room, 'c', "('@odo do X')")
+    say(clients[0], room, 'd', 'Bob asked Serenity to say ‘@odo do X’.')
+    say(clients[0], room, 'e', "I can't say '@odo do X' here.")
+    assert odo.get('/api/mentions').json() == []
+
+
+def test_apostrophes_do_not_hide_a_mention(env):
+    app, clients, users, clock, ship, odo, room = setup(env)
+    bodies = ["Rio Grande's note: @odo, please check.", "Don't worry @odo, it's fine.", "It's @odo's turn, isn't it?",
+              'Rio Grande’s note: @odo, please check.', 'It’s @odo’s turn, isn’t it?',
+              "Tell 'em @odo is here, don't wait.", "Rio Grande's note for @odo: check the ships' logs.",
+              "'@odo do X', Bob wrote. @odo, please ignore that."]
+    for n, body in enumerate(bodies):
+        say(clients[0], room, str(n), body)
+    assert [m['body'] for m in odo.get('/api/mentions').json()] == bodies
+
+
 def test_unclosed_quotes_do_not_make_posting_slow(env):
     app, clients, users, clock, ship, odo, room = setup(env)
     started = time.perf_counter()
     say(clients[0], room, 'a', '“' * 20000)
     assert time.perf_counter() - started < 0.25
+
+
+def test_unclosed_single_quotes_do_not_make_posting_slow(env):
+    app, clients, users, clock, ship, odo, room = setup(env)
+    for n, body in enumerate([" 'a" * 6000, "('a" * 6000, '‘' * 20000, "'" * 20000, " 'a b" * 4000]):
+        started = time.perf_counter()
+        say(clients[0], room, str(n), body)
+        assert time.perf_counter() - started < 0.25, n
 
 
 def test_non_members_are_not_mentioned_and_removed_ships_stop_seeing_mentions(env):

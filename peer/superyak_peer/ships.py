@@ -12,9 +12,11 @@ SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')
 CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 POSTS_PER_MINUTE = 30
 MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
-# A name shown as code, in double quotes or on a quoted line is talked about, not addressed. Each span
+# A name shown as code, in quotes or on a quoted line is talked about, not addressed. Each span
 # stops at its own opening mark too, so unclosed marks cannot make one message cost quadratic time.
-NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^“”\n]*”|^[ \t]*>[^\n]*', re.MULTILINE)
+# A single quote opens only at the start, after a space or after a bracket, and closes only where no letter
+# follows, so an apostrophe (Rio Grande's, don't, it’s) quotes nothing.
+NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^“”\n]*”|(?<![^\s(\[{])\'[^\'\n]*\'(?!\w)|‘[^‘’\n]*’(?!\w)|^[ \t]*>[^\n]*', re.MULTILINE)
 # A ship key is secrets.token_urlsafe(32): 43 URL-safe characters. Every such token standing on its own is a candidate,
 # so a key is caught however it is quoted (JSON, a Bearer header, a URL parameter).
 KEY_TOKEN = re.compile(r'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])')
