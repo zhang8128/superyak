@@ -591,9 +591,15 @@ def test_a_roster_event_cannot_add_a_message(two_peers):
     bare = _roster_with_message(a, b, room, id='m-bare', author_id=b[1], body='bare author', created=5.0, **base)
     broken = _roster_with_message(a, b, room, id='m-broken', author_id=a[2].identity.peer_id + ':' + a[1],
                                   body=['not', 'text'], created='x', **base)
-    assert b[2].receive(bare)['ok'] and b[2].receive(broken)['ok']
+    # Well formed, so SF1's backstop would pass it: only MF1's guard keeps it out (section 2 re-check of 1b68427).
+    ghost = _roster_with_message(a, b, room, id='m-ghost', author_id='f' * 64 + ':ghost', body='ghost', created=5.0,
+                                 **base)
+    assert b[2].receive(bare)['ok'] and b[2].receive(broken)['ok'] and b[2].receive(ghost)['ok']
     ids = [m['id'] for m in b[0].get_room(b[1], remote)['messages']]
-    assert 'm-bare' not in ids and 'm-broken' not in ids
+    assert 'm-bare' not in ids and 'm-broken' not in ids and 'm-ghost' not in ids
+    with b[0].transaction() as db:
+        stored = json.loads(db.execute("SELECT payload FROM inbox WHERE kind='room' AND recipient=?", (b[1],)).fetchone()[0])
+    assert not {'m-bare', 'm-broken', 'm-ghost'} & {m.get('id') for m in stored['messages'] if isinstance(m, dict)}
     assert b[0].list_rooms(b[1])
 
 
@@ -615,6 +621,8 @@ def test_a_stored_malformed_message_is_left_out_of_the_view(two_peers):
                 {'id': 7, 'author_id': author, 'body': 'x', 'created': 1.0, **ok},
                 {'id': 'm-client', 'author_id': author, 'body': 'x', 'created': 1.0, **{**ok, 'client_message_id': None}},
                 {'id': 'm-long', 'author_id': author + ':extra', 'body': 'x', 'created': 1.0, **ok},
+                # A local author with a bad body: the backstop must run before the unverified rewrite (re-check, m5b).
+                {'id': 'm-local', 'author_id': b[2].identity.peer_id + ':' + b[1], 'body': ['x'], 'created': 1.0, **ok},
                 'not a dict']
     with b[0].transaction() as db:
         row = db.execute("SELECT * FROM inbox WHERE kind='room' AND recipient=?", (b[1],)).fetchone()
