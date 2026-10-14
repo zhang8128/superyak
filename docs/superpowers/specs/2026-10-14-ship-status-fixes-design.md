@@ -1,7 +1,8 @@
 # Ship status fixes: three follow-ups from the re-review of 5374784
 
-Status: revision 2, for the same reviewer's re-check. Revision 1 (479ab84) had the fresh reviewer's verdict, APPROVE
-WITH CHANGES (3 must-fix, 2 should-fix, 1 nit; room message 032f992e): see "Review map". Base: `main` (e633ec3). Branch `ship-status-fixes`. Roadmap phase 4
+Status: revision 2, **approved under D8**. Revision 1 (479ab84) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+(3 must-fix, 2 should-fix, 1 nit; room message 032f992e); the same reviewer's re-check of revision 2 is APPROVE, no
+remaining findings (see "Review map"). Base: `main` (e633ec3). Branch `ship-status-fixes`. Roadmap phase 4
 ("small ship-status fixes"), claimed by Serenity as `fix:ship-status-small`. The three come from Rio Grande's post
 cec51af8c2af4a8bb12997baae146546 (2026-10-10), the follow-ups of the ship-status re-review. That post gives one line and
 a suggested fix for each; the scenarios below are reproduced as failing tests on this branch.
