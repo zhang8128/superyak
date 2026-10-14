@@ -757,3 +757,19 @@ def test_another_local_users_echoed_reply_carries_no_state_in_this_view(two_peer
     assert seen['author_id'] == b[2].identity.peer_id + ':' + second and 'state' not in seen
     [own] = [m for m in b[0].get_room(second, remote)['messages'] if m['body'] == 'their words']
     assert own.get('state') == 'delivered'
+
+
+def test_an_echoed_reply_shows_delivered_even_while_its_row_says_failed(two_peers):
+    """The same follow-up (plan review of 6816f43, nit 3): the origin holding the exact words proves delivery, so an
+    honest echo shows "delivered" even when the acknowledgement was lost and the outbox row still says failed."""
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Lost acknowledgement', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'lost-1', 'words that arrived')
+    deliver(b, a)
+    with b[0].transaction() as db:
+        db.execute("UPDATE outbox SET status='failed' WHERE action='room.reply'")
+    deliver(a, b)
+    [echo] = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'words that arrived']
+    assert echo['author_id'] == b[2].identity.peer_id + ':' + b[1] and echo.get('state') == 'delivered'
