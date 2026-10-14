@@ -324,3 +324,11 @@ a.button { display: inline-block; text-decoration: none; }
 .room-brief h3 { margin: 0 0 8px; }
 .room-brief-body, .carry-brief-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .carry-brief-text { max-height: 200px; margin-top: 10px; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+
+.brief-author { margin: 8px 0 0; }
+.brief-ship-tag { margin-right: 6px; }
+.brief-warning { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: var(--amber-soft); color: #74471d; font-weight: 700; }
+.brief-history { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.brief-history h4 { margin: 0 0 8px; }
+.brief-revisions { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.brief-revision-body { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
