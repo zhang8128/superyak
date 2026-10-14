@@ -146,8 +146,20 @@ class Watcher:
                         self._finish(mid)  # an earlier run that failed left its ticket running
                         self._remember(mid)  # its session answered it with reply_to: nothing to post
                     elif not listed:  # a breakout's mark is kept: its budget and its 404 depend on it (breakouts R5, R12)
+                        # ship-status fixes F2: the station's own first_deferred, recorded when this watcher, which
+                        # charged the mention at entry, lists it. It only ever decides a charge, never a spare (R37).
                         self.state['deferred'].append({k: mention[k] for k in ('message_id', 'room_id', 'author', 'seq')}
-                                                      | ({'breakout': True} if mention.get('breakout') else {}))
+                                                      | ({'breakout': True} if mention.get('breakout') else {})
+                                                      | ({'first_deferred': ticket['first_deferred']}
+                                                         if 'first_deferred' in ticket else {}))
+                    else:
+                        entry = next(d for d in self.state['deferred'] if d['message_id'] == mid)
+                        if 'first_deferred' not in entry:  # F2: hand-listed, never charged: charged here, once
+                            if author['kind'] == 'ship' and not self._ship_budget(mention):
+                                self._remember(mid)
+                                self.save()
+                                return True, self._pause_note(mention)
+                            entry['first_deferred'] = ticket.get('first_deferred')
                     self.save()
                     return True, 0
                 # R37: only the station's answer spares a re-ask: a run resolving a deferral it held carries
