@@ -355,6 +355,8 @@ writes it through this route, and the owner's own ships through theirs (see Ship
 - **History.** Every save, removal and carry is kept as a revision, in the same transaction.
   - `GET /api/chats/{id}/brief/revisions` is for the room's owner only. A member gets 403 ("Only the room owner
     can read its brief history"), a ship key 403, and a non-member or received room 404.
+  - It returns every kept revision, unpaged. Pruning keeps that bounded: a room's newest 50 revisions, everything
+    from the last 24 hours, and the owner's newest revision, at most 4,000 characters each.
   - It returns `[{revision,body,author_id,author_name,author_kind,updated,carried_from}]`, newest first. A
     removal's body is `''`, and `author_name` is one safe line.
   - After each write, a revision goes once it is outside the room's newest 50, older than 24 hours, and not the

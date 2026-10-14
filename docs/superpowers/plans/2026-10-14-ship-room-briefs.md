@@ -2703,8 +2703,8 @@ cd $WT/peer && $PEER
 ```
 
 **Expected:** all pass. Then check that the new test file has all its tests:
-`grep -c "def test_" $WT/peer/tests/test_ship_briefs.py` should print 19 (the who-may-write test is one function with
-nine cases).
+`grep -c "def test_" $WT/peer/tests/test_ship_briefs.py` should print 25 (the who-may-write test is one function with
+nine cases; the task reviews added six).
 
 - [ ] **Step 2: A fresh reviewer gets the whole branch.** Start one reviewer agent on the Pi that took no part in
   writing this work. Give it:
@@ -2831,6 +2831,20 @@ Then ask Andy to open City of AI in the browser. Under the brief it should read 
 the "Brief history" button.
 
 - [ ] **Step 6: Push main:** `cd /home/andy/superyak && git push origin main`.
+
+- [ ] **Step 6b: Restart the lighthouse again, now that HEAD is on origin/main** (Serenity's section 2 review,
+  should-fix 1). Since version-check-2 the station compares HEAD with `origin/main` only when the lighthouse starts, so
+  Step 4's restart, before the push, logged "HEAD is not on origin/main" and left the check off. Step 4 stays before
+  the push, so a rollback before the push is still a plain `reset --hard`.
+
+```bash
+systemctl --user restart superyak-lighthouse && systemctl --user is-active superyak-lighthouse
+journalctl --user --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'
+```
+
+**Expected:** `active`, then `superyak: version check on: <HEAD 12>, N behind`. On this Pi, `journalctl --user -u`
+finds nothing; `--user-unit` works. A missing line is not a reason to roll back the briefs: say so in the room and
+look at why the check is off.
 
 - [ ] **Step 7: Name the gated rooms, announce in City of AI, and restart the Pi's sessions.**
 
