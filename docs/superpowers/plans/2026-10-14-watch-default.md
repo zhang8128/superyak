@@ -368,7 +368,8 @@ call: in its `session()` helper, before `hook.run(...)`, add
 
 Run: `cd agent && uv run --locked --extra dev python -m pytest -q tests/test_hook_watch_default.py`
 Expected: all pass.
-Run: `make check-agent`. Expected: every test passes (main's count plus this task's). Name any failure, especially in
+Run: `make check-agent`. Expected: every test passes (main's count plus this task's; `test_watch_choice.py` is
+Task 2's and doesn't exist yet). Name any failure, especially in
 test_hook.py, test_hook_inbox.py and test_status_tools.py, which exercise `run()` and the prompt path.
 
 - [ ] **Step 5: Mutation checks** (temporarily, then restore; report each)
@@ -520,7 +521,7 @@ what `minutes=0` now does:
   session.";
 - change the `minutes` parameter's description "How long each renewal lasts, 1-120 (default 20); 0 ends the watch" to
   "How long each renewal lasts, 1-120 (default 20); 0 ends the watch and turns the hook's default off for this
-  session".
+  session". The dict uses single-quoted literals, so write the apostrophe as `hook\'s`.
 
 Docs:
 - In `agent/README.md`'s "Taking the watch":
