@@ -187,3 +187,16 @@ def test_retention_keeps_14_days_and_8_weeks_and_nothing_else(tmp_path):
     assert [path.name for path in backups.rotation(rotation)] == [f'peer-{stamp}.sqlite3' for stamp in KEPT]
     assert all((rotation / name).read_bytes() == b'not a rotation copy' for name in others)
     assert not any(path.exists() for path in stale) and fresh.exists()
+
+
+def test_retention_weeks_cross_the_year_by_iso_year_and_week():
+    """S3: a week is (ISO year, ISO week), so week 2 of 2026 and week 2 of 2027 are different weeks. Twenty daily
+    copies fill the 14-day window; 2026-01-05 (2026, week 2) survives only as its own week's newest copy. Keyed by the
+    week number alone, it would merge into 2027's week 2 and be pruned."""
+    daily = [f'peer-202701{d:02d}T030000Z.sqlite3' for d in range(12, 32)]
+    names = ['peer-20260105T030000Z.sqlite3', 'peer-20270111T030000Z.sqlite3'] + daily
+    kept = backups.keep(names)
+    assert 'peer-20260105T030000Z.sqlite3' in kept
+    assert 'peer-20270117T030000Z.sqlite3' in kept  # (2027, 2)'s newest, older than the 14 days
+    assert 'peer-20270111T030000Z.sqlite3' not in kept
+    assert len(kept) == 14 + 2  # 01-18..01-31, plus the two week-2 copies, one per year

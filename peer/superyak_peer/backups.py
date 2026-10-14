@@ -197,6 +197,8 @@ def run_backup(data_dir, backup_dir, *, clock=time.time, sleep=time.sleep):
                 # was ahead left a future name "newest". Either way: nothing written, nothing pruned, every night.
                 raise BackupError(1, f"the Pi's clock is behind the newest copy ({newest.name}); if the clock is right, "
                                      f'move that copy out of {backup_dir}')
+            # Two runs in the same second share this name; the later replaces the earlier, and both are checked copies
+            # (which is why the clock check above uses <, not <=).
             final, tmp = backup_dir / f'peer-{stamp}.sqlite3', backup_dir / f'.peer-{stamp}-{os.getpid()}.tmp'
             _checked_copy(database, tmp, clock, sleep)
             try:
