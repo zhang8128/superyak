@@ -310,11 +310,13 @@ def test_a_ship_reads_the_room_brief_through_the_real_station(env, tmp_path):
         request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'station_read', 'arguments': {'room': room, **args}}}
         return handle(tools, request)['result']['content'][0]['text']
     text = read()
-    assert 'Room brief (revision 1, updated 1970-01-12)\n[team] from Patient (@patient, person)' in text
+    assert "Room brief (revision 1, updated 1970-01-12), written by the room's owner: Patient (@patient, person)\n[team] from Patient (@patient, person)" in text
     assert text.index('Decisions D1-D9.') < text.index('first message')
     assert app.state.store.mentions(ship['id']) == []
     assert clients[0].put(f'/api/chats/{room}/brief', json={'body': '  ', 'revision': 1}).status_code == 200
-    assert 'Room brief' not in read()
+    removed = read()
+    assert "Room brief: none (removed by the room's owner; a new brief names revision 2)" in removed
+    assert 'Decisions D1-D9.' not in removed
 
 
 def watched_room(env, tmp_path, monkeypatch):

@@ -27,6 +27,7 @@ class FakeStation:
         self.tickets, self.sources, self.ticket_override, self.label_refusals = {}, {}, {}, set()
         self.blocks, self.instruction_state, self.drafts = {}, {}, []
         self.briefs = {}  # room id -> the brief as GET /api/chats/{id} shows it, or None
+        self.brief_revisions = {}  # room id -> brief_revision, as GET /api/chats/{id} shows it
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
         self.requests = []  # every call: method, path, JSON body and its x-superyak-* headers (spec S1)
         self.watches = {}  # (ship, session) -> {minutes, writable, label}
@@ -83,11 +84,17 @@ class FakeStation:
                 self.mention_rows.append({'seq': len(self.mention_rows) + 1, 'message_id': message['id'], 'room_id': room_id, 'user_id': target['id']})
         return message
 
-    def brief(self, room_id, author, body, revision=1, carried_from=None):
-        """A room's brief as the station shows it; a blank body removes it, and GET then says null."""
+    def brief(self, room_id, author, body, revision=1, carried_from=None, old_station=False):
+        """A room's brief as the station shows it. A blank body removes it: GET then says null, with the removed
+        revision as brief_revision. A station with ship briefs names the author's kind and username; old_station leaves
+        them out, as an older station does."""
         self.clock += 1
-        self.briefs[room_id] = ({'body': body, 'revision': revision, 'author_id': author['id'], 'author_name': author['name'],
-                                 'updated': self.clock, 'carried_from': carried_from} if body.strip() else None)
+        self.brief_revisions[room_id] = revision
+        shown = {'body': body, 'revision': revision, 'author_id': author['id'], 'author_name': author['name'],
+                 'updated': self.clock, 'carried_from': carried_from}
+        if not old_station:
+            shown.update(author_kind=author['kind'], author_username=author['username'])
+        self.briefs[room_id] = shown if body.strip() else None
 
     def view(self, room):
         last = max([m['created'] for m in room['messages']], default=0.0)
@@ -95,6 +102,7 @@ class FakeStation:
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
                 'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'brief': self.briefs.get(room['id']),
+                'brief_revision': self.brief_revisions.get(room['id'], 0),
                 'claims': self.claims.get(room['id'], []),
                 'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']],
                 **({'system_author': system} if system else {}),
@@ -102,7 +110,7 @@ class FakeStation:
                    if room['id'] in self.breakouts else {})}  # breakouts S6: only a breakout carries the key
 
     def listed(self, room):
-        return {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief')}
+        return {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief', 'brief_revision')}
 
     def open_breakout(self, me, payload):
         """POST /api/ships/me/rooms, with step 1's checks in its order."""
