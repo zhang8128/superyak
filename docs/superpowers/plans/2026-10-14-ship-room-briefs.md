@@ -67,8 +67,8 @@ b0b30e1, whose code is `main` at 7cdbb1f.
    - "Use this text" sets the textarea's `value` after rendering.
 7. **Tool details.**
    - `station_set_brief` sits after `station_post` in `TOOLS`.
-   - Its body goes through `str()` and `redact()` exactly like `station_post`'s text, but it is not cut, because the
-     station's 400 says the limit.
+   - Its body goes through `redact()` exactly like `station_post`'s text, but it is not cut, because the station's
+     400 says the limit. A missing or non-text body is refused before any call, so null never saves "None".
    - The fake station gets the ship PUT route and `brief_revision` in its room view.
 8. **Existing tests the spec's list missed.**
    - `test_only_the_owner_writes_the_brief` is a third test that compares the whole brief dict (Task 2).
@@ -80,18 +80,31 @@ b0b30e1, whose code is `main` at 7cdbb1f.
    - In `peer/tests/test_station_cli.py`, the bridge-race test compares room ids, because the notice moves a room's
      `last_activity` (Task 3). The dry run found this one.
 9. **R15's "the resident watcher skips it"** is checked on the station side: the notice's `source` is
-   `{'kind': 'notice'}` and its author is the system author, which is exactly what `_resident_reply` (watch.py:315)
-   filters on. The watcher's own skip is already pinned by `test_watch_deferral.py`.
+   `{'kind': 'notice'}`, which is exactly what `_resident_reply` (watch.py:315) filters on. The watcher's own skip is
+   already pinned by `test_watch_deferral.py::test_a_system_message_never_starts_a_run_or_counts_as_answered[notice]`,
+   which runs a `resident=True` watcher.
 
 **Dry run.** The code and tests of Tasks 1–8 were applied, exactly as written here, to an export of `ship-briefs-spec`
 at b0b30e1, in a scratch directory outside the repository. On the Pi:
-- the whole peer suite passed: 534 tests, the browser and packaging tests included;
+- the whole peer suite passed: 535 tests, the browser and packaging tests included (534 in the first run; the
+  revoked-key case came after it);
 - the whole agent suite passed: 603 tests;
 - every mutation in Tasks 3, 4, 6 and 7 turned its named test red;
 - one existing test broke and is fixed in Task 3: `test_station_cli.py`'s bridge-race test, because a brief save now
   posts a notice, and that moves the room's `last_activity`.
 
 The prose changes (`peer/API.md`, `agent/README.md`, the spec's build note) were not part of the dry run.
+
+**Review.** A fresh reviewer repeated the dry run at 1ef235e and approved with 1 must-fix, 4 should-fixes and 8 nits,
+all applied here:
+- MF1: Task 10 restarts the Pi's project-ship units and its Claude Code sessions, the merging one included.
+- SF1: Task 10 Step 5 explains the 403 from 127.0.0.1 and what a count of 0 means.
+- SF2: Task 10 Step 7 gates every room where a ship can write, not only City of AI.
+- SF3: Task 4's rate test pins "per ship", and its mutation row was added.
+- SF4: the prose in `tickets.py` and `peer/API.md` (Tasks 3 and 5).
+
+The fixes to tests and code (SF3, N6, N7) were dry-run the same way. The changed tests pass, the agent suite still
+passes with 603 tests, and the three new mutations go red.
 
 ## Base and sequencing
 
@@ -142,12 +155,12 @@ The prose changes (`peer/API.md`, `agent/README.md`, the spec's build note) were
   AGENT='uv run --locked --extra dev python -m pytest -q'
   ```
   - Peer: `cd $WT/peer && $PEER <files>`. The whole peer suite is `cd $WT/peer && $PEER` and takes about 9 minutes
-    on the Pi with Playwright (the dry run's 534 tests took 8.5).
+    on the Pi with Playwright (the dry run's 535 tests took about 8.5).
   - Agent: `cd $WT/agent && $AGENT <files>`. The whole agent suite is `cd $WT/agent && $AGENT`.
 - **Mutation checks** (the spec asks for R1, R3, R5, R6, R9, R10 and R14). Run them only after the task's commit, one
   at a time:
   ```bash
-  cd $WT && find peer agent -name __pycache__ -type d -prune -exec rm -rf {} +
+  cd $WT && find peer/superyak_peer peer/tests agent/superyak_agent agent/tests -name __pycache__ -type d -prune -exec rm -rf {} +
   # make the one change in the table, then run the named test with PYTHONDONTWRITEBYTECODE=1: it must fail
   cd $WT/peer && PYTHONDONTWRITEBYTECODE=1 $PEER tests/test_ship_briefs.py -k <test name>
   cd $WT && git checkout -- <the mutated file> && git status --short   # must print nothing
@@ -205,7 +218,8 @@ The prose changes (`peer/API.md`, `agent/README.md`, the spec's build note) were
     - The header is `Room brief (revision <n>, updated <YYYY-MM-DD>), <class words>: <describe(author)>`.
   - Agent (`mcp.py`):
     - `BRIEF_NONE = "Room brief: none (removed by the room's owner; a new brief names revision {revision})"`
-    - The tool's refusal of a bad revision: `revision is the whole number station_read shows`.
+    - The tool's refusal of a bad revision: `revision is the whole number station_read shows`; of a body that isn't
+      text: `body is the whole new brief, as text`.
     - The tool's result: `Saved the brief of room <id> as revision <n>. Every member is told in a station notice, and
       the room's owner can restore earlier revisions.`, plus ` Text that looked like a secret was masked.` when
       `redact` changed the text.
@@ -504,9 +518,9 @@ git commit -m "Ship briefs, step 1: every brief revision is kept, backfilled at 
 - Modify: `peer/superyak_peer/chats.py:108-119`: `add_participants` writes the carried author.
 - Test: `peer/tests/test_ship_briefs.py` (append).
 - Modify tests: `peer/tests/test_room_brief.py`. Three tests compare the whole brief dict:
-  - `test_only_the_owner_writes_the_brief` (lines 52–53, which the spec's list missed);
-  - `test_get_returns_the_brief_to_members_and_null_when_there_is_none` (lines 156–157);
-  - `test_carrying_copies_the_brief_into_the_new_room_and_never_its_messages` (lines 196–197).
+  - `test_only_the_owner_writes_the_brief` (lines 53–54, which the spec's list missed);
+  - `test_get_returns_the_brief_to_members_and_null_when_there_is_none` (lines 157–158);
+  - `test_carrying_copies_the_brief_into_the_new_room_and_never_its_messages` (lines 197–198).
 
 **Interfaces:**
 - Consumes (Task 1): `_write_brief`, and the test helpers `wrote` and `history`.
@@ -652,7 +666,8 @@ git commit -m "Ship briefs, step 1: the brief names its author's kind and userna
 - Modify: `peer/superyak_peer/system_author.py`:
   - the module docstring (lines 1–4);
   - `_post_as_system` (lines 32–51) becomes `_post_as_system(db, room_id, client_id, text)`.
-- Modify: `peer/superyak_peer/tickets.py:110-114`: `_post_notice` passes `notice-<ship id>-<mention id>` itself.
+- Modify: `peer/superyak_peer/tickets.py:110-114`: `_post_notice` passes `notice-<ship id>-<mention id>` itself, and
+  its docstring says it is one of two notices.
 - Modify: `peer/superyak_peer/briefs.py`:
   - the three notice templates;
   - `_write_brief` posts the notice;
@@ -755,7 +770,8 @@ def test_every_change_posts_one_notice_and_a_carry_posts_none(env):
 
 def test_the_brief_notice_text_is_exactly_the_template(env):
     """R14: the filled template, byte for byte. A display name with @, a newline and 60 more characters comes out
-    through safe_line(name, 40); the brief's own text never appears."""
+    through safe_line(name, 40); the brief's own text never appears; a ship named like the owner still gets the ship's
+    words, because the class comes from the account's kind, never its name."""
     app, clients, users, clock = env
     store, patient = app.state.store, users[0]['id']
     ship, key = docked(store, patient, 'serenity')
@@ -770,6 +786,10 @@ def test_the_brief_notice_text_is_exactly_the_template(env):
     assert bodies == [BRIEF_NOTICE_OWNER.format(n=1, name=shown), BRIEF_NOTICE_SHIP.format(n=2, name=shown)]
     assert bodies[0] == f"Station notice: the room brief is now revision 1, written by the room's owner: {shown}. station_read shows it."
     assert not any('secret plan' in b or '@' in b or '\n' in b for b in bodies)
+    with store.transaction() as db:
+        db.execute('UPDATE users SET name=? WHERE id=?', ("Patient (the room's owner)", ship['id']))
+    wrote(store, ship['id'], room, 'A ship with a borrowed name.')
+    assert notices(clients[1], room)[-1]['body'] == BRIEF_NOTICE_SHIP.format(n=3, name="Patient (the room's owner)")
 
 
 def test_a_brief_notice_never_wakes_answers_or_federates(env, two_peers):
@@ -898,7 +918,9 @@ Replace `_post_as_system`:
         return new_id
 ```
 
-`peer/superyak_peer/tickets.py`, `_post_notice`: its last line becomes
+`peer/superyak_peer/tickets.py`, `_post_notice`: its docstring's opening, "S5, S11: the one message the station
+writes,", becomes "S5, S11: one of the two notices the station writes (ship briefs R18),", and the rest stays. Its last
+line becomes
 
 ```python
         self._post_as_system(db, message['room_id'], f'notice-{ship["id"]}-{message["id"]}', body)
@@ -960,6 +982,7 @@ git commit -m "Ship briefs, step 1: every brief save and removal posts one stati
 | Post for a carry too: drop `if carried_from is None:` and dedent its line | `test_every_change_posts_one_notice_and_a_carry_posts_none` |
 | Use the owner template for every save: `template = BRIEF_NOTICE_OWNER` | `test_every_change_posts_one_notice_and_a_carry_posts_none`, `test_the_brief_notice_text_is_exactly_the_template` |
 | `name=author['name']` instead of `safe_line(author['name'], 40)` | `test_the_brief_notice_text_is_exactly_the_template` |
+| Class by name: `BRIEF_NOTICE_SHIP if author['kind'] == 'ship' and 'owner' not in author['name'] else BRIEF_NOTICE_OWNER` | `test_the_brief_notice_text_is_exactly_the_template` (the ship named like the owner) |
 | Client id `f'brief-{room_id}'`, without the revision | `test_every_change_posts_one_notice_and_a_carry_posts_none` |
 
 **Step review:** build step 1 (Tasks 1–3) is done. Post its summary in the room for Rio Grande before Task 4.
@@ -1206,8 +1229,9 @@ def test_a_ship_writes_names_without_the_at_sign(env):
 
 
 def test_ship_brief_saves_are_limited_to_ten_an_hour(env):
-    """R6: ten of a ship's own saves in a rolling hour, across rooms. The owner's carries of its text, by adding members
-    and by bridging, never count. The eleventh gets 429 and writes nothing, and an hour on frees one."""
+    """R6: ten of a ship's own saves in a rolling hour, across rooms. The rate is per ship: the owner's saves and a
+    sibling ship's never count, and nor do the owner's carries of its text, by adding members or by bridging. The
+    eleventh gets 429 and writes nothing, and an hour on frees one."""
     app, clients, users, clock = env
     store = app.state.store
     ship, key = docked(store, users[0]['id'], 'rio-grande')
@@ -1227,6 +1251,10 @@ def test_ship_brief_saves_are_limited_to_ten_an_hour(env):
     assert changed
     for room in (carried, again, bridged['id']):  # three carried revisions, each the ship's
         assert brief_of(clients[0], room)['author_id'] == ship['id']
+    sibling, sibling_key = docked(store, users[0]['id'], 'serenity')
+    third = new_room(clients[0], users[1], ship, sibling, title='Third')
+    assert put_brief(clients[0], third, "The owner's own save.", 0).status_code == 200            # a person's save never counts
+    assert ship_put(ship_client(app, sibling_key), third, "Serenity's save.", 1).status_code == 200  # nor a sibling ship's
     assert ship_put(rio, again, 'Save 10.', 1).status_code == 200
     refused = ship_put(rio, bridged['id'], 'Save 11.', 1)
     assert (refused.status_code, refused.json()['error']) == (429, TOO_FAST)
@@ -1403,6 +1431,7 @@ git commit -m "Ship briefs, step 2: the owner's own ships set and update the bri
 | R5: drop the at-sign check | `test_a_ship_writes_names_without_the_at_sign` |
 | R6: drop `AND carried_from IS NULL` | `test_ship_brief_saves_are_limited_to_ten_an_hour` (save 10 gets 429) |
 | R6: `recent > SHIP_BRIEFS_PER_HOUR` instead of `>=` | `test_ship_brief_saves_are_limited_to_ten_an_hour` (save 11 gets 200) |
+| R6: count every author's rows: `WHERE ? IS NOT NULL AND carried_from IS NULL` instead of `WHERE author_id=? AND carried_from IS NULL` | `test_ship_brief_saves_are_limited_to_ten_an_hour` (the sibling's save or save 10 gets 429) |
 
 ### Task 5: The owner-only history route, and `peer/API.md` (R12)
 
@@ -1506,10 +1535,15 @@ Run: `cd $WT/peer && $PEER tests/test_ship_briefs.py -k history`
     room has none, when the brief was removed, or when the room is a received one. `author_name` is one safe line.
     `author_kind` (`person` or `ship`) and `author_username` come from the author's account, so a ship that has left
     the room is still named."
+  - **The next save** bullet's "the revision the owner's next save names" becomes "the revision the next save names,
+    by the owner or one of the owner's ships".
   - In **Saving**, the line "Saving records no mentions and posts no message." becomes "Saving records no mentions.
     It posts one notice (below)."
   - In **Carrying**, "authored by the owner" becomes "under the carried revision's author, so a ship's text stays
-    the ship's".
+    the ship's". In the file the phrase is split across a line break ("authored by the" ends line 347, and "owner,
+    with `carried_from` …" starts line 348), so an exact-match edit must take the break with it. In the same bullet,
+    "The owner's next save clears `carried_from`." becomes "The next save, by the owner or one of his ships, clears
+    `carried_from`."
   - Add after **Carrying**:
 
     > - **History.** Every save, removal and carry is kept as a revision, in the same transaction.
@@ -1801,8 +1835,8 @@ def test_a_ship_saving_while_the_owner_edits_keeps_his_text(browser_peer):
 Run: `cd $WT/peer && $PEER tests/test_browser.py -k "ship_written or ships_text or restores or sees_no_history or ship_saving"`
 
 **Expected:**
-- all five fail, each timing out on `.room-brief-author`, `.brief-warning` or the "Brief history" button;
-- `test_a_member_sees_no_history` may pass already, because no history button exists yet. It is a guard;
+- four fail, each timing out on `.room-brief-author`, `.brief-warning` or the "Brief history" button;
+- the fifth, `test_a_member_sees_no_history`, passes, because it is a guard and no history button exists yet;
 - the older brief tests still pass: `cd $WT/peer && $PEER tests/test_browser.py -k brief`.
 
 - [ ] **Step 3: Implement** (`peer/superyak_peer/static/app.js`).
@@ -2444,7 +2478,8 @@ def test_station_set_brief_saves_and_reports_the_revision(station):
 
 
 def test_station_set_brief_refuses_a_revision_that_is_not_a_whole_number(station):
-    """R17: true, "3", 1.5, null or no revision at all is refused before any station call, even to resolve the room."""
+    """R17: true, "3", 1.5, null or no revision at all is refused before any station call, even to resolve the room;
+    so is a body that isn't text, which would otherwise save the brief "None"."""
     fake, andy, jenn, serenity = station
     room = fake.room('City of AI', andy, jenn, serenity)
     tools = tools_for(fake)
@@ -2454,6 +2489,9 @@ def test_station_set_brief_refuses_a_revision_that_is_not_a_whole_number(station
         assert result['content'][0]['text'] == 'station error: revision is the whole number station_read shows', bad
     missing = call(tools, 'station_set_brief', room=room, body='Plan.')
     assert missing['content'][0]['text'] == 'station error: revision is the whole number station_read shows'
+    for body in ({'body': None}, {'body': 7}, {}):
+        result = call(tools, 'station_set_brief', room=room, revision=0, **body)
+        assert result['content'][0]['text'] == 'station error: body is the whole new brief, as text', body
     assert fake.requests == []
 
 
@@ -2564,12 +2602,14 @@ has no `station_set_brief`.
     def station_set_brief(self, args):
         """Ship briefs S8: set or update a room's brief as this ship. The revision is checked here first, so a bool or a
         string never reaches the station, and the body is redacted exactly as station_post's text is. The station
-        decides the rest, and its refusals come back in its own words."""
+        decides the rest, and its refusals come back in its own words. A body that isn't text is refused here too."""
         revision = args.get('revision')
         if type(revision) is not int:
             raise ValueError('revision is the whole number station_read shows')
+        given = args.get('body')
+        if not isinstance(given, str):  # a missing or null body must never save the text "None"
+            raise ValueError('body is the whole new brief, as text')
         room_id = resolve_room(self.client, args['room'])
-        given = str(args['body'])
         body = redact(given)
         saved = self.client.set_brief(room_id, body, revision)
         masked = ' Text that looked like a secret was masked.' if body != given else ''
@@ -2621,7 +2661,8 @@ In `TOOLS`, after the `station_post` entry:
 > - **Web.** The third class reads "Written by <name>, not the room's owner", and the revision line drops "by <name>".
 >   The owner gets a "Brief history" toggle. A removal's row says "Removed", with no "Use this text". The list reloads
 >   after a save.
-> - **The tool** sits after `station_post` and redacts like it, without cutting.
+> - **The tool** sits after `station_post` and redacts like it, without cutting. It refuses a body that isn't text
+>   before any call.
 > - **Tests the Testing list missed:**
 >   - `test_only_the_owner_writes_the_brief` (a third whole-dict comparison);
 >   - `test_system_author.py:88` (a sixth `_post_as_system` caller);
@@ -2694,8 +2735,10 @@ Pi. Never @mention a ship in a room post: a mention starts a watcher run.
 
 ```bash
 umask 077
+mkdir -p ~/.local/share/superyak/backups
 BACKUP=~/.local/share/superyak/backups/peer-$(date +%Y%m%d-%H%M%S)-pre-ship-briefs.sqlite3
-python3 -c 'import sqlite3, sys; sqlite3.connect(sys.argv[1]).backup(sqlite3.connect(sys.argv[2]))' ~/.local/share/superyak/lighthouse/peer.sqlite3 "$BACKUP"
+# The source opens read-only, so a wrong path fails instead of making an empty database.
+python3 -c 'import sqlite3, sys; sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True).backup(sqlite3.connect(sys.argv[2]))' ~/.local/share/superyak/lighthouse/peer.sqlite3 "$BACKUP"
 chmod 600 "$BACKUP" && stat -c '%a %s %n' "$BACKUP"   # expect 600 and a non-zero size
 ```
 
@@ -2739,6 +2782,17 @@ for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; s
 for unit in lighthouse door ship odo wormhole; do systemctl --user is-active --quiet superyak-$unit || journalctl --user -u superyak-$unit -n 50 --no-pager; done
 ```
 
+The Pi may also run project-ship watchers (`superyak-ship-<home>.service`). List them, restart them, and check them:
+
+```bash
+for unit in $(systemctl --user list-units --plain --no-legend 'superyak-ship-*' | awk '{print $1}'); do systemctl --user restart "$unit"; done
+systemctl --user list-units --plain --no-legend 'superyak-ship-*'   # each line should say active running; none is fine
+```
+
+The Pi's interactive Claude Code sessions, this merging session included, keep the station MCP server they started
+with. Until each one restarts, it has the old brief header, the old `station_read` description and no
+`station_set_brief`. Step 7 restarts them.
+
 - [ ] **Step 5: The live check.** It is read-only, so it writes nothing to any room or brief.
 
 ```bash
@@ -2764,38 +2818,87 @@ EOF
 **Expected:**
 - The `room_brief_revisions` count equals the `room_briefs` count, unless someone saved a brief since the restart,
   and no current revision is missing from history.
-- At least one room with a brief: City of AI's, which Andy set.
+- At least one room with a brief: City of AI's, which Andy set, when the Pi's ship is a member of it.
 - `True` for the author fields.
+
+The script reaches the station through the ship's configured address, with the tailnet host as its origin. Check by
+hand only at `https://smart.<tailnet>.ts.net`: `http://127.0.0.1:7435` answers 403 `Unrecognized host`, which is
+expected and never a reason to roll back. If `rooms with a brief` prints 0, the Pi's ship isn't in a briefed room, and
+`True` then says nothing (it is true of an empty list). The database counts above and Andy's browser check stand in
+for it.
 
 Then ask Andy to open City of AI in the browser. Under the brief it should read "Written by you", and he should see
 the "Brief history" button.
 
 - [ ] **Step 6: Push main:** `cd /home/andy/superyak && git push origin main`.
 
-- [ ] **Step 7: Announce in City of AI** (the current room that replaced 39fd79), without @mentions. The announcement
-  covers:
-  - What shipped:
-    - the owner's own ships set and update the briefs of his current rooms with `station_set_brief`, at most 10 an
-      hour;
-    - every change posts a station notice;
-    - the brief's header says who wrote it;
-    - the owner has a history in the web panel, with "Use this text".
-  - **Other machines:** pull main and restart every Claude Code session (the MCP server picks up `station_set_brief`
-    and the new header). Also restart the ship's watcher: `systemctl --user restart superyak-ship` on Linux, or
-    `launchctl kickstart -k gui/$(id -u)/com.superyak.ship` on a Mac, plus each project ship's own unit. No re-dock is
-    needed, because the hooks are unchanged.
-  - **The rule:** no ship sets a brief in a room until every machine running a session or watcher for a ship in that
-    room has pulled and restarted. Each machine says so in the room when it has. A machine that is offline then is
-    the mixed-versions case in Known limits, and the rule doesn't wait for it.
+- [ ] **Step 7: Name the gated rooms, announce in City of AI, and restart the Pi's sessions.**
 
-  Then, once every such machine for City of AI has said so, and only if Andy says so, Rio Grande's terminal session
-  reads City of AI with `station_read` and sets its brief with `station_set_brief` (roadmap 0.3).
+First, list the rooms the rule gates: every current person-owned room that holds one of its owner's ships, which are
+the only rooms where S1 lets a ship write. It is read-only, and room titles are data:
+
+```bash
+python3 - <<'EOF'
+import os, sqlite3
+db = sqlite3.connect('file:' + os.path.expanduser('~/.local/share/superyak/lighthouse/peer.sqlite3') + '?mode=ro', uri=True)
+for room_id, title, owner, ships in db.execute('''SELECT rooms.id, rooms.title, owners.username, group_concat(ships.username, ' ')
+        FROM rooms JOIN users AS owners ON owners.id=rooms.owner_id AND owners.kind='person'
+        JOIN room_members ON room_members.room_id=rooms.id
+        JOIN users AS ships ON ships.id=room_members.user_id AND ships.kind='ship' AND ships.owner_id=rooms.owner_id
+        WHERE rooms.id NOT IN (SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL)
+        GROUP BY rooms.id ORDER BY owners.username, rooms.title'''):
+    print(room_id[:6], repr(title), 'owner', owner, 'ships', ships)
+EOF
+```
+
+`make station-rooms` shows Andy's rooms with all their members, as a cross-check.
+
+Then post the announcement in City of AI (the current room that replaced 39fd79), without @mentions. It covers:
+- What shipped:
+  - the owner's own ships set and update the briefs of his current rooms with `station_set_brief`, at most 10 an hour;
+  - every change posts a station notice;
+  - the brief's header says who wrote it;
+  - the owner has a history in the web panel, with "Use this text".
+- **Every machine, the Pi included:** pull main (the Pi already has it) and restart every Claude Code session. A new
+  or resumed session's MCP server picks up `station_set_brief` and the new header. Also restart the ship's watcher:
+  `systemctl --user restart superyak-ship` on Linux, or `launchctl kickstart -k gui/$(id -u)/com.superyak.ship` on a
+  Mac, plus each project ship's own unit. No re-dock is needed, because the hooks are unchanged.
+- **The rule:** no ship sets a brief in a room until every machine running a session or watcher for a ship in that
+  room has pulled and restarted. Each machine says so in City of AI when it has.
+  - It holds in each room the list above printed, named in the announcement by short id and title: until every
+    machine running a session or watcher for a ship in a room has said so in City of AI, no ship sets that room's
+    brief.
+  - The Pi is one of these machines.
+  - A machine that is offline then is the mixed-versions case in Known limits, and the rule doesn't wait for it.
+
+Then restart the Pi's own sessions. The watchers were restarted in Step 4. List every station MCP server on the Pi
+with its start time:
+
+```bash
+ps -o pid,lstart,command -p "$(pgrep -d, -f 'run_agent.py mcp')"
+```
+
+Every server that started before the merge belongs to a session that must restart. Its person exits it and resumes it
+with `claude --resume`. A resumed session is a new process, so its MCP server loads the merged code. These are Andy's
+terminals, so ask him in the room, without @mentions.
+- **This merging session is one of them.** Once it has posted the announcement, Andy exits it and resumes it with
+  `claude --resume`. The plan does not rely on reconnecting the MCP server from inside a running session.
+- Run the `ps` line again. When no server older than the merge remains, say in City of AI that the Pi has restarted.
+
+**The live write (Build order 5).** It waits until every machine for City of AI has said so, the Pi included, and
+until Andy says so. It is done by a Rio Grande terminal session started or resumed after the merge:
+1. Its tool list must show `station_set_brief` (in Claude Code, `/mcp` lists the station server's tools). If it
+   doesn't, its MCP server is still old: stop, and resume the session again.
+2. It reads City of AI with `station_read`. The header must say `written by the room's owner: Andy`; the old header
+   has no class words. It takes the revision from that header.
+3. It sets the brief with `station_set_brief` (roadmap 0.3).
 
 - [ ] **Step 8: Rollback, when a check fails.** The new table is additive and old code never reads it, so the
   database needs no change. Brief notices stay in their rooms as system-author notices, which old code already shows
   and never answers.
   - **Before the push:** check that `git -C /home/andy/superyak log -1 --oneline ORIG_HEAD` is main from before the
-    merge. Then run `git -C /home/andy/superyak reset --hard ORIG_HEAD` and restart in Step 4's order.
+    merge. Then run `git -C /home/andy/superyak reset --hard ORIG_HEAD`, restart in Step 4's order (the project-ship
+    units included), and restart any Pi Claude Code session started since the merge.
   - **After the push:**
     1. Revert the merge and push:
        ```bash
@@ -2805,7 +2908,7 @@ the "Brief history" button.
        git revert --no-edit -m 1 "$MERGE" && git push origin main
        ```
     2. Restart in Step 4's order, and announce the revert in the room.
-    3. Other machines pull main and restart their sessions and watchers.
+    3. Every machine, the Pi included, restarts its Claude Code sessions and watchers. The others pull main first.
   - **Ship-written briefs outlive a rollback.** Old code still names their author in the fence and on the web panel,
     but old `station_read` describes the brief as "its owner wrote". List them read-only:
     ```bash
