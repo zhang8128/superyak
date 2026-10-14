@@ -12,7 +12,8 @@ and labels an unverified message for what it is.
 
 **Spec:** `docs/superpowers/specs/2026-10-14-federation-followups-design.md`, revision 2, approved under D8 (443ef75).
 
-**Status:** revision 1, for a fresh reviewer.
+**Status:** revision 2, for the same reviewer's re-check. Revision 1 (6816f43) had the fresh reviewer's verdict, APPROVE
+WITH CHANGES (2 should-fix, 4 nits; room message bf8e0f3d): see "Review map".
 
 ## Global Constraints
 
@@ -30,7 +31,7 @@ and labels an unverified message for what it is.
 ## Review Focus
 
 1. An honest echo whose outbox row is pending, failed or withdrawn after a lost acknowledgement: shows "Delivered" on
-   the message (Task 1's code sets it regardless of the row's status; the spec accepts the panel showing the row).
+   the message (Task 1, test 4, with the row set to failed; the spec accepts the panel showing the row).
 2. Two local users in one received room: each sees "delivered" only on their own reply (Task 1, test 3).
 3. An origin that adds `unverified: true` to an honest echo: no mark (Task 1, test 2).
 4. A received room with the user's own queued reply and a host message reusing its client id: the user's reply says
@@ -44,8 +45,8 @@ and labels an unverified message for what it is.
 **Files:**
 - Modify: `peer/superyak_peer/peer_store.py` (`REMOTE_MESSAGE_KEYS`, `_remote_room`, `_unverified_local_authors`)
 - Modify: `peer/PROTOCOL.md` (room.message, after "The receiver cannot detect either.")
-- Test: `peer/tests/test_federation.py`: the three tests at the end of the file are already committed (5507c0e,
-  dd76d28), red today. No test changes in this task.
+- Test: `peer/tests/test_federation.py`: the four tests at the end of the file are already committed (5507c0e,
+  dd76d28, 1e63b9b), red today. No test changes in this task.
 
 **Interfaces:**
 - Produces: a received room's messages carry `state: "delivered"` on the viewer's own verified reply, the outbox
@@ -54,10 +55,11 @@ and labels an unverified message for what it is.
 - [ ] **Step 1: Run the red tests**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_federation.py`
-Expected: 3 failed, 42 passed. The three:
+Expected: 4 failed, 42 passed. The four:
 - `test_an_origin_cannot_set_a_messages_delivery_state_or_mark`: `assert 'state' not in shown`;
 - `test_this_stations_echoed_reply_shows_delivered_whatever_state_the_origin_adds`: `'failed' == 'delivered'`;
-- `test_another_local_users_echoed_reply_carries_no_state_in_this_view`: `None == 'delivered'` (second assertion).
+- `test_another_local_users_echoed_reply_carries_no_state_in_this_view`: `None == 'delivered'` (second assertion);
+- `test_an_echoed_reply_shows_delivered_even_while_its_row_says_failed`: the echo has no `state`.
 
 - [ ] **Step 2: The code**
 
@@ -78,8 +80,9 @@ In `_remote_room`, change `self._unverified_local_authors(replies, row['origin']
 `self._unverified_local_authors(replies, row['origin'], result['messages'], actor)`.
 
 In `_unverified_local_authors`, change the signature to `def _unverified_local_authors(self, replies, origin,
-messages, actor):`. Its docstring's last line ends `...which copy comes first (PROTOCOL.md, room.message)."""`;
-replace that ending so the docstring closes with two more lines:
+messages, actor):`. Replace the docstring's whole final line,
+`        message, and with a replayed copy it chooses which copy comes first (PROTOCOL.md, room.message)."""`,
+with these three lines:
 
 ```python
         message, and with a replayed copy it chooses which copy comes first (PROTOCOL.md, room.message).
@@ -137,18 +140,20 @@ cannot tell a replay from a forgery.
 - [ ] **Step 3: Run the tests**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_federation.py`
-Expected: 45 passed.
+Expected: 46 passed.
 
 - [ ] **Step 4: Mutation checks**, one at a time, each restored before the next (`git diff --stat` after each restore
   shows only your change):
   - put `'state'` back at the end of `REMOTE_MESSAGE_KEYS`: test 1 fails;
   - add `'unverified'` at the end of `REMOTE_MESSAGE_KEYS`: tests 1 and 2 fail;
   - replace `message['state'] = 'delivered'` with `pass`: tests 2 and 3 fail;
-  - replace `= data['actor'] == actor` with `= True`: test 3 fails.
+  - replace `= data['actor'] == actor` with `= True`: test 3 fails;
+  - append ` and delivery['status'] == 'delivered'` to `= data['actor'] == actor`: test 4 fails.
 
 - [ ] **Step 5: The peer suite**
 
-Run: `make check-peer`. Expected: every test passes (main's count plus 3 on this Mac: 538). Name any failure.
+Run: `make check-peer`. Expected: every test passes (the branch base's count plus 4 on this Mac: 539). Name any
+failure.
 
 - [ ] **Step 6: Commit**
 
@@ -238,8 +243,12 @@ def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_del
             expect(forged.locator(".message-meta").first).to_have_text(
                 "Unverified: the room's host says this is from someone on this station")
             expect(forged).to_have_class("message unverified")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Delivered")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Saved here")
             claims = page.locator(".message", has_text="the host's own words")
             expect(claims).to_be_visible()
+            expect(claims.locator(".message-meta").first).not_to_contain_text("Unverified")
+            expect(claims).to_have_class("message")
             expect(claims.locator(".message-meta").last).not_to_contain_text("Delivered")
             expect(claims.locator(".message-meta").last).not_to_contain_text("Saved here")
             mine = page.locator(".message", has_text="my real words")
@@ -291,13 +300,17 @@ In `peer/superyak_peer/static/app.css`, after the `.message.mine { ... }` line a
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_browser.py -k received_room_marks_unverified`.
 Expected: PASS.
-Run: `make check-peer`. Expected: every test passes (539 on this Mac). Name any failure, especially in
+Run: `make check-peer`. Expected: every test passes (540 on this Mac). Name any failure, especially in
 test_browser.py's chat and delivery tests.
 
 - [ ] **Step 5: Mutation checks**, each restored before the next:
   - delete the `if (state.room?.origin) return null;` line: the new test fails at `not_to_contain_text("Delivered")`;
   - replace ` : message.unverified ? UNVERIFIED_AUTHOR : ` with ` : ` in the `author` line: the new test fails at the
-    label.
+    label;
+  - replace ` : message.unverified ? UNVERIFIED_AUTHOR : ` with ` : !mine ? UNVERIFIED_AUTHOR : ` (every message not the
+    viewer's labelled unverified): the new test fails at the host message's author line;
+  - in peer_store.py, add `message['state'] = 'delivered'` after `message['unverified'] = True` (a state on the
+    unverified copy): the new test fails at the forged message's `not_to_contain_text("Delivered")`.
 
 - [ ] **Step 6: Commit**
 
@@ -318,7 +331,19 @@ git commit -m "Federation follow-ups F1 and F2, browser: the unverified mark, an
 ## Self-review notes
 
 - **Spec coverage:** F2 server and requirements 1-5 and 8: Task 1. F1, F2 browser and requirements 6-7: Task 2.
-- **Dry run:** every block was applied as written in a scratch worktree at 443ef75.
-  - Task 1: RED 3 failed and 42 passed; GREEN 45; the four mutations each fail exactly the tests named.
-  - Task 2: RED fails at the label ("Someone in this chat"); GREEN passes in 2.1 s; both mutations fail the new test.
-  - `make check-peer`: 539 passed (main's 535 on this Mac, plus 3 federation, plus 1 browser).
+- **Dry run:** revision 1's blocks were applied as written in a scratch worktree (the plan reviewer reproduced them at
+  6816f43); revision 2's at 1e63b9b.
+  - Task 1: RED 4 failed and 42 passed; GREEN 46; the five mutations each fail exactly the tests named.
+  - Task 2: RED fails at the label ("Someone in this chat"); GREEN passes; all four mutations fail the new test.
+  - `make check-peer`: 540 passed (the branch base's 535 on this Mac, plus 4 federation, plus 1 browser).
+
+## Review map (revision 2: the plan review of 6816f43)
+
+| # | Finding | Change |
+|---|---|---|
+| S1 | no test pinned "no state on an unverified message" | the browser test checks the forged message shows neither "Delivered" nor "Saved here"; Task 2's third new mutation |
+| S2 | the host message's author line was unchecked | the browser test checks it isn't "Unverified" and its class is exactly `message`; Task 2's second new mutation |
+| N3 | Review Focus 1 claimed but untested | test 4 (1e63b9b): an honest echo while the row says failed shows "delivered"; Task 1's fifth mutation |
+| N4 | the docstring edit was ambiguous | "replace the docstring's whole final line", quoted |
+| N5 | the dry run's base | revision 2's dry run at 1e63b9b |
+| N6 | the class string | no change: harmless, and the test pins the exact strings |
