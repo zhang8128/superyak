@@ -351,6 +351,7 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     - for rooms and spaces in both files, remove each room, remote-room or space membership that isn't there
       (`room_members`, `remote_room_members`, `space_members`);
     - lower `is_admin` and `is_super_admin` to the replaced file's value where that is lower.
+    - close each breakout that is closed there and still open here, with its closing time (Rio Grande's ruling, Q1).
   - **Without one:** revoke every key of every ship that has an owner; those machines dock again. The station's own
     ships, which have no owner (Odo, Wormhole), keep their keys.
   - **Reported, never applied,** since a bad replaced file may be the reason for the restore: users whose password hash
@@ -554,6 +555,7 @@ without its feature.
     steps.
   - `test_reconcile_refuses_the_live_data_dir_and_symlinks` (R18): the `--live-data-dir`, a directory holding
     `dispatch.lock`, a symlink and a copy that fails its check are each refused, and the file is unchanged.
+  - `test_reconcile_closes_breakouts_closed_since_the_copy` (R18): a breakout closed in B is closed after reconciling A.
 - **`peer/tests/test_alerts.py`:**
   - `test_a_crash_queues_one_alert_and_a_clean_stop_queues_none` (R10).
   - `test_monitor_kinds` (R10): `--monitor` with `MONITOR_SERVICE_RESULT=start-limit-hit` for a service queues
@@ -724,3 +726,9 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | S-R4: a copy can hold a working key | Applied | Security ("What a copy holds") |
 | S-R5: the reconcile stays before the server's start | Applied | S7 step 4 |
 | S-R6: a backstop for `down` and `failed` | Applied | S12, R11, `test_stopped_alerts_are_held_back_and_back_off_per_unit` |
+
+## Review map (Rio Grande's ruling on the plan review's Q1 (2026-10-14))
+
+| Item | Ruling | Where |
+|---|---|---|
+| Q1: a breakout its ship closed since the copy reopens after a restore, and its members can post and record mentions there again | Ruled in. It only takes access away, so it narrows S16 and needs no new D8 round | S16 ("With a usable replaced file"), Testing (`test_reconcile_closes_breakouts_closed_since_the_copy`) |

@@ -27,8 +27,9 @@ in Ops when a service crashes, gives up, or a backup or restore test fails.
 one route, systemd 252 user units, GNU make, pytest.
 
 **Spec:** [`docs/superpowers/specs/2026-10-14-station-backups-alerts-design.md`](../specs/2026-10-14-station-backups-alerts-design.md),
-revision 3, approved under D8 at b09ed70. It is the binding authority: where this plan and the spec disagree, the spec
-wins and the plan is wrong. The spec's two review maps walk every item of its D8 review and re-check. Read the spec's
+revision 3, approved under D8 at b09ed70, with one line added to S16 and one to R18's tests by Rio Grande's ruling on
+the plan review's Q1 (closed breakouts, 2026-10-14; access-removing only, so no new D8 round). It is the binding
+authority: where this plan and the spec disagree, the spec wins and the plan is wrong. The spec's two review maps walk every item of its D8 review and re-check. Read the spec's
 S1–S16, R1–R18, Error handling and Deploy before Task 1. Line references below are to b09ed70 (base 7cdbb1f).
 
 **Reviews:**
@@ -37,11 +38,16 @@ S1–S16, R1–R18, Error handling and Deploy before Task 1. Line references bel
 - Before merge, a fresh reviewer with no history of this work reviews the whole branch (Task 12). Merging, restarting
   and checking follow section 2 of the station law and the spec's Deploy section (Task 13). **Deploy steps 4 and 5 wait
   for Andy's go-ahead.**
+- This revision of the plan applies a fresh reviewer's plan review of 48678cf in full (2 must-fix, 5 should-fix, 6
+  nits), as Rio Grande ruled, and his ruling on its Q1.
 
 **Checked before commit:** every task's edits were applied, as written, to a scratch export of b09ed70 (with main's
-`ships.py` and `memos.py`) on the Pi. The 55 new tests passed, as did the rest of the peer suite except the browser tests
-(497 in all) and the agent suite. Every mutation in the tasks' tables failed the test it names. The executor still runs
-each red step and each mutation: the check proves the code and tests fit together, not that a later edit keeps them so.
+`ships.py` and `memos.py`) on the Pi, for 48678cf and again for this revision. The 60 new tests passed (10 in
+`test_backups.py`, 20 in `test_restore.py`, 26 in `test_alerts.py`, 3 in `test_station_units.py` and 1 in
+`test_ship_agent.py`), as did the rest of the peer suite except the browser tests (501 in all), the agent suite and the
+team suite. Every mutation row this revision adds, and most of the earlier ones, failed the test it names. The executor
+still runs each red step and each mutation: the check proves the code and tests fit together, not that a later edit
+keeps them so.
 
 ## Global Constraints
 
@@ -146,7 +152,8 @@ each red step and each mutation: the check proves the code and tests fit togethe
 - **Names** (signatures later tasks rely on):
   - `backups.BackupError(code, reason=None)` with `.code` and `.reason`; `backups.ReconcileRefused(ValueError)`;
   - `backups.default_backup_dir(data_dir) -> Path`; `backups.copy_stamp(now) -> str`; `backups.copy_time(path) -> float`;
-  - `backups.rotation(directory) -> list[Path]`; `backups.newest_copy(directory) -> Path | None`;
+  - `backups._stamp_ok(name) -> bool`; `backups.rotation(directory) -> list[Path]`;
+    `backups.newest_copy(directory) -> Path | None`;
     `backups.keep(names) -> set[str]`; `backups.prune(directory, now)`; `backups.rotation_lock(directory)`;
   - `backups.run_backup(data_dir, backup_dir, *, output=None, copy_to='', clock=time.time, sleep=time.sleep) -> Path`;
   - `backups.free_bytes(path) -> int`, `backups._check(db, pragma) -> bool`, `backups._publish(tmp, final)`,
@@ -158,7 +165,8 @@ each red step and each mutation: the check proves the code and tests fit togethe
     `backups.restore_test(backup_dir, backup=None) -> dict` with `backup`, `port`, `counts`;
   - `alerts.Refused`; `alerts.systemd_fields(environ, monitor) -> dict`; `alerts.kind_for(unit, monitor) -> str`;
     `alerts.render(alert) -> str`; `alerts.failure_reason(alert) -> str`;
-  - `alerts.record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT) -> dict | None`;
+  - `alerts._state(value) -> dict` (one unit's `rate.json` record, sanitised);
+    `alerts.record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT) -> dict | None`;
     `alerts.station_alert(data_dir, unit, *, monitor, environ, now=None) -> dict | None`;
     `alerts.clean(alerts_dir, now)`; `alerts.queued(alerts_dir) -> list[dict]`;
     `alerts.listed(alerts_dir, now) -> list[dict]`; `alerts.notices_beside(data_dir, backup_dir, now) -> list | None`;
@@ -222,6 +230,17 @@ One swap: the reconcile (S16, Task 6) comes before the restore test (S7, Task 7)
 - **The reconcile:** spaces are reported like rooms (short id and name); a peer's short id is 12 hex characters; a
   sequence the replaced file lacks is raised by 1,000,000 (fail closed); a law layer active in the replaced file but
   missing from the copy is reported too.
+- **The reconcile fails closed on Andy's likeliest slips at runbook step 5** (plan review M2): a `--db` with a second
+  name (a hard link, which could be the live file), a `--replaced` that is the staged copy itself, and a replaced file
+  whose `events` sequence is lower than the copy's, which means `DB=` and `REPLACED=` were swapped. Equal sequences pass.
+- **A room or space that loses a member in the reconcile** has its `epoch` or `version` raised by one, as
+  `remove_participant` and `change_space_member` do, so a delivery queued under the old epoch is refused (review N6).
+- **The reconcile says when no active super admin remains** after it lowered one, and points at
+  `bootstrap-super-admin` (review N5).
+- **A name that matches the copy pattern but isn't a real time** (`peer-20261399T000000Z.sqlite3`) is not a rotation
+  copy: never read, pruned or counted as newest (review S1). A `rate.json` record of the wrong shape is sanitised field
+  by field (review S2). The notifier cleans old alert files on every run, clean stops included (review N1).
+- **`make station-units` never changes the mode of a directory that exists** (review N2).
 - **`make station-units`** enables the timers with `--now` (Deploy step 4 expects `list-timers` to show them), and
   writes the drop-in on every `superyak-ship-*.service` present as well (Known limits). The by-hand make targets run
   `uv run --locked --project peer`, as the other `station-*` targets do; the units run the venv's interpreter with `-I`.
@@ -610,7 +629,7 @@ git commit -m "Backups, task 1: a checked copy from a read-only connection, publ
 **Interfaces:**
 - Consumes: Task 1's `run_backup`, `rotation_lock`, `copy_stamp`, `STAMP`.
 - Produces: `COPY_NAME`, `TEMP_NAME`, `KEEP_DAYS`, `KEEP_WEEKS`, `TEMP_MAX_AGE`, `copy_time(path) -> float`,
-  `rotation(directory) -> list[Path]` (oldest first), `newest_copy(directory) -> Path | None`, `keep(names) -> set[str]`,
+  `_stamp_ok(name) -> bool`, `rotation(directory) -> list[Path]` (oldest first), `newest_copy(directory) -> Path | None`, `keep(names) -> set[str]`,
   `prune(directory, now)`. Task 4 prunes the copy off the Pi with `prune`; Tasks 7 and 10 use `newest_copy` and
   `copy_time`.
 
@@ -645,7 +664,8 @@ def test_retention_keeps_14_days_and_8_weeks_and_nothing_else(tmp_path):
     for extra in ('20261016T033110Z', '20261016T150000Z'):
         (rotation / f'peer-{extra}.sqlite3').write_bytes(b'copy')
     others = ['peer-20261007-083623-before-andy-password.sqlite3', 'peer.sqlite3.pre-instruction-layers-20261008-163222',
-              'peer-20260101T000000Z.sqlite3.bak', 'notes.txt']
+              'peer-20260101T000000Z.sqlite3.bak', 'notes.txt',
+              'peer-20261399T000000Z.sqlite3']        # matches the pattern but isn't a time: never newest, never pruned
     for name in others:
         (rotation / name).write_bytes(b'not a rotation copy')
     stale = [rotation / '.peer-20261001T033000Z-41.tmp', rotation / '.peer-20261001T033000Z-41.tmp-journal']
@@ -692,6 +712,16 @@ def copy_time(path):
     return calendar.timegm(time.strptime(COPY_NAME.fullmatch(Path(path).name)[1], STAMP))
 
 
+def _stamp_ok(name):
+    """A name that matches COPY_NAME and holds a real UTC time; peer-20261399T000000Z.sqlite3 only looks like one. A
+    stray one would otherwise sort newest: every backup would fail on the clock check and station-notices would crash."""
+    try:
+        time.strptime(COPY_NAME.fullmatch(name)[1], STAMP)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def rotation(directory):
     """The copies with a final name, oldest first. Symlinks and every other name are never read, moved or pruned."""
     try:
@@ -699,7 +729,7 @@ def rotation(directory):
     except FileNotFoundError:
         return []
     return sorted((Path(entry.path) for entry in entries
-                   if COPY_NAME.fullmatch(entry.name) and entry.is_file(follow_symlinks=False)), key=lambda path: path.name)
+                   if _stamp_ok(entry.name) and entry.is_file(follow_symlinks=False)), key=lambda path: path.name)
 
 
 def newest_copy(directory):
@@ -768,6 +798,7 @@ Expected: all passed.
 | R3: call `prune(backup_dir, now)` before `_checked_copy` | same |
 | R3: in `prune`, delete every file whose name starts with `peer-` | same |
 | R3: drop the clock check | same |
+| R3, review S1: `rotation` filters with `COPY_NAME.fullmatch` instead of `_stamp_ok` | same (the stray name sorts newest, so the run at `NOW` exits 1) |
 
 - [ ] **Step 6: Commit**
 
@@ -1179,6 +1210,7 @@ Create `peer/tests/test_restore.py`:
 """The restore (docs/superpowers/specs/2026-10-14-station-backups-alerts-design.md, S6, S7, S16; R7-R9, R18). Every
 test works in tmp_path; the restore test boots real loopback servers and stops every one of them."""
 from contextlib import closing
+import json
 import os
 from pathlib import Path
 import re
@@ -1286,7 +1318,8 @@ the most stressful moment. Every step only takes access away, in one transaction
   `reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time) -> dict` (the report),
   `describe_reconcile(report) -> str`, the step functions `_end_sessions`, `_use_invitations`, `_revoke_held_keys`,
   `_clear_uncollected`, `_expire_waiting`, `_raise_sequences`, `_revoke_owned_ship_keys`, `_revoke_like_replaced`,
-  `_remove_members_like_replaced`, `_lower_roles_like_replaced`, `_report_differences`, each
+  `_remove_members_like_replaced`, `_lower_roles_like_replaced`, `_close_breakouts_like_replaced` (Rio Grande's ruling
+  on the plan review's Q1), `_report_differences`, each
   `(db, old, now, report) -> None` and looked up by name at call time (tests patch one);
   `station-restore-reconcile --db FILE [--replaced FILE] [--live-data-dir DIR]`. Task 7 calls `reconcile(path)`.
 
@@ -1376,22 +1409,27 @@ def test_reconcile_rolls_back_when_a_step_fails(tmp_path, monkeypatch, capsys):
 
 def test_reconcile_without_the_replaced_file_fails_closed(tmp_path, capsys):
     """R18: without a usable replaced file every owned ship's keys are revoked, and the station's ships (no owner) keep
-    theirs. A replaced file of junk bytes gives the same result as none, and the report says it was treated as absent."""
+    theirs. A replaced file of junk bytes, or a symlink (here to the usable live file), gives the same result as none,
+    and the report says it was treated as absent and why."""
     store = Store(tmp_path / 'lighthouse')
     andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     serenity, serenity_key = docked(store, andy['id'], 'serenity')
     odo = store.create_station_ship('odo', 'Odo')
     odo_key = store.issue_ship_key(odo['id'])
-    for label, junk in (('replaced-none', False), ('replaced-junk', True)):
+    why = {None: 'not given', 'junk': 'treated as absent (it failed its check)', 'link': 'treated as absent (it is a symlink)'}
+    for label, replaced in (('replaced-none', None), ('replaced-junk', 'junk'), ('replaced-link', 'link')):
         copy = staged(tmp_path, store, label)
         args = ['--db', copy]
-        if junk:
+        if replaced == 'junk':
             (copy.parent / 'peer.sqlite3').write_bytes(os.urandom(8192))
+        elif replaced == 'link':
+            (copy.parent / 'peer.sqlite3').symlink_to(store.db_path)
+        if replaced:
             args += ['--replaced', copy.parent / 'peer.sqlite3']
         code, out, err = reconcile(capsys, *args)
         assert code == 0, err
         assert 'Ship keys revoked for: serenity.' in out.splitlines()
-        assert ('The replaced file was treated as absent (it failed its check).' in out) == junk
+        assert f'The replaced file was {why[replaced]}.' in out
         live = go_live(copy, tmp_path / f'live-{label}')
         with pytest.raises(Problem):
             live.ship_for_key(serenity_key)
@@ -1471,7 +1509,10 @@ def test_reconcile_takes_back_what_the_restore_revived(tmp_path, capsys):
         roles = {row['username']: row['is_admin'] for row in db.execute('SELECT username, is_admin FROM users')}
         crew = [row[0] for row in db.execute('SELECT user_id FROM space_members WHERE space_id=?', (space['id'],))]
         sessions = db.execute('SELECT count(*) FROM sessions').fetchone()[0]
+        counters = (db.execute('SELECT epoch FROM rooms WHERE id=?', (room['id'],)).fetchone()[0],
+                    db.execute('SELECT version FROM spaces WHERE id=?', (space['id'],)).fetchone()[0])
     assert (roles['jenn'], roles['patient'], roles['andy']) == (0, 0, 1)         # lowered, never raised
+    assert counters == (2, 2)            # raised once, as remove_participant and change_space_member do (review N6)
     assert patient['id'] not in crew
     with pytest.raises(Problem):
         live.redeem(invitation['token'], 'newcomer-again', 'Newcomer', 'long-password-newcomer')
@@ -1494,6 +1535,114 @@ def test_reconcile_takes_back_what_the_restore_revived(tmp_path, capsys):
                for line in lines)
     for secret in [key, token_hash(key), invitation['token'], token_hash(invitation['token']), session['token'], *hashes]:
         assert secret not in out
+
+
+def test_reconcile_takes_back_every_other_step(tmp_path, capsys):
+    """R18, S16 (plan review M1): the steps the main test doesn't reach. An activation, an approved request's uncollected
+    token and share link, a waiting docking, a remote room member, a super admin's role, a peer's pairing and the events
+    sequence. Lowering the only active super admin is said (review N5)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    store.bootstrap_super_admin('root', 'Root', tmp_path / 'activation.json')
+    activation = json.loads((tmp_path / 'activation.json').read_text())['token']
+    request = store.request_access('Eve', 'eve@example.org', '')
+    store.decide_access_request(andy['id'], request['id'], True)                  # approved; token not yet collected
+    waiting = store.start_docking('defiant', 'bazzite')                           # waiting for a person to confirm
+    room = store.create_room(andy['id'], 'Ops', [])
+    peer = 'ab' * 32
+    with store.transaction() as db:
+        db.execute("UPDATE access_requests SET share_url='https://login.tailscale.com/admin/invite/abc', share_status='ready' WHERE id=?", (request['id'],))
+        db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", (peer,))
+        db.execute("INSERT INTO remote_contacts(id, peer_id, user_id, name) VALUES('contact-1', ?, 'remote-user', 'Remote')", (peer,))
+        db.execute("INSERT INTO remote_room_members(room_id, contact_id) VALUES(?, 'contact-1')", (room['id'],))
+        db.execute('UPDATE users SET is_super_admin=1 WHERE id=?', (andy['id'],))
+    copy = staged(tmp_path, store)                                                # A
+    store.redeem(activation, 'root', 'Root', 'long-password-root')                # B moves on
+    with store.transaction() as db:
+        db.execute('DELETE FROM remote_room_members WHERE room_id=?', (room['id'],))
+        db.execute('UPDATE users SET is_super_admin=0 WHERE id=?', (andy['id'],))
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peer,))
+    store.send_message(andy['id'], room['id'], 'after-the-copy', 'an event after the copy')
+    with store.transaction() as db:
+        events = db.execute("SELECT seq FROM sqlite_sequence WHERE name='events'").fetchone()[0]
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    live = go_live(copy, tmp_path / 'live')
+    with pytest.raises(Problem):
+        live.redeem(activation, 'root', 'Root', 'long-password-root')
+    status = live.access_request_status(request['id'], request['secret'])
+    assert 'token' not in status and 'share_url' not in status
+    assert waiting['id'] not in [item['id'] for item in live.station_pending()]
+    with pytest.raises(Problem):
+        live.confirm_docking(andy['id'], waiting['id'], waiting['code'])
+    with live.transaction() as db:
+        assert db.execute('SELECT count(*) FROM remote_room_members').fetchone()[0] == 0
+        assert db.execute("SELECT is_super_admin FROM users WHERE username='andy'").fetchone()[0] == 0
+        assert live.emit(db, 'probe', 'probe', 1) > events
+    lines = out.splitlines()
+    assert f'Reported, not applied: peers whose pairing differs: {peer[:12]}.' in lines
+    assert any(line.startswith('No active super admin remains after lowering roles') for line in lines)
+    for secret in ['https://login.tailscale.com/admin/invite/abc', activation, token_hash(activation)]:
+        assert secret not in out
+
+
+def test_reconcile_without_a_replaced_file_raises_both_sequences(tmp_path, capsys):
+    """R18, S16 step 5 without a replaced file (plan review M1): mentions and events jump by SEQUENCE_JUMP."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    room = store.create_room(andy['id'], 'Ops', [])
+    store.send_message(andy['id'], room['id'], 'm1', 'hello')
+    copy = staged(tmp_path, store)
+    with closing(sqlite3.connect(copy)) as db:
+        before = dict(db.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('mentions', 'events')").fetchall())
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        after = dict(db.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('mentions', 'events')").fetchall())
+    assert after == {table: before.get(table, 0) + backups.SEQUENCE_JUMP for table in ('mentions', 'events')}
+
+
+def test_reconcile_refuses_a_hard_link_and_a_same_or_older_replaced_file(tmp_path, capsys):
+    """R18, S16 fails closed (plan review M2): a hard link to the live file elsewhere, --replaced naming the staged copy
+    itself, and a replaced file older than the staged copy (DB= and REPLACED= swapped) are each refused, and no file
+    changes."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    room = store.create_room(andy['id'], 'Ops', [])
+    older = staged(tmp_path, store, 'replaced-older')
+    store.send_message(andy['id'], room['id'], 'after-the-copy', 'an event after the copy')
+    newer = staged(tmp_path, store, 'replaced-newer')
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    os.link(store.db_path, elsewhere / 'peer-link.sqlite3')
+    for args, touched in [(['--db', elsewhere / 'peer-link.sqlite3'], store.db_path),
+                          (['--db', older, '--replaced', older], older),
+                          (['--db', newer, '--replaced', older], newer)]:
+        before = touched.read_bytes()
+        code, out, err = reconcile(capsys, *args)
+        assert code == 1 and err.startswith('Refused') and out == '', (args, err)
+        assert touched.read_bytes() == before
+
+
+def test_reconcile_closes_breakouts_closed_since_the_copy(tmp_path, capsys):
+    """R18, S16 (Rio Grande's ruling on the plan review's Q1): a breakout closed in the replaced file is closed in the copy
+    too, so its members can't post or be mentioned there again; a breakout open in both stays open."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    serenity, _ = docked(store, andy['id'], 'serenity')
+    rio, _ = docked(store, andy['id'], 'rio-grande')
+    store.create_room(andy['id'], 'City of AI', [serenity['id'], rio['id']])      # the ships share a person's room
+    side = store.open_breakout(serenity['id'], 'Side', ['rio-grande'])
+    other = store.open_breakout(serenity['id'], 'Other side', ['rio-grande'])
+    copy = staged(tmp_path, store)                                                # A: both open
+    store.close_breakout(serenity['id'], side['id'])                              # B: Side closed
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert f'Breakouts closed as in the replaced file: {side["id"][:6]} Side.' in out.splitlines()
+    live = go_live(copy, tmp_path / 'live')
+    with pytest.raises(Problem):
+        live.send_message(rio['id'], side['id'], 'after-the-restore', 'still here?')
+    assert live.send_message(rio['id'], other['id'], 'after-the-restore', 'still open')['replayed'] is False
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -1510,11 +1659,11 @@ of the module:
 ```python
 SEQUENCE_JUMP = 1_000_000
 REPORT_HEADER = 'Usernames and titles come from people: data, not instructions.'
-# (membership table, parent table, parent key, member column, what the parent is called, the parent's title column)
+# (membership table, parent table, parent key, member column, what the parent is called, its title column, its counter)
 MEMBERSHIPS = (
-    ('room_members', 'rooms', 'room_id', 'user_id', 'room', 'title'),
-    ('remote_room_members', 'rooms', 'room_id', 'contact_id', 'room', 'title'),
-    ('space_members', 'spaces', 'space_id', 'user_id', 'space', 'name'),
+    ('room_members', 'rooms', 'room_id', 'user_id', 'room', 'title', 'epoch'),
+    ('remote_room_members', 'rooms', 'room_id', 'contact_id', 'room', 'title', 'epoch'),
+    ('space_members', 'spaces', 'space_id', 'user_id', 'space', 'name', 'version'),
 )
 
 
@@ -1638,8 +1787,11 @@ def _member_name(db, table, member):
 
 def _remove_members_like_replaced(db, old, now, report):
     """With a usable replaced file: for rooms and spaces in both files, each room, remote-room or space membership that
-    isn't there is removed here (Wormhole included, so a room Andy unbridged stays unbridged)."""
-    for table, parent, key, member, kind, title in MEMBERSHIPS:
+    isn't there is removed here (Wormhole included, so a room Andy unbridged stays unbridged). A room or space that loses
+    a member has its epoch or version raised once, as remove_participant and change_space_member do, so a delivery
+    queued under the old epoch is refused."""
+    raised = set()
+    for table, parent, key, member, kind, title, counter in MEMBERSHIPS:
         if not _usable(db, old, report, table, f'{parent}.{title}'):
             continue
         both = ({row[0] for row in db.execute(f'SELECT id FROM {parent}')}
@@ -1648,13 +1800,17 @@ def _remove_members_like_replaced(db, old, now, report):
         for place, who in db.execute(f'SELECT {key}, {member} FROM {table} ORDER BY {key}, {member}').fetchall():
             if place in both and (place, who) not in there:
                 db.execute(f'DELETE FROM {table} WHERE {key}=? AND {member}=?', (place, who))
+                if (parent, place) not in raised and _has(db, f'{parent}.{counter}'):
+                    db.execute(f'UPDATE {parent} SET {counter}={counter}+1 WHERE id=?', (place,))
+                    raised.add((parent, place))
                 name = db.execute(f'SELECT {title} FROM {parent} WHERE id=?', (place,)).fetchone()[0]
                 report['removed'].append((_member_name(db, table, who), kind, place[:6], name))
 
 
 def _lower_roles_like_replaced(db, old, now, report):
     """With a usable replaced file: is_admin and is_super_admin come down to the replaced file's value where that is
-    lower. Never up."""
+    lower. Never up. When that leaves no active super admin, the report says so."""
+    lowered_super = False
     for column in ('is_admin', 'is_super_admin'):
         if not _usable(db, old, report, f'users.{column}'):
             continue
@@ -1662,8 +1818,22 @@ def _lower_roles_like_replaced(db, old, now, report):
         for row in db.execute(f'SELECT id, username, {column} FROM users ORDER BY username').fetchall():
             if row['id'] in there and there[row['id']] < row[column]:
                 db.execute(f'UPDATE users SET {column}=? WHERE id=?', (there[row['id']], row['id']))
+                lowered_super = lowered_super or column == 'is_super_admin'
                 if row['username'] not in report['lowered']:
                     report['lowered'].append(row['username'])
+    if lowered_super and _has(db, 'users.activation_pending'):
+        report['no_super_admin'] = db.execute('SELECT 1 FROM users WHERE is_super_admin=1 AND activation_pending=0').fetchone() is None
+
+
+def _close_breakouts_like_replaced(db, old, now, report):
+    """With a usable replaced file (Rio Grande's ruling on the plan review's Q1): a breakout closed there and still open
+    here is closed here, at the same time, so its members can't post or record mentions in it again."""
+    if not _usable(db, old, report, 'breakouts.closed', 'rooms.title'):
+        return
+    for room_id, closed in old.execute('SELECT room_id, closed FROM breakouts WHERE closed IS NOT NULL ORDER BY room_id').fetchall():
+        if db.execute('UPDATE breakouts SET closed=? WHERE room_id=? AND closed IS NULL', (closed, room_id)).rowcount:
+            title = db.execute('SELECT title FROM rooms WHERE id=?', (room_id,)).fetchone()
+            report['closed'].append((room_id[:6], title[0] if title else ''))
 
 
 def _title(draft):
@@ -1694,11 +1864,15 @@ def _report_differences(db, old, now, report):
 def _refuse(db_path, live_data_dir):
     """S16: never a file in the live data dir (the one --live-data-dir names, or any directory holding a dispatch.lock,
     which every directory a station has opened holds), never a symlink. The check runs on the file's real directory,
-    so a path, a symlinked parent or '..' can't fool it."""
+    so a path, a symlinked parent or '..' can't fool it. A file with a second name (a hard link) is refused too, since
+    the other name could be the live file (plan review M2)."""
     if db_path.is_symlink() or any(Path(f'{db_path}{end}').is_symlink() for end in ('-journal', '-wal', '-shm')):
         raise ReconcileRefused('Refused: the copy is a symlink. Stage a real file (runbook step 5).')
     if not db_path.is_file():
         raise ReconcileRefused(f'Refused: there is no file at {db_path}')
+    if db_path.stat().st_nlink > 1:
+        raise ReconcileRefused('Refused: the copy has another name (a hard link), so writing it could write another file. '
+                               'Stage a real copy with install (runbook step 5).')
     home = db_path.resolve().parent
     if os.path.lexists(home / 'dispatch.lock') or (live_data_dir is not None and home == Path(live_data_dir).resolve()):
         raise ReconcileRefused('Refused: that file is in a live data directory. Stage the copy in the replaced directory (runbook step 5).')
@@ -1734,12 +1908,20 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
     _refuse(db_path, live_data_dir)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
-              'passwords': [], 'layers': [], 'peers': [], 'skipped': [], 'not_compared': []}
+              'no_super_admin': False, 'closed': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
+              'not_compared': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
     try:
         if not _check(db, 'integrity_check'):
             raise ReconcileRefused('Refused: the copy failed its integrity check.')
+        # Plan review M2: the likeliest slips at runbook step 5. The live file always holds the copy's history and more,
+        # so its events sequence is never lower; a lower one means DB= and REPLACED= were swapped.
+        if old is not None and os.path.samefile(Path(replaced).absolute(), db_path):
+            raise ReconcileRefused('Refused: --replaced is the staged copy itself. REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
+        if old is not None and _has(old, 'events') and _has(db, 'events') and _sequence(old, 'events') < _sequence(db, 'events'):
+            raise ReconcileRefused('Refused: the replaced file is older than the staged copy. Are DB= and REPLACED= swapped? '
+                                   'DB= is the staged restored.sqlite3; REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
         db.execute('BEGIN IMMEDIATE')
         try:
             now = clock()
@@ -1748,7 +1930,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
             if old is None:
                 _revoke_owned_ship_keys(db, old, now, report)
             else:
-                for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced, _report_differences):
+                for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
+                             _close_breakouts_like_replaced, _report_differences):
                     step(db, old, now, report)
             db.execute('COMMIT')
         except BaseException:
@@ -1788,6 +1971,12 @@ def describe_reconcile(report):
                                              for who, kind, short, title in report['removed']) + '.')
     if report['lowered']:
         lines.append(f'Roles lowered for: {people(report["lowered"])}.')
+    if report['no_super_admin']:
+        lines.append('No active super admin remains after lowering roles: renew a pending one with bootstrap-super-admin '
+                     '--renew-activation, or reserve one with bootstrap-super-admin (runbook step 7).')
+    if report['closed']:
+        lines.append('Breakouts closed as in the replaced file: '
+                     + '; '.join(f'{short} {safe_line(title)}' for short, title in report['closed']) + '.')
     if report['passwords']:
         lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '
                      'Change again any that was changed for a reason.')
@@ -1853,6 +2042,21 @@ Expected: all passed.
 | R18: `COMMIT` instead of `ROLLBACK` in the `except` | `test_reconcile_rolls_back_when_a_step_fails` |
 | R18: `_usable` raises `ValueError` for a missing table instead of skipping it | `test_reconcile_skips_what_an_older_copy_lacks` |
 | R18: `_replaced` returns the connection even when `quick_check` fails | `test_reconcile_without_the_replaced_file_fails_closed` |
+| R18 (review N3): drop the symlink check in `_replaced` | `test_reconcile_without_the_replaced_file_fails_closed` |
+| R18 (review M1): step 2 skips `account_activations` | `test_reconcile_takes_back_every_other_step` |
+| R18 (review M1): `_clear_uncollected` keeps the values (`SET {column}={column}`) | same |
+| R18 (review M1): `_expire_waiting` skips dockings | same |
+| R18 (review M1): `_raise_sequences` raises only `mentions` | same |
+| R18 (review M1): drop the `remote_room_members` row of `MEMBERSHIPS` | same |
+| R18 (review M1): `_lower_roles_like_replaced` lowers only `is_admin` | same |
+| R18 (review M1): skip the peers block of `_report_differences` | same |
+| Review N5: never set `no_super_admin` | same |
+| R18 (review M1): `SEQUENCE_JUMP = 0` | `test_reconcile_without_a_replaced_file_raises_both_sequences` |
+| R18 (review M2): drop the `st_nlink` guard in `_refuse` | `test_reconcile_refuses_a_hard_link_and_a_same_or_older_replaced_file` |
+| R18 (review M2): drop the `samefile` guard | same |
+| R18 (review M2): drop the older-`events` guard | same |
+| R18 (Q1 ruling): drop `_close_breakouts_like_replaced` from the step tuple | `test_reconcile_closes_breakouts_closed_since_the_copy` |
+| Review N6: drop the epoch and version raise in `_remove_members_like_replaced` | `test_reconcile_takes_back_what_the_restore_revived` |
 
 - [ ] **Step 7: Run the whole peer suite and commit**
 
@@ -2336,7 +2540,8 @@ def utc(monkeypatch):
 
 def test_a_crash_queues_one_alert_and_a_clean_stop_queues_none(tmp_path, monkeypatch):
     """R10: ExecStopPost= with a failing result queues one 0600 stopped alert in a 0700 queue; success queues nothing; a
-    run outside systemd exits 2. The notifier also deletes alert files over 30 days old (S10)."""
+    run outside systemd exits 2. The notifier deletes alert files over 30 days old each time it runs, clean stops
+    included (S10, review N1)."""
     data = tmp_path / 'lighthouse'
     data.mkdir(mode=0o700)
     month_old = alerts.record(data / 'alerts', 'superyak-door.service', 'stopped', CRASH, time.time() - 31 * 86400)
@@ -2350,8 +2555,9 @@ def test_a_crash_queues_one_alert_and_a_clean_stop_queues_none(tmp_path, monkeyp
                            'systemd restarts it unless it was being stopped. Log on the Pi: journalctl --user-unit '
                            f"superyak-lighthouse.service --since '{local(one['at'] - 600, '%Y-%m-%d %H:%M')}'.")
     assert stat.S_IMODE(path.stat().st_mode) == 0o600 and stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    alerts.record(data / 'alerts', 'superyak-odo.service', 'stopped', CRASH, time.time() - 40 * 86400)
     under_systemd(monkeypatch, service_result='success', exit_code='killed', exit_status='TERM')
-    assert alert(data, 'superyak-door.service') == 0 and len(files(data)) == 1
+    assert alert(data, 'superyak-door.service') == 0 and [found['id'] for _, found in files(data)] == [one['id']]
     under_systemd(monkeypatch)
     assert alert(data, 'superyak-lighthouse.service') == 2 and len(files(data)) == 1
 
@@ -2615,14 +2821,13 @@ def station_alert(data_dir, unit, *, monitor, environ, now=None):
     if not isinstance(unit, str) or not UNIT.fullmatch(unit):
         raise Refused('the unit must look like superyak-<name>.service')
     fields = systemd_fields(environ, monitor)
-    if fields['result'] == 'success':
-        return None  # a clean stop: deploy restarts, systemctl stop, shutdown, and the stops Requires= carries along
     now = time.time() if now is None else now
     alerts_dir = Path(data_dir) / 'alerts'
     try:
-        alert = record(alerts_dir, unit, kind_for(unit, monitor), fields, now)
-        clean(alerts_dir, now)
-        return alert
+        clean(alerts_dir, now)  # S10: each time the notifier runs, clean stops included (review N1)
+        if fields['result'] == 'success':
+            return None  # a clean stop: deploy restarts, systemctl stop, shutdown, and the stops Requires= carries along
+        return record(alerts_dir, unit, kind_for(unit, monitor), fields, now)
     except OSError as error:
         print(f'station-alert: could not queue the alert for {unit}: {type(error).__name__}: {error.strerror or error}', file=sys.stderr)
         return None
@@ -2668,6 +2873,7 @@ Expected: all passed.
 | R12: keep an unknown result as given (`'result': result`) | same |
 | R12: `failure_reason` maps every exit code to `see the log` | `test_failed_backup_and_restore_runs_name_their_reason` |
 | Error handling: drop the `except OSError` in `station_alert` | `test_a_notifier_that_cannot_write_its_queue_exits_0` |
+| S10, review N1: clean only when an alert is queued (move `clean` after the `success` return) | `test_a_crash_queues_one_alert_and_a_clean_stop_queues_none` |
 
 - [ ] **Step 7: Commit**
 
@@ -2685,6 +2891,7 @@ git commit -m "Alerts, task 8: station-alert queues one checked line per failure
 **Interfaces:**
 - Consumes: Task 8.
 - Produces: `WINDOW`, `MAX_WINDOW`, `GIVE_UPS_PER_DAY`, `LOCK_WAIT`, `_rates(alerts_dir) -> dict`,
+  `_state(value) -> dict` (one unit's record with every field of the wrong type dropped),
   `record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT) -> dict | None` (None when held back).
   `alerts/rate.json` maps each unit to `{window, until, last, held, held_since, give_ups}`; Task 10's
   `describe_queue` reads `held` and `held_since` from it.
@@ -2789,6 +2996,20 @@ def _rates(alerts_dir):
     return rates if isinstance(rates, dict) else {}
 
 
+def _number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _state(value):
+    """One unit's record from rate.json. A field of the wrong type (a hand edit) is dropped, never fatal: a duplicate is
+    better than a lost alert (review S2)."""
+    value = value if isinstance(value, dict) else {}
+    state = {key: value[key] for key in ('window', 'until', 'last', 'held', 'held_since') if _number(value.get(key))}
+    give_ups = value.get('give_ups')
+    state['give_ups'] = [t for t in give_ups if _number(t)] if isinstance(give_ups, list) else []
+    return state
+
+
 def _hold(state, now, *, stop):
     state['held'] = state.get('held', 0) + 1
     state['held_since'] = state.get('held_since') or now
@@ -2807,8 +3028,7 @@ def record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT):
     with _lock(alerts_dir / '.lock', lock_wait) as locked:
         if locked:
             rates = _rates(alerts_dir)
-            state = rates.get(unit) if isinstance(rates.get(unit), dict) else {}
-            rates[unit] = state
+            state = rates[unit] = _state(rates.get(unit))
             if kind == 'stopped':
                 if now < state.get('until', 0):
                     _hold(state, now, stop=True)
@@ -2935,6 +3155,7 @@ def test_a_stale_backup_is_announced_once_per_lapse(tmp_path, capsys):
 
     assert alerts.notices_beside(data, rotation, now) is None
     rotation.mkdir(parents=True)
+    (rotation / 'peer-20261399T000000Z.sqlite3').write_bytes(b'not a time')   # review S1: never the newest copy
     assert alerts.notices_beside(data, rotation, now) == []
     old = copy(now - 36 * 3600)
     assert alerts.notices_beside(data, rotation, now) == []                         # exactly 36 hours: not more than
@@ -2958,7 +3179,8 @@ def test_a_stale_backup_is_announced_once_per_lapse(tmp_path, capsys):
 def test_a_junk_file_in_the_queue_is_skipped_not_fatal(tmp_path, capsys):
     """Review Focus 5: an empty alert file (a power cut after a rename), a half-written one, a hand-edited one with an at
     sign, and a garbled rate.json. station-notices skips what it can't read, lists the rest without the at sign and exits
-    0, because Odo runs it with check=True; the next alert still queues."""
+    0, because Odo runs it with check=True; the next alert still queues. A rate.json of the wrong shape loses no alert
+    and doesn't break station-alerts (review S2)."""
     store = Store(tmp_path / 'lighthouse')
     queue = store.data_dir / 'alerts'
     good = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, time.time())
@@ -2971,6 +3193,11 @@ def test_a_junk_file_in_the_queue_is_skipped_not_fatal(tmp_path, capsys):
     assert code == 0 and [notice['id'] for notice in json.loads(out)] == [f'alert-{good["id"]}', 'alert-0123456789ab']
     assert '@' not in out
     assert alerts.record(queue, 'superyak-lighthouse.service', 'stopped', CRASH, time.time()) is not None
+    wrong = {'superyak-door.service': {'until': 'x', 'window': 'y', 'held': 'z', 'held_since': 'w', 'give_ups': 'v'}}
+    (queue / 'rate.json').write_text(json.dumps(wrong))
+    assert 'Nothing is held back.' in alerts.describe_queue(queue, time.time())
+    assert alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, time.time()) is not None
+    assert alerts.record(queue, 'superyak-door.service', 'down', GIVE_UP, time.time()) is not None
 
 
 def test_station_alerts_shows_the_queue_and_what_is_held_back(tmp_path, capsys):
@@ -3090,8 +3317,8 @@ def describe_queue(alerts_dir, now):
     waiting = queued(alerts_dir)
     lines = ['Queued alerts, oldest first (Odo posts each once in Ops; files over 30 days old are deleted):'] if waiting else ['No alerts are queued.']
     lines += [f'  {_local(alert["at"], "%Y-%m-%d %H:%M")}  {alert["kind"]:<7}  {alert["unit"]}  {alert["id"]}' for alert in waiting]
-    held = [(unit, state) for unit, state in sorted(_rates(alerts_dir).items())
-            if UNIT.fullmatch(unit) and isinstance(state, dict) and state.get('held')]
+    held = [(unit, state) for unit, state in ((unit, _state(value)) for unit, value in sorted(_rates(alerts_dir).items()))
+            if UNIT.fullmatch(unit) and state.get('held') and state.get('held_since')]
     lines.append("Held back (counted in that unit's next stopped line, or only shown here):" if held else 'Nothing is held back.')
     lines += [f'  {unit}: {state["held"]} {"stop" if state["held"] == 1 else "stops"} held back since {_local(state["held_since"])}'
               for unit, state in held]
@@ -3159,6 +3386,7 @@ are unchanged and still pass.
 | R14: `<` instead of `<=` against `STALE_AFTER` | `test_a_stale_backup_is_announced_once_per_lapse` |
 | Review Focus 5: `queued` stops catching `ValueError` | `test_a_junk_file_in_the_queue_is_skipped_not_fatal` |
 | Review Focus 5: `listed` returns `alert['text']` without `safe_line` | same |
+| Review S2: `record` takes `rates.get(unit)` as it is, without `_state` | same |
 
 - [ ] **Step 8: Run all three suites and commit**
 
@@ -3301,7 +3529,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     for service in services:
         (units / f'{service}.service').write_text('[Service]\nExecStart=/bin/true\n')
     andys = units / 'superyak-door.service.d' / '10-andy.conf'
-    andys.parent.mkdir()
+    andys.parent.mkdir(mode=0o700)          # an existing directory keeps its mode (review N2)
     andys.write_text('[Service]\nNice=5\n')
     calls = tmp_path / 'systemctl.log'
     (shim / 'systemctl').write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\n')
@@ -3324,6 +3552,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
         assert stat.S_IMODE((units / name).stat().st_mode) == 0o644
     for service in services:
         assert (units / f'{service}.service.d' / '50-alerts.conf').read_bytes() == (UNITS / '50-alerts.conf').read_bytes()
+    assert stat.S_IMODE(andys.parent.stat().st_mode) == 0o700
     assert calls.read_text().splitlines() == ['--user daemon-reload',
                                               '--user enable --now superyak-backup.timer superyak-restore-test.timer']
     calls.unlink()
@@ -3486,9 +3715,9 @@ station-alerts:
 
 station-units:
 	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }
-	install -d -m 755 "$(SYSTEMD_USER)"
+	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
 	for unit in $(STATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
-	for service in $(ALERTED_SERVICES); do install -d -m 755 "$(SYSTEMD_USER)/$$service.service.d" && install -m 644 peer/systemd/50-alerts.conf "$(SYSTEMD_USER)/$$service.service.d/50-alerts.conf" || exit 1; done
+	for service in $(ALERTED_SERVICES); do d="$(SYSTEMD_USER)/$$service.service.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && install -m 644 peer/systemd/50-alerts.conf "$$d/50-alerts.conf" || exit 1; done
 	systemctl --user daemon-reload
 	systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer
 
@@ -3501,7 +3730,8 @@ station-units-remove:
 	systemctl --user daemon-reload
 ```
 
-`station-units` never edits the five unit files; it only adds files beside them. `station-units-remove` deletes only
+`station-units` never edits the five unit files; it only adds files beside them, and it never changes the mode of a
+directory that already exists (review N2). `station-units-remove` deletes only
 the five files it installed and `50-alerts.conf`, and removes a `.d` directory only when that leaves it empty.
 
 - [ ] **Step 5: Check the targets without running them**
@@ -3554,7 +3784,8 @@ Run every step on the Pi, from `~/superyak`.
    make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3"
    ```
    Leave out `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those
-   machines dock again. Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent
+   machines dock again. It refuses a swapped `DB=` and `REPLACED=`, the same file twice, and a hard link. Read its
+   report. Go on only when it exits 0. If it says the replaced file was treated as absent
    (for example "a hot journal beside it"), the room and space members, admins and law layers weren't compared: check
    them by hand in step 8. If the command was killed rather than finishing, run it again before going on: it rolls back
    what the killed run left when it opens the file.
@@ -3635,6 +3866,7 @@ elsewhere it is skipped.
 | Review Focus 2: `station-units-remove` runs `rm -rf "$$dir"` instead of removing only `50-alerts.conf` | `test_station_units_install_and_remove_only_their_own_files` |
 | Review Focus 2: drop the `superyak-ship-*` wildcard from `ALERTED_SERVICES` | same |
 | Review Focus 2: drop the `peer.sqlite3` refusal | same |
+| Review N2: create each `.d` directory with a bare `install -d -m 755 "$$d"` again | same |
 
 - [ ] **Step 11: Run all three suites and commit**
 
@@ -3667,7 +3899,7 @@ Run, from `/home/andy/superyak/.worktrees/backups-alerts`:
 - `cd team && uv run --locked --extra dev python -m pytest -q`
 
 Expected: all passed, with `test_units_pass_systemd_analyze_verify` run, not skipped. Then confirm that every test the
-spec names exists:
+spec names exists, and the plan review's three:
 
 ```bash
 for name in test_backup_copies_committed_data_from_a_read_only_connection test_copies_are_private_checked_and_appear_whole \
@@ -3681,7 +3913,9 @@ for name in test_backup_copies_committed_data_from_a_read_only_connection test_c
   test_monitor_kinds test_stopped_alerts_are_held_back_and_back_off_per_unit test_the_lock_fallback_queues_anyway \
   test_failed_backup_and_restore_runs_name_their_reason test_alert_lines_hold_no_log_lines_mentions_or_unchecked_values \
   test_notices_list_queued_alerts_and_are_unchanged_without_them test_notices_still_list_alerts_when_the_store_cannot_open \
-  test_a_stale_backup_is_announced_once_per_lapse test_odo_posts_a_queued_alert_in_ops_once test_units_say_what_the_spec_says; do
+  test_a_stale_backup_is_announced_once_per_lapse test_odo_posts_a_queued_alert_in_ops_once test_units_say_what_the_spec_says \
+  test_reconcile_closes_breakouts_closed_since_the_copy test_reconcile_takes_back_every_other_step \
+  test_reconcile_without_a_replaced_file_raises_both_sequences test_reconcile_refuses_a_hard_link_and_a_same_or_older_replaced_file; do
   grep -q "def $name(" peer/tests/*.py || echo "MISSING $name"
 done
 ```
@@ -3773,7 +4007,12 @@ Restart the lighthouse so it serves `/api/health`; Odo and Wormhole restart with
 systemctl --user restart superyak-lighthouse
 for unit in lighthouse odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done   # three lines ending in active
 curl -fsS https://smart.tail7db420.ts.net/api/health; echo   # expect {"ok":true}
+sleep 10
+for unit in lighthouse odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done   # still three active
 ```
+
+The units are `Type=simple`, so `restart` returns at the fork; the second `is-active` loop, about 10 s later, sees a
+crash the first can't.
 
 A loopback call gets 403 from the Host check unless it sends the origin's Host, so the check goes over the tailnet. If a
 unit isn't active or the body differs, show the log (`journalctl --user-unit superyak-lighthouse.service -n 50
@@ -3795,6 +4034,8 @@ systemctl --user list-timers 'superyak-*'                          # both timers
 systemctl --user show -p OnFailure -p ExecStopPost superyak-door   # OnFailure=superyak-alert@superyak-door.service.service and the station-alert ExecStopPost
 for unit in lighthouse door ship odo wormhole; do systemctl --user restart superyak-$unit; done
 for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done   # five lines ending in active
+sleep 10
+for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done   # still five active
 make station-alerts   # "No alerts are queued." and "Nothing is held back.": these were clean stops, through the new ExecStopPost=
 ```
 
@@ -3825,12 +4066,17 @@ systemctl --user reset-failed 'superyak-alert@superyak-alerttest.service.service
 
 Say in the room, without @mentions, what was installed, and that the two Ops lines from step 5 were the test. Say
 plainly that an outage of the lighthouse, Odo or the Pi is still silent until Andy picks a channel outside the station.
+Name the one item that is his (spec S15, Known limits): add `-I` to Odo's `--notices-command` in his odo unit, so Odo's
+workspace stays off `sys.path` for the command this branch extends.
 
 - [ ] **Step 7: Rollback**
 
 1. `make station-units-remove`: the timers are disabled and the units and drop-ins removed, then `daemon-reload`; it
    also stops a running backup or restore test and resets their failed state. Skip this step if the units were never
-   installed.
+   installed. If step 5 ran, also stop its test unit, which may still be restarting:
+   ```bash
+   systemctl --user stop superyak-alerttest 2>/dev/null; systemctl --user reset-failed superyak-alerttest 'superyak-alert@superyak-alerttest.service.service' 2>/dev/null || true
+   ```
 2. Revert the merge as earlier Deploy sections do, and restart the five:
    - **Before the push:** check that `git -C /home/andy/superyak log -1 --oneline ORIG_HEAD` is main from before the
      merge, then `git -C /home/andy/superyak reset --hard ORIG_HEAD`.
@@ -3845,6 +4091,8 @@ plainly that an outage of the lighthouse, Odo or the Pi is still silent until An
      ```bash
      for unit in lighthouse door ship odo wormhole; do systemctl --user restart superyak-$unit; done
      for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done
+     sleep 10
+     for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done   # still five active
      ```
      and announce the revert in the room. Bringing the feature back after a pushed revert means reverting that revert,
      not merging the branch again.
