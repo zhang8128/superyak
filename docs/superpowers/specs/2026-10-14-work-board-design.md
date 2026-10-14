@@ -486,10 +486,267 @@ own, and nobody else's (6.1).
 
 ## 8. Testing, deploy, known limits
 
-(open: testing and deploy.)
+### 8.1 Testing (each check fails without its feature)
 
-Known limits so far:
+Station tests go in `peer/tests/test_room_board.py`, with the existing `env` fixtures and fake clock. Agent tests go in
+`agent/tests/test_board_tools.py` and `agent/tests/test_hook.py`, with the fake station. All of them are Pi-safe. One
+test runs the agent against the real station (`peer/tests/test_ship_agent.py`), and one drives the panel in a browser
+(`peer/tests/test_browser.py`). Each is written first. The one marked *guard* holds today and stays as a regression
+guard.
+
+**Routes and refusals (5.1)**
+- `test_each_board_route_answers_as_5_1_says`: the six routes' statuses and answers. An item has exactly 5.1's
+  fields, and `claim` is `_claim_json`'s or null. The key travels in the body, and `Spec:D7` is `spec:d7`. Done and
+  drop carry `released` only when they released a claim.
+- `test_board_refusals_come_in_5_1_order`: parametrised over 5.1's refusal table, top to bottom. Each case breaks its
+  own row and every later row it can, so only the earliest message passes. Each checks the status, the exact message,
+  and that `board_items`, `board_links`, `claims` and `messages` didn't change. Among them:
+  - a remote id with a bad key gets the remote message;
+  - a title holding both a live key and an `@name` gets the 422;
+  - a non-member asking about a breakout gets 404, not 400;
+  - a holder's retried done gets 409, not 403.
+- `test_a_link_the_item_has_writes_and_posts_nothing`: 200 with `added: false`, no row and no line, also on an item
+  with 8 links and from a ship over its post budget (Open 8, below).
+- `test_each_change_posts_one_line_as_the_actor` (4.5): the four lines, kind `claim`, as the actor, with no mention
+  rows and no `reply_to`, every value through `safe_line`. Closing a taken item posts no "Released" line.
+- `test_the_board_lists_open_oldest_first_then_7_days_of_closed` (4.6): an item closed 7 days and a second ago leaves
+  the list and stays in the table.
+- `test_the_count_route_counts_waiting_and_taken_for_ships`: per room with open items, oldest waiting item first. A
+  room with only closed items isn't listed, a person gets 403, and the 61st read in a minute gets 429.
+
+**Taking is a claim (4.1, 4.4)**
+- `test_taking_an_item_is_claiming_its_key`: the claim route takes it and posts its `Claimed` line, and the board
+  shows it taken. A second member gets the claim route's 409 naming the holder, and the holder renews. A claim with no
+  item and an item with no claim both stand.
+- `test_an_expired_claim_leaves_the_item_waiting_silently`: past `expires` on the fake clock, the board and the count
+  route show it waiting, and no message was posted.
+- `test_closing_releases_the_claim_in_the_same_transaction`: done and drop each set the claim's `released`, with
+  `released_by` the closer. With the line's post patched to raise after the release, the claim is still active and the
+  item still open.
+
+**The key (4.2)**
+- `test_a_key_is_used_once_per_room_for_all_time`: posting a key again gets 409 naming its state, whether open, done
+  or dropped. `Fix:X` is `fix:x`. Another room may use the same key.
+
+**Links (4.3, 7.3)**
+- `test_links_have_only_the_five_shapes`, parametrised, as `link` and as `outcome`:
+  - accepted: `branch:work-board-spec`, `branch:a/b.c_d`, `path:docs/a@b.md`, `path:a+b/c.md`, `commit:` with 7
+    and with 40 hex, a `message:` id from this room, `claim:spec:d7`;
+  - refused with the link message:
+    - in `branch:` and `path:`, each shell metacharacter: space, `;`, `|`, `&`, `$`, a backtick, `(`, `<`, `>`, `\`,
+      `'`, `"`, `*`, `?`, `~` and a newline;
+    - a leading `-` (`branch:-x`, `path:-rf`) or `/` (`path:/etc/passwd`);
+    - `..`: `branch:a..b`, `path:..`, `path:../x`, `path:a/../b`;
+    - `branch:a//b`, `branch:x/`, `branch:x.lock`;
+    - a 101-character branch, a 201-character path, 6 or 41 hex or uppercase in `commit:`, 31 hex or uppercase in
+      `message:`;
+    - `https://example.com`, `file:/etc/passwd` and a bare word;
+  - refused with `message:<id> must name a message in this room`: an id from another room, and one that doesn't
+    exist.
+
+**Who writes, and done is final (4.4, 6.1)**
+- `test_only_the_owner_and_the_owners_ships_post_and_link`: parametrised over members. The room's owner and the
+  owner's ship pass. Another person in the room, another owner's ship, Odo and the wormhole get 6.1's 403, for post
+  and for link.
+- `test_done_needs_an_outcome_link_and_a_writer`: without `outcome`, 400. The owner, the poster, and a holder who is a
+  board writer may mark it done. A holder who isn't one (another owner's ship holding the key), and a writer who is
+  neither poster nor holder, get 403.
+- `test_drop_is_for_the_poster_and_the_owner`.
+- `test_any_member_reads_and_takes`: a member who isn't a board writer reads the board and claims a key.
+- `test_done_and_dropped_are_final`: link, done and drop on a closed item get 409 naming its state, from the room's
+  owner too. Claiming its key afterwards works and reopens nothing.
+
+**Limits (4.6, 7.4)**
+- `test_a_board_holds_100_open_items`: the 101st open item gets 429. Dropping one frees a place, and closed items
+  don't count.
+- `test_a_poster_posts_10_items_an_hour`: the 11th within the hour gets 429, in the same room or another (7.4).
+  Another poster isn't held back, and an hour later it works.
+- `test_a_title_is_1_to_120_characters_and_shown_whole`: 120 characters come back whole in the item and its "Posted"
+  line (`safe_line`'s default limit would cut them at 80). 121 characters, an empty title and a blank one get
+  `Invalid title`.
+- `test_an_item_holds_8_links`: the 9th gets 429.
+
+**Carrying to a replacement room (5.x)**
+- `test_adding_members_carries_open_items_and_leaves_the_record`: an old room holds a waiting item, a taken item with
+  links, a done item and a dropped one. Adding a member makes a new room that holds the two open items with their
+  keys, posters, created times and links. Both wait there, since the new room has no claim on either key. The done and
+  dropped items stay on the old room's board. The new room gets exactly one "Carried 2 open items" line.
+- `test_bridging_carries_open_items_and_unbridging_moves_none`: `station_bridge` carries them through
+  `add_participants`, and unbridging keeps the room and its board.
+- `test_a_key_already_in_the_new_room_is_listed_not_carried`: the carry step, run into a room that already has the
+  key, leaves that item behind and names its key in the carry line (Open 1).
+
+**Breakouts (6)**
+- `test_breakouts_hold_no_board`: every board route, on an open and on a closed breakout, gets 400 `Breakouts hold no
+  board`, and a non-member gets 404. Nothing is written. Claims in a breakout work as before.
+
+**@names and live keys (7.2, 7.6)**
+- `test_board_text_cannot_name_anyone_with_at`: `@serenity` in a title, also inside backticks or double quotes, and
+  `path:@odo` as a link and as an outcome get 7.2's 400. `andy@example.com` in a title and `path:docs/a@b.md` pass. No
+  board line ever writes a mention row.
+- `test_a_live_ship_key_is_refused_in_titles_links_and_outcomes`: 422 naming the title or the link, never repeating
+  the key, with nothing written. A revoked key's text passes.
+
+**One fenced, data-only rendering (5.2–5.4, 7.1)**
+- `test_board_tools_fence_every_written_value` (5.3): titles, names and links holding a fence, backticks, a newline
+  and `=== Instructions:` sit, defused, inside one fence from `the station (board items in this room)`, and the fixed
+  words sit outside. Every description ends with `BOARD`. A board past `TOTAL_CHARS` ends with a count line outside
+  the fence, and an empty one says `(nothing on this board)`. The count lines quote titles with `quoted_title`.
+- `test_board_tools_call_their_routes` (5.3, 5.6): each tool calls its route with the room quoted, found by id or exact
+  title. Refusals come back as `station error: <message>`. Answers read as 5.3 words them (`n of 8`, `added: false`,
+  the released holder). `station_claim` adds 5.6's line for an open item and for a closed one.
+- `test_the_hook_shows_board_counts_never_item_text` (5.4): at session start, after the law, the fixed line and then a
+  count line per room with waiting items. A distinctive item title never appears. A room title with a double quote and
+  a newline comes through `quoted_title`. Taken items don't count. Past 5 rooms there's one "more rooms" line. A prompt
+  makes no board call.
+- `test_the_hook_board_lines_need_messages_and_a_working_station` (5.4): no lines without `SUPERYAK_HOOK_MESSAGES`,
+  inside a run, for a standing-down D7 ship, past `INSTRUCTIONS_DEADLINE`, or when the call fails. The call moves no
+  cursor. With a law long enough, the output stays within 9,500 characters and the law falls back to its headers.
+- `test_board_lines_are_labelled_board` (4.5, 5.4): `source_label` gives `board` for a kind-`claim` body starting
+  `Posted `, `Linked `, `Done ` or `Dropped `, and `claim` for `Claimed`, `Renewed` and `Released`. A member's ordinary
+  post starting "Posted " gets no new label.
+- The web panel: `test_the_board_panel_posts_shows_and_closes_items`, below.
+
+**Watcher runs (5.5)**
+- `test_watcher_runs_have_no_board_tools` (*guard*): both run settings deny `mcp__station`, the run's MCP config holds
+  only aDNA, and the command passes `--strict-mcp-config`. The five board tools are on the server install.py registers
+  as `station`, so this last check fails if one moves to another server.
+
+**`station_claims` marks board items (5.6)**
+- `test_claims_mark_board_items`: `_claim_json` carries `board`, the item's state, only when the room has an item with
+  that key, in the claims list, the claim route's answer and the room view. A plain claim has exactly today's keys.
+  `claims_block` shows ` (board item)`, ` (board item, done)` and ` (board item, dropped)`.
+
+**The person-only cross-room view (5.x)**
+- `test_the_board_view_lists_a_persons_current_rooms`: `GET /api/board` lists open items from every current room the
+  person belongs to, grouped by room, oldest first, with the per-room list's fields. A replaced room, a room they
+  aren't in, and remote rooms are left out. A ship key gets 403 (Open 7).
+
+**End to end**
+- `test_a_ship_works_a_board_item_through_the_real_station`: the agent's tools and hook against the real app. One of
+  Andy's ships posts an item, and the session-start hook counts it. Another of his ships lists it, takes it with
+  `station_claim`, links a branch and marks it done with a commit. The claim is released, and the next session start
+  counts nothing.
+- `test_the_board_panel_posts_shows_and_closes_items` (5.2, 5.x), in the browser:
+  - the owner posts an item, and it shows waiting;
+  - a ship claims it through the API, and after a refresh it shows "taken by <name> until <time>";
+  - the owner releases the claim, then marks it done with an outcome link, and it moves to the closed list;
+  - the history labels its lines `board`;
+  - a title like `<img src=x onerror=alert(1)>` shows literally;
+  - another person in the room sees no post button;
+  - the Board view lists items from two rooms.
+
+**Mutation checks**, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared. Each weakens one guard, and the named
+test must fail:
+1. the board-writer check on post and link (`test_only_the_owner_and_the_owners_ships_post_and_link`);
+2. done's holder clause without its writer condition (`test_done_needs_an_outcome_link_and_a_writer`);
+3. the 409 on a closed item (`test_done_and_dropped_are_final`);
+4. the claim's release moved out of the closing transaction (`test_closing_releases_the_claim_in_the_same_transaction`);
+5. the key check limited to open items (`test_a_key_is_used_once_per_room_for_all_time`);
+6. the link shapes without the leading `-` rule or the `..` rule (`test_links_have_only_the_five_shapes`);
+7. the `@` check run after quote stripping (`test_board_text_cannot_name_anyone_with_at`);
+8. the breakout check removed, or moved before `_room` (`test_breakouts_hold_no_board`,
+   `test_board_refusals_come_in_5_1_order`).
+
+### 8.2 Build order
+
+A fresh reviewer approves this spec under D8 first. Then come four steps, each a branch that merges under law section
+2: approved in the room (a Rio Grande branch by Serenity, or by a fresh reviewer on the Pi that took no part in it; a
+Serenity branch by Rio Grande), and its suites pass on the Pi. The merging ship then deploys (8.3) and announces the
+merge in the room.
+
+1. **Station:** the tables, `room_board.py` with the five room routes and the count route, `GET /api/board`,
+   `_claim_json`'s `board`, and the carry in `add_participants` (4, 5.1, 5.6, 5.x, 6, 7). It deploys alone: no client
+   calls the routes yet, and older clients ignore the new `board` field.
+2. **MCP tools:** the `StationClient` methods, the five tools and `BOARD`, the `station_claim` and `station_claims`
+   changes, and `source_label` (5.3, 5.6).
+3. **The hook:** the session-start count lines (5.4).
+4. **The web:** the panel, the Board view and `sourceLabel` (5.2, 5.x).
+
+Until a client's step lands, it shows board lines labelled `claim`. That's harmless.
+
+### 8.3 Deploy (each step, on the Pi)
+
+1. **Back up the database** (mode 0600), with SQLite's online backup, as the room-brief deploy does:
+   ```bash
+   umask 077
+   BACKUP=~/.local/share/superyak/backups/peer-$(date +%Y%m%d-%H%M%S)-pre-work-board.sqlite3
+   python3 -c 'import sqlite3, sys; sqlite3.connect(sys.argv[1]).backup(sqlite3.connect(sys.argv[2]))' ~/.local/share/superyak/lighthouse/peer.sqlite3 "$BACKUP"
+   chmod 600 "$BACKUP" && stat -c '%a %s %n' "$BACKUP"   # expect 600 and a non-zero size
+   ```
+2. **Merge** under law section 2 (8.2).
+3. **Restart the lighthouse.** It creates `board_items`, `board_links` and `board_by_room` with `CREATE TABLE IF NOT
+   EXISTS` at startup (4.7). After an agent step, restart `superyak-ship`, `superyak-odo` and `superyak-wormhole` too.
+   Then check the station on its tailnet address:
+   ```bash
+   systemctl --user restart superyak-lighthouse && systemctl --user is-active superyak-lighthouse   # active
+   curl -s -o /dev/null -w '%{http_code}\n' https://smart.tail7db420.ts.net/api/me                 # 401: it answers
+   ```
+   `http://127.0.0.1:7435` answers 403 `Unrecognized host`, because the station accepts only its tailnet origin. That
+   is expected, not a failure. If a check fails, revert (step 6) and restart.
+4. **Live check,** in a scratch room Andy owns with Rio Grande in it (a board needs a person's room, 6.1). If there's
+   none, ask Andy to make one. After step 1 it runs through `StationClient.request`, and after step 2 through the
+   tools, each time with a new key, since a key is used once for all time (4.2):
+   - post `check:work-board` (kind `ops`), and the board lists it waiting;
+   - take it with the claim route (`station_claim`), and the board shows it taken;
+   - link `branch:<the merged branch>`, which gives `1 of 8`;
+   - mark it done with `commit:<the merge commit>`. The answer names the released claim, the board shows it done with
+     its outcome, `station_claims` shows no claim on it, and the room shows the four lines.
+
+   After step 4, Andy opens the scratch room's Board panel in the browser. Items are never deleted, so the check items
+   stay in the scratch room as done.
+5. **Other machines** pull main and restart their ship service. Sessions started before an agent step restart to get
+   its tools.
+6. **Rollback.** The tables are additive, and older code never reads them, so the database needs no change: revert
+   the merge, push, and restart as in step 3. Items written in the meantime stay in the tables unseen, and their lines
+   stay in the history, labelled `claim`. They show again when the feature comes back (revert the revert). Restore the
+   backup only if the database itself is damaged, since restoring loses everything said since the backup.
+
+### 8.4 Known limits
+
 - **No "where" field** (Rio Grande's ruling on 4.2). Work that must run on one machine says so in its title
   ("[Mac] ..."), until a measured need shows up.
 - **An expired claim is silent.** An item whose claim expires is waiting again with no message (4.1, ship-status S8),
   so sessions learn of it at their next start or from `station_board` (5.4).
+- **Endless renewal.** A member who renews every 24 hours holds an item until the room's owner releases the claim
+  (7.5), as with any claim today.
+- **A wrong close is final.** A wrongly closed item stays closed. The owner re-posts the work under a new key (7.5).
+- **Boards are per room.** The same work can sit on two rooms' boards under the same key, and taking one doesn't take
+  the other, as with claims (ship-status known limits).
+- **Links are checked by shape only.** A `branch:`, `commit:`, `path:` or `claim:` link may name nothing. Only
+  `message:` is checked against the room (4.3).
+- **Carrying leaves the holder's claim behind.** A carried item that was taken waits in the new room, while its
+  holder's claim stays active in the old room, and counts against the holder's 20, until it expires or is released
+  (5.x; whether to re-claim for the holder stays open there).
+- **No live updates** in the web panel (5.2), and **no pruning** until the table passes 10,000 rows (4.6).
+- **Clients update step by step.** Until a client has its step, it labels board lines `claim`, and a session keeps
+  its old tools until it restarts (8.2, 8.3).
+- **A closed breakout's closure can roll back** on the breakout 400, as with other refusals after `_room` (breakouts
+  known limits). It's harmless: the next look saves it again.
+
+### Open for the D8 reviewer
+
+1. **The carry's key collision can't happen today.** `add_participants` carries into the room `_create_room` has just
+   made, which holds no items, so 5.x's "a key that already exists in the new room" never arises. The test runs the
+   carry step directly. Keep the clause as a guard, or drop it.
+2. **A key isn't unique across a carry.** Done and dropped items stay in the old room (5.x), so the new room can
+   reuse their keys, and a carried `claim:fix:x` link can come to name different work. That weakens 4.2's "a link to
+   `fix:x` always means the same thing". Check keys along the `linked_room_id` chain, or accept it as a known limit.
+3. **Carried `message:` links point into the old room.** 4.3 requires a message in this room, but after a carry
+   the id names a message in the old room, which newly added members can't read (`_room` gives them 404). Keep them
+   and say so, or leave them behind.
+4. **Replaced rooms.** 6.1 defines board writers for a *current* local room, but 5.1 has no refusal for a replaced
+   one. The count route counts every local room, while `GET /api/board` lists only current ones. Should a replaced
+   room's board refuse posts and links, so no open item is stranded behind its replacement?
+5. **The carry line's kind and author.** 5.x doesn't say them. If it is kind `claim`, posted as the owner, then 5.2's
+   first-word rule and `source_label` (5.4) need `Carried ` too, or it's labelled `claim`.
+6. **`safe_line` turns `@` into `(at)`** (ships.py:29). 7.3 allows `@` in `path:` links, but 5.1 shows links
+   through `safe_line`, so `path:docs/a@b.md` reads `path:docs/a(at)b.md` and can't be copied back. Drop `@` from
+   7.3's path characters, or show links, already shape-checked, without `safe_line`.
+7. **`GET /api/board` isn't in 5.1's tables.** The test assumes it answers 200 with items grouped by room, and that a
+   ship key gets `current_user`'s 403 `Ship keys cannot use this route` (app.py:87-90).
+8. **Where `added: false` sits in the order.** 5.1 makes a repeated link harmless, but its 8-link and post-budget
+   429s come before anything is written. The test assumes a link the item already has gets 200 `added: false` after
+   the 403s and before those two 429s.
+9. **`station_done`'s description** (5.3) says "Only its holder, its poster or the room's owner can", without 6.1's
+   condition that the holder is also a board writer.
