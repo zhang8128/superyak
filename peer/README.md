@@ -305,6 +305,19 @@ current again). The bridge itself only relays rooms owned by the people its `--o
 never relays a brief. Unbridging keeps the room and its brief. In the parent
 repository these are `make station-rooms`, `make station-bridge ID=…` and `make station-unbridge ID=…`.
 
+Backups, the restore test and service alerts are trusted local commands too (spec
+`docs/superpowers/specs/2026-10-14-station-backups-alerts-design.md` in the parent repository). `station-backup` writes a
+checked copy of `peer.sqlite3` into the rotation, `backups/station/` beside the data directory, and keeps 14 nightly and
+8 weekly copies; `--output FILE` writes one copy elsewhere and never replaces a file. `station-restore-test` boots a
+throwaway loopback station from the newest copy. `station-restore-reconcile` takes back, on a staged copy, the access a
+restore would revive. `station-alert` runs under systemd only and queues one line in `alerts/` in the data directory,
+which `station-notices` lists for Odo to post in `Ops`; `station-alerts` shows the queue. In the parent repository these
+are `make station-backup [OUTPUT=…]`, `make station-restore-test [BACKUP=…]`, `make station-restore-reconcile DB=…
+[REPLACED=…]` and `make station-alerts`; `make station-units` installs the timers, the alert handler and the alert
+drop-ins on the station host, and `make station-units-remove` undoes it. Restoring over the live file is a person's
+step: `docs/station-restore.md`. A deploy that changes the schema runs `make station-restore-test` after its restart,
+and takes its pre-deploy copy with `make station-backup OUTPUT=…`.
+
 Create the resident ship, which has no owner and a private agent config holding its key:
 
 ```sh
