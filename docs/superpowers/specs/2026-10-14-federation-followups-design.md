@@ -1,7 +1,8 @@
 # Federation follow-ups: the unverified mark in the browser, and delivery state only from this station
 
-Status: revision 2, for the same reviewer's re-check. Revision 1 (5507c0e) had the fresh reviewer's verdict, APPROVE
-WITH CHANGES (4 should-fix, 5 nits; room message 98d2778d): see "Review map". Base: `main` (3b48646). Branch
+Status: revision 2, **approved under D8**. Revision 1 (5507c0e) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+(4 should-fix, 5 nits; room message 98d2778d); the same reviewer's re-check of revision 2 (dd76d28) is APPROVE, with
+three nits taken here (see "Review map"). Base: `main` (3b48646). Branch
 `federation-followups`. Roadmap phase 4, claimed by Serenity as `fix:federation-followups`. Both items are the
 follow-ups left by the merge of federation-own-author (d15ab04): "the browser doesn't show the unverified mark, and a
 remote message's state should come only from the local outbox."
@@ -25,8 +26,8 @@ neighbour in the city, so both are about whose word a person reads.
 - **Fix:**
   - When `message.unverified` is true, the author line reads **"Unverified: the room's host says this is from someone
     on this station"**, static and escaped as today.
-  - The message element gets the class `unverified`, styled in app.css as `.message.unverified { border-style:
-    dashed; }`.
+  - The message element gets the class `unverified`, styled in app.css as `.message.unverified { border: 1px dashed
+    var(--muted); padding: 11px 14px; }`: the padding gives back the border's pixel, so the bubble keeps its size.
   - `mine` stays false (the author id matches no local user). The label comes only from the server's flag, and F2's
     allowlist keeps an origin from setting it.
 
@@ -60,7 +61,7 @@ neighbour in the city, so both are about whose word a person reads.
 - **PROTOCOL.md** (room.message, after the verified/unverified sentence, :132-139) gains: "A received message's
   delivery state is the receiver's alone: its own reply shows delivered once the origin's copy matches its outbox row,
   a reply still queued shows that row's status, and any state the origin sends is ignored. A second copy of a verified
-  reply is shown as unverified: it may be a replay, not tampering."
+  reply is shown as unverified: it may be a replay, and this station cannot tell a replay from a forgery."
 
 ## Requirements
 
@@ -99,7 +100,7 @@ neighbour in the city, so both are about whose word a person reads.
     room. Otherwise the guard's mutation could pass for the wrong reason.
   - The assertions are scoped to each message's element: the user's own queued reply, also shown, says "Delivered"
     rightly.
-  - Browser tests run on the Mac (Playwright, 3.5 s for one) and on the Pi.
+  - It runs in the browser suite (test_browser.py), on the Mac and on the Pi.
 - **Mutation checks:**
   - put `state` back in `REMOTE_MESSAGE_KEYS`: test 1 fails;
   - put `unverified` in `REMOTE_MESSAGE_KEYS`: test 2 fails;
@@ -148,3 +149,4 @@ app.js and runs the peer). Ships don't need to update: no agent file changes.
 | N8 | `unverified` in the allowlist wasn't caught | test 2 adds `unverified: true`; its own mutation |
 | N9 | the pending state until refresh | a Known limit, unchanged |
 | refs | 77-86 and 463 loose | 79-86; 458-464 |
+| re-check | three nits on dd76d28 | a 1px muted dashed border that keeps the bubble's size; "cannot tell a replay from a forgery"; the test runs in the browser suite |
