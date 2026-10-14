@@ -120,6 +120,25 @@ def test_a_persons_hand_listed_entry_is_never_charged(station, ship_config, tmp_
     assert runner.calls == [] and len(w.state['deferred']) == 1
     assert not any('Pausing my replies' in b for b in bodies(fake, room))
     assert w.state['ship_exchanges'][key] == spent
+
+
+def test_a_hand_listed_entry_deferred_again_and_again_is_charged_once(station, ship_config, tmp_path):
+    """F2: the first defer charges a hand-listed ship entry and records the station's first_deferred on it, so the
+    defers after it charge nothing more."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = fake.say(room, defiant, '@serenity a ship question')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    for _ in range(3):
+        assert w.cycle() == 0
+    assert len(w.state['ship_exchanges'][f'{room}:{defiant["id"]}']) == 1
+    assert len(w.state['deferred']) == 1 and runner.calls == []
+    assert not any('Pausing my replies' in b for b in bodies(fake, room))
 ```
 
 In `test_a_deferred_breakout_mention_keeps_its_mark_and_its_budget`, change the expected entry
@@ -136,6 +155,8 @@ Expected:
   `test_an_over_budget_hand_listed_entry_gets_the_pause_note_at_its_defer` (no pause note) and the N1 test (no new key);
 - `test_a_lost_run_response_for_a_deferral_the_station_held_is_not_charged_again` passes, because it models the fixed
   station;
+- `test_a_hand_listed_entry_deferred_again_and_again_is_charged_once` passes (the first defer already charges and
+  records), and Step 5's third mutation is what makes it fail;
 - `test_a_persons_hand_listed_entry_is_never_charged` passes: it guards against a wrong fix (the charge applied to a
   person), and Step 5's second mutation is what makes it fail.
 
@@ -176,13 +197,15 @@ The `self.save()` and `return True, 0` after the block stay as they are.
 - [ ] **Step 4: Run them, then the agent suite**
 
 Run: `cd agent && uv run --locked --extra dev python -m pytest -q tests/test_watch_deferral.py`. Expected: all pass.
-Run: `make check-agent`. Expected: every test passes (main's count plus 5). Name any failure.
+Run: `make check-agent`. Expected: every test passes (main's count plus 6). Name any failure.
 
 - [ ] **Step 5: Mutation checks**, one at a time, each restored before the next:
   - remove the `| ({'first_deferred': ...} if 'first_deferred' in ticket else {})` term:
     `test_a_normally_deferred_ship_mention_is_charged_once_across_defers` fails;
   - remove `author['kind'] == 'ship' and ` from the new branch's budget check:
-    `test_a_persons_hand_listed_entry_is_never_charged` fails.
+    `test_a_persons_hand_listed_entry_is_never_charged` fails;
+  - remove `entry['first_deferred'] = ticket.get('first_deferred')`:
+    `test_a_hand_listed_entry_deferred_again_and_again_is_charged_once` fails.
 
   Confirm with `git diff --stat` that watch.py matches your change.
 
@@ -234,7 +257,7 @@ def test_a_run_never_deferred_carries_no_first_deferred(env):
     assert 'first_deferred' not in ask(watcher, asked['id']).json()
 
 
-def test_the_tickets_column_is_added_once_and_old_rows_read_null(tmp_path):
+def test_the_tickets_column_is_added_once(tmp_path):
     from superyak_peer.db import Store
     Store(tmp_path / 'p')
     store = Store(tmp_path / 'p')  # a second start changes nothing
@@ -311,12 +334,17 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
 ## Deploy (Rio Grande, after the merge under law section 2)
 
 1. Back up the database (as for version check), merge with `--no-ff`, push, and run the guard.
-2. Restart the five units. The lighthouse's start runs the migration (one column). Check the journal for errors and
-   `PRAGMA table_info(tickets)` for `first_deferred`.
+2. Before restarting the Pi's ship watcher, look at its state file's `deferred` list for ship-authored entries: they
+   will be charged once more at their next `defer`, so say so in the announcement (step 5).
+   Restart the five units. The lighthouse's start runs the migration (one column). Check the journal for errors and
+   `PRAGMA table_info(tickets)` for `first_deferred`. Confirm the version check:
+   `journalctl --user --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'` should show
+   `superyak: version check on: <HEAD 12>, N behind`.
 3. **Watch the journal across the first real ticket calls** after the restart (`journalctl --user --user-unit
    superyak-lighthouse -f` until a ship's watcher has asked for tickets, or 15 minutes). A running ticket issued before
    the migration has no `first_deferred` and is read through the new `_decided`; the plan review's simulation of that
-   row showed the key omitted and no error, and this confirms it on the real table. Any traceback: revert and restart.
+   row showed the key omitted and no error, and this confirms it on the real table. Any traceback: `git revert -m 1 <merge>`, push, restart the units. No database restore is needed:
+   main's code runs on the migrated schema.
 4. **Live check:** the peer test path, not the live watcher. With `decisions`, a deferral, the watch ended and a
    repeated ask on the Pi's station give the same ticket carrying `first_deferred` both times. Use a scratch station
    (`Store` in a temp folder), not the live one, so nothing is posted.
@@ -334,14 +362,14 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
   reproduction tests.
   - **RED:** Task 1 fails exactly the four tests Step 2 names, and the lost-run test passes; Task 2 fails its two, and
     the guard passes.
-  - **GREEN:** test_watch_deferral 25 and test_deferrals 24 pass.
+  - **GREEN:** test_watch_deferral 25 (26 with the final review's test) and test_deferrals 24 pass.
   - **Mutations,** all caught:
     - the F2 record term removed fails the normal-path test and N1;
     - the F3 echo removed fails the re-send test (and test_only_the_stations_own_deferral_row_marks_a_reask);
     - the echo leaking into `_ticket_json`'s path fails the `decisions=False` assertion.
   - **Full suites:** `make check-agent` 631, `make check-peer` 532.
   - **Revision 2:** the person-authored test passes with the code and fails with the guard removed; `make check-agent`
-    632.
+    632; after the final review's hand-listed record test, 633.
 - **Accepted, outside this fix** (plan review nit 4): a ship's budget and deferred list live in each watcher's own state
   file, so a ship watched from two machines enforces the five-an-hour budget on each. Pre-existing, not a regression.
 

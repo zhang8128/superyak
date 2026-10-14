@@ -101,7 +101,8 @@ never a spare.
 ## Security
 
 - The budget protects a ship from other ships' floods. Every change only adds charges or spares on the station's
-  word. No local state can create a spare.
+  word. Local state can withhold F2's charge, never create a spare (a hand-edited entry that already has `first_deferred`
+  skips F2's charge: it is the owner's own file, and the budget protects the owner from other ships).
 - The column holds the station's own timestamp. No client value is written to it.
 
 ## Testing
@@ -128,9 +129,16 @@ pulling main: it's a change to `agent/superyak_agent/watch.py`, a runtime file, 
 
 ## Known limits
 
-- An entry a watcher listed before this change has no recorded `first_deferred`. If its next answer is `defer` again,
-  F2 charges it once more. If it's a `run`, today's `held` check decides, as before. At most one extra charge per
-  mention already deferred at upgrade time, failing toward charging.
+- An entry a watcher listed before this change has no recorded `first_deferred`. If its next answer is `run`,
+  today's `held` check decides, as before. If it is `defer` again, F2 treats the entry as hand-listed: a watcher
+  upgraded with ship-authored entries already on its `deferred` list charges each of them once more at its next
+  `defer`. If that puts the author over the hour's budget, the mention is dropped with a pause note (simulated by the
+  final review: three such mentions in an hour, two charged again and the third dropped; five, all dropped).
+- A mention dropped at its `defer` this way leaves its station deferral row behind, because the station deletes a row
+  only when the watcher asks again (or a breakout closes or the ship leaves it). That room's posts by the ship then
+  carry a stale `deferred_here` id, and the mention keeps its R26 `deferred` mark. No safety or budget effect; a
+  follow-up station spec will stop counting rows past the 120-minute bound, or already answered with `reply_to`, as
+  waiting.
 
 ## Review map (revision 2: the D8 review of 479ab84)
 

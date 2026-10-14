@@ -378,7 +378,7 @@ def test_a_run_never_deferred_carries_no_first_deferred(env):
     assert 'first_deferred' not in ask(watcher, asked['id']).json()
 
 
-def test_the_tickets_column_is_added_once_and_old_rows_read_null(tmp_path):
+def test_the_tickets_column_is_added_once(tmp_path):
     from superyak_peer.db import Store
     Store(tmp_path / 'p')
     store = Store(tmp_path / 'p')  # a second start changes nothing

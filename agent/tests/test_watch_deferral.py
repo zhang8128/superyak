@@ -495,3 +495,22 @@ def test_a_persons_hand_listed_entry_is_never_charged(station, ship_config, tmp_
     assert runner.calls == [] and len(w.state['deferred']) == 1
     assert not any('Pausing my replies' in b for b in bodies(fake, room))
     assert w.state['ship_exchanges'][key] == spent
+
+
+def test_a_hand_listed_entry_deferred_again_and_again_is_charged_once(station, ship_config, tmp_path):
+    """F2: the first defer charges a hand-listed ship entry and records the station's first_deferred on it, so the
+    defers after it charge nothing more."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = fake.say(room, defiant, '@serenity a ship question')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    for _ in range(3):
+        assert w.cycle() == 0
+    assert len(w.state['ship_exchanges'][f'{room}:{defiant["id"]}']) == 1
+    assert len(w.state['deferred']) == 1 and runner.calls == []
+    assert not any('Pausing my replies' in b for b in bodies(fake, room))
