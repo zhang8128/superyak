@@ -85,7 +85,8 @@ of a received room, and a ship's pairing card comes only from the CLI.
   time); the migration test. The full peer suite.
 - **Mutation checks:**
   - drop the origin-prefix check: the `another-station` and `a-local-room` cases fail;
-  - drop the type check: the list, dict and number cases fail;
+  - drop the whole receive check: all six cases fail. (Dropping only the `isinstance` part isn't caught: receive already
+    turns the `TypeError` a non-string raises into a 400, so the type guard is defence, measured in the plan's dry run.)
   - drop the view's backstop: the stored-value guard fails;
   - drop the clamp: the 2^53 test fails;
   - clamp the queued replies too: the queued-reply guard fails;

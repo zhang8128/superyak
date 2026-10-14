@@ -933,3 +933,46 @@ def test_the_inbox_received_table_is_added_once_and_inbox_is_unchanged(tmp_path)
         columns = [r[1] for r in db.execute('PRAGMA table_info(inbox)')]
     assert tables == ['inbox_received']
     assert columns == ['origin', 'resource_id', 'kind', 'recipient', 'revision', 'actor', 'payload']
+
+
+def test_an_honest_linked_room_is_received_with_its_origins_earlier_room(two_peers):
+    """Remote room fields, requirement 2 (a guard): adding a member makes a new linked room on the origin, and the receiver
+    still takes it, showing `<origin>:<earlier id>`."""
+    a, b, ca, cb = two_peers
+    second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
+    c2 = a[2].pair(a[1], b[2].card(second))
+    b[2].pair(second, a[2].card(a[1]))
+    room = a[0].create_room(a[1], 'Growing', [ca['id']])
+    deliver(a, b)
+    grown = a[0].add_participants(a[1], room['id'], [c2['id']])
+    deliver(a, b)
+    [shown] = [r for r in b[0].list_rooms(b[1]) if r['id'] == a[2].identity.peer_id + ':' + grown['id']]
+    assert shown['linked_room_id'] == a[2].identity.peer_id + ':' + room['id']
+
+
+def test_a_stored_bad_linked_room_shows_as_none(two_peers):
+    """Remote room fields, requirement 3 (a guard): the view's backstop for a value an older receiver stored."""
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Old link', [ca['id']])
+    deliver(a, b)
+    with b[0].transaction() as db:
+        row = db.execute("SELECT * FROM inbox WHERE kind='room' AND recipient=?", (b[1],)).fetchone()
+        stored = json.loads(row['payload'])
+        stored['linked_room_id'] = ['not', 'hashable']
+        db.execute('UPDATE inbox SET payload=? WHERE origin=? AND resource_id=? AND kind=? AND recipient=?',
+                   (json.dumps(stored), row['origin'], row['resource_id'], row['kind'], row['recipient']))
+    [shown] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Old link']
+    assert shown['linked_room_id'] is None
+
+
+def test_this_stations_queued_reply_still_moves_a_received_room(two_peers):
+    """Remote room fields, requirement 6 (a guard): the clamp is for the origin's claims; this station's own queued reply
+    still moves the room to its own time."""
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Busy', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    time.sleep(0.01)
+    sent = b[0].send_message(b[1], remote, 'q-1', 'my reply')
+    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Busy']
+    assert listed['last_activity'] == sent['created']
