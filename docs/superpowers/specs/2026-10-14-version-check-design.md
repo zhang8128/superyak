@@ -1,6 +1,7 @@
 # Version check: a ship learns from the station when its agent is behind
 
-Status: revision 5, its D8 review's changes applied, for the reviewer's re-check of M1 ("version-check 2"). Revision 4 was **approved under D8**, built, and
+Status: revision 5, **approved under D8** ("version-check 2"): its review was APPROVE WITH CHANGES, and the re-check
+of the applied changes is APPROVE. Revision 4 was **approved under D8**, built, and
 merged to main as e633ec3 (deployed on the Pi). This revision takes the Pi review's follow-ups S1-S3 and N1-N3 (room
 messages 2a5884e7 and a9d01e30): see "Review map (revision 5)". Revision 3 was approved under D8 before the build. Revision 1 (a01f4cf) had the fresh reviewer's verdict, APPROVE WITH CHANGES
 (1 must-fix, 1 should-fix, 4 nits; room message 74cf14d2). Revision 2 (4e72f20) made all six, and the same reviewer's
@@ -321,3 +322,6 @@ Two findings change the design. Neither changes the goal.
 | S-A | `merge-base --is-ancestor`'s exit 1 has empty output, so the shared helper would log a generic reason | call 2 reads its exit status: 0 on, 1 off with `HEAD is not on origin/main`, else the git-failure path |
 | S-B | two sentences still said "`agent/`" | Build order step 3 and the Known limit say "a file in `RUNTIME_PATHS`" |
 | N-A | `ast.literal_eval` needs a literal | V1 says `RUNTIME_PATHS` is a literal tuple of string constants |
+
+Revision 5's re-check: APPROVE, no remaining findings (M1's fresh-interpreter probe checked against a polluted
+parent and a planted `superyak_team.slack` import).
