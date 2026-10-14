@@ -1,6 +1,6 @@
-"""Version check (docs/superpowers/specs/2026-10-14-version-check-design.md, V1-V3 and V8): at startup the station reads its
-own git history once, so the instructions route can tell a ship whose agent code is behind. Nothing here runs in a
-request, and no client value ever reaches git."""
+"""Version check (docs/superpowers/specs/2026-10-14-version-check-design.md, V1-V3 and V8): at startup the station
+reads its own git history once, so the instructions route can tell a ship whose agent code is behind. Nothing here runs
+in a request, and no client value ever reaches git."""
 import re
 import subprocess
 import sys

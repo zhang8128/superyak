@@ -13,9 +13,10 @@ PROBE = r'''
 import importlib, json, pkgutil, sys
 from pathlib import Path
 sys.path[:0] = ['.', '../team']  # run_agent.py's own path
+# run_agent.py itself only sets this path and imports superyak_agent.__main__, imported below
 import superyak_agent
-for module in pkgutil.iter_modules(superyak_agent.__path__):
-    importlib.import_module('superyak_agent.' + module.name)
+for module in pkgutil.walk_packages(superyak_agent.__path__, 'superyak_agent.'):
+    importlib.import_module(module.name)
 root = Path('..').resolve()
 print(json.dumps(sorted(str(Path(mod.__file__).resolve().relative_to(root)) if getattr(mod, '__file__', None)
                         else '(no file) ' + name  # a namespace package or an extension can't hide from the check
@@ -59,4 +60,6 @@ def test_every_runtime_path_still_names_a_file():
 
 def test_the_check_names_a_team_file_left_out_of_the_list():
     paths = tuple(p for p in runtime_paths() if p != 'team/superyak_team/teamlib.py')
-    assert missing_from(paths, agent_team_files()) == ['team/superyak_team/teamlib.py']
+    files = ['team/superyak_team/__init__.py', 'team/superyak_team/teamlib.py', 'team/superyak_team/workers.py',
+             'agent/superyak_agent/hook.py']
+    assert missing_from(paths, files) == ['team/superyak_team/teamlib.py']

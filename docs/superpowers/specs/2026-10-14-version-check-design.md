@@ -73,7 +73,7 @@ Two findings change the design. Neither changes the goal.
        a missing `origin/main`, takes the usual git-failure path, with git's first stderr line as the reason.
     3. `rev-list --max-count=5000 HEAD`, every commit it descends from, newest first;
     4. one `cat-file --batch-check` that reads `<commit>:<path>` for HEAD and each commit, for every path in
-       `RUNTIME_PATHS`: at most 25,005 lines, one process.
+       `RUNTIME_PATHS`: at most 25,000 lines (`rev-list` already includes HEAD), one process.
   - **The result** is the station's commit (12 hex digits) and a set `behind`: the 12-digit prefixes of ancestors whose
     runtime files differ from HEAD's. Each commit's runtime files are the tuple of object names `cat-file` gives for the
     paths in order. A path a commit lacks (`missing`) is a value like any other, so an ancestor from before a file
@@ -207,7 +207,7 @@ Two findings change the design. Neither changes the goal.
 
 ## Testing
 
-- **Peer:** a `git_history(tmp_path)` fixture builds a small repository with the runtime paths and an
+- **Peer:** a `history_repo` fixture builds a small repository with the runtime paths and an
   `origin/main` ref (`git update-ref refs/remotes/origin/main HEAD`). The tests cover:
   - V1's read and set (including `--max-count`), and V2's cases (a tests-only change gives no key, a `team/` runtime
     file does);
@@ -227,8 +227,8 @@ Two findings change the design. Neither changes the goal.
 
 1. Peer: the startup read (V1), the set and the key (V2, V3).
 2. Agent: the hook's line (V4 to V6).
-3. Deploy: restart the lighthouse (the peer change), then the other units in the usual order. No backup is needed:
-   nothing is written. Live check at the route: the instructions call with a presence for an agent commit from before
+3. Deploy: restart the lighthouse (the peer change), then the other units in the usual order. Nothing is written, but the deploy takes the
+   usual backup first (plan, Deploy). Live check at the route: the instructions call with a presence for an agent commit from before
    the last change to a file in `RUNTIME_PATHS` gets `agent_update`, and one for HEAD doesn't (plan, Deploy step 3).
    An end-to-end check, a session that shows the line, is only possible at the next deploy that changes a file in
    `RUNTIME_PATHS`, once ships run this hook.

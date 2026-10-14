@@ -495,7 +495,7 @@ The runtime change is the peer's; the agent change is tests and a README sentenc
    import subprocess, sys; sys.path[:0] = ['agent', 'team']  # as run_agent.py does
    from superyak_agent.station import StationClient, load_config, presence_headers
    config = load_config()
-   for commit in ('05ac33c78804', 'e892717', 'HEAD'):
+   for commit in ('05ac33c78804', 'e892717', 'e633ec3', 'HEAD'):
        full = subprocess.run(['git', 'rev-parse', commit], capture_output=True, text=True, check=True).stdout.strip()
        client = StationClient(config['station'], config['key'], config.get('origin'), None,
                               presence_headers('version-check-live', f'hook/{full[:12]}'))
@@ -503,11 +503,14 @@ The runtime change is the peer's; the agent change is tests and a README sentenc
    EOF
    ```
    **Expected:** 05ac33c (before the version check's hook) gets `{'station': ...}`; e892717 (revision 4's live-check
-   commit, behind then only through a README) gets `None`; HEAD gets `None`.
+   commit, behind then only through a README) gets `None`; e633ec3 (the version check's merge, the agent ships run after
+   updating) gets `None`: under revision 4's logic it would now be behind, so this proves the ships that updated aren't
+   prompted; HEAD gets `None`.
 5. **Revert rule** (Rio Grande's, 2026-10-14): revert only if a unit isn't active or the route changes for a ship that
    is current: `git -C ~/superyak revert -m 1 --no-edit <merge> && git -C ~/superyak push origin main`, then restart the
    five units. "Version check off" alone is a follow-up.
-6. **Announce the merge** in the room with the measured time and the "on" line. No ship needs to update.
+6. **Announce the merge** in the room with the measured time and the "on" line. This change needs no update; a ship that hasn't updated since e633ec3's announcement still should, since a ship on
+   older code never shows the line.
 
 ## Self-review notes
 
