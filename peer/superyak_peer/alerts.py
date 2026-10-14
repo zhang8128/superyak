@@ -1,6 +1,8 @@
 """Service alerts (docs/superpowers/specs/2026-10-14-station-backups-alerts-design.md, S9-S14): one checked line per
 failure, queued as a private file that station-notices lists and Odo posts once in Ops. Standard library only. The
 notifier reads nothing from the environment but systemd's result variables, and never a journal line (S11)."""
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -21,6 +23,9 @@ TIMER_UNITS = {'superyak-backup.service': 'the nightly backup', 'superyak-restor
 ALERT_FILE = re.compile(r'([0-9a-f]{12})\.json')
 KINDS = ('stopped', 'down', 'failed')
 KEPT_DAYS = 30
+WINDOW, MAX_WINDOW = 1800, 6 * 3600
+GIVE_UPS_PER_DAY = 6
+LOCK_WAIT = 5
 SINCE_BEFORE = 600
 LINE_LIMIT = 400
 DAY = 86400
@@ -95,6 +100,8 @@ def _queue_dir(alerts_dir):
     if alerts_dir.is_symlink():
         raise OSError(f'{alerts_dir} is a symlink')
     alerts_dir.mkdir(mode=0o700, exist_ok=True)
+    if alerts_dir.stat().st_mode & 0o077:  # mkdir leaves an existing wider mode in place
+        os.chmod(alerts_dir, 0o700)
     return alerts_dir
 
 
@@ -114,13 +121,95 @@ def _write_private(path, data):
         raise
 
 
-def record(alerts_dir, unit, kind, fields, now):
-    """S10: queue one alert, its text rendered once, so a repeated listing posts the same words. Returns the alert."""
+@contextmanager
+def _lock(path, wait):
+    """S12: records are written under a flock on alerts/.lock. After `wait` seconds without it, go on unlocked."""
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    locked = False
+                    break
+                time.sleep(0.1)
+        yield locked
+    finally:
+        os.close(fd)
+
+
+def _rates(alerts_dir):
+    """alerts/rate.json; a missing or garbled file starts fresh."""
+    path = Path(alerts_dir) / 'rate.json'
+    try:
+        if path.is_symlink():
+            return {}  # never read through a link; the next write replaces it
+        rates = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return rates if isinstance(rates, dict) else {}
+
+
+def _number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _state(value):
+    """One unit's record from rate.json. A field of the wrong type (a hand edit) is dropped, never fatal: a duplicate is
+    better than a lost alert (review S2)."""
+    value = value if isinstance(value, dict) else {}
+    state = {key: value[key] for key in ('window', 'until', 'last', 'held', 'held_since') if _number(value.get(key))}
+    give_ups = value.get('give_ups')
+    state['give_ups'] = [t for t in give_ups if _number(t)] if isinstance(give_ups, list) else []
+    return state
+
+
+def _hold(state, now, *, stop):
+    state['held'] = state.get('held', 0) + 1
+    state['held_since'] = state.get('held_since') or now
+    if stop:
+        state['last'] = now
+
+
+def record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT):
+    """S12, then S10. A stopped failure inside its unit's window is held back and counted; the window is 30 minutes and
+    doubles within an unbroken burst up to 6 hours, and a full window since the unit's last stop ends the burst. down and
+    failed are always queued, except a 7th in a day for one unit (the backstop), which is held and counted like a stop.
+    Without the lock within 5 s the alert is queued anyway: a duplicate is better than a lost alert. Returns the queued
+    alert, or None when it was held back."""
     alerts_dir = _queue_dir(alerts_dir)
-    alert = {'id': secrets.token_hex(6), 'unit': unit, 'kind': kind, 'at': now, **fields, 'held_back': 0, 'held_since': None}
-    alert['text'] = render(alert)
-    _write_private(alerts_dir / f'{alert["id"]}.json', alert)
-    return alert
+    held, held_since = 0, None
+    with _lock(alerts_dir / '.lock', lock_wait) as locked:
+        if locked:
+            rates = _rates(alerts_dir)
+            state = rates[unit] = _state(rates.get(unit))
+            if kind == 'stopped':
+                if now < state.get('until', 0):
+                    _hold(state, now, stop=True)
+                    _write_private(alerts_dir / 'rate.json', rates)
+                    return None
+                burst = 'last' in state and now - state['last'] < state.get('window', WINDOW)
+                window = min(state.get('window', WINDOW) * 2, MAX_WINDOW) if burst else WINDOW
+                held, held_since = state.get('held', 0), state.get('held_since')
+                state.update(window=window, until=now + window, last=now, held=0, held_since=None)
+            else:
+                recent = [t for t in state.get('give_ups', []) if t > now - DAY]
+                if len(recent) >= GIVE_UPS_PER_DAY:
+                    _hold(state, now, stop=False)
+                    state['give_ups'] = recent
+                    _write_private(alerts_dir / 'rate.json', rates)
+                    return None
+                state['give_ups'] = recent + [now]
+            _write_private(alerts_dir / 'rate.json', rates)
+        alert = {'id': secrets.token_hex(6), 'unit': unit, 'kind': kind, 'at': now, **fields,
+                 'held_back': held, 'held_since': held_since}
+        alert['text'] = render(alert)
+        _write_private(alerts_dir / f'{alert["id"]}.json', alert)
+        return alert
 
 
 def queued(alerts_dir):
@@ -148,6 +237,8 @@ def queued(alerts_dir):
 
 def clean(alerts_dir, now):
     """S10: alert files more than 30 days old are deleted each time the notifier runs."""
+    if Path(alerts_dir).is_symlink():
+        raise OSError(f'{alerts_dir} is a symlink')  # never unlink files in a link's target
     for alert in queued(alerts_dir):
         if alert['at'] < now - KEPT_DAYS * DAY:
             (Path(alerts_dir) / f'{alert["id"]}.json').unlink(missing_ok=True)
@@ -162,10 +253,13 @@ def station_alert(data_dir, unit, *, monitor, environ, now=None):
     now = time.time() if now is None else now
     alerts_dir = Path(data_dir) / 'alerts'
     try:
-        clean(alerts_dir, now)  # S10: each time the notifier runs, clean stops included (review N1)
-        if fields['result'] == 'success':
-            return None  # a clean stop: deploy restarts, systemctl stop, shutdown, and the stops Requires= carries along
-        return record(alerts_dir, unit, kind_for(unit, monitor), fields, now)
+        if fields['result'] != 'success':  # a clean stop queues nothing: deploy restarts, systemctl stop, shutdown, and the stops Requires= carries along
+            return record(alerts_dir, unit, kind_for(unit, monitor), fields, now)
     except OSError as error:
         print(f'station-alert: could not queue the alert for {unit}: {type(error).__name__}: {error.strerror or error}', file=sys.stderr)
-        return None
+    finally:
+        try:
+            clean(alerts_dir, now)  # S10: each time the notifier runs, clean stops included; never stops an alert (review N1)
+        except OSError as error:
+            print(f'station-alert: could not clean the old alerts in {alerts_dir}: {type(error).__name__}: {error.strerror or error}', file=sys.stderr)
+    return None

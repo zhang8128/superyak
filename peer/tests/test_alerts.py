@@ -180,3 +180,107 @@ def test_a_notifier_that_cannot_write_its_queue_exits_0(tmp_path, monkeypatch, c
         os.chmod(data / 'alerts', 0o700)
     assert 'could not queue the alert for superyak-odo.service' in capsys.readouterr().err
     assert files(data) == []
+
+
+def test_stopped_alerts_are_held_back_and_back_off_per_unit(tmp_path, utc):
+    """R11, with a fake clock: one stopped line per unit per window. The window doubles within an unbroken burst, up to
+    6 hours, and a full window without a failure ends the burst. down is never windowed, up to 6 per unit in a day."""
+    queue, ship = tmp_path / 'alerts', 'superyak-ship.service'
+
+    def at(minutes):
+        return T0 + minutes * 60
+
+    six = [alerts.record(queue, ship, 'stopped', CRASH, at(m)) for m in (0, 2, 4, 6, 8, 10)]
+    assert [one is not None for one in six] == [True, False, False, False, False, False]   # 6 crashes in 10 minutes: one file
+    second = alerts.record(queue, ship, 'stopped', CRASH, at(31))
+    assert (second['held_back'], second['held_since']) == (5, at(2))
+    assert second['text'].endswith(f' 5 more stops since {local(at(2), "%H:%M")} were held back.')
+    assert alerts.record(queue, ship, 'stopped', CRASH, at(61)) is None                     # the second window is 60 minutes
+    assert alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, at(61)) is not None   # windows are per unit
+    downs = [alerts.record(queue, ship, 'down', GIVE_UP, at(m)) for m in range(62, 69)]
+    assert [one is not None for one in downs] == [True] * 6 + [False]                       # inside the window; the 7th held
+    third = alerts.record(queue, ship, 'stopped', CRASH, at(121))                            # a full 60 minutes since 61
+    assert third['held_back'] == 2                                                         # the stop at 61 and the 7th down
+    assert third['text'].endswith(f' 2 more stops since {local(at(61), "%H:%M")} were held back.')
+    assert alerts.record(queue, ship, 'stopped', CRASH, at(140)) is None                     # the burst ended: 30 minutes again,
+    assert alerts.record(queue, ship, 'stopped', CRASH, at(152)) is not None                 # so 152 is past it
+    loop = tmp_path / 'loop'                                                                 # a watcher crash-looping for a day
+    posted = [m for m in range(0, 1440, 5) if alerts.record(loop, 'superyak-odo.service', 'stopped', CRASH, at(m))]
+    assert posted == [0, 30, 90, 210, 450, 810, 1170]                                        # windows of 30, 60, 120, 240, 360, 360
+    assert [m for m in posted if m < 480] == [0, 30, 90, 210, 450]                           # overnight: 5 lines, not 16
+
+
+def test_the_lock_fallback_queues_anyway(tmp_path):
+    """R11: with alerts/.lock held by another process, the alert is queued after 5 s, without the rate record: a
+    duplicate beats a lost alert."""
+    queue = tmp_path / 'alerts'
+    queue.mkdir(mode=0o700)
+    holder = subprocess.Popen([sys.executable, '-c', HOLD, str(queue / '.lock')], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == 'held'
+        started = time.monotonic()
+        one = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
+        waited = time.monotonic() - started
+    finally:
+        holder.kill()
+        holder.wait()
+    assert alerts.LOCK_WAIT == 5 and 5 <= waited < 8
+    assert one is not None and [found['id'] for _, found in files(tmp_path)] == [one['id']]
+    assert not (queue / 'rate.json').exists()
+
+
+def test_a_cleaning_error_never_stops_the_alert_being_queued(tmp_path, monkeypatch, capsys):
+    """Review of task 8, fix 1: clean() runs after record() in its own try. An error unlinking an old alert is said on
+    stderr and the exit stays 0, but the failure's alert is queued."""
+    def broken(alerts_dir, now):
+        raise PermissionError(13, 'Permission denied')
+
+    monkeypatch.setattr(alerts, 'clean', broken)
+    under_systemd(monkeypatch, service_result='exit-code', exit_code='exited', exit_status='1')
+    assert alert(tmp_path, 'superyak-door.service') == 0
+    assert len(files(tmp_path)) == 1
+    assert 'could not clean' in capsys.readouterr().err
+
+
+def test_a_symlinked_alerts_directory_is_never_cleaned(tmp_path, monkeypatch, capsys):
+    """Review of task 8, fix 2: clean() refuses a symlinked alerts directory, so it never unlinks files in the target."""
+    target = tmp_path / 'elsewhere'
+    target.mkdir()
+    old = alerts.record(target, 'superyak-door.service', 'stopped', CRASH, time.time() - 40 * 86400)
+    data = tmp_path / 'lighthouse'
+    data.mkdir()
+    (data / 'alerts').symlink_to(target)
+    under_systemd(monkeypatch, service_result='exit-code', exit_code='exited', exit_status='1')
+    assert alert(data, 'superyak-door.service') == 0
+    assert (target / f'{old["id"]}.json').exists()
+    assert [path.name for path in target.iterdir() if path.name != 'rate.json' and path.name != '.lock'] == [f'{old["id"]}.json']
+    assert 'symlink' in capsys.readouterr().err
+
+
+def test_an_existing_wide_alerts_directory_is_tightened_to_0700(tmp_path):
+    """Review of task 8, fix 3: mkdir(exist_ok=True) leaves a wider mode in place, so the queue chmods it."""
+    queue = tmp_path / 'alerts'
+    queue.mkdir(mode=0o755)
+    os.chmod(queue, 0o755)
+    alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
+    assert stat.S_IMODE(queue.stat().st_mode) == 0o700
+
+
+def test_rate_json_and_the_lock_are_private_and_not_followed_through_symlinks(tmp_path):
+    """The lock and the rate record follow the queue's rules: 0600, atomic, never through a symlink."""
+    queue = tmp_path / 'alerts'
+    alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
+    for name in ('rate.json', '.lock'):
+        assert stat.S_IMODE((queue / name).stat().st_mode) == 0o600
+    victim = tmp_path / 'victim'
+    victim.write_text('keep')
+    (queue / '.lock').unlink()
+    (queue / '.lock').symlink_to(victim)
+    with pytest.raises(OSError):
+        alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0 + 99999)
+    assert victim.read_text() == 'keep'
+    (queue / '.lock').unlink()
+    (queue / 'rate.json').unlink()
+    (queue / 'rate.json').symlink_to(victim)
+    alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0 + 99999)
+    assert victim.read_text() == 'keep' and not (queue / 'rate.json').is_symlink()
