@@ -430,12 +430,13 @@ want of this:
 - **R37.** A re-ask of a deferred mention is exempt from the five-an-hour ship budget only when the station's own
   `deferrals` row exists for that mention (the station's `defer` decision), never because the watcher's state says so.
   The station says so in its answer: a `defer`, and a `run` that resolves a deferral it held, carry that row's
-  `first_deferred`; a run for a mention it never deferred carries none. The budget is the watcher's
-  (watch.py:15, 175), so the watcher spares a re-ask only when the answer carries `first_deferred`, or when the
-  station echoes back the exact ticket id it already issued for that same mention. The station deletes its deferral
-  row when it issues the run ticket, so a retry after a failed run gets that same ticket back without
-  `first_deferred`; the echoed id is still the station's answer, since a watcher can't make the station return an
-  id it never issued for that mention. A run under a new ticket id after a retry is charged (Rio Grande, 7d9dad84).
+  `first_deferred`, including when the station sends that running ticket again; a run for a mention it never deferred
+  carries none. The budget is the watcher's (watch.py:15, 175), so the watcher spares a re-ask only when the answer
+  carries `first_deferred`, or when the station echoes back the exact ticket id it already issued for that same mention.
+  The station deletes its deferral row when it issues the run ticket but records its `first_deferred` on the ticket, so
+  a retry after a failed run gets that same ticket back carrying it; the echoed id is still the station's
+  answer, since a watcher can't make the station return an id it never issued for that mention. A run under a new ticket
+  id after a retry is charged (Rio Grande, 7d9dad84).
 - **R38.** A resident DM reply is recognised by its mention having no `seq`. Every mention from `/api/mentions` carries
   one and the deferred list keeps it, so a room mention can never pass as a DM reply and always gets the read-only
   line in a read run.
@@ -567,7 +568,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   - `test_a_reask_without_a_station_deferral_is_charged` (R37: listed in the watcher's state only, eight re-asks run
     five and pause the rest, their tickets finished)
   - `test_a_reask_the_station_held_spends_no_budget` (R37: a run carrying `first_deferred`)
-  - `test_a_retry_of_a_held_reask_is_not_charged_again` (R37: the same running ticket, back without `first_deferred`)
+  - `test_a_retry_of_a_held_reask_is_not_charged_again` (R37: the same running ticket, back without `first_deferred`; that is now true only of tickets issued before the migration or while the station runs main's code)
   - `test_a_reask_asks_for_the_ticket_first_and_fetches_the_room_only_to_run` (S5: no room fetch while deferred)
 - **Mutation checks**, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared, on R1, R3, R5, R6, R7 (the notice
   exclusion), R8, R10 (the full-list path), R11, R13, R15, R18, R20 (422, not 409), R21, R22, R23, R25, R26 (the

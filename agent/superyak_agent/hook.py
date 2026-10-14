@@ -2,7 +2,6 @@
 session start, changes and withdrawals at a prompt) and, at a prompt, the new room messages since the last turn, fenced.
 Session start may end with the version line (spec 2026-10-14).
 It must never block or break a prompt, so every failure prints nothing."""
-import hashlib
 import json
 import math
 import os
@@ -11,7 +10,7 @@ import shlex
 from pathlib import Path
 import time
 from . import claims
-from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, plain_id, presence_headers, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
+from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, plain_id, presence_headers, read_hint, read_json, session_key, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -38,14 +37,15 @@ SESSION_END_TIMEOUT = 3  # spec S4: best effort; a watch this call misses runs o
 
 def _end_watch(config_path, transport, presence):
     """S4, M2: the one new client call: end this session's watch. It can only end one (R2), never prints, and fails
-    silently. Without a session name there is nothing to end, so it makes no call."""
+    silently. Without a session name there is nothing to end, so it makes no call. True once watch(0) succeeded."""
     config = read_json(config_path)
     if not presence or not config or not config.get('key'):
-        return
+        return False
     try:
         StationClient(config['station'], config['key'], config.get('origin'), transport, presence).watch(0)
+        return True
     except Exception:  # noqa: BLE001 - a hook must never break the exit
-        pass
+        return False
 
 
 def hook_fields(stdin):
@@ -78,7 +78,9 @@ START_PREAMBLE = 'Instructions that bind this ship, from the station. They are t
 CHANGE_PREAMBLE = 'These instructions changed since this session last looked:'
 POINTER = 'The full text does not fit here: call the station_instructions tool and follow it.'
 STATE_DAYS = 14
-STATE_NAME = re.compile(r'[0-9a-f]{16}\.json')
+STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|watch|prompted)')
+WATCH_DEFAULT_MINUTES = 20  # the station's default lease (presence.py)
+RENEWAL_MARGIN = 60  # seconds: the station renews a lease at most once per 30 s, so the hook declares a minute early
 SETTINGS = Path.home() / '.claude' / 'settings.json'  # where install_all writes the machine ship's hooks (install.py:375)
 HEX12 = re.compile(r'[0-9a-f]{12}')
 
@@ -155,10 +157,15 @@ def run(config_path, state_path=None, clock=time.time, transport=None, session_i
     link = _Link(transport)
     try:
         if event == 'session-end':
-            _end_watch(config_path, link(SESSION_END_TIMEOUT), presence)
+            if _end_watch(config_path, link(SESSION_END_TIMEOUT), presence) and session_id:
+                try:  # S1: a session resumed under this id must take the default again, so forget what it held
+                    (Path(sessions_dir or config_path.parent / 'sessions') / (session_key(session_id) + '.prompted')
+                     ).unlink(missing_ok=True)
+                except OSError:
+                    pass
             return ''
         text, shown = _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir,
-                               lambda: monotonic() - started > INSTRUCTIONS_DEADLINE, presence)
+                               lambda: monotonic() - started > INSTRUCTIONS_DEADLINE, presence, mode)
         _forget_unless(shown, config_path, event, session_id, sessions_dir)
         return text
     finally:
@@ -177,7 +184,7 @@ def _forget_unless(shown, config_path, event, session_id, sessions_dir):
         pass
 
 
-def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, late, presence=None):
+def _run_all(config_path, state_path, clock, link, session_id, event, messages, sessions_dir, late, presence=None, mode=None):
     """(text, shown): shown is whether the instructions step ran to the end, so the session's state matches its context."""
     data, text, shown = None, '', False
     wants = event == 'session-start' or bool(session_id)
@@ -188,6 +195,11 @@ def _run_all(config_path, state_path, clock, link, session_id, event, messages, 
             return '', False  # the station is down: do not spend a second timeout on the messages
         except Exception:  # noqa: BLE001 - a hook must never break the prompt
             data = None
+    if event == 'prompt' and session_id and messages and mode in ('write', 'plan') and not late():
+        try:  # watch by default (W1-W4): after the instructions, before the inbox, whose advance stays last (R4)
+            _watch_default(config_path, session_id, mode, link(INBOX_CALL_TIMEOUT), sessions_dir, clock, presence)
+        except Exception:  # noqa: BLE001 - W4: silent; .prompted unwritten, so the next prompt tries again
+            pass
     if event != 'session-start' and messages and not late():
         try:
             text = (_run_inbox(config_path, session_id, link(INBOX_CALL_TIMEOUT), presence) if session_id
@@ -213,7 +225,7 @@ def _run_all(config_path, state_path, clock, link, session_id, event, messages, 
 
 
 def _session_file(sessions_dir, session_id):
-    return Path(sessions_dir) / (hashlib.sha256(session_id.encode('utf-8', 'surrogatepass')).hexdigest()[:16] + '.json')
+    return Path(sessions_dir) / (session_key(session_id) + '.json')
 
 
 def _read_session(path):
@@ -228,11 +240,20 @@ def _read_session(path):
 
 
 def _prune(sessions_dir, keep, now):
+    """Session files (state `.json`, `.watch`, `.prompted`) whose `seen` is more than STATE_DAYS old, or missing or not
+    a number, are deleted, except a `.watch` without a usable `seen`: it ages by its file's mtime instead, since the hook
+    reads an unreadable choice as "off". The current session's files (`keep`'s key) are never touched."""
+    keep_key = Path(keep).name[:16] if keep else None
     for path in Path(sessions_dir).iterdir():
-        if path == keep or not STATE_NAME.fullmatch(path.name):
+        if not STATE_NAME.fullmatch(path.name) or path.name[:16] == keep_key:
             continue
         try:
-            seen = read_json(path).get('seen')
+            try:
+                seen = read_json(path).get('seen')
+            except Exception:  # noqa: BLE001 - unreadable
+                seen = None
+            if not (type(seen) in (int, float) and math.isfinite(seen)) and path.suffix == '.watch':
+                seen = path.lstat().st_mtime  # N1: the hook reads an unreadable choice as "off"; age it, don't undo it
             if not (type(seen) in (int, float) and math.isfinite(seen)) or seen < now - STATE_DAYS * 86400:
                 path.unlink()
         except Exception:  # noqa: BLE001 - damaged: delete it
@@ -251,6 +272,57 @@ def _fetch_instructions(config_path, transport, presence=None):
     if not config or not config.get('key'):
         return None
     return StationClient(config['station'], config['key'], config.get('origin'), transport, presence).instructions()
+
+
+def _watch_client(config_path, transport, presence):
+    config = read_json(config_path)
+    if not config or not config.get('key'):
+        return None  # as _fetch_instructions: no config, no call
+    return StationClient(config['station'], config['key'], config.get('origin'), transport, presence)
+
+
+def _read_object(path):
+    """The JSON object in path: {} when the file is absent, None when it is there but isn't one."""
+    try:
+        value = read_json(path, {})
+    except Exception:  # noqa: BLE001 - damaged: the caller decides what that means
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock, presence):
+    """Watch by default (spec 2026-10-14-watch-default-design.md, W1-W4). A write-mode prompt holds the watch: declared
+    at the first prompt and again once its lease less RENEWAL_MARGIN has passed since the last declaration (`seen` in
+    `.prompted` is when the hook last declared, so an active session declares about once per 19 minutes, never once per
+    prompt, and a lease that lapsed unseen comes back). A plan-mode prompt lets go of a default the hook
+    holds. The session's own choice (`.watch`, written by station_watch) always wins. Prints nothing; the caller makes
+    any failure silent, and `.prompted` is written only after the station answered."""
+    client = _watch_client(config_path, transport, presence)
+    if client is None:
+        return
+    folder = Path(sessions_dir or Path(config_path).parent / 'sessions')
+    key = session_key(session_id)
+    watch_path = folder / f'{key}.watch'
+    choice = None if watch_path.is_symlink() and not watch_path.exists() else _read_object(watch_path)  # N2
+    raw = (choice or {}).get('choice')
+    own = raw if type(raw) is int and 1 <= raw <= 120 else None
+    if choice is None or ('choice' in choice and own is None):
+        return  # the session's "off", or a choice the hook can't read, which counts as "off" so an opt-out sticks
+    prompted_path = folder / f'{key}.prompted'
+    prompted = _read_object(prompted_path) or {}  # damaged counts as absent: at worst one extra declare
+    now, seen = clock(), prompted.get('seen')
+    held = prompted.get('held') is True
+    if mode == 'plan':
+        if held and own is None:
+            client.watch(0)
+            write_private(prompted_path, {'seen': now, 'held': False})
+        return
+    minutes = own or WATCH_DEFAULT_MINUTES
+    writable = choice['writable'] if own is not None and type(choice.get('writable')) is bool else True
+    fresh = held and type(seen) in (int, float) and math.isfinite(seen) and 0 <= now - seen <= minutes * 60 - RENEWAL_MARGIN
+    if not fresh:
+        client.watch(minutes, writable)
+        write_private(prompted_path, {'seen': now, 'held': True})
 
 
 def _with_withdrawals(parts, withdrawn, budget):

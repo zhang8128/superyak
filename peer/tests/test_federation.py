@@ -775,3 +775,27 @@ def test_an_echoed_reply_shows_delivered_even_while_its_row_says_failed(two_peer
     deliver(a, b)
     [echo] = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'words that arrived']
     assert echo['author_id'] == b[2].identity.peer_id + ':' + b[1] and echo.get('state') == 'delivered'
+
+
+def test_a_hand_edited_malformed_member_cannot_break_the_room_list(two_peers):
+    """Ship-status re-review of 5374784: receive() refuses a malformed roster, but a hand-edited inbox row reached
+    _remote_room's m['peer'] and broke get_room and list_rooms for its recipient. A malformed member is left out."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Edited by hand', [ca['id']])
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    roster = a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                    action='room.roster', recipients=[b[1]], payload=snapshot)
+    assert b[2].receive(roster)['ok']
+    with b[0].transaction() as db:
+        row = db.execute("SELECT rowid, payload FROM inbox WHERE kind='room' AND resource_id=?", (room['id'],)).fetchone()
+        payload = json.loads(row['payload'])
+        good = payload['members'][0]
+        payload['members'] += [{'peer': good['peer']}, 'not a member', {'id': 'x', 'peer': 7}]
+        db.execute('UPDATE inbox SET payload=? WHERE rowid=?', (json.dumps(payload), row['rowid']))
+    remote_id = a[2].identity.peer_id + ':' + room['id']
+    got = b[0].get_room(b[1], remote_id)
+    assert {'peer': good['peer'], 'id': good['id']} in got['members']
+    assert all(isinstance(m['peer'], str) and isinstance(m['id'], str) for m in got['members'])
+    assert len(got['members']) == len(snapshot['members'])
+    assert any(r['id'] == remote_id for r in b[0].list_rooms(b[1]))
