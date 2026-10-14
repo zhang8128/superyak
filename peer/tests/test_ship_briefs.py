@@ -639,3 +639,17 @@ def test_only_the_owner_reads_the_history(env):
     assert (shipped.status_code, shipped.json()['error']) == (403, 'Ship keys cannot use this route')
     assert clients[2].get(f'/api/chats/{room}/brief/revisions').status_code == 404
     assert clients[0].get(f'/api/chats/{"f" * 64}:{room}/brief/revisions').status_code == 404
+
+
+def test_the_history_shows_a_carried_revision_under_its_original_author(env):
+    """R12 with R7: a carry's history row keeps carried_from and the ship's kind and name."""
+    app, clients, users, clock = env
+    store, patient = app.state.store, users[0]['id']
+    ship, key = docked(store, patient, 'rio-grande')
+    room = new_room(clients[0], users[1], ship)
+    wrote(store, ship['id'], room, 'Rio Grande keeps this brief.')
+    carried_id = add_members(clients[0], room, users[2], carry_brief=1).json()['id']
+    got = clients[0].get(f'/api/chats/{carried_id}/brief/revisions')
+    assert got.status_code == 200, got.text
+    assert [(r['revision'], r['body'], r['author_id'], r['author_name'], r['author_kind'], r['carried_from'])
+            for r in got.json()] == [(1, 'Rio Grande keeps this brief.', ship['id'], ship['name'], 'ship', room)]

@@ -330,14 +330,15 @@ writes it through this route, and the owner's own ships through theirs (see Ship
   is `null` when the room has none, when the brief was removed, or when the room is a received one. `author_name` is
   one safe line. `author_kind` (`person` or `ship`) and `author_username` come from the author's account, so a ship
   that has left the room is still named.
-- **The next save.** `brief_revision` is the revision the next save names, by the owner or one of the owner's ships: 0 before the first brief, and
-  still the removed brief's revision after a removal, so the owner can write one again.
+- **The next save.** `brief_revision` is the revision the next save names, by the owner or one of the owner's
+  ships: 0 before the first brief, and still the removed brief's revision after a removal, so the owner can write
+  one again.
 - **Saving.**
   - `body` is 0-4,000 characters of valid UTF-8 with no NUL; anything else gets 400.
   - `revision` must be that `int`, not a bool; anything else gets 409.
   - Every save, a removal included, writes revision n+1 on the same row, so a stale tab never overwrites a later
     brief. A removal is a body that is empty or only whitespace, stored as `''`.
-  - A member who isn't the owner gets 403, and so does a ship key. A non-member and a received room get 404.
+  - A member who isn't the owner gets 403, and so does a ship key on this route. A non-member and a received room get 404.
   - A brief that contains a live ship key gets 422 and is not saved, as a message does; a revoked key saves.
   - Saving records no mentions. It posts one notice (below).
 - **Audit and federation.**
