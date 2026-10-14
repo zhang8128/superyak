@@ -13,6 +13,9 @@ agent changes, so no ship needs to update after this deploys.
 
 **Tech Stack:** Python 3.11+, git CLI on the station, pytest.
 
+**Status:** revision 2, for the same reviewer's re-check. Revision 1 (560ff06) had the fresh reviewer's verdict,
+APPROVE WITH CHANGES (1 must-fix, 1 should-fix, 1 nit; room message 29d2390e): see "Review map".
+
 **Spec:** `docs/superpowers/specs/2026-10-14-version-check-design.md`, revision 5 (approved under D8, a4afa8f). Read
 V1, V2, V8, requirements 2, 4, 9, 10 and the revision-5 review maps first.
 
@@ -29,6 +32,8 @@ whole-branch review. The branch merges when Rio Grande approves it in "Superyak:
   anything else the git-failure path with git's first stderr line); `rev-list --max-count=5000 HEAD`; one
   `cat-file --batch-check=%(objectname)` with `<commit>:<path>` for every commit and every path, in that order.
 - `behind` = ancestors (not HEAD) whose tuple of object names differs from HEAD's; `missing` is a value like any other.
+  git prints an unresolvable `<commit>:<path>` as `<commit>:<path> missing`, ignoring the format, so that text differs
+  per commit. Every answer that isn't a full hex object name becomes the one value `'missing'` before comparing.
 - `load()` prints exactly one line: `superyak: version check on: <station12>, <N> behind`, or
   `superyak: version check off: <reason>`. It never raises: finding the checkout and printing are guarded too.
 - No client value reaches git; git runs only at startup; no new state.
@@ -130,6 +135,17 @@ def test_a_team_runtime_change_makes_earlier_commits_behind(tmp_path):
     assert reason is None and history.behind == frozenset({p[:12]})
 
 
+def test_a_runtime_path_missing_from_head_and_its_ancestors_alike_is_ignored(tmp_path):
+    repo = tmp_path / 'repo3'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    p = commit(repo, {k: v for k, v in RUNTIME.items() if not k.endswith('workers.py')}, 'P')
+    c = commit(repo, {'docs/x.md': 'c\n'}, 'C')
+    git(repo, 'update-ref', 'refs/remotes/origin/main', c)
+    history, reason = read_history(repo)
+    assert reason is None and history.behind == frozenset()  # workers.py is missing from both: not a difference
+
+
 def test_head_not_on_origin_main_turns_the_check_off(history_repo):
     repo, c = history_repo
     git(repo, 'checkout', '-q', '-b', 'feature')
@@ -184,7 +200,7 @@ gets 2.0 seconds.
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_agent_version.py`
-Expected (checked while writing this plan): 9 failed, 15 passed. The failures:
+Expected (checked while writing this plan): 9 failed, 16 passed. The failures:
 - `test_behind_holds_only_ancestors_whose_runtime_files_differ`, `test_the_limit_bounds_how_far_back_the_read_goes`
   and `test_agent_update_names_the_station_only_for_a_client_behind`: today's code compares `agent/` trees, so B is
   behind;
@@ -193,7 +209,11 @@ Expected (checked while writing this plan): 9 failed, 15 passed. The failures:
 - `test_load_reads_a_real_checkout_and_says_it_is_on` (no line today);
 - the two never-raises tests.
 
-`test_an_unexpected_answer_from_git_turns_the_check_off` passes on today's code too, because it's a guard.
+`test_an_unexpected_answer_from_git_turns_the_check_off` and
+`test_a_runtime_path_missing_from_head_and_its_ancestors_alike_is_ignored` pass on today's code too, because they're
+guards. The second one fails if the module's `names = [n if FULL_HEX.fullmatch(n) else 'missing' ...]` line is left
+out. Check that once after Step 3, by commenting the line out and running that test, then restore the line. Put the
+observation in the report.
 
 - [ ] **Step 3: Write the module**
 
@@ -268,6 +288,9 @@ def read_history(checkout, run=subprocess.run, limit=HISTORY_LIMIT, timeout=TIME
     width = len(RUNTIME_PATHS)
     if not FULL_HEX.fullmatch(head) or not commits or commits[0] != head or len(names) != len(commits) * width:
         return None, 'git answered in an unexpected form'
+    # git prints a path a commit lacks as "<commit>:<path> missing", ignoring the format: different for every commit.
+    # One value for all of them, so a path missing from HEAD and an ancestor alike compares equal (V1).
+    names = [n if FULL_HEX.fullmatch(n) else 'missing' for n in names]
     files = {c: tuple(names[i * width:(i + 1) * width]) for i, c in enumerate(commits)}
     behind = frozenset(c[:12] for c in commits if c != head and files[c] != files[head])
     return AgentHistory(head[:12], behind), None
@@ -306,7 +329,7 @@ def agent_update(history, presence):
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_agent_version.py tests/test_agent_version_route.py tests/test_packaging.py`
 Expected: all pass.
-Run: `make check-peer` (from the repository root). Expected: 534 passed (528 at main e633ec3, plus 6). Name any
+Run: `make check-peer` (from the repository root). Expected: 535 passed (528 at main e633ec3, plus 7). Name any
 failure.
 
 - [ ] **Step 5: Commit**
@@ -355,8 +378,10 @@ import superyak_agent
 for module in pkgutil.iter_modules(superyak_agent.__path__):
     importlib.import_module('superyak_agent.' + module.name)
 root = Path('..').resolve()
-print(json.dumps(sorted(str(Path(mod.__file__).resolve().relative_to(root)) for name, mod in list(sys.modules.items())
-                        if (name == 'superyak_team' or name.startswith('superyak_team.')) and getattr(mod, '__file__', None))))
+print(json.dumps(sorted(str(Path(mod.__file__).resolve().relative_to(root)) if getattr(mod, '__file__', None)
+                        else '(no file) ' + name  # a namespace package or an extension can't hide from the check
+                        for name, mod in list(sys.modules.items())
+                        if name == 'superyak_team' or name.startswith('superyak_team.'))))
 '''
 
 
@@ -385,6 +410,14 @@ def test_runtime_paths_name_every_team_file_the_agent_loads():
     assert missing_from(runtime_paths(), files) == []
 
 
+def test_every_runtime_path_still_names_a_file():
+    files = agent_team_files()
+
+    def stale(path):  # a team entry must be a file the agent loads; an agent entry must exist
+        return path not in files if path.startswith('team/') else not (ROOT / path).exists()
+    assert [path for path in runtime_paths() if stale(path)] == []  # a renamed or removed file must leave the list too
+
+
 def test_the_check_names_a_team_file_left_out_of_the_list():
     paths = tuple(p for p in runtime_paths() if p != 'team/superyak_team/teamlib.py')
     assert missing_from(paths, agent_team_files()) == ['team/superyak_team/teamlib.py']
@@ -407,7 +440,7 @@ def test_the_line_is_the_only_difference_at_session_start(ship):
 - [ ] **Step 2: Run them**
 
 Run: `cd agent && uv run --locked --extra dev python -m pytest -q tests/test_runtime_parity.py tests/test_hook_version.py`
-Expected: all pass once Task 1 is in. These are guards, so they pass at once. Check that each can fail instead:
+Expected: 24 passed once Task 1 is in. These are guards, so they pass at once. Check that each can fail instead:
 - temporarily remove `'team/superyak_team/teamlib.py',` from `RUNTIME_PATHS` in agent_version.py: the first parity
   test fails, naming teamlib.py; restore it;
 - temporarily change `'\n\n'.join` in hook.py's `_run_all` version-line block to `'\n'.join`: the equality test
@@ -423,7 +456,7 @@ there and say so in the report.
 
 - [ ] **Step 4: The agent suite**
 
-Run: `make check-agent` (from the repository root). Expected: 630 passed (627 at main e633ec3, plus 3). Name any
+Run: `make check-agent` (from the repository root). Expected: 631 passed (627 at main e633ec3, plus 4). Name any
 failure.
 
 - [ ] **Step 5: Commit**
@@ -483,10 +516,17 @@ The runtime change is the peer's; the agent change is tests and a README sentenc
   N3 is spec text only. Requirements 2, 4, 9: Task 1; 10 and 1: Task 2; 8: Deploy step 2.
 - **Interfaces:** `RUNTIME_PATHS` (Task 1) is read by name in Task 2; `load`, `read_history`, `agent_update` and
   `AgentHistory` keep their signatures, so `app.py`, `__main__.py` and test_agent_version_route.py need no change.
-- **Dry run:** every block was run as written in a scratch worktree at the plan's commit, before review.
-  - Task 1's tests against today's module: 9 failed, 15 passed, as Step 2 says. With the new module, the focused peer
-    run gives 32 passed.
-  - Task 2: 23 passed. Both mutation checks fail as Step 2 says: dropping teamlib.py fails the first parity test,
-    naming it, and a one-newline join fails the equality test.
-  - Full suites: `make check-agent` 630 passed, `make check-peer` 534 passed.
-  - The Deploy step 4 script's imports load with `['agent', 'team']`.
+- **Dry run:** every block was run as written in a scratch worktree, before each review. Revision 2's run:
+  - Task 1's tests against today's module: 9 failed, 16 passed, as Step 2 says. With the new module, the focused peer
+    run gives 33 passed. Without the normalization line, exactly the new missing-path test fails.
+  - Task 2: 24 passed.
+  - Full suites: `make check-agent` 631 passed, `make check-peer` 535 passed.
+  - Revision 1's mutation checks and the Deploy script's imports were re-run by the reviewer and still hold.
+
+## Review map (revision 2: the review of 560ff06)
+
+| # | Finding | Change |
+|---|---|---|
+| M1 | git's `missing` answer embeds the commit, so a path absent from HEAD and an ancestor alike compared unequal | the module maps every non-hex answer to `'missing'`; Task 1 adds `test_a_runtime_path_missing_from_head_and_its_ancestors_alike_is_ignored` and checks it fails without the line; Global Constraints says so |
+| S1 | the parity test checked only one direction | Task 2 adds `test_every_runtime_path_still_names_a_file` (team entries among the files the agent loads, agent entries present) |
+| N1 | a team module without `__file__` was invisible | the probe reports it as `(no file) <name>`, which the check names |
