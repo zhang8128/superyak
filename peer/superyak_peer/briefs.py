@@ -36,16 +36,19 @@ class Briefs:
     def _room_brief(self, db, room_id):
         """(brief, revision). The brief is what members see: None when the room never had one or it was removed. The
         revision is the one the owner's next save must name: 0 before the first brief, and a removed brief's own
-        revision after a removal."""
+        revision after a removal. Its author's kind and username come from the account (ship briefs S4), so a reader can
+        name a ship that has since left the room."""
         # LEFT JOIN: a missing author row must never make the revision read as 0.
-        row = db.execute('SELECT room_briefs.*, users.name AS author_name FROM room_briefs LEFT JOIN users ON users.id=room_briefs.author_id '
-                         'WHERE room_briefs.room_id=?', (room_id,)).fetchone()
+        row = db.execute('SELECT room_briefs.*, users.name AS author_name, '
+                         'users.username AS author_username, users.kind AS author_kind FROM room_briefs '
+                         'LEFT JOIN users ON users.id=room_briefs.author_id WHERE room_briefs.room_id=?', (room_id,)).fetchone()
         if row is None:
             return None, 0
         if row['body'] == '':
             return None, row['revision']
         return ({'body': row['body'], 'revision': row['revision'], 'author_id': row['author_id'],
-                 'author_name': safe_line(row['author_name'] or ''), 'updated': row['updated'], 'carried_from': row['carried_from']},
+                 'author_name': safe_line(row['author_name'] or ''),
+                 'author_kind': row['author_kind'], 'author_username': row['author_username'], 'updated': row['updated'], 'carried_from': row['carried_from']},
                 row['revision'])
 
     def _write_brief(self, db, room_id, body, revision, author_id, carried_from=None):
@@ -81,15 +84,16 @@ class Briefs:
             db.execute(BRIEF_BACKFILL)
 
     def _brief_to_carry(self, db, room_id, carry):
-        """The body to copy into the next room. None without carry_brief (the default: carrying is always a choice) or
-        when the brief was removed. carry_brief is the revision the owner saw, so a brief changed since then is never
-        carried unseen (409)."""
+        """The body and its author to copy into the next room, or None without carry_brief (the default: carrying is
+        always a choice) or when the brief was removed. carry_brief is the revision the owner saw, so a brief changed
+        since then is never carried unseen (409). The carried revision keeps its author (ship briefs S4): carrying
+        isn't endorsing, and make station-bridge carries without the owner reading the text."""
         if carry is None:
             return None
         brief, revision = self._room_brief(db, room_id)
         if carry != revision:
             raise Problem(409, 'The room brief changed since you looked at it; look again before carrying it')
-        return brief['body'] if brief else None
+        return (brief['body'], brief['author_id']) if brief else None
 
     def save_brief(self, actor, key, body, revision):
         """PUT /api/chats/{id}/brief, for the room's owner. The route has already refused ship keys and a missing CSRF

@@ -51,7 +51,7 @@ def test_only_the_owner_writes_the_brief(env):
     saved = put_brief(patient, room, 'Decisions D1-D9. Rio Grande builds the brief.', 0)
     assert saved.status_code == 200, saved.text
     assert saved.json() == {'body': 'Decisions D1-D9. Rio Grande builds the brief.', 'revision': 1, 'author_id': users[0]['id'],
-                            'author_name': 'Patient', 'updated': 1000000.0, 'carried_from': None}
+                            'author_name': 'Patient', 'author_kind': 'person', 'author_username': 'patient', 'updated': 1000000.0, 'carried_from': None}
     kept = ('Decisions D1-D9. Rio Grande builds the brief.', 1)
     for body in ('Mine now.', ''):  # a change, then a removal
         assert put_brief(doctor, room, body, 1).status_code == 403, body
@@ -154,7 +154,7 @@ def test_get_returns_the_brief_to_members_and_null_when_there_is_none(env):
     assert fresh['brief'] is None and fresh['brief_revision'] == 0
     put_brief(patient, room, 'Purpose: the city of AI.', 0)
     clock[0] += 60
-    expected = {'body': 'Purpose: the city of AI.', 'revision': 1, 'author_id': users[0]['id'], 'author_name': 'Patient',
+    expected = {'body': 'Purpose: the city of AI.', 'revision': 1, 'author_id': users[0]['id'], 'author_name': 'Patient', 'author_kind': 'person', 'author_username': 'patient',
                 'updated': 1000000.0, 'carried_from': None}
     assert brief_of(doctor, room) == expected and brief_of(patient, room) == expected
     assert ship_client(app, key).get(f'/api/chats/{room}').json()['brief'] == expected
@@ -195,7 +195,7 @@ def test_carrying_copies_the_brief_into_the_new_room_and_never_its_messages(env)
     new = response.json()['id']
     got = organizer.get(f'/api/chats/{new}').json()
     assert got['brief'] == {'body': 'D1-D9 are decided. Rio Grande builds the brief.', 'revision': 1, 'author_id': users[0]['id'],
-                            'author_name': 'Patient', 'updated': 1000060.0, 'carried_from': room}
+                            'author_name': 'Patient', 'author_kind': 'person', 'author_username': 'patient', 'updated': 1000060.0, 'carried_from': room}
     assert got['brief_revision'] == 1 and got['messages'] == []
     assert 'old secret' not in organizer.get(f'/api/chats/{new}').text
     assert organizer.get(f'/api/chats/{room}').status_code == 404

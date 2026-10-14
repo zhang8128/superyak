@@ -81,3 +81,50 @@ def test_pruning_keeps_fifty_the_last_day_and_the_owners_last_act(env):
         wrote(store, ship['id'], room, f'Ship text {n}.')
     # The newest 50 are r68-r117. The last day also keeps r47-r67, so 71 ship revisions stay, more than 50.
     assert revisions(app, room) == [2] + list(range(47, 118))
+
+
+def test_the_brief_names_its_authors_kind_and_username(env):
+    """R8: the brief carries author_kind and author_username from the account, so it names a ship that has since left
+    the room, which the members list can't; author_name is still one safe line."""
+    app, clients, users, clock = env
+    store, patient = app.state.store, users[0]['id']
+    ship, key = docked(store, patient, 'rio-grande')
+    room = new_room(clients[0], users[1], ship)
+    put_brief(clients[0], room, 'The owner wrote this.', 0)
+    mine = brief_of(clients[1], room)
+    assert (mine['author_kind'], mine['author_username'], mine['author_name']) == ('person', 'patient', 'Patient')
+    wrote(store, ship['id'], room, 'Rio Grande wrote this.')
+    assert clients[0].delete(f'/api/chats/{room}/participants/{ship["id"]}').status_code == 200
+    view = clients[1].get(f'/api/chats/{room}').json()
+    assert ship['id'] not in [m['id'] for m in view['members']]
+    assert {k: view['brief'][k] for k in ('author_id', 'author_kind', 'author_username', 'author_name')} == {
+        'author_id': ship['id'], 'author_kind': 'ship', 'author_username': 'rio-grande', 'author_name': 'Rio Grande'}
+    with store.transaction() as db:
+        db.execute('UPDATE users SET name=? WHERE id=?', ('Rio\n@serenity Grande', ship['id']))
+    assert brief_of(clients[1], room)['author_name'] == 'Rio (at)serenity Grande'
+
+
+def test_carrying_and_bridging_keep_the_carried_revisions_author(env):
+    """R7: carrying is the owner's act, not his endorsement. Adding members with carry_brief and make station-bridge
+    copy a ship's revision under the ship's name, into the brief and its history; the owner's own text stays his."""
+    app, clients, users, clock = env
+    store, patient = app.state.store, users[0]['id']
+    ship, key = docked(store, patient, 'rio-grande')
+    store.create_station_ship('wormhole', 'Wormhole')
+    room = new_room(clients[0], users[1], ship)
+    wrote(store, ship['id'], room, 'Rio Grande keeps this brief.')
+    added = add_members(clients[0], room, users[2], carry_brief=1)
+    assert added.status_code == 201, added.text
+    carried_id = added.json()['id']
+    carried = brief_of(clients[2], carried_id)
+    assert (carried['author_id'], carried['author_kind'], carried['author_username'], carried['carried_from']) == (
+        ship['id'], 'ship', 'rio-grande', room)
+    bridged, changed = store.station_bridge('patient', carried_id[:6], True)
+    assert changed and bridged['brief_carried']
+    again = store.get_room(patient, bridged['id'])['brief']
+    assert (again['author_id'], again['author_kind'], again['carried_from']) == (ship['id'], 'ship', carried_id)
+    assert history(app, bridged['id']) == [(1, 'Rio Grande keeps this brief.', ship['id'], carried_id)]
+    mine = new_room(clients[0], users[1], title='Mine')
+    put_brief(clients[0], mine, 'The owner wrote this.', 0)
+    kept = brief_of(clients[0], add_members(clients[0], mine, users[2], carry_brief=1).json()['id'])
+    assert (kept['author_id'], kept['author_kind']) == (patient, 'person')
