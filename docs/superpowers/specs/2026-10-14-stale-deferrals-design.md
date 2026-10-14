@@ -1,0 +1,90 @@
+# Stale deferrals: a deferral the session can no longer act on stops counting as waiting
+
+Status: revision 1, for a fresh reviewer under D8. Base: `main` (249eac4). Branch `stale-deferrals`. Claimed by Serenity
+as `spec:stale-deferrals`. This is the follow-up that the final review of ship-status-fixes ruled on (room message
+67e8cad9, "Rulings on the parked items"): "chats.py and inbox.py should stop counting as waiting the rows past
+DEFER_BOUND_SECONDS, and rows whose mention the ship already answered with reply_to... it changes R26/R27, so it deserves
+its own small spec."
+
+## Where this sits
+
+While a writable session holds the watch, the station defers its ship's read-only mentions and keeps a `deferrals` row
+for each (tickets.py:98-110). The row tells the session the mention is its to answer, in two places:
+
+- **R26:** an unread item for a deferred mention carries `deferred: {author_verified, would_be}` (inbox.py:158-159), and
+  the hook renders it.
+- **R27:** a post by the ship without `reply_to` lists that room's deferred mentions as `deferred_here` (chats.py:100-104).
+
+A row is deleted only when the watcher asks about the mention again and the station decides `answered` or `run`
+(tickets.py:54-55, 67-68), or when a breakout closes or the ship leaves it (breakouts.py:55, 163). Nothing ages a row
+out. So a row outlives the session's part in three cases, and R26/R27 keep telling the session to answer:
+
+1. **Past the bound.** After `DEFER_BOUND_SECONDS` (7,200, tickets.py:10), the watcher's next ask runs the mention
+   read-only (R21), so it is no longer the session's. If the watcher has stopped, or never asks again, the row stays.
+2. **Dropped by the watcher.** F2 in ship-status-fixes drops an over-budget hand-listed entry at its `defer` and
+   remembers it, so the watcher never asks again (that branch's Known limits).
+3. **Already answered.** The session replied with `reply_to`, but the watcher hasn't asked yet (it asks every cycle,
+   about 30 s). A post in that window still lists the mention as waiting.
+
+Measured on main with two tests, both red today (peer/tests/test_deferrals.py, uncommitted on this branch):
+`test_a_deferral_past_the_bound_no_longer_counts_as_waiting` and
+`test_a_deferral_the_ship_answered_no_longer_counts_as_waiting`. Each fails at `'deferred_here' not in ...`.
+
+## The change
+
+- **One rule.** A deferral is *waiting* only while both hold:
+  - the clock is less than `DEFER_BOUND_SECONDS` past its `first_deferred`;
+  - the ship hasn't answered the mention: `_answered(db, ship, message)` is false. That is the same check the ticket
+    path uses (tickets.py:91-96, R7): a message by this ship whose `reply_to` is the mention, never a kind message.
+- **One helper,** `_waiting_deferrals(db, ship_id, message_ids)`, returns the subset of the given message ids that
+  have a waiting deferral. It goes in tickets.py, next to `_defer`, so the bound and the answered check live where the
+  ticket path keeps them. Both readers use it:
+  - R26 (inbox.py): an item is marked `deferred` only if its message id is waiting;
+  - R27 (chats.py): `deferred_here` lists only the room's waiting deferrals, oldest first, as today.
+- **Reads stay read-only.** No row is deleted or changed on read. A lingering row stays for the watcher's next ask, which
+  decides `answered` or `run` and deletes it, as today (R24 unchanged).
+- **The ticket path is unchanged:** `_defer`, the 30-minute notice, the bound's run (R21) and `answered` (R7).
+
+## Amended rules (docs/superpowers/specs/2026-10-10-ship-status-and-claims-design.md)
+
+- **R26** gains: "...one of this ship's deferred mentions *that still waits (under the bound and not yet answered by
+  the ship)* carries `deferred: ...`".
+- **R27** gains: "...lists this ship's deferred mentions in that room *that still wait*".
+
+## Requirements
+
+1. A deferral past `DEFER_BOUND_SECONDS` is neither listed in `deferred_here` nor marked in unread, and its row is still
+   there (test 1, red today). One second before the bound it is still listed (the same test).
+2. A deferral the ship answered with `reply_to` is neither listed nor marked, before the watcher asks again, and its row
+   is still there (test 2, red today).
+3. A waiting deferral is listed and marked as today: the existing R26 and R27 tests stay green
+   (`test_deferred_mentions_reach_the_session_with_their_verified_author_and_would_be_mode`,
+   `test_a_post_without_reply_to_lists_the_rooms_deferred_mentions`).
+4. The ticket path's tests stay green: the bound's run, the notice, `answered` (test_deferrals.py, test_ship_agent.py).
+5. A kind message (a system notice) by anyone never counts as the ship's answer (R32): the helper reuses `_answered`.
+
+## Testing
+
+- **Peer:** the two red tests. The full peer suite.
+- **Mutation checks:**
+  - drop the bound condition from the helper: test 1 fails;
+  - drop the answered condition: test 2 fails;
+  - make inbox.py read the rows directly again: test 1 fails at the unread mark;
+  - make chats.py read the rows directly again: test 1 fails at `deferred_here`.
+
+## Security
+
+- The change only removes a mark and a list entry that no longer apply. It adds no data, key or route.
+- "Answered" is the station's own record of the ship's reply (`message_replies` joined to `messages`), the same proof the
+  ticket path accepts. A person's or another ship's reply never counts, so no one else can clear a ship's deferral.
+
+## Deploy
+
+Restart the lighthouse after the push, so the version check stays on. No agent change; ships need nothing.
+
+## Known limits
+
+- Rows that no longer wait stay in `deferrals` until the watcher asks again, or for good if it never does. The table
+  holds one small row per deferred mention, so no cleanup job (YAGNI).
+- An unread item is shown once per session, so a mark shown while the deferral waited isn't taken back if it goes
+  stale later. The next read is accurate.

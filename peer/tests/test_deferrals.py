@@ -352,3 +352,34 @@ def test_an_old_client_sees_todays_unread_and_post_responses(env):
     assert set(got) == {'cursor', 'position', 'more', 'messages'} and all('deferred' not in m for m in got['messages'])
     posted = say(session, room, 'p', 'a plain post')
     assert set(posted) == {'id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'replayed'}
+
+
+def test_a_deferral_past_the_bound_no_longer_counts_as_waiting(env):
+    """Stale deferrals (the ship-status fixes' final review): past DEFER_BOUND_SECONDS the station runs the mention at
+    the watcher's next ask, so it is no longer the session's to answer: no deferred_here and no R26 mark, even when the
+    watcher never asks again and the row lingers."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    clock[0] += 7199
+    assert say(session, room, 'p', 'still thinking')['deferred_here'] == [asked['id']]
+    clock[0] += 1
+    assert 'deferred_here' not in say(session, room, 'q', 'later')
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' not in {m['message_id']: m for m in got['messages']}[asked['id']]
+    assert len(table(store, 'deferrals')) == 1  # read-only: the row is left for the watcher's next ask
+
+
+def test_a_deferral_the_ship_answered_no_longer_counts_as_waiting(env):
+    """Stale deferrals: once the ship has answered the mention with reply_to, it no longer waits, even before the
+    watcher's next ask deletes the row."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    reply(session, room, 'r', 'the answer', asked['id'])
+    assert 'deferred_here' not in say(session, room, 'p', 'and another thing')
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' not in {m['message_id']: m for m in got['messages']}[asked['id']]
+    assert len(table(store, 'deferrals')) == 1
