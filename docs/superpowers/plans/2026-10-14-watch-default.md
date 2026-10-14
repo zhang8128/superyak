@@ -16,7 +16,7 @@
 
 **Tech Stack:** Python 3.11+, stdlib only, pytest.
 
-**Status:** revision 2, for the same reviewer's re-check. Revision 1 (5570319) had the fresh reviewer's verdict,
+**Status:** revision 2, **approved**: the same reviewer's re-check is APPROVE (two bookkeeping nits, taken). Revision 1 (5570319) had the fresh reviewer's verdict,
 APPROVE WITH CHANGES (0 must-fix, 4 should-fix, 5 nits; room message 04e1446c): see "Review map". Should-fix 2
 (requirement 5's wording) went to the spec's D8 reviewer.
 
@@ -579,10 +579,10 @@ Agent-only: no station restart and no backup needed. The version check prompts s
   - Requirement 6: `_prune`.
   - Requirement 7: no station files.
 - **Dry run:** every block was run as written in a scratch worktree at the plan's base, with both tasks applied.
-  - The new tests give 14 + 5 = 19 passed.
+  - The new tests give 14 + 6 = 20 passed.
   - All four mutation checks fail their named tests: the plan-mode ending, the opt-out read, `fresh` always false, and
     the cursor check.
-  - `make check-agent` gives 650 passed.
+  - `make check-agent` gives 651 passed.
   - It surfaced three things, all fixed here:
     - the output-equality test needed a deep-copied twin station, because the fake's unread isn't independent per
       session;
@@ -596,7 +596,7 @@ Agent-only: no station restart and no backup needed. The version check prompts s
 | # | Finding | Change |
 |---|---|---|
 | S1 | `station_watch`'s description didn't say `minutes=0` turns the default off | Task 2 changes the tool and `minutes` descriptions; `test_the_tool_says_minutes_zero_turns_the_default_off` |
-| S2 | requirement 5's change needed a D8 look | sent to the spec's D8 reviewer; the merge waits on its answer |
+| S2 | requirement 5's change needed a D8 look | approved by the spec's D8 reviewer (room message ed700b54) |
 | S3 | the README's opening sentence was stale | Task 2 rewrites it, default first |
 | S4 | the fifth spec mutation was missing | Task 1 Step 5 adds "the whole plan-mode branch deleted" |
 | N5 | `import hashlib` dead in hook.py | Task 1 removes it |
