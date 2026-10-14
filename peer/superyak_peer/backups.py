@@ -577,6 +577,7 @@ def _unpair(db, peer, report):
                            "(SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (peer,)).rowcount
     nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND payload IS NOT NULL', (peer,)).rowcount
     report['unpaired'].append((peer[:12], names))
+    report['unpaired_full'].append(peer)
     report['unpaired_counts'] = [sum(pair) for pair in zip(report['unpaired_counts'], (withdrawn, nulled))]
 
 
@@ -599,11 +600,11 @@ def _unpair_named(db, named, report):
         return
     if not _usable(db, None, report, *PEER_NEEDS):
         raise UnpairRefused('Refused: this copy lacks the peer tables, so there is nothing to unpair.')
-    done = {peer[:12] for peer, _ in report['unpaired']}
     for peer in named:
-        if peer[:12] not in done:
+        if peer not in report['unpaired_full']:
             _unpair(db, peer, report)
-            done.add(peer[:12])
+    # a peer named here is no longer one the report calls left paired (N3)
+    report['lacked'] = [item for item in report['lacked'] if item[2] not in report['unpaired_full']]
 
 
 def _resolve_peers(db, names):
@@ -641,8 +642,12 @@ def _report_differences(db, old, now, report):
     if _usable(db, old, report, 'peers.paired'):  # revision 4: paired here and unpaired there was applied above
         here = dict(db.execute('SELECT peer_id, paired FROM peers').fetchall())
         there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
-        report['peers'] = [peer[:12] for peer in sorted(there) if there[peer] and not here.get(peer)]
-        report['lacked'] = [peer[:12] for peer in sorted(here) if here[peer] and peer not in there]
+        def known(peer):
+            names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))] \
+                if _has(db, 'remote_contacts.name') else []
+            return (peer[:12], names, peer)
+        report['peers'] = [known(peer) for peer in sorted(there) if there[peer] and not here.get(peer)]
+        report['lacked'] = [known(peer) for peer in sorted(here) if here[peer] and peer not in there]
 
 
 def _refuse(db_path, live_data_dir):
@@ -725,7 +730,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     _refuse(db_path, live_data_dir)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
-              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
+              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
               'not_compared': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -781,9 +786,10 @@ def describe_reconcile(report):
     if report['replaced'] == 'compared':
         lines.append('Compared with the replaced file.')
     else:
-        lines.append(f"The replaced file was {report['replaced']}. Room and space members, admins, law layers and peer pairings were not "
-                     "compared: check them by hand in runbook step 8. Every owned ship's keys were revoked, so those "
-                     'machines dock again.')
+        lines.append(f"The replaced file was {report['replaced']}. Room and space members, admins and law layers were not "
+                     "compared: check them by hand in runbook step 8. Peer pairings were not compared either, and nothing was "
+                     'unpaired: before the copy goes live (runbook step 5), peer pairings: list them and name any you had cut '
+                     "off in UNPAIR=. Every owned ship's keys were revoked, so those machines dock again.")
     lines.append('Taken back: ' + ', '.join(f'{label} ({count})' for label, count in report['counts'].items()) + '.')
     for table, (before, after) in report['sequences'].items():
         if after != before:
@@ -813,8 +819,10 @@ def describe_reconcile(report):
             f'{short} {safe_line(title)} (here {_revision(here)}, in the replaced file {_revision(there)})'
             for short, title, here, there in report['layers']) + '. Set them in the browser before the ships start.')
     if report['peers'] or report['lacked']:
-        parts = ([f'paired in the replaced file but not here: {", ".join(report["peers"])}'] if report['peers'] else []) \
-            + ([f'paired here and absent from the replaced file, so left paired: {", ".join(report["lacked"])}'] if report['lacked'] else [])
+        def listed(items):
+            return ', '.join(f'{short} ({people(names)})' if names else short for short, names, _ in items)
+        parts = ([f'paired in the replaced file but not here: {listed(report["peers"])}'] if report['peers'] else []) \
+            + ([f'paired here and absent from the replaced file, so left paired: {listed(report["lacked"])}'] if report['lacked'] else [])
         lines.append('Reported, not applied: peers: ' + '; '.join(parts) + '.')
     if report['skipped']:
         lines.append(f'Skipped, because this copy lacks them: {", ".join(report["skipped"])}.')

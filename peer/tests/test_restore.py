@@ -352,8 +352,8 @@ def test_reconcile_unpairs_a_peer_as_federation_unpair_does(tmp_path, capsys):
     lines = out.splitlines()
     assert (f'Unpaired again: {peers["cut"][:12]} (Cut One, Cut Two). Withdrew 2 pending and failed deliveries '
             'and cleared 1 received payloads.') in lines
-    assert (f'Reported, not applied: peers: paired in the replaced file but not here: {peers["later"][:12]}; '
-            f'paired here and absent from the replaced file, so left paired: {peers["ghost"][:12]}.') in lines
+    assert (f'Reported, not applied: peers: paired in the replaced file but not here: {peers["later"][:12]} (Later); '
+            f'paired here and absent from the replaced file, so left paired: {peers["ghost"][:12]} (Ghost).') in lines
     assert not any(peers['kept'][:12] in line for line in lines)
 
 
@@ -392,6 +392,87 @@ def test_reconcile_unpairs_nothing_without_a_replaced_file(tmp_path, capsys):
     code, out, err = reconcile(capsys, '--db', copy)
     assert code == 0, err
     assert peer_rows(copy) == before and 'Unpaired' not in out
+
+
+def test_reconcile_unpair_refuses_an_ambiguous_id_and_changes_no_byte(tmp_path, capsys):
+    """--unpair with a short id two peers share is refused (exit 2) and the staged copy is byte for byte unchanged, also when
+    the refusal comes after other work. A full id picks the one peer even if another shares its prefix, and the report does
+    not call a lacked peer both unpaired and left paired. Mutations: `len(matches) != 1` -> `not matches`; refusing only
+    after COMMIT; deduplicate on the 12-character prefix; compute `lacked` before the named unpair."""
+    store, peers = peer_station(tmp_path)
+    twin = peers['cut'][:12] + 'f' * 52
+    with store.transaction() as db:
+        db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", (twin,))
+    copy = staged(tmp_path, store)
+    before = copy.read_bytes()
+    for args in (('--unpair', peers['cut'][:12]), ('--unpair', peers['kept'], '--unpair', peers['cut'][:12]),
+                 ('--replaced', store.db_path, '--unpair', peers['cut'][:12])):
+        code, out, err = reconcile(capsys, '--db', copy, *args)
+        assert code == 2 and 'Refused' in err and out == ''
+        assert copy.read_bytes() == before
+    code, out, err = reconcile(capsys, '--db', copy, '--unpair', twin)
+    assert code == 0, err
+    paired = peer_rows(copy)[0]
+    assert paired[twin] == 0 and paired[peers['cut']] == 1
+    stale = staged(tmp_path, store, 'replaced-20261017-140000')           # still has the ghost; the replaced file will lack it
+    with store.transaction() as db:
+        db.execute('DELETE FROM outbox WHERE contact_id=?', ('c-ghost',))
+        db.execute('DELETE FROM inbox WHERE origin=?', (peers['ghost'],))
+        db.execute('DELETE FROM remote_contacts WHERE peer_id=?', (peers['ghost'],))
+        db.execute('DELETE FROM peers WHERE peer_id=?', (peers['ghost'],))
+    code, out, err = reconcile(capsys, '--db', stale, '--replaced', store.db_path, '--unpair', peers['ghost'])
+    assert code == 0, err
+    assert f'Unpaired again: {peers["ghost"][:12]} (Ghost).' in out
+    assert 'left paired' not in out
+
+
+def test_unpair_prefix_dedupe_is_by_full_id(tmp_path, capsys):
+    """N3: two peers share a 12-character prefix and the replaced file unpaired the first; --unpair with the other's full id
+    still unpairs the other. Mutation: deduplicate on the 12-character prefix."""
+    store = Store(tmp_path / 'lighthouse')
+    first, second = 'ab' * 6 + '1' * 52, 'ab' * 6 + '2' * 52
+    with store.transaction() as db:
+        for peer in (first, second):
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", (peer,))
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (first,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path, '--unpair', second)
+    assert code == 0, err
+    assert peer_rows(copy)[0] == {first: 0, second: 0}
+
+
+def test_absent_replaced_file_sends_peers_to_step_5_not_step_8(tmp_path, capsys):
+    """N1: when the replaced file is treated as absent the report sends peer pairings to step 5's UNPAIR= run, before the copy
+    goes live, and never to step 8 (after the lighthouse serves)."""
+    store, peers = peer_station(tmp_path)
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', tmp_path / 'missing.sqlite3')
+    assert code == 0, err
+    text = next(line for line in out.splitlines() if line.startswith('The replaced file was'))
+    assert 'peer pairings: list them' in text and 'UNPAIR=' in text and 'runbook step 5' in text
+    assert 'peer pairings were not compared' not in text
+    assert 'law layers were not compared' in text and 'step 8' in text   # the others are still checked by hand in step 8
+
+
+def test_renew_activation_works_on_a_reconciled_copy(tmp_path, capsys):
+    """Runbook step 7: reconcile marks every activation used, and bootstrap-super-admin --renew-activation still works on
+    the reconciled copy (it needs only the pending first super admin) and its new token redeems."""
+    store = Store(tmp_path / 'lighthouse')
+    store.bootstrap_super_admin('root', 'Root', tmp_path / 'activation.json')
+    copy = staged(tmp_path, store)
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    live = go_live(copy, tmp_path / 'live')
+    renewed = tmp_path / 'renewed.json'
+    cli(['bootstrap-super-admin', '--data-dir', str(tmp_path / 'live'), '--username', 'root', '--name', 'Root',
+         '--activation-file', str(renewed), '--renew-activation'])
+    assert stat_mode(renewed) == 0o600
+    live.redeem(json.loads(renewed.read_text())['token'], 'root', 'Root', 'long-password-root')
+
+
+def stat_mode(path):
+    return os.stat(path).st_mode & 0o777
 
 
 def test_reconcile_runs_twice_on_one_staged_copy(tmp_path, capsys):
