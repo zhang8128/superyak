@@ -4,6 +4,7 @@ notifier reads nothing from the environment but systemd's result variables, and 
 from contextlib import contextmanager
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -26,6 +27,7 @@ KEPT_DAYS = 30
 WINDOW, MAX_WINDOW = 1800, 6 * 3600
 GIVE_UPS_PER_DAY = 6
 LOCK_WAIT = 5
+MAX_HELD = 1_000_000
 SINCE_BEFORE = 600
 LINE_LIMIT = 400
 DAY = 86400
@@ -57,7 +59,10 @@ def kind_for(unit, monitor):
 
 def _local(at, fmt='%H:%M on %Y-%m-%d'):
     """S11: times in the Pi's local zone, with the date."""
-    return time.strftime(fmt, time.localtime(at))
+    try:
+        return time.strftime(fmt, time.localtime(at))
+    except (OverflowError, OSError, ValueError, TypeError):
+        return 'an unknown time'  # a stored value out of range never stops an alert being rendered
 
 
 def failure_reason(alert):
@@ -83,7 +88,7 @@ def render(alert):
         line = (f'Station alert: {name} stopped unexpectedly at {when} ({alert["result"]}{status}). '
                 f'systemd restarts it unless it was being stopped. {log}')
         held = alert['held_back']
-        if held:
+        if held and alert['held_since'] is not None:
             first = alert['held_since']
             day = _local(first, '%H:%M') if _local(first, '%Y-%m-%d') == _local(at, '%Y-%m-%d') else _local(first)
             line += f' {held} more {"stop" if held == 1 else "stops"} since {day} {"was" if held == 1 else "were"} held back.'
@@ -124,7 +129,11 @@ def _write_private(path, data):
 @contextmanager
 def _lock(path, wait):
     """S12: records are written under a flock on alerts/.lock. After `wait` seconds without it, go on unlocked."""
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        yield False  # a symlink, a directory or anything else that can't be locked: queue the alert unlocked
+        return
     try:
         deadline = time.monotonic() + wait
         while True:
@@ -155,17 +164,43 @@ def _rates(alerts_dir):
 
 
 def _number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """A finite int or float; a bool, NaN, Infinity or an int too big for a float is not."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
-def _state(value):
-    """One unit's record from rate.json. A field of the wrong type (a hand edit) is dropped, never fatal: a duplicate is
-    better than a lost alert (review S2)."""
+def _state(value, now):
+    """One unit's record from rate.json. A field of the wrong type or out of range (a hand edit, a clock that stepped back)
+    is dropped, never fatal and never able to hold an alert back: a duplicate is better than a lost alert (review S2, I1)."""
     value = value if isinstance(value, dict) else {}
     state = {key: value[key] for key in ('window', 'until', 'last', 'held', 'held_since') if _number(value.get(key))}
+    if not 0 < state.get('window', 1) <= MAX_WINDOW:
+        del state['window']
+    for key in ('until', 'last'):
+        if key in state and state[key] > now + MAX_WINDOW:
+            del state[key]
+    if 'held' in state and not (isinstance(state['held'], int) and 0 <= state['held'] <= MAX_HELD):
+        del state['held']
+    if 'held_since' in state and state['held_since'] > now:
+        del state['held_since']
+    if ('held' in state) != ('held_since' in state):
+        state.pop('held', None)
+        state.pop('held_since', None)
     give_ups = value.get('give_ups')
-    state['give_ups'] = [t for t in give_ups if _number(t)] if isinstance(give_ups, list) else []
+    state['give_ups'] = [t for t in give_ups if _number(t) and t <= now] if isinstance(give_ups, list) else []
     return state
+
+
+def _save_rates(alerts_dir, rates):
+    """A rate.json that can't be written is said on stderr and never stops an alert."""
+    try:
+        _write_private(alerts_dir / 'rate.json', rates)
+    except OSError as error:
+        print(f'station-alert: could not write {alerts_dir / "rate.json"}: {type(error).__name__}: {error.strerror or error}', file=sys.stderr)
 
 
 def _hold(state, now, *, stop):
@@ -184,13 +219,14 @@ def record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT):
     alerts_dir = _queue_dir(alerts_dir)
     held, held_since = 0, None
     with _lock(alerts_dir / '.lock', lock_wait) as locked:
+        rates = None
         if locked:
             rates = _rates(alerts_dir)
-            state = rates[unit] = _state(rates.get(unit))
+            state = rates[unit] = _state(rates.get(unit), now)
             if kind == 'stopped':
                 if now < state.get('until', 0):
                     _hold(state, now, stop=True)
-                    _write_private(alerts_dir / 'rate.json', rates)
+                    _save_rates(alerts_dir, rates)
                     return None
                 burst = 'last' in state and now - state['last'] < state.get('window', WINDOW)
                 window = min(state.get('window', WINDOW) * 2, MAX_WINDOW) if burst else WINDOW
@@ -201,14 +237,15 @@ def record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT):
                 if len(recent) >= GIVE_UPS_PER_DAY:
                     _hold(state, now, stop=False)
                     state['give_ups'] = recent
-                    _write_private(alerts_dir / 'rate.json', rates)
+                    _save_rates(alerts_dir, rates)
                     return None
                 state['give_ups'] = recent + [now]
-            _write_private(alerts_dir / 'rate.json', rates)
         alert = {'id': secrets.token_hex(6), 'unit': unit, 'kind': kind, 'at': now, **fields,
                  'held_back': held, 'held_since': held_since}
         alert['text'] = render(alert)
         _write_private(alerts_dir / f'{alert["id"]}.json', alert)
+        if rates is not None:  # after the alert: if it can't be written, no window is set
+            _save_rates(alerts_dir, rates)
         return alert
 
 

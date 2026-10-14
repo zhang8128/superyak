@@ -219,12 +219,12 @@ def test_the_lock_fallback_queues_anyway(tmp_path):
     try:
         assert holder.stdout.readline().strip() == 'held'
         started = time.monotonic()
-        one = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
+        one = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0, lock_wait=0.5)
         waited = time.monotonic() - started
     finally:
         holder.kill()
         holder.wait()
-    assert alerts.LOCK_WAIT == 5 and 5 <= waited < 8
+    assert alerts.LOCK_WAIT == 5 and 0.5 <= waited < 3
     assert one is not None and [found['id'] for _, found in files(tmp_path)] == [one['id']]
     assert not (queue / 'rate.json').exists()
 
@@ -276,11 +276,101 @@ def test_rate_json_and_the_lock_are_private_and_not_followed_through_symlinks(tm
     victim.write_text('keep')
     (queue / '.lock').unlink()
     (queue / '.lock').symlink_to(victim)
-    with pytest.raises(OSError):
-        alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0 + 99999)
+    assert alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0 + 99999) is not None   # unlocked, not lost
     assert victim.read_text() == 'keep'
     (queue / '.lock').unlink()
     (queue / 'rate.json').unlink()
     (queue / 'rate.json').symlink_to(victim)
     alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0 + 99999)
     assert victim.read_text() == 'keep' and not (queue / 'rate.json').is_symlink()
+
+
+def seed_rates(queue, unit, **state):
+    """A rate.json as a clock step or a hand edit could leave it (json.dumps writes Infinity and NaN)."""
+    queue.mkdir(mode=0o700, exist_ok=True)
+    (queue / 'rate.json').write_text(json.dumps({unit: state}))
+
+
+def test_a_future_until_or_give_up_never_holds_a_real_failure(tmp_path):
+    """Review I1: timestamps are bounded by the clock. A clock that stepped back (no RTC), Infinity, NaN or 1e18 in
+    rate.json must not hold stopped alerts or shut the give-up backstop. Catches: no clamp of until/last/give_ups in
+    _state, or no non-finite check."""
+    unit = 'superyak-door.service'
+    for value in (T0 + 10 * 86400, float('inf'), float('nan'), 1e18, -float('inf')):
+        queue = tmp_path / f'q{value}'
+        seed_rates(queue, unit, window=1800, until=value, last=value)
+        assert alerts.record(queue, unit, 'stopped', CRASH, T0) is not None, value
+    queue = tmp_path / 'give-ups'
+    seed_rates(queue, unit, give_ups=[T0 + 3600] * 6 + [float('nan'), 1e18])
+    assert alerts.record(queue, unit, 'down', GIVE_UP, T0) is not None
+    queue = tmp_path / 'window'
+    seed_rates(queue, unit, window=float('inf'), until=0, last=T0 - 1)
+    one = alerts.record(queue, unit, 'stopped', CRASH, T0)
+    assert one is not None and json.loads((queue / 'rate.json').read_text())[unit]['until'] <= T0 + alerts.MAX_WINDOW
+
+
+def test_a_wild_held_since_still_queues_readable_text(tmp_path, utc):
+    """Review I1: held_since = 1e30 (a hand edit) can't make render raise. Catches: no bound on held/held_since in
+    _state, and (for render called directly) no fallback in _local."""
+    unit = 'superyak-door.service'
+    queue = tmp_path / 'alerts'
+    seed_rates(queue, unit, window=1800, until=T0 - 1, last=T0 - 5000, held=3, held_since=1e30)
+    one = alerts.record(queue, unit, 'stopped', CRASH, T0)
+    assert one is not None and one['text'].startswith('Station alert: superyak-door stopped')
+    assert '\n' not in one['text'] and 'Traceback' not in one['text']
+    assert (one['held_back'], one['held_since']) == (0, None)             # the wild value was dropped, not carried
+    queue = tmp_path / 'nan'
+    seed_rates(queue, unit, until=0, last=T0 - 5000, held=2, held_since=float('nan'))
+    assert alerts.record(queue, unit, 'stopped', CRASH, T0)['held_since'] is None
+    odd = dict(one, held_back=3, held_since=1e30)
+    assert 'held back' in alerts.render(odd) or alerts.render(odd).startswith('Station alert')
+    for held in (-4, 10**30, 'x', float('nan'), True):
+        queue = tmp_path / f'h{held}'
+        seed_rates(queue, unit, until=0, last=T0 - 5000, held=held, held_since=T0 - 60)
+        assert alerts.record(queue, unit, 'stopped', CRASH, T0)['held_back'] in (0, 1_000_000)
+
+
+@pytest.mark.parametrize('kind', ['symlink', 'directory'])
+def test_a_bad_lock_never_loses_the_alert(tmp_path, kind):
+    """Review M1: a symlinked or directory .lock is a lock that can't be taken: the alert goes out unlocked. Catches: an
+    os.open error in _lock propagating."""
+    queue = tmp_path / 'alerts'
+    queue.mkdir(mode=0o700)
+    victim = tmp_path / 'victim'
+    victim.write_text('keep')
+    if kind == 'symlink':
+        (queue / '.lock').symlink_to(victim)
+    else:
+        (queue / '.lock').mkdir()
+    one = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
+    assert one is not None and [found['id'] for _, found in files(tmp_path)] == [one['id']]
+    assert victim.read_text() == 'keep' and not (queue / 'rate.json').exists()
+
+
+def test_a_rate_json_that_cannot_be_written_never_loses_the_alert(tmp_path, capsys):
+    """Review M2: the alert file is written before rate.json, and a failing rate write is said on stderr, not raised.
+    Catches: writing rate.json first, or no try/except around the rate write."""
+    queue = tmp_path / 'alerts'
+    queue.mkdir(mode=0o700)
+    (queue / 'rate.json').mkdir()
+    one = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
+    assert one is not None and [found['id'] for _, found in files(tmp_path)] == [one['id']]
+    assert 'rate' in capsys.readouterr().err
+
+
+def test_a_failed_alert_write_leaves_no_window_set(tmp_path, monkeypatch):
+    """Review M2: if the alert can't be written, the unit's window is not already set, so the next failure still queues.
+    Catches: updating rate.json before the alert write."""
+    queue = tmp_path / 'alerts'
+    real = alerts._write_private
+
+    def failing(path, data):
+        if path.name != 'rate.json':
+            raise OSError(28, 'No space left on device')
+        real(path, data)
+
+    monkeypatch.setattr(alerts, '_write_private', failing)
+    with pytest.raises(OSError):
+        alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
+    monkeypatch.setattr(alerts, '_write_private', real)
+    assert alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0 + 1) is not None
