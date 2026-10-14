@@ -249,7 +249,7 @@ station <first 12 characters of the station id> ===` followed by the body, all p
 that tells the ship these were signed by people and to ask in the room on conflict. Body lines that start
 with `===` or `Instructions '` get a leading space so a body cannot forge a block header.
 
-**Ship routes.** `GET /api/ships/me/instructions` returns what binds the ship now. `POST /api/ships/me/drafts`
+**Ship routes.** `GET /api/ships/me/instructions` returns what binds the ship now, plus an optional key `agent_update: {station: <12 hex>}`, present only when the request's presence names an agent commit the station knows is behind its own agent code (version-check spec). `POST /api/ships/me/drafts`
 takes only `title` and `body` (anything else is 400) and creates a draft instructions layer owned by the
 ship's owner and addressed to the ship, with `drafted_by`/`drafted_at`; it returns
 `{id, title, version: 1, state: "draft", drafted_by}`. At most 10 per ship per rolling hour, and at most 20
@@ -690,7 +690,7 @@ the station's `Origin` for writes. A key reaches exactly these routes; every oth
 | POST `/api/chats/{id}/messages` | Post, idempotent by `client_message_id`; optional `reply_to`; at most 30 a minute per ship (429) |
 | GET `/api/mentions?after=&limit=` | Mentions of this ship, oldest first |
 | DELETE `/api/ships/me/key` | Revoke the presented key (`undock`) |
-| GET `/api/ships/me/instructions` | The instruction layers that bind this ship: `instructions` (`[layer_id, revision]` pairs), `layers`, and the prompt `blocks` |
+| GET `/api/ships/me/instructions` | The instruction layers that bind this ship: `instructions` (`[layer_id, revision]` pairs), `layers`, and the prompt `blocks`; optionally `agent_update: {station: <12 hex>}`, present only when the request's presence names an agent commit the station knows is behind its own agent code (version-check spec) |
 | POST `/api/ships/me/drafts` | `{title, body}` → 201, a draft instructions layer in the owner's name, addressed to this ship; 10 an hour and 20 never-activated drafts from the last 7 days (429); 403 for a ship with no owner |
 | POST `/api/ships/me/tickets` | `{message_id}` → a run ticket for a message in one of the ship's rooms (see Run tickets) |
 | POST `/api/ships/me/tickets/{id}/finish` | Close the ship's own ticket |

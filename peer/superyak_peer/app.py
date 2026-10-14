@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from .agent_version import agent_update
 from .common import Problem, valid_utf8
 from .db import Store
 from .inbox import breakout_filter, wait_seconds, with_earlier_noise
@@ -113,7 +114,7 @@ def actor(request):
 def download(row):
     return Response(row['content'], media_type='application/octet-stream', headers={'Content-Disposition': f'attachment; filename="{row["name"]}"'})
 
-def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None):
+def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGINS, secure_cookies=False, federation_endpoint=None, sync_enabled=False, model_config=None, local_demo=False, share_link_file=None, agent_history=None):
     allowed_origins = tuple(allowed_origins) or DEFAULT_ORIGINS
     demo_credentials = []
     if local_demo:
@@ -136,6 +137,7 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     app = FastAPI(title='Superyak', docs_url=None, redoc_url=None, openapi_url=None, lifespan=federation_lifespan)
     store = app.state.store = Store(data_dir, clock=clock, share_link_file=share_link_file)
     app.state.federation = Federation(store, endpoint=federation_endpoint)
+    app.state.agent_history = agent_history  # version check V1: read once by `serve`; None means off
     app.state.sync_enabled = sync_enabled
     install(app)
     from .models import LocalGemma
@@ -220,7 +222,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
 
     @app.get('/api/ships/me/instructions')
     def ship_instructions(request: Request):
-        return store.ship_instructions(ship_member(request)['id'], app.state.federation.identity.peer_id)
+        result = store.ship_instructions(ship_member(request)['id'], app.state.federation.identity.peer_id)
+        update = agent_update(app.state.agent_history, parse_presence(request.headers))  # V3: absent unless behind
+        if update is not None:
+            result['agent_update'] = update
+        return result
 
     @app.post('/api/ships/me/drafts', status_code=201)
     async def ship_draft(request: Request):
