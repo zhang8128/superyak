@@ -72,6 +72,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             for name in ('share_url', 'share_status'):
                 if name not in request_columns:
                     db.execute(f'ALTER TABLE access_requests ADD COLUMN {name} TEXT')
+            ticket_columns = {row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
+            if 'first_deferred' not in ticket_columns:  # ship-status fixes F3: the deferral a run resolved, on its ticket
+                db.execute('ALTER TABLE tickets ADD COLUMN first_deferred REAL')
         self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
         self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
 

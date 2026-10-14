@@ -414,3 +414,37 @@ def test_deferred_here_lists_the_oldest_deferral_first(env):
     clock[0] += 10
     ask(watcher, later)
     assert say(session, room, 'p', 'thinking')['deferred_here'] == [earlier, later]
+
+
+def test_a_run_from_a_deferral_carries_first_deferred_on_every_resend(env):
+    """Ship-status fixes F3: the station keeps the deferral a run resolved on its ticket, and says so on issue and on
+    every re-send to a watcher asking for decisions, so a retry after a lost answer is spared on the station's word
+    (R37). An old watcher never sees the key (R23)."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    first = ask(watcher, asked['id']).json()['first_deferred']
+    on_watch(session, minutes=0)
+    ran = ask(watcher, asked['id']).json()
+    assert ran['decision'] == 'run' and ran['first_deferred'] == first
+    again = ask(watcher, asked['id']).json()
+    assert again['id'] == ran['id'] and again['first_deferred'] == first
+    assert 'first_deferred' not in ask(watcher, asked['id'], decisions=False).json()
+    assert 'first_deferred' not in watcher.post(f'/api/ships/me/tickets/{ran["id"]}/finish', json={}).json()
+
+
+def test_a_run_never_deferred_carries_no_first_deferred(env):
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    ran = ask(watcher, asked['id']).json()
+    assert ran['decision'] == 'run' and 'first_deferred' not in ran
+    assert 'first_deferred' not in ask(watcher, asked['id']).json()
+
+
+def test_the_tickets_column_is_added_once(tmp_path):
+    from superyak_peer.db import Store
+    Store(tmp_path / 'p')
+    store = Store(tmp_path / 'p')  # a second start changes nothing
+    with store.transaction() as db:
+        names = [r['name'] for r in db.execute('PRAGMA table_info(tickets)')]
+    assert names.count('first_deferred') == 1
