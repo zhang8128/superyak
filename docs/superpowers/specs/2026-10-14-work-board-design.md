@@ -353,6 +353,21 @@ message, so it's fenced, never a mention and never ticketed (ship-status R20).
   - for a closed one: `The board item with this key is <state>; claiming doesn't reopen it, and new work needs a new
     key.`
 
+### 5.x Rio Grande's rulings on section 5's open points (2026-10-14)
+
+- **Andy's board across rooms.** The web app gets a "Board" view that lists open items from every current room the
+  person belongs to, grouped by room, oldest first. It is served by a person-only `GET /api/board`, which uses the
+  same rows and the same fencing as the per-room list. Section 2's goal says Andy sees the whole board, and room by
+  room doesn't meet it.
+- **Open items carry to a replacement room.** When adding members or bridging makes a new room (chats.py
+  `_replace_room`, as `carry_brief` does for briefs), the room's **open** items and their links move to the new room
+  in the same transaction. The keys, posters and created times are kept, and one "Carried n open items" line is
+  posted in the new room. Done and dropped items stay in the old room as the record. Claims don't carry, because a
+  claim belongs to its room: a carried item that was taken shows as waiting in the new room until its holder claims
+  it there. A key that already exists in the new room isn't carried; it is listed in the carry line instead.
+  (open, for the D8 reviewer: whether an item that was taken should keep its holder by re-claiming for them.)
+- **The 403 for posting** uses section 6's wording once section 6 is settled.
+
 ## 6. Who may post and take
 
 **Breakouts hold no board** (Rio Grande's ruling). A board makes work visible to everyone in the room, the owner
