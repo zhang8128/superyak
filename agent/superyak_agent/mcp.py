@@ -268,7 +268,6 @@ class Tools:
             return f'Already posted as message {shown_id(sent["id"])} in room {shown_id(room_id)}; the same text was not posted twice.'
         return f'Posted message {shown_id(sent["id"])} to room {shown_id(room_id)}.' + reminder
 
-
     def station_set_brief(self, args):
         """Ship briefs S8: set or update a room's brief as this ship. The revision is checked here first, so a bool or a
         string never reaches the station, and the body is redacted exactly as station_post's text is. The station
@@ -285,6 +284,7 @@ class Tools:
         masked = ' Text that looked like a secret was masked.' if body != given else ''
         return (f'Saved the brief of room {shown_id(room_id)} as revision {saved["revision"]}. Every member is told in a '
                 "station notice, and the room's owner can restore earlier revisions." + masked)
+
     def station_watch(self, args):
         """S4, S9: declare, change or end this session's watch, under its own name (stamp() set the header)."""
         if not (self.named or os.environ.get('CLAUDE_CODE_SESSION_ID')):
