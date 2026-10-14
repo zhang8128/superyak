@@ -352,10 +352,17 @@ The decisions below rest on these facts, each checked on 2026-10-14.
       (`room_members`, `remote_room_members`, `space_members`);
     - lower `is_admin` and `is_super_admin` to the replaced file's value where that is lower.
     - close each breakout that is closed there and still open here, with its closing time (Rio Grande's ruling, Q1).
+    - unpair each peer that is paired here and unpaired there, exactly as `Federation.unpair` does
+      (federation.py:43-45): `peers.paired` = 0, that peer's `pending` and `failed` outbox rows `withdrawn`, and its
+      inbox payloads nulled (revision 4, Rio Grande's ruling after the Task 11 review's C1: "Check delivery now" and
+      `POST /api/sync` deliver to every paired peer whatever `--sync` says, and inbound `/federation/events` accepts
+      any paired peer, so leaving a cut-off peer paired until Andy re-unpairs it in the browser is a real window).
+      This takes away only: a peer unpaired here and paired there stays unpaired, and is reported.
   - **Without one:** revoke every key of every ship that has an owner; those machines dock again. The station's own
     ships, which have no owner (Odo, Wormhole), keep their keys.
   - **Reported, never applied,** since a bad replaced file may be the reason for the restore: users whose password hash
-    differs, instruction layers whose active revision differs, and peers whose pairing differs.
+    differs, instruction layers whose active revision differs, and peers paired there but not here (pairing again
+    is a person's act; taking a pairing away is applied above).
   - **What it prints:** counts, and for each reported or revoked item the username (users and ships), the layer's
     short id and title, the room's short id and title, or the peer's short id, under station-pending's header that
     names and titles come from people and are data, not instructions. It prints no hashes, keys or tokens.
