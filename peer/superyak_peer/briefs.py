@@ -1,14 +1,23 @@
 """Room briefs (docs/superpowers/specs/2026-10-08-room-brief-design.md): a short text a room's owner writes about the
 room, such as its purpose, its decisions so far and who does what. Members and their agents read it as quoted data,
 never as instructions. A room keeps one row with only its current revision; every save, a removal included, writes the
-next revision on that row, so a stale tab can never overwrite a later brief."""
+next revision on that row, so a stale tab can never overwrite a later brief. Every revision is also kept in the room's
+history (ship briefs S5, docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md), which only the owner reads."""
 from .common import Problem, text
 from .ships import safe_line
 
 MAX_BRIEF = 4000
+HISTORY_KEPT = 50     # ship briefs S5: pruning never takes a room's newest 50 revisions,
+HISTORY_DAY = 86400   # nor anything from the last 24 hours, nor the owner's newest revision
 BRIEF_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS room_briefs(room_id TEXT PRIMARY KEY REFERENCES rooms(id), body TEXT NOT NULL, revision INTEGER NOT NULL, author_id TEXT NOT NULL REFERENCES users(id), updated REAL NOT NULL, carried_from TEXT);
+CREATE TABLE IF NOT EXISTS room_brief_revisions(room_id TEXT NOT NULL REFERENCES rooms(id), revision INTEGER NOT NULL, body TEXT NOT NULL, author_id TEXT NOT NULL REFERENCES users(id), updated REAL NOT NULL, carried_from TEXT, PRIMARY KEY(room_id, revision));
+CREATE INDEX IF NOT EXISTS room_brief_revisions_by_author ON room_brief_revisions(author_id, updated);
 '''
+# S5: every start copies each room's current revision into its history, once, so a brief written before history
+# existed (or by older code after a rollback) is kept before any ship can overwrite it.
+BRIEF_BACKFILL = ('INSERT OR IGNORE INTO room_brief_revisions(room_id,revision,body,author_id,updated,carried_from) '
+                  'SELECT room_id,revision,body,author_id,updated,carried_from FROM room_briefs')
 
 
 def brief_body(body):
@@ -40,15 +49,36 @@ class Briefs:
                 row['revision'])
 
     def _write_brief(self, db, room_id, body, revision, author_id, carried_from=None):
-        """The room's one row. A save passes no carried_from: the carried note dates the carried revision only. The
-        audit event names the revision and author, never the text; federation sends no event of this kind and no
-        room snapshot holds a brief, so a brief never leaves this station."""
+        """The room's one row and its history row, in the caller's transaction (ship briefs R11), then pruning. A save
+        passes no carried_from: the carried note dates the carried revision only. The audit event names the revision
+        and author, never the text; federation sends no event of this kind and no room snapshot holds a brief, so a
+        brief never leaves this station."""
+        now = self.clock()
         db.execute('INSERT INTO room_briefs VALUES(?,?,?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET body=excluded.body, '
                    'revision=excluded.revision, author_id=excluded.author_id, updated=excluded.updated, '
                    'carried_from=excluded.carried_from',
-                   (room_id, body, revision, author_id, self.clock(), carried_from))
+                   (room_id, body, revision, author_id, now, carried_from))
+        # A plain INSERT: revisions only go up, so a clash is a bug, and it rolls the whole save back.
+        db.execute('INSERT INTO room_brief_revisions(room_id,revision,body,author_id,updated,carried_from) VALUES(?,?,?,?,?,?)',
+                   (room_id, revision, body, author_id, now, carried_from))
         self.emit(db, 'chat.brief', room_id, revision,
                   {'author_id': author_id, 'revision': revision, **({'carried_from': carried_from} if carried_from else {})})
+        self._prune_brief_history(db, room_id, now)
+
+    def _prune_brief_history(self, db, room_id, now):
+        """S5: a room's revision goes once it is all three: outside the room's newest HISTORY_KEPT, older than
+        HISTORY_DAY, and not the room's newest person-written revision (a removal counts, so text the owner removed
+        ages out like any other). The last day is never pruned, so the ship rate's count (S3) always sees its hour."""
+        db.execute('''DELETE FROM room_brief_revisions WHERE room_id=? AND updated<?
+            AND revision NOT IN (SELECT revision FROM room_brief_revisions WHERE room_id=? ORDER BY revision DESC LIMIT ?)
+            AND revision IS NOT (SELECT MAX(kept.revision) FROM room_brief_revisions AS kept
+                                 JOIN users ON users.id=kept.author_id WHERE kept.room_id=? AND users.kind='person')''',
+                   (room_id, now - HISTORY_DAY, room_id, HISTORY_KEPT, room_id))
+
+    def _backfill_brief_history(self):
+        """S5, at every start, after the schema: each room's current revision goes into its history once."""
+        with self.transaction() as db:
+            db.execute(BRIEF_BACKFILL)
 
     def _brief_to_carry(self, db, room_id, carry):
         """The body to copy into the next room. None without carry_brief (the default: carrying is always a choice) or
