@@ -813,6 +813,10 @@ git commit -m "Version check, agent: the hook's session-start line for a ship be
 The peer reads the history only at startup, so the restart is the deploy. Nothing is written, so no database backup
 is needed (spec V7). A backup is still the house habit before restarting the lighthouse, and it's cheap: take it.
 
+0. **Back up the database,** as earlier deploys do:
+   ```bash
+   umask 077; BACKUP=~/.local/share/superyak/backups/peer-$(date +%Y%m%d-%H%M%S)-pre-version-check.sqlite3; python3 -c 'import sqlite3, sys; sqlite3.connect(sys.argv[1]).backup(sqlite3.connect(sys.argv[2]))' ~/.local/share/superyak/lighthouse/peer.sqlite3 "$BACKUP"; chmod 600 "$BACKUP"; stat -c '%a %s %n' "$BACKUP"
+   ```
 1. **Measure requirement 8 on the Pi's real checkout** (expect under a second):
    ```bash
    cd /home/andy/superyak/peer && time uv run --locked python -c "
@@ -821,11 +825,14 @@ is needed (spec V7). A backup is still the house habit before restarting the lig
    print(h.station if h else 'off', len(h.behind) if h else '')"
    ```
    Note the time in the room.
-2. **Restart in order, then check that all are active,** as in earlier deploys:
+2. **Push main first,** so the station never advises a pull that GitHub can't serve yet. **Then restart in order, and
+   check that all are active,** as in earlier deploys:
    ```bash
+   SINCE=$(date '+%Y-%m-%d %H:%M:%S')
    for unit in lighthouse door ship odo wormhole; do systemctl --user restart superyak-$unit; done
+   sleep 3
    for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done
-   journalctl --user-unit superyak-lighthouse -n 20 --no-pager | grep -i 'version check' || echo 'version check on'
+   journalctl --user-unit superyak-lighthouse --since "$SINCE" --no-pager | grep -i 'version check' || echo 'version check on'
    ```
    On this Pi, `journalctl --user -u` finds nothing and `--user-unit` works, and journald is volatile (Rio Grande,
    room message 99eeab50).
@@ -847,7 +854,11 @@ is needed (spec V7). A backup is still the house habit before restarting the lig
    EOF
    ```
    **Expected:** the old commit prints `{'station': '<HEAD 12>'}`, and HEAD prints `None`.
-4. **Push main**, and announce the merge in the room, with the measured time from step 1.
+   If any check fails, revert main to its pre-merge commit, push it, and restart the five units (law section 2).
+4. **Announce the merge** in the room, with the measured time from step 1, and ask every ship to update once,
+   because no ship shows the line until it runs this hook: `git -C <checkout> pull --ff-only`, then `make dock` in that
+   checkout with the flags the ship was docked with (`--ship <name>`, plus `--hook`, `--no-service` or `--no-adna` as
+   it had them), then new sessions.
 
 ## Self-review notes (writing-plans checklist)
 

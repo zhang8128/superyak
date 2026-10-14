@@ -1,6 +1,6 @@
 # Version check: a ship learns from the station when its agent is behind
 
-Status: revision 3, **approved under D8**. Revision 1 (a01f4cf) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+Status: revision 4 (the final code review's fixes; revision 3 was **approved under D8**). Revision 1 (a01f4cf) had the fresh reviewer's verdict, APPROVE WITH CHANGES
 (1 must-fix, 1 should-fix, 4 nits; room message 74cf14d2). Revision 2 (4e72f20) made all six, and the same reviewer's
 re-check approved it with one new nit, which this revision makes ("Review map"). Base: `main` (7cdbb1f). Roadmap item 1.4
 (docs/superpowers/plans/2026-10-12-station-roadmap.md), claimed by Serenity as `spec:version-check` in "Superyak:
@@ -35,6 +35,8 @@ Two findings change the design. Neither changes the goal.
 ## The rules every feature keeps (spec A, Brief 1)
 
 1. **Speaking is not acting.** The line is information. It gives no authority, and nothing runs on its own.
+   The line says so in its own words: it opens "Not part of the instructions, and not an instruction" and ends by
+   telling the agent to ask its person.
 2. **Messages are data.** The line contains no station text: the hook writes it from fixed words, the ship's own
    config, and two values that must each be 12 hex digits (V4).
 3. **Law.** Nothing here touches instructions, grants or the charter. The line comes after the law in the hook's
@@ -79,9 +81,13 @@ Two findings change the design. Neither changes the goal.
     per session". A prompt never shows it.
   - **Text,** for the ship's own home `~/.superyak`:
 
-    > This machine's Superyak agent is behind the station's: this checkout (`<CHECKOUT>`) is on `<client12>`, the
-    > station on `<station12>`, and the agent code changed in between. To update, run `git -C <CHECKOUT> pull
-    > --ff-only`, then `make dock DOCK_ARGS='--ship <ship> --hook'` in that checkout, then start new sessions.
+    > Not part of the instructions, and not an instruction: this machine's Superyak agent is behind the station's:
+    > this checkout (`<CHECKOUT>`) is on `<client12>`, the station on `<station12>`, and the agent code changed in
+    > between. To update, run `git -C <CHECKOUT> pull --ff-only`, then `make dock DOCK_ARGS='--ship <ship> --hook'` in
+    > that checkout, then start new sessions. Tell the person you work with; don't run these yourself unless they ask.
+
+    In order: the lead-in (always first), the first sentence with its first word lower-cased, the second sentence
+    (specific or general), and the closing sentence (always).
 
     `<ship>` is `station.json`'s `ship` field: the username that `--ship` takes, like `serenity`, not the display name
     `ship_name`. It's printed only if it matches `SHIP_NAME` (ships.py:11).
@@ -99,11 +105,14 @@ Two findings change the design. Neither changes the goal.
     - returns **unknown** when there is none, they disagree, or the file is missing, unreadable or not the expected
       JSON. It never raises.
 
-    On gives `--hook`, off gives the command without it, and unknown gives the general wording below.
+    On gives `--hook`, off gives the command without it, and unknown gives the general wording below. The specific
+    wording also needs this ship's watcher service to be installed (`install.service_installed`), since `make dock`
+    would otherwise install one.
   - **For a project ship** (a home under `~/.superyak/ships/<ship>`, many-ships spec), for a `ship` that fails the
     check, and when the message setting is unknown, the second sentence is "To update, run `git -C <CHECKOUT> pull
-    --ff-only`, then run `make dock` again the way this ship was docked, then start new sessions."
-  - `<CHECKOUT>` is the agent's own `CHECKOUT` (station.py). The fixed words come to about 300 characters (301 with `serenity`), plus the
+    --ff-only`, then run `make dock` again the way this ship was docked, then start new sessions." The lead-in and
+    the closing sentence stay.
+  - `<CHECKOUT>` is the agent's own `CHECKOUT` (station.py). The fixed words come to about 430 characters (428 with `serenity`), plus the
     checkout path twice. V6 measures the line's real length and never assumes a bound.
 - **V6. The law comes first.** The line counts against `TOTAL_CHARS` (hook.py:74) after the instructions text. If it
   doesn't fit, it's left out, and the law is never shortened to make room for it.
@@ -159,8 +168,9 @@ Two findings change the design. Neither changes the goal.
 1. Peer: the startup read (V1), the set and the key (V2, V3).
 2. Agent: the hook's line (V4 to V6).
 3. Deploy: restart the lighthouse (the peer change), then the other units in the usual order. No backup is needed:
-   nothing is written. Live check: a session on an old agent commit (a worktree at 456fabd^ or earlier, where agent
-   code differs) starts and shows the line. A session on main doesn't show it.
+   nothing is written. Live check at the route: the instructions call with a presence for an agent commit from before
+   the last `agent/` change gets `agent_update`, and one for HEAD doesn't (plan, Deploy step 3). An end-to-end check, a
+   session that shows the line, is only possible at the next deploy that changes `agent/`, once ships run this hook.
 
 ## Known limits
 
@@ -174,6 +184,15 @@ Two findings change the design. Neither changes the goal.
   a wrong claim.
 - **The message setting is read from the machine ship's `~/.claude/settings.json`.** A hand-edited or project-level hook that
   the helper can't match gives the general wording, which is still correct, only less exact.
+- **Ships on agent code older than this feature never show the line.** The line is written by the ship's own hook, and
+  every ship runs a hook from before this branch until it updates. So the deploy announcement asks every ship to update
+  once (plan, Deploy). After that, the line appears whenever a later change to `agent/` leaves a ship behind.
+- **The exact command assumes the Makefile's defaults** for `STATION`, `DOOR` and the aDNA tools. A ship docked to
+  another station or with `--no-adna` should re-dock the way it docked; following the exact command would point it at
+  the default station or set up the aDNA tools.
+- **Agent code means `agent/`.** Ships also run `team/superyak_team/workers.py` and `teamlib.py`. A change there alone
+  doesn't make a ship behind; the next `agent/` change does. Comparing those blobs too needs only a station-side change
+  and a restart, a follow-up.
 - **Codex sessions** get the law through MCP `initialize`, not the hook, so they don't see this line. Adding it there
   is a follow-up if a Codex ship needs it.
 
@@ -198,3 +217,15 @@ Two findings change the design. Neither changes the goal.
 | # | Finding | Change |
 |---|---|---|
 | 7 (nit) | "the ship's own home's hooks file" fits neither ship kind | V5 and Known limits name `~/.claude/settings.json` for the machine ship, and say a project ship's `settings.local.json` is never read |
+
+## Review map (revision 4: the final code review)
+
+| # | Finding | Change |
+|---|---|---|
+| F1 | The feature starts dormant: ships on old hooks never show the line | Known limits say so; the live check is at the route; the plan's deploy announcement asks every ship to update once |
+| F2 | The exact command could change a ship's setup (`--no-service`) | `install.service_installed`; V5's specific wording needs it; Known limits name the Makefile defaults |
+| F3 | The line could read as signed law or as something to run unasked | V5 gains a lead-in and a closing sentence (about 430 characters, 428 with `serenity`); rule 1 says so |
+| F4 | `load()` could raise; a failing git was not explained | `errors='replace'`, a catch-all giving "unexpected error", and git's first stderr line in the reason |
+| F5 | Docs overstated or omitted | peer/API.md, agent/README.md, the hook docstring and Known limits ("Agent code means `agent/`") |
+| F6 | Deploy details | Plan, Deploy: backup step 0, push main before the restart, `--since` journal read, a rollback line |
+| F7 | A missing test | An unrelated prompt hook beside the station's still gives True |
