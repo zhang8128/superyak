@@ -403,3 +403,71 @@ def test_undock_finishes_with_a_malformed_settings_file(monkeypatch, tmp_path):
     assert not machine.config.exists() and settings.read_text() == '{not json'
     assert machine.out[0].startswith('Could not remove the Claude Code hooks from ~/.claude/settings.json (Expecting property name')
     assert machine.out[-1] == 'Undocked: key revoked, watcher stopped and station tools removed; the hooks stay in ~/.claude/settings.json.'
+
+
+from superyak_agent.install import hook_command, install_hooks, messages_installed  # noqa: E402
+
+
+def test_messages_installed_reads_what_install_hooks_wrote(tmp_path):
+    config = tmp_path / 'home' / 'station.json'
+    on, off = tmp_path / 'on.json', tmp_path / 'off.json'
+    install_hooks(on, config, messages=True)
+    install_hooks(off, config, messages=False)
+    assert messages_installed(on, config) is True
+    assert messages_installed(off, config) is False
+
+
+def prompt_settings(path, *commands):
+    path.write_text(json.dumps({'hooks': {'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': c}]} for c in commands]}}))
+    return path
+
+
+def test_two_station_prompt_hooks_that_disagree_are_unknown(tmp_path):
+    config = tmp_path / 'home' / 'station.json'
+    base = hook_command(config)
+    path = prompt_settings(tmp_path / 's.json', base, f'env SUPERYAK_HOOK_MESSAGES=0 {base}')
+    assert messages_installed(path, config) is None
+
+
+@pytest.mark.parametrize('content', [None, '', 'not json', '[]', '{"hooks": []}', '{"hooks": {"UserPromptSubmit": [3]}}',
+                                     '{"hooks": {"UserPromptSubmit": [{"hooks": "x"}]}}', '{"hooks": {"SessionStart": []}}'])
+def test_a_missing_damaged_or_odd_file_is_unknown(tmp_path, content):
+    config, path = tmp_path / 'home' / 'station.json', tmp_path / 's.json'
+    if content is not None:
+        path.write_text(content)
+    assert messages_installed(path, config) is None
+
+
+def test_another_checkouts_hook_is_not_ours(tmp_path):
+    config = tmp_path / 'home' / 'station.json'
+    other = '/usr/bin/python3 /elsewhere/superyak/agent/run_agent.py hook --config /x/station.json'
+    assert messages_installed(prompt_settings(tmp_path / 's.json', other), config) is None
+
+
+def test_an_unrelated_prompt_hook_beside_the_stations_still_gives_true(tmp_path):
+    config = tmp_path / 'home' / 'station.json'
+    path = prompt_settings(tmp_path / 's.json', 'echo unrelated', hook_command(config))
+    assert messages_installed(path, config) is True
+
+
+def test_service_installed_sees_the_systemd_unit_the_plist_or_neither(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    home = tmp_path / 'home'
+    assert install.service_installed(home) is False
+    label, unit, _ = install.service_names(home)
+    systemd = tmp_path / '.config' / 'systemd' / 'user' / unit
+    systemd.parent.mkdir(parents=True)
+    systemd.write_text('x')
+    assert install.service_installed(home) is True
+    systemd.unlink()
+    plist = tmp_path / 'Library' / 'LaunchAgents' / f'{label}.plist'
+    plist.parent.mkdir(parents=True)
+    plist.write_text('x')
+    assert install.service_installed(home) is True
+
+
+def test_service_installed_never_raises(tmp_path, monkeypatch):
+    def boom(home):
+        raise OSError('no')
+    monkeypatch.setattr(install, 'service_names', boom)
+    assert install.service_installed(tmp_path) is False

@@ -115,6 +115,13 @@ its title, revision and signer.
   after any notice that points to it.
 - **`status`.** Prints `Instructions: none`, or one line per layer: title, revision and signer.
 
+**Behind the station.** When the station's agent code has changed since this checkout's commit, session start ends
+with one line naming both commits and the exact update command: a fast-forward pull, then `make dock` with
+`--ship` and, when room messages are on, `--hook`, then new sessions. The exact command is printed only when this
+ship's watcher is installed; a ship docked differently (another station, `--no-service`, `--no-adna`) re-docks the
+way it docked. Ships that are current, ahead, or on commits the station doesn't know see nothing. Codex sessions
+don't see it (they get the law through MCP). See spec 2026-10-14-version-check-design.md.
+
 **Drafting from a session.** `station_draft_instructions(title, body)` (title one line, at most 200 characters)
 saves a draft for the owner. Nothing changes for the ship until the owner activates it in the web app. The
 station lets a ship draft 10 layers an hour, and keep at most 20 drafts from the last 7 days that were never
@@ -166,7 +173,7 @@ replaced (removing Wormhole in the browser does not, so an earlier room would co
 The bridge relays only what is said after its first run, and never messages from `wormhole` or `odo`. It never relays the room's brief, only messages.
 
 - **Out.** A message with an explicit `@persona` that is in the persona map (case-insensitive, trailing
-  punctuation dropped; as on the station, a name in code, in double quotes or on a `>` line does not count) becomes a new memo `coord_<YYYY_MM_DD>_station_to_<persona>_<slug>.md` in
+  punctuation dropped; as on the station, a name in code, in quotes or on a `>` line does not count) becomes a new memo `coord_<YYYY_MM_DD>_station_to_<persona>_<slug>.md` in
   `who/coordination/outbound/`. The slug is up to six words; a number makes the name unique. The memo
   is `status: staged`, `reply_required: true`, expires after 14 days, and quotes the message with
   secrets redacted. Wormhole posts `Sent to Venus (Network.aDNA) as <file>.` in the room. Unknown
