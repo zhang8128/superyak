@@ -1,6 +1,6 @@
 # Reply-to index: `_answered` searches replies by index instead of scanning them all
 
-Status: revision 2, for the same reviewer's re-check. Revision 1 (b1454d2) had the fresh reviewer's verdict, REQUEST
+Status: revision 2, **approved under D8** (the re-check of 32471f3 is APPROVE). Revision 1 (b1454d2) had the fresh reviewer's verdict, REQUEST
 CHANGES (1 must-fix, 1 should-fix, 2 nits): the test stayed red with the fix, because a search by `reply_to` alone plans
 as `USING COVERING INDEX`. Revision 2 checks the plan of the statement `_answered` really runs. Base: `main` (26eb709). Branch `reply-to-index`. Claimed by Serenity as
 `fix:reply-to-index`. The follow-up named in the stale-deferrals spec's Known limits and in its section 2 review, stake 4
