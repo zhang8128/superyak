@@ -199,7 +199,7 @@ want of this:
     - It sets `notice_posted`, so it's posted at most once per mention. Being the system author's, with no `reply_to`, it
       can never count as an answer (R7, R11, R32).
   - **What the session on watch sees.** A deferred mention reaches the session through its inbox like any message.
-    Each unread item that is one of this ship's deferred mentions carries `deferred: {author_verified, would_be:
+    Each unread item that is one of this ship's deferred mentions that still waits (under the bound and not yet answered by the ship; stale deferrals spec) carries `deferred: {author_verified, would_be:
     "read"}`: the station-verified author (the same `describe()` the inbox already shows) and the mode the station
     would have given. The hook renders it as "(deferred to you; the station would have given a read-only run)".
     - **The on-watch line.** Whenever the session is on a writable watch and its block holds any item with
@@ -212,7 +212,7 @@ want of this:
     - So the session never takes the text as authority (it knows the station would have answered read-only), and it
       knows how to close the mention (a1fbbe35, point 2).
   - **`reply_to` is the only signal of an answer.** Counting any later post by the ship would swallow unrelated
-    mentions. When `station_post` is called without `reply_to` and this ship has deferred mentions in that room, its
+    mentions. When `station_post` is called without `reply_to` and this ship has deferred mentions in that room that still wait (same qualifier), its
     result adds: "Deferred mentions in this room still waiting for a reply_to: <ids>."
   - **Old MCP servers.** The station's decision reads `message_replies`, never client message ids, so a reply's
     client id can't confuse it. MCP servers older than d82caf4 still use the watcher's `reply-<id>` client ids

@@ -1,5 +1,6 @@
 """Member-only rooms, linked new audiences, epoch-rechecked messages."""
 from .common import Problem, text, ids, uid, require
+from .tickets import DEFER_BOUND_SECONDS
 
 class Chats:
     def _room(self, db, actor, key):
@@ -99,7 +100,8 @@ class Chats:
             sent = dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
             if reply_to is None:  # R27: this ship's deferred mentions here that still wait (stale deferrals spec)
                 held = [r[0] for r in db.execute('''SELECT deferrals.message_id FROM deferrals JOIN messages
-                    ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?''', (actor, key))]
+                    ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?
+                    AND deferrals.first_deferred > ?''', (actor, key, self.clock() - DEFER_BOUND_SECONDS))]
                 waiting = self._waiting_deferrals(db, actor, held)
                 if waiting:  # R35: present only when it has something to say
                     sent['deferred_here'] = waiting

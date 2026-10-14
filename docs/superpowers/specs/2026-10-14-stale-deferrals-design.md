@@ -66,9 +66,10 @@ Measured on main with two tests, both red today (peer/tests/test_deferrals.py, u
    (`test_deferred_mentions_reach_the_session_with_their_verified_author_and_would_be_mode`,
    `test_a_post_without_reply_to_lists_the_rooms_deferred_mentions`).
 4. The ticket path's tests stay green: the bound's run, the notice, `answered` (test_deferrals.py, test_ship_agent.py).
-5. A kind message never counts as the ship's answer (R7, R32): the helper reuses `_answered`. In practice this is the
-   ship's own claim message, since a notice's author is the system (test 3, a guard: it passes today, and the "plain
-   join" mutation below makes it fail).
+5. A kind message never counts as the ship's answer (R7, R32): the helper reuses `_answered`. The case is unreachable
+   through the API today: a notice's author is the system, and claims carry no `reply_to` (room_claims.py) while only
+   `send_message` writes `message_replies`. Test 3 builds the state by hand as a defence-in-depth guard: it passes today,
+   and the "plain join" mutation below makes it fail.
 6. A reply to the mention by someone other than the ship (a person, another ship) doesn't stop it waiting (test 2's
    first half).
 

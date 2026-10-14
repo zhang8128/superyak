@@ -416,6 +416,36 @@ def test_deferred_here_lists_the_oldest_deferral_first(env):
     assert say(session, room, 'p', 'thinking')['deferred_here'] == [earlier, later]
 
 
+def test_deferred_here_lists_only_this_rooms_deferrals(env):
+    """Stale deferrals, final review: R27 is per room. A mention deferred in each of two rooms the ship is in; a post
+    without reply_to in one room lists that room's mention only."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    other = clients[0].post('/api/chats', json={'title': 'Galley', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    here = say(clients[1], room, 'a', '@serenity a question here')
+    there = say(clients[1], other, 'b', '@serenity a question there')
+    on_watch(session)
+    ask(watcher, here['id'])
+    ask(watcher, there['id'])
+    assert say(session, room, 'p', 'thinking')['deferred_here'] == [here['id']]
+    assert say(session, other, 'q', 'thinking')['deferred_here'] == [there['id']]
+
+
+def test_a_deferral_for_another_ship_never_marks_this_ships_unread(env):
+    """Stale deferrals, final review: the deferral is the ship's own. One message mentions two ships and only the
+    second is deferred (only its watch is on, only it asks), so the first ship's unread carries no deferred mark."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    rio, rio_key = docked(store, users[0]['id'], 'rio-grande')
+    both = clients[0].post('/api/chats', json={'title': 'Both', 'member_ids': [ship['id'], rio['id'], users[1]['id']]}).json()['id']
+    asked = say(clients[1], both, 'a', '@serenity @rio-grande a question for you both')
+    on_watch(ship_client(app, rio_key, **HEADERS))
+    assert ask(ship_client(app, rio_key), asked['id']).json()['decision'] == 'defer'
+    assert [(r['ship_id'], r['message_id']) for r in table(store, 'deferrals')] == [(rio['id'], asked['id'])]
+    mine = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' not in {m['message_id']: m for m in mine['messages']}[asked['id']]
+    theirs = ship_client(app, rio_key, **HEADERS).post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' in {m['message_id']: m for m in theirs['messages']}[asked['id']]
+
+
 def test_a_run_from_a_deferral_carries_first_deferred_on_every_resend(env):
     """Ship-status fixes F3: the station keeps the deferral a run resolved on its ticket, and says so on issue and on
     every re-send to a watcher asking for decisions, so a retry after a lost answer is spared on the station's word
