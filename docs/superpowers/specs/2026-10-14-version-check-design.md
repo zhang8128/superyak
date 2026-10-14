@@ -1,6 +1,7 @@
 # Version check: a ship learns from the station when its agent is behind
 
-Status: revision 4 (the final code review's fixes; revision 3 was **approved under D8**). Revision 1 (a01f4cf) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+Status: revision 4, **approved under D8**: it made the final code review's fixes, and its D8 re-check (APPROVE WITH
+CHANGES, one should-fix) is applied as written. Revision 3 was approved under D8 before the build. Revision 1 (a01f4cf) had the fresh reviewer's verdict, APPROVE WITH CHANGES
 (1 must-fix, 1 should-fix, 4 nits; room message 74cf14d2). Revision 2 (4e72f20) made all six, and the same reviewer's
 re-check approved it with one new nit, which this revision makes ("Review map"). Base: `main` (7cdbb1f). Roadmap item 1.4
 (docs/superpowers/plans/2026-10-12-station-roadmap.md), claimed by Serenity as `spec:version-check` in "Superyak:
@@ -130,7 +131,8 @@ Two findings change the design. Neither changes the goal.
 5. The hook writes the line at session start and never at a prompt. With a settings file whose station
    `UserPromptSubmit` hook has no `SUPERYAK_HOOK_MESSAGES=0`, the command has `--hook`. With one where it has that word,
    the command has no `--hook`. A missing, unreadable or non-JSON file, no station prompt hook, or two that disagree
-   give the general wording, and so does a project home.
+   give the general wording, and so does a project home, or a machine ship whose watcher service isn't installed
+   (`install.service_installed`), even when the message setting is known.
 6. A `station` value that isn't 12 hex digits, equals the hook's own commit, or arrives inside a non-object is
    ignored.
 7. When the law fills `TOTAL_CHARS`, the line is dropped and the law is whole.
@@ -159,7 +161,8 @@ Two findings change the design. Neither changes the goal.
   read and set (including `--max-count`), V2's cases, V3's key present and absent (comparing the full JSON with and
   without), and V1's failure paths (not a checkout, `git` not found, a timeout).
 - **Agent:** hook tests with a fake transport and a temp settings file cover requirements 1 and 5 to 7, and
-  `messages_installed` gets its own tests for on, off and each unknown case. They include the `--hook` and project
+  `messages_installed` gets its own tests for on, off and each unknown case, and `service_installed` its own for the
+  systemd unit, the plist, neither, and never raising. They include the `--hook` and project
   wording, and a byte-for-byte comparison against today's output for an `agent_update`-free response.
 - **Both suites pass on the Pi** before the merge (D3).
 
@@ -229,3 +232,9 @@ Two findings change the design. Neither changes the goal.
 | F5 | Docs overstated or omitted | peer/API.md, agent/README.md, the hook docstring and Known limits ("Agent code means `agent/`") |
 | F6 | Deploy details | Plan, Deploy: backup step 0, push main before the restart, `--since` journal read, a rollback line |
 | F7 | A missing test | An unrelated prompt hook beside the station's still gives True |
+
+## Review map (revision 4's D8 re-check: APPROVE WITH CHANGES)
+
+| # | Finding | Change |
+|---|---|---|
+| S1 (should-fix) | requirement 5 and Testing didn't mention F2's `service_installed` gate | requirement 5 names a machine ship without its watcher; Testing names `service_installed`'s tests |
