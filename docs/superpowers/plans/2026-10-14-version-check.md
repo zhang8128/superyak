@@ -13,6 +13,9 @@ fixed words. It decides whether to include `--hook` by reading the installed pro
 
 **Tech Stack:** Python 3.11+, FastAPI (peer), stdlib only (agent), git CLI on the station, pytest.
 
+**Status:** revision 2, for the same reviewer's re-check. Revision 1 (457b5a5) had the fresh reviewer's verdict, APPROVE
+WITH CHANGES (2 must-fix, 1 should-fix, 4 nits; room message b7b4cc72). This revision makes them ("Review map").
+
 **Spec:** `docs/superpowers/specs/2026-10-14-version-check-design.md` (revision 3, approved under D8). Read it first.
 Requirement and decision numbers below (V1-V7, requirements 1-8) are the spec's.
 
@@ -38,13 +41,17 @@ only when Rio Grande approves it in "Superyak: city of AI" and both suites pass 
   - General second sentence: "To update, run `git -C <CHECKOUT> pull --ff-only`, then run `make dock` again the way
     this ship was docked, then start new sessions."
 - Station text never reaches the line: only the 12-hex `station` value, after it has been checked.
+- `peer/pyproject.toml` keeps reviewed release inventories that list every file. A new peer module goes in both the
+  sdist and the wheel `only-include` lists, and a new peer test file in the sdist list, or the built station fails to
+  start (`test_packaging.py`). The agent package has no new module in this plan.
 
 ## Review Focus
 
 Five inputs the spec implies but its requirements don't name, most likely first. Each has a test in its task.
 
 1. **A checkout path with a space or a quote** (`/Users/a b/superyak`). A person copies the command into a shell, so
-   it must still work: the path inside the two commands is `shlex.quote`d (Task 4, `test_a_checkout_path_with_a_space_is_quoted_in_the_commands`).
+   it must still work: the path in the `git -C <path> pull --ff-only` command is `shlex.quote`d (the `make dock`
+   command holds no path) (Task 4, `test_a_checkout_path_with_a_space_is_quoted_in_the_commands`).
 2. **The station's checkout is a git worktree or a detached HEAD.** `.git` is a file in a worktree, and a deploy can
    leave HEAD detached. Both must still read (Task 1, `test_a_worktree_checkout_is_found_and_read` and
    `test_a_detached_head_reads`).
@@ -61,6 +68,7 @@ Five inputs the spec implies but its requirements don't name, most likely first.
 
 **Files:**
 - Create: `peer/superyak_peer/agent_version.py`
+- Modify: `peer/pyproject.toml` (both `only-include` inventories)
 - Test: `peer/tests/test_agent_version.py`
 
 **Interfaces:**
@@ -296,15 +304,24 @@ def agent_update(history, presence):
     return {'station': history.station} if commit in history.behind else None
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: List the new files in the release inventories**
 
-Run: `cd peer && uv run --locked python -m pytest -q tests/test_agent_version.py`
-Expected: 16 passed (counting each parametrized case).
+In `peer/pyproject.toml`, add `"superyak_peer/agent_version.py",` right after `"superyak_peer/access_requests.py",`
+in **both** `only-include` lists: `[tool.hatch.build.targets.sdist]` (about line 47) and
+`[tool.hatch.build.targets.wheel]` (about line 121). Add `"tests/test_agent_version.py",` right after
+`"tests/test_access_requests.py",` in the sdist list (about line 82). The lists are alphabetical. Every peer test file
+is listed there, and a test that isn't listed silently drops out of the released source bundle.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run the tests to verify they pass, with the packaging tests**
+
+Run: `cd peer && uv run --locked python -m pytest -q tests/test_agent_version.py tests/test_packaging.py`
+Expected: 16 + 3 passed. Without Step 4, Task 2's import of `agent_version` in `__main__.py` makes two packaging tests
+fail: the built station can't import the module.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add peer/superyak_peer/agent_version.py peer/tests/test_agent_version.py
+git add peer/superyak_peer/agent_version.py peer/tests/test_agent_version.py peer/pyproject.toml
 git commit -m "Version check, peer: the station reads its agent history once at startup (V1, V2)"
 ```
 
@@ -316,6 +333,7 @@ git commit -m "Version check, peer: the station reads its agent history once at 
 - Modify: `peer/superyak_peer/app.py` (`create_app` signature at :116 and its body near :137; the
   `/api/ships/me/instructions` route at :221-223)
 - Modify: `peer/superyak_peer/__main__.py:335` (the `serve` command's `create_app` call)
+- Modify: `peer/pyproject.toml` (the sdist inventory: the new test file)
 - Test: `peer/tests/test_agent_version_route.py`
 
 **Interfaces:**
@@ -424,18 +442,21 @@ In `peer/superyak_peer/__main__.py`, add `from . import agent_version` beside th
 Then add `agent_history=agent_version.load()` to the `create_app(...)` call at line 335. Call it as
 `agent_version.load()`, an attribute lookup, so the test's monkeypatch reaches it.
 
+In `peer/pyproject.toml`'s sdist `only-include` list, add `"tests/test_agent_version_route.py",` right after
+`"tests/test_agent_version.py",` (Task 1 added that one).
+
 - [ ] **Step 4: Run the tests to verify they pass, then the whole peer suite**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_agent_version_route.py tests/test_agent_version.py`
 Expected: all pass.
 Run: `make check-peer` (from the repo root)
-Expected: every test passes. Before this branch the suite had 505 tests on the single-quote branch or 502 on main;
-it now has those plus the new ones. Name any failure in the report, even one this change didn't cause.
+Expected: every test passes. Main had 505 peer tests at 05ac33c (the single-quote branch merged), so expect 526
+(505 + 21 new). Name any failure in the report, even one this change didn't cause.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add peer/superyak_peer/app.py peer/superyak_peer/__main__.py peer/tests/test_agent_version_route.py
+git add peer/superyak_peer/app.py peer/superyak_peer/__main__.py peer/tests/test_agent_version_route.py peer/pyproject.toml
 git commit -m "Version check, peer: the instructions route adds agent_update only for a ship behind (V3)"
 ```
 
@@ -682,6 +703,20 @@ def test_the_line_is_dropped_when_the_law_fills_the_budget(ship):
     assert 'x' * (hook.TOTAL_CHARS - 400) in text  # the law is whole
 
 
+def test_the_line_shows_when_law_and_line_fill_the_budget_exactly(ship):
+    fake, serenity, config, settings, tmp_path = ship
+    line = hook._version_line({'agent_update': {'station': STATION}}, config)
+    law(fake, serenity, body='x')
+    one = len(hook.run(config, transport=fake, event='session-start', session_id='probe', sessions_dir=tmp_path / 'probe'))
+    extra = hook.TOTAL_CHARS - one - 2 - len(line)  # body characters that make law, blank line and line exactly TOTAL_CHARS
+    law(fake, serenity, body='x' * (1 + extra), agent_update={'station': STATION})
+    exact = start(fake, config, tmp_path)
+    assert len(exact) == hook.TOTAL_CHARS and exact.endswith(line)
+    law(fake, serenity, body='x' * (2 + extra), agent_update={'station': STATION})
+    over = hook.run(config, transport=fake, event='session-start', session_id='s2', sessions_dir=tmp_path / 'sessions')
+    assert "This machine's" not in over
+
+
 def test_the_line_stands_alone_when_there_is_no_law(ship):
     fake, serenity, config, settings, tmp_path = ship
     fake.instruction_state[serenity['id']] = {'instructions': [], 'layers': [], 'blocks': '', 'agent_update': {'station': STATION}}
@@ -760,9 +795,9 @@ In `agent/README.md`, in the section that describes the hook's session-start out
 - [ ] **Step 4: Run the tests to verify they pass, then the whole agent suite**
 
 Run: `cd agent && uv run --locked --extra dev python -m pytest -q tests/test_hook_version.py`
-Expected: 18 passed.
+Expected: 19 passed. The exact-budget test fails if `<=` in the V6 check becomes `<` (checked while writing this plan).
 Run: `make check-agent` (from the repo root)
-Expected: every test passes (593 before this branch, plus the new ones). Name any failure.
+Expected: every test passes: 593 before this branch, plus 30 new, so 623. Name any failure.
 
 - [ ] **Step 5: Commit**
 
@@ -790,18 +825,20 @@ is needed (spec V7). A backup is still the house habit before restarting the lig
    ```bash
    for unit in lighthouse door ship odo wormhole; do systemctl --user restart superyak-$unit; done
    for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done
-   journalctl --user -u superyak-lighthouse -n 20 --no-pager | grep -i 'version check' || echo 'version check on'
+   journalctl --user-unit superyak-lighthouse -n 20 --no-pager | grep -i 'version check' || echo 'version check on'
    ```
+   On this Pi, `journalctl --user -u` finds nothing and `--user-unit` works, and journald is volatile (Rio Grande,
+   room message 99eeab50).
    **Expected:** five `active` lines and `version check on`. If the journal says "version check off", the station
    still serves as before. Read the reason, and fix it in a follow-up rather than rolling back.
 3. **Live check,** read-only apart from one presence row named `version-check-live`, which is pruned after a day:
    ```bash
    cd /home/andy/superyak && python3 - <<'EOF'
-   import subprocess, sys; sys.path[:0] = ['agent']
+   import subprocess, sys; sys.path[:0] = ['agent', 'team']  # as run_agent.py does: station.py imports superyak_team
    from superyak_agent.station import StationClient, load_config, presence_headers
    git = lambda *a: subprocess.run(['git', *a], capture_output=True, text=True, check=True).stdout.strip()
    last = git('rev-list', '-1', 'HEAD', '--', 'agent/')
-   old, now = git('rev-parse', '--short=12', last + '^'), git('rev-parse', '--short=12', 'HEAD')
+   old, now = git('rev-parse', last + '^')[:12], git('rev-parse', 'HEAD')[:12]  # [:12], exactly as read_history cuts
    config = load_config()
    for commit in (old, now):
        client = StationClient(config['station'], config['key'], config.get('origin'), None,
@@ -825,7 +862,23 @@ is needed (spec V7). A backup is still the house habit before restarting the lig
     5 is Tasks 3 and 4. 6 and 7 are Task 4. 8 is Deploy step 1.
 - **Interfaces:** the names match across tasks: `AgentHistory`, `agent_update`, `load`, `messages_installed` and
   `_version_line`.
-- **Dry run:** every code block here was run as written, in a scratch worktree at 37c508f,
-  before review. Task 1 gave 16 passed, Tasks 1 and 2 together 21, and Tasks 3 and 4 with test_install 66, after
-  one test fix that this text already carries. That fix was the project-ship case, which must call `_version_line`
-  directly because `claims.verdict` stands a project ship's hook down outside its project.
+- **Dry run:** every code block here was run as written, in a scratch worktree, together with both full suites.
+  - **Revision 1** ran each task's own tests (16, 21, then 66 with test_install, after the project-ship test fix this
+    text carries). It missed the peer suite's two packaging failures, which the review found (and which surfaced
+    in the full run just after submission), and it never ran the deploy script's imports.
+  - **Revision 2:** with the inventory lines, the peer packaging tests pass (3). The agent suite gives 622 + 1 = 623
+    with the exact-budget test. The live check's imports load with `['agent', 'team']` and fail with `['agent']`
+    alone.
+
+## Review map (revision 2: the review of 457b5a5)
+
+| # | Finding | Change |
+|---|---|---|
+| M1 | `agent_version.py` missing from both peer inventories; two packaging tests fail | Task 1 Step 4 adds it to the sdist and wheel lists; Step 5 runs `test_packaging.py`; Global Constraints names the rule |
+| M2 | the live check's `sys.path` lacked `team/` | `['agent', 'team']`, as run_agent.py does |
+| S1 | the new test files weren't in the sdist list | Task 1 Step 4 and Task 2 Step 3 add them |
+| N1 | `--short=12` isn't `[:12]` | the live check slices `[:12]`, as read_history does |
+| N2 | Review Focus 1 said "two commands" | only the `git -C` command holds the path |
+| N3 | no test at V6's exact boundary | `test_the_line_shows_when_law_and_line_fill_the_budget_exactly`, checked against the `<` mutant |
+| N4 | the route parses presence twice | kept: it's pure and cheap, and keeps `ship_for_key`'s signature unchanged |
+| (Rio Grande) | `journalctl --user -u` finds nothing on the Pi | Deploy step 2 uses `--user-unit` |
