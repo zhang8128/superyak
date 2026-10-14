@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+from . import agent_version
 from .auth import password_hash
 from .common import Problem, text
 from .db import Store
@@ -332,7 +333,7 @@ def main(argv=None):
             origins = args.origin or [f'{"https" if tls else "http"}://{args.host}:{args.port}']
             from .models import load_config
             model_config = load_config(args.model_config)
-            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file)
+            app = create_app(args.data_dir, local_demo=args.local_demo, model_config=model_config, allowed_origins=origins, secure_cookies=tls or args.proxy_headers, federation_endpoint=args.federation_endpoint, sync_enabled=args.sync, share_link_file=args.share_link_file, agent_history=agent_version.load())
             uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=str(args.tls_cert) if tls else None, ssl_keyfile=str(args.tls_key) if tls else None, proxy_headers=args.proxy_headers, forwarded_allow_ips='127.0.0.1' if args.proxy_headers else None)
     except (Problem, ValueError, OSError) as exc:
         parser.exit(1, f'{exc}\n')
