@@ -241,7 +241,8 @@ def _read_session(path):
 
 def _prune(sessions_dir, keep, now):
     """Session files (state `.json`, `.watch`, `.prompted`) whose `seen` is more than STATE_DAYS old, or missing or not
-    a number, are deleted. The current session's files (`keep`'s key) are never touched."""
+    a number, are deleted, except a `.watch` without a usable `seen`: it ages by its file's mtime instead, since the hook
+    reads an unreadable choice as "off". The current session's files (`keep`'s key) are never touched."""
     keep_key = Path(keep).name[:16] if keep else None
     for path in Path(sessions_dir).iterdir():
         if not STATE_NAME.fullmatch(path.name) or path.name[:16] == keep_key:
@@ -252,7 +253,7 @@ def _prune(sessions_dir, keep, now):
             except Exception:  # noqa: BLE001 - unreadable
                 seen = None
             if not (type(seen) in (int, float) and math.isfinite(seen)) and path.suffix == '.watch':
-                seen = path.lstat().st_mtime  # N2: the hook reads an unreadable choice as "off"; age it, don't undo it
+                seen = path.lstat().st_mtime  # N1: the hook reads an unreadable choice as "off"; age it, don't undo it
             if not (type(seen) in (int, float) and math.isfinite(seen)) or seen < now - STATE_DAYS * 86400:
                 path.unlink()
         except Exception:  # noqa: BLE001 - damaged: delete it
