@@ -442,3 +442,32 @@ def test_another_checkouts_hook_is_not_ours(tmp_path):
     config = tmp_path / 'home' / 'station.json'
     other = '/usr/bin/python3 /elsewhere/superyak/agent/run_agent.py hook --config /x/station.json'
     assert messages_installed(prompt_settings(tmp_path / 's.json', other), config) is None
+
+
+def test_an_unrelated_prompt_hook_beside_the_stations_still_gives_true(tmp_path):
+    config = tmp_path / 'home' / 'station.json'
+    path = prompt_settings(tmp_path / 's.json', 'echo unrelated', hook_command(config))
+    assert messages_installed(path, config) is True
+
+
+def test_service_installed_sees_the_systemd_unit_the_plist_or_neither(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    home = tmp_path / 'home'
+    assert install.service_installed(home) is False
+    label, unit, _ = install.service_names(home)
+    systemd = tmp_path / '.config' / 'systemd' / 'user' / unit
+    systemd.parent.mkdir(parents=True)
+    systemd.write_text('x')
+    assert install.service_installed(home) is True
+    systemd.unlink()
+    plist = tmp_path / 'Library' / 'LaunchAgents' / f'{label}.plist'
+    plist.parent.mkdir(parents=True)
+    plist.write_text('x')
+    assert install.service_installed(home) is True
+
+
+def test_service_installed_never_raises(tmp_path, monkeypatch):
+    def boom(home):
+        raise OSError('no')
+    monkeypatch.setattr(install, 'service_names', boom)
+    assert install.service_installed(tmp_path) is False

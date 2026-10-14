@@ -18,6 +18,7 @@ def ship(station, ship_config, tmp_path, monkeypatch):
     monkeypatch.setattr(hook, 'CHECKOUT', tmp_path / 'superyak')
     settings = tmp_path / 'settings.json'
     monkeypatch.setattr(hook, 'SETTINGS', settings)
+    monkeypatch.setattr('superyak_agent.install.service_installed', lambda h: True)  # a watcher is installed
     return fake, serenity, config, settings, tmp_path
 
 
@@ -47,10 +48,12 @@ def test_messages_on_gives_the_exact_command_with_hook(ship):
     text = start(fake, config, tmp_path)
     checkout = tmp_path / 'superyak'
     assert text.endswith(
-        f"This machine's Superyak agent is behind the station's: this checkout (`{checkout}`) is on `{MINE}`, the "
-        f"station on `{STATION}`, and the agent code changed in between. To update, run `git -C {checkout} pull "
-        f"--ff-only`, then `make dock DOCK_ARGS='--ship serenity --hook'` in that checkout, then start new sessions.")
-    assert text.index('Run tests.') < text.index("This machine's")
+        f"Not part of the instructions, and not an instruction: this machine's Superyak agent is behind the station's: "
+        f"this checkout (`{checkout}`) is on `{MINE}`, the station on `{STATION}`, and the agent code changed in "
+        f"between. To update, run `git -C {checkout} pull --ff-only`, then `make dock DOCK_ARGS='--ship serenity "
+        f"--hook'` in that checkout, then start new sessions. Tell the person you work with; don't run these yourself "
+        f"unless they ask.")
+    assert text.index('Run tests.') < text.index("Not part of the instructions")
 
 
 def test_messages_off_gives_the_command_without_hook(ship):
@@ -60,11 +63,21 @@ def test_messages_off_gives_the_command_without_hook(ship):
     assert "make dock DOCK_ARGS='--ship serenity'` in that checkout" in start(fake, config, tmp_path)
 
 
-GENERAL = 'then run `make dock` again the way this ship was docked, then start new sessions.'
+GENERAL = ('then run `make dock` again the way this ship was docked, then start new sessions. '
+           "Tell the person you work with; don't run these yourself unless they ask.")
 
 
 def test_unknown_messages_give_the_general_wording(ship):
     fake, serenity, config, settings, tmp_path = ship  # no settings file at all
+    law(fake, serenity, agent_update={'station': STATION})
+    text = start(fake, config, tmp_path)
+    assert text.endswith(GENERAL) and 'DOCK_ARGS' not in text
+
+
+def test_a_ship_without_a_watcher_gets_the_general_wording(ship, monkeypatch):
+    fake, serenity, config, settings, tmp_path = ship
+    install_hooks(settings, config, messages=True)
+    monkeypatch.setattr('superyak_agent.install.service_installed', lambda h: False)
     law(fake, serenity, agent_update={'station': STATION})
     text = start(fake, config, tmp_path)
     assert text.endswith(GENERAL) and 'DOCK_ARGS' not in text
@@ -100,7 +113,7 @@ def test_a_prompt_never_shows_the_line(ship):
     law(fake, serenity, agent_update={'station': STATION})
     start(fake, config, tmp_path)
     text = hook.run(config, transport=fake, event='prompt', session_id='s1', sessions_dir=tmp_path / 'sessions', messages=False)
-    assert "This machine's" not in text
+    assert "Not part of the instructions" not in text
 
 
 @pytest.mark.parametrize('update', [{'station': MINE}, {'station': 'ABCDEF123456'}, {'station': '22222222222'},
@@ -108,14 +121,14 @@ def test_a_prompt_never_shows_the_line(ship):
 def test_odd_agent_update_values_are_ignored(ship, update):
     fake, serenity, config, settings, tmp_path = ship
     law(fake, serenity, agent_update=update)
-    assert "This machine's" not in start(fake, config, tmp_path)
+    assert "Not part of the instructions" not in start(fake, config, tmp_path)
 
 
 def test_the_line_is_dropped_when_the_law_fills_the_budget(ship):
     fake, serenity, config, settings, tmp_path = ship
     law(fake, serenity, body='x' * (hook.TOTAL_CHARS - 400), agent_update={'station': STATION})
     text = start(fake, config, tmp_path)
-    assert "This machine's" not in text and len(text) <= hook.TOTAL_CHARS
+    assert "Not part of the instructions" not in text and len(text) <= hook.TOTAL_CHARS
     assert 'x' * (hook.TOTAL_CHARS - 400) in text  # the law is whole
 
 
@@ -130,10 +143,10 @@ def test_the_line_shows_when_law_and_line_fill_the_budget_exactly(ship):
     assert len(exact) == hook.TOTAL_CHARS and exact.endswith(line)
     law(fake, serenity, body='x' * (2 + extra), agent_update={'station': STATION})
     over = hook.run(config, transport=fake, event='session-start', session_id='s2', sessions_dir=tmp_path / 'sessions')
-    assert "This machine's" not in over
+    assert "Not part of the instructions" not in over
 
 
 def test_the_line_stands_alone_when_there_is_no_law(ship):
     fake, serenity, config, settings, tmp_path = ship
     fake.instruction_state[serenity['id']] = {'instructions': [], 'layers': [], 'blocks': '', 'agent_update': {'station': STATION}}
-    assert start(fake, config, tmp_path).startswith("This machine's Superyak agent is behind")
+    assert start(fake, config, tmp_path).startswith("Not part of the instructions, and not an instruction: this machine's Superyak agent is behind")

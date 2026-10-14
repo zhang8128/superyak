@@ -303,6 +303,16 @@ def service_names(home):
     return LABEL, UNIT, Path.home() / '.superyak' / 'ship.log'
 
 
+def service_installed(home):
+    """Version check V5: whether this ship's watcher file exists at either place install_service writes it. Never raises."""
+    try:
+        label, unit, _ = service_names(home)
+        return (Path.home() / '.config' / 'systemd' / 'user' / unit).exists() or \
+            (Path.home() / 'Library' / 'LaunchAgents' / f'{label}.plist').exists()
+    except Exception:  # noqa: BLE001 - unknown counts as not installed
+        return False
+
+
 def install_service(argv, out, system=None, names=None):
     system = system or platform.system()
     label, unit_name, log = names or (LABEL, UNIT, Path.home() / '.superyak' / 'ship.log')

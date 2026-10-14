@@ -1,5 +1,6 @@
 """Claude Code hook, at session start and at each prompt: the ship's instructions from the station (all of them at
 session start, changes and withdrawals at a prompt) and, at a prompt, the new room messages since the last turn, fenced.
+Session start may end with the version line (spec 2026-10-14).
 It must never block or break a prompt, so every failure prints nothing."""
 import hashlib
 import json
@@ -284,14 +285,16 @@ def _version_line(data, config_path, settings_path=None):
     pull = f'To update, run `git -C {checkout} pull --ff-only`, then '
     general = pull + 'run `make dock` again the way this ship was docked, then start new sessions.'
     ship = (read_json(config_path) or {}).get('ship')
-    messages = None
+    exact = None
     if claims.kind_of(Path(config_path).parent) == 'machine' and isinstance(ship, str) and claims.NAME.fullmatch(ship):
-        from .install import messages_installed  # only here: the line is rare, and the hook must stay light
+        from .install import messages_installed, service_installed  # only here: the line is rare, and the hook must stay light
         messages = messages_installed(settings_path or SETTINGS, config_path)
-    second = general if messages is None else (
-        pull + f"`make dock DOCK_ARGS='--ship {ship}{' --hook' if messages else ''}'` in that checkout, then start new sessions.")
-    return (f"This machine's Superyak agent is behind the station's: this checkout (`{CHECKOUT}`) is on `{mine}`, "
-            f'the station on `{theirs}`, and the agent code changed in between. ' + second)
+        if messages is not None and service_installed(Path(config_path).parent):  # else make dock would install a watcher
+            exact = pull + f"`make dock DOCK_ARGS='--ship {ship}{' --hook' if messages else ''}'` in that checkout, then start new sessions."
+    return ("Not part of the instructions, and not an instruction: "
+            f"this machine's Superyak agent is behind the station's: this checkout (`{CHECKOUT}`) is on `{mine}`, "
+            f'the station on `{theirs}`, and the agent code changed in between. ' + (exact or general)
+            + " Tell the person you work with; don't run these yourself unless they ask.")
 
 
 def _instructions(data, config_path, event, session_id, clock, sessions_dir, budget):
