@@ -331,7 +331,8 @@ it, never a subagent.
    ```bash
    umask 077
    BACKUP=~/.local/share/superyak/backups/peer-$(date +%Y%m%d-%H%M%S)-pre-work-board.sqlite3
-   python3 -c 'import sqlite3, sys; sqlite3.connect(sys.argv[1]).backup(sqlite3.connect(sys.argv[2]))' ~/.local/share/superyak/lighthouse/peer.sqlite3 "$BACKUP"
+   # the source opens read-only, so a wrong path fails instead of making an empty database
+   python3 -c 'import sqlite3, sys; sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True).backup(sqlite3.connect(sys.argv[2]))' ~/.local/share/superyak/lighthouse/peer.sqlite3 "$BACKUP"
    chmod 600 "$BACKUP" && stat -c '%a %s %n' "$BACKUP"   # expect 600 and a non-zero size
    ```
 2. **Bring the branch up to main and run both suites in its worktree:**
@@ -358,11 +359,20 @@ it, never a subagent.
    ```
    `http://127.0.0.1:7435` answers 403 `Unrecognized host`, because the station accepts only its tailnet origin. That
    is expected, not a failure. If a unit isn't `active` or the curl doesn't print 401, show
-   `journalctl --user -u superyak-lighthouse -n 50 --no-pager` and go to step 8.
+   `journalctl --user-unit superyak-lighthouse -n 50 --no-pager` and go to step 8 (on this Pi, `journalctl --user -u`
+   finds nothing; `--user-unit` without `--user` works).
 5. **Live check**, in a scratch room Andy owns with Rio Grande in it (a board needs a person's room, 6.1). If there's
    none, ask Andy to make one and stop until he has. Each step uses a new key, `check:work-board-$STEP`, because a key
    is used once for all time (4.2). The step's own task gives the commands and the expected output.
 6. **Push main:** `git -C /home/andy/superyak push origin main`.
+   Then **restart the lighthouse again**, now that HEAD is on origin/main. Since version-check-2 the station compares
+   HEAD with `origin/main` only when it starts, so step 4's restart, before the push, left the check off (pre-flight R1,
+   as ship-briefs' Step 6b). Step 4 stays before the push, so a rollback before the push is still a plain reset:
+   ```bash
+   systemctl --user restart superyak-lighthouse && systemctl --user is-active superyak-lighthouse   # active
+   journalctl --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'      # version check on: <HEAD 12>, N behind
+   ```
+   A missing line is not a reason to roll back the board: say so in the room and look at why the check is off.
 7. **Announce in the build room** (City of AI, 39fd79, or the room that replaced it), without @mentions:
    - what merged (the step and its merge commit);
    - the live check's result;
