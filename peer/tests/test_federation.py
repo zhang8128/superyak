@@ -535,13 +535,15 @@ def test_a_paired_peer_cannot_send_a_station_author_claims_or_extra_fields(two_p
     assert '_station' not in json.dumps([again, b[0].list_rooms(b[1])])
 
 
-def _forged_message(a, b, room, message_id, client_id, body, created, author=None):
+def _forged_message(a, b, room, message_id, client_id, body, created, author=None, **extra):
     """A room.message the origin (a) signs itself, attributing words in its own room to one of b's local users (b's
-    first user unless `author` names another)."""
+    first user unless `author` names another, a full participant id when it holds a colon), with any extra keys the
+    origin chooses to add."""
     with a[0].transaction() as db:
         snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
-    message = {'id': message_id, 'room_id': room['id'], 'author_id': b[2].identity.peer_id + ':' + (author or b[1]),
-               'client_message_id': client_id, 'body': body, 'epoch': 1, 'created': created}
+    author_id = author if author and ':' in author else b[2].identity.peer_id + ':' + (author or b[1])
+    message = {'id': message_id, 'room_id': room['id'], 'author_id': author_id,
+               'client_message_id': client_id, 'body': body, 'epoch': 1, 'created': created, **extra}
     return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
                                   action='room.message', recipients=[b[1]], payload={**snapshot, 'message': message})
 
@@ -705,3 +707,33 @@ def test_two_replies_with_the_same_words_both_keep_the_local_author(two_peers):
     yes = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'yes']
     assert len(yes) == 2
     assert all(m['author_id'] == b[2].identity.peer_id + ':' + b[1] and not m.get('unverified') for m in yes)
+
+
+
+def test_an_origin_cannot_set_a_messages_delivery_state_or_mark(two_peers):
+    """Follow-up of federation-own-author (d15ab04): a delivery state and the unverified mark are this station's word.
+    A paired origin that adds `state` or `unverified` to its own message can't make this station show either."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Says failed', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    assert b[2].receive(_forged_message(a, b, room, 'm-claims', 'origin-1', 'the host says this failed', 5.0,
+                                        author=a[2].identity.peer_id + ':' + a[1], state='failed', unverified=True))['ok']
+    [shown] = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'the host says this failed']
+    assert 'state' not in shown and 'unverified' not in shown
+
+
+def test_this_stations_echoed_reply_shows_delivered_whatever_state_the_origin_adds(two_peers):
+    """The same follow-up: this station's reply, once the origin's copy matches its outbox row (author, client id and
+    body), shows "delivered". The origin's added state doesn't reach the view, and the browser no longer guesses a
+    state from client ids."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Echo', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    b[0].send_message(b[1], remote, 'mine-1', 'my words')
+    deliver(b, a)
+    assert b[2].receive(_forged_message(a, b, room, 'm-echo', 'mine-1', 'my words', 5.0, state='failed'))['ok']
+    [echo] = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'my words']
+    assert echo['author_id'] == b[2].identity.peer_id + ':' + b[1] and not echo.get('unverified')
+    assert echo.get('state') == 'delivered'
