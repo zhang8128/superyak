@@ -1,12 +1,22 @@
 """Remote contacts and received resources never become local accounts."""
 import json
+import re
 from .common import Problem, require, uid, text, ids, encode
 
 # What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
-# columns (plus this station's delivery state for a queued reply). An allowlist, never a denylist (R44).
+# columns (only those: plus this station's own delivery state and unverified mark, never the origin's). An allowlist, never a denylist (R44).
 REMOTE_ROOM_KEYS = ('title', 'owner_id', 'member_ids', 'linked_room_id', 'created', 'last_activity')
 UNVERIFIED = ':(unverified)'  # a forged local author's stand-in; no participant id can hold parentheses
-REMOTE_MESSAGE_KEYS = ('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'state')
+# No `state` and no `unverified`: a received message's delivery state and mark are this station's word alone.
+REMOTE_MESSAGE_KEYS = ('id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created')
+PARTICIPANT_ID = re.compile(r'[0-9a-f]{64}:[A-Za-z0-9_-]{1,64}')
+
+
+def _stored_message_ok(m):
+    # The view's backstop for whatever is already stored (section 2 review of 96030b0, SF1), beside receive-time checks.
+    return (isinstance(m, dict) and isinstance(m.get('author_id'), str) and PARTICIPANT_ID.fullmatch(m['author_id']) is not None
+            and all(isinstance(m.get(k), str) for k in ('id', 'body', 'client_message_id'))
+            and type(m.get('created')) in (int, float))
 
 PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
@@ -73,12 +83,12 @@ class PeerStore:
         # receive() refuses a malformed roster; a hand-edited member must not break this view or list_rooms either.
         result['members'] = [{'peer': m['peer'], 'id': m['id']} for m in value.get('members', [])
                              if isinstance(m, dict) and isinstance(m.get('peer'), str) and isinstance(m.get('id'), str)]
-        result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', [])]
+        result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', []) if _stored_message_ok(m)]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
         replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply'", (row['resource_id'],row['origin'])).fetchall()
         # Every reply this station sent proves its own words, withdrawn ones too: a reply can reach the origin and then
         # be withdrawn here when its acknowledgement was lost (review of e9a6712). Only queued ones are shown below.
-        self._unverified_local_authors(replies, row['origin'], result['messages'])
+        self._unverified_local_authors(replies, row['origin'], result['messages'], actor)
         for delivery in replies:
             meta = json.loads(delivery['metadata'])
             if meta['actor'] != actor or delivery['status'] == 'withdrawn':
@@ -101,26 +111,30 @@ class PeerStore:
             self._peer_id_cache = PeerIdentity.load_or_create(self.data_dir).peer_id
         return self._peer_id_cache
 
-    def _unverified_local_authors(self, replies, origin, messages):
+    def _unverified_local_authors(self, replies, origin, messages, actor):
         """The origin hosts its room and can say anything in it, but never as one of this station's users. A message
         attributed to a local user (<this peer>:<id>) stands only when this station sent that exact reply, its
         room.reply outbox row (author, client message id and body), and only once: an honest origin holds one copy
         (receive keys peer_messages on room, author and client message id), so a later copy is a replay. Anything
         else is shown as the origin's, marked unverified, so it is never "You" and never a local person's words.
         The origin still orders and timestamps its own room: it can drop a reply and show it elsewhere, beside another
-        message, and with a replayed copy it chooses which copy comes first (PROTOCOL.md, room.message)."""
+        message, and with a replayed copy it chooses which copy comes first (PROTOCOL.md, room.message).
+        A copy that stands and matches the viewer's own row shows "delivered": the origin holds those exact words, so
+        the reply arrived even if its acknowledgement was lost. Another local user's copy stands with no state here."""
         own = self._own_peer_id() + ':'
-        sent = set()
+        sent = {}  # (author, client message id, body) -> whether the row is the viewer's
         for delivery in replies:
-            local = json.loads(delivery['metadata'])['message']
-            sent.add((local['author_id'], local['client_message_id'], local['body']))
+            data = json.loads(delivery['metadata'])
+            local = data['message']
+            sent[(local['author_id'], local['client_message_id'], local['body'])] = data['actor'] == actor
         for message in messages:
             author = message.get('author_id')
             if not (isinstance(author, str) and author.startswith(own)):
                 continue
             reply = (author, message.get('client_message_id'), message.get('body'))
             if reply in sent:
-                sent.discard(reply)
+                if sent.pop(reply):
+                    message['state'] = 'delivered'
             else:
                 message['author_id'] = origin + UNVERIFIED  # outside the participant id grammar: matches no contact
                 message['unverified'] = True
