@@ -215,6 +215,7 @@ def main(argv=None):
     reconcile_cmd = commands.add_parser('station-restore-reconcile', help='Trusted local: on a staged copy, take back what a restore revives (runbook step 5)')
     reconcile_cmd.add_argument('--db', type=Path, required=True, help='The staged copy; never a file in a live data directory')
     reconcile_cmd.add_argument('--replaced', type=Path, help='The peer.sqlite3 the restore replaces, opened read-only')
+    reconcile_cmd.add_argument('--unpair', action='append', default=[], metavar='PEER', help="Unpair this peer (12-character id or full id) in the copy as the browser does; repeatable; the only way without a usable --replaced")
     reconcile_cmd.add_argument('--live-data-dir', type=Path, help='The live data directory, which is refused (make passes STATION_DATA)')
     restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
     restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
@@ -313,9 +314,11 @@ def main(argv=None):
                 parser.exit(failed.code, f'station-backup: {failed.reason}\n')
             print(f'Checked copy: {written}')
         elif args.command == 'station-restore-reconcile':
-            from .backups import ReconcileRefused, describe_reconcile, reconcile
+            from .backups import ReconcileRefused, UnpairRefused, describe_reconcile, reconcile
             try:
-                report = reconcile(args.db, replaced=args.replaced, live_data_dir=args.live_data_dir)
+                report = reconcile(args.db, replaced=args.replaced, live_data_dir=args.live_data_dir, unpair=args.unpair)
+            except UnpairRefused as refused:
+                parser.exit(2, f'station-restore-reconcile: {refused}\n')
             except ReconcileRefused:
                 raise  # a ValueError: the handler below prints it and exits 1
             except Exception as error:  # noqa: BLE001 - the transaction rolled back, so the staged copy is unchanged

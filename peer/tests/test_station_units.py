@@ -100,6 +100,9 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     andys = units / 'superyak-door.service.d' / '10-andy.conf'
     andys.parent.mkdir(mode=0o700)          # an existing directory keeps its mode (review N2)
     andys.write_text('[Service]\nNice=5\n')
+    stray = units / 'superyak-other.service.d' / '50-alerts.conf'      # not a service the install names: remove leaves it (review M8)
+    stray.parent.mkdir()
+    stray.write_text('[Service]\nNice=7\n')
     calls = tmp_path / 'systemctl.log'
     (shim / 'systemctl').write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\n')
     (shim / 'systemctl').chmod(0o755)
@@ -129,6 +132,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     assert removed.returncode == 0, removed.stderr
     assert sorted(str(path.relative_to(units)) for path in units.rglob('*')) == before
     assert andys.read_text() == '[Service]\nNice=5\n'
+    assert stray.read_text() == '[Service]\nNice=7\n'
     assert calls.read_text().splitlines() == [
         '--user disable --now superyak-backup.timer superyak-restore-test.timer',
         '--user stop superyak-backup.service superyak-restore-test.service',

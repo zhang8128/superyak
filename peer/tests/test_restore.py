@@ -293,10 +293,121 @@ def test_reconcile_takes_back_every_other_step(tmp_path, capsys):
         assert db.execute("SELECT is_super_admin FROM users WHERE username='andy'").fetchone()[0] == 0
         assert live.emit(db, 'probe', 'probe', 1) > events
     lines = out.splitlines()
-    assert f'Reported, not applied: peers whose pairing differs: {peer[:12]}.' in lines
+    assert any(line.startswith(f'Unpaired again: {peer[:12]} (Remote).') for line in lines)
     assert any(line.startswith('No active super admin remains after lowering roles') for line in lines)
     for secret in ['https://login.tailscale.com/admin/invite/abc', activation, token_hash(activation)]:
         assert secret not in out
+
+
+def peer_station(tmp_path):
+    """A station with four peers and their contacts, outbox rows (pending, failed, delivered, sent) and inbox payloads."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    peers = {'cut': 'cd' * 32, 'kept': 'ef' * 32, 'later': '12' * 32, 'ghost': '34' * 32}
+    with store.transaction() as db:
+        for key, paired in (('cut', 1), ('kept', 1), ('later', 0), ('ghost', 1)):
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', ?)", (peers[key], paired))
+        for contact, key, name in (('c-cut', 'cut', 'Cut One'), ('c-cut2', 'cut', 'Cut Two'), ('c-kept', 'kept', 'Kept'),
+                                   ('c-later', 'later', 'Later'), ('c-ghost', 'ghost', 'Ghost')):
+            db.execute('INSERT INTO remote_contacts(id, peer_id, user_id, name) VALUES(?, ?, ?, ?)', (contact, peers[key], 'u-' + contact, name))
+        for number, (contact, status) in enumerate((('c-cut', 'pending'), ('c-cut2', 'failed'), ('c-cut', 'delivered'), ('c-cut', 'sent'),
+                                                    ('c-kept', 'pending'), ('c-kept', 'failed'), ('c-later', 'pending'), ('c-ghost', 'pending'))):
+            db.execute("INSERT INTO outbox(id, event_seq, contact_id, resource_id, revision, action, metadata, status) "
+                       "VALUES(?, ?, ?, 'r', 1, 'room.message', '{}', ?)", (f'o{number}', number, contact, status))
+        for peer in peers.values():
+            db.execute("INSERT INTO inbox(origin, resource_id, kind, recipient, revision, actor, payload) VALUES(?, 'r', 'k', ?, 1, 'a', 'text')",
+                       (peer, andy['id']))
+    return store, peers
+
+
+def peer_rows(copy):
+    with closing(sqlite3.connect(copy)) as db:
+        return (dict(db.execute('SELECT peer_id, paired FROM peers').fetchall()),
+                dict(db.execute('SELECT id, status FROM outbox').fetchall()),
+                dict(db.execute('SELECT origin, payload FROM inbox').fetchall()))
+
+
+def test_reconcile_unpairs_a_peer_as_federation_unpair_does(tmp_path, capsys):
+    """S16 revision 4 (Task 11 review C1 and its D8 re-check). A peer paired in the copy and unpaired in the replaced file
+    ends paired=0, its contacts' pending and failed outbox rows withdrawn (delivered and sent untouched), its inbox payloads
+    NULL. A peer unpaired in the copy and paired in the replaced file stays unpaired and is reported; a peer the replaced
+    file lacks stays paired and is reported; another peer is unchanged. Mutations: an unpair that leaves paired=1; no outbox
+    withdraw; no inbox null; the reverse direction applied; an absent peer unpaired."""
+    store, peers = peer_station(tmp_path)
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:                      # after the copy: Andy cuts one peer off, and pairs another
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peers['cut'],))
+        db.execute('UPDATE peers SET paired=1 WHERE peer_id=?', (peers['later'],))
+        db.execute('DELETE FROM outbox WHERE contact_id=?', ('c-ghost',))
+        db.execute('DELETE FROM inbox WHERE origin=?', (peers['ghost'],))
+        db.execute('DELETE FROM remote_contacts WHERE peer_id=?', (peers['ghost'],))
+        db.execute('DELETE FROM peers WHERE peer_id=?', (peers['ghost'],))    # the replaced file lacks this peer
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    paired, outbox, inbox = peer_rows(copy)
+    assert paired == {peers['cut']: 0, peers['kept']: 1, peers['later']: 0, peers['ghost']: 1}
+    assert outbox == {'o0': 'withdrawn', 'o1': 'withdrawn', 'o2': 'delivered', 'o3': 'sent', 'o4': 'pending', 'o5': 'failed',
+                      'o6': 'pending', 'o7': 'pending'}
+    assert inbox == {peers['cut']: None, peers['kept']: 'text', peers['later']: 'text', peers['ghost']: 'text'}
+    lines = out.splitlines()
+    assert (f'Unpaired again: {peers["cut"][:12]} (Cut One, Cut Two). Withdrew 2 pending and failed deliveries '
+            'and cleared 1 received payloads.') in lines
+    assert (f'Reported, not applied: peers: paired in the replaced file but not here: {peers["later"][:12]}; '
+            f'paired here and absent from the replaced file, so left paired: {peers["ghost"][:12]}.') in lines
+    assert not any(peers['kept'][:12] in line for line in lines)
+
+
+def test_reconcile_unpair_names_a_peer_with_or_without_a_replaced_file(tmp_path, capsys):
+    """--unpair PEER (revision 4): a 12-character or full id unpairs that peer as above, repeatable, with or without
+    --replaced. An unknown or ambiguous id is refused with exit 2 and nothing changed. Mutation: --unpair ignored."""
+    store, peers = peer_station(tmp_path)
+    copy = staged(tmp_path, store)
+    before = peer_rows(copy)
+    for bad in ('nope', 'c', peers['cut'][:11], peers['cut'] + 'ab'):
+        code, out, err = reconcile(capsys, '--db', copy, '--unpair', bad)
+        assert code == 2 and 'Refused' in err and out == '', bad
+        assert peer_rows(copy) == before
+    code, out, err = reconcile(capsys, '--db', copy, '--unpair', peers['cut'][:12], '--unpair', peers['kept'])
+    assert code == 0, err
+    paired, outbox, inbox = peer_rows(copy)
+    assert paired == {peers['cut']: 0, peers['kept']: 0, peers['later']: 0, peers['ghost']: 1}
+    assert outbox['o0'] == outbox['o1'] == 'withdrawn' and outbox['o2'] == 'delivered' and outbox['o6'] == 'pending'
+    assert inbox[peers['cut']] is None and inbox[peers['ghost']] == 'text'
+    assert f'Unpaired again: {peers["cut"][:12]} (Cut One, Cut Two); {peers["kept"][:12]} (Kept).' in out
+    second = staged(tmp_path, store, 'replaced-20261017-130000')           # with a replaced file naming a third peer
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peers['ghost'],))
+    code, out, err = reconcile(capsys, '--db', second, '--replaced', store.db_path, '--unpair', peers['cut'])
+    assert code == 0, err
+    assert peer_rows(second)[0] == {peers['cut']: 0, peers['kept']: 1, peers['later']: 0, peers['ghost']: 0}
+    assert f'Unpaired again: {peers["ghost"][:12]} (Ghost); {peers["cut"][:12]} (Cut One, Cut Two).' in out
+
+
+def test_reconcile_unpairs_nothing_without_a_replaced_file(tmp_path, capsys):
+    """S16 revision 4: without a usable replaced file (or --unpair) every peer stays paired. Mutation: unpair outside the
+    compared branch."""
+    store, peers = peer_station(tmp_path)
+    copy = staged(tmp_path, store)
+    before = peer_rows(copy)
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    assert peer_rows(copy) == before and 'Unpaired' not in out
+
+
+def test_reconcile_runs_twice_on_one_staged_copy(tmp_path, capsys):
+    """Runbook step 5 without a replaced file: a second run (with --unpair) on the same staged copy succeeds, changes
+    nothing a first run took back, and raises the sequences by SEQUENCE_JUMP again (harmless)."""
+    store, peers = peer_station(tmp_path)
+    copy = staged(tmp_path, store)
+    assert reconcile(capsys, '--db', copy)[0] == 0
+    with closing(sqlite3.connect(copy)) as db:
+        first = db.execute("SELECT seq FROM sqlite_sequence WHERE name='events'").fetchone()[0]
+    code, out, err = reconcile(capsys, '--db', copy, '--unpair', peers['cut'][:12])
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        second = db.execute("SELECT seq FROM sqlite_sequence WHERE name='events'").fetchone()[0]
+    assert second == first + backups.SEQUENCE_JUMP
+    assert peer_rows(copy)[0][peers['cut']] == 0 and peer_rows(copy)[0][peers['kept']] == 1
 
 
 def test_reconcile_without_a_replaced_file_raises_both_sequences(tmp_path, capsys):

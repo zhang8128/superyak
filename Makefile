@@ -35,6 +35,7 @@ OUTPUT ?=
 BACKUP ?=
 DB ?=
 REPLACED ?=
+UNPAIR ?=
 # Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
 # and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
 STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-alert@.service
@@ -64,7 +65,7 @@ help:
 	@echo "make station-bridge ID=… On the Pi: bridge a room to Stanley's aDNA lattice (adds Wormhole); make station-unbridge ID=… stops"
 	@echo "make station-backup [OUTPUT=…]  On the Pi: a checked copy of the station database (the rotation, or OUTPUT)"
 	@echo "make station-restore-test [BACKUP=…]  On the Pi: boot a throwaway station from the newest copy (or BACKUP)"
-	@echo "make station-restore-reconcile DB=… [REPLACED=…]  On the Pi: runbook step 5 (docs/station-restore.md)"
+	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
 	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
 	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
@@ -221,8 +222,8 @@ station-restore-test:
 	uv run --locked --project peer python -m superyak_peer station-restore-test --backup-dir "$(STATION_BACKUPS)"$(if $(BACKUP), --backup "$(BACKUP)")
 
 station-restore-reconcile:
-	@test -n "$(DB)" || { echo 'Usage: make station-restore-reconcile DB=<staged copy> [REPLACED=<the replaced peer.sqlite3>]'; exit 2; }
-	uv run --locked --project peer python -m superyak_peer station-restore-reconcile --db "$(DB)" --live-data-dir "$(STATION_DATA)"$(if $(REPLACED), --replaced "$(REPLACED)")
+	@test -n "$(DB)" || { echo 'Usage: make station-restore-reconcile DB=<staged copy> [REPLACED=<the replaced peer.sqlite3>] [UNPAIR="<peer id> …"]'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer station-restore-reconcile --db "$(DB)" --live-data-dir "$(STATION_DATA)"$(if $(REPLACED), --replaced "$(REPLACED)")$(foreach peer,$(UNPAIR), --unpair "$(peer)")
 
 station-alerts:
 	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"
@@ -240,7 +241,7 @@ station-units-remove:
 	-systemctl --user stop superyak-backup.service superyak-restore-test.service
 	-systemctl --user reset-failed superyak-backup.service superyak-restore-test.service 'superyak-alert@*'
 	for unit in $(STATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
-	for dir in "$(SYSTEMD_USER)"/superyak-*.service.d; do if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
+	for service in $(ALERTED_SERVICES); do dir="$(SYSTEMD_USER)/$$service.service.d"; if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
 	systemctl --user daemon-reload
 
 wormhole-personas:

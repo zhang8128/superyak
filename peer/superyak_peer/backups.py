@@ -388,6 +388,10 @@ class ReconcileRefused(ValueError):
     """S16: a FILE the reconcile won't touch. The CLI exits 1, and the file is unchanged."""
 
 
+class UnpairRefused(ReconcileRefused):
+    """--unpair named no peer, or more than one: the CLI exits 2, and the file is unchanged."""
+
+
 def _has(db, *needs):
     """Each need is 'table' or 'table.column'."""
     for need in needs:
@@ -560,6 +564,61 @@ def _close_breakouts_like_replaced(db, old, now, report):
             report['closed'].append((room_id[:6], title[0] if title else ''))
 
 
+PEER_NEEDS = ('peers.paired', 'remote_contacts.peer_id', 'remote_contacts.name', 'outbox.status', 'outbox.contact_id',
+              'inbox.origin', 'inbox.payload')
+
+
+def _unpair(db, peer, report):
+    """Exactly Federation.unpair (federation.py:43-45) on the staged copy: paired=0, that peer's contacts' pending and
+    failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled."""
+    names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))]
+    db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (peer,))
+    withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN "
+                           "(SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (peer,)).rowcount
+    nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND payload IS NOT NULL', (peer,)).rowcount
+    report['unpaired'].append((peer[:12], names))
+    report['unpaired_counts'] = [sum(pair) for pair in zip(report['unpaired_counts'], (withdrawn, nulled))]
+
+
+def _unpair_like_replaced(db, old, now, report):
+    """With a usable replaced file (revision 4, Task 11 review C1): a peer paired here whose row there has paired=0 is
+    unpaired here. A peer the replaced file lacks is not (a damaged file must not cut off a peer it merely doesn't
+    list); it is reported. 'Check delivery now' and /federation/events work on any paired peer, so leaving the pairing
+    would be a real window. Only takes away."""
+    if not _usable(db, old, report, *PEER_NEEDS):
+        return
+    there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
+    for peer, paired in db.execute('SELECT peer_id, paired FROM peers ORDER BY peer_id').fetchall():
+        if paired and peer in there and not there[peer]:
+            _unpair(db, peer, report)
+
+
+def _unpair_named(db, named, report):
+    """--unpair PEER (revision 4): the same, for the peers a person names (the only way without a usable replaced file)."""
+    if not named:
+        return
+    if not _usable(db, None, report, *PEER_NEEDS):
+        raise UnpairRefused('Refused: this copy lacks the peer tables, so there is nothing to unpair.')
+    done = {peer[:12] for peer, _ in report['unpaired']}
+    for peer in named:
+        if peer[:12] not in done:
+            _unpair(db, peer, report)
+            done.add(peer[:12])
+
+
+def _resolve_peers(db, names):
+    """Each name is a peer's 12-character short id or its full id, matching exactly one peers row; otherwise refused."""
+    found = []
+    ids = [row[0] for row in db.execute('SELECT peer_id FROM peers')] if _has(db, 'peers.peer_id') else []
+    for name in names:
+        matches = [peer for peer in ids if peer == name or (len(name) == 12 and peer[:12] == name)]
+        if len(matches) != 1:
+            raise UnpairRefused(f'Refused: --unpair {safe_line(name, 80)} matches {len(matches)} peers in the copy; '
+                                'give a peer\'s 12-character id or its full id, as exactly one peer has it.')
+        found.append(matches[0])
+    return found
+
+
 def _title(draft):
     try:
         return json.loads(draft).get('title') or 'Untitled'
@@ -569,7 +628,7 @@ def _title(draft):
 
 def _report_differences(db, old, now, report):
     """Reported, never applied, since a bad replaced file may be the reason for the restore: users whose password
-    differs, instruction layers whose active revision differs, and peers whose pairing differs."""
+    differs, instruction layers whose active revision differs, and peers paired there but not here (a pairing taken away is applied)."""
     if _usable(db, old, report, 'users.salt', 'users.password_hash'):
         there = {row[0]: (row[1], row[2]) for row in old.execute('SELECT id, salt, password_hash FROM users')}
         report['passwords'] = [row['username'] for row in db.execute('SELECT id, username, salt, password_hash FROM users ORDER BY username')
@@ -579,10 +638,11 @@ def _report_differences(db, old, now, report):
         for layer_id, active, draft in old.execute('SELECT id, active_revision, draft FROM layers ORDER BY id').fetchall():
             if (layer_id in here and here[layer_id] != active) or (layer_id not in here and active is not None):
                 report['layers'].append((layer_id[:6], _title(draft), here.get(layer_id), active))
-    if _usable(db, old, report, 'peers.paired'):
+    if _usable(db, old, report, 'peers.paired'):  # revision 4: paired here and unpaired there was applied above
         here = dict(db.execute('SELECT peer_id, paired FROM peers').fetchall())
         there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
-        report['peers'] = [peer[:12] for peer in sorted(set(here) | set(there)) if here.get(peer) != there.get(peer)]
+        report['peers'] = [peer[:12] for peer in sorted(there) if there[peer] and not here.get(peer)]
+        report['lacked'] = [peer[:12] for peer in sorted(here) if here[peer] and peer not in there]
 
 
 def _refuse(db_path, live_data_dir):
@@ -658,14 +718,14 @@ def _not_this_station(db, old):
     return None
 
 
-def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
+def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=time.time):
     """station-restore-reconcile (S16): on a staged copy, take back what a restore revives. Every step only takes access
     away, all in one transaction: if any step fails it rolls back and the copy is unchanged. Returns the report."""
     db_path = Path(db_path).absolute()
     _refuse(db_path, live_data_dir)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
-              'no_super_admin': False, 'closed': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
+              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
               'not_compared': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -683,6 +743,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
         if why:  # review I1: compared, it would take back nothing and revoke no key; fail closed, as for one that fails its check
             old.close()
             old, report['replaced'] = None, f'treated as absent ({why})'
+        named = _resolve_peers(db, list(unpair))
         db.execute('BEGIN IMMEDIATE')
         try:
             now = clock()
@@ -692,8 +753,9 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
                 _revoke_owned_ship_keys(db, old, now, report)
             else:
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
-                             _close_breakouts_like_replaced, _report_differences):
+                             _close_breakouts_like_replaced, _unpair_like_replaced, _report_differences):
                     step(db, old, now, report)
+            _unpair_named(db, named, report)
             db.execute('COMMIT')
         except BaseException:
             if db.in_transaction:  # SQLite rolls back by itself on some errors (SQLITE_FULL, IOERR); the CLI reports those
@@ -719,7 +781,7 @@ def describe_reconcile(report):
     if report['replaced'] == 'compared':
         lines.append('Compared with the replaced file.')
     else:
-        lines.append(f"The replaced file was {report['replaced']}. Room and space members, admins and law layers were not "
+        lines.append(f"The replaced file was {report['replaced']}. Room and space members, admins, law layers and peer pairings were not "
                      "compared: check them by hand in runbook step 8. Every owned ship's keys were revoked, so those "
                      'machines dock again.')
     lines.append('Taken back: ' + ', '.join(f'{label} ({count})' for label, count in report['counts'].items()) + '.')
@@ -739,6 +801,10 @@ def describe_reconcile(report):
     if report['closed']:
         lines.append('Breakouts closed as in the replaced file: '
                      + '; '.join(f'{short} {safe_line(title)}' for short, title in report['closed']) + '.')
+    if report['unpaired']:
+        withdrawn, cleared = report['unpaired_counts']
+        lines.append('Unpaired again: ' + '; '.join(f'{peer} ({people(names)})' if names else peer for peer, names in report['unpaired'])
+                     + f'. Withdrew {withdrawn} pending and failed deliveries and cleared {cleared} received payloads.')
     if report['passwords']:
         lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '
                      'Change again any that was changed for a reason.')
@@ -746,8 +812,10 @@ def describe_reconcile(report):
         lines.append('Reported, not applied: law layers whose active revision differs: ' + '; '.join(
             f'{short} {safe_line(title)} (here {_revision(here)}, in the replaced file {_revision(there)})'
             for short, title, here, there in report['layers']) + '. Set them in the browser before the ships start.')
-    if report['peers']:
-        lines.append(f'Reported, not applied: peers whose pairing differs: {", ".join(report["peers"])}.')
+    if report['peers'] or report['lacked']:
+        parts = ([f'paired in the replaced file but not here: {", ".join(report["peers"])}'] if report['peers'] else []) \
+            + ([f'paired here and absent from the replaced file, so left paired: {", ".join(report["lacked"])}'] if report['lacked'] else [])
+        lines.append('Reported, not applied: peers: ' + '; '.join(parts) + '.')
     if report['skipped']:
         lines.append(f'Skipped, because this copy lacks them: {", ".join(report["skipped"])}.')
     if report['not_compared']:
