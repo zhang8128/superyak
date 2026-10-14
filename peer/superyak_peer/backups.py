@@ -353,6 +353,14 @@ MEMBERSHIPS = (
     ('remote_room_members', 'rooms', 'room_id', 'contact_id', 'room', 'title', 'epoch'),
     ('space_members', 'spaces', 'space_id', 'user_id', 'space', 'name', 'version'),
 )
+# Fix round 1 (review I1): every table and column the comparing steps read from the replaced file, step 5's sequences
+# included. The live file is always at least as new as the copy and migrations only add, so a replaced file lacking
+# one that the copy has is the wrong file or a damaged one.
+COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 'users.password_hash', 'ship_keys.id',
+            'ship_keys.revoked', 'rooms.id', 'rooms.title', 'spaces.id', 'spaces.name',
+            *(f'{table}.{column}' for table, _, key, member, *_ in MEMBERSHIPS for column in (key, member)),
+            'breakouts.room_id', 'breakouts.closed', 'layers.id', 'layers.active_revision', 'layers.draft',
+            'peers.peer_id', 'peers.paired', 'mentions', 'events')
 
 
 class ReconcileRefused(ValueError):
@@ -371,7 +379,9 @@ def _has(db, *needs):
 
 def _usable(db, old, report, *needs):
     """S16 'An older copy': a step whose table or column the staged copy lacks is skipped and named (migrations only
-    add, so there is nothing there to take back); what the replaced file lacks is not compared. Neither is an error."""
+    add, so there is nothing there to take back); what the replaced file lacks is not compared. Neither is an error.
+    A replaced file lacking anything in COMPARED is treated as absent before any step runs (fix round 1), so for the
+    replaced file this is a backstop, reached only if a step reads something COMPARED doesn't list."""
     missing = [need for need in needs if not _has(db, need)]
     report['skipped'] += [need for need in missing if need not in report['skipped']]
     absent = [need for need in needs if old is not None and not missing and not _has(old, need)]
@@ -515,11 +525,16 @@ def _lower_roles_like_replaced(db, old, now, report):
 
 def _close_breakouts_like_replaced(db, old, now, report):
     """With a usable replaced file (Rio Grande's ruling on the plan review's Q1): a breakout closed there and still open
-    here is closed here, at the same time, so its members can't post or record mentions in it again."""
+    here is closed here, at the same time, so its members can't post or record mentions in it again. Its deferrals are
+    dropped too, as Breakouts._close_breakout drops them (breakouts.py), so no session stays deferred for a mention
+    nobody can answer now."""
     if not _usable(db, old, report, 'breakouts.closed', 'rooms.title'):
         return
+    deferrals = _usable(db, None, report, 'deferrals.message_id', 'messages.room_id')
     for room_id, closed in old.execute('SELECT room_id, closed FROM breakouts WHERE closed IS NOT NULL ORDER BY room_id').fetchall():
         if db.execute('UPDATE breakouts SET closed=? WHERE room_id=? AND closed IS NULL', (closed, room_id)).rowcount:
+            if deferrals:
+                db.execute('DELETE FROM deferrals WHERE message_id IN (SELECT id FROM messages WHERE room_id=?)', (room_id,))
             title = db.execute('SELECT title FROM rooms WHERE id=?', (room_id,)).fetchone()
             report['closed'].append((room_id[:6], title[0] if title else ''))
 
@@ -553,7 +568,9 @@ def _refuse(db_path, live_data_dir):
     """S16: never a file in the live data dir (the one --live-data-dir names, or any directory holding a dispatch.lock,
     which every directory a station has opened holds), never a symlink. The check runs on the file's real directory,
     so a path, a symlinked parent or '..' can't fool it. A file with a second name (a hard link) is refused too, since
-    the other name could be the live file (plan review M2)."""
+    the other name could be the live file (plan review M2). Nor a copy in the backups rotation (fix round 1): any
+    directory holding the rotation's .lock, which every rotation a backup has written holds, and backups/station beside
+    the --live-data-dir. A copy there is a checked copy, and reconciling it in place would change it."""
     if db_path.is_symlink() or any(Path(f'{db_path}{end}').is_symlink() for end in ('-journal', '-wal', '-shm')):
         raise ReconcileRefused('Refused: the copy is a symlink. Stage a real file (runbook step 5).')
     if not db_path.is_file():
@@ -564,6 +581,9 @@ def _refuse(db_path, live_data_dir):
     home = db_path.resolve().parent
     if os.path.lexists(home / 'dispatch.lock') or (live_data_dir is not None and home == Path(live_data_dir).resolve()):
         raise ReconcileRefused('Refused: that file is in a live data directory. Stage the copy in the replaced directory (runbook step 5).')
+    if os.path.lexists(home / '.lock') or (live_data_dir is not None and home == default_backup_dir(live_data_dir).resolve()):
+        raise ReconcileRefused('Refused: that file is in the backups rotation, a checked copy that reconciling would change. '
+                               'Stage a copy of it in the replaced directory (runbook step 5).')
 
 
 def _replaced(path):
@@ -586,7 +606,35 @@ def _replaced(path):
     if old is not None:
         old.close()
     journal = Path(f'{path}-journal')
-    return None, f'treated as absent ({"a hot journal beside it, " + journal.name if journal.exists() else "it failed its check"})'
+    return None, f'treated as absent ({"a hot journal beside it, " + journal.name if _hot(journal) else "it failed its check"})'
+
+
+def _hot(journal):
+    """SQLite's own rule for a hot journal: a file whose first byte isn't zero. An empty journal isn't hot, nor is one
+    whose header is still zero because its write never synced; neither is why a replaced file failed its check."""
+    if not journal.is_file():
+        return False
+    try:
+        with open(journal, 'rb') as stream:
+            return stream.read(1) not in (b'', b'\x00')
+    except OSError:
+        return False
+
+
+def _not_this_station(db, old):
+    """Fix round 1 (review I1): why a replaced file that passed quick_check still can't be compared, or None. It lacks
+    a table or column in COMPARED that the copy has (a 0-byte file is a valid empty database), or an account or ship key
+    the copy has (neither is ever deleted, so that is another station's file or a damaged one). Names no id."""
+    lacking = [need for need in COMPARED if _has(db, need) and not _has(old, need)]
+    if lacking:
+        more = f' and {len(lacking) - 3} more' if len(lacking) > 3 else ''
+        return f'it lacks tables or columns the copy has: {", ".join(lacking[:3])}{more}'
+    for table in ('users', 'ship_keys'):
+        if _has(db, f'{table}.id') and _has(old, f'{table}.id'):
+            there = {row[0] for row in old.execute(f'SELECT id FROM {table}')}
+            if any(row[0] not in there for row in db.execute(f'SELECT id FROM {table}')):
+                return "it lacks accounts or ship keys the copy has, so it is another station's file or a damaged one"
+    return None
 
 
 def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
@@ -610,6 +658,10 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
         if old is not None and _has(old, 'events') and _has(db, 'events') and _sequence(old, 'events') < _sequence(db, 'events'):
             raise ReconcileRefused('Refused: the replaced file is older than the staged copy. Are DB= and REPLACED= swapped? '
                                    'DB= is the staged restored.sqlite3; REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
+        why = _not_this_station(db, old) if old is not None else None
+        if why:  # review I1: compared, it would take back nothing and revoke no key; fail closed, as for one that fails its check
+            old.close()
+            old, report['replaced'] = None, f'treated as absent ({why})'
         db.execute('BEGIN IMMEDIATE')
         try:
             now = clock()
@@ -623,7 +675,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
                     step(db, old, now, report)
             db.execute('COMMIT')
         except BaseException:
-            db.execute('ROLLBACK')
+            if db.in_transaction:  # SQLite rolls back by itself on some errors (SQLITE_FULL, IOERR); the CLI reports those
+                db.execute('ROLLBACK')
             raise
     finally:
         db.close()

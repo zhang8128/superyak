@@ -340,7 +340,8 @@ def test_reconcile_refuses_a_hard_link_and_a_same_or_older_replaced_file(tmp_pat
 
 def test_reconcile_closes_breakouts_closed_since_the_copy(tmp_path, capsys):
     """R18, S16 (Rio Grande's ruling on the plan review's Q1): a breakout closed in the replaced file is closed in the copy
-    too, so its members can't post or be mentioned there again; a breakout open in both stays open."""
+    too, so its members can't post or be mentioned there again, and its deferrals are dropped as closing one drops them
+    (fix round 1, review minor 3); a breakout open in both stays open, with its deferral."""
     store = Store(tmp_path / 'lighthouse')
     andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     serenity, _ = docked(store, andy['id'], 'serenity')
@@ -348,12 +349,148 @@ def test_reconcile_closes_breakouts_closed_since_the_copy(tmp_path, capsys):
     store.create_room(andy['id'], 'City of AI', [serenity['id'], rio['id']])      # the ships share a person's room
     side = store.open_breakout(serenity['id'], 'Side', ['rio-grande'])
     other = store.open_breakout(serenity['id'], 'Other side', ['rio-grande'])
+    asked = store.send_message(serenity['id'], side['id'], 'asked', '@rio-grande over here')
+    kept = store.send_message(serenity['id'], other['id'], 'kept', '@rio-grande and here')
+    with store.transaction() as db:                                               # rio-grande deferred both (S5)
+        db.executemany('INSERT INTO deferrals(ship_id, message_id, first_deferred) VALUES(?, ?, 0)',
+                       [(rio['id'], asked['id']), (rio['id'], kept['id'])])
     copy = staged(tmp_path, store)                                                # A: both open
     store.close_breakout(serenity['id'], side['id'])                              # B: Side closed
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
     assert code == 0, err
     assert f'Breakouts closed as in the replaced file: {side["id"][:6]} Side.' in out.splitlines()
     live = go_live(copy, tmp_path / 'live')
+    with live.transaction() as db:
+        assert [row[0] for row in db.execute('SELECT message_id FROM deferrals')] == [kept['id']]
     with pytest.raises(Problem):
         live.send_message(rio['id'], side['id'], 'after-the-restore', 'still here?')
     assert live.send_message(rio['id'], other['id'], 'after-the-restore', 'still open')['replayed'] is False
+
+
+def sequences(path):
+    """The mentions and events sequences of a database file, as {name: seq}."""
+    with closing(sqlite3.connect(path)) as db:
+        return dict(db.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('mentions', 'events')").fetchall())
+
+
+def test_reconcile_treats_a_replaced_file_that_isnt_this_stations_as_absent(tmp_path, capsys):
+    """Fix round 1 (review I1): a replaced file can pass quick_check and still not be this station's: a 0-byte file is a
+    valid empty database, and another station's file has the tables but not the copy's accounts and ship keys. Either is
+    treated as absent, so the reconcile fails closed: every owned ship's keys are revoked, both sequences jump by
+    1,000,000, and the report says why without naming an id. So is this station's file with its ship keys lost, since
+    keys are never deleted."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    serenity, key = docked(store, andy['id'], 'serenity')
+    elsewhere = Store(tmp_path / 'elsewhere')                                    # another station, built the same way
+    docked(elsewhere, elsewhere.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)['id'], 'serenity')
+    why = {'empty': 'treated as absent (it lacks tables or columns the copy has: ',
+           'elsewhere': "treated as absent (it lacks accounts or ship keys the copy has, so it is another station's file "
+                        'or a damaged one)'}
+    why['keys-lost'] = why['elsewhere']
+    for label in ('empty', 'elsewhere', 'keys-lost'):
+        copy = staged(tmp_path, store, f'replaced-{label}')
+        replaced = copy.parent / 'peer.sqlite3'
+        if label == 'empty':
+            replaced.write_bytes(b'')
+        elif label == 'elsewhere':
+            shutil.copyfile(elsewhere.db_path, replaced)
+        else:
+            shutil.copyfile(store.db_path, replaced)
+            with closing(sqlite3.connect(replaced)) as db:
+                db.execute('DELETE FROM ship_keys')
+                db.commit()
+        before = sequences(copy)
+        code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
+        assert code == 0, err
+        lines = out.splitlines()
+        assert lines[1].startswith(f'The replaced file was {why[label]}') and 'Compared with the replaced file.' not in lines
+        assert 'Ship keys revoked for: serenity.' in lines
+        assert sequences(copy) == {table: before.get(table, 0) + 1_000_000 for table in ('mentions', 'events')}
+        live = go_live(copy, tmp_path / f'live-{label}')
+        with pytest.raises(Problem):
+            live.ship_for_key(key)
+        with live.transaction() as db:
+            ids = [row[0] for row in db.execute('SELECT id FROM users UNION ALL SELECT id FROM ship_keys')]
+        assert not any(value in out for value in ids)
+
+
+def test_reconcile_reports_the_error_sqlite_rolled_back_on(tmp_path, monkeypatch, capsys):
+    """Fix round 1 (review minor 1): SQLite rolls a transaction back by itself on some errors (SQLITE_FULL, an I/O
+    error). The CLI then reports that error, not a failed ROLLBACK, and the staged bytes are unchanged."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    store.login('andy', 'long-password-andy', 'test')                           # a session for step 1 to delete
+    copy = staged(tmp_path, store)
+    before = copy.read_bytes()
+
+    def full(db, old, now, report):
+        db.execute('ROLLBACK')                                                   # what SQLite did before raising
+        raise sqlite3.OperationalError('database or disk is full')
+
+    monkeypatch.setattr(backups, '_raise_sequences', full)
+    code, out, err = reconcile(capsys, '--db', copy)
+    assert code == 1 and out == ''
+    assert 'nothing was changed: OperationalError: database or disk is full' in err, err
+    assert copy.read_bytes() == before
+
+
+def interrupted(source, target):
+    """target as a write interrupted mid-transaction leaves it: the file, and beside it a hot journal. With synchronous
+    off SQLite writes the journal's header at once, so a copy taken mid-write is what a power cut leaves."""
+    writing = target.parent / 'writing.sqlite3'
+    shutil.copyfile(source, writing)
+    with closing(sqlite3.connect(writing, isolation_level=None)) as writer:
+        writer.execute('PRAGMA synchronous=OFF')
+        writer.execute('BEGIN IMMEDIATE')
+        writer.execute("UPDATE users SET name='mid-write'")
+        shutil.copyfile(writing, target)
+        shutil.copyfile(f'{writing}-journal', f'{target}-journal')
+        writer.execute('ROLLBACK')
+    writing.unlink()
+
+
+def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, capsys):
+    """Fix round 1 (review minor 2): no file at the --replaced path; a replaced file with a hot journal beside it; and a
+    damaged one beside a journal SQLite wouldn't treat as hot (an empty one, or one whose header is still zero because
+    its write never synced). Each fails closed with its own reason, and the journal is never touched."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    serenity, key = docked(store, andy['id'], 'serenity')
+    cases = {'missing': ('there is no such file', None),
+             'hot': ('a hot journal beside it, peer.sqlite3-journal', None),
+             'empty-journal': ('it failed its check', b''),
+             'zeroed-journal': ('it failed its check', bytes(512))}
+    for label, (why, journal) in cases.items():
+        copy = staged(tmp_path, store, f'replaced-{label}')
+        replaced = copy.parent / 'peer.sqlite3'
+        if label == 'hot':
+            interrupted(store.db_path, replaced)
+        elif label != 'missing':
+            replaced.write_bytes(os.urandom(8192))
+            Path(f'{replaced}-journal').write_bytes(journal)
+        beside = Path(f'{replaced}-journal')
+        kept = beside.read_bytes() if beside.exists() else None
+        code, out, err = reconcile(capsys, '--db', copy, '--replaced', replaced)
+        assert code == 0, err
+        assert f'The replaced file was treated as absent ({why}).' in out.splitlines()[1], (label, out)
+        assert 'Ship keys revoked for: serenity.' in out.splitlines()
+        assert (beside.read_bytes() if beside.exists() else None) == kept
+
+
+def test_reconcile_refuses_a_copy_in_the_backups_rotation(tmp_path, capsys):
+    """Fix round 1 (review minor 4): a copy in the rotation is a checked copy, never the staged one, so reconciling it in
+    place is refused: a directory holding the rotation's .lock, and backups/station beside the --live-data-dir. Neither
+    file changes."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    store.login('andy', 'long-password-andy', 'test')                           # a session the reconcile would delete
+    rotation = backups.default_backup_dir(store.data_dir)
+    newest = backups.run_backup(store.data_dir, rotation)
+    for args in (['--db', newest], ['--db', newest, '--live-data-dir', store.data_dir]):
+        if '--live-data-dir' in args:
+            (rotation / '.lock').unlink()                                        # the rotation's own mark gone
+        before = newest.read_bytes()
+        code, out, err = reconcile(capsys, *args)
+        assert code == 1 and err.startswith('Refused') and 'rotation' in err and out == '', (args, err)
+        assert newest.read_bytes() == before
