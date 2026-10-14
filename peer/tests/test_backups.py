@@ -132,9 +132,9 @@ def test_each_layer_of_privacy_holds_without_the_umask(tmp_path, monkeypatch):
 
 
 def test_a_failed_integrity_check_leaves_nothing_behind(tmp_path, monkeypatch):
-    """R2/S2: exit 11 and no temporary, journal or final file."""
+    """R2/S2: exit 11 and no temporary, journal or final file. The live quick_check passes, so it is the copy that failed."""
     store, rotation = station(tmp_path)
-    monkeypatch.setattr(backups, '_check', lambda db, pragma: False)
+    monkeypatch.setattr(backups, '_check', lambda db, pragma: pragma == 'quick_check')
     assert backup(store, rotation) == 11
     assert names(rotation) == []
 
@@ -200,3 +200,115 @@ def test_retention_weeks_cross_the_year_by_iso_year_and_week():
     assert 'peer-20270117T030000Z.sqlite3' in kept  # (2027, 2)'s newest, older than the 14 days
     assert 'peer-20270111T030000Z.sqlite3' not in kept
     assert len(kept) == 14 + 2  # 01-18..01-31, plus the two week-2 copies, one per year
+
+
+def overwrite_pages(path, first=2):
+    """Junk over every page after the first two: the header survives, the tables don't."""
+    size = path.stat().st_size
+    with open(path, 'r+b') as stream:
+        stream.seek(first * 4096)
+        stream.write(b'\xff' * (size - first * 4096))
+
+
+def test_output_writes_one_checked_copy_and_never_overwrites(tmp_path, monkeypatch):
+    """R4: one checked copy at a new path outside the rotation; an existing path is refused, even one created during the
+    copy, because the copy is published with os.link."""
+    store, rotation = station(tmp_path)
+    target = tmp_path / 'before-deploy.sqlite3'
+    assert backup(store, rotation, '--output', target) == 0
+    assert ok(target) and stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert not rotation.exists()
+    kept = target.read_bytes()
+    assert backup(store, rotation, '--output', target) == 1 and target.read_bytes() == kept
+    racing, real_check = tmp_path / 'racing.sqlite3', backups._check
+
+    def check_then_race(db, pragma):
+        racing.write_bytes(b'made by someone else during the copy')
+        return real_check(db, pragma)
+
+    monkeypatch.setattr(backups, '_check', check_then_race)
+    assert backup(store, rotation, '--output', racing) == 1
+    assert racing.read_bytes() == b'made by someone else during the copy'
+    assert not list(tmp_path.glob('.peer-*'))
+
+
+@pytest.mark.parametrize('failure, code', [(None, 0), ('low disk', 10), ('copy fails its check', 11),
+                                           ('live database damaged', 12)])
+def test_failures_keep_old_copies_and_exit_with_their_code(tmp_path, monkeypatch, failure, code):
+    """R5: low disk and failed checks write nothing, prune nothing, leave no temporary file and exit with their code. The
+    first case is the control: the same rotation and a run that works, which prunes the older of one day's two copies."""
+    store, rotation = station(tmp_path)
+    rotation.mkdir(parents=True, mode=0o700)
+    day = time.strftime('%Y%m%d', time.gmtime(time.time() - 3 * 86400))
+    old = [f'peer-{day}T010000Z.sqlite3', f'peer-{day}T020000Z.sqlite3'] + [
+        f'peer-{time.strftime(backups.STAMP, time.gmtime(time.time() - days * 86400))}.sqlite3' for days in (2, 1)]
+    for name in old:
+        (rotation / name).write_bytes(b'an earlier copy')
+    if failure == 'low disk':
+        monkeypatch.setattr(backups, 'free_bytes', lambda path: 10 * 2**20)
+    elif failure == 'copy fails its check':
+        monkeypatch.setattr(backups, '_check', lambda db, pragma: pragma == 'quick_check')
+    elif failure == 'live database damaged':
+        overwrite_pages(store.db_path)
+    assert backup(store, rotation) == code
+    if failure is None:
+        [new] = [name for name in names(rotation) if name not in old]
+        assert names(rotation) == sorted(old[1:] + [new])
+    else:
+        assert names(rotation) == sorted(old)
+
+
+CRASH = '''import os, sqlite3, sys
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute('PRAGMA cache_size=2')
+db.execute('BEGIN IMMEDIATE')
+db.execute("UPDATE filler SET v = v || 'y'")
+os._exit(0)
+'''
+
+
+def test_a_hot_journal_after_a_power_cut_is_retried_never_called_damage(tmp_path):
+    """Review Focus 4 (S8): a power cut mid-commit leaves a hot journal. The read-only open succeeds and the first read
+    fails with SQLITE_READONLY_ROLLBACK. The backup retries for 60 s, then exits 1, never 12, and leaves the live file
+    and its journal exactly as they were: the lighthouse recovers them when it opens the database."""
+    store, rotation = station(tmp_path)
+    with closing(sqlite3.connect(store.db_path)) as db:
+        db.execute('CREATE TABLE filler(v TEXT)')
+        db.executemany('INSERT INTO filler VALUES(?)', [('x' * 500,) for _ in range(2000)])
+        db.commit()
+    subprocess.run([sys.executable, '-I', '-c', CRASH, str(store.db_path)], check=True)   # the cache spills, then "power off"
+    journal = Path(f'{store.db_path}-journal')
+    assert journal.stat().st_size > 0
+    live, hot = store.db_path.read_bytes(), journal.read_bytes()
+    now = [time.time()]
+    with pytest.raises(backups.BackupError) as failed:
+        backups.run_backup(store.data_dir, rotation, clock=lambda: now[0],
+                           sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+    assert failed.value.code == 1 and f'could not be copied for {backups.RETRY_SECONDS} s' in failed.value.reason
+    assert store.db_path.read_bytes() == live and journal.read_bytes() == hot
+    assert names(rotation) == []
+
+
+def test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place(tmp_path, monkeypatch, capsys):
+    """Spec, Error handling: a pruning error is exit 1 ("anything else"). The new copy is already published, so the
+    reason says so rather than reading as a failed backup; one stuck file doesn't stop the rest being pruned."""
+    store, rotation = station(tmp_path)
+    rotation.mkdir(parents=True, mode=0o700)
+    day = time.strftime('%Y%m%d', time.gmtime(time.time() - 3 * 86400))
+    stuck, gone = (f'peer-{day}T0{hour}0000Z.sqlite3' for hour in (1, 2))
+    newest_of_day = f'peer-{day}T030000Z.sqlite3'
+    for name in (stuck, gone, newest_of_day):
+        (rotation / name).write_bytes(b'an earlier copy')
+    real_unlink = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        if self.name == stuck:
+            raise PermissionError(13, 'Permission denied', str(self))
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', unlink)
+    assert backup(store, rotation) == 1
+    message = capsys.readouterr().err
+    assert 'new copy is in place' in message and stuck in message
+    [new] = [name for name in names(rotation) if name not in (stuck, gone, newest_of_day)]
+    assert ok(rotation / new) and gone not in names(rotation) and stuck in names(rotation)

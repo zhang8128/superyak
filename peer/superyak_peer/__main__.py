@@ -209,6 +209,7 @@ def main(argv=None):
     backup_cmd = commands.add_parser('station-backup', help='Trusted local: a checked copy of the station database into the rotation')
     backup_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     backup_cmd.add_argument('--backup-dir', type=Path, help='The rotation (default: backups/station beside the data dir)')
+    backup_cmd.add_argument('--output', type=Path, help='One checked copy at this new path, outside the rotation; never replaces a file')
     door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
@@ -278,7 +279,7 @@ def main(argv=None):
         elif args.command == 'station-backup':
             from .backups import BackupError, default_backup_dir, run_backup
             try:
-                written = run_backup(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir))
+                written = run_backup(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir), output=args.output)
             except BackupError as failed:
                 parser.exit(failed.code, f'station-backup: {failed.reason}\n')
             print(f'Checked copy: {written}')

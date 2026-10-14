@@ -5,10 +5,12 @@ snapshot of committed data on its own (S2)."""
 import calendar
 from contextlib import closing, contextmanager
 import datetime
+import errno
 import fcntl
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import time
 
@@ -17,6 +19,8 @@ COPY_NAME = re.compile(r'peer-(\d{8}T\d{6}Z)\.sqlite3')
 TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal)?')
 KEEP_DAYS, KEEP_WEEKS = 14, 8
 TEMP_MAX_AGE = 86400
+MIN_FREE = 1 << 30
+RETRY_SECONDS = 60
 SEE_LOG = 'see the log'
 REASONS = {  # spec, Error handling: the words the CLI prints and the Ops line carries
     10: 'not enough disk space',
@@ -91,16 +95,25 @@ def keep(names):
 
 def prune(directory, now):
     """S3, R3: run only once a new checked copy is in place. Deletes the copies S3 doesn't keep, and temporary files
-    (.tmp and .tmp-journal) over a day old. Nothing else in the directory is touched."""
+    (.tmp and .tmp-journal) over a day old. Nothing else in the directory is touched. A file that can't be removed
+    doesn't stop the rest: the failures come back as (name, error) pairs, empty when all went well."""
+    failures = []
     copies = rotation(directory)
     kept = keep([path.name for path in copies])
     for path in copies:
         if path.name not in kept:
-            path.unlink()
+            try:
+                path.unlink()
+            except OSError as error:
+                failures.append((path.name, error))
     for entry in list(os.scandir(directory)):
-        if (TEMP_NAME.fullmatch(entry.name) and entry.is_file(follow_symlinks=False)
-                and now - entry.stat(follow_symlinks=False).st_mtime > TEMP_MAX_AGE):
-            os.unlink(entry.path)
+        try:
+            if (TEMP_NAME.fullmatch(entry.name) and entry.is_file(follow_symlinks=False)
+                    and now - entry.stat(follow_symlinks=False).st_mtime > TEMP_MAX_AGE):
+                os.unlink(entry.path)
+        except OSError as error:
+            failures.append((entry.name, error))
+    return failures
 
 
 def _read_only(path):
@@ -161,17 +174,45 @@ def _remove_temporary(tmp):
         path.unlink(missing_ok=True)
 
 
+def free_bytes(path):
+    return shutil.disk_usage(path).free
+
+
 def _checked_copy(database, tmp, clock, sleep):
-    """S2 steps 1-3: a new 0600 file, SQLite's backup API in one step from a read-only connection, then
-    integrity_check. Every failure removes the file."""
+    """S2 steps 1-3 and S4: a new 0600 file, SQLite's backup API in one step from a read-only connection, then
+    integrity_check. A busy database or a hot journal is retried for 60 s (S8: after a power cut the read-only open
+    succeeds and the first read fails with SQLITE_READONLY_ROLLBACK). Every failure removes the file."""
     os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
     try:
-        with closing(_read_only(database)) as source, closing(sqlite3.connect(tmp)) as copy:
-            source.backup(copy, pages=-1)
-            sound = _check(copy, 'integrity_check')
+        deadline = clock() + RETRY_SECONDS
+        while True:
+            try:
+                with closing(_read_only(database)) as source:
+                    size = source.execute('PRAGMA page_count').fetchone()[0] * source.execute('PRAGMA page_size').fetchone()[0]
+                    if free_bytes(tmp.parent) - size < MIN_FREE:  # S4: at least 1 GiB left after the copy
+                        raise BackupError(10)
+                    with closing(sqlite3.connect(tmp)) as copy:
+                        source.backup(copy, pages=-1)
+                        sound = _check(copy, 'integrity_check')
+                break
+            except sqlite3.OperationalError as error:
+                if getattr(error, 'sqlite_errorcode', None) == sqlite3.SQLITE_FULL:
+                    raise BackupError(10) from error
+                if clock() >= deadline:
+                    raise BackupError(1, f'the station database could not be copied for {RETRY_SECONDS} s: {error}') from error
+                sleep(1)
+            except sqlite3.DatabaseError:
+                sound = False  # a copy that raised is a copy that failed its check
+                break
         if not sound:
-            raise BackupError(11)
+            with closing(_read_only(database)) as live:  # S4: tell a bad copy from a damaged station
+                raise BackupError(11 if _check(live, 'quick_check') else 12)
         _fsync(tmp)
+    except OSError as error:
+        _remove_temporary(tmp)
+        if error.errno == errno.ENOSPC:
+            raise BackupError(10) from error
+        raise
     except BaseException:
         _remove_temporary(tmp)
         raise
@@ -183,11 +224,28 @@ def _publish(tmp, final):
     _fsync(final.parent)
 
 
-def run_backup(data_dir, backup_dir, *, clock=time.time, sleep=time.sleep):
+def _write_output(database, output, clock, sleep):
+    """S2 --output FILE: one checked copy at a new path, outside the rotation. It publishes with os.link, so an existing
+    FILE is never replaced, even one created after the check (R4)."""
+    if os.path.lexists(output):
+        raise ValueError(f'{output} exists; --output never replaces a file')
+    tmp = output.parent / f'.peer-{copy_stamp(clock())}-{os.getpid()}.tmp'
+    _checked_copy(database, tmp, clock, sleep)
+    try:
+        os.link(tmp, output)
+        _fsync(output.parent)
+    finally:
+        _remove_temporary(tmp)
+    return output
+
+
+def run_backup(data_dir, backup_dir, *, output=None, clock=time.time, sleep=time.sleep):
     """station-backup (S2). Returns the new copy's path; raises BackupError with its exit code."""
     database = _live_database(data_dir)
     old_umask = os.umask(0o077)
     try:
+        if output is not None:
+            return _write_output(database, Path(output).absolute(), clock, sleep)
         backup_dir = _rotation_dir(backup_dir)
         with rotation_lock(backup_dir):
             now = clock()
@@ -206,7 +264,10 @@ def run_backup(data_dir, backup_dir, *, clock=time.time, sleep=time.sleep):
             except BaseException:
                 _remove_temporary(tmp)
                 raise
-            prune(backup_dir, now)
+            failures = prune(backup_dir, now)
+            if failures:  # the new copy is published; spec, Error handling: a pruning error is exit 1
+                raise BackupError(1, f'the new copy is in place ({final.name}), but pruning could not remove: '
+                                     + '; '.join(f'{name} ({error.strerror or error})' for name, error in failures))
         return final
     finally:
         os.umask(old_umask)
