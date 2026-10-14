@@ -13,7 +13,7 @@ agent changes, so no ship needs to update after this deploys.
 
 **Tech Stack:** Python 3.11+, git CLI on the station, pytest.
 
-**Status:** revision 2, for the same reviewer's re-check. Revision 1 (560ff06) had the fresh reviewer's verdict,
+**Status:** revision 2, **approved** (the same reviewer's re-check: APPROVE, no remaining findings). Revision 1 (560ff06) had the fresh reviewer's verdict,
 APPROVE WITH CHANGES (1 must-fix, 1 should-fix, 1 nit; room message 29d2390e): see "Review map".
 
 **Spec:** `docs/superpowers/specs/2026-10-14-version-check-design.md`, revision 5 (approved under D8, a4afa8f). Read
