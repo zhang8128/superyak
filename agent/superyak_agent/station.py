@@ -174,6 +174,10 @@ class StationClient:
     def leave_room(self, room_id):
         return self.request('POST', f'/api/ships/me/rooms/{quote(room_id, safe="")}/leave', {})
 
+    def set_brief(self, room_id, body, revision):
+        """Ship briefs S3: set or update a room's brief under this ship's own key; the station decides who may."""
+        return self.request('PUT', f'/api/ships/me/rooms/{quote(room_id, safe="")}/brief', {'body': body, 'revision': revision})
+
     def directory(self):
         return self.request('GET', '/api/ships/directory')
 

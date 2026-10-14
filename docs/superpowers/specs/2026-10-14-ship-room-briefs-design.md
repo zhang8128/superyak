@@ -5,6 +5,28 @@ three must-fixes, thirteen should-fixes and rulings on Q1–Q5. Rio Grande ruled
 does; the review map at the end walks each item. The re-review of 1176793 approved it with three wording nits, N1–N3,
 which are applied here (see the end). Base: `main` (7cdbb1f).
 
+Built on branch `ship-briefs` (plan `docs/superpowers/plans/2026-10-14-ship-room-briefs.md`). Decisions the spec left
+to the plan:
+- **S1(d)** uses `CURRENT_PERSON_ROOM` itself.
+- **The @name scan** is `ships.addressed_names`, shared with `_record_mentions`.
+- **Boundaries.** A save counts toward the rate while `updated > now - 3600`, and a revision is older than 24 hours
+  when `updated < now - 86400`.
+- **History.** The backfill runs from `Store.__init__` after the system author, and a history clash rolls the save
+  back.
+- **The notice** uses the ship template when the author is a ship, and the owner template otherwise.
+- **Web.** The third class reads "Written by <name>, not the room's owner", and the revision line drops "by <name>".
+  The owner gets a "Brief history" toggle. A removal's row says "Removed", with no "Use this text". The list reloads
+  after a save.
+- **The tool** sits after `station_post` and redacts like it, without cutting. It refuses a body that isn't text
+  before any call.
+- **Tests the Testing list missed:**
+  - `test_only_the_owner_writes_the_brief` (a third whole-dict comparison);
+  - `test_system_author.py:88` (a sixth `_post_as_system` caller);
+  - `test_mcp.py`'s tool list, `brief_header` and removal assertion;
+  - `test_ship_agent.py`'s brief read test;
+  - `test_station_cli.py`'s bridge-race test, which now compares room ids because a notice moves `last_activity`.
+- **R15's resident-watcher half** is checked on the station side by the notice's source.
+
 Amends three approved specs, and says where:
 - [room brief](2026-10-08-room-brief-design.md):
   - who writes (S1);

@@ -28,6 +28,7 @@ class FakeStation:
         self.blocks, self.instruction_state, self.drafts = {}, {}, []
         self.briefs = {}  # room id -> the brief as GET /api/chats/{id} shows it, or None
         self.brief_revisions = {}  # room id -> brief_revision, as GET /api/chats/{id} shows it
+        self.brief_puts, self.brief_refusals = [], []  # every ship brief PUT's JSON; (status, error) to answer first
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
         self.requests = []  # every call: method, path, JSON body and its x-superyak-* headers (spec S1)
         self.watches = {}  # (ship, session) -> {minutes, writable, label}
@@ -162,6 +163,24 @@ class FakeStation:
         if room['owner_id'] == me and self.closed(room_id) is None:
             self.breakouts[room_id]['closed'] = self.clock
         return 200, json.dumps({'room_id': room_id, 'left': True, 'closed': self.closed(room_id)}).encode()
+
+    def ship_brief(self, me, room_id, payload):
+        """PUT /api/ships/me/rooms/{id}/brief (ship briefs S3): just the checks the tool's tests need, in the station's
+        words. A refusal queued in brief_refusals answers first, as the station would."""
+        self.brief_puts.append(dict(payload))
+        if self.brief_refusals:
+            status, error = self.brief_refusals.pop(0)
+            return status, json.dumps({'error': error}).encode()
+        room = self.rooms.get(room_id)
+        if room is None or me not in room['member_ids']:
+            return 404, b'{"error": "Not found"}'
+        body, revision = payload.get('body'), payload.get('revision')
+        if not isinstance(body, str) or not body.strip():
+            return 403, json.dumps({'error': "Only the room's owner can remove its brief"}).encode()
+        if type(revision) is not int or revision != self.brief_revisions.get(room_id, 0):
+            return 409, json.dumps({'error': 'The brief changed since you read it. Read it again with station_read and merge before saving.'}).encode()
+        self.brief(room_id, self.users[me], body, revision + 1)
+        return 200, json.dumps(self.briefs[room_id]).encode()
 
     def unread_page(self, me, name, limit, breakouts):
         """POST /api/ships/me/unread. With breakouts=mentions, breakout messages that don't mention the reader are left
@@ -299,6 +318,8 @@ class FakeStation:
             return self.open_breakout(me, json.loads(data))
         if method == 'POST' and segments[:4] == ['api', 'ships', 'me', 'rooms'] and len(segments) == 6 and segments[5] in ('leave', 'close'):
             return self.end_breakout(me, segments[4], segments[5])
+        if method == 'PUT' and segments[:4] == ['api', 'ships', 'me', 'rooms'] and len(segments) == 6 and segments[5] == 'brief':
+            return self.ship_brief(me, segments[4], json.loads(data))
         if method == 'POST' and path == '/api/ships/me/unread/advance':
             payload = json.loads(data)
             name = payload.get('cursor') or 'default'
