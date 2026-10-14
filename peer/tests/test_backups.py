@@ -109,3 +109,31 @@ def test_copies_are_private_checked_and_appear_whole(tmp_path, monkeypatch):
     monkeypatch.setattr(backups, '_publish', fail)
     assert backup(store, rotation) == 1
     assert names(rotation) == []
+
+
+def test_a_hand_made_rotation_folder_is_tightened_to_0700(tmp_path):
+    """R2: the real case on the Pi is a folder made by hand at 0755; the run must leave it 0700."""
+    store, rotation = station(tmp_path)
+    rotation.mkdir(parents=True, mode=0o755)
+    os.chmod(rotation, 0o755)
+    assert backup(store, rotation) == 0
+    assert stat.S_IMODE(rotation.stat().st_mode) == 0o700
+
+
+def test_each_layer_of_privacy_holds_without_the_umask(tmp_path, monkeypatch):
+    """R2: with umask a no-op, the file's 0600 comes from O_CREAT's mode and the folder's 0700 from the chmod."""
+    store, rotation = station(tmp_path)
+    rotation.mkdir(parents=True, mode=0o755)
+    os.chmod(rotation, 0o755)
+    monkeypatch.setattr(os, 'umask', lambda mask: 0)  # a no-op: the process umask stays what the test runner has
+    assert backup(store, rotation) == 0
+    [copy] = rotation.glob('peer-*.sqlite3')
+    assert stat.S_IMODE(copy.stat().st_mode) == 0o600 and stat.S_IMODE(rotation.stat().st_mode) == 0o700
+
+
+def test_a_failed_integrity_check_leaves_nothing_behind(tmp_path, monkeypatch):
+    """R2/S2: exit 11 and no temporary, journal or final file."""
+    store, rotation = station(tmp_path)
+    monkeypatch.setattr(backups, '_check', lambda db, pragma: False)
+    assert backup(store, rotation) == 11
+    assert names(rotation) == []

@@ -128,6 +128,7 @@ def run_backup(data_dir, backup_dir, *, clock=time.time, sleep=time.sleep):
         backup_dir = _rotation_dir(backup_dir)
         with rotation_lock(backup_dir):
             stamp = copy_stamp(clock())
+            # Two runs in the same second share this name; the later replaces the earlier, and both are checked copies.
             final, tmp = backup_dir / f'peer-{stamp}.sqlite3', backup_dir / f'.peer-{stamp}-{os.getpid()}.tmp'
             _checked_copy(database, tmp, clock, sleep)
             try:
