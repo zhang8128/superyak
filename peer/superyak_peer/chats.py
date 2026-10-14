@@ -97,10 +97,10 @@ class Chats:
             self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
             sent = dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
-            if reply_to is None:  # R27: this ship's deferred mentions here that still wait for a reply_to
-                waiting = [r[0] for r in db.execute('''SELECT deferrals.message_id FROM deferrals JOIN messages
-                    ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?
-                    ORDER BY deferrals.first_deferred''', (actor, key))]
+            if reply_to is None:  # R27: this ship's deferred mentions here that still wait (stale deferrals spec)
+                held = [r[0] for r in db.execute('''SELECT deferrals.message_id FROM deferrals JOIN messages
+                    ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?''', (actor, key))]
+                waiting = self._waiting_deferrals(db, actor, held)
                 if waiting:  # R35: present only when it has something to say
                     sent['deferred_here'] = waiting
             return sent

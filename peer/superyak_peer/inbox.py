@@ -136,7 +136,7 @@ class Inbox:
                               'ORDER BY events.id LIMIT ?', (actor, position, actor, *([actor] if breakouts else []), limit + 1)).fetchall()
             if breakouts:
                 position, counts, titles = self._left_out(db, actor, name, position, rows[:limit])
-            messages, sources, breakout_rooms = [], {}, set()
+            messages, sources, breakout_rooms, asked = [], {}, set(), []
             for row in rows[:limit]:
                 payload = json.loads(row['payload'])
                 found = (db.execute('SELECT * FROM messages WHERE id=?', (payload['message_id'],)).fetchone()
@@ -155,9 +155,13 @@ class Inbox:
                         'reply_to': self._reply_to(db, found['id']), 'source': sources[row['resource_id']].get(found['id'])}
                 if row['resource_id'] in breakout_rooms:  # breakouts S6: only a breakout's items carry the key
                     item['breakout'] = True
-                if mentioned and db.execute('SELECT 1 FROM deferrals WHERE ship_id=? AND message_id=?', (actor, found['id'])).fetchone():
-                    item['deferred'] = {'author_verified': item['author'], 'would_be': 'read'}  # R26
                 messages.append(item)
+                if mentioned:
+                    asked.append(found['id'])
+            waiting = set(self._waiting_deferrals(db, actor, asked))  # R26, once per page, after any breakout closed
+            for item in messages:
+                if item['message_id'] in waiting:
+                    item['deferred'] = {'author_verified': item['author'], 'would_be': 'read'}
             on_watch = self._session_on_writable_watch(db, actor, name)  # R26: the line asks for answers; only a writable watch takes them
         got = {'cursor': name, 'position': position, 'more': len(rows) > limit, 'messages': messages}
         if on_watch:  # R35: present only when it has something to say, so an old client sees today's keys

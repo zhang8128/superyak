@@ -400,10 +400,10 @@ want of this:
 - **R24.** Deferrals live only in `deferrals`. No ticket row exists for a deferred mention, the `tickets` schema is
   unchanged, and a `deferrals` row is deleted when its mention is decided `answered` or `run`.
 - **R25.** A mention whose decided mode would be `build` (an owner's mention) is never deferred.
-- **R26.** An unread item that is one of this ship's deferred mentions carries `deferred: {author_verified, would_be}`,
+- **R26.** An unread item that is one of this ship's deferred mentions that still waits (under the bound and not yet answered by the ship; stale deferrals spec) carries `deferred: {author_verified, would_be}`,
   and the hook renders it. The hook adds the on-watch reply line whenever the session is on a writable watch and its
   block holds any item with `mentions_me`, marked deferred or not. A read-only watch gets no line (137f0a38, minor 4).
-- **R27.** `station_post` without `reply_to` lists this ship's deferred mentions in that room in its result.
+- **R27.** `station_post` without `reply_to` lists this ship's deferred mentions in that room that still wait in its result.
 - **R28.** A client without a real session name sends no session header, so no two sessions share a row.
 - **R29.** The system author exists once: one `users` row created at schema setup, with kind `system`, username
   `_station` and a random id kept in `system_meta`, and it is always found by that id, never by username. No person,
