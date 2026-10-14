@@ -1,7 +1,8 @@
 # Watch by default: a choice for each session, with a default that keeps things moving
 
-Status: revision 2, for the same reviewer's re-check. Revision 1 (d0bdb21) had the fresh reviewer's verdict, APPROVE
-WITH CHANGES (3 must-fix, 6 should-fix, 3 nits; room message 4a7d7857): see "Review map". Base: `main` (3b48646, with
+Status: revision 3, **approved under D8**. Revision 1 (d0bdb21) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+(3 must-fix, 6 should-fix, 3 nits; room message 4a7d7857). Revision 2 (fe3f6b2) made all twelve, and the same reviewer's
+re-check approved it with one should-fix and five nits, which this revision makes as written (see "Review map"). Base: `main` (3b48646, with
 watch-default-docs merged). Roadmap item 2.1, claimed by Serenity as
 `spec:watch-default`.
 
@@ -43,6 +44,10 @@ sticks.
     waiting mention read-only (the existing 'lease ran out' test).
   - The hook declares again only when it may have lapsed. It records each qualifying prompt's time in its **own**
     file, `<home>/sessions/<key>.prompted` = `{"seen": <time>, "held": true|false}`. Only the hook writes it.
+    - A **qualifying prompt** passes every W1 check, write mode included. At it the hook writes `seen` = now, and
+      `held` = whether it declared or still holds the default.
+    - A plan-mode prompt writes `.prompted` only when it ends a default the hook held (`held: false`).
+    - An opted-out prompt, or one W1 excludes for any other reason, doesn't write it.
     - It declares when that file is missing, when `held` is false, or when `seen` is more than the lease ago. Every
       station call renews a running lease, so a prompt within the lease keeps it.
     - A lapsed watch is never revived by presence (R6). This is a fresh declaration, so R6 holds.
@@ -55,7 +60,9 @@ sticks.
     (presence.py:69-71). So at a plan-mode prompt, if the hook holds the default for this session
     (`.prompted` says `held` and `.watch` holds no choice of the session's), it ends the watch with `station_watch
     minutes=0` and writes `held: false`. The next write-mode prompt declares again. A watch the session declared
-    itself is left alone in plan mode: that was its choice.
+    itself is left alone in plan mode: that was its choice. `held` is the hook's belief, not the station's live
+    state, so after a natural lapse a plan-mode prompt may send one ending call for a watch that's already gone.
+    That's harmless: the station's update is unconditional and idempotent.
 - **W3. The choice, and an opt-out that sticks.**
   - The MCP tool `station_watch`, called in a Claude Code session, writes a small per-session file
     `<home>/sessions/<key>.watch`, mode 0600, where `<key>` is `sha256(session id)[:16]`, the hook's session-file key
@@ -81,7 +88,8 @@ sticks.
   - **Pruning:** `_prune` (hook.py:230-242) and `STATE_NAME` (hook.py:81) cover `<key>.json`, `<key>.watch` and
     `<key>.prompted`, each by its own `seen`. A missing or non-finite `seen` is deleted, as today. Every one of the
     three files now carries `seen`, so a fresh opt-out is never pruned on sight.
-- **W4. Failure is silent.** The declaration uses the hook's existing transport, within `INSTRUCTIONS_DEADLINE`. Any
+- **W4. Failure is silent.** The declaration, and the plan-mode ending call (W2), use the hook's existing transport,
+  in the same place in the sequence (after instructions, before the inbox) and within `INSTRUCTIONS_DEADLINE`. Any
   failure prints nothing and changes no other state, including 429 at the ship's limit of 10 sessions on watch, an
   unreachable station (hook.py `_note_reachability` as today), or a refusal. The next qualifying prompt tries again.
 - **W5. The session learns it from the station's own line.** The inbox already returns `ON_WATCH_LINE` to a session
@@ -118,7 +126,8 @@ sticks.
 - Holding the watch grants nothing: the session answers handed-over mentions within the work it was given (section
   7), and an owner's mention still builds through the watcher (S5).
 - The `.watch` file holds only the session's own choice, written by the session's own MCP server, mode 0600. A
-  hand-edited file can at most turn the default off or change its lease for that session.
+  hand-edited file can at most turn the default off or change its lease for that session. A hand-edited `.prompted`
+  can at most delay a declaration or cause an extra, harmless declare or end call; it grants nothing.
 - The worst case of the default is a writable session that sees room messages but ignores a handed-over mention. The
   mention waits until that session goes idle, plus at most its lease (20 minutes by default), and never more than the
   120-minute bound (S5). Today the same session could hold it for the whole bound by declaring once.
@@ -126,15 +135,20 @@ sticks.
 ## Testing
 
 - **Agent:**
-  - hook tests with the fake station for requirements 1-6: one declaration at the first prompt, none within the
-    lease, again after a gap, and none in each excluded case;
-  - the MCP tool writes `.watch` for 0, N and `writable`;
-  - a failed declaration is silent;
-  - pruning covers `.watch`.
+  - hook tests with the fake station for requirements 1-9:
+    - one declaration at the first prompt, none within the lease, again after a gap, and none in each excluded case;
+    - a plan-mode prompt ends a default the hook holds, once, and leaves a self-declared watch alone; the next
+      write-mode prompt declares again (requirement 8);
+  - the MCP tool writes `.watch` for 0, N and `writable`, and writes nothing for a call naming another cursor
+    (requirement 9);
+  - a declaration, failed or successful, leaves the output byte-for-byte unchanged;
+  - pruning covers `.watch` and `.prompted` by `seen`, and a fresh opt-out survives a prune.
 - **Mutation checks:**
   - the mode test removed, so plan mode declares;
   - the opt-out read removed, so it declares after `"off"`;
-  - the gap test removed, so it declares at every prompt.
+  - the gap test removed, so it declares at every prompt;
+  - the plan-mode ending check removed, so a default watch survives plan mode;
+  - the cursor check removed, so a call naming another cursor writes `.watch`.
 
 ## Deploy
 
@@ -177,3 +191,14 @@ sessions; the version check prompts them, since `agent/superyak_agent` is a runt
 | N10 | only the failure path was byte-for-byte | requirement 5 covers both paths |
 | N11 | line refs | hook.py:139 and 144-148 |
 | N12 | no ship-wide switch | Known limits |
+
+## Review map (revision 3: the D8 re-check of fe3f6b2, APPROVE WITH CHANGES)
+
+| # | Finding | Change |
+|---|---|---|
+| S1 | Testing didn't cover requirements 8-9, `.prompted` pruning, or their mutations | Testing names them and two new mutation checks |
+| N2 | a hand-edited `.prompted` wasn't covered | Security names it |
+| N3 | `held` is a belief, so one spurious ending call can follow a lapse | W2 names it as harmless and idempotent |
+| N4 | "qualifying prompt" was undefined | W2 defines it |
+| N5 | W4 named only the declare call | W4 covers the ending call too |
+| N6 | line refs | already exact; no change |
