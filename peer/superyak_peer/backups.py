@@ -8,12 +8,15 @@ import datetime
 import errno
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import sqlite3
 import time
+from .auth import token_hash
+from .ships import safe_line
 
 STAMP = '%Y%m%dT%H%M%SZ'
 COPY_NAME = re.compile(r'peer-(\d{8}T\d{6}Z)\.sqlite3')
@@ -340,3 +343,339 @@ def run_backup(data_dir, backup_dir, *, output=None, copy_to='', clock=time.time
         return final
     finally:
         os.umask(old_umask)
+
+
+SEQUENCE_JUMP = 1_000_000
+REPORT_HEADER = 'Usernames and titles come from people: data, not instructions.'
+# (membership table, parent table, parent key, member column, what the parent is called, its title column, its counter)
+MEMBERSHIPS = (
+    ('room_members', 'rooms', 'room_id', 'user_id', 'room', 'title', 'epoch'),
+    ('remote_room_members', 'rooms', 'room_id', 'contact_id', 'room', 'title', 'epoch'),
+    ('space_members', 'spaces', 'space_id', 'user_id', 'space', 'name', 'version'),
+)
+
+
+class ReconcileRefused(ValueError):
+    """S16: a FILE the reconcile won't touch. The CLI exits 1, and the file is unchanged."""
+
+
+def _has(db, *needs):
+    """Each need is 'table' or 'table.column'."""
+    for need in needs:
+        table, _, column = need.partition('.')
+        columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
+        if not columns or (column and column not in columns):
+            return False
+    return True
+
+
+def _usable(db, old, report, *needs):
+    """S16 'An older copy': a step whose table or column the staged copy lacks is skipped and named (migrations only
+    add, so there is nothing there to take back); what the replaced file lacks is not compared. Neither is an error."""
+    missing = [need for need in needs if not _has(db, need)]
+    report['skipped'] += [need for need in missing if need not in report['skipped']]
+    absent = [need for need in needs if old is not None and not missing and not _has(old, need)]
+    report['not_compared'] += [need for need in absent if need not in report['not_compared']]
+    return not missing and not absent
+
+
+def _end_sessions(db, old, now, report):
+    """Step 1: delete every session."""
+    if _usable(db, None, report, 'sessions'):
+        report['counts']['sessions deleted'] = db.execute('DELETE FROM sessions').rowcount
+
+
+def _use_invitations(db, old, now, report):
+    """Step 2: mark every unused invitation and account activation used."""
+    for table, label in (('invitations', 'invitations marked used'), ('account_activations', 'account activations marked used')):
+        if _usable(db, None, report, f'{table}.used'):
+            report['counts'][label] = db.execute(f'UPDATE {table} SET used=1 WHERE used=0').rowcount
+
+
+def _revoke_held_keys(db, old, now, report):
+    """Step 3, dockings: a docking that still holds its plaintext key has that key revoked and is expired, as
+    Ships._expire_uncollected does (ships.py:109-110)."""
+    if not _usable(db, None, report, 'dockings.key', 'ship_keys.revoked'):
+        return
+    held = db.execute('SELECT id, ship_name, key FROM dockings WHERE key IS NOT NULL').fetchall()
+    for row in held:
+        if db.execute('UPDATE ship_keys SET revoked=? WHERE key_hash=? AND revoked IS NULL', (now, token_hash(row['key']))).rowcount:
+            report['revoked'].append(row['ship_name'])
+        db.execute("UPDATE dockings SET key=NULL,status='expired' WHERE id=?", (row['id'],))
+    report['counts']['uncollected docking keys revoked'] = len(held)
+
+
+def _clear_uncollected(db, old, now, report):
+    """Step 3, requests: clear every access request's uncollected invitation token and share link."""
+    for column, label in (('token', 'uncollected invitation tokens cleared'), ('share_url', 'uncollected share links cleared')):
+        if _usable(db, None, report, f'access_requests.{column}'):
+            report['counts'][label] = db.execute(f'UPDATE access_requests SET {column}=NULL WHERE {column} IS NOT NULL').rowcount
+
+
+def _expire_waiting(db, old, now, report):
+    """Step 4: every pending access request and waiting docking expires now, so requesters ask again."""
+    for table, status, label in (('access_requests', 'pending', 'pending access requests expired'),
+                                 ('dockings', 'waiting', 'waiting dockings expired')):
+        if _usable(db, None, report, f'{table}.expires', f'{table}.status'):
+            report['counts'][label] = db.execute(f'UPDATE {table} SET expires=? WHERE status=? AND expires>?', (now, status, now)).rowcount
+
+
+def _sequence(db, table):
+    row = db.execute('SELECT seq FROM sqlite_sequence WHERE name=?', (table,)).fetchone() if _has(db, 'sqlite_sequence') else None
+    return max(row[0] if row else 0, db.execute(f'SELECT COALESCE(MAX(rowid), 0) FROM "{table}"').fetchone()[0])
+
+
+def _raise_sequences(db, old, now, report):
+    """Step 5: no watcher's saved cursor may hide a new mention: each sequence becomes the replaced file's where that is
+    higher, or 1,000,000 more without a usable replaced file (or one that lacks the table: fail closed)."""
+    for table in ('mentions', 'events'):
+        if not _usable(db, None, report, table):
+            continue
+        current = _sequence(db, table)
+        target = max(current, _sequence(old, table)) if old is not None and _has(old, table) else current + SEQUENCE_JUMP
+        if target > current and not db.execute('UPDATE sqlite_sequence SET seq=? WHERE name=?', (target, table)).rowcount:
+            db.execute('INSERT INTO sqlite_sequence(name, seq) VALUES(?, ?)', (table, target))
+        report['sequences'][table] = (current, target)
+
+
+def _revoke_owned_ship_keys(db, old, now, report):
+    """Without a usable replaced file: every key of every ship that has an owner; those machines dock again. The
+    station's own ships, which have no owner (Odo, Wormhole), keep their keys."""
+    if not _usable(db, None, report, 'users.kind', 'users.owner_id', 'ship_keys.revoked'):
+        return
+    owned = "SELECT id FROM users WHERE kind='ship' AND owner_id IS NOT NULL"
+    report['revoked'] += [row[0] for row in db.execute(
+        f'SELECT DISTINCT users.username FROM ship_keys JOIN users ON users.id=ship_keys.ship_id '
+        f'WHERE ship_keys.revoked IS NULL AND ship_keys.ship_id IN ({owned}) ORDER BY users.username')]
+    report['counts']['ship keys revoked'] = db.execute(f'UPDATE ship_keys SET revoked=? WHERE revoked IS NULL AND ship_id IN ({owned})', (now,)).rowcount
+
+
+def _revoke_like_replaced(db, old, now, report):
+    """With a usable replaced file: every ship key revoked there is revoked here."""
+    if not _usable(db, old, report, 'ship_keys.revoked'):
+        return
+    count = 0
+    for key_id, revoked in old.execute('SELECT id, revoked FROM ship_keys WHERE revoked IS NOT NULL').fetchall():
+        ship = db.execute('SELECT users.username FROM ship_keys JOIN users ON users.id=ship_keys.ship_id '
+                          'WHERE ship_keys.id=? AND ship_keys.revoked IS NULL', (key_id,)).fetchone()
+        if ship:
+            db.execute('UPDATE ship_keys SET revoked=? WHERE id=?', (revoked, key_id))
+            report['revoked'].append(ship[0])
+            count += 1
+    report['counts']['ship keys revoked as in the replaced file'] = count
+
+
+def _member_name(db, table, member):
+    if table == 'remote_room_members':
+        row = db.execute('SELECT name FROM remote_contacts WHERE id=?', (member,)).fetchone() if _has(db, 'remote_contacts.name') else None
+        return f'remote contact {row[0]}' if row else f'remote contact {member[:6]}'
+    row = db.execute('SELECT username FROM users WHERE id=?', (member,)).fetchone()
+    return row[0] if row else member[:6]
+
+
+def _remove_members_like_replaced(db, old, now, report):
+    """With a usable replaced file: for rooms and spaces in both files, each room, remote-room or space membership that
+    isn't there is removed here (Wormhole included, so a room Andy unbridged stays unbridged). A room or space that loses
+    a member has its epoch or version raised once, as remove_participant and change_space_member do, so a delivery
+    queued under the old epoch is refused."""
+    raised = set()
+    for table, parent, key, member, kind, title, counter in MEMBERSHIPS:
+        if not _usable(db, old, report, table, f'{parent}.{title}'):
+            continue
+        both = ({row[0] for row in db.execute(f'SELECT id FROM {parent}')}
+                & {row[0] for row in old.execute(f'SELECT id FROM {parent}')})
+        there = set(old.execute(f'SELECT {key}, {member} FROM {table}').fetchall())
+        for place, who in db.execute(f'SELECT {key}, {member} FROM {table} ORDER BY {key}, {member}').fetchall():
+            if place in both and (place, who) not in there:
+                db.execute(f'DELETE FROM {table} WHERE {key}=? AND {member}=?', (place, who))
+                if (parent, place) not in raised and _has(db, f'{parent}.{counter}'):
+                    db.execute(f'UPDATE {parent} SET {counter}={counter}+1 WHERE id=?', (place,))
+                    raised.add((parent, place))
+                name = db.execute(f'SELECT {title} FROM {parent} WHERE id=?', (place,)).fetchone()[0]
+                report['removed'].append((_member_name(db, table, who), kind, place[:6], name))
+
+
+def _lower_roles_like_replaced(db, old, now, report):
+    """With a usable replaced file: is_admin and is_super_admin come down to the replaced file's value where that is
+    lower. Never up. When that leaves no active super admin, the report says so."""
+    lowered_super = False
+    for column in ('is_admin', 'is_super_admin'):
+        if not _usable(db, old, report, f'users.{column}'):
+            continue
+        there = dict(old.execute(f'SELECT id, {column} FROM users').fetchall())
+        for row in db.execute(f'SELECT id, username, {column} FROM users ORDER BY username').fetchall():
+            if row['id'] in there and there[row['id']] < row[column]:
+                db.execute(f'UPDATE users SET {column}=? WHERE id=?', (there[row['id']], row['id']))
+                lowered_super = lowered_super or column == 'is_super_admin'
+                if row['username'] not in report['lowered']:
+                    report['lowered'].append(row['username'])
+    if lowered_super and _has(db, 'users.activation_pending'):
+        report['no_super_admin'] = db.execute('SELECT 1 FROM users WHERE is_super_admin=1 AND activation_pending=0').fetchone() is None
+
+
+def _close_breakouts_like_replaced(db, old, now, report):
+    """With a usable replaced file (Rio Grande's ruling on the plan review's Q1): a breakout closed there and still open
+    here is closed here, at the same time, so its members can't post or record mentions in it again."""
+    if not _usable(db, old, report, 'breakouts.closed', 'rooms.title'):
+        return
+    for room_id, closed in old.execute('SELECT room_id, closed FROM breakouts WHERE closed IS NOT NULL ORDER BY room_id').fetchall():
+        if db.execute('UPDATE breakouts SET closed=? WHERE room_id=? AND closed IS NULL', (closed, room_id)).rowcount:
+            title = db.execute('SELECT title FROM rooms WHERE id=?', (room_id,)).fetchone()
+            report['closed'].append((room_id[:6], title[0] if title else ''))
+
+
+def _title(draft):
+    try:
+        return json.loads(draft).get('title') or 'Untitled'
+    except (TypeError, ValueError, AttributeError):
+        return 'Untitled'
+
+
+def _report_differences(db, old, now, report):
+    """Reported, never applied, since a bad replaced file may be the reason for the restore: users whose password
+    differs, instruction layers whose active revision differs, and peers whose pairing differs."""
+    if _usable(db, old, report, 'users.salt', 'users.password_hash'):
+        there = {row[0]: (row[1], row[2]) for row in old.execute('SELECT id, salt, password_hash FROM users')}
+        report['passwords'] = [row['username'] for row in db.execute('SELECT id, username, salt, password_hash FROM users ORDER BY username')
+                               if row['id'] in there and there[row['id']] != (row['salt'], row['password_hash'])]
+    if _usable(db, old, report, 'layers.active_revision', 'layers.draft'):
+        here = {row['id']: row['active_revision'] for row in db.execute('SELECT id, active_revision FROM layers')}
+        for layer_id, active, draft in old.execute('SELECT id, active_revision, draft FROM layers ORDER BY id').fetchall():
+            if (layer_id in here and here[layer_id] != active) or (layer_id not in here and active is not None):
+                report['layers'].append((layer_id[:6], _title(draft), here.get(layer_id), active))
+    if _usable(db, old, report, 'peers.paired'):
+        here = dict(db.execute('SELECT peer_id, paired FROM peers').fetchall())
+        there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
+        report['peers'] = [peer[:12] for peer in sorted(set(here) | set(there)) if here.get(peer) != there.get(peer)]
+
+
+def _refuse(db_path, live_data_dir):
+    """S16: never a file in the live data dir (the one --live-data-dir names, or any directory holding a dispatch.lock,
+    which every directory a station has opened holds), never a symlink. The check runs on the file's real directory,
+    so a path, a symlinked parent or '..' can't fool it. A file with a second name (a hard link) is refused too, since
+    the other name could be the live file (plan review M2)."""
+    if db_path.is_symlink() or any(Path(f'{db_path}{end}').is_symlink() for end in ('-journal', '-wal', '-shm')):
+        raise ReconcileRefused('Refused: the copy is a symlink. Stage a real file (runbook step 5).')
+    if not db_path.is_file():
+        raise ReconcileRefused(f'Refused: there is no file at {db_path}')
+    if db_path.stat().st_nlink > 1:
+        raise ReconcileRefused('Refused: the copy has another name (a hard link), so writing it could write another file. '
+                               'Stage a real copy with install (runbook step 5).')
+    home = db_path.resolve().parent
+    if os.path.lexists(home / 'dispatch.lock') or (live_data_dir is not None and home == Path(live_data_dir).resolve()):
+        raise ReconcileRefused('Refused: that file is in a live data directory. Stage the copy in the replaced directory (runbook step 5).')
+
+
+def _replaced(path):
+    """(read-only connection, None) when the replaced file is usable, else (None, why). A replaced file that won't open
+    or fails quick_check is treated as absent, and the reconcile fails closed; the report says why."""
+    if path is None:
+        return None, 'not given'
+    path = Path(path).absolute()
+    if path.is_symlink():
+        return None, 'treated as absent (it is a symlink)'
+    if not path.is_file():
+        return None, 'treated as absent (there is no such file)'
+    old = None
+    try:
+        old = _read_only(path)
+        if _check(old, 'quick_check'):
+            return old, None
+    except sqlite3.Error:
+        pass
+    if old is not None:
+        old.close()
+    journal = Path(f'{path}-journal')
+    return None, f'treated as absent ({"a hot journal beside it, " + journal.name if journal.exists() else "it failed its check"})'
+
+
+def reconcile(db_path, *, replaced=None, live_data_dir=None, clock=time.time):
+    """station-restore-reconcile (S16): on a staged copy, take back what a restore revives. Every step only takes access
+    away, all in one transaction: if any step fails it rolls back and the copy is unchanged. Returns the report."""
+    db_path = Path(db_path).absolute()
+    _refuse(db_path, live_data_dir)
+    old, why = _replaced(replaced)
+    report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
+              'no_super_admin': False, 'closed': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
+              'not_compared': []}
+    db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    try:
+        if not _check(db, 'integrity_check'):
+            raise ReconcileRefused('Refused: the copy failed its integrity check.')
+        # Plan review M2: the likeliest slips at runbook step 5. The live file always holds the copy's history and more,
+        # so its events sequence is never lower; a lower one means DB= and REPLACED= were swapped.
+        if old is not None and os.path.samefile(Path(replaced).absolute(), db_path):
+            raise ReconcileRefused('Refused: --replaced is the staged copy itself. REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
+        if old is not None and _has(old, 'events') and _has(db, 'events') and _sequence(old, 'events') < _sequence(db, 'events'):
+            raise ReconcileRefused('Refused: the replaced file is older than the staged copy. Are DB= and REPLACED= swapped? '
+                                   'DB= is the staged restored.sqlite3; REPLACED= is the peer.sqlite3 set aside in runbook step 4.')
+        db.execute('BEGIN IMMEDIATE')
+        try:
+            now = clock()
+            for step in (_end_sessions, _use_invitations, _revoke_held_keys, _clear_uncollected, _expire_waiting, _raise_sequences):
+                step(db, old, now, report)
+            if old is None:
+                _revoke_owned_ship_keys(db, old, now, report)
+            else:
+                for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
+                             _close_breakouts_like_replaced, _report_differences):
+                    step(db, old, now, report)
+            db.execute('COMMIT')
+        except BaseException:
+            db.execute('ROLLBACK')
+            raise
+    finally:
+        db.close()
+        if old is not None:
+            old.close()
+    return report
+
+
+def _revision(value):
+    return 'none' if value is None else f'revision {value}'
+
+
+def describe_reconcile(report):
+    """What Andy reads at runbook step 5 (S16): counts, then usernames, short ids and titles under the header that they
+    come from people. Never a hash, a key or a token."""
+    def people(values):
+        return ', '.join(safe_line(value) for value in values)
+    lines = [REPORT_HEADER]
+    if report['replaced'] == 'compared':
+        lines.append('Compared with the replaced file.')
+    else:
+        lines.append(f"The replaced file was {report['replaced']}. Room and space members, admins and law layers were not "
+                     "compared: check them by hand in runbook step 8. Every owned ship's keys were revoked, so those "
+                     'machines dock again.')
+    lines.append('Taken back: ' + ', '.join(f'{label} ({count})' for label, count in report['counts'].items()) + '.')
+    for table, (before, after) in report['sequences'].items():
+        if after != before:
+            lines.append(f"The {table} sequence was raised from {before} to {after}, so no watcher's saved cursor hides what comes next.")
+    if report['revoked']:
+        lines.append(f'Ship keys revoked for: {people(sorted(set(report["revoked"])))}.')
+    if report['removed']:
+        lines.append('Removed: ' + '; '.join(f'{safe_line(who)} from {kind} {short} {safe_line(title)}'
+                                             for who, kind, short, title in report['removed']) + '.')
+    if report['lowered']:
+        lines.append(f'Roles lowered for: {people(report["lowered"])}.')
+    if report['no_super_admin']:
+        lines.append('No active super admin remains after lowering roles: renew a pending one with bootstrap-super-admin '
+                     '--renew-activation, or reserve one with bootstrap-super-admin (runbook step 7).')
+    if report['closed']:
+        lines.append('Breakouts closed as in the replaced file: '
+                     + '; '.join(f'{short} {safe_line(title)}' for short, title in report['closed']) + '.')
+    if report['passwords']:
+        lines.append(f'Reported, not applied: these passwords differ from the replaced file: {people(report["passwords"])}. '
+                     'Change again any that was changed for a reason.')
+    if report['layers']:
+        lines.append('Reported, not applied: law layers whose active revision differs: ' + '; '.join(
+            f'{short} {safe_line(title)} (here {_revision(here)}, in the replaced file {_revision(there)})'
+            for short, title, here, there in report['layers']) + '. Set them in the browser before the ships start.')
+    if report['peers']:
+        lines.append(f'Reported, not applied: peers whose pairing differs: {", ".join(report["peers"])}.')
+    if report['skipped']:
+        lines.append(f'Skipped, because this copy lacks them: {", ".join(report["skipped"])}.')
+    if report['not_compared']:
+        lines.append(f'Not compared, because the replaced file lacks them: {", ".join(report["not_compared"])}.')
+    return '\n'.join(lines)

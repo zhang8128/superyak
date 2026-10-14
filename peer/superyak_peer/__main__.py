@@ -211,6 +211,10 @@ def main(argv=None):
     backup_cmd.add_argument('--backup-dir', type=Path, help='The rotation (default: backups/station beside the data dir)')
     backup_cmd.add_argument('--output', type=Path, help='One checked copy at this new path, outside the rotation; never replaces a file')
     backup_cmd.add_argument('--copy-to', default='', help='A mounted directory on another disk for the copy off the Pi; empty does nothing')
+    reconcile_cmd = commands.add_parser('station-restore-reconcile', help='Trusted local: on a staged copy, take back what a restore revives (runbook step 5)')
+    reconcile_cmd.add_argument('--db', type=Path, required=True, help='The staged copy; never a file in a live data directory')
+    reconcile_cmd.add_argument('--replaced', type=Path, help='The peer.sqlite3 the restore replaces, opened read-only')
+    reconcile_cmd.add_argument('--live-data-dir', type=Path, help='The live data directory, which is refused (make passes STATION_DATA)')
     door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
@@ -285,6 +289,15 @@ def main(argv=None):
             except BackupError as failed:
                 parser.exit(failed.code, f'station-backup: {failed.reason}\n')
             print(f'Checked copy: {written}')
+        elif args.command == 'station-restore-reconcile':
+            from .backups import ReconcileRefused, describe_reconcile, reconcile
+            try:
+                report = reconcile(args.db, replaced=args.replaced, live_data_dir=args.live_data_dir)
+            except ReconcileRefused:
+                raise  # a ValueError: the handler below prints it and exits 1
+            except Exception as error:  # noqa: BLE001 - the transaction rolled back, so the staged copy is unchanged
+                parser.exit(1, f'station-restore-reconcile: nothing was changed: {type(error).__name__}: {safe_line(error, 200)}\n')
+            print(describe_reconcile(report))
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
