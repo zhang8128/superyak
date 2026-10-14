@@ -132,3 +132,24 @@ def test_load_reads_a_real_checkout_quietly(history_repo, capsys):
     history = load(repo / 'peer' / 'superyak_peer' / 'agent_version.py')
     assert history == AgentHistory(c['C'][:12], frozenset({c['P'][:12], c['O'][:12]}))
     assert capsys.readouterr().err == ''
+
+
+def test_load_turns_off_with_one_line_when_reading_raises(history_repo, monkeypatch, capsys):
+    from superyak_peer import agent_version
+    repo, _ = history_repo
+
+    def boom(*args, **kwargs):
+        raise ValueError('odd')
+    monkeypatch.setattr(agent_version, 'read_history', boom)
+    assert load(repo / 'peer' / 'superyak_peer' / 'agent_version.py') is None
+    err = capsys.readouterr().err
+    assert err.count('\n') == 1 and 'unexpected error (ValueError)' in err
+
+
+def test_a_failing_git_says_what_it_printed(history_repo):
+    repo, _ = history_repo
+
+    def run(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, 'git', stderr='fatal: not a git repository\n')
+    history, reason = read_history(repo, run=run)
+    assert history is None and 'git failed (CalledProcessError): fatal: not a git repository' in reason

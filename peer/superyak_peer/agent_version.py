@@ -32,7 +32,7 @@ def read_history(checkout, run=subprocess.run, limit=HISTORY_LIMIT, timeout=TIME
         left = deadline - clock()
         if left <= 0:
             raise subprocess.TimeoutExpired('git', timeout)
-        return run(['git', '-C', str(checkout), *args], input=stdin, capture_output=True, text=True, timeout=left,
+        return run(['git', '-C', str(checkout), *args], input=stdin, capture_output=True, text=True, errors='replace', timeout=left,
                    check=True).stdout
 
     try:
@@ -42,6 +42,10 @@ def read_history(checkout, run=subprocess.run, limit=HISTORY_LIMIT, timeout=TIME
         trees = git('cat-file', '--batch-check=%(objectname)', stdin=''.join(f'{c}:agent\n' for c in commits)).splitlines()
     except subprocess.TimeoutExpired:
         return None, f'git ran out of time ({timeout:g} seconds)'
+    except subprocess.CalledProcessError as error:
+        stderr = error.stderr if isinstance(error.stderr, str) else ''
+        first = (stderr.strip().splitlines() or [''])[0].strip()[:200]  # station-local text, never client data
+        return None, f'git failed (CalledProcessError): {first}' if first else 'git failed (CalledProcessError)'
     except (OSError, subprocess.SubprocessError) as error:
         return None, f'git failed ({type(error).__name__})'
     if not FULL_HEX.fullmatch(head) or not FULL_HEX.fullmatch(tree) or len(trees) != len(commits):
@@ -57,7 +61,10 @@ def load(module_file=__file__, run=subprocess.run, err=None):
     if checkout is None:
         print('superyak: version check off: not running from a git checkout with agent/', file=err, flush=True)
         return None
-    history, reason = read_history(checkout, run=run)
+    try:
+        history, reason = read_history(checkout, run=run)
+    except Exception as error:  # noqa: BLE001 - the station must start whatever git does
+        history, reason = None, f'unexpected error ({type(error).__name__})'
     if history is None:
         print(f'superyak: version check off: {reason}', file=err, flush=True)
     return history
