@@ -378,8 +378,25 @@ def test_a_deferral_the_ship_answered_no_longer_counts_as_waiting(env):
     asked = say(clients[1], room, 'a', '@serenity a question')
     on_watch(session)
     ask(watcher, asked['id'])
+    reply(clients[1], room, 'x', 'a person answers it', asked['id'])  # only the ship's own reply answers it (R7)
+    assert say(session, room, 'o', 'thinking')['deferred_here'] == [asked['id']]
     reply(session, room, 'r', 'the answer', asked['id'])
     assert 'deferred_here' not in say(session, room, 'p', 'and another thing')
     got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
     assert 'deferred' not in {m['message_id']: m for m in got['messages']}[asked['id']]
     assert len(table(store, 'deferrals')) == 1
+
+
+def test_a_ships_kind_message_never_counts_as_its_answer(env):
+    """Stale deferrals, requirement 5 (D8 review of 8e93d0f, should-fix 3): a claim message by the ship with reply_to
+    the mention is not an answer (R7, R32), so the deferral still waits."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    claim = reply(session, room, 'k', 'claiming it', asked['id'])
+    with store.transaction() as db:
+        db.execute("INSERT INTO message_kinds VALUES(?, 'claim')", (claim['id'],))
+    assert say(session, room, 'p', 'still thinking')['deferred_here'] == [asked['id']]
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert {m['message_id']: m for m in got['messages']}[asked['id']]['deferred']['would_be'] == 'read'
