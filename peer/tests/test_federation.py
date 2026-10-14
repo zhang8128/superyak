@@ -1,4 +1,5 @@
 import re
+import time
 import json
 
 import pytest
@@ -863,3 +864,42 @@ def test_a_hand_edited_malformed_member_cannot_break_the_room_list(two_peers):
     assert all(isinstance(m['peer'], str) and isinstance(m['id'], str) for m in got['members'])
     assert len(got['members']) == len(snapshot['members'])
     assert any(r['id'] == remote_id for r in b[0].list_rooms(b[1]))
+
+
+def _roster_with(a, b, room, **fields):
+    """A room.roster the origin (a) signs, with some of its room snapshot's fields replaced."""
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                  action='room.roster', recipients=[b[1]], payload={**snapshot, **fields})
+
+
+@pytest.mark.parametrize('linked', [['a', 'list'], {'a': 'dict'}, 7, 'no-colon', 'another-station', 'a-local-room'])
+def test_a_received_rooms_linked_room_is_its_origins_own_or_none(two_peers, linked):
+    """Remote room fields (follow-up of the section 2 review of 96030b0): a received room's linked_room_id names the
+    origin's own earlier room, or nothing. An unhashable value would break Wormhole's replaced-room set; a bare id, a
+    local room's id or another station's would claim to replace a room the origin doesn't host."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Linked', [ca['id']])
+    deliver(a, b)
+    value = {'another-station': 'f' * 64 + ':' + room['id'], 'a-local-room': b[0].create_room(b[1], 'Mine', [])['id']}.get(linked, linked) if isinstance(linked, str) else linked
+    with pytest.raises(Problem):
+        b[2].receive(_roster_with(a, b, room, linked_room_id=value))
+    [shown] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Linked']
+    assert shown.get('linked_room_id') is None
+
+
+def test_a_received_room_cannot_claim_activity_after_it_arrived(two_peers):
+    """Remote room fields: the origin chooses its room's last_activity and its messages' created (anything up to
+    2**53), and the room list sorts on them, so a hostile origin could pin its room to the top for good. A received
+    room's activity counts only up to when this station last received an event for it."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Pinned', [ca['id']])
+    deliver(a, b)
+    assert b[2].receive(_roster_with(a, b, room, last_activity=2**53))['ok']
+    assert b[2].receive(_forged_message(a, b, room, 'm-future', 'f-1', 'from the future', 2**53,
+                                        author=a[2].identity.peer_id + ':' + a[1]))['ok']
+    arrived = time.time()
+    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Pinned']
+    assert listed['last_activity'] <= arrived
+    assert b[0].get_room(b[1], listed['id'])['last_activity'] <= arrived
