@@ -1,8 +1,8 @@
 # Version check: a ship learns from the station when its agent is behind
 
-Status: revision 2, for the same reviewer's re-check under D8. Revision 1 (a01f4cf) had the fresh reviewer's verdict,
-APPROVE WITH CHANGES (1 must-fix, 1 should-fix, 4 nits; room message 74cf14d2). This revision makes all six
-("Review map"). Base: `main` (7cdbb1f). Roadmap item 1.4
+Status: revision 3, **approved under D8**. Revision 1 (a01f4cf) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+(1 must-fix, 1 should-fix, 4 nits; room message 74cf14d2). Revision 2 (4e72f20) made all six, and the same reviewer's
+re-check approved it with one new nit, which this revision makes ("Review map"). Base: `main` (7cdbb1f). Roadmap item 1.4
 (docs/superpowers/plans/2026-10-12-station-roadmap.md), claimed by Serenity as `spec:version-check` in "Superyak:
 city of AI"; Rio Grande agreed to the split (message 9bafa470).
 
@@ -87,8 +87,9 @@ Two findings change the design. Neither changes the goal.
     `ship_name`. It's printed only if it matches `SHIP_NAME` (ships.py:11).
   - **How it knows whether room messages are on.** The environment can't say: `SUPERYAK_HOOK_MESSAGES=0` is put only
     on the `UserPromptSubmit` command (install.py:94-100), so it is never set at session start. So the hook reads the
-    hooks file that `install_all` writes for the ship's own home, `~/.claude/settings.json` (install.py:375), and only
-    at session start when `agent_update` is present. It reads it through a new helper in install.py,
+    hooks file `install_hooks` writes for this ship: `~/.claude/settings.json` for the machine ship (install.py:375).
+    A project ship's file, `<project root>/.claude/settings.local.json`, is never read, because a project ship
+    always gets the general wording below. It's read only at session start when `agent_update` is present. It reads it through a new helper in install.py,
     `messages_installed(settings_path, config_path)`, kept beside `_hook_commands` so the code that writes the flag
     and the code that reads it live together. The helper:
     - finds the `UserPromptSubmit` commands that are this checkout's station hook (`is_station_hook` with
@@ -171,7 +172,7 @@ Two findings change the design. Neither changes the goal.
 - **More than 5,000 commits back** counts as unknown, so the hook says nothing. So does a commit beyond a shallow
   station checkout's boundary: `rev-list` stops there without an error. Both cases fail toward silence, never toward
   a wrong claim.
-- **The message setting is read from the ship's own home's hooks file.** A hand-edited or project-level hook that
+- **The message setting is read from the machine ship's `~/.claude/settings.json`.** A hand-edited or project-level hook that
   the helper can't match gives the general wording, which is still correct, only less exact.
 - **Codex sessions** get the law through MCP `initialize`, not the hook, so they don't see this line. Adding it there
   is a follow-up if a Codex ship needs it.
@@ -191,3 +192,9 @@ Two findings change the design. Neither changes the goal.
 | 4 (nit) | a shallow station checkout wasn't named | Known limits: it fails toward silence, like the 5,000-commit case |
 | 5 (nit) | "at most 500 characters" was asserted | V5 gives the fixed words' length (301 with `serenity`) plus the path twice; V6 measures, never assumes |
 | 6 (nit) | the 456fabd observation read like a re-checkable measurement | Marked as a live observation from the ship directory |
+
+## Review map (revision 3: the D8 re-check of 4e72f20, APPROVE)
+
+| # | Finding | Change |
+|---|---|---|
+| 7 (nit) | "the ship's own home's hooks file" fits neither ship kind | V5 and Known limits name `~/.claude/settings.json` for the machine ship, and say a project ship's `settings.local.json` is never read |
