@@ -100,6 +100,26 @@ def test_an_over_budget_hand_listed_entry_gets_the_pause_note_at_its_defer(stati
     w.cycle()
     assert runner.calls == [] and w.state['deferred'] == []
     assert sum('Pausing my replies' in b for b in bodies(fake, room)) == 1
+
+
+def test_a_persons_hand_listed_entry_is_never_charged(station, ship_config, tmp_path):
+    """F2 (plan review of 4fa215b, should-fix 1): the hour's budget is for ships only (R12). A person's hand-listed
+    entry, deferred again and again with that key's budget already spent, is never charged and never paused."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, jenn, '@serenity a person question')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    key, spent = f'{room}:{jenn["id"]}', [w.clock()] * 5
+    w.state['ship_exchanges'][key] = list(spent)  # a guard that counted people would pause here
+    for _ in range(3):
+        assert w.cycle() == 0
+    assert runner.calls == [] and len(w.state['deferred']) == 1
+    assert not any('Pausing my replies' in b for b in bodies(fake, room))
+    assert w.state['ship_exchanges'][key] == spent
 ```
 
 In `test_a_deferred_breakout_mention_keeps_its_mark_and_its_budget`, change the expected entry
@@ -115,7 +135,9 @@ Expected:
   `test_a_normally_deferred_ship_mention_is_charged_once_across_defers` (no `first_deferred` on the entry),
   `test_an_over_budget_hand_listed_entry_gets_the_pause_note_at_its_defer` (no pause note) and the N1 test (no new key);
 - `test_a_lost_run_response_for_a_deferral_the_station_held_is_not_charged_again` passes, because it models the fixed
-  station.
+  station;
+- `test_a_persons_hand_listed_entry_is_never_charged` passes: it guards against a wrong fix (the charge applied to a
+  person), and Step 5's second mutation is what makes it fail.
 
 Report the exact list.
 
@@ -154,11 +176,15 @@ The `self.save()` and `return True, 0` after the block stay as they are.
 - [ ] **Step 4: Run them, then the agent suite**
 
 Run: `cd agent && uv run --locked --extra dev python -m pytest -q tests/test_watch_deferral.py`. Expected: all pass.
-Run: `make check-agent`. Expected: every test passes (main's count plus 4). Name any failure.
+Run: `make check-agent`. Expected: every test passes (main's count plus 5). Name any failure.
 
-- [ ] **Step 5: Mutation check:** remove the `| ({'first_deferred': ...} if 'first_deferred' in ticket else {})` term:
-  `test_a_normally_deferred_ship_mention_is_charged_once_across_defers` fails. Restore it, and confirm with
-  `git diff --stat` that watch.py matches your change.
+- [ ] **Step 5: Mutation checks**, one at a time, each restored before the next:
+  - remove the `| ({'first_deferred': ...} if 'first_deferred' in ticket else {})` term:
+    `test_a_normally_deferred_ship_mention_is_charged_once_across_defers` fails;
+  - remove `author['kind'] == 'ship' and ` from the new branch's budget check:
+    `test_a_persons_hand_listed_entry_is_never_charged` fails.
+
+  Confirm with `git diff --stat` that watch.py matches your change.
 
 - [ ] **Step 6: Commit**
 
@@ -287,10 +313,14 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
 1. Back up the database (as for version check), merge with `--no-ff`, push, and run the guard.
 2. Restart the five units. The lighthouse's start runs the migration (one column). Check the journal for errors and
    `PRAGMA table_info(tickets)` for `first_deferred`.
-3. **Live check:** the peer test path, not the live watcher. With `decisions`, a deferral, the watch ended and a
+3. **Watch the journal across the first real ticket calls** after the restart (`journalctl --user --user-unit
+   superyak-lighthouse -f` until a ship's watcher has asked for tickets, or 15 minutes). A running ticket issued before
+   the migration has no `first_deferred` and is read through the new `_decided`; the plan review's simulation of that
+   row showed the key omitted and no error, and this confirms it on the real table. Any traceback: revert and restart.
+4. **Live check:** the peer test path, not the live watcher. With `decisions`, a deferral, the watch ended and a
    repeated ask on the Pi's station give the same ticket carrying `first_deferred` both times. Use a scratch station
    (`Store` in a temp folder), not the live one, so nothing is posted.
-4. Announce it. Ships update by pulling main: watch.py is a runtime file, so the version check prompts them.
+5. Announce it. Ships update by pulling main: watch.py is a runtime file, so the version check prompts them.
 
 ## Self-review notes
 
@@ -310,3 +340,17 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
     - the F3 echo removed fails the re-send test (and test_only_the_stations_own_deferral_row_marks_a_reask);
     - the echo leaking into `_ticket_json`'s path fails the `decisions=False` assertion.
   - **Full suites:** `make check-agent` 631, `make check-peer` 532.
+  - **Revision 2:** the person-authored test passes with the code and fails with the guard removed; `make check-agent`
+    632.
+- **Accepted, outside this fix** (plan review nit 4): a ship's budget and deferred list live in each watcher's own state
+  file, so a ship watched from two machines enforces the five-an-hour budget on each. Pre-existing, not a regression.
+
+## Review map (revision 2: the plan review of 4fa215b, room message 766b63c0)
+
+| # | Finding | Change |
+|---|---|---|
+| S1 | no test covered F2's author-kind guard | `test_a_persons_hand_listed_entry_is_never_charged`; Step 5's second mutation |
+| S2 | no live read of an old ticket row | Deploy step 3 watches the journal across the first real ticket calls |
+| N3 | asymmetric None handling, unreachable | no change: `_defer()` always carries `first_deferred` on a defer |
+| N4 | two machines double the budget | noted above as accepted, pre-existing |
+| N5 | `is not None` untested at clock 0 | no change: the code is right; a station clock of 0 doesn't occur |
