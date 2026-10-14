@@ -1,7 +1,8 @@
 # Stale deferrals: a deferral the session can no longer act on stops counting as waiting
 
-Status: revision 2, for the same reviewer's re-check. Revision 1 (8e93d0f) had the fresh reviewer's verdict, APPROVE
-WITH CHANGES (4 should-fix, 3 nits; room message cf259232): see "Review map". Base: `main` (249eac4). Branch `stale-deferrals`. Claimed by Serenity
+Status: revision 2, **approved under D8**. Revision 1 (8e93d0f) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+(4 should-fix, 3 nits; room message cf259232); the same reviewer's re-check of revision 2 (8ed1d48) is APPROVE, three
+nits needing no change (see "Review map"). Base: `main` (249eac4). Branch `stale-deferrals`. Claimed by Serenity
 as `spec:stale-deferrals`. This is the follow-up that the final review of ship-status-fixes ruled on (room message
 67e8cad9, "Rulings on the parked items"): "chats.py and inbox.py should stop counting as waiting the rows past
 DEFER_BOUND_SECONDS, and rows whose mention the ship already answered with reply_to... it changes R26/R27, so it deserves
