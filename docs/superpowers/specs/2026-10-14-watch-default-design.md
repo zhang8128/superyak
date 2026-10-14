@@ -1,6 +1,8 @@
 # Watch by default: a choice for each session, with a default that keeps things moving
 
-Status: revision 1, for a fresh reviewer under D8. Base: `main` (e633ec3). Roadmap item 2.1, claimed by Serenity as
+Status: revision 2, for the same reviewer's re-check. Revision 1 (d0bdb21) had the fresh reviewer's verdict, APPROVE
+WITH CHANGES (3 must-fix, 6 should-fix, 3 nits; room message 4a7d7857): see "Review map". Base: `main` (3b48646, with
+watch-default-docs merged). Roadmap item 2.1, claimed by Serenity as
 `spec:watch-default`.
 
 ## Goal
@@ -29,35 +31,56 @@ sticks.
     `SUPERYAK_HOOK_MESSAGES=0` when they're off (install.py:94-100), so this test is reliable at a prompt;
   - the prompt's `permission_mode` gives `mode == 'write'` (hook.py:49-61). A plan-mode session never holds it;
   - the session hasn't opted out (W3);
-  - the hook isn't inside a watcher run (`SUPERYAK_RUN`, hook.py:135-136), and a D7 ship isn't standing down
-    (hook.py:140-144). Those paths return before any call, as today.
+  - the hook isn't inside a watcher run (`SUPERYAK_RUN`, hook.py:139), and a D7 ship isn't standing down
+    (hook.py:144-148). Those paths return before any call, as today.
 
   A session-start hook can't know the mode (M1), so the first prompt is the first moment the default can apply.
 - **W2. Keeps things moving: a short lease, declared again after a gap.**
-  - The hook declares `station_watch` with `writable=true` and `minutes` = the session's own choice if it made one
-    (W3), else 20 (WATCH_DEFAULT_MINUTES).
+  - The hook declares `station_watch` with `minutes` and `writable` set to the session's own choice if it made one
+    (W3), else `minutes=20` (WATCH_DEFAULT_MINUTES) and `writable=true`.
   - Every station call renews a running lease (presence.py:41-60), so a session that keeps prompting keeps the watch.
   - A session that goes idle stops renewing. The lease lapses within its minutes, and the watcher then answers the
     waiting mention read-only (the existing 'lease ran out' test).
-  - The hook declares again only when it may have lapsed: it records each prompt's time in the session's watch file
-    (W3), and declares when there's no record or the last prompt was more than the lease ago. A lapsed watch is never
-    revived by presence (R6); this is a fresh declaration, so R6 holds.
+  - The hook declares again only when it may have lapsed. It records each qualifying prompt's time in its **own**
+    file, `<home>/sessions/<key>.prompted` = `{"seen": <time>, "held": true|false}`. Only the hook writes it.
+    - It declares when that file is missing, when `held` is false, or when `seen` is more than the lease ago. Every
+      station call renews a running lease, so a prompt within the lease keeps it.
+    - A lapsed watch is never revived by presence (R6). This is a fresh declaration, so R6 holds.
   - At most one extra station call per session, at its first prompt and after each idle gap, never at every prompt.
+  - **Where it runs** (should-fix 4): after the instructions call and before the inbox call. That keeps the inbox
+    advance the last network call (R4). It runs only if the hook isn't yet past `INSTRUCTIONS_DEADLINE`, with
+    `INBOX_CALL_TIMEOUT`. A slow declaration can push the inbox past the deadline, as a slow instructions call can
+    today. The messages then show at the next prompt, and nothing is lost, because the cursor doesn't advance.
+  - **Plan mode lets go** (should-fix 5): the station defers to any writable watch whatever the session's mode
+    (presence.py:69-71). So at a plan-mode prompt, if the hook holds the default for this session
+    (`.prompted` says `held` and `.watch` holds no choice of the session's), it ends the watch with `station_watch
+    minutes=0` and writes `held: false`. The next write-mode prompt declares again. A watch the session declared
+    itself is left alone in plan mode: that was its choice.
 - **W3. The choice, and an opt-out that sticks.**
   - The MCP tool `station_watch`, called in a Claude Code session, writes a small per-session file
-    `<home>/sessions/<sha256(session id)[:16]>.watch`, mode 0600, beside the hook's session file and keyed the same
-    way:
-    - `{"choice": "off"}` after `minutes=0`;
-    - `{"choice": <minutes>, "writable": <bool>}` after `minutes > 0`.
+    `<home>/sessions/<key>.watch`, mode 0600, where `<key>` is `sha256(session id)[:16]`, the hook's session-file key
+    (hook.py:215). Only the MCP tool writes it:
+    - `{"choice": "off", "seen": <time>}` after `minutes=0`;
+    - `{"choice": <minutes>, "writable": <bool>, "seen": <time>}` after `minutes > 0`.
 
-    The session id comes from `CLAUDE_CODE_SESSION_ID`, the same id the hook gets on stdin. A Codex session, with only
-    a `cursor` name, writes nothing; it has no hook.
+    The session id comes from `CLAUDE_CODE_SESSION_ID`, the same id the hook gets on stdin.
+  - **Only for this session's own watch** (should-fix 6): the file is written only when the call targets this Claude
+    Code session, that is, the `cursor` is absent or equals `CLAUDE_CODE_SESSION_ID`. A call naming another cursor
+    manages that watch only and writes nothing. A Codex session, with only a `cursor` name, writes nothing; it has no
+    hook.
   - The hook reads that file and never declares for a session whose choice is `"off"`. A later
     `station_watch minutes>0` replaces it, and the default resumes with that session's minutes and writable choice.
   - A session that chose `writable=false` keeps a read-only watch: the hook declares with the session's own
     `writable`.
-  - The file is separate from the hook's instruction-state file (hook.py:215), so the two writers never touch the same
-    JSON. The hook's pruning (hook.py `_prune`, 14 days) removes stale `.watch` files too.
+  - **One writer per file** (must-fixes 2 and 3):
+    - `.watch` is the MCP tool's, and the hook only reads it;
+    - `.prompted` is the hook's;
+    - the hook's instruction-state `.json` (hook.py:215) is unchanged.
+
+    No two writers ever touch the same file, and each write is whole (`write_private`).
+  - **Pruning:** `_prune` (hook.py:230-242) and `STATE_NAME` (hook.py:81) cover `<key>.json`, `<key>.watch` and
+    `<key>.prompted`, each by its own `seen`. A missing or non-finite `seen` is deleted, as today. Every one of the
+    three files now carries `seen`, so a fresh opt-out is never pruned on sight.
 - **W4. Failure is silent.** The declaration uses the hook's existing transport, within `INSTRUCTIONS_DEADLINE`. Any
   failure prints nothing and changes no other state, including 429 at the ship's limit of 10 sessions on watch, an
   unreachable station (hook.py `_note_reachability` as today), or a refusal. The next qualifying prompt tries again.
@@ -81,9 +104,14 @@ sticks.
    - after `station_watch minutes=0` in that session.
 4. `station_watch minutes=N` (N > 0) in a session makes later declarations use N and that call's `writable`.
    `minutes=0` writes `"off"`, and the hook never declares again in that session until a later `minutes>0`.
-5. A failed declaration prints nothing and breaks no prompt. The hook's other output is byte-for-byte unchanged.
-6. `.watch` files older than 14 days are pruned with the session files.
+5. A declaration, failed or successful, prints nothing and breaks no prompt. The hook's output is byte-for-byte what
+   it would be without this feature, on both paths.
+6. `.watch` and `.prompted` files whose `seen` is older than 14 days are pruned with the session files. A fresh
+   `{"choice": "off", "seen": now}` survives a prune.
 7. The station is unchanged. No route, table or migration changes.
+8. At a plan-mode prompt, a default watch the hook holds is ended once (`minutes=0`) and `held` becomes false. A watch
+   the session declared itself is not touched. The next write-mode prompt declares again.
+9. A `station_watch` call naming a `cursor` other than this session's id writes no `.watch` file.
 
 ## Security
 
@@ -111,11 +139,41 @@ sticks.
 ## Deploy
 
 Agent-side only (hook.py, mcp.py), so the station needs no restart. Ships pick it up by pulling main and starting new
-sessions; the version check prompts them, since `agent/superyak_agent` is a runtime path. Docs:
-agent/README.md "Taking the watch" changes from "the session's own choice" to the default with its opt-out.
+sessions; the version check prompts them, since `agent/superyak_agent` is a runtime path.
+- **Docs:** agent/README.md's "Taking the watch" (on main since watch-default-docs, 3b48646, merged into this branch)
+  changes from "the session's own choice" to the default with its opt-out.
+- **The law** (should-fix 7): station law section 7 says "A writable session that's working, looping or long-running
+  holds station_watch with writable=true". After this ships, the hook takes the watch by default for every write-mode
+  session that shows room messages. Only Andy signs law. Rio Grande drafts a one-line amendment with
+  `station_draft_instructions` for Andy to activate, such as: "...holds station_watch with writable=true; the hook
+  takes it by default for write-mode sessions that show room messages, and a session ends it with minutes=0". The
+  feature doesn't depend on the amendment, since the law already asks those sessions to hold the watch.
 
 ## Known limits
 
 - The default starts at a session's first prompt, not at session start (M1: no mode at SessionStart).
 - A Codex session has no hook, so it gets no default. It keeps declaring by hand.
 - Sessions running from before the update keep today's behavior until they restart.
+- **The ship's cap of 10 sessions on watch** (WATCH_SESSIONS_PER_SHIP, presence.py:13; should-fix 9): with the default,
+  an 11th active write-mode session gets a silent 429 (W4) and tries again after its next idle gap. One session on
+  watch is enough to defer the watcher's read-only runs, so mentions are still handed to a session. Raising the cap is
+  a station change, and not worth it until a ship really runs more than 10 such sessions at once.
+- **No ship-wide off switch** (nit 12): the choice is per session, as Andy put it. A new session gets one default
+  declaration at its first write-mode prompt before `minutes=0` can turn it off.
+
+## Review map (revision 2: the D8 review of d0bdb21)
+
+| # | Finding | Change |
+|---|---|---|
+| M1 | W2 forced `writable=true` | W2 uses the session's own `writable` if it chose one, else `true` |
+| M2 | `.watch` had no timestamp; `_prune` would delete it on sight | `.watch` carries `seen`; `_prune` and `STATE_NAME` cover `.watch` and `.prompted` by `seen`; requirement 6 |
+| M3 | the hook and the MCP tool both wrote `.watch` | the hook's timestamp lives in its own `.prompted`; one writer per file |
+| S4 | the declare call's place was unstated | after instructions, before the inbox (R4 kept), within the deadline |
+| S5 | plan mode kept a default watch | at a plan-mode prompt the hook ends the default it holds; requirement 8 |
+| S6 | a call naming another cursor would opt this session out | `.watch` is written only for this session's own id; requirement 9 |
+| S7 | law section 7 goes stale | Deploy names a one-line amendment for Andy to sign |
+| S8 | the README section was on another branch | main merged in; Deploy names the section |
+| S9 | the 10-session cap | Known limits: silent 429, one session on watch is enough |
+| N10 | only the failure path was byte-for-byte | requirement 5 covers both paths |
+| N11 | line refs | hook.py:139 and 144-148 |
+| N12 | no ship-wide switch | Known limits |
