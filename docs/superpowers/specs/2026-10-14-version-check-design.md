@@ -1,6 +1,8 @@
 # Version check: a ship learns from the station when its agent is behind
 
-Status: revision 1, for a fresh reviewer under D8. Base: `main` (7cdbb1f). Roadmap item 1.4
+Status: revision 2, for the same reviewer's re-check under D8. Revision 1 (a01f4cf) had the fresh reviewer's verdict,
+APPROVE WITH CHANGES (1 must-fix, 1 should-fix, 4 nits; room message 74cf14d2). This revision makes all six
+("Review map"). Base: `main` (7cdbb1f). Roadmap item 1.4
 (docs/superpowers/plans/2026-10-12-station-roadmap.md), claimed by Serenity as `spec:version-check` in "Superyak:
 city of AI"; Rio Grande agreed to the split (message 9bafa470).
 
@@ -19,8 +21,9 @@ a relay.
 Two findings change the design. Neither changes the goal.
 
 1. **Comparing commits is mostly noise.** Of the 93 first-parent commits on main from 2026-10-03 to 7cdbb1f, 46
-   didn't touch `agent/`. Today every Serenity session reports `456fabd3aef5` while main is at 7cdbb1f, and
-   `git diff 456fabd 7cdbb1f -- agent/` is empty. A commit comparison would tell every one of those sessions to
+   didn't touch `agent/`. On 2026-10-14 the ship directory showed every Serenity session on `456fabd3aef5` (a live
+   observation, not re-derivable from git) while main was at 7cdbb1f, and `git diff 456fabd 7cdbb1f -- agent/` is
+   empty. A commit comparison would tell every one of those sessions to
    update for a change that can't affect it. A line that's wrong half the time gets ignored. So the check compares
    **agent code**, not commits (V2).
 2. **A bare `make dock` turns off room messages.** `make dock` on a docked ship is safe: `Dock.step` sees the working
@@ -78,14 +81,29 @@ Two findings change the design. Neither changes the goal.
 
     > This machine's Superyak agent is behind the station's: this checkout (`<CHECKOUT>`) is on `<client12>`, the
     > station on `<station12>`, and the agent code changed in between. To update, run `git -C <CHECKOUT> pull
-    > --ff-only`, then `make dock DOCK_ARGS='--ship <ship_name> --hook'` in that checkout, then start new sessions.
+    > --ff-only`, then `make dock DOCK_ARGS='--ship <ship> --hook'` in that checkout, then start new sessions.
 
-    `--hook` is there only when room messages are on for this hook (`SUPERYAK_HOOK_MESSAGES` isn't `0`). `<ship_name>`
-    comes from `station.json`, and it's printed only if it matches `SHIP_NAME` (ships.py:11).
-  - **For a project ship** (a home under `~/.superyak/ships/<ship>`, many-ships spec), and for a ship name that fails
-    the check, the second sentence is "To update, run `git -C <CHECKOUT> pull --ff-only`, then run `make dock` again
-    the way this ship was docked, then start new sessions."
-  - `<CHECKOUT>` is the agent's own `CHECKOUT` (station.py). The line is at most 500 characters.
+    `<ship>` is `station.json`'s `ship` field: the username that `--ship` takes, like `serenity`, not the display name
+    `ship_name`. It's printed only if it matches `SHIP_NAME` (ships.py:11).
+  - **How it knows whether room messages are on.** The environment can't say: `SUPERYAK_HOOK_MESSAGES=0` is put only
+    on the `UserPromptSubmit` command (install.py:94-100), so it is never set at session start. So the hook reads the
+    hooks file that `install_all` writes for the ship's own home, `~/.claude/settings.json` (install.py:375), and only
+    at session start when `agent_update` is present. It reads it through a new helper in install.py,
+    `messages_installed(settings_path, config_path)`, kept beside `_hook_commands` so the code that writes the flag
+    and the code that reads it live together. The helper:
+    - finds the `UserPromptSubmit` commands that are this checkout's station hook (`is_station_hook` with
+      `hook_command(config_path)`, install.py:68);
+    - returns **on** when there is at least one and none carries the word `SUPERYAK_HOOK_MESSAGES=0`
+      (`_hook_words`, the test install.py:109 and :126 already use), and **off** when every one carries it;
+    - returns **unknown** when there is none, they disagree, or the file is missing, unreadable or not the expected
+      JSON. It never raises.
+
+    On gives `--hook`, off gives the command without it, and unknown gives the general wording below.
+  - **For a project ship** (a home under `~/.superyak/ships/<ship>`, many-ships spec), for a `ship` that fails the
+    check, and when the message setting is unknown, the second sentence is "To update, run `git -C <CHECKOUT> pull
+    --ff-only`, then run `make dock` again the way this ship was docked, then start new sessions."
+  - `<CHECKOUT>` is the agent's own `CHECKOUT` (station.py). The fixed words come to about 300 characters (301 with `serenity`), plus the
+    checkout path twice. V6 measures the line's real length and never assumes a bound.
 - **V6. The law comes first.** The line counts against `TOTAL_CHARS` (hook.py:74) after the instructions text. If it
   doesn't fit, it's left out, and the law is never shortened to make room for it.
 - **V7. No new state.** Nothing new is written on the machine or on the station. No database change, no migration.
@@ -99,8 +117,10 @@ Two findings change the design. Neither changes the goal.
 3. A client commit outside the history, `unknown`, a malformed header or no header gives no key.
 4. A station started outside a git checkout, or with `git` missing from `PATH`, starts and serves as before. The key is
    never present, and one log line says why.
-5. The hook writes the line at session start and never at a prompt, with `--hook` only when messages are on, and the
-   project-ship wording for a project home.
+5. The hook writes the line at session start and never at a prompt. With a settings file whose station
+   `UserPromptSubmit` hook has no `SUPERYAK_HOOK_MESSAGES=0`, the command has `--hook`. With one where it has that word,
+   the command has no `--hook`. A missing, unreadable or non-JSON file, no station prompt hook, or two that disagree
+   give the general wording, and so does a project home.
 6. A `station` value that isn't 12 hex digits, equals the hook's own commit, or arrives inside a non-object is
    ignored.
 7. When the law fills `TOTAL_CHARS`, the line is dropped and the law is whole.
@@ -112,10 +132,11 @@ Two findings change the design. Neither changes the goal.
 
 - **What leaves the station:** its commit prefix, and only to an authenticated ship whose own commit is already
   behind it. The door (the public funnel) has no such route. A ship learns nothing about other ships.
-- **Input:** the client header is already limited to `(hook|mcp)/([0-9a-f]{12}|unknown)` (presence.py:17). The lookup
+- **Input:** the client header is already limited to `(hook|mcp)/([0-9a-f]{12}|unknown)` (presence.py:18). The lookup
   is a set membership test, so no client value reaches git, a path or a log.
 - **Output:** the line contains fixed words, the ship's own config values (the name checked against `SHIP_NAME`, the
-  checkout path the agent itself computed), and two 12-hex values. A compromised station can at most claim falsely
+  checkout path the agent itself computed), and two 12-hex values. The hooks file read in V5 only chooses between
+  two fixed wordings; nothing from it is printed. A compromised station can at most claim falsely
   that a ship is behind. The advice it causes is a fast-forward pull of the checkout's own branch from its own
   upstream, plus a re-dock with a key the ship already holds. That can't bring in code the ship's own upstream doesn't
   already hold, and it can't move keys.
@@ -127,7 +148,8 @@ Two findings change the design. Neither changes the goal.
 - **Peer:** a `git_history(tmp_path)` fixture builds a small repository with an `agent/` folder. The tests cover V1's
   read and set (including `--max-count`), V2's cases, V3's key present and absent (comparing the full JSON with and
   without), and V1's failure paths (not a checkout, `git` not found, a timeout).
-- **Agent:** hook tests with a fake transport cover requirements 1 and 5 to 7. They include the `--hook` and project
+- **Agent:** hook tests with a fake transport and a temp settings file cover requirements 1 and 5 to 7, and
+  `messages_installed` gets its own tests for on, off and each unknown case. They include the `--hook` and project
   wording, and a byte-for-byte comparison against today's output for an `agent_update`-free response.
 - **Both suites pass on the Pi** before the merge (D3).
 
@@ -146,7 +168,11 @@ Two findings change the design. Neither changes the goal.
   Comparing a session's `mcp/` and `hook/` commits would catch a stale station-tools process. That's a follow-up.
 - **The station's own updates:** it reads its history only at startup. That's every deploy, since deploys restart
   it.
-- **More than 5,000 commits back** counts as unknown, so the hook says nothing.
+- **More than 5,000 commits back** counts as unknown, so the hook says nothing. So does a commit beyond a shallow
+  station checkout's boundary: `rev-list` stops there without an error. Both cases fail toward silence, never toward
+  a wrong claim.
+- **The message setting is read from the ship's own home's hooks file.** A hand-edited or project-level hook that
+  the helper can't match gives the general wording, which is still correct, only less exact.
 - **Codex sessions** get the law through MCP `initialize`, not the hook, so they don't see this line. Adding it there
   is a follow-up if a Codex ship needs it.
 
@@ -154,3 +180,14 @@ Two findings change the design. Neither changes the goal.
 
 - The ship directory showing "behind" per session (the station has what it needs; a follow-up).
 - Automatic updates of any kind. The line advises, and the ship's owner or session acts.
+
+## Review map (revision 2: the D8 review of a01f4cf)
+
+| # | Finding | Change |
+|---|---|---|
+| 1 (must-fix) | `SUPERYAK_HOOK_MESSAGES` is never set at session start, so V5's test always said "on" | V5 reads the installed `UserPromptSubmit` hook through `messages_installed` (install.py, beside `_hook_commands`); unknown gives the general wording; requirement 5 and Testing name the cases |
+| 2 (should-fix) | `<ship_name>` was ambiguous between `ship` and `ship_name` | V5 names `station.json`'s `ship` field, the username `--ship` takes |
+| 3 (nit) | presence.py:17 pointed at the comment | Now presence.py:18 |
+| 4 (nit) | a shallow station checkout wasn't named | Known limits: it fails toward silence, like the 5,000-commit case |
+| 5 (nit) | "at most 500 characters" was asserted | V5 gives the fixed words' length (301 with `serenity`) plus the path twice; V6 measures, never assumes |
+| 6 (nit) | the 456fabd observation read like a re-checkable measurement | Marked as a live observation from the ship directory |
