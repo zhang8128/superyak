@@ -1,6 +1,7 @@
 # Ship status fixes: three follow-ups from the re-review of 5374784
 
-Status: revision 1, for a fresh reviewer under D8. Base: `main` (e633ec3). Branch `ship-status-fixes`. Roadmap phase 4
+Status: revision 2, for the same reviewer's re-check. Revision 1 (479ab84) had the fresh reviewer's verdict, APPROVE
+WITH CHANGES (3 must-fix, 2 should-fix, 1 nit; room message 032f992e): see "Review map". Base: `main` (e633ec3). Branch `ship-status-fixes`. Roadmap phase 4
 ("small ship-status fixes"), claimed by Serenity as `fix:ship-status-small`. The three come from Rio Grande's post
 cec51af8c2af4a8bb12997baae146546 (2026-10-10), the follow-ups of the ship-status re-review. That post gives one line and
 a suggested fix for each; the scenarios below are reproduced as failing tests on this branch.
@@ -30,14 +31,19 @@ never a spare.
   - If the station's first answer to it is `defer`, the watcher keeps waiting. The station's eventual run carries
     `first_deferred`, which spares it under R37, so the mention is never charged at all.
 - **Test:** `test_a_hand_listed_entry_the_station_then_defers_is_charged_once` fails today: 0 charges.
-- **Fix (the watcher):**
-  - When the watcher puts a mention on its list after the station's `defer` answer, the entry records that answer's
+- **Fix (the watcher), in the `defer` branch only** (watch.py:143-152):
+  - When the watcher puts a new mention on its list after the station's `defer` answer, the entry records that answer's
     `first_deferred` (`entry['first_deferred']`). That records that this watcher charged the mention at entry.
-  - A listed entry **without** a recorded `first_deferred` is charged at the station's first answer to it, whether
-    `defer` or `run`.
-    - Over budget, it gets the pause note, its ticket is finished if one was issued, and it leaves the list, as an
-      over-budget new mention does today.
-    - Within budget, a `defer` answer records `first_deferred` on the entry, so it isn't charged again.
+  - When the station answers `defer` for a listed entry **without** a recorded `first_deferred` (hand-listed), the
+    watcher charges it there, once.
+    - Over budget, it gets the pause note and leaves the list, as an over-budget new mention does today. No ticket was
+      issued for a `defer`, so there's nothing to finish.
+    - Within budget, it records the answer's `first_deferred` on the entry, so a later `defer` doesn't charge it
+      again.
+  - **A `run` answer is unchanged:** the existing `held` check (watch.py:155-162) already charges a run that carries
+    neither `first_deferred` nor a recorded ticket id, and spares one that carries either. That's the station's word,
+    so the hand-listed entry's eventual run carrying `first_deferred` is spared, correctly, because it was charged at
+    its `defer`.
   - The recorded value is used only to decide whether to charge, never to spare. Sparing stays as R37 says.
 
 ## F3. A lost `run` response no longer over-charges a deferral the station held
@@ -50,7 +56,12 @@ never a spare.
      row is gone. The watcher never recorded that ticket's id.
   4. So under R37 the retry is charged again, and with the hour's budget spent the mention is dropped with a pause
      note.
-- **Test:** `test_a_lost_run_response_for_a_deferral_the_station_held_is_not_charged_again` fails today: no run.
+- **Tests:**
+  - **Red evidence, on the station:** a peer test where a run ticket issued from a deferral, asked for again, carries
+    no `first_deferred` today and must carry it.
+  - **The agent side:** `test_a_lost_run_response_for_a_deferral_the_station_held_is_not_charged_again` models the
+    fixed station, so its retry answer carries `first_deferred=1.0`. It passes with no watcher change, which shows the
+    watcher needs none.
 - **Fix (the station; the watcher is unchanged):**
   - The `tickets` table gains a nullable `first_deferred REAL` column. It's added at startup with db.py's existing
     `PRAGMA table_info` / `ALTER TABLE ADD COLUMN` pattern (db.py:64-74).
@@ -58,9 +69,16 @@ never a spare.
     ticket.
   - Whenever the station returns a running ticket to a watcher that asked for decisions, the answer carries the
     ticket's `first_deferred` if it has one: on issue, as today, and on every re-send.
-  - So the retry is spared on the station's word, under R37 as written. R37's text gains one clause: "...a run that
-    resolves a deferral it held carries `first_deferred`, **including when the station sends that running ticket
-    again**".
+  - **Where:** in `_decided` (tickets.py:78), gated on `decisions`, as today's issue-time field is (tickets.py:74-75).
+    Never in `_ticket_json` (tickets.py:33), which `finish_ticket` and no-`decisions` answers share, so an old watcher
+    never sees a new key (R23).
+  - So the retry is spared on the station's word, under R37 as written. Two sentences of R37 change:
+    - "...a `run` that resolves a deferral it held carry that row's `first_deferred`" gains "**including when the
+      station sends that running ticket again**";
+    - "The station deletes its deferral row when it issues the run ticket, so a retry after a failed run gets that same
+      ticket back without `first_deferred`" becomes "...so a retry after a failed run gets that same ticket back, **now
+      carrying the `first_deferred` the ticket itself recorded**". The echoed-id clause after it stays for tickets that
+      never carried one.
 - **Why not the post's suggestion** (spare on the `first_deferred` recorded in the entry): that would spare because
   the watcher's state says so, which R37 forbids. A hand-edited entry could then dodge the budget. F2 records the
   value only to charge.
@@ -71,8 +89,10 @@ never a spare.
 2. F2's test passes: one charge for the hand-listed entry. A hand-listed entry over budget gets the pause note and
    leaves the list. A normally listed entry, charged at entry with `first_deferred` recorded, is never charged again
    (the existing R37 tests stay green).
-3. F3's test passes, with no change to the watcher. A station test shows that a re-sent running ticket from a deferral
-   carries `first_deferred`, and that one not from a deferral carries none.
+3. F3's agent test passes, with no change to the watcher. Station tests show:
+   - a re-sent running ticket from a deferral carries `first_deferred`;
+   - one not from a deferral carries none;
+   - a no-`decisions` re-ask of a ticket from a deferral carries none (R23).
 4. The column migration is additive. It's idempotent on an existing database (run twice, one column). An old binary on
    the migrated database ignores the column, so a rollback to main keeps working.
 5. Without `decisions`, every answer stays exactly today's (R23).
@@ -88,15 +108,17 @@ never a spare.
 - **Peer:**
   - F1's test;
   - a ticket test: issue from a deferral, then re-ask, and the same running ticket carries `first_deferred`; a ticket
-    not from a deferral carries none, also on re-send;
+    not from a deferral carries none, also on re-send; a no-`decisions` re-ask carries none;
   - a migration test: a database without the column gains it once, and a second start changes nothing.
 - **Agent:**
   - F2's and F3's tests;
-  - the existing R37 tests unchanged;
-  - an over-budget hand-listed entry gets the pause note.
+  - the existing R37 tests unchanged, except that
+    `test_a_deferred_breakout_mention_keeps_its_mark_and_its_budget` (test_watch_deferral.py:332-347) adds the new
+    `first_deferred` key to its expected entry (N1);
+  - an over-budget hand-listed entry gets the pause note at its `defer`.
 - **Mutation checks:**
-  - F2: the "record on defer" line removed, so a normally listed entry is charged twice;
-  - F3: the re-send without `first_deferred`, so F3's test fails.
+  - F2: the "record on defer" line removed, so a hand-listed entry that's deferred twice is charged twice;
+  - F3: the echo moved into `_ticket_json`, so the no-`decisions` test fails, or removed, so the re-send test fails.
 
 ## Deploy
 
@@ -105,6 +127,17 @@ pulling main: it's a change to `agent/superyak_agent/watch.py`, a runtime file, 
 
 ## Known limits
 
-- An entry a watcher listed before this change has no recorded `first_deferred`, so F2 charges it once more after the
-  update, at its next station answer. That's one extra charge per mention already deferred at upgrade time. It fails
-  toward charging, and only once.
+- An entry a watcher listed before this change has no recorded `first_deferred`. If its next answer is `defer` again,
+  F2 charges it once more. If it's a `run`, today's `held` check decides, as before. At most one extra charge per
+  mention already deferred at upgrade time, failing toward charging.
+
+## Review map (revision 2: the D8 review of 479ab84)
+
+| # | Finding | Change |
+|---|---|---|
+| M1 | F3's agent test modelled the old station | the retry carries `first_deferred=1.0`; the red evidence is a peer test |
+| M2 | F2's "defer or run" broke three R37 tests | F2 acts only in the `defer` branch; a `run` stays with the `held` check |
+| M3 | R37's retry sentence contradicted the amendment | both sentences revised |
+| S1 | where to gate the echo was unstated | in `_decided`, gated on `decisions`; never in `_ticket_json` |
+| S2 | no test for the no-`decisions` re-ask | requirement 3 and Testing add it |
+| N1 | an existing test's expected entry | named in Testing |
