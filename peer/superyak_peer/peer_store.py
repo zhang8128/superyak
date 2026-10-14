@@ -3,7 +3,7 @@ import json
 from .common import Problem, require, uid, text, ids, encode
 
 # What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
-# columns (plus this station's delivery state for a queued reply). An allowlist, never a denylist (R44).
+# columns (only those: plus this station's own delivery state and unverified mark, never the origin's). An allowlist, never a denylist (R44).
 REMOTE_ROOM_KEYS = ('title', 'owner_id', 'member_ids', 'linked_room_id', 'created', 'last_activity')
 UNVERIFIED = ':(unverified)'  # a forged local author's stand-in; no participant id can hold parentheses
 # No `state` and no `unverified`: a received message's delivery state and mark are this station's word alone.

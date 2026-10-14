@@ -1990,7 +1990,7 @@ def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_del
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
     here, remote = browser_peer["app"].state.federation, browser_peer["remote"]
     there, casey, patient = remote["federation"], remote["user"]["id"], users["patient"]["id"]
-    here.pair(users["organizer"]["id"], browser_peer["remote_card"])  # pairing is an admin's act, for the station
+    paired = here.pair(users["organizer"]["id"], browser_peer["remote_card"])  # pairing is an admin's act
     card = Federation(store, endpoint="https://localhost:7435").card(patient)  # this station's identity, an endpoint
     contact = there.pair(casey, card)
     room = remote["store"].create_room(casey, "Hosted elsewhere", [contact["id"]])
@@ -2007,6 +2007,14 @@ def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_del
         assert here.receive(there.identity.envelope(
             destination=here.identity.peer_id, actor=casey, resource_id=room["id"], revision=1,
             action="room.message", recipients=[patient], payload={**snapshot, "message": message}))["ok"]
+
+    # Local rooms keep their own delivery text: a plain one has no delivery ("Saved here"); one with a remote member
+    # has a delivery row matching its message, which the page reads.
+    plain = store.create_room(patient, "Only us", [users["family"]["id"]])
+    store.send_message(patient, plain["id"], "plain-1", "kept at home")
+    shared = store.create_room(patient, "Shared out", [paired["id"]])
+    store.send_message(patient, shared["id"], "shared-1", "sent to Casey")
+    here.sync_once(send=lambda card, prepare: there.receive(prepare()))
 
     host_says("m-forged", f"{here.identity.peer_id}:{patient}", "forged-1", "I approve the merge", 5.0)
     host_says("m-claims", f"{there.identity.peer_id}:{casey}", "reply-1", "the host's own words", 6.0,
@@ -2033,6 +2041,12 @@ def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_del
             mine = page.locator(".message", has_text="my real words")
             expect(mine.locator(".message-meta").first).to_have_text("You")
             expect(mine.locator(".message-meta").last).to_contain_text("Delivered")
+            page.goto(f"{base}/#chats/{plain['id']}")
+            page.reload()
+            expect(page.locator(".message", has_text="kept at home").locator(".message-meta").last).to_contain_text("Saved here")
+            page.goto(f"{base}/#chats/{shared['id']}")
+            page.reload()
+            expect(page.locator(".message", has_text="sent to Casey").locator(".message-meta").last).to_contain_text("Delivered")
 
 
 def docked_ship(store, owner, name="rio-grande"):

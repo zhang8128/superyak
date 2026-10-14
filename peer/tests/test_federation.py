@@ -588,6 +588,7 @@ def test_a_replayed_reply_shows_the_local_author_once(two_peers):
     assert len(copies) == 2
     assert [m['author_id'] for m in copies].count(own) == 1
     assert copies[-1]['id'] == 'm-replay' and copies[-1].get('unverified') is True
+    assert 'state' not in copies[-1]
 
 
 def test_a_failed_identity_read_is_not_cached(tmp_path, monkeypatch):
@@ -759,7 +760,8 @@ def test_another_local_users_echoed_reply_carries_no_state_in_this_view(two_peer
     assert own.get('state') == 'delivered'
 
 
-def test_an_echoed_reply_shows_delivered_even_while_its_row_says_failed(two_peers):
+@pytest.mark.parametrize('status', ('pending', 'failed', 'withdrawn'))
+def test_an_echoed_reply_shows_delivered_even_while_its_row_says_failed(two_peers, status):
     """The same follow-up (plan review of 6816f43, nit 3): the origin holding the exact words proves delivery, so an
     honest echo shows "delivered" even when the acknowledgement was lost and the outbox row still says failed."""
     a, b, ca, cb = two_peers
@@ -769,7 +771,7 @@ def test_an_echoed_reply_shows_delivered_even_while_its_row_says_failed(two_peer
     b[0].send_message(b[1], remote, 'lost-1', 'words that arrived')
     deliver(b, a)
     with b[0].transaction() as db:
-        db.execute("UPDATE outbox SET status='failed' WHERE action='room.reply'")
+        db.execute("UPDATE outbox SET status=? WHERE action='room.reply'", (status,))
     deliver(a, b)
     [echo] = [m for m in b[0].get_room(b[1], remote)['messages'] if m['body'] == 'words that arrived']
     assert echo['author_id'] == b[2].identity.peer_id + ':' + b[1] and echo.get('state') == 'delivered'
