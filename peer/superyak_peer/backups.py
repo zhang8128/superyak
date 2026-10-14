@@ -240,12 +240,16 @@ def _write_output(database, output, clock, sleep):
     tmp = output.parent / f'.peer-{copy_stamp(clock())}-{os.getpid()}.tmp'
     _checked_copy(database, tmp, clock, sleep)
     try:
-        os.link(tmp, output)
-        _fsync(output.parent)
-    except FileExistsError as error:
-        raise BackupError(1, f'{output} exists; --output never replaces a file') from error
-    except OSError as error:
-        raise BackupError(1, f'could not publish {output} with a hard link (does its filesystem support them?): {error}') from error
+        try:
+            os.link(tmp, output)
+        except FileExistsError as error:
+            raise BackupError(1, f'{output} exists; --output never replaces a file') from error
+        except OSError as error:
+            raise BackupError(1, f'could not publish {output} with a hard link (does its filesystem support them?): {error}') from error
+        try:
+            _fsync(output.parent)
+        except OSError as error:
+            raise BackupError(1, f'the copy is in place ({output}), but syncing its folder failed: {error}') from error
     finally:
         _remove_temporary(tmp)
     return output
@@ -302,6 +306,8 @@ def run_backup(data_dir, backup_dir, *, output=None, copy_to='', clock=time.time
     old_umask = os.umask(0o077)
     try:
         if output is not None:
+            if copy_to:
+                raise BackupError(1, '--output writes one copy outside the rotation; run --copy-to on its own')
             return _write_output(database, Path(output).absolute(), clock, sleep)
         backup_dir = _rotation_dir(backup_dir)
         with rotation_lock(backup_dir):

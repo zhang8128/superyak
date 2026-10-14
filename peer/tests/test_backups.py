@@ -432,3 +432,57 @@ def test_output_failures_say_why_instead_of_a_traceback(tmp_path, monkeypatch, c
     assert backup(store, rotation, '--output', fresh) == 1
     assert 'hard link' in capsys.readouterr().err
     assert not fresh.exists() and not list(tmp_path.glob('.peer-*'))
+
+
+def test_output_with_copy_to_is_refused_before_anything_is_written(tmp_path, capsys):
+    """--output is outside the rotation, so a --copy-to beside it would silently do nothing: refused instead."""
+    store, rotation = station(tmp_path)
+    offsite = tmp_path / 'offsite'
+    offsite.mkdir()
+    target = tmp_path / 'out.sqlite3'
+    assert backup(store, rotation, '--output', target, f'--copy-to={offsite}') == 1
+    assert 'run --copy-to on its own' in capsys.readouterr().err
+    assert not target.exists() and not rotation.exists() and list(offsite.iterdir()) == []
+
+
+def test_a_pruning_failure_at_the_destination_exits_13_and_keeps_the_local_copy(tmp_path, monkeypatch, capsys):
+    store, _ = station(tmp_path)
+    rotation = tmp_path / 'backups' / 'station'
+    offsite = tmp_path / 'offsite'
+    offsite.mkdir()
+    day = time.strftime('%Y%m%d', time.gmtime(time.time() - 3 * 86400))
+    stuck = f'peer-{day}T010000Z.sqlite3'
+    for hour in ('01', '02'):
+        (offsite / f'peer-{day}T{hour}0000Z.sqlite3').write_bytes(b'an earlier copy')
+    monkeypatch.setattr(backups, '_device', lambda path: 2 if Path(path) == rotation else 1)
+    real_unlink = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        if self.name == stuck and self.parent == offsite:
+            raise PermissionError(13, 'Permission denied', str(self))
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', unlink)
+    assert backup(store, rotation, f'--copy-to={offsite}') == 13
+    message = capsys.readouterr().err
+    assert 'copy off the Pi failed' in message and stuck in message
+    [local] = backups.rotation(rotation)
+    assert (offsite / local.name).exists()
+
+
+def test_a_failed_folder_sync_after_the_link_does_not_blame_hard_links(tmp_path, monkeypatch, capsys):
+    """R4: once the link is made the copy is published; only syncing its folder failed. Exit 1, and the message says so."""
+    store, rotation = station(tmp_path)
+    target = tmp_path / 'out.sqlite3'
+    real_fsync = backups._fsync
+
+    def fsync(path):
+        if Path(path) == target.parent and target.exists():
+            raise OSError(5, 'Input/output error')
+        return real_fsync(path)
+
+    monkeypatch.setattr(backups, '_fsync', fsync)
+    assert backup(store, rotation, '--output', target) == 1
+    message = capsys.readouterr().err
+    assert 'hard link' not in message and 'is in place' in message and 'sync' in message
+    assert ok(target) and not list(tmp_path.glob('.peer-*'))
