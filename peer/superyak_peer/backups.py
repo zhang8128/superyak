@@ -29,6 +29,7 @@ COPY_NAME = re.compile(r'peer-(\d{8}T\d{6}Z)\.sqlite3')
 TEMP_NAME = re.compile(r'\.peer-.+\.tmp(?:-journal)?')
 KEEP_DAYS, KEEP_WEEKS = 14, 8
 TEMP_MAX_AGE = 86400
+STALE_AFTER = 36 * 3600
 MIN_FREE = 1 << 30
 RETRY_SECONDS = 60
 SCRATCH_PREFIX = 'superyak-restore-test-'
@@ -91,6 +92,18 @@ def rotation(directory):
 def newest_copy(directory):
     copies = rotation(directory)
     return copies[-1] if copies else None
+
+
+def stale_notice(backup_dir, now):
+    """S14: one notice while the newest copy is more than 36 hours old. Its id names that copy, so it changes as soon as
+    a new copy appears; no rotation, or an empty one, gives none."""
+    newest = newest_copy(backup_dir)
+    if newest is None or now - copy_time(newest) <= STALE_AFTER:
+        return None
+    taken = time.strftime('%Y-%m-%d %H:%M', time.localtime(copy_time(newest)))
+    return {'id': f'backup-stale-{newest.name}',
+            'text': f'Station alert: the newest station backup is from {taken}, more than 36 hours ago. The nightly timer '
+                    'may have stopped. On the Pi: systemctl --user list-timers superyak-backup.timer.'}
 
 
 def keep(names):

@@ -374,3 +374,119 @@ def test_a_failed_alert_write_leaves_no_window_set(tmp_path, monkeypatch):
         alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0)
     monkeypatch.setattr(alerts, '_write_private', real)
     assert alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, T0 + 1) is not None
+
+
+def notices(capsys, data, *extra):
+    """station-notices as Odo runs it: (exit code, stdout, stderr)."""
+    try:
+        cli(['station-notices', '--data-dir', str(data), *map(str, extra)])
+        code = 0
+    except SystemExit as stopped:
+        code = stopped.code
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_notices_list_queued_alerts_and_are_unchanged_without_them(tmp_path, capsys):
+    """R13, R15: without an alert queue or a rotation the output is today's, byte for byte. With 25 stopped alerts and an
+    older down, the store's notices come first, then the down and the 20 newest stops, oldest first."""
+    store = Store(tmp_path / 'lighthouse')
+    store.request_access('Jenn', 'jenn@example.org', 'Andy invited me')
+    assert notices(capsys, store.data_dir) == (0, json.dumps(store.station_notices(), indent=2) + '\n', '')
+    now, queue = time.time(), store.data_dir / 'alerts'
+    down = alerts.record(queue, 'superyak-odo.service', 'down', GIVE_UP, now - 3600)
+    stops = [alerts.record(queue, f'superyak-w{i:02d}.service', 'stopped', CRASH, now - (25 - i) * 60) for i in range(25)]
+    alerts.record(queue, 'superyak-door.service', 'down', GIVE_UP, now - 8 * 86400)          # older than 7 days
+    code, out, err = notices(capsys, store.data_dir)
+    listed = json.loads(out)
+    assert code == 0 and listed[:1] == store.station_notices()
+    assert [notice['id'] for notice in listed[1:]] == [f'alert-{one["id"]}' for one in [down, *stops[5:]]]
+    assert listed[1]['text'] == down['text']
+
+
+def test_notices_still_list_alerts_when_the_store_cannot_open(tmp_path, capsys):
+    """R13 (M3): the database overwritten with junk and one alert queued: the alert is listed, the error's class name goes
+    to stderr, and the exit is 0. Without either directory the failure is today's."""
+    store = Store(tmp_path / 'lighthouse')
+    store.db_path.write_bytes(b'not a database ' * 1000)
+    with pytest.raises(sqlite3.DatabaseError):
+        notices(capsys, store.data_dir)
+    one = alerts.record(store.data_dir / 'alerts', 'superyak-lighthouse.service', 'stopped', CRASH, time.time())
+    code, out, err = notices(capsys, store.data_dir)
+    assert code == 0 and json.loads(out) == [{'id': f'alert-{one["id"]}', 'text': one['text']}]
+    assert 'DatabaseError' in err
+
+
+def test_a_stale_backup_is_announced_once_per_lapse(tmp_path, capsys):
+    """R14: a rotation whose newest copy is more than 36 hours old gives one backup-stale-<name> notice, the same on
+    every listing; a new copy ends the lapse; no rotation, or an empty one, gives none."""
+    data, rotation = tmp_path / 'lighthouse', tmp_path / 'backups' / 'station'
+    data.mkdir()
+    now = calendar.timegm((2026, 10, 14, 12, 0, 0))
+
+    def copy(at):
+        path = rotation / f'peer-{backups.copy_stamp(at)}.sqlite3'
+        path.write_bytes(b'copy')
+        return path
+
+    assert alerts.notices_beside(data, rotation, now) is None
+    rotation.mkdir(parents=True)
+    (rotation / 'peer-20261399T000000Z.sqlite3').write_bytes(b'not a time')   # review S1: never the newest copy
+    assert alerts.notices_beside(data, rotation, now) == []
+    old = copy(now - 36 * 3600)
+    assert alerts.notices_beside(data, rotation, now) == []                         # exactly 36 hours: not more than
+    first = alerts.notices_beside(data, rotation, now + 60)
+    assert first == [{'id': f'backup-stale-{old.name}', 'text': (
+        f'Station alert: the newest station backup is from {local(now - 36 * 3600, "%Y-%m-%d %H:%M")}, more than 36 hours '
+        'ago. The nightly timer may have stopped. On the Pi: systemctl --user list-timers superyak-backup.timer.')}]
+    assert alerts.notices_beside(data, rotation, now + 3600) == first               # once per lapse: the same id
+    new = copy(now + 3600)
+    assert alerts.notices_beside(data, rotation, now + 7200) == []
+    assert [n['id'] for n in alerts.notices_beside(data, rotation, now + 3600 + 37 * 3600)] == [f'backup-stale-{new.name}']
+    Store(data)                                                                       # the command, with the real clock
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    real = elsewhere / f'peer-{backups.copy_stamp(time.time() - 40 * 3600)}.sqlite3'
+    real.write_bytes(b'copy')
+    code, out, err = notices(capsys, data, '--backup-dir', elsewhere)
+    assert code == 0 and json.loads(out)[-1]['id'] == f'backup-stale-{real.name}'
+
+
+def test_a_junk_file_in_the_queue_is_skipped_not_fatal(tmp_path, capsys):
+    """Review Focus 5: an empty alert file (a power cut after a rename), a half-written one, a hand-edited one with an at
+    sign, and a garbled rate.json. station-notices skips what it can't read, lists the rest without the at sign and exits
+    0, because Odo runs it with check=True; the next alert still queues. A rate.json of the wrong shape loses no alert
+    and doesn't break station-alerts (review S2)."""
+    store = Store(tmp_path / 'lighthouse')
+    queue = store.data_dir / 'alerts'
+    good = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, time.time())
+    (queue / '000000000000.json').write_bytes(b'')
+    (queue / 'abcdefabcdef.json').write_text('{"id": "abcdefabcdef", "unit": ')
+    edited = {'id': '0123456789ab', 'unit': 'superyak-odo.service', 'kind': 'down', 'at': time.time() + 1, 'text': 'run this @serenity'}
+    (queue / '0123456789ab.json').write_text(json.dumps(edited))
+    (queue / 'rate.json').write_text('not json')
+    code, out, err = notices(capsys, store.data_dir)
+    assert code == 0 and [notice['id'] for notice in json.loads(out)] == [f'alert-{good["id"]}', 'alert-0123456789ab']
+    assert '@' not in out
+    assert alerts.record(queue, 'superyak-lighthouse.service', 'stopped', CRASH, time.time()) is not None
+    wrong = {'superyak-door.service': {'until': 'x', 'window': 'y', 'held': 'z', 'held_since': 'w', 'give_ups': 'v'}}
+    (queue / 'rate.json').write_text(json.dumps(wrong))
+    assert 'Nothing is held back.' in alerts.describe_queue(queue, time.time())
+    assert alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, time.time()) is not None
+    assert alerts.record(queue, 'superyak-door.service', 'down', GIVE_UP, time.time()) is not None
+
+
+def test_station_alerts_shows_the_queue_and_what_is_held_back(tmp_path, capsys):
+    """S13, and the words Deploy steps 4 and 5 check: 'No alerts are queued.', then 'N stops held back'."""
+    data = tmp_path / 'lighthouse'
+    data.mkdir()
+    cli(['station-alerts', '--data-dir', str(data)])
+    assert capsys.readouterr().out == 'No alerts are queued.\nNothing is held back.\n'
+    queue = data / 'alerts'
+    first = alerts.record(queue, 'superyak-alerttest.service', 'stopped', CRASH, time.time() - 30)
+    for seconds in (20, 10, 5):
+        alerts.record(queue, 'superyak-alerttest.service', 'stopped', CRASH, time.time() - seconds)
+    cli(['station-alerts', '--data-dir', str(data)])
+    out = capsys.readouterr().out
+    assert f'stopped  superyak-alerttest.service  {first["id"]}' in out
+    assert 'superyak-alerttest.service: 3 stops held back since ' in out

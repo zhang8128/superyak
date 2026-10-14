@@ -190,6 +190,7 @@ def main(argv=None):
     card.add_argument('--endpoint', required=True)
     notices = commands.add_parser('station-notices', help='Trusted local listing of what Odo announces in Ops')
     notices.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    notices.add_argument('--backup-dir', type=Path, help='The backup rotation (default: backups/station beside the data dir)')
     pending = commands.add_parser('station-pending', help='Trusted local: list waiting dockings and access requests by short id')
     pending.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     pending.add_argument('--as', dest='person', help='Who would approve (make passes APPROVER), so a taken ship name says what approving does')
@@ -222,6 +223,8 @@ def main(argv=None):
     alert_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     alert_cmd.add_argument('--unit', required=True)
     alert_cmd.add_argument('--monitor', action='store_true', help="As an OnFailure= handler: read systemd's MONITOR_* variables")
+    queue_cmd = commands.add_parser('station-alerts', help='Trusted local: show the alert queue and what is held back')
+    queue_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
@@ -287,7 +290,20 @@ def main(argv=None):
             room, changed = Store(args.data_dir).station_bridge(args.person, args.id, bridge)
             print(describe_bridge(room, changed, bridge))
         elif args.command == 'station-notices':
-            print(json.dumps(Store(args.data_dir).station_notices(), indent=2))
+            import time
+            from .alerts import notices_beside
+            from .backups import default_backup_dir
+            extra = notices_beside(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir), time.time())
+            if extra is None:  # R15: neither directory, so exactly today's output and today's failures
+                print(json.dumps(Store(args.data_dir).station_notices(), indent=2))
+            else:
+                try:
+                    listed = Store(args.data_dir).station_notices()
+                except Exception as error:  # noqa: BLE001 - S10: a damaged store must not silence the alerts
+                    print(f'station-notices: listing the queued alerts only; the store could not be read ({type(error).__name__})',
+                          file=sys.stderr)
+                    listed = []
+                print(json.dumps(listed + extra, indent=2))
         elif args.command == 'station-backup':
             from .backups import BackupError, default_backup_dir, run_backup
             try:
@@ -329,6 +345,10 @@ def main(argv=None):
                 station_alert(args.data_dir, args.unit, monitor=args.monitor, environ=os.environ)
             except Refused as refused:
                 parser.exit(2, f'station-alert: {refused}\n')
+        elif args.command == 'station-alerts':
+            import time
+            from .alerts import describe_queue
+            print(describe_queue(args.data_dir / 'alerts', time.time()))
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation

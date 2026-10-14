@@ -11,7 +11,7 @@ import re
 import secrets
 import sys
 import time
-from .backups import REASONS, SEE_LOG
+from .backups import REASONS, SEE_LOG, stale_notice
 from .ships import safe_line
 
 UNIT = re.compile(r'superyak-[a-z0-9-]{1,60}\.service')
@@ -24,6 +24,7 @@ TIMER_UNITS = {'superyak-backup.service': 'the nightly backup', 'superyak-restor
 ALERT_FILE = re.compile(r'([0-9a-f]{12})\.json')
 KINDS = ('stopped', 'down', 'failed')
 KEPT_DAYS = 30
+LISTED_DAYS, LISTED_NEWEST = 7, 20
 WINDOW, MAX_WINDOW = 1800, 6 * 3600
 GIVE_UPS_PER_DAY = 6
 LOCK_WAIT = 5
@@ -300,3 +301,36 @@ def station_alert(data_dir, unit, *, monitor, environ, now=None):
         except OSError as error:
             print(f'station-alert: could not clean the old alerts in {alerts_dir}: {type(error).__name__}: {error.strerror or error}', file=sys.stderr)
     return None
+
+
+def listed(alerts_dir, now):
+    """S10: the last 7 days' alerts, oldest first: at most the 20 newest, plus every down and failed alert of those
+    days, so a give-up line is never pushed out by restarts. The text goes through safe_line again on the way out."""
+    recent = [alert for alert in queued(alerts_dir) if alert['at'] > now - LISTED_DAYS * DAY]
+    newest = {alert['id'] for alert in recent[-LISTED_NEWEST:]}
+    return [{'id': f'alert-{alert["id"]}', 'text': safe_line(alert['text'], LINE_LIMIT)}
+            for alert in recent if alert['id'] in newest or alert['kind'] != 'stopped']
+
+
+def notices_beside(data_dir, backup_dir, now):
+    """What station-notices appends to Store.station_notices() (S10, S14). None when neither the alert queue nor the
+    rotation exists, so the command prints exactly what it printed before (R15)."""
+    alerts_dir, backup_dir = Path(data_dir) / 'alerts', Path(backup_dir)
+    if not alerts_dir.is_dir() and not backup_dir.is_dir():
+        return None
+    stale = stale_notice(backup_dir, now)
+    return listed(alerts_dir, now) + ([stale] if stale else [])
+
+
+def describe_queue(alerts_dir, now):
+    """make station-alerts (S13): the queue and the held-back counts. Every value here is ours: checked units and
+    rendered lines."""
+    waiting = queued(alerts_dir)
+    lines = ['Queued alerts, oldest first (Odo posts each once in Ops; files over 30 days old are deleted):'] if waiting else ['No alerts are queued.']
+    lines += [f'  {_local(alert["at"], "%Y-%m-%d %H:%M")}  {alert["kind"]:<7}  {alert["unit"]}  {alert["id"]}' for alert in waiting]
+    held = [(unit, state) for unit, state in ((unit, _state(value, now)) for unit, value in sorted(_rates(alerts_dir).items()))
+            if UNIT.fullmatch(unit) and state.get('held') and state.get('held_since')]
+    lines.append("Held back (counted in that unit's next stopped line, or only shown here):" if held else 'Nothing is held back.')
+    lines += [f'  {unit}: {state["held"]} {"stop" if state["held"] == 1 else "stops"} held back since {_local(state["held_since"])}'
+              for unit, state in held]
+    return '\n'.join(lines)
