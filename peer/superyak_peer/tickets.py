@@ -108,8 +108,9 @@ class Tickets:
         return {'decision': 'defer', 'message_id': message['id'], 'first_deferred': row['first_deferred']}
 
     def _post_notice(self, db, ship, message, first, now):
-        """S5, S11: one of the two notices the station writes (ship briefs R18), in this transaction under BEGIN IMMEDIATE, together with
-        notice_posted, so it is posted at most once. It names only the ship and the minutes waited (R11)."""
+        """S5, S11: one of the two notices the station writes (ship briefs R18), in this transaction under BEGIN
+        IMMEDIATE, together with notice_posted, so it is posted at most once. It names only the ship and the minutes waited
+        (R11)."""
         body = NOTICE_TEMPLATE.format(ship=safe_line(ship['name'], 40), waited=int((now - first) // 60))
         self._post_as_system(db, message['room_id'], f'notice-{ship["id"]}-{message["id"]}', body)
 

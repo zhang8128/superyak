@@ -72,7 +72,9 @@ class Briefs:
         self.emit(db, 'chat.brief', room_id, revision,
                   {'author_id': author_id, 'revision': revision, **({'carried_from': carried_from} if carried_from else {})})
         self._prune_brief_history(db, room_id, now)
-        if carried_from is None:  # S6: a save or a removal, by either route, posts one notice; a carry posts none
+        # S6: a save or a removal, by either route, posts one notice; a carry posts none. _post_as_system returns None
+        # in a closed breakout (which refuses briefs anyway) and the save stands; the notice never quotes the brief.
+        if carried_from is None:
             self._post_as_system(db, room_id, f'brief-{room_id}-{revision}', self._brief_notice(db, body, revision, author_id))
 
     def _prune_brief_history(self, db, room_id, now):
@@ -113,8 +115,7 @@ class Briefs:
 
     def save_brief(self, actor, key, body, revision):
         """PUT /api/chats/{id}/brief, for the room's owner. The route has already refused ship keys and a missing CSRF
-        token. Saving records no mentions;
-        `_write_brief` posts the one notice (ship briefs S6)."""
+        token. Saving records no mentions; `_write_brief` posts the one notice (ship briefs S6)."""
         body = brief_body(body)
         self._refuse_live_ship_keys(body, what='brief')  # its own transaction, so before ours
         if ':' in key:
