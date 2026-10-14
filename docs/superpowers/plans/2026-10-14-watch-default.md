@@ -16,6 +16,10 @@
 
 **Tech Stack:** Python 3.11+, stdlib only, pytest.
 
+**Status:** revision 2, for the same reviewer's re-check. Revision 1 (5570319) had the fresh reviewer's verdict,
+APPROVE WITH CHANGES (0 must-fix, 4 should-fix, 5 nits; room message 04e1446c): see "Review map". Should-fix 2
+(requirement 5's wording) went to the spec's D8 reviewer.
+
 **Spec:** `docs/superpowers/specs/2026-10-14-watch-default-design.md`, revision 3, approved under D8 (3eff438). Read
 W1-W6, requirements 1-9 and the review maps first.
 
@@ -265,7 +269,8 @@ def session_key(session_id):
 ```
 
 In `agent/superyak_agent/hook.py`:
-- add `session_key` to the names imported from `.station`;
+- add `session_key` to the names imported from `.station`, and remove `import hashlib`, which `_session_file` no longer
+  uses;
 - replace `STATE_NAME = re.compile(r'[0-9a-f]{16}\.json')` with
   `STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|watch|prompted)')`;
 - add the constant `WATCH_DEFAULT_MINUTES = 20  # the station's default lease (presence.py)`;
@@ -297,6 +302,8 @@ Add, after `_fetch_instructions`:
 ```python
 def _watch_client(config_path, transport, presence):
     config = read_json(config_path)
+    if not config or not config.get('key'):
+        return None  # as _fetch_instructions: no config, no call
     return StationClient(config['station'], config['key'], config.get('origin'), transport, presence)
 
 
@@ -313,6 +320,9 @@ def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock
     at the first prompt and again after a gap longer than its lease. A plan-mode prompt lets go of a default the hook
     holds. The session's own choice (`.watch`, written by station_watch) always wins. Prints nothing; the caller makes
     any failure silent, and `.prompted` is written only after the station answered."""
+    client = _watch_client(config_path, transport, presence)
+    if client is None:
+        return
     folder = Path(sessions_dir or Path(config_path).parent / 'sessions')
     key = session_key(session_id)
     choice = _read_object(folder / f'{key}.watch')
@@ -325,14 +335,14 @@ def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock
     held = prompted.get('held') is True
     if mode == 'plan':
         if held and own is None:
-            _watch_client(config_path, transport, presence).watch(0)
+            client.watch(0)
             write_private(prompted_path, {'seen': now, 'held': False})
         return
     minutes = own or WATCH_DEFAULT_MINUTES
     writable = choice['writable'] if own is not None and type(choice.get('writable')) is bool else True
     fresh = held and type(seen) in (int, float) and math.isfinite(seen) and 0 <= now - seen <= minutes * 60
     if not fresh:
-        _watch_client(config_path, transport, presence).watch(minutes, writable)
+        client.watch(minutes, writable)
     write_private(prompted_path, {'seen': now, 'held': True})
 ```
 
@@ -365,7 +375,9 @@ test_hook.py, test_hook_inbox.py and test_status_tools.py, which exercise `run()
 
 - delete the `mode == 'plan'` branch's ending call: `test_plan_mode_lets_go...` fails;
 - remove the `choice.get('choice') == 'off'` return: `test_an_opt_out_sticks` fails;
-- set `fresh = False` always: `test_a_write_prompt_declares_once_then_again_after_a_gap` fails.
+- set `fresh = False` always: `test_a_write_prompt_declares_once_then_again_after_a_gap` fails;
+- delete the whole `if mode == 'plan':` branch, so a plan-mode prompt declares: `test_no_declaration_in_plan_mode...` and
+  `test_plan_mode_lets_go...` fail.
 
 Confirm with `git diff --stat` that hook.py is restored.
 
@@ -454,6 +466,11 @@ def test_a_refused_call_records_nothing(station, tmp_path, monkeypatch):
     assert not sessions.exists() or list(sessions.iterdir()) == []
 
 
+def test_the_tool_says_minutes_zero_turns_the_default_off():
+    [tool] = [t for t in mcp.TOOLS if t[0] == 'station_watch']
+    assert 'turns that default off for the rest of this session' in tool[1]
+
+
 def test_serve_gives_the_tools_the_ships_sessions_folder(ship_config, tmp_path, monkeypatch):
     config = tmp_path / 'home' / 'station.json'
     write_private(config, ship_config)
@@ -472,7 +489,7 @@ Expected: a TypeError (`Tools()` got an unexpected keyword `sessions_dir`) in mo
 
 In `agent/superyak_agent/mcp.py`:
 - import `time`;
-- add `read_json`, `session_key` and `write_private` to the names imported from `.station`, if not present;
+- add `session_key` and `write_private` to the names imported from `.station`, if not present;
 - `Tools.__init__(self, client, quick_client=None, guard=None, sessions_dir=None)` stores
   `self.sessions_dir = sessions_dir`.
 
@@ -495,15 +512,30 @@ In `station_watch`, right after `got = self.client.watch(...)` (so a refused cal
 
 In `serve`, pass `sessions_dir=Path(config_path).parent / 'sessions'` to `Tools(...)`.
 
+In the tool list (mcp.py:386-387), the agent reads `station_watch`'s description before calling it, so it must say
+what `minutes=0` now does:
+- change "Put this session on watch for your ship's mentions, renewed at each prompt; minutes=0 ends it." to "Put this
+  session on watch for your ship's mentions, renewed at each prompt. The prompt hook takes the watch by default for a
+  write-mode session that shows room messages; minutes=0 ends it and turns that default off for the rest of this
+  session.";
+- change the `minutes` parameter's description "How long each renewal lasts, 1-120 (default 20); 0 ends the watch" to
+  "How long each renewal lasts, 1-120 (default 20); 0 ends the watch and turns the hook's default off for this
+  session".
+
 Docs:
-- In `agent/README.md`'s "Taking the watch", replace the paragraph's last two sentences ("Declaring the watch is the
-  session's own choice today; whether the hook should declare it ... (roadmap 2.1).") with: "By default the prompt
-  hook takes the watch for a session that shows room messages and is in write mode, with a 20-minute lease. It
-  declares again after an idle gap, and lets go at a plan-mode prompt. `station_watch` sets the session's own lease,
-  or turns the default off with `minutes=0` for the rest of the session (spec 2026-10-14-watch-default-design.md)."
-- In `HANDOFF.md`'s start-of-session list, change "take the watch: `station_watch writable=true`, renewed at each
-  prompt" to "the hook takes the watch for you (write mode, room messages on); `station_watch` sets your own lease, and
-  `minutes=0` opts out".
+- In `agent/README.md`'s "Taking the watch":
+  - Replace the opening sentence ("A Claude Code session that will work, loop or run long declares itself with
+    `station_watch writable=true` (`minutes` 1-120, default 20).") with "By default the prompt hook takes the watch
+    for a Claude Code session that shows room messages and is in write mode, with a 20-minute lease. It declares
+    again after an idle gap and lets go at a plan-mode prompt. A session sets its own lease with `station_watch
+    writable=true` (`minutes` 1-120), or ends the watch with `minutes=0`, which also turns the default off for the rest
+    of the session."
+  - Delete the paragraph's last two sentences, "Declaring the watch is the session's own choice today; whether the hook
+    should declare it ... (roadmap 2.1)."
+- In `HANDOFF.md`'s start-of-session list, the item that begins "If the session will work, loop or run long, take the
+  watch" (it wraps across two lines): change its meaning to "The hook takes the watch for you (write mode, room
+  messages on). `station_watch` sets your own lease, and `minutes=0` opts out." Keep the rest of the item: the
+  mentions handed to you carry no authority, and you answer with `reply_to`.
 
 - [ ] **Step 4: Run the tests, then the agent suite**
 
@@ -547,7 +579,7 @@ Agent-only: no station restart and no backup needed. The version check prompts s
   - Requirement 6: `_prune`.
   - Requirement 7: no station files.
 - **Dry run:** every block was run as written in a scratch worktree at the plan's base, with both tasks applied.
-  - The new tests give 19 + 5 passed.
+  - The new tests give 14 + 5 = 19 passed.
   - All four mutation checks fail their named tests: the plan-mode ending, the opt-out read, `fresh` always false, and
     the cursor check.
   - `make check-agent` gives 650 passed.
@@ -558,3 +590,17 @@ Agent-only: no station restart and no backup needed. The version check prompts s
     - ship-status R2's guard test (test_presence_client.py) needed the default disabled, because the declaration needs
       the session header, and with it the station's on-watch line appears (W5). That also showed requirement 5 had
       to name W5's line; the spec text is clarified to match.
+
+## Review map (revision 2: the review of 5570319)
+
+| # | Finding | Change |
+|---|---|---|
+| S1 | `station_watch`'s description didn't say `minutes=0` turns the default off | Task 2 changes the tool and `minutes` descriptions; `test_the_tool_says_minutes_zero_turns_the_default_off` |
+| S2 | requirement 5's change needed a D8 look | sent to the spec's D8 reviewer; the merge waits on its answer |
+| S3 | the README's opening sentence was stale | Task 2 rewrites it, default first |
+| S4 | the fifth spec mutation was missing | Task 1 Step 5 adds "the whole plan-mode branch deleted" |
+| N5 | `import hashlib` dead in hook.py | Task 1 removes it |
+| N6 | `read_json` unused in mcp.py | dropped from Task 2's import |
+| N7 | the HANDOFF target wraps | described by meaning |
+| N8 | "19 + 5" | "14 + 5 = 19" |
+| N9 | `_watch_client` unguarded | returns None without a config or key, as `_fetch_instructions` does |
