@@ -79,6 +79,7 @@ POINTER = 'The full text does not fit here: call the station_instructions tool a
 STATE_DAYS = 14
 STATE_NAME = re.compile(r'[0-9a-f]{16}\.(?:json|watch|prompted)')
 WATCH_DEFAULT_MINUTES = 20  # the station's default lease (presence.py)
+RENEWAL_MARGIN = 60  # seconds: the station renews a lease at most once per 30 s, so the hook declares a minute early
 SETTINGS = Path.home() / '.claude' / 'settings.json'  # where install_all writes the machine ship's hooks (install.py:375)
 HEX12 = re.compile(r'[0-9a-f]{12}')
 
@@ -303,7 +304,7 @@ def _watch_default(config_path, session_id, mode, transport, sessions_dir, clock
         return
     minutes = own or WATCH_DEFAULT_MINUTES
     writable = choice['writable'] if own is not None and type(choice.get('writable')) is bool else True
-    fresh = held and type(seen) in (int, float) and math.isfinite(seen) and 0 <= now - seen <= minutes * 60
+    fresh = held and type(seen) in (int, float) and math.isfinite(seen) and 0 <= now - seen <= minutes * 60 - RENEWAL_MARGIN
     if not fresh:
         client.watch(minutes, writable)
     write_private(prompted_path, {'seen': now, 'held': True})

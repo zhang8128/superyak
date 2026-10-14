@@ -39,7 +39,8 @@ sticks.
 - **W2. Keeps things moving: a short lease, declared again after a gap.**
   - The hook declares `station_watch` with `minutes` and `writable` set to the session's own choice if it made one
     (W3), else `minutes=20` (WATCH_DEFAULT_MINUTES) and `writable=true`.
-  - Every station call renews a running lease (presence.py:41-60), so a session that keeps prompting keeps the watch.
+  - The station renews a running lease at most once per 30 s per session (presence.py:8, 41-60), so the hook declares again
+    in the lease's last minute (RENEWAL_MARGIN, 60 s), and a session that keeps prompting keeps the watch.
   - A session that goes idle stops renewing. The lease lapses within its minutes, and the watcher then answers the
     waiting mention read-only (the existing 'lease ran out' test).
   - The hook declares again only when it may have lapsed. It records each qualifying prompt's time in its **own**
@@ -48,8 +49,8 @@ sticks.
       `held` = whether it declared or still holds the default.
     - A plan-mode prompt writes `.prompted` only when it ends a default the hook held (`held: false`).
     - An opted-out prompt, or one W1 excludes for any other reason, doesn't write it.
-    - It declares when that file is missing, when `held` is false, or when `seen` is more than the lease ago. Every
-      station call renews a running lease, so a prompt within the lease keeps it.
+    - It declares when that file is missing, when `held` is false, or when `seen` is more than the lease, less RENEWAL_MARGIN (60 s), ago.
+      The station renews a running lease at most once per 30 s, so a prompt before that last minute keeps it.
     - A lapsed watch is never revived by presence (R6). This is a fresh declaration, so R6 holds.
   - At most one extra station call per session, at its first prompt and after each idle gap, never at every prompt.
   - **Where it runs** (should-fix 4): after the instructions call and before the inbox call. That keeps the inbox
@@ -169,9 +170,16 @@ sessions; the version check prompts them, since `agent/superyak_agent` is a runt
 
 - The default starts at a session's first prompt, not at session start (M1: no mode at SessionStart).
 - A Codex session has no hook, so it gets no default. It keeps declaring by hand.
-- Sessions running from before the update keep today's behavior until they restart.
+- Sessions running at the update: the hook runs fresh from the checkout at every prompt, but the MCP server is one
+  long-lived process per session. After a pull, a running session takes the default at its next prompt, while its old MCP
+  server writes no `.watch`, so `minutes=0` does not stick past the next idle gap until the session restarts. Restart
+  sessions after pulling.
+- A session living longer than 14 days, or resumed under the same id, can have its `.watch` opt-out pruned by another
+  session's prune and get the default back (requirement 6 allows it).
+- Headless `claude -p` runs on a machine docked with `--hook` that don't set `SUPERYAK_RUN` (for example
+  engram/local_agent.py's spawn) take the watch while they run; set `SUPERYAK_RUN=1` in such spawns.
 - **The ship's cap of 10 sessions on watch** (WATCH_SESSIONS_PER_SHIP, presence.py:13; should-fix 9): with the default,
-  an 11th active write-mode session gets a silent 429 (W4) and tries again after its next idle gap. One session on
+  an 11th active write-mode session gets a silent 429 (W4); the hook retries at every qualifying prompt (one fast extra call). One session on
   watch is enough to defer the watcher's read-only runs, so mentions are still handed to a session. Raising the cap is
   a station change, and not worth it until a ship really runs more than 10 such sessions at once.
 - **No ship-wide off switch** (nit 12): the choice is per session, as Andy put it. A new session gets one default

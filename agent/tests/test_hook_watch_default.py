@@ -176,3 +176,12 @@ def test_prune_keeps_the_current_sessions_files_and_drops_old_ones(tmp_path):
     hook._prune(folder, folder / f'{current}.json', now)
     assert sorted(p.name for p in folder.iterdir()) == sorted([f'{current}.json', f'{current}.watch',
                                                               f'{current}.prompted', f'{fresh_off}.watch'])
+
+
+def test_a_prompt_in_the_lease_s_last_minute_declares_again(station, ship_config, tmp_path):
+    """Final review of 97a9e8c, Important 1: the station renews a lease at most once per 30 s, so its lease can end up to
+    30 s before seen + lease. The hook declares again in the lease's last minute instead of trusting it."""
+    fake, serenity, config, sessions = setup(station, ship_config, tmp_path)
+    prompt(fake, config, sessions, 1000.0)
+    prompt(fake, config, sessions, 1000.0 + 20 * 60 - 30)
+    assert len(declared(fake)) == 2

@@ -73,7 +73,7 @@ def test_an_opt_out_that_cannot_be_saved_says_so(station, tmp_path, monkeypatch)
 
 def test_the_tool_says_minutes_zero_turns_the_default_off():
     [tool] = [t for t in mcp.TOOLS if t[0] == 'station_watch']
-    assert 'turns that default off for the rest of this session' in tool[1]
+    assert 'turns that default off for this session until a later call with minutes>0' in tool[1]
 
 
 def test_serve_gives_the_tools_the_ships_sessions_folder(ship_config, tmp_path, monkeypatch):
