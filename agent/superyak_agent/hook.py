@@ -6,10 +6,11 @@ import json
 import math
 import os
 import re
+import shlex
 from pathlib import Path
 import time
 from . import claims
-from .station import BREAKOUT_MARK, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, plain_id, presence_headers, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
+from .station import BREAKOUT_MARK, CHECKOUT, DEFERRED_MARK, ON_WATCH_LINE, StationClient, authors, breakout_count_lines, client_version, fence_message, label, plain_id, presence_headers, read_hint, read_json, shown_id, source_label, urllib_transport, write_private, write_private_text
 
 MAX_MESSAGES = 20
 MAX_CHARS = 4000
@@ -77,6 +78,8 @@ CHANGE_PREAMBLE = 'These instructions changed since this session last looked:'
 POINTER = 'The full text does not fit here: call the station_instructions tool and follow it.'
 STATE_DAYS = 14
 STATE_NAME = re.compile(r'[0-9a-f]{16}\.json')
+SETTINGS = Path.home() / '.claude' / 'settings.json'  # where install_all writes the machine ship's hooks (install.py:375)
+HEX12 = re.compile(r'[0-9a-f]{12}')
 
 
 class _Link:
@@ -198,6 +201,13 @@ def _run_all(config_path, state_path, clock, link, session_id, event, messages, 
         except Exception:  # noqa: BLE001
             part = ''
         text = '\n\n'.join(t for t in (part, text) if t)
+    if event == 'session-start' and data is not None:
+        try:
+            line = _version_line(data, config_path)
+        except Exception:  # noqa: BLE001 - a hook must never break the session start
+            line = ''
+        if line and len(text) + (2 if text else 0) + len(line) <= TOTAL_CHARS:  # V6: after the law, never cutting it
+            text = '\n\n'.join(t for t in (text, line) if t)
     return text, shown
 
 
@@ -259,6 +269,29 @@ def _with_withdrawals(parts, withdrawn, budget):
         shown.append(line)
     left = len(withdrawn) - len(shown)
     return text(shown + ([summary(left)] if left else []))
+
+
+def _version_line(data, config_path, settings_path=None):
+    """Version check V4, V5: one line when the station says this checkout's agent code is behind its own, or ''.
+    Only the station's 12-hex commit is used; the words are fixed, and the command is exact only for the machine
+    ship when the installed prompt hook says whether room messages are on."""
+    update = data.get('agent_update') if isinstance(data, dict) else None
+    theirs = update.get('station') if isinstance(update, dict) else None
+    mine = client_version()
+    if not isinstance(theirs, str) or not HEX12.fullmatch(theirs) or not HEX12.fullmatch(mine) or theirs == mine:
+        return ''
+    checkout = shlex.quote(str(CHECKOUT))
+    pull = f'To update, run `git -C {checkout} pull --ff-only`, then '
+    general = pull + 'run `make dock` again the way this ship was docked, then start new sessions.'
+    ship = (read_json(config_path) or {}).get('ship')
+    messages = None
+    if claims.kind_of(Path(config_path).parent) == 'machine' and isinstance(ship, str) and claims.NAME.fullmatch(ship):
+        from .install import messages_installed  # only here: the line is rare, and the hook must stay light
+        messages = messages_installed(settings_path or SETTINGS, config_path)
+    second = general if messages is None else (
+        pull + f"`make dock DOCK_ARGS='--ship {ship}{' --hook' if messages else ''}'` in that checkout, then start new sessions.")
+    return (f"This machine's Superyak agent is behind the station's: this checkout (`{CHECKOUT}`) is on `{mine}`, "
+            f'the station on `{theirs}`, and the agent code changed in between. ' + second)
 
 
 def _instructions(data, config_path, event, session_id, clock, sessions_dir, budget):

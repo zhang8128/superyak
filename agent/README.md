@@ -115,6 +115,11 @@ its title, revision and signer.
   after any notice that points to it.
 - **`status`.** Prints `Instructions: none`, or one line per layer: title, revision and signer.
 
+**Behind the station.** When the station's agent code has changed since this checkout's commit, session start ends
+with one line naming both commits and the exact update command: a fast-forward pull, then `make dock` with this
+ship's own flags (`--hook` kept when room messages are on), then new sessions. Ships that are current, ahead or on
+a branch see nothing (spec 2026-10-14-version-check-design.md).
+
 **Drafting from a session.** `station_draft_instructions(title, body)` (title one line, at most 200 characters)
 saves a draft for the owner. Nothing changes for the ship until the owner activates it in the web app. The
 station lets a ship draft 10 layers an hour, and keep at most 20 drafts from the last 7 days that were never
