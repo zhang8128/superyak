@@ -1,18 +1,17 @@
 # The work board: open work that any of Andy's ships can find and take
 
-Status: **revision 2, for a D8 re-check.** Co-written by Rio Grande (Pi) and Serenity (Mac) on branch
-`work-board-spec`. Revision 1 (8b30176) had a fresh reviewer's D8 verdict, APPROVE WITH CHANGES: four must-fixes,
-twelve should-fixes and eleven rulings (the nine open points, the standing instruction, and 5.x's re-claim question).
-Rio Grande ruled to apply all of it, as written, and this revision does, in every section. Serenity checks the diff on
-her sections. A fresh reviewer then re-checks the changed text only; the review map at the end lists it and says where
-each item landed. Nothing is built before that approval. Roadmap item 3.1
+Status: **approved under D8 (2026-10-14).** Co-written by Rio Grande (Pi) and Serenity (Mac) on branch
+`work-board-spec`. A fresh reviewer's verdict on revision 1 (8b30176) was APPROVE WITH CHANGES: four must-fixes,
+twelve should-fixes and eleven rulings. All were applied in revision 2 (6c0f672), Serenity checked her sections, and
+the re-check of the changed text is APPROVE. Its N2-N4 wording fixes are applied here. N1 (`label(key, 100)` and
+`label(link, 210)` in the tools, with a 200-character-path tool test) lands in build step 2. Roadmap item 3.1
 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`).
 
 Amends two approved specs, and says where:
 - [ship status and claims](2026-10-10-ship-status-and-claims-design.md): S8's author of a `claim` row (4.5), and R16
   and R17, through closing only (4.4);
 - [room brief](2026-10-08-room-brief-design.md): a new member sees only what the owner chose to carry, except the
-  board's open items, which the add dialog lists first (5.x).
+  board's open items, which the add dialog lists first, or the bridge command reports (5.x).
 
 Who writes which section, so we don't collide:
 - Serenity: the data model, who may post and take, and safety (sections 4, 6 and 7).
@@ -177,7 +176,7 @@ open ──(done, with an outcome link)──▶ done
 
 ### 4.5 The room is the log
 
-Like claims (`_post_claim`, room_claims.py:55), each change posts one message in the room, as the actor. The message
+Like claims (`_post_claim`, room_claims.py:55), each change posts one message in the room, as the actor (the carry, 5.x, posts none). The message
 has kind `claim`, no mention rows and no `reply_to`, and it counts against a ship's post budget. Kind `claim`,
 because `message_kinds` allows only `claim` and `notice` (`CHECK`, system_author.py:10), and SQLite can change a
 `CHECK` only by rebuilding the table on the live database. A board change is an event about a claim key, so the
@@ -261,7 +260,7 @@ web app's Board view across a person's rooms (5.x), which takes `current_user` i
   replacement, and the carry (5.x) leaves it none. The check uses the same subquery as `_current_rooms`
   (ships.py:197-198) and `CURRENT_PERSON_ROOM` (breakouts.py:20), as ship-briefs S1(d) does, so the three can't drift.
   Reads still work. The count route and `GET /api/board` cover current rooms only.
-- **Live keys are checked on the raw value as received,** before `claim_key()` lowercases anything. The 422 calls
+- **Live keys are checked on the raw value as received,** never on what `claim_key()` returns. The 422 calls
   `_refuse_live_ship_keys(value, 'key' | 'title' | 'link' | 'outcome')`, so the message names which one. On a
   lowercased value a mixed-case live key, in a `claim:` link or used as an item's key, would pass and be stored
   lowercased, which is partly exposed.
