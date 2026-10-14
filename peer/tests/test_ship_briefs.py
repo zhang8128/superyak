@@ -8,7 +8,7 @@ import sqlite3
 import pytest
 import superyak_peer
 from superyak_peer.common import Problem
-from superyak_peer.briefs import BRIEF_NOTICE_OWNER, BRIEF_NOTICE_SHIP
+from superyak_peer.briefs import BRIEF_NOTICE_OWNER, BRIEF_NOTICE_SHIP, REPLACED_ROOM
 from superyak_peer.db import Store
 from test_deferrals import ask, on_watch
 from test_federation import deliver, two_peers  # noqa: F401 - two_peers is a fixture
@@ -68,6 +68,60 @@ def test_every_write_keeps_a_revision_and_startup_backfills(env):
         Store(store.data_dir)  # a restart
     assert history(app, old) == [(7, 'Written by older code.', patient, None)]
     assert revisions(app, room) == [1, 2, 3, 4]  # two restarts doubled nothing
+
+
+def plant_brief_row(store, room, author, body='Planted.', revision=3):
+    """A room_briefs row whose references may match nothing, made with foreign keys off (as a damaged file would)."""
+    db = sqlite3.connect(store.db_path)
+    db.execute('PRAGMA foreign_keys=OFF')
+    db.execute('INSERT OR REPLACE INTO room_briefs VALUES(?,?,?,?,?,?)', (room, body, revision, author, 5.0, None))
+    db.commit()
+    db.close()
+
+
+def test_a_broken_reference_in_room_briefs_does_not_stop_the_station_starting(env):
+    """A room_briefs row whose author or room matches nothing is skipped by the backfill; the good rows still copy."""
+    app, clients, users, clock = env
+    store, patient = app.state.store, users[0]['id']
+    good = new_room(clients[0], users[1], title='Good')
+    no_author = new_room(clients[0], users[1], title='No author')
+    plant_brief_row(store, good, patient, 'Good one.', 2)
+    plant_brief_row(store, no_author, 'nobody-by-this-id')
+    plant_brief_row(store, 'f' * 32, patient)  # no such room
+    Store(store.data_dir)
+    Store(store.data_dir)
+    assert history(app, good) == [(2, 'Good one.', patient, None)]
+    assert history(app, no_author) == [] and history(app, 'f' * 32) == []
+
+
+def test_a_carry_of_a_brief_whose_author_is_gone_goes_under_the_owner(env):
+    """Main wrote the owner; a stored author that no longer exists must not make the carry a 500."""
+    app, clients, users, clock = env
+    store, patient = app.state.store, users[0]['id']
+    room = new_room(clients[0], users[1])
+    plant_brief_row(store, room, 'nobody-by-this-id', 'Text kept.', 1)
+    added = add_members(clients[0], room, users[2], carry_brief=1)
+    assert added.status_code == 201, added.text
+    carried = brief_of(clients[0], added.json()['id'])
+    assert (carried['body'], carried['author_id'], carried['carried_from']) == ('Text kept.', patient, room)
+    assert history(app, added.json()['id']) == [(1, 'Text kept.', patient, room)]
+
+
+def test_the_deploys_first_start_backfills_each_room_once(env):
+    """On the Pi the history table doesn't exist at first start: three starts leave one row per room, at its current revision."""
+    app, clients, users, clock = env
+    store, patient = app.state.store, users[0]['id']
+    rooms = [new_room(clients[0], users[1], title=f'Room {n}') for n in range(3)]
+    for n, room in enumerate(rooms):
+        for revision in range(n + 1):
+            assert put_brief(clients[0], room, f'Text {revision}.', revision).status_code == 200
+    with store.transaction() as db:
+        db.execute('DROP TABLE room_brief_revisions')
+        db.execute('DROP INDEX IF EXISTS room_brief_revisions_by_author')
+    for _ in range(3):
+        Store(store.data_dir)
+    for n, room in enumerate(rooms):
+        assert history(app, room) == [(n + 1, f'Text {n}.', patient, None)]
 
 
 def test_pruning_keeps_fifty_the_last_day_and_the_owners_last_act(env):
@@ -596,6 +650,15 @@ def test_the_refusals_come_in_the_specs_order(env):
     put_brief(clients[0], room, 'The owner wrote this.', 0)
     refused = ship_put(ship_client(app, rio_key), room, '', 7)
     assert (refused.status_code, refused.json()['error']) == (403, "Only the room's owner can remove its brief")
+    # Replaced before removal: a ship in a replaced room sending '' is 409 "replaced", not 403.
+    old_ship, old_key = docked(store, users[0]['id'], 'tardis')
+    replaced = new_room(clients[0], users[1], old_ship)
+    assert add_members(clients[0], replaced, users[2]).status_code == 201
+    refused = ship_put(ship_client(app, old_key), replaced, '', 0)
+    assert (refused.status_code, refused.json()['error']) == (409, REPLACED_ROOM)
+    # The live-key check before _room: a non-member sending a live key is 422, not 404.
+    refused = ship_put(ship_client(app, rio_key), outside, f'the key {rio_key}', 0)
+    assert refused.status_code == 422, refused.text
     # The @name check before the live-key check: both in one body is 400.
     refused = ship_put(ship_client(app, rio_key), room, f'@serenity here is the key {rio_key}', 1)
     assert (refused.status_code, refused.json()['error']) == (400, 'A ship writes names in a brief without the at sign')

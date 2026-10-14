@@ -29,7 +29,8 @@ CREATE INDEX IF NOT EXISTS room_brief_revisions_by_author ON room_brief_revision
 # S5: every start copies each room's current revision into its history, once, so a brief written before history
 # existed (or by older code after a rollback) is kept before any ship can overwrite it.
 BRIEF_BACKFILL = ('INSERT OR IGNORE INTO room_brief_revisions(room_id,revision,body,author_id,updated,carried_from) '
-                  'SELECT room_id,revision,body,author_id,updated,carried_from FROM room_briefs')
+                  'SELECT room_id,revision,body,author_id,updated,carried_from FROM room_briefs '
+                  'WHERE author_id IN (SELECT id FROM users) AND room_id IN (SELECT id FROM rooms)')  # a broken reference never stops a start
 # S6: every save and removal posts exactly one of these, by the system author, under client id
 # brief-<room id>-<revision>. {name} is safe_line(display name, 40); the brief's own text is never quoted.
 BRIEF_NOTICE_OWNER = "Station notice: the room brief is now revision {n}, written by the room's owner: {name}. station_read shows it."
@@ -123,7 +124,12 @@ class Briefs:
         brief, revision = self._room_brief(db, room_id)
         if carry != revision:
             raise Problem(409, 'The room brief changed since you looked at it; look again before carrying it')
-        return (brief['body'], brief['author_id']) if brief else None
+        if not brief:
+            return None
+        if db.execute('SELECT 1 FROM users WHERE id=?', (brief['author_id'],)).fetchone() is None:
+            # the stored author is gone: carry under the room's owner, as before authors were kept
+            return brief['body'], db.execute('SELECT owner_id FROM rooms WHERE id=?', (room_id,)).fetchone()[0]
+        return brief['body'], brief['author_id']
 
     def save_brief(self, actor, key, body, revision):
         """PUT /api/chats/{id}/brief, for the room's owner. The route has already refused ship keys and a missing CSRF
