@@ -1,5 +1,6 @@
 """Ship-side station client and the machine's private ship configuration."""
 import functools
+import hashlib
 import http.client
 import json
 import os
@@ -32,6 +33,12 @@ def presence_headers(name, client, mode=None):
     if mode in ('write', 'plan'):
         headers['x-superyak-mode'] = mode
     return headers
+
+
+def session_key(session_id):
+    """The 16 hex digits naming a Claude Code session's files in the ship's sessions folder: the hook's state and
+    `.prompted`, and the MCP tool's `.watch` (watch by default, W3). One function, so both sides name the same file."""
+    return hashlib.sha256(session_id.encode('utf-8', 'surrogatepass')).hexdigest()[:16]
 
 
 @functools.lru_cache(maxsize=1)
