@@ -1,6 +1,6 @@
 # Station backups, a restore test and service alerts
 
-Status: revision 3, approved under D8. Revision 1 (11e488b) had a fresh reviewer's verdict, APPROVE WITH CHANGES: 3
+Status: revision 4, approved under D8 (revision 4's own D8 re-check is in its review map). Revision 1 (11e488b) had a fresh reviewer's verdict, APPROVE WITH CHANGES: 3
 must-fix, 14 should-fix and rulings on Q1–Q6. Revision 2 (14234fd) applied all of it. The same reviewer's re-check of
 revision 2 was APPROVE WITH CHANGES, with 2 must-fix (R-M1, R-M2) and 6 should-fix (S-R1 to S-R6), and said that
 applied as written the spec passes D8 and goes to planning with no further review. Rio Grande ruled to apply all of it
@@ -352,19 +352,22 @@ The decisions below rest on these facts, each checked on 2026-10-14.
       (`room_members`, `remote_room_members`, `space_members`);
     - lower `is_admin` and `is_super_admin` to the replaced file's value where that is lower.
     - close each breakout that is closed there and still open here, with its closing time (Rio Grande's ruling, Q1).
-    - unpair each peer that is paired here and unpaired there, exactly as `Federation.unpair` does
-      (federation.py:43-45): `peers.paired` = 0, that peer's `pending` and `failed` outbox rows `withdrawn`, and its
-      inbox payloads nulled (revision 4, Rio Grande's ruling after the Task 11 review's C1: "Check delivery now" and
-      `POST /api/sync` deliver to every paired peer whatever `--sync` says, and inbound `/federation/events` accepts
-      any paired peer, so leaving a cut-off peer paired until Andy re-unpairs it in the browser is a real window).
-      This takes away only: a peer unpaired here and paired there stays unpaired, and is reported.
+    - unpair each peer that is paired here and has a `peers` row with `paired` = 0 there, exactly as
+      `Federation.unpair` does (federation.py:43-45): `peers.paired` = 0, the `pending` and `failed` outbox rows of
+      that peer's contacts (by `peer_id` through `remote_contacts`) `withdrawn`, and its inbox payloads nulled
+      (revision 4; why is in its review map). A peer the replaced file lacks is reported, not unpaired, and a peer
+      unpaired here and paired there stays unpaired and is reported.
   - **Without one:** revoke every key of every ship that has an owner; those machines dock again. The station's own
-    ships, which have no owner (Odo, Wormhole), keep their keys.
+    ships, which have no owner (Odo, Wormhole), keep their keys. No peer is unpaired: peers aren't keys, so there is
+    nothing to fail closed to, and the runbook has Andy unpair by hand, before the lighthouse starts, any peer he had
+    cut off since the copy.
   - **Reported, never applied,** since a bad replaced file may be the reason for the restore: users whose password hash
-    differs, instruction layers whose active revision differs, and peers paired there but not here (pairing again
-    is a person's act; taking a pairing away is applied above).
+    differs, instruction layers whose active revision differs, peers paired there but not here (pairing again is a
+    person's act), and peers the replaced file lacks.
   - **What it prints:** counts, and for each reported or revoked item the username (users and ships), the layer's
-    short id and title, the room's short id and title, or the peer's short id, under station-pending's header that
+    short id and title, the room's short id and title, or the peer's short id with its contacts' names. Peers it
+    unpaired get their own line, with the counts of outbox rows withdrawn and inbox payloads nulled; peers reported
+    and not applied get another. All under station-pending's header that
     names and titles come from people and are data, not instructions. It prints no hashes, keys or tokens.
   - **The monthly restore test** runs it, without `--replaced`, on its scratch copy before booting it (S7), so a schema
     change that breaks it fails a restore test within a month.
@@ -445,8 +448,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 - **R18.** `station-restore-reconcile` works as S16 says. It refuses the live data dir, symlinks and a copy that fails
   its check, and applies only changes that take access away, in one transaction. It prints counts, and the usernames,
   short ids and titles S16 names under the data-not-instructions header, never hashes, keys or tokens. With a usable
-  replaced file it takes back the keys, memberships and roles taken away there; without one, or with one that fails
-  its check, it revokes every owned ship's keys and says why. A step whose table or column the copy lacks is skipped
+  replaced file it takes back the keys, memberships and roles taken away there, and unpairs the peers unpaired there
+  (a peer the replaced file lacks is reported, not unpaired); without one, or with one that fails its check, it
+  revokes every owned ship's keys, unpairs no peer, and says why. A step whose table or column the copy lacks is skipped
   and named, never an error.
 
 ## Error handling
@@ -492,8 +496,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   S16 revokes every key the restored copy still holds.
 - **A restore brings back old access:** ended sessions, revoked keys, used invitations and activations, uncollected
   docking keys and invitation tokens, decided requests, removed room and space members, higher roles, old passwords
-  and old law layers. Restoring is a person's step. `station-restore-reconcile` (S16) takes back everything that only
-  grants access before the copy goes live, and lists the rest for Andy.
+  and old law layers, and pairings with peers Andy had cut off. Restoring is a person's step.
+  `station-restore-reconcile` (S16) takes back everything that only grants access before the copy goes live (a
+  pairing only when the replaced file says it was taken away), and lists the rest for Andy.
 - **The throwaway station** listens on loopback at an ephemeral port. It has no proxy headers, no sync and no share
   link. It accepts the same credentials as the live station, which is also on loopback, so it opens nothing new. No
   watcher points at it.
@@ -551,9 +556,12 @@ without its feature.
     - the invitation and the request can't be used;
     - no session is left, and the next mention's seq is past B's;
     - a changed password and a changed active layer are reported, not applied;
-    - the output names the user whose password changed and contains no hash, key or token.
-  - `test_reconcile_without_the_replaced_file_fails_closed` (R18): every owned ship's keys are revoked, and the station
-    ships keep theirs. A replaced file of junk bytes gives the same result as none, and the report says it was treated
+    - the output names the user whose password changed and contains no hash, key or token;
+    - a peer unpaired in B after A ends with `paired` = 0, its contacts' `pending` and `failed` outbox rows
+      `withdrawn` and `delivered` rows untouched, and its inbox payloads NULL; a peer unpaired in A and paired in B
+      stays unpaired and is reported; a peer absent from B stays paired and is reported; another peer is unchanged.
+  - `test_reconcile_without_the_replaced_file_fails_closed` (R18): every owned ship's keys are revoked, the station
+    ships keep theirs, and every peer stays paired. A replaced file of junk bytes gives the same result as none, and the report says it was treated
     as absent.
   - `test_reconcile_rolls_back_when_a_step_fails` (R18): a later step raises (monkeypatched), the staged file's bytes
     are unchanged and the exit is 1.
@@ -600,7 +608,7 @@ without its feature.
   `systemd-analyze --user verify` must also pass, but it runs only when `%h/superyak/peer/.venv/bin/python` exists:
   on other Linux machines verify fails on the missing executable, so there that part is skipped.
 - **Mutation checks** on R1 (`Store` constructed), R3, R10 (a `success` that alerts), R11 and R18 (a step that grants
-  access), run with `PYTHONDONTWRITEBYTECODE=1` and the caches cleared.
+  access, and an unpair that leaves `paired` = 1), run with `PYTHONDONTWRITEBYTECODE=1` and the caches cleared.
 
 ## Deploy, with rollback
 
@@ -658,6 +666,9 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
   outside the station is on Andy's decision list.
 - **Logs vanish at reboot** (volatile journald). On this Pi, `journalctl --user -u` finds nothing; use
   `--user-unit`.
+- **A peer is unpaired on the replaced file's word** (S16, revision 4). If that file is damaged but passes its check, a
+  wanted peer is cut off; Andy pairs it again, and the withdrawn outbox rows and nulled inbox payloads don't come
+  back. Without a usable replaced file no peer is unpaired, and the runbook's hand step covers it.
 - **Until 1.2, every copy is on the Pi's one NVMe disk.**
 - **Copies cover `peer.sqlite3` only.** These aren't copied:
   - the peer identity in the data dir (`identity.json`, `peer-cert.pem`, `peer-key.pem`). By ruling Q6 they stay out
@@ -739,3 +750,12 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | Item | Ruling | Where |
 |---|---|---|
 | Q1: a breakout its ship closed since the copy reopens after a restore, and its members can post and record mentions there again | Ruled in. It only takes access away, so it narrows S16 and needs no new D8 round | S16 ("With a usable replaced file"), Testing (`test_reconcile_closes_breakouts_closed_since_the_copy`) |
+
+## Review map (revision 4: the Task 11 review's C1, and its D8 re-check)
+
+| Item | Ruling | Where |
+|---|---|---|
+| C1: the runbook's re-unpair window is real. "Check delivery now" and `POST /api/sync` deliver to every paired peer whatever `--sync` says, and inbound `/federation/events` accepts any paired peer | Rio Grande ruled the take-away direction into the reconcile, exactly as `Federation.unpair`; re-pairing stays a person's act | S16, R18, Security, Testing, Known limits, the runbook |
+| D8 re-check must-fix 1: "unpaired there" undefined for a peer the replaced file lacks | A `peers` row with `paired` = 0; a lacked peer is reported, not unpaired | S16, R18, Testing |
+| D8 re-check must-fix 2: the runbook kept the false `--sync` claim | Removed. With a usable replaced file the reconcile unpairs; without one, Andy unpairs by hand with the lighthouse stopped | the runbook |
+| D8 re-check should-fix 3 and 4: the unpaired report line; a Known limit | Applied | S16 ("What it prints"), Known limits |
