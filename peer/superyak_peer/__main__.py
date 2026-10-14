@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import sys
 from . import agent_version
 from .auth import password_hash
 from .common import Problem, text
@@ -205,6 +206,9 @@ def main(argv=None):
         bridge.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
         bridge.add_argument('--id', required=True, help='Short id from station-rooms (at least 4 characters)')
         bridge.add_argument('--as', dest='person', required=True, help='The room owner; only they can change the members')
+    backup_cmd = commands.add_parser('station-backup', help='Trusted local: a checked copy of the station database into the rotation')
+    backup_cmd.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    backup_cmd.add_argument('--backup-dir', type=Path, help='The rotation (default: backups/station beside the data dir)')
     door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
@@ -271,6 +275,13 @@ def main(argv=None):
             print(describe_bridge(room, changed, bridge))
         elif args.command == 'station-notices':
             print(json.dumps(Store(args.data_dir).station_notices(), indent=2))
+        elif args.command == 'station-backup':
+            from .backups import BackupError, default_backup_dir, run_backup
+            try:
+                written = run_backup(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir))
+            except BackupError as failed:
+                parser.exit(failed.code, f'station-backup: {failed.reason}\n')
+            print(f'Checked copy: {written}')
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
