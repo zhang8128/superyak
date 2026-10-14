@@ -222,6 +222,13 @@ def message_elsewhere(s):  # row 14: on a closed item, from a non-writer
             400, NOT_HERE)
 
 
+def key_used(s):  # row 15: a non-writer, on a full board
+    insert_item(s, s.room, 'build:x', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
+    fill(s, s.room, 100)
+    return (s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': 'Again', 'kind': 'build'}, 409,
+            '`build:x` is already on this board or a room it replaced (done); new work needs a new key')
+
+
 def closed(s):  # row 16: a holder's retried done gets 409, not 403
     rio = s.ship('rio-grande')
     insert_item(s, s.room, 'build:x')
@@ -248,6 +255,33 @@ def drop_by_a_non_poster(s):  # row 19: a board writer who neither posted it nor
     return s.ship('rio-grande'), 'POST', f'/api/chats/{s.room}/board/drop', {'key': 'build:x'}, 403, DROP_BY
 
 
+def link_it_has(s):  # row 20: on a full item, from a ship over its post budget
+    insert_item(s, s.room, 'build:x')
+    eight_links(s, s.room, 'build:x')
+    over_budget(s, 'serenity')
+    return s.ship('serenity'), 'POST', f'/api/chats/{s.room}/board/link', {'key': 'build:x', 'link': 'commit:0000000'}, 200, None
+
+
+def board_full(s):  # row 21: the owner, who also posted 10 in the last hour
+    fill(s, s.room, 100, poster='andy', created=s.clock[0])
+    return (s.andy, 'POST', f'/api/chats/{s.room}/board', {'key': 'build:new', 'title': 'One more', 'kind': 'build'}, 429,
+            'This board already has 100 open items')
+
+
+def ten_an_hour(s):  # row 22: a ship over its post budget too
+    fill(s, s.room, 10, created=s.clock[0])
+    over_budget(s, 'serenity')
+    return (s.ship('serenity'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:new', 'title': 'One more', 'kind': 'build'}, 429,
+            'You posted 10 items in the last hour; wait before posting another')
+
+
+def eight_links_full(s):  # row 23: a ship over its post budget too
+    insert_item(s, s.room, 'build:x')
+    eight_links(s, s.room, 'build:x')
+    over_budget(s, 'serenity')
+    return s.ship('serenity'), 'POST', f'/api/chats/{s.room}/board/link', {'key': 'build:x', 'link': 'branch:ninth'}, 429, '`build:x` already has 8 links'
+
+
 def post_budget(s):  # row 24
     over_budget(s, 'serenity')
     return (s.ship('serenity'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:new', 'title': 'One more', 'kind': 'build'},
@@ -255,7 +289,8 @@ def post_budget(s):  # row 24
 
 
 REFUSALS = [remote_room, bad_key, bad_title, bad_kind, done_without_outcome, bad_link, live_key, at_name, not_a_member, breakout,
-            no_item, message_elsewhere, closed, not_a_writer, done_by_a_non_writer, drop_by_a_non_poster, post_budget]
+            no_item, message_elsewhere, key_used, closed, not_a_writer, done_by_a_non_writer, drop_by_a_non_poster, link_it_has,
+            board_full, ten_an_hour, eight_links_full, post_budget]
 
 
 @pytest.mark.parametrize('case', REFUSALS, ids=lambda case: case.__name__)
@@ -677,6 +712,104 @@ def test_adding_members_carries_open_items_and_leaves_the_record(env):
     assert s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande')) == rio_holds
     assert [c['key'] for c in claims(s.andy, s.room)] == ['build:left']
     assert {i['key']: i['state'] for i in board(s.andy, s.room).json()} == {'build:done': 'done', 'build:dropped': 'dropped'}
+
+
+def test_a_key_is_used_once_per_room_for_all_time(env):
+    """4.2: posting a key again gets 409 naming its state, open, done or dropped; `Fix:X` is `fix:x`; another room may use
+    the same key. After an add, a key done in the replaced room, and the carried open one, get the 409 in the new
+    room."""
+    s = Station(env)
+    serenity = s.ship('serenity')
+    for key, close in (('fix:open', None), ('fix:done', done), ('fix:dropped', drop)):
+        assert post(serenity, s.room, key).status_code == 201
+        if close:
+            assert close(serenity, s.room, key).status_code == 200
+    for key, state in (('Fix:Open', 'open'), ('fix:done', 'done'), ('FIX:DROPPED', 'dropped')):
+        assert refused(post(serenity, s.room, key)) == (
+            409, f'`{key.lower()}` is already on this board or a room it replaced ({state}); new work needs a new key')
+    assert post(serenity, s.make_room('Other room'), 'fix:done').status_code == 201
+    new = add_member(s, s.room)
+    for key, state in (('fix:done', 'done'), ('fix:open', 'open')):
+        assert refused(post(serenity, new, key)) == (
+            409, f'`{key}` is already on this board or a room it replaced ({state}); new work needs a new key')
+
+
+def test_a_board_holds_100_open_items(env):
+    """4.6: the 101st open item gets 429; dropping one frees a place, and closed items don't count."""
+    s = Station(env)
+    fill(s, s.room, 99, poster='andy')
+    insert_item(s, s.room, 'closed:1', poster='andy', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
+    assert post(s.andy, s.room, 'build:100').status_code == 201
+    assert refused(post(s.andy, s.room, 'build:101')) == (429, 'This board already has 100 open items')
+    assert drop(s.andy, s.room, 'fill:0').status_code == 200
+    assert post(s.andy, s.room, 'build:101').status_code == 201
+
+
+def test_a_poster_posts_10_items_an_hour(env):
+    """4.6, 7.4: the 11th item within the hour gets 429, in the same room or another; another poster isn't held back,
+    and an hour later it works."""
+    s = Station(env)
+    serenity, other = s.ship('serenity'), s.make_room('Other room')
+    for n in range(10):
+        assert post(serenity, s.room if n % 2 else other, f'build:{n}').status_code == 201
+    for room in (s.room, other):
+        assert refused(post(serenity, room, 'build:10')) == (429, 'You posted 10 items in the last hour; wait before posting another')
+    assert post(s.ship('rio-grande'), s.room, 'build:rio').status_code == 201
+    s.tick(3601)
+    assert post(serenity, s.room, 'build:10').status_code == 201
+
+
+def test_an_item_holds_8_links(env):
+    """4.3, 4.6: the 9th link gets 429."""
+    s = Station(env)
+    serenity = s.ship('serenity')
+    insert_item(s, s.room, 'build:a')
+    for n in range(8):
+        assert link(serenity, s.room, 'build:a', f'commit:{n:07x}').status_code == 200
+    assert refused(link(serenity, s.room, 'build:a', 'branch:ninth')) == (429, '`build:a` already has 8 links')
+
+
+def test_a_link_the_item_has_writes_and_posts_nothing(env):
+    """5.1, ruling 8: a link the item already has answers 200 with added: false, writing and posting nothing, also on an
+    item with 8 links and from a ship over its post budget. A non-writer re-adding it still gets 403, and a retry on a
+    closed item gets 409. A carried message: link re-added in the new room gets the message: 400."""
+    s = Station(env)
+    serenity = s.ship('serenity')
+    insert_item(s, s.room, 'build:a')
+    assert link(serenity, s.room, 'build:a', 'branch:x').json()['added'] is True
+    before = s.snapshot()
+    again = link(serenity, s.room, 'build:a', 'branch:x')
+    assert again.status_code == 200 and again.json()['added'] is False and s.snapshot() == before
+    for n in range(7):
+        assert link(serenity, s.room, 'build:a', f'commit:{n:07x}').status_code == 200
+    over_budget(s, 'serenity')
+    before = s.snapshot()
+    again = link(serenity, s.room, 'build:a', 'branch:x')
+    assert again.status_code == 200 and again.json()['added'] is False and s.snapshot() == before
+    assert refused(link(s.ship('defiant'), s.room, 'build:a', 'branch:x')) == (403, WRITER)
+    insert_item(s, s.room, 'build:closed', poster='andy')
+    assert link(s.andy, s.room, 'build:closed', 'branch:x').status_code == 200
+    assert done(s.andy, s.room, 'build:closed').status_code == 200
+    assert refused(link(s.andy, s.room, 'build:closed', 'branch:x')) == (409, '`build:closed` is already done')
+    verdict = say(s.andy, s.room, 'verdict', 'Approved.')['id']
+    insert_item(s, s.room, 'build:m', poster='andy')
+    assert link(s.andy, s.room, 'build:m', f'message:{verdict}').status_code == 200
+    new = add_member(s, s.room)
+    assert refused(link(s.andy, new, 'build:m', f'message:{verdict}')) == (400, NOT_HERE)
+
+
+def test_the_carry_leaves_claims_that_are_not_on_open_items(env):
+    """Task 4 review pin: an ad hoc claim and a claim on a closed item's key are not board work, so the carry leaves
+    both in the old room even though their holders are members of the new one. Fails if _carry_board moves every
+    active claim whose holder is a member."""
+    s = Station(env)
+    serenity, rio = s.ship('serenity'), s.ship('rio-grande')
+    insert_item(s, s.room, 'build:done', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
+    assert claim(rio, s.room, 'adhoc:x').status_code == 201
+    assert claim(serenity, s.room, 'build:done').status_code == 201
+    new = add_member(s, s.room)
+    assert sorted(c['key'] for c in claims(s.andy, s.room)) == ['adhoc:x', 'build:done']
+    assert claims(s.andy, new) == []
 
 
 def test_bridging_carries_open_items_and_unbridging_moves_none(tmp_path, capsys):

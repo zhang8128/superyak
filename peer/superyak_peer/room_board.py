@@ -19,6 +19,9 @@ NAME_CHARS = 40
 LINK_CHARS = 210
 CLOSED_LISTED = 50
 CLOSED_SECONDS = 7 * 86400
+OPEN_PER_ROOM = 100
+POSTS_PER_HOUR = 10
+LINKS_PER_ITEM = 8
 REMOTE = 'Board items belong to rooms on this station'
 KIND = 'kind is one of spec, plan, build, review, ops, other'
 NO_OUTCOME = 'Done needs an outcome link, like commit:<sha> or message:<id>'
@@ -29,6 +32,8 @@ BREAKOUT = 'Breakouts hold no board'
 WRITER = "Only this room's owner and the owner's own ships can post on its board"
 DONE_BY = "Only the room's owner, the item's poster, or a holder who can post on this board can mark it done"
 DROP_BY = "Only the item's poster or the room's owner can drop it"
+FULL = f'This board already has {OPEN_PER_ROOM} open items'
+HOURLY = f'You posted {POSTS_PER_HOUR} items in the last hour; wait before posting another'
 BRANCH = re.compile(r'[A-Za-z0-9._/-]{1,100}')
 PATH = re.compile(r'[A-Za-z0-9._/+-]{1,200}')
 COMMIT = re.compile(r'[0-9a-f]{7,40}')
@@ -102,6 +107,20 @@ class RoomBoard:
         if link.startswith('message:') and db.execute('SELECT 1 FROM messages WHERE id=? AND room_id=?', (link[8:], room_id)).fetchone() is None:
             raise Problem(400, NOT_HERE)
 
+    def _key_used(self, db, room_id, key):
+        """4.2: the state of the item with this key in this room or any room up its linked_room_id chain, or None. A key
+        names one piece of work for good, whatever its state, so a link to it always means the same thing. Walks the
+        chain with a seen set, as _earlier_bridged does."""
+        seen, at = set(), room_id
+        while at is not None and at not in seen:
+            seen.add(at)
+            row = db.execute('SELECT state FROM board_items WHERE room_id=? AND key=?', (at, key)).fetchone()
+            if row is not None:
+                return row['state']
+            above = db.execute('SELECT linked_room_id FROM rooms WHERE id=?', (at,)).fetchone()
+            at = above['linked_room_id'] if above else None
+        return None
+
     def _item_json(self, db, row):
         """5.1's item. Names through safe_line(name, 40), the title through safe_line(title, 120), links and the outcome
         through safe_line(link, 210), and `claim`: the active claim on the key as _claim_json gives it, or None."""
@@ -161,16 +180,24 @@ class RoomBoard:
         no_at_name(title)
         with self.transaction() as db:
             room = self._board_room(db, actor, room_id, write=True)
+            used = self._key_used(db, room_id, key)
+            if used is not None:
+                raise Problem(409, f'`{key}` is already on this board or a room it replaced ({used}); new work needs a new key')
             if not self._board_writer(db, room, actor):
                 raise Problem(403, WRITER)
             now = self.clock()
+            if db.execute("SELECT count(*) FROM board_items WHERE room_id=? AND state='open'", (room_id,)).fetchone()[0] >= OPEN_PER_ROOM:
+                raise Problem(429, FULL)
+            if db.execute('SELECT count(*) FROM board_items WHERE posted_by=? AND created>?', (actor, now - 3600)).fetchone()[0] >= POSTS_PER_HOUR:
+                raise Problem(429, HOURLY)
             db.execute('INSERT INTO board_items(id,room_id,key,title,kind,posted_by,created) VALUES(?,?,?,?,?,?,?)',
                        (uid(), room_id, key, title, kind, actor, now))
             self._post_claim(db, actor, room_id, f'Posted `{key}` ({kind}): {safe_line(title, MAX_TITLE)}')
             return self._item_json(db, self._board_item(db, room_id, key))
 
     def link_item(self, actor, room_id, key, link):
-        """POST /api/chats/{room}/board/link: one more link on an item."""
+        """POST /api/chats/{room}/board/link: one more link on an open item, by a board writer, at most 8, never removed.
+        A link the item already has answers added: false and writes and posts nothing, so a retried call is harmless."""
         self._local_board(room_id)
         key, raw = claim_key(key), link
         link = board_link(link)
@@ -184,6 +211,10 @@ class RoomBoard:
                 raise Problem(409, f'`{key}` is already {item["state"]}')
             if not self._board_writer(db, room, actor):
                 raise Problem(403, WRITER)
+            if db.execute('SELECT 1 FROM board_links WHERE item_id=? AND link=?', (item['id'], link)).fetchone():
+                return {**self._item_json(db, item), 'added': False}
+            if db.execute('SELECT count(*) FROM board_links WHERE item_id=?', (item['id'],)).fetchone()[0] >= LINKS_PER_ITEM:
+                raise Problem(429, f'`{key}` already has {LINKS_PER_ITEM} links')
             db.execute('INSERT INTO board_links VALUES(?,?,?,?)', (item['id'], link, actor, self.clock()))
             self._post_claim(db, actor, room_id, f'Linked `{key}`: {safe_line(link, LINK_CHARS)}')
             return {**self._item_json(db, item), 'added': True}
