@@ -45,7 +45,7 @@ sticks.
     waiting mention read-only (the existing 'lease ran out' test).
   - The hook declares at the first qualifying prompt, again at least once per lease less a minute while the session is
     active, and at the first prompt after an idle gap. `seen` in `.prompted` is when the hook last declared (S2).
-  - The hook declares again only when it may have lapsed. It records the time of each declaration in its **own**
+  - It records the time of each declaration in its **own**
     file, `<home>/sessions/<key>.prompted` = `{"seen": <time>, "held": true|false}`. Only the hook writes it.
     - A **qualifying prompt** passes every W1 check, write mode included. When it declares, the hook writes `seen` = now and
       `held` = true; a prompt that only trusts the lease writes nothing (S2).
@@ -88,8 +88,9 @@ sticks.
     - the hook's instruction-state `.json` (hook.py:215) is unchanged.
 
     No two writers ever touch the same file, and each write is whole (`write_private`).
-  - **Pruning:** `_prune` (hook.py:230-242) and `STATE_NAME` (hook.py:81) cover `<key>.json`, `<key>.watch` and
-    `<key>.prompted`, each by its own `seen`. A missing or non-finite `seen` is deleted, as today. Every one of the
+  - **Pruning:** `_prune` and `STATE_NAME` (hook.py) cover `<key>.json`, `<key>.watch` and `<key>.prompted`, each by
+    its own `seen`. A missing or non-finite `seen` is deleted, as today, except on a `.watch`, which then ages by its
+    file's mtime: the hook reads an unreadable choice as "off" (section 2 review, N1). Every one of the
     three files now carries `seen`, so a fresh opt-out is never pruned on sight.
 - **W4. Failure is silent.** The declaration, and the plan-mode ending call (W2), use the hook's existing transport,
   in the same place in the sequence (after instructions, before the inbox) and within `INSTRUCTIONS_DEADLINE`. Any
