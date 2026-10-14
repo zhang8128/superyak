@@ -394,9 +394,9 @@ def test_a_brief_saved_between_the_read_and_the_carry_stops_the_bridge_with_its_
         return real(self, actor, key, member_ids, carry_brief)
 
     monkeypatch.setattr(Store, 'add_participants', save_first)
-    before = store.list_rooms(andy['id'])
+    before = [r['id'] for r in store.list_rooms(andy['id'])]
     with pytest.raises(SystemExit) as stopped:
         cli(['station-bridge', '--data-dir', str(store.data_dir), '--id', gamma['id'][:6], '--as', 'andy'])
     assert stopped.value.code not in (0, None)
     assert 'The room brief changed while bridging; run station-bridge again' in capsys.readouterr().err
-    assert store.list_rooms(andy['id']) == before
+    assert [r['id'] for r in store.list_rooms(andy['id'])] == before  # no new room; the save's notice moved activity

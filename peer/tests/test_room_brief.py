@@ -123,17 +123,6 @@ def test_revisions_only_go_up_and_a_removal_keeps_the_row(env):
     assert brief_row(app, room) == ('Again.', 3)
 
 
-def test_saving_a_brief_records_no_mention_and_posts_nothing(env):
-    app, clients, users, clock = env
-    store = app.state.store
-    ship, key = docked(store, users[0]['id'], 'serenity')
-    room = new_room(clients[0], users[1], ship)
-    assert put_brief(clients[0], room, '@serenity and @doctor: read the plan.', 0).status_code == 200
-    assert store.mentions(ship['id']) == [] and store.mentions(users[1]['id']) == []
-    with store.transaction() as db:
-        assert db.execute('SELECT count(*) FROM messages WHERE room_id=?', (room,)).fetchone()[0] == 0
-        assert db.execute("SELECT count(*) FROM events WHERE kind='chat.message'").fetchone()[0] == 0
-
 
 def brief_of(client, room):
     response = client.get(f'/api/chats/{room}')

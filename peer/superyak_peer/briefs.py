@@ -18,6 +18,11 @@ CREATE INDEX IF NOT EXISTS room_brief_revisions_by_author ON room_brief_revision
 # existed (or by older code after a rollback) is kept before any ship can overwrite it.
 BRIEF_BACKFILL = ('INSERT OR IGNORE INTO room_brief_revisions(room_id,revision,body,author_id,updated,carried_from) '
                   'SELECT room_id,revision,body,author_id,updated,carried_from FROM room_briefs')
+# S6: every save and removal posts exactly one of these, by the system author, under client id
+# brief-<room id>-<revision>. {name} is safe_line(display name, 40); the brief's own text is never quoted.
+BRIEF_NOTICE_OWNER = "Station notice: the room brief is now revision {n}, written by the room's owner: {name}. station_read shows it."
+BRIEF_NOTICE_SHIP = "Station notice: the room brief is now revision {n}, written by a ship, not the room's owner: {name}. station_read shows it."
+BRIEF_NOTICE_REMOVED = "Station notice: the room's owner removed the room brief (revision {n})."
 
 
 def brief_body(body):
@@ -67,6 +72,8 @@ class Briefs:
         self.emit(db, 'chat.brief', room_id, revision,
                   {'author_id': author_id, 'revision': revision, **({'carried_from': carried_from} if carried_from else {})})
         self._prune_brief_history(db, room_id, now)
+        if carried_from is None:  # S6: a save or a removal, by either route, posts one notice; a carry posts none
+            self._post_as_system(db, room_id, f'brief-{room_id}-{revision}', self._brief_notice(db, body, revision, author_id))
 
     def _prune_brief_history(self, db, room_id, now):
         """S5: a room's revision goes once it is all three: outside the room's newest HISTORY_KEPT, older than
@@ -83,6 +90,15 @@ class Briefs:
         with self.transaction() as db:
             db.execute(BRIEF_BACKFILL)
 
+    def _brief_notice(self, db, body, revision, author_id):
+        """S6's text. Only the owner removes, and only the owner (a person) saves through the person route, so a save
+        by any author who isn't a ship is the owner's."""
+        if body == '':
+            return BRIEF_NOTICE_REMOVED.format(n=revision)
+        author = db.execute('SELECT name, kind FROM users WHERE id=?', (author_id,)).fetchone()
+        template = BRIEF_NOTICE_SHIP if author['kind'] == 'ship' else BRIEF_NOTICE_OWNER
+        return template.format(n=revision, name=safe_line(author['name'], 40))
+
     def _brief_to_carry(self, db, room_id, carry):
         """The body and its author to copy into the next room, or None without carry_brief (the default: carrying is
         always a choice) or when the brief was removed. carry_brief is the revision the owner saw, so a brief changed
@@ -97,7 +113,8 @@ class Briefs:
 
     def save_brief(self, actor, key, body, revision):
         """PUT /api/chats/{id}/brief, for the room's owner. The route has already refused ship keys and a missing CSRF
-        token. Saving records no mentions and posts no message."""
+        token. Saving records no mentions;
+        `_write_brief` posts the one notice (ship briefs S6)."""
         body = brief_body(body)
         self._refuse_live_ship_keys(body, what='brief')  # its own transaction, so before ours
         if ':' in key:
