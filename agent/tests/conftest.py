@@ -27,6 +27,8 @@ class FakeStation:
         self.tickets, self.sources, self.ticket_override, self.label_refusals = {}, {}, {}, set()
         self.blocks, self.instruction_state, self.drafts = {}, {}, []
         self.briefs = {}  # room id -> the brief as GET /api/chats/{id} shows it, or None
+        self.brief_revisions = {}  # room id -> brief_revision, as GET /api/chats/{id} shows it
+        self.brief_puts, self.brief_refusals = [], []  # every ship brief PUT's JSON; (status, error) to answer first
         self.cursors, self.replies, self.unread_calls = {}, {}, []  # (ship, name) -> position; message id -> reply_to
         self.requests = []  # every call: method, path, JSON body and its x-superyak-* headers (spec S1)
         self.watches = {}  # (ship, session) -> {minutes, writable, label}
@@ -83,11 +85,17 @@ class FakeStation:
                 self.mention_rows.append({'seq': len(self.mention_rows) + 1, 'message_id': message['id'], 'room_id': room_id, 'user_id': target['id']})
         return message
 
-    def brief(self, room_id, author, body, revision=1, carried_from=None):
-        """A room's brief as the station shows it; a blank body removes it, and GET then says null."""
+    def brief(self, room_id, author, body, revision=1, carried_from=None, old_station=False):
+        """A room's brief as the station shows it. A blank body removes it: GET then says null, with the removed
+        revision as brief_revision. A station with ship briefs names the author's kind and username; old_station leaves
+        them out, as an older station does."""
         self.clock += 1
-        self.briefs[room_id] = ({'body': body, 'revision': revision, 'author_id': author['id'], 'author_name': author['name'],
-                                 'updated': self.clock, 'carried_from': carried_from} if body.strip() else None)
+        self.brief_revisions[room_id] = revision
+        shown = {'body': body, 'revision': revision, 'author_id': author['id'], 'author_name': author['name'],
+                 'updated': self.clock, 'carried_from': carried_from}
+        if not old_station:
+            shown.update(author_kind=author['kind'], author_username=author['username'])
+        self.briefs[room_id] = shown if body.strip() else None
 
     def view(self, room):
         last = max([m['created'] for m in room['messages']], default=0.0)
@@ -95,6 +103,7 @@ class FakeStation:
         return {'id': room['id'], 'title': room['title'], 'owner_id': room.get('owner_id'), 'linked_room_id': room.get('linked_room_id'),
                 'member_ids': room['member_ids'], 'last_activity': last,
                 'members': [self.users[i] for i in room['member_ids'] if i in self.users], 'brief': self.briefs.get(room['id']),
+                'brief_revision': self.brief_revisions.get(room['id'], 0),
                 'claims': self.claims.get(room['id'], []),
                 'messages': [dict(m, source=self.source_of(m), reply_to=self.replies.get(m['id'])) for m in room['messages']],
                 **({'system_author': system} if system else {}),
@@ -102,7 +111,7 @@ class FakeStation:
                    if room['id'] in self.breakouts else {})}  # breakouts S6: only a breakout carries the key
 
     def listed(self, room):
-        return {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief')}
+        return {k: v for k, v in self.view(room).items() if k not in ('messages', 'brief', 'brief_revision')}
 
     def open_breakout(self, me, payload):
         """POST /api/ships/me/rooms, with step 1's checks in its order."""
@@ -154,6 +163,24 @@ class FakeStation:
         if room['owner_id'] == me and self.closed(room_id) is None:
             self.breakouts[room_id]['closed'] = self.clock
         return 200, json.dumps({'room_id': room_id, 'left': True, 'closed': self.closed(room_id)}).encode()
+
+    def ship_brief(self, me, room_id, payload):
+        """PUT /api/ships/me/rooms/{id}/brief (ship briefs S3): just the checks the tool's tests need, in the station's
+        words. A refusal queued in brief_refusals answers first, as the station would."""
+        self.brief_puts.append(dict(payload))
+        if self.brief_refusals:
+            status, error = self.brief_refusals.pop(0)
+            return status, json.dumps({'error': error}).encode()
+        room = self.rooms.get(room_id)
+        if room is None or me not in room['member_ids']:
+            return 404, b'{"error": "Not found"}'
+        body, revision = payload.get('body'), payload.get('revision')
+        if not isinstance(body, str) or not body.strip():
+            return 403, json.dumps({'error': "Only the room's owner can remove its brief"}).encode()
+        if type(revision) is not int or revision != self.brief_revisions.get(room_id, 0):
+            return 409, json.dumps({'error': 'The brief changed since you read it. Read it again with station_read and merge before saving.'}).encode()
+        self.brief(room_id, self.users[me], body, revision + 1)
+        return 200, json.dumps(self.briefs[room_id]).encode()
 
     def unread_page(self, me, name, limit, breakouts):
         """POST /api/ships/me/unread. With breakouts=mentions, breakout messages that don't mention the reader are left
@@ -291,6 +318,8 @@ class FakeStation:
             return self.open_breakout(me, json.loads(data))
         if method == 'POST' and segments[:4] == ['api', 'ships', 'me', 'rooms'] and len(segments) == 6 and segments[5] in ('leave', 'close'):
             return self.end_breakout(me, segments[4], segments[5])
+        if method == 'PUT' and segments[:4] == ['api', 'ships', 'me', 'rooms'] and len(segments) == 6 and segments[5] == 'brief':
+            return self.ship_brief(me, segments[4], json.loads(data))
         if method == 'POST' and path == '/api/ships/me/unread/advance':
             payload = json.loads(data)
             name = payload.get('cursor') or 'default'

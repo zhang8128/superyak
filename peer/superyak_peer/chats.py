@@ -114,8 +114,9 @@ class Chats:
                 raise Problem(403, 'Room owner required')
             carried = self._brief_to_carry(db, key, carry_brief)
             new = self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
-            if carried is not None:  # only the brief: the old room's messages stay with their participants
-                self._write_brief(db, new['id'], carried, 1, actor, carried_from=key)
+            if carried is not None:  # only the brief, under its own author: the old room's messages stay with their participants
+                body, author = carried
+                self._write_brief(db, new['id'], body, 1, author, carried_from=key)
             return new
 
     def remove_participant(self, actor, key, user_id):
