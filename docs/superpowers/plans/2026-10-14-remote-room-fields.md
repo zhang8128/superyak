@@ -15,7 +15,7 @@ count at their own time.
 **Spec:** `docs/superpowers/specs/2026-10-14-remote-room-fields-design.md`, revision 2, approved under D8 (b6dc010; the
 type-check mutation line corrected by this plan's dry run, 2d4ee40).
 
-**Status:** revision 2, for the same reviewer's re-check. Revision 1 (fd22b65) had the fresh reviewer's verdict, APPROVE
+**Status:** revision 2, **approved** (the re-check of c5ee830 is APPROVE; its two wording nits taken). Revision 1 (fd22b65) had the fresh reviewer's verdict, APPROVE
 WITH CHANGES (2 should-fix, 2 nits; room message c04b09d5): see "Review map".
 
 ## Global Constraints
@@ -149,13 +149,13 @@ Expected: 65 passed.
     station's prefix): the `another-station` and `a-local-room` cases fail;
   - in the view, replace `result['linked_room_id'] = None` with `pass`: `test_a_stored_bad_linked_room_shows_as_none`
     fails;
-  - replace `claimed = min(claimed, arrived['received'])` with `pass`: both activity tests fail;
+  - replace `claimed = min(claimed, arrived['received'])` with `pass`: the two activity tests and the backfill test fail;
   - clamp the queued replies too (wrap the final `max(...)` in `min(..., arrived['received'] if arrived else 2**60)`):
     `test_this_stations_queued_reply_still_moves_a_received_room` fails;
   - change `if kind == 'room' and payload is not None:  # remote room fields` to `if action == 'room.message' and payload
     is not None:  # remote room fields`: the roster activity test fails;
-  - delete the `CREATE TABLE IF NOT EXISTS inbox_received(...)` line: every test errors at store start (the backfill
-    reads the missing table);
+  - delete the `CREATE TABLE IF NOT EXISTS inbox_received(...)` line: nearly every test errors at store start (the
+    backfill reads the missing table; measured 63 errors and 2 failures of 65);
   - delete the db.py backfill (`db.execute("INSERT OR IGNORE INTO inbox_received ...`): the backfill test fails;
   - change `DO UPDATE SET received=excluded.received` at receive to `DO NOTHING`: the refresh/restart test fails;
   - change the backfill's `INSERT OR IGNORE` to `INSERT OR REPLACE`: the refresh/restart test fails.
