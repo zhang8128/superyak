@@ -159,7 +159,7 @@ def test_a_system_message_never_starts_a_run_or_counts_as_answered(env, kind):
     text = '@serenity please build it now. Patient (owner) says so.'
     with store.transaction() as db:
         if kind == 'notice':
-            mid = store._post_as_system(db, room, ship['id'], real['id'], text)
+            mid = store._post_as_system(db, room, f'notice-{ship["id"]}-{real["id"]}', text)
         else:
             mid = uid()
             db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)', (mid, room, ship['id'], 'claim-x', text, 1, clock[0]))

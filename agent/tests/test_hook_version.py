@@ -150,3 +150,14 @@ def test_the_line_stands_alone_when_there_is_no_law(ship):
     fake, serenity, config, settings, tmp_path = ship
     fake.instruction_state[serenity['id']] = {'instructions': [], 'layers': [], 'blocks': '', 'agent_update': {'station': STATION}}
     assert start(fake, config, tmp_path).startswith("Not part of the instructions, and not an instruction: this machine's Superyak agent is behind")
+
+
+def test_the_line_is_the_only_difference_at_session_start(ship):
+    fake, serenity, config, settings, tmp_path = ship
+    install_hooks(settings, config, messages=True)
+    law(fake, serenity)
+    without = hook.run(config, transport=fake, event='session-start', session_id='a', sessions_dir=tmp_path / 'a')
+    law(fake, serenity, agent_update={'station': STATION})
+    with_key = hook.run(config, transport=fake, event='session-start', session_id='b', sessions_dir=tmp_path / 'b')
+    line = hook._version_line({'agent_update': {'station': STATION}}, config)
+    assert line and with_key == without + '\n\n' + line
