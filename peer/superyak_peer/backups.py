@@ -3,7 +3,7 @@ S14, S16). Trusted local commands, standard library only. station-backup never c
 dispatch gate: it reads the live file through a read-only connection, and SQLite's backup API copies a consistent
 snapshot of committed data on its own (S2)."""
 import calendar
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 import datetime
 import errno
 import fcntl
@@ -13,8 +13,14 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import sqlite3
+import stat
+import subprocess
+import sys
+import tempfile
 import time
+import urllib.request
 from .auth import token_hash
 from .ships import safe_line
 
@@ -25,6 +31,8 @@ KEEP_DAYS, KEEP_WEEKS = 14, 8
 TEMP_MAX_AGE = 86400
 MIN_FREE = 1 << 30
 RETRY_SECONDS = 60
+SCRATCH_PREFIX = 'superyak-restore-test-'
+START_WAIT, START_TRIES, STOP_WAIT = 60, 3, 10
 SEE_LOG = 'see the log'
 REASONS = {  # spec, Error handling: the words the CLI prints and the Ops line carries
     10: 'not enough disk space',
@@ -732,3 +740,127 @@ def describe_reconcile(report):
     if report['not_compared']:
         lines.append(f'Not compared, because the replaced file lacks them: {", ".join(report["not_compared"])}.')
     return '\n'.join(lines)
+
+
+def counts(db):
+    """S7: users that aren't the system author, rooms and messages. A copy from before the system author counts every
+    user, which is the same number once the server's start has added it."""
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    users = ("SELECT count(*) FROM users WHERE id NOT IN (SELECT value FROM system_meta WHERE key='system_author')"
+             if 'system_meta' in tables else 'SELECT count(*) FROM users')
+    return tuple(db.execute(sql).fetchone()[0] for sql in (users, 'SELECT count(*) FROM rooms', 'SELECT count(*) FROM messages'))
+
+
+def server_command(scratch, port):
+    """S7 step 5: today's code serving the copy on loopback: no proxy headers, no sync, no share link, no Odo."""
+    return [sys.executable, '-I', '-m', 'superyak_peer', 'serve', '--data-dir', str(scratch), '--host', '127.0.0.1', '--port', str(port)]
+
+
+def _free_port():
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
+
+
+def _answers(port):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # loopback never goes through a proxy
+    try:
+        with opener.open(f'http://127.0.0.1:{port}/api/health', timeout=2) as reply:
+            return reply.status == 200
+    except OSError:
+        return False
+
+
+def _stop(process):
+    """S7 step 8: SIGTERM, then SIGKILL after 10 s, then wait()."""
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(STOP_WAIT)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _start(scratch):
+    """S7 steps 5-6: serve the scratch copy on a free loopback port until /api/health answers 200, within 60 s. A server
+    that exits during start-up (its port taken in the meantime) is started again, up to 3 times."""
+    for _ in range(START_TRIES):
+        port = _free_port()
+        process = subprocess.Popen(server_command(scratch, port), cwd=scratch, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + START_WAIT
+            while process.poll() is None and time.monotonic() < deadline:
+                if _answers(port):
+                    return process, port
+                time.sleep(0.2)
+        except BaseException:
+            _stop(process)
+            raise
+        exited = process.poll() is not None
+        _stop(process)
+        if not exited:
+            break  # it ran for 60 s without answering: no second try
+    raise BackupError(22)
+
+
+def _leftovers(parent, now):
+    """S7 step 2: scratch directories over a day old, owned by this user; never symlinks (the shared /tmp fallback)."""
+    try:
+        entries = list(os.scandir(parent))
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.startswith(SCRATCH_PREFIX):
+            continue
+        info = entry.stat(follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and now - info.st_mtime > TEMP_MAX_AGE:
+            shutil.rmtree(entry.path, ignore_errors=True)
+
+
+def _restored_copy(source, target):
+    """S7 step 3: the backup API from a read-only connection into a new 0600 file, then integrity_check. BACKUP=
+    pointed at the live file reads it and nothing more."""
+    os.close(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+    try:
+        with closing(_read_only(source)) as copy_from, closing(sqlite3.connect(target)) as copy:
+            copy_from.backup(copy, pages=-1)
+            return _check(copy, 'integrity_check')
+    except sqlite3.DatabaseError:
+        return False
+
+
+def restore_test(backup_dir, backup=None):
+    """station-restore-test (S7). It takes no data dir, so it can't name the live one (R9). Every path tears down: the
+    server is stopped and reaped and the scratch directory removed."""
+    backup_dir = Path(backup_dir).absolute()
+    source = Path(backup).absolute() if backup else newest_copy(backup_dir)
+    if source is None or not source.is_file():
+        raise BackupError(20)
+    parent = Path(os.environ.get('XDG_RUNTIME_DIR') or tempfile.gettempdir())
+    _leftovers(parent, time.time())
+    scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=parent))
+    server = None
+    try:
+        target = scratch / 'peer.sqlite3'
+        with rotation_lock(backup_dir) if backup_dir.is_dir() else nullcontext():  # pruning can't remove it mid-copy
+            sound = _restored_copy(source, target)
+        if not sound:
+            raise BackupError(21)
+        with closing(_read_only(target)) as db:
+            before = counts(db)
+        try:
+            reconcile(target)  # S16 without --replaced, before the server's start: the scratch holds no dispatch.lock yet
+        except Exception as error:
+            raise BackupError(24) from error
+        server, port = _start(scratch)
+        from .db import Store  # S7 step 7: the trusted local path; the test never mints a session or holds a password
+        with Store(scratch).transaction() as db:
+            after = counts(db)
+        if after != before or after[0] < 1 or after[1] < 1:
+            raise BackupError(23)
+        return {'backup': source, 'port': port, 'counts': after}
+    finally:
+        _stop(server)
+        shutil.rmtree(scratch, ignore_errors=True)

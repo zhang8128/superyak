@@ -494,3 +494,146 @@ def test_reconcile_refuses_a_copy_in_the_backups_rotation(tmp_path, capsys):
         code, out, err = reconcile(capsys, *args)
         assert code == 1 and err.startswith('Refused') and 'rotation' in err and out == '', (args, err)
         assert newest.read_bytes() == before
+
+
+def small_station(tmp_path):
+    """Two people, a room and a message, with one checked copy in the rotation beside the data dir."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    room = store.create_room(andy['id'], 'Ops', [jenn['id']])
+    store.send_message(andy['id'], room['id'], 'm1', 'hello')
+    rotation = tmp_path / 'backups' / 'station'
+    backups.run_backup(store.data_dir, rotation)
+    return store, rotation
+
+
+def runtime_dir(tmp_path, monkeypatch):
+    run = tmp_path / 'run'
+    run.mkdir(mode=0o700)
+    monkeypatch.setenv('XDG_RUNTIME_DIR', str(run))
+    return run
+
+
+def restore_test(*args):
+    """station-restore-test as the timer runs it; returns its exit code."""
+    try:
+        cli(['station-restore-test', *map(str, args)])
+    except SystemExit as stopped:
+        return stopped.code
+    return 0
+
+
+def record_processes(monkeypatch):
+    """Every process the restore test starts, so a test can prove none is left."""
+    started, real_popen = [], subprocess.Popen
+
+    class Recorded(real_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            started.append(self)
+
+    monkeypatch.setattr(backups.subprocess, 'Popen', Recorded)
+    return started
+
+
+def test_restore_test_boots_a_throwaway_station_from_the_newest_copy(tmp_path, monkeypatch, capsys):
+    """R8: a real subprocess server boots from the newest copy; the command exits 0, the scratch directory is gone and the
+    port is closed. Leftover scratch directories over a day old are removed; fresh ones and symlinks are not."""
+    run = runtime_dir(tmp_path, monkeypatch)
+    store, rotation = small_station(tmp_path)
+    old, fresh, elsewhere = run / 'superyak-restore-test-old', run / 'superyak-restore-test-fresh', tmp_path / 'elsewhere'
+    for directory in (old, fresh, elsewhere):
+        directory.mkdir()
+    (run / 'superyak-restore-test-link').symlink_to(elsewhere)
+    two_days_ago = time.time() - 2 * 86400
+    for directory in (old, elsewhere):
+        os.utime(directory, (two_days_ago, two_days_ago))
+    assert restore_test('--backup-dir', rotation) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f'Restore test passed: {backups.newest_copy(rotation).name} booted on 127.0.0.1:')
+    assert out.rstrip().endswith('; users 2, rooms 1, messages 1.')
+    port = int(re.search(r'127\.0\.0\.1:(\d+)', out)[1])
+    assert sorted(p.name for p in run.iterdir()) == ['superyak-restore-test-fresh', 'superyak-restore-test-link']
+    assert elsewhere.is_dir()
+    with socket.socket() as probe:
+        assert probe.connect_ex(('127.0.0.1', port)) != 0
+
+
+@pytest.mark.parametrize('failure, code', [('no copy', 20), ('damaged copy', 21), ('server exits', 22),
+                                           ('counts changed', 23), ('reconcile raises', 24)])
+def test_restore_test_failures_clean_up_and_exit_with_their_code(tmp_path, monkeypatch, failure, code):
+    """R8, R9: each failure exits with its code, removes the scratch directory and leaves no process."""
+    run = runtime_dir(tmp_path, monkeypatch)
+    rotation = tmp_path / 'backups' / 'station' if failure == 'no copy' else small_station(tmp_path)[1]
+    started = record_processes(monkeypatch)
+    if failure == 'damaged copy':
+        overwrite_pages(backups.newest_copy(rotation))
+    elif failure == 'server exits':
+        monkeypatch.setattr(backups, 'server_command', lambda scratch, port: [sys.executable, '-c', 'raise SystemExit(3)'])
+    elif failure == 'counts changed':
+        real_counts, seen = backups.counts, []
+
+        def changed(db):
+            seen.append(real_counts(db))
+            users, rooms, messages = seen[-1]
+            return seen[-1] if len(seen) == 1 else (users, rooms, messages + 1)
+
+        monkeypatch.setattr(backups, 'counts', changed)
+    elif failure == 'reconcile raises':
+        def raises(*args, **kwargs):
+            raise RuntimeError('a schema change broke the reconcile')
+
+        monkeypatch.setattr(backups, 'reconcile', raises)
+    assert restore_test('--backup-dir', rotation) == code
+    assert list(run.iterdir()) == []
+    assert all(process.poll() is not None for process in started)
+    assert len(started) == {'server exits': 3, 'counts changed': 1}.get(failure, 0)
+
+
+def test_restore_test_has_no_data_dir_option(tmp_path, capsys):
+    """R9: it can't name the live data dir."""
+    with pytest.raises(SystemExit) as refused:
+        cli(['station-restore-test', '--backup-dir', str(tmp_path), '--data-dir', str(tmp_path)])
+    assert refused.value.code == 2 and 'unrecognized arguments: --data-dir' in capsys.readouterr().err
+
+
+def test_restore_test_passes_on_a_copy_from_before_a_migration(tmp_path, monkeypatch, capsys):
+    """Review Focus 1: runbook step 2 most likely tests the copy from before a bad migration. A copy without the system
+    author, message_kinds, space_members and access_requests.share_url still passes: the counts read the same before the
+    server migrates it and after."""
+    runtime_dir(tmp_path, monkeypatch)
+    store, rotation = small_station(tmp_path)
+    with closing(sqlite3.connect(backups.newest_copy(rotation))) as db:
+        db.execute("DELETE FROM users WHERE id=(SELECT value FROM system_meta WHERE key='system_author')")
+        db.execute('DROP TABLE system_meta')
+        db.execute('DROP TABLE message_kinds')
+        db.execute('DROP TABLE space_members')
+        db.execute('ALTER TABLE access_requests DROP COLUMN share_url')
+        db.commit()
+    assert restore_test('--backup-dir', rotation) == 0
+    assert capsys.readouterr().out.rstrip().endswith('; users 2, rooms 1, messages 1.')
+
+
+@pytest.mark.parametrize('stop', [signal.SIGTERM, signal.SIGHUP])
+def test_a_stopped_restore_test_leaves_no_server_and_no_scratch(tmp_path, monkeypatch, stop):
+    """Review Focus 3: systemd's TimeoutStartSec= or a person stops the restore test while its station boots. The signal
+    becomes SystemExit, so the server is stopped and reaped and the scratch directory is removed."""
+    run = runtime_dir(tmp_path, monkeypatch)
+    store, rotation = small_station(tmp_path)
+    started = record_processes(monkeypatch)
+    booting = 'import pathlib, sys, time\npathlib.Path(sys.argv[1], "booting").touch()\ntime.sleep(120)\n'
+    monkeypatch.setattr(backups, 'server_command', lambda scratch, port: [sys.executable, '-c', booting, str(scratch)])
+
+    def stop_while_booting():
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if any((p / 'booting').exists() for p in run.glob('superyak-restore-test-*')):
+                os.kill(os.getpid(), stop)  # the handler the command installed turns it into SystemExit
+                return
+            time.sleep(0.05)
+
+    threading.Thread(target=stop_while_booting, daemon=True).start()
+    assert restore_test('--backup-dir', rotation) == 128 + stop
+    assert list(run.iterdir()) == []
+    assert started and all(process.poll() is not None for process in started)

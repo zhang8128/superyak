@@ -215,6 +215,9 @@ def main(argv=None):
     reconcile_cmd.add_argument('--db', type=Path, required=True, help='The staged copy; never a file in a live data directory')
     reconcile_cmd.add_argument('--replaced', type=Path, help='The peer.sqlite3 the restore replaces, opened read-only')
     reconcile_cmd.add_argument('--live-data-dir', type=Path, help='The live data directory, which is refused (make passes STATION_DATA)')
+    restore_cmd = commands.add_parser('station-restore-test', help='Trusted local: boot a throwaway loopback station from the newest copy (or --backup FILE)')
+    restore_cmd.add_argument('--backup-dir', type=Path, required=True, help='The rotation')
+    restore_cmd.add_argument('--backup', type=Path, help='Test this copy instead of the newest one')
     door = commands.add_parser('door', help='Public access-request door for tailscale funnel (two routes, loopback only)')
     door.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     door.add_argument('--host', default='127.0.0.1')
@@ -298,6 +301,24 @@ def main(argv=None):
             except Exception as error:  # noqa: BLE001 - the transaction rolled back, so the staged copy is unchanged
                 parser.exit(1, f'station-restore-reconcile: nothing was changed: {type(error).__name__}: {safe_line(error, 200)}\n')
             print(describe_reconcile(report))
+        elif args.command == 'station-restore-test':
+            import signal
+            from .backups import BackupError, restore_test
+
+            def stopped(signum, frame):
+                raise SystemExit(128 + signum)  # S7 step 8: stopped by hand or by systemd, the finally blocks tear down
+
+            previous = {number: signal.signal(number, stopped) for number in (signal.SIGTERM, signal.SIGHUP)}
+            try:
+                tested = restore_test(args.backup_dir, args.backup)
+            except BackupError as failed:
+                parser.exit(failed.code, f'station-restore-test: {failed.reason}\n')
+            finally:
+                for number, handler in previous.items():
+                    signal.signal(number, handler)
+            users, rooms, messages = tested['counts']
+            print(f'Restore test passed: {tested["backup"].name} booted on 127.0.0.1:{tested["port"]}; '
+                  f'users {users}, rooms {rooms}, messages {messages}.')
         elif args.command == 'card':
             from .identity import PeerIdentity
             from .federation import Federation
