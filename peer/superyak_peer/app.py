@@ -534,6 +534,30 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = member(request)['id'], await body(request)
         return store.release(who, key, data.get('key'))
 
+    @app.get('/api/chats/{key}/board')
+    def chat_board(key: str, request: Request):
+        return store.room_board(member(request)['id'], key)
+
+    @app.post('/api/chats/{key}/board', status_code=201)
+    async def chat_board_post(key: str, request: Request):
+        who, data = member(request)['id'], await body(request)  # the key travels in the body: it can hold `/` (R40)
+        return store.post_item(who, key, data.get('key'), data.get('title'), data.get('kind'))
+
+    @app.post('/api/chats/{key}/board/link')
+    async def chat_board_link(key: str, request: Request):
+        who, data = member(request)['id'], await body(request)
+        return store.link_item(who, key, data.get('key'), data.get('link'))
+
+    @app.post('/api/chats/{key}/board/done')
+    async def chat_board_done(key: str, request: Request):
+        who, data = member(request)['id'], await body(request)
+        return store.done_item(who, key, data.get('key'), data.get('outcome'))
+
+    @app.post('/api/chats/{key}/board/drop')
+    async def chat_board_drop(key: str, request: Request):
+        who, data = member(request)['id'], await body(request)
+        return store.drop_item(who, key, data.get('key'))
+
     @app.put('/api/chats/{key}/brief')
     async def chat_brief(key: str, request: Request):
         who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
