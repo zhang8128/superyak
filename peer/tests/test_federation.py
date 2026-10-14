@@ -882,24 +882,40 @@ def test_a_received_rooms_linked_room_is_its_origins_own_or_none(two_peers, link
     a, b, ca, cb = two_peers
     room = a[0].create_room(a[1], 'Linked', [ca['id']])
     deliver(a, b)
-    value = {'another-station': 'f' * 64 + ':' + room['id'], 'a-local-room': b[0].create_room(b[1], 'Mine', [])['id']}.get(linked, linked) if isinstance(linked, str) else linked
+    claims = {'another-station': 'f' * 64 + ':' + room['id'],  # a well-formed id, under a station that isn't the origin
+              'a-local-room': b[2].identity.peer_id + ':' + b[0].create_room(b[1], 'Mine', [])['id']}  # one of b's own
+    value = claims.get(linked, linked) if isinstance(linked, str) else linked
     with pytest.raises(Problem):
         b[2].receive(_roster_with(a, b, room, linked_room_id=value))
     [shown] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Linked']
     assert shown.get('linked_room_id') is None
 
 
-def test_a_received_room_cannot_claim_activity_after_it_arrived(two_peers):
-    """Remote room fields: the origin chooses its room's last_activity and its messages' created (anything up to
-    2**53), and the room list sorts on them, so a hostile origin could pin its room to the top for good. A received
-    room's activity counts only up to when this station last received an event for it."""
+def _pinned(b, title):
+    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == title]
+    return listed['last_activity'], b[0].get_room(b[1], listed['id'])['last_activity']
+
+
+def test_a_received_roster_cannot_claim_activity_after_it_arrived(two_peers):
+    """Remote room fields: the origin chooses its snapshot's last_activity (anything up to 2**53), and the room list sorts
+    on it, so a hostile origin could pin its room to the top for good with a roster alone. A received room's activity
+    counts only up to when this station last received an event for it (D8 review of ef36222, M1: the roster alone)."""
     a, b, ca, cb = two_peers
     room = a[0].create_room(a[1], 'Pinned', [ca['id']])
     deliver(a, b)
     assert b[2].receive(_roster_with(a, b, room, last_activity=2**53))['ok']
+    arrived = time.time()
+    listed, viewed = _pinned(b, 'Pinned')
+    assert [listed <= arrived, viewed <= arrived] == [True, True]
+
+
+def test_a_received_message_cannot_claim_activity_after_it_arrived(two_peers):
+    """Remote room fields: the same for a message's created (anything up to 2**53), with an honest snapshot."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Future', [ca['id']])
+    deliver(a, b)
     assert b[2].receive(_forged_message(a, b, room, 'm-future', 'f-1', 'from the future', 2**53,
                                         author=a[2].identity.peer_id + ':' + a[1]))['ok']
     arrived = time.time()
-    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Pinned']
-    assert listed['last_activity'] <= arrived
-    assert b[0].get_room(b[1], listed['id'])['last_activity'] <= arrived
+    listed, viewed = _pinned(b, 'Future')
+    assert [listed <= arrived, viewed <= arrived] == [True, True]
