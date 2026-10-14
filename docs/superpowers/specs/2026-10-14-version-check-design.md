@@ -1,6 +1,6 @@
 # Version check: a ship learns from the station when its agent is behind
 
-Status: revision 5, for a fresh reviewer under D8 ("version-check 2"). Revision 4 was **approved under D8**, built, and
+Status: revision 5, its D8 review's changes applied, for the reviewer's re-check of M1 ("version-check 2"). Revision 4 was **approved under D8**, built, and
 merged to main as e633ec3 (deployed on the Pi). This revision takes the Pi review's follow-ups S1-S3 and N1-N3 (room
 messages 2a5884e7 and a9d01e30): see "Review map (revision 5)". Revision 3 was approved under D8 before the build. Revision 1 (a01f4cf) had the fresh reviewer's verdict, APPROVE WITH CHANGES
 (1 must-fix, 1 should-fix, 4 nits; room message 74cf14d2). Revision 2 (4e72f20) made all six, and the same reviewer's
@@ -53,7 +53,8 @@ Two findings change the design. Neither changes the goal.
   - **Its checkout** is the git work tree that holds the running `superyak_peer` package
     (`Path(superyak_peer.__file__).resolve().parents[2]`), and only if that folder has both `.git` (a folder, or a worktree's file) and `agent/`. On
     the Pi that's `/home/andy/superyak`, where every deploy restarts the lighthouse.
-  - **What ships run** is a fixed list in the station's code, `RUNTIME_PATHS` (agent_version.py):
+  - **What ships run** is a fixed list in the station's code, `RUNTIME_PATHS` (agent_version.py), written as a literal
+    tuple of string constants, never built with joins, f-strings or calls, so V8 can read it with `ast.literal_eval`:
     `agent/superyak_agent` (the package, as one tree), `agent/run_agent.py`, `team/superyak_team/__init__.py`,
     `team/superyak_team/teamlib.py` and `team/superyak_team/workers.py`.
     - Measured on 05ac33c: importing every `superyak_agent` module, with `run_agent.py`'s own `sys.path`, loads exactly
@@ -66,6 +67,9 @@ Two findings change the design. Neither changes the goal.
     1. `rev-parse HEAD`, its commit;
     2. `merge-base --is-ancestor HEAD refs/remotes/origin/main`. If HEAD isn't on its checkout's `origin/main`, the
        check is off, so a station restarted on a feature branch can't tell every ship on main that it's behind (S1).
+       It runs without `check=True`, and its exit status is read directly. 0 goes on. 1 (not an ancestor, which git
+       reports with empty output) is off, with the reason `HEAD is not on origin/main`. Anything else, such as 128 for
+       a missing `origin/main`, takes the usual git-failure path, with git's first stderr line as the reason.
     3. `rev-list --max-count=5000 HEAD`, every commit it descends from, newest first;
     4. one `cat-file --batch-check` that reads `<commit>:<path>` for HEAD and each commit, for every path in
        `RUNTIME_PATHS`: at most 25,005 lines, one process.
@@ -136,12 +140,23 @@ Two findings change the design. Neither changes the goal.
 - **V6. The law comes first.** The line counts against `TOTAL_CHARS` (hook.py:74) after the instructions text. If it
   doesn't fit, it's left out, and the law is never shortened to make room for it.
 - **V7. No new state.** Nothing new is written on the machine or on the station. No database change, no migration.
-- **V8. The runtime list can't go stale silently.** An agent test imports every `superyak_agent` module, with
-  `run_agent.py`'s `sys.path` (`['.', '../team']` from `agent/`). It collects every `superyak_team` module that ends up
-  loaded and asserts that each one's file is named in `RUNTIME_PATHS`. The list is read from
-  `peer/superyak_peer/agent_version.py` with `ast`, without importing the peer, as `test_memos.py` reads `ships.py`'s
-  patterns. A new `team/` import in the agent fails the agent suite until the station's list names it. The
-  `superyak_agent` package is covered whole, as one tree.
+- **V8. The runtime list can't go stale silently.** An agent test asks a **fresh Python interpreter** which `team/`
+  files the agent loads, and checks each one is named in `RUNTIME_PATHS`.
+  - **How:** it runs `subprocess.run([sys.executable, '-c', PROBE], cwd=<agent/>)`. `PROBE` puts `run_agent.py`'s
+    `sys.path` first (`['.', '../team']`), imports every `superyak_agent` module, and prints, as JSON, the
+    repository-relative file of every module in `sys.modules` whose name is `superyak_team` or starts with
+    `superyak_team.`.
+  - **Why a fresh interpreter:** under `make check-agent`, pytest imports every test file before any test runs, and
+    several of them load `teamlib` and `workers` at module scope. A before-and-after diff inside the test process
+    would see nothing new and could never fail. A full look at the test process's `sys.modules` would also count
+    `team/` modules some other test imported for itself. The fresh interpreter's answer is the agent's alone, whatever
+    pytest has loaded.
+  - **The check:** every printed file is named in `RUNTIME_PATHS`. The list is read from
+    `peer/superyak_peer/agent_version.py` with `ast.literal_eval`, without importing the peer, as `test_memos.py`
+    reads `ships.py`'s patterns. The `superyak_agent` package is covered whole, as one tree.
+  - **The check is itself tested:** the comparison is a small helper, and a second test gives it a list without
+    `team/superyak_team/teamlib.py` and asserts that the helper names that file as missing. A new `team/` import in
+    the agent therefore fails the agent suite until the station's list names it.
 
 ## Requirements
 
@@ -213,8 +228,9 @@ Two findings change the design. Neither changes the goal.
 2. Agent: the hook's line (V4 to V6).
 3. Deploy: restart the lighthouse (the peer change), then the other units in the usual order. No backup is needed:
    nothing is written. Live check at the route: the instructions call with a presence for an agent commit from before
-   the last `agent/` change gets `agent_update`, and one for HEAD doesn't (plan, Deploy step 3). An end-to-end check, a
-   session that shows the line, is only possible at the next deploy that changes `agent/`, once ships run this hook.
+   the last change to a file in `RUNTIME_PATHS` gets `agent_update`, and one for HEAD doesn't (plan, Deploy step 3).
+   An end-to-end check, a session that shows the line, is only possible at the next deploy that changes a file in
+   `RUNTIME_PATHS`, once ships run this hook.
 
 ## Known limits
 
@@ -230,7 +246,8 @@ Two findings change the design. Neither changes the goal.
   the helper can't match gives the general wording, which is still correct, only less exact.
 - **Ships on agent code older than this feature never show the line.** The line is written by the ship's own hook, and
   every ship runs a hook from before this branch until it updates. So the deploy announcement asks every ship to update
-  once (plan, Deploy). After that, the line appears whenever a later change to `agent/` leaves a ship behind.
+  once (plan, Deploy). After that, the line appears whenever a later change to a file in `RUNTIME_PATHS` leaves a ship
+  behind.
 - **The exact command assumes the Makefile's defaults** for `STATION`, `DOOR` and the aDNA tools. A ship docked to
   another station or with `--no-adna` should re-dock the way it docked; following the exact command would point it at
   the default station or set up the aDNA tools.
@@ -295,3 +312,12 @@ Two findings change the design. Neither changes the goal.
 | N1 | Pi review | V1: `load()` never raises, finding the checkout and printing included |
 | N2 | Pi review | Testing: requirement 1 pinned by equality |
 | N3 | Pi review | Known limits: `AGENT_PYTHON` |
+
+## Review map (revision 5's D8 review: APPROVE WITH CHANGES)
+
+| # | Finding | Change |
+|---|---|---|
+| M1 | a diff-based parity test can never fail under `make check-agent` (collection already loaded the team modules) | V8 runs the imports in a fresh interpreter (`subprocess`), stronger than the review's full-`sys.modules` fix, which would also count team modules other tests import; the comparison helper is itself tested with a list missing `teamlib.py` |
+| S-A | `merge-base --is-ancestor`'s exit 1 has empty output, so the shared helper would log a generic reason | call 2 reads its exit status: 0 on, 1 off with `HEAD is not on origin/main`, else the git-failure path |
+| S-B | two sentences still said "`agent/`" | Build order step 3 and the Known limit say "a file in `RUNTIME_PATHS`" |
+| N-A | `ast.literal_eval` needs a literal | V1 says `RUNTIME_PATHS` is a literal tuple of string constants |
