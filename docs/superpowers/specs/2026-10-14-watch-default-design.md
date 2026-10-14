@@ -112,8 +112,10 @@ sticks.
    - after `station_watch minutes=0` in that session.
 4. `station_watch minutes=N` (N > 0) in a session makes later declarations use N and that call's `writable`.
    `minutes=0` writes `"off"`, and the hook never declares again in that session until a later `minutes>0`.
-5. A declaration, failed or successful, prints nothing and breaks no prompt. The hook's output is byte-for-byte what
-   it would be without this feature, on both paths.
+5. A declaration, failed or successful, prints nothing of its own and breaks no prompt. The hook's output is
+   byte-for-byte what it would be without this feature, except for W5: once the session holds a writable watch, the
+   station's own on-watch line appears with the messages the inbox returns, as for a session that declared by hand.
+   (Clarified while dry-running the plan; W5 always said so.)
 6. `.watch` and `.prompted` files whose `seen` is older than 14 days are pruned with the session files. A fresh
    `{"choice": "off", "seen": now}` survives a prune.
 7. The station is unchanged. No route, table or migration changes.
