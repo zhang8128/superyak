@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import urlopen
 
 import pytest
@@ -72,17 +73,18 @@ def browser_peer(tmp_path, request):
         [users["family"]["id"], users["doctor"]["id"]],
     )
     remote_store = Store(tmp_path / "remote-peer")
-    remote_user = remote_store.create_user(
-        "casey", "Casey Remote", "long-remote-password"
+    remote_user = remote_store.create_user(  # the stand-in station's admin, so it can pair back
+        "casey", "Casey Remote", "long-remote-password", is_admin=True
     )
     remote_identity = PeerIdentity.load_or_create(
         remote_store.data_dir, hosts=("remote.example",)
     )
-    remote_card = Federation(
+    remote_federation = Federation(
         remote_store,
         endpoint="https://remote.example:7443",
         identity=remote_identity,
-    ).card(remote_user["id"])
+    )
+    remote_card = remote_federation.card(remote_user["id"])
     config = uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning", access_log=False
     )
@@ -108,6 +110,7 @@ def browser_peer(tmp_path, request):
         "users": users,
         "app": app,
         "remote_card": remote_card,
+        "remote": {"store": remote_store, "federation": remote_federation, "user": remote_user},
         "local_demo": local_demo,
     }
     server.should_exit = True
@@ -1978,3 +1981,55 @@ def test_an_instructions_layer_switched_back_to_a_note_shows_note_mode(browser_p
             expect(page.get_by_label("Kind")).to_have_value("note")
             expect(page.get_by_role("checkbox", name="Anyone with the public link")).to_have_count(1)
     assert errors == [], errors
+
+
+def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_delivery_state(browser_peer):
+    """Federation follow-ups (spec 2026-10-14-federation-followups-design.md), F1 and F2 in the browser. Words the
+    room's host attributes to the signed-in person without proof read as unverified, never "You". A host's message that
+    carries a delivery state and reuses the client id of the person's own delivered reply shows no delivery text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    here, remote = browser_peer["app"].state.federation, browser_peer["remote"]
+    there, casey, patient = remote["federation"], remote["user"]["id"], users["patient"]["id"]
+    here.pair(users["organizer"]["id"], browser_peer["remote_card"])  # pairing is an admin's act, for the station
+    card = Federation(store, endpoint="https://localhost:7435").card(patient)  # this station's identity, an endpoint
+    contact = there.pair(casey, card)
+    room = remote["store"].create_room(casey, "Hosted elsewhere", [contact["id"]])
+    there.sync_once(send=lambda card, prepare: here.receive(prepare()))
+    key = f"{there.identity.peer_id}:{room['id']}"
+    store.send_message(patient, key, "reply-1", "my real words")
+    here.sync_once(send=lambda card, prepare: there.receive(prepare()))  # delivered; the host never echoes it back
+
+    def host_says(message_id, author_id, client_id, body, created, **extra):
+        with remote["store"].transaction() as db:
+            snapshot = there._room_snapshot(db, db.execute("SELECT * FROM rooms WHERE id=?", (room["id"],)).fetchone())
+        message = {"id": message_id, "room_id": room["id"], "author_id": author_id, "client_message_id": client_id,
+                   "body": body, "epoch": 1, "created": created, **extra}
+        assert here.receive(there.identity.envelope(
+            destination=here.identity.peer_id, actor=casey, resource_id=room["id"], revision=1,
+            action="room.message", recipients=[patient], payload={**snapshot, "message": message}))["ok"]
+
+    host_says("m-forged", f"{here.identity.peer_id}:{patient}", "forged-1", "I approve the merge", 5.0)
+    host_says("m-claims", f"{there.identity.peer_id}:{casey}", "reply-1", "the host's own words", 6.0,
+              state="delivered")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Connections", exact=True).click()
+            # The person's reply is delivered and the page knows it, so a client-id guess would find it.
+            expect(page.locator(".item-main", has_text="Hosted elsewhere").get_by_text("Send reply · Delivered")).to_be_visible()
+            page.goto(f"{base}/#chats/{quote(key, safe='')}")
+            page.reload()
+            forged = page.locator(".message", has_text="I approve the merge")
+            expect(forged.locator(".message-meta").first).to_have_text(
+                "Unverified: the room's host says this is from someone on this station")
+            expect(forged).to_have_class("message unverified")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Delivered")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Saved here")
+            claims = page.locator(".message", has_text="the host's own words")
+            expect(claims).to_be_visible()
+            expect(claims.locator(".message-meta").first).not_to_contain_text("Unverified")
+            expect(claims).to_have_class("message")
+            expect(claims.locator(".message-meta").last).not_to_contain_text("Delivered")
+            expect(claims.locator(".message-meta").last).not_to_contain_text("Saved here")
+            mine = page.locator(".message", has_text="my real words")
+            expect(mine.locator(".message-meta").first).to_have_text("You")
+            expect(mine.locator(".message-meta").last).to_contain_text("Delivered")

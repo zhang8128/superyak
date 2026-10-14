@@ -472,6 +472,7 @@ function participantSummary(room) {
 
 function messageDelivery(message) {
   if (message.state) return message.state;
+  if (state.room?.origin) return null;  // a received room: only the station's own state, never a guess from client ids
   const matches = state.sync.deliveries.filter((delivery) => delivery.message_id === message.id || (delivery.client_message_id && delivery.client_message_id === message.client_message_id));
   if (!matches.length) return "saved";
   if (matches.some((item) => item.status === "failed")) return "failed";
@@ -510,11 +511,15 @@ function sourceLabel(message) {
   return source.kind === "post" ? "no run ticket" : "";
 }
 
+// The server's mark for words a room's host attributes to someone on this station that this station never sent.
+const UNVERIFIED_AUTHOR = "Unverified: the room's host says this is from someone on this station";
+
 function messageMarkup(message) {
   const mine = isSelf(message.author_id);
   const system = state.room?.system_author;  // the station's own author, known by id, never by display name (R31)
-  const author = mine ? "You" : system && message.author_id === system.id ? "Station" : participantName(message.author_id);
-  return `<div class="message ${mine ? "mine" : ""}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)} · ${escapeHtml(deliveryText(messageDelivery(message)))}</div></div>`;
+  const author = mine ? "You" : system && message.author_id === system.id ? "Station" : message.unverified ? UNVERIFIED_AUTHOR : participantName(message.author_id);
+  const delivery = messageDelivery(message);
+  return `<div class="message${mine ? " mine" : ""}${message.unverified ? " unverified" : ""}"><div class="message-meta">${escapeHtml(author)}${sourceLabel(message) ? ` · <span class="message-source">${escapeHtml(sourceLabel(message))}</span>` : ""}</div><p>${escapeHtml(message.body)}</p><div class="message-meta">${formatDate(message.created)}${delivery ? ` · ${escapeHtml(deliveryText(delivery))}` : ""}</div></div>`;
 }
 
 function briefMeta(brief) {

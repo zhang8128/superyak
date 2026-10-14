@@ -178,6 +178,7 @@ dialog::backdrop { background: rgba(14,31,28,.48); backdrop-filter: blur(2px); }
 .messages { min-height: 280px; display: flex; flex-direction: column; gap: 12px; }
 .message { max-width: min(78%, 620px); padding: 12px 15px; align-self: flex-start; border-radius: 14px 14px 14px 4px; background: var(--paper-deep); }
 .message.mine { align-self: flex-end; border-radius: 14px 14px 4px 14px; background: var(--teal-soft); }
+.message.unverified { border: 1px dashed var(--muted); padding: 11px 14px; }
 .message p { margin: 3px 0; white-space: pre-wrap; }
 .message-meta { color: var(--muted); font-size: 11px; }
 .composer { position: sticky; bottom: 12px; margin-top: 22px; padding: 14px; display: grid; grid-template-columns: 1fr auto; gap: 10px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,248,.96); box-shadow: 0 8px 24px rgba(36,45,42,.08); }
