@@ -490,6 +490,10 @@ def test_answered_searches_replies_by_an_index(tmp_path):
     store = Store(tmp_path / 'peer')
     with store.transaction() as db:
         leading = [db.execute(f"PRAGMA index_info('{r[1]}')").fetchone()[2] for r in db.execute("PRAGMA index_list('message_replies')")]
-        plan = [tuple(r)[3] for r in db.execute('EXPLAIN QUERY PLAN SELECT 1 FROM message_replies WHERE reply_to=?', ('m',))]
+        ran = []  # the statement _answered really runs, so the plan checked is its own (D8 review of b1454d2)
+        db.set_trace_callback(ran.append)
+        store._answered(db, 'a-ship', 'a-mention')
+        db.set_trace_callback(None)
+        plan = [tuple(r)[3] for r in db.execute('EXPLAIN QUERY PLAN ' + next(q for q in ran if 'message_replies' in q))]
     assert leading.count('reply_to') == 1
-    assert any(step.startswith('SEARCH message_replies USING INDEX') for step in plan)
+    assert any(step.startswith('SEARCH message_replies USING INDEX message_replies_by_reply_to') for step in plan)

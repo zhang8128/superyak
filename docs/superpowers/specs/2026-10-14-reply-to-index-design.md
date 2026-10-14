@@ -1,6 +1,8 @@
 # Reply-to index: `_answered` searches replies by index instead of scanning them all
 
-Status: revision 1, for a fresh reviewer under D8. Base: `main` (26eb709). Branch `reply-to-index`. Claimed by Serenity as
+Status: revision 2, for the same reviewer's re-check. Revision 1 (b1454d2) had the fresh reviewer's verdict, REQUEST
+CHANGES (1 must-fix, 1 should-fix, 2 nits): the test stayed red with the fix, because a search by `reply_to` alone plans
+as `USING COVERING INDEX`. Revision 2 checks the plan of the statement `_answered` really runs. Base: `main` (26eb709). Branch `reply-to-index`. Claimed by Serenity as
 `fix:reply-to-index`. The follow-up named in the stale-deferrals spec's Known limits and in its section 2 review, stake 4
 (room message 114bc5d0): "Fine to merge with the index as Serenity's separate follow-up. It should land before the reply
 count reaches tens of thousands."
@@ -23,9 +25,11 @@ Measured:
 - **On the Mac** (sqlite3, 100k replies, 100 `_answered`-shaped queries): 596 ms without an index, 0.4 ms with one. The
   plan then reads `SEARCH message_replies USING INDEX message_replies_by_reply_to (reply_to=?)`.
 
-One test, red today (peer/tests/test_deferrals.py, uncommitted on this branch):
-`test_answered_searches_replies_by_an_index` asserts that an index on `message_replies` leads with `reply_to`, and that
-SQLite's plan for a search by `reply_to` uses it. It fails with `0 == 1` (the only index is the primary key's).
+One test, red today and green with the change (peer/tests/test_deferrals.py, committed on this branch):
+`test_answered_searches_replies_by_an_index` asserts that exactly one index on `message_replies` leads with `reply_to`,
+and that the plan of the statement `_answered` really runs (captured with SQLite's trace callback, so the test never
+copies the query) searches `message_replies` through `message_replies_by_reply_to`. Today it fails with `0 == 1` (the
+only index is the primary key's).
 
 ## The change
 
@@ -43,8 +47,8 @@ Because the change is this one line, the spec carries the implementation and the
 
 ## Requirements
 
-1. After two starts, `message_replies` has exactly one index leading with `reply_to`, and a search by `reply_to` uses an
-   index (the test, red today).
+1. After two starts, `message_replies` has exactly one index leading with `reply_to`, and `_answered`'s own statement
+   plans as `SEARCH message_replies USING INDEX message_replies_by_reply_to` (the test: red today, green with the line).
 2. Every existing test stays green: no behaviour changes.
 
 ## Rollback and mixed versions
