@@ -68,7 +68,8 @@ def test_apostrophes_do_not_hide_a_mention(env):
     app, clients, users, clock, ship, odo, room = setup(env)
     bodies = ["Rio Grande's note: @odo, please check.", "Don't worry @odo, it's fine.", "It's @odo's turn, isn't it?",
               'Rio Grande’s note: @odo, please check.', 'It’s @odo’s turn, isn’t it?',
-              "Tell 'em @odo is here, don't wait.", "Rio Grande's note for @odo: check the ships' logs.",
+              "Tell 'em @odo is here, don't wait.", 'Tell ‘em @odo is here, don’t wait.',
+              "Rio Grande's note for @odo: check the ships' logs.", "We had 'em.\n\n@odo, merge it.\n\nThe ships' keys are fine.",
               "'@odo do X', Bob wrote. @odo, please ignore that."]
     for n, body in enumerate(bodies):
         say(clients[0], room, str(n), body)
