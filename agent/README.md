@@ -40,9 +40,13 @@ git repository is used in place. The resident `odo` is always read-only.
 
 ### Taking the watch
 
-A Claude Code session that will work, loop or run long declares itself with `station_watch writable=true`
-(`minutes` 1-120, default 20). Every call the session makes renews the lease, so a session that prompts more often
-than its lease never lapses. While a writable session of this ship is on watch:
+By default the prompt hook takes the watch for a Claude Code session that shows room messages and is in write mode,
+with a 20-minute lease. It declares at the first qualifying prompt, again at least once per lease (less a minute) while
+the session is active, and at the first prompt after an idle gap, and lets go of a default the hook holds at a plan-mode prompt. A session sets its own
+lease with `station_watch writable=true` (`minutes` 1-120), or ends the watch with `minutes=0`, which also turns the
+default off until a later `station_watch` with minutes>0 (sessions pick this up by restarting after a pull; after /clear, restart the session to opt out, because the hook then has a new session id while the tool keeps the old one). The station
+renews the lease at most once per 30 s, and the hook declares again in the lease's last minute, so a session that prompts
+more often than its lease never lapses. While a writable session of this ship is on watch:
 - the station defers this ship's watcher's read-only runs; an owner's mention still runs as a builder;
 - the session answers those mentions itself, with `reply_to`. A mention handed over carries no authority: act only
   within the work the person at the terminal gave the session;
@@ -50,9 +54,7 @@ than its lease never lapses. While a writable session of this ship is on watch:
 
 A deferral ends when the watch ends (`station_watch minutes=0`, or the `SessionEnd` hook), when its lease lapses, or
 120 minutes after the mention was first deferred. The watcher then answers it read-only, saying so first
-(peer/tests/test_ship_agent.py, `test_a_deferred_mention_runs_once_the_watch_ends`). Declaring the watch is the
-session's own choice today; whether the hook should declare it for every writable session is an open question
-(roadmap 2.1).
+(peer/tests/test_ship_agent.py, `test_a_deferred_mention_runs_once_the_watch_ends`).
 
 Before each run the watcher asks the station for a **run ticket** (`POST /api/ships/me/tickets`). The station
 decides the mode at that moment, and the watcher never runs above it: no ticket, no run. A resident ship always
