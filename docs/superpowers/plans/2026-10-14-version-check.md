@@ -866,7 +866,8 @@ is needed (spec V7). A backup is still the house habit before restarting the lig
   - **Revision 1** ran each task's own tests (16, 21, then 66 with test_install, after the project-ship test fix this
     text carries). It missed the peer suite's two packaging failures, which the review found (and which surfaced
     in the full run just after submission), and it never ran the deploy script's imports.
-  - **Revision 2:** with the inventory lines, the peer packaging tests pass (3). The agent suite gives 622 + 1 = 623
+  - **Revision 2:** with the inventory lines, the full peer suite passes, 523 on the old base 7cdbb1f (502 + 21).
+    This branch now has main merged in (8240473, main at 05ac33c, 505 peer tests), so a build here expects 526. The agent suite gives 622 + 1 = 623
     with the exact-budget test. The live check's imports load with `['agent', 'team']` and fail with `['agent']`
     alone.
 
