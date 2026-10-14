@@ -1,11 +1,13 @@
 """Ship-written room briefs (docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md): the owner's own ships set
 and update the brief of his current rooms they're in; every revision is kept, announced and marked with its author."""
 import ast
+import concurrent.futures
 import json
 from pathlib import Path
 import sqlite3
 import pytest
 import superyak_peer
+from superyak_peer.common import Problem
 from superyak_peer.briefs import BRIEF_NOTICE_OWNER, BRIEF_NOTICE_SHIP
 from superyak_peer.db import Store
 from test_deferrals import ask, on_watch
@@ -262,3 +264,284 @@ def test_only_two_notices_are_written_by_the_system_author(env):
         system = store.system_author_id(db)
         written = sorted(r[0] for r in db.execute('SELECT client_message_id FROM messages WHERE author_id=?', (system,)))
     assert written == sorted([f'brief-{room}-1', f'notice-{ship["id"]}-{asked["id"]}'])
+
+
+READ_AGAIN = 'The brief changed since you read it. Read it again with station_read and merge before saving.'
+TOO_FAST = 'This ship is changing room briefs too fast; try again within the hour'
+NOT_THE_OWNERS_SHIP = "Only the room's owner and the owner's own ships can change its brief"
+
+
+def ship_put(client, room, body, revision):
+    return client.put(f'/api/ships/me/rooms/{room}/brief', json={'body': body, 'revision': revision})
+
+
+def test_a_ship_of_the_rooms_owner_sets_and_updates_its_brief(env):
+    """R1, R7: the owner's own ship, a member of his current room, saves revision 1 and then 2 under its own name; each
+    save posts its notice."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship)
+    first = ship_put(rio, room, 'Purpose: the city of AI. Rio Grande keeps this brief.', 0)
+    assert first.status_code == 200, first.text
+    assert first.json() == {'body': 'Purpose: the city of AI. Rio Grande keeps this brief.', 'revision': 1, 'author_id': ship['id'],
+                            'author_name': 'Rio Grande', 'author_kind': 'ship', 'author_username': 'rio-grande',
+                            'updated': 1000000.0, 'carried_from': None}
+    clock[0] += 60
+    second = ship_put(rio, room, 'Purpose: the city of AI. D1-D9 are decided.', 1)
+    assert second.status_code == 200, second.text
+    assert (second.json()['revision'], second.json()['author_id'], second.json()['updated']) == (2, ship['id'], 1000060.0)
+    assert brief_of(clients[1], room) == second.json()
+    assert [m['body'] for m in notices(clients[1], room)] == [
+        f"Station notice: the room brief is now revision {n}, written by a ship, not the room's owner: Rio Grande. station_read shows it."
+        for n in (1, 2)]
+
+
+def another_owners_ship(app, clients, users):
+    worf, key = docked(app.state.store, users[1]['id'], 'worf')
+    return ship_client(app, key), new_room(clients[0], users[1], worf), 403, NOT_THE_OWNERS_SHIP
+
+
+def ownerless(app, clients, name):
+    store = app.state.store
+    resident = store.create_station_ship(name, name.title())
+    return ship_client(app, store.issue_ship_key(resident['id'])), new_room(clients[0], resident), 403, NOT_THE_OWNERS_SHIP
+
+
+def odo(app, clients, users):
+    return ownerless(app, clients, 'odo')
+
+
+def wormhole(app, clients, users):
+    return ownerless(app, clients, 'wormhole')
+
+
+def the_owners_ship_not_in_the_room(app, clients, users):
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    return ship_client(app, key), new_room(clients[0], users[1]), 404, 'Not found'
+
+
+def a_persons_session(app, clients, users):
+    return clients[0], new_room(clients[0], users[1]), 403, 'Only a ship key can use this route'
+
+
+def a_revoked_key(app, clients, users):
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    room = new_room(clients[0], users[1], ship)
+    app.state.store.revoke_presented_key(key)
+    return ship_client(app, key), room, 401, 'Invalid ship key'
+
+
+def a_remote_room(app, clients, users):
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    return ship_client(app, key), 'f' * 64 + ':' + new_room(clients[0], ship), 404, 'Not found'
+
+
+def a_breakout(app, clients, users):
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'], 'rio-grande')
+    sibling, _ = docked(store, users[0]['id'], 'tardis')
+    new_room(clients[0], ship, sibling)
+    opened = ship_client(app, key).post('/api/ships/me/rooms', json={'title': 'Pair', 'ships': ['tardis']})
+    assert opened.status_code == 201, opened.text
+    return ship_client(app, key), opened.json()['id'], 403, 'Breakouts have no brief'
+
+
+def a_replaced_room(app, clients, users):
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    room = new_room(clients[0], users[1], ship)
+    assert add_members(clients[0], room, users[2]).status_code == 201
+    return ship_client(app, key), room, 409, 'This room was replaced by a newer linked room; change the brief there'
+
+
+@pytest.mark.parametrize('case', [another_owners_ship, odo, wormhole, the_owners_ship_not_in_the_room, a_persons_session,
+                                  a_revoked_key, a_remote_room, a_breakout, a_replaced_room], ids=lambda case: case.__name__)
+def test_who_may_write_through_the_ship_route(env, case):
+    """R1, S1, Error handling: only a ship of the room's owner, with a live key, a member of his current local room
+    that isn't a breakout. Each other writer is refused with its own status and words, and nothing is written: no
+    brief, no history, no notice."""
+    app, clients, users, clock = env
+    client, room, status, error = case(app, clients, users)
+    refused = ship_put(client, room, 'A brief from the wrong writer.', 0)
+    assert (refused.status_code, refused.json()['error']) == (status, error)
+    with app.state.store.transaction() as db:
+        assert db.execute('SELECT (SELECT count(*) FROM room_briefs) + (SELECT count(*) FROM room_brief_revisions)').fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM messages').fetchone()[0] == 0
+
+
+def test_the_person_route_still_refuses_ship_keys(env):
+    """R2, a regression guard: the owner's own ship, which the ship route lets write here, still gets the person route's
+    403; a member who isn't the owner keeps his; the owner saves and removes as before."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship)
+    for body in ('Mine.', ''):
+        refused = rio.put(f'/api/chats/{room}/brief', json={'body': body, 'revision': 0})
+        assert (refused.status_code, refused.json()['error']) == (403, 'Ship keys cannot use this route'), body
+    member = put_brief(clients[1], room, 'Mine.', 0)
+    assert (member.status_code, member.json()['error']) == (403, 'Only the room owner can change its brief')
+    assert brief_row(app, room) is None
+    assert put_brief(clients[0], room, 'The owner wrote this.', 0).status_code == 200
+    removed = put_brief(clients[0], room, '', 1)
+    assert removed.status_code == 200 and removed.json() is None and brief_row(app, room) == ('', 2)
+
+
+def test_a_ship_cannot_remove_a_brief(env):
+    """R3: an empty or whitespace-only body from a ship is 403, with or without a brief, and nothing is written."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship)
+    for revision in (0, 1):
+        if revision:
+            put_brief(clients[0], room, 'The owner wrote this.', 0)
+        for body in ('', '  \n'):
+            refused = ship_put(rio, room, body, revision)
+            assert (refused.status_code, refused.json()['error']) == (403, "Only the room's owner can remove its brief"), repr(body)
+    assert brief_row(app, room) == ('The owner wrote this.', 1) and revisions(app, room) == [1]
+    assert len(notices(clients[0], room)) == 1
+
+
+def test_ship_briefs_keep_the_text_rules(env):
+    """R4: the person route's text rules and live-key refusal, with the same status and words on both routes; exactly
+    4,000 characters is saved."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship)
+    for bad, status in (('x' * 4001, 400), ('a NUL\x00inside', 400), (None, 400), (5, 400), (f'The key is "{key}"', 422)):
+        by_ship, by_owner = ship_put(rio, room, bad, 0), put_brief(clients[0], room, bad, 0)
+        assert by_ship.status_code == by_owner.status_code == status, bad
+        assert by_ship.json()['error'] == by_owner.json()['error'], bad
+    assert ship_put(rio, room, 'x' * 4001, 0).json()['error'] == 'A brief is at most 4,000 characters'
+    assert ship_put(rio, room, f'Bearer {key}', 0).json()['error'] == (
+        'This brief contains a live ship key, so it was not saved. Treat that key as exposed: its ship should revoke it and dock again.')
+    lone = rio.put(f'/api/ships/me/rooms/{room}/brief', content=json.dumps({'body': 'bad\ud800', 'revision': 0}),
+                   headers={'content-type': 'application/json'})
+    assert (lone.status_code, lone.json()['error']) == (400, 'Text must be valid UTF-8')
+    assert brief_row(app, room) is None
+    exact = ship_put(rio, room, 'x' * 4000, 0)
+    assert exact.status_code == 200 and exact.json()['body'] == 'x' * 4000
+
+
+def test_a_stale_revision_from_a_ship_is_409_and_says_read_again(env):
+    """R4: a stale or non-int revision is 409 in words that name no revision, so the ship must read again. After the
+    owner's removal, the removed revision is the one to name."""
+    app, clients, users, clock = env
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship)
+    put_brief(clients[0], room, 'The owner wrote this.', 0)
+    for stale in (0, 2, True, '1', 1.0, None):
+        refused = ship_put(rio, room, 'An edit from a stale read.', stale)
+        assert (refused.status_code, refused.json()['error']) == (409, READ_AGAIN), stale
+        assert not any(c.isdigit() for c in refused.json()['error'])
+    missing = rio.put(f'/api/ships/me/rooms/{room}/brief', json={'body': 'No revision.'})
+    assert (missing.status_code, missing.json()['error']) == (409, READ_AGAIN)
+    put_brief(clients[0], room, '', 1)  # the owner removed it: revision 2, and no brief
+    after = ship_put(rio, room, 'A new brief.', 1)
+    assert (after.status_code, after.json()['error']) == (409, READ_AGAIN)
+    saved = ship_put(rio, room, 'A new brief.', 2)
+    assert saved.status_code == 200 and saved.json()['revision'] == 3
+    assert brief_row(app, room) == ('A new brief.', 3)
+
+
+def test_a_ship_writes_names_without_the_at_sign(env):
+    """R5: an addressed @name from a ship is 400, scanned exactly as mentions are, so names talked about pass. No brief
+    save records a mention, and the owner's brief may still hold @names."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'], 'rio-grande')
+    serenity, _ = docked(store, users[0]['id'], 'serenity')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship, serenity)
+    for body in ('Serenity, read this: @serenity', '@doctor and Serenity', '@nobody-here reads it'):
+        refused = ship_put(rio, room, body, 0)
+        assert (refused.status_code, refused.json()['error']) == (400, 'A ship writes names in a brief without the at sign'), body
+    assert brief_row(app, room) is None
+    talked_about = ['Use `@serenity` to wake it.', 'It answers to "@serenity".', '> @serenity said this\nand we agreed.',
+                    'Mail andy@example.com.']
+    for n, body in enumerate(talked_about):
+        saved = ship_put(rio, room, body, n)
+        assert saved.status_code == 200, (body, saved.text)
+    assert put_brief(clients[0], room, '@serenity and @doctor: read the plan.', len(talked_about)).status_code == 200
+    with store.transaction() as db:
+        assert db.execute('SELECT count(*) FROM mentions').fetchone()[0] == 0
+
+
+def test_ship_brief_saves_are_limited_to_ten_an_hour(env):
+    """R6: ten of a ship's own saves in a rolling hour, across rooms. The rate is per ship: the owner's saves and a
+    sibling ship's never count, and nor do the owner's carries of its text, by adding members or by bridging. The
+    eleventh gets 429 and writes nothing, and an hour on frees one."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'], 'rio-grande')
+    store.create_station_ship('wormhole', 'Wormhole')
+    rio = ship_client(app, key)
+    first, second = new_room(clients[0], users[1], ship), new_room(clients[0], users[1], ship, title='Ops')
+    started = clock[0]
+    assert ship_put(rio, first, 'Save 1.', 0).status_code == 200  # at the start of the hour
+    clock[0] += 60
+    for n in range(2, 10):  # saves 2-9, across both rooms
+        room = first if n % 2 else second
+        current = brief_of(clients[0], room)
+        assert ship_put(rio, room, f'Save {n}.', current['revision'] if current else 0).status_code == 200, n
+    carried = add_members(clients[0], first, users[2], carry_brief=brief_of(clients[0], first)['revision']).json()['id']
+    again = add_members(clients[0], carried, users[3], carry_brief=1).json()['id']
+    bridged, changed = store.station_bridge('patient', second[:6], True)
+    assert changed
+    for room in (carried, again, bridged['id']):  # three carried revisions, each the ship's
+        assert brief_of(clients[0], room)['author_id'] == ship['id']
+    sibling, sibling_key = docked(store, users[0]['id'], 'serenity')
+    third = new_room(clients[0], users[1], ship, sibling, title='Third')
+    assert put_brief(clients[0], third, "The owner's own save.", 0).status_code == 200            # a person's save never counts
+    assert ship_put(ship_client(app, sibling_key), third, "Serenity's save.", 1).status_code == 200  # nor a sibling ship's
+    assert ship_put(rio, again, 'Save 10.', 1).status_code == 200
+    refused = ship_put(rio, bridged['id'], 'Save 11.', 1)
+    assert (refused.status_code, refused.json()['error']) == (429, TOO_FAST)
+    assert brief_of(clients[0], bridged['id'])['revision'] == 1 and notices(clients[0], bridged['id']) == []
+    clock[0] = started + 3600  # save 1 leaves the hour
+    assert ship_put(rio, bridged['id'], 'Save 11, an hour on.', 1).status_code == 200
+    late = ship_put(rio, again, 'Save 12.', 2)  # saves 2-11 fill the hour again
+    assert (late.status_code, late.json()['error']) == (429, TOO_FAST)
+
+
+def test_briefs_and_notices_stay_local(two_peers):
+    """R16, a regression guard: a received room takes no brief by either route, and a brief and its notice in a room
+    with a paired member never reach that peer."""
+    a, b, ca, cb = two_peers
+    ship, key = docked(b[0], b[1], 'serenity')
+    room = a[0].create_room(a[1], 'Across peers', [ca['id']])
+    a[0].save_brief(a[1], room['id'], 'Private to this station.', 0)
+    a[0].send_message(a[1], room['id'], 'plain', 'an ordinary message')
+    assert deliver(a, b)['delivered'] >= 1
+    remote = b[0].list_rooms(b[1])[0]['id']
+    assert ':' in remote
+    for write in (lambda: b[0].save_brief(b[1], remote, 'Mine.', 0), lambda: b[0].save_ship_brief(ship['id'], remote, 'Mine.', 0)):
+        with pytest.raises(Problem) as refused:
+            write()
+        assert refused.value.status == 404
+    shown = b[0].get_room(b[1], remote)
+    assert shown['brief'] is None and [m['body'] for m in shown['messages']] == ['an ordinary message']
+
+
+def test_two_ships_saving_the_same_revision_at_once_save_once(env):
+    """Review Focus 1: two of the owner's ships update the brief after the same decision, both from revision 1. One
+    saves revision 2; the other gets the 409 that says read again and writes nothing; one notice per revision."""
+    app, clients, users, clock = env
+    store = app.state.store
+    rio, _ = docked(store, users[0]['id'], 'rio-grande')
+    serenity, _ = docked(store, users[0]['id'], 'serenity')
+    room = new_room(clients[0], users[1], rio, serenity)
+    put_brief(clients[0], room, 'The plan.', 0)
+
+    def save(ship):
+        try:
+            return store.save_ship_brief(ship['id'], room, f'The plan, as {ship["name"]} read it.', 1)['revision']
+        except Problem as refused:
+            return refused.status, refused.message
+    with concurrent.futures.ThreadPoolExecutor(2) as pool:
+        got = list(pool.map(save, [rio, serenity]))
+    assert got.count(2) == 1 and got.count((409, READ_AGAIN)) == 1, got
+    assert revisions(app, room) == [1, 2] and len(notices(clients[0], room)) == 2

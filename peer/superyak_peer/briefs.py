@@ -2,13 +2,24 @@
 room, such as its purpose, its decisions so far and who does what. Members and their agents read it as quoted data,
 never as instructions. A room keeps one row with only its current revision; every save, a removal included, writes the
 next revision on that row, so a stale tab can never overwrite a later brief. Every revision is also kept in the room's
-history (ship briefs S5, docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md), which only the owner reads."""
+history (ship briefs S5, docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md), which only the owner reads. The owner's own ships write too, through their own route,
+in his current rooms they're in (ship briefs S1–S3)."""
+from .breakouts import CURRENT_PERSON_ROOM
 from .common import Problem, text
-from .ships import safe_line
+from .ships import addressed_names, safe_line
 
 MAX_BRIEF = 4000
 HISTORY_KEPT = 50     # ship briefs S5: pruning never takes a room's newest 50 revisions,
 HISTORY_DAY = 86400   # nor anything from the last 24 hours, nor the owner's newest revision
+SHIP_BRIEFS_PER_HOUR = 10   # S3: a ship's own saves (never carries) in a rolling hour, across rooms
+BRIEF_RATE_SECONDS = 3600
+NO_AT_SIGN = 'A ship writes names in a brief without the at sign'
+NO_BREAKOUT_BRIEF = 'Breakouts have no brief'
+NOT_THE_OWNERS_SHIP = "Only the room's owner and the owner's own ships can change its brief"
+REPLACED_ROOM = 'This room was replaced by a newer linked room; change the brief there'
+NO_SHIP_REMOVAL = "Only the room's owner can remove its brief"
+READ_AGAIN = 'The brief changed since you read it. Read it again with station_read and merge before saving.'
+TOO_FAST = 'This ship is changing room briefs too fast; try again within the hour'
 BRIEF_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS room_briefs(room_id TEXT PRIMARY KEY REFERENCES rooms(id), body TEXT NOT NULL, revision INTEGER NOT NULL, author_id TEXT NOT NULL REFERENCES users(id), updated REAL NOT NULL, carried_from TEXT);
 CREATE TABLE IF NOT EXISTS room_brief_revisions(room_id TEXT NOT NULL REFERENCES rooms(id), revision INTEGER NOT NULL, body TEXT NOT NULL, author_id TEXT NOT NULL REFERENCES users(id), updated REAL NOT NULL, carried_from TEXT, PRIMARY KEY(room_id, revision));
@@ -127,5 +138,39 @@ class Briefs:
             current = self._room_brief(db, key)[1]
             if type(revision) is not int or revision != current:
                 raise Problem(409, 'The brief changed since you opened it; look at the newer one before saving')
+            self._write_brief(db, key, body, current + 1, actor)
+            return self._room_brief(db, key)[0]
+
+    def save_ship_brief(self, actor, key, body, revision):
+        """PUT /api/ships/me/rooms/{id}/brief (ship briefs S1-S3), under the ship's own key, which the route has
+        checked. A ship of the room's owner, in his current local room that isn't a breakout, edits but never removes.
+        The checks run in S3's order, and every refusal writes nothing. The 409 names no revision: the ship must read
+        again before it overwrites anything."""
+        body = brief_body(body)                                     # 1. the person route's text rules (400)
+        if addressed_names(body):                                   # 2. law section 7: names without the at sign
+            raise Problem(400, NO_AT_SIGN)
+        self._refuse_live_ship_keys(body, what='brief')             # 3. its own transaction, so before ours (422)
+        if ':' in key:                                              # 4. a received room's brief is never written here
+            raise Problem(404, 'Not found')
+        with self.transaction() as db:
+            room = self._room(db, actor, key)                       # 404 for a non-member
+            if 'breakout' in room:                                  # S7
+                raise Problem(403, NO_BREAKOUT_BRIEF)
+            ship = db.execute('SELECT kind, owner_id FROM users WHERE id=?', (actor,)).fetchone()
+            if ship['kind'] != 'ship' or ship['owner_id'] is None or ship['owner_id'] != room['owner_id']:  # S1(b)
+                raise Problem(403, NOT_THE_OWNERS_SHIP)
+            # S1(d): the breakout rule's own subquery. S1(b) made the room person-owned, so missing here means replaced.
+            if db.execute(f'SELECT 1 FROM rooms WHERE id=? AND id IN ({CURRENT_PERSON_ROOM})', (key,)).fetchone() is None:
+                raise Problem(409, REPLACED_ROOM)
+            if body == '':                                          # S2: only a person removes
+                raise Problem(403, NO_SHIP_REMOVAL)
+            current = self._room_brief(db, key)[1]
+            if type(revision) is not int or revision != current:
+                raise Problem(409, READ_AGAIN)
+            # S3: the history keeps the last day whole, so this count sees the full hour. Carries never count.
+            recent = db.execute('SELECT count(*) FROM room_brief_revisions WHERE author_id=? AND carried_from IS NULL '
+                                'AND updated>?', (actor, self.clock() - BRIEF_RATE_SECONDS)).fetchone()[0]
+            if recent >= SHIP_BRIEFS_PER_HOUR:
+                raise Problem(429, TOO_FAST)
             self._write_brief(db, key, body, current + 1, actor)
             return self._room_brief(db, key)[0]

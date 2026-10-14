@@ -38,6 +38,13 @@ def safe_line(value, limit=80):
     return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
 
 
+def addressed_names(body):
+    """The usernames a text addresses with @, lower-cased, in order, once each: MENTION after NOT_ADDRESSED, so names
+    in code, in double quotes or on a quoted line, and email addresses, are talked about, not addressed. Mentions and
+    the ship brief route (ship briefs S3) share it, so the two scans can't drift."""
+    return list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(NOT_ADDRESSED.sub(' ', body))))
+
+
 class Ships:
     def _new_ship(self, db, username, name, owner_id):
         # Ships never sign in: the random password is discarded and login rejects kind='ship'.
@@ -311,8 +318,7 @@ class Ships:
     def _record_mentions(self, db, room_id, message_id, body):
         if self._breakout_closed(db, room_id) is not None:
             return  # breakouts S4: a closed breakout records no mention
-        addressed = NOT_ADDRESSED.sub(' ', body)
-        names = list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(addressed)))[:20]
+        names = addressed_names(body)[:20]
         if not names:
             return
         marks = ','.join('?' * len(names))
