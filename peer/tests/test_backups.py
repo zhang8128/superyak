@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -312,3 +313,122 @@ def test_a_pruning_failure_exits_1_and_says_the_new_copy_is_in_place(tmp_path, m
     assert 'new copy is in place' in message and stuck in message
     [new] = [name for name in names(rotation) if name not in (stuck, gone, newest_of_day)]
     assert ok(rotation / new) and gone not in names(rotation) and stuck in names(rotation)
+
+
+def test_copy_to_is_off_by_default_and_refuses_the_same_disk(tmp_path, monkeypatch):
+    """R6: an empty --copy-to does nothing. The rotation's own disk, a missing directory or a symlink gives 13 and keeps
+    the local copy. Another disk gets a 0600 copy with the same sha256, and S3 applies there too."""
+    store, rotation = station(tmp_path)
+    offsite = tmp_path / 'offsite'
+    offsite.mkdir()
+    assert backup(store, rotation, '--copy-to=') == 0                  # what the unit passes while backup.env is absent
+    assert len(backups.rotation(rotation)) == 1 and list(offsite.iterdir()) == []
+    assert backup(store, rotation, f'--copy-to={offsite}') == 13       # tmp_path is the rotation's disk too
+    assert backups.rotation(rotation) and list(offsite.iterdir()) == []
+    monkeypatch.setattr(backups, '_device', lambda path: 2 if Path(path) == rotation else 1)   # every other path: another disk
+    link = tmp_path / 'link'
+    link.symlink_to(offsite)
+    for refused in (tmp_path / 'missing', link):
+        assert backup(store, rotation, f'--copy-to={refused}') == 13
+        assert backups.rotation(rotation) and list(offsite.iterdir()) == []
+    day = time.strftime('%Y%m%d', time.gmtime(time.time() - 3 * 86400))
+    for hour in ('01', '02'):
+        (offsite / f'peer-{day}T{hour}0000Z.sqlite3').write_bytes(b'an earlier copy')
+    assert backup(store, rotation, f'--copy-to={offsite}') == 0
+    local = backups.newest_copy(rotation)
+    copied = offsite / local.name
+    assert stat.S_IMODE(copied.stat().st_mode) == 0o600
+    assert hashlib.sha256(copied.read_bytes()).digest() == hashlib.sha256(local.read_bytes()).digest()
+    assert sorted(p.name for p in offsite.iterdir()) == sorted([f'peer-{day}T020000Z.sqlite3', local.name])
+
+
+def test_a_copy_that_does_not_match_is_removed_and_exits_13(tmp_path, monkeypatch, capsys):
+    """R6: the sha256 comparison. A mismatch leaves no file, not even a temporary one, in the destination."""
+    store, rotation = station(tmp_path)
+    offsite = tmp_path / 'offsite'
+    offsite.mkdir()
+    monkeypatch.setattr(backups, '_device', lambda path: 2 if Path(path) == rotation else 1)
+    real = backups._sha256
+    monkeypatch.setattr(backups, '_sha256', lambda path: real(path) if Path(path).parent == rotation else 'different')
+    assert backup(store, rotation, f'--copy-to={offsite}') == 13
+    assert 'does not match' in capsys.readouterr().err
+    assert list(offsite.iterdir()) == [] and len(backups.rotation(rotation)) == 1
+
+
+def stuck_rotation(tmp_path, monkeypatch):
+    """A rotation holding one old copy that pruning cannot remove, and the old copy's name."""
+    rotation = tmp_path / 'backups' / 'station'
+    rotation.mkdir(parents=True, mode=0o700)
+    day = time.strftime('%Y%m%d', time.gmtime(time.time() - 3 * 86400))
+    stuck, newest_of_day = (f'peer-{day}T0{hour}0000Z.sqlite3' for hour in (1, 2))
+    for name in (stuck, newest_of_day):
+        (rotation / name).write_bytes(b'an earlier copy')
+    real_unlink = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        if self.name == stuck and self.parent == rotation:
+            raise PermissionError(13, 'Permission denied', str(self))
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', unlink)
+    return rotation, stuck
+
+
+def test_the_copy_off_the_pi_still_runs_after_a_pruning_failure(tmp_path, monkeypatch, capsys):
+    """A pruning problem never skips the copy off the Pi. Pruning alone failing is exit 1 and the copy is made; both
+    failing is exit 13 (the more specific code), and the message carries both outcomes."""
+    store, _ = station(tmp_path)
+    rotation, stuck = stuck_rotation(tmp_path, monkeypatch)
+    offsite = tmp_path / 'offsite'
+    offsite.mkdir()
+    monkeypatch.setattr(backups, '_device', lambda path: 2 if Path(path) == rotation else 1)
+    assert backup(store, rotation, f'--copy-to={offsite}') == 1
+    message = capsys.readouterr().err
+    assert 'new copy is in place' in message and stuck in message
+    [new] = [name for name in names(rotation) if not name.startswith('peer-' + stuck[5:13])]
+    assert (offsite / new).read_bytes() == (rotation / new).read_bytes()
+    shutil.rmtree(offsite)                                                   # now both fail: no destination
+    assert backup(store, rotation, f'--copy-to={offsite}') == 13
+    message = capsys.readouterr().err
+    assert 'copy off the Pi failed' in message and 'new copy is in place' in message and stuck in message
+
+
+def test_prune_of_a_missing_directory_removes_nothing_like_rotation(tmp_path):
+    """A folder that isn't there has nothing to prune, as rotation() already treats it. For --copy-to the missing
+    folder is refused earlier (13), so prune never has to guess."""
+    assert backups.rotation(tmp_path / 'gone') == []
+    assert backups.prune(tmp_path / 'gone', time.time()) == []
+
+
+def test_a_full_disk_when_the_temporary_file_is_made_exits_10(tmp_path, monkeypatch, capsys):
+    """S4: ENOSPC at the os.open that creates the temporary file is exit 10, not a traceback."""
+    store, rotation = station(tmp_path)
+    real_open = os.open
+
+    def full(path, *args, **kwargs):
+        if Path(path).name.endswith('.tmp'):
+            raise OSError(28, 'No space left on device')
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', full)
+    assert backup(store, rotation) == 10
+    assert 'not enough disk space' in capsys.readouterr().err
+    assert names(rotation) == []
+
+
+def test_output_failures_say_why_instead_of_a_traceback(tmp_path, monkeypatch, capsys):
+    """R4: an existing path, and a filesystem without hard links, are exit 1 with a plain message."""
+    store, rotation = station(tmp_path)
+    taken = tmp_path / 'taken.sqlite3'
+    taken.write_bytes(b'mine')
+    assert backup(store, rotation, '--output', taken) == 1
+    assert 'never replaces a file' in capsys.readouterr().err and taken.read_bytes() == b'mine'
+
+    def no_links(source, target, *args, **kwargs):
+        raise OSError(1, 'Operation not permitted')
+
+    monkeypatch.setattr(os, 'link', no_links)
+    fresh = tmp_path / 'fresh.sqlite3'
+    assert backup(store, rotation, '--output', fresh) == 1
+    assert 'hard link' in capsys.readouterr().err
+    assert not fresh.exists() and not list(tmp_path.glob('.peer-*'))

@@ -7,6 +7,7 @@ from contextlib import closing, contextmanager
 import datetime
 import errno
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -98,6 +99,8 @@ def prune(directory, now):
     (.tmp and .tmp-journal) over a day old. Nothing else in the directory is touched. A file that can't be removed
     doesn't stop the rest: the failures come back as (name, error) pairs, empty when all went well."""
     failures = []
+    if not os.path.isdir(directory):  # nothing there, nothing to prune; rotation() reads a missing folder as empty too
+        return failures
     copies = rotation(directory)
     kept = keep([path.name for path in copies])
     for path in copies:
@@ -182,7 +185,12 @@ def _checked_copy(database, tmp, clock, sleep):
     """S2 steps 1-3 and S4: a new 0600 file, SQLite's backup API in one step from a read-only connection, then
     integrity_check. A busy database or a hot journal is retried for 60 s (S8: after a power cut the read-only open
     succeeds and the first read fails with SQLITE_READONLY_ROLLBACK). Every failure removes the file."""
-    os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+    try:
+        os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+    except OSError as error:  # not removed: a file that already exists there isn't ours
+        if error.errno == errno.ENOSPC:
+            raise BackupError(10) from error
+        raise
     try:
         deadline = clock() + RETRY_SECONDS
         while True:
@@ -228,18 +236,67 @@ def _write_output(database, output, clock, sleep):
     """S2 --output FILE: one checked copy at a new path, outside the rotation. It publishes with os.link, so an existing
     FILE is never replaced, even one created after the check (R4)."""
     if os.path.lexists(output):
-        raise ValueError(f'{output} exists; --output never replaces a file')
+        raise BackupError(1, f'{output} exists; --output never replaces a file')
     tmp = output.parent / f'.peer-{copy_stamp(clock())}-{os.getpid()}.tmp'
     _checked_copy(database, tmp, clock, sleep)
     try:
         os.link(tmp, output)
         _fsync(output.parent)
+    except FileExistsError as error:
+        raise BackupError(1, f'{output} exists; --output never replaces a file') from error
+    except OSError as error:
+        raise BackupError(1, f'could not publish {output} with a hard link (does its filesystem support them?): {error}') from error
     finally:
         _remove_temporary(tmp)
     return output
 
 
-def run_backup(data_dir, backup_dir, *, output=None, clock=time.time, sleep=time.sleep):
+def _device(path):
+    return os.stat(path).st_dev
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def copy_off(final, target, backup_dir, now):
+    """S5, 1.2's switch: the checked copy to a mounted directory on another disk, atomically at 0600, its sha256
+    compared, and S3 applied there. A share that isn't mounted is the Pi's own disk, so it is refused rather than
+    silently filled. Any failure is exit 13; the local copy stays, and the rotation is already pruned."""
+    target = Path(target).absolute()
+    tmp = target / f'.peer-{COPY_NAME.fullmatch(final.name)[1]}-{os.getpid()}.tmp'
+    made = False
+    try:
+        if target.is_symlink() or not target.is_dir():
+            raise ValueError(f'{target} is not a directory')
+        if _device(target) == _device(backup_dir):
+            raise ValueError(f"{target} is on the rotation's own disk; is the share mounted?")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        made = True
+        with os.fdopen(fd, 'wb') as out, open(final, 'rb') as source:
+            shutil.copyfileobj(source, out, 1 << 20)
+            out.flush()
+            os.fsync(out.fileno())
+        if _sha256(tmp) != _sha256(final):
+            raise ValueError('the copy off the Pi does not match the checked copy')
+        os.replace(tmp, target / final.name)
+        made = False
+        _fsync(target)
+        failures = prune(target, now)
+        if failures:
+            raise ValueError('pruning there could not remove: '
+                             + '; '.join(f'{name} ({error.strerror or error})' for name, error in failures))
+    except (OSError, ValueError) as error:
+        if made:
+            _remove_temporary(tmp)
+        raise BackupError(13, f'the copy off the Pi failed: {error}') from error
+
+
+def run_backup(data_dir, backup_dir, *, output=None, copy_to='', clock=time.time, sleep=time.sleep):
     """station-backup (S2). Returns the new copy's path; raises BackupError with its exit code."""
     database = _live_database(data_dir)
     old_umask = os.umask(0o077)
@@ -265,9 +322,15 @@ def run_backup(data_dir, backup_dir, *, output=None, clock=time.time, sleep=time
                 _remove_temporary(tmp)
                 raise
             failures = prune(backup_dir, now)
-            if failures:  # the new copy is published; spec, Error handling: a pruning error is exit 1
-                raise BackupError(1, f'the new copy is in place ({final.name}), but pruning could not remove: '
-                                     + '; '.join(f'{name} ({error.strerror or error})' for name, error in failures))
+            pruning = (f'the new copy is in place ({final.name}), but pruning could not remove: '
+                       + '; '.join(f'{name} ({error.strerror or error})' for name, error in failures)) if failures else ''
+            if copy_to:  # a pruning problem never skips the copy off the Pi
+                try:
+                    copy_off(final, copy_to, backup_dir, now)
+                except BackupError as failed:
+                    raise BackupError(failed.code, f'{failed.reason}; {pruning}' if pruning else failed.reason) from failed
+            if pruning:  # the new copy is published; spec, Error handling: a pruning error is exit 1
+                raise BackupError(1, pruning)
         return final
     finally:
         os.umask(old_umask)
