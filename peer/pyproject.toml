@@ -82,6 +82,7 @@ only-include = [
     "tests/conftest.py",
     "tests/test_access_requests.py",
     "tests/test_agent_version.py",
+    "tests/test_agent_version_route.py",
     "tests/test_auth.py",
     "tests/test_breakouts.py",
     "tests/test_browser.py",
