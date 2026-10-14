@@ -51,7 +51,7 @@ whole-branch review. Rio Grande approves the merge and the Pi suites must pass (
 **Files:**
 - Modify: `agent/superyak_agent/watch.py` (the `defer` branch, about lines 143-152)
 - Modify: `agent/tests/test_watch_deferral.py`: the two reproduction tests, already in the worktree uncommitted, at
-  the end of the file. The F3 agent test's retry already carries `first_deferred=1.0`. Plus two new tests, and N1's
+  the end of the file. The F3 agent test's retry already carries `first_deferred=1.0`. Plus four new tests (two for the upgrade stamp, S1), and N1's
   expected entry.
 
 - [ ] **Step 1: The tests**
@@ -141,6 +141,51 @@ def test_a_hand_listed_entry_deferred_again_and_again_is_charged_once(station, s
     assert not any('Pausing my replies' in b for b in bodies(fake, room))
 ```
 
+S1 (section 2 review), the upgrade stamp. Add `DEFERRED_PER_CYCLE` to the file's `from superyak_agent.watch import`
+line, and append:
+
+```python
+def test_an_upgraded_watcher_charges_none_of_its_carried_over_entries(station, ship_config, tmp_path):
+    """Ship-status fixes S1: every released watcher charged a ship's mention at entry, before listing it, so the
+    entries an older watcher carried over were charged already. The upgraded watcher stamps them at its first start
+    and charges none of them again, nor drops any over the budget."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = [fake.say(room, defiant, f'@serenity ship question {n}') for n in range(5)]
+    defer(fake, *asked)
+    runner = FakeRunner()
+    w0 = watcher(fake, ship_config, tmp_path, runner)
+    w0.me = w0.client.me()
+    _listed(w0, fake, *asked)
+    w0.state.pop('listed_charged', None)  # a file written by main's watcher: no flag, no first_deferred
+    w0.save()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    for _ in range(-(-len(asked) // DEFERRED_PER_CYCLE) + 1):
+        assert w.cycle() == 0
+    assert not w.state['ship_exchanges'].get(f'{room}:{defiant["id"]}')
+    assert not any('Pausing my replies' in b for b in bodies(fake, room))
+    assert runner.calls == [] and len(w.state['deferred']) == 5
+
+
+def test_an_entry_hand_added_after_the_first_start_is_still_charged_once(station, ship_config, tmp_path):
+    """S1: the stamp is for the first start only. An entry the owner lists by hand later is charged once."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = fake.say(room, defiant, '@serenity a ship question')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    for _ in range(3):
+        assert w.cycle() == 0
+    assert len(w.state['ship_exchanges'][f'{room}:{defiant["id"]}']) == 1
+    assert len(w.state['deferred']) == 1 and runner.calls == []
+    assert not any('Pausing my replies' in b for b in bodies(fake, room))
+```
+
 In `test_a_deferred_breakout_mention_keeps_its_mark_and_its_budget`, change the expected entry
 `{'message_id': asked['id'], 'room_id': room, 'author': rio, 'seq': 1, 'breakout': True}` to
 `{'message_id': asked['id'], 'room_id': room, 'author': rio, 'seq': 1, 'breakout': True,
@@ -197,7 +242,7 @@ The `self.save()` and `return True, 0` after the block stay as they are.
 - [ ] **Step 4: Run them, then the agent suite**
 
 Run: `cd agent && uv run --locked --extra dev python -m pytest -q tests/test_watch_deferral.py`. Expected: all pass.
-Run: `make check-agent`. Expected: every test passes (main's count plus 6). Name any failure.
+Run: `make check-agent`. Expected: every test passes (main's count plus 8). Name any failure.
 
 - [ ] **Step 5: Mutation checks**, one at a time, each restored before the next:
   - remove the `| ({'first_deferred': ...} if 'first_deferred' in ticket else {})` term:
@@ -205,7 +250,9 @@ Run: `make check-agent`. Expected: every test passes (main's count plus 6). Name
   - remove `author['kind'] == 'ship' and ` from the new branch's budget check:
     `test_a_persons_hand_listed_entry_is_never_charged` fails;
   - remove `entry['first_deferred'] = ticket.get('first_deferred')`:
-    `test_a_hand_listed_entry_deferred_again_and_again_is_charged_once` fails.
+    `test_a_hand_listed_entry_deferred_again_and_again_is_charged_once` fails;
+  - remove the stamp loop's `entry.setdefault('first_deferred', None)` line in `Watcher.__init__`:
+    `test_an_upgraded_watcher_charges_none_of_its_carried_over_entries` fails.
 
   Confirm with `git diff --stat` that watch.py matches your change.
 
@@ -334,9 +381,7 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
 ## Deploy (Rio Grande, after the merge under law section 2)
 
 1. Back up the database (as for version check), merge with `--no-ff`, push, and run the guard.
-2. Before restarting the Pi's ship watcher, look at its state file's `deferred` list for ship-authored entries: they
-   will be charged once more at their next `defer`, so say so in the announcement (step 5).
-   Restart the five units. The lighthouse's start runs the migration (one column). Check the journal for errors and
+2. Restart the five units. The lighthouse's start runs the migration (one column). Check the journal for errors and
    `PRAGMA table_info(tickets)` for `first_deferred`. Confirm the version check:
    `journalctl --user --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'` should show
    `superyak: version check on: <HEAD 12>, N behind`.
@@ -348,7 +393,9 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
 4. **Live check:** the peer test path, not the live watcher. With `decisions`, a deferral, the watch ended and a
    repeated ask on the Pi's station give the same ticket carrying `first_deferred` both times. Use a scratch station
    (`Store` in a temp folder), not the live one, so nothing is posted.
-5. Announce it. Ships update by pulling main: watch.py is a runtime file, so the version check prompts them.
+5. Announce it. Ships update by pulling main: watch.py is a runtime file, so the version check prompts them. The new
+   watcher stamps its existing `deferred` list at its first start (`listed_charged`), so ships can pull and restart
+   whenever the version check prompts them.
 
 ## Self-review notes
 
@@ -362,12 +409,12 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
   reproduction tests.
   - **RED:** Task 1 fails exactly the four tests Step 2 names, and the lost-run test passes; Task 2 fails its two, and
     the guard passes.
-  - **GREEN:** test_watch_deferral 27 (the person-authored test of revision 2 and the final review's test included) and test_deferrals 24 pass.
+  - **GREEN:** test_watch_deferral 29 (the person-authored test of revision 2 and the final review's test included) and test_deferrals 24 pass.
   - **Mutations,** all caught:
     - the F2 record term removed fails the normal-path test and N1;
     - the F3 echo removed fails the re-send test (and test_only_the_stations_own_deferral_row_marks_a_reask);
     - the echo leaking into `_ticket_json`'s path fails the `decisions=False` assertion.
-  - **Full suites:** `make check-agent` 631, `make check-peer` 532.
+  - **Full suites:** `make check-agent` 633, `make check-peer` 532.
   - **Revision 2:** the person-authored test passes with the code and fails with the guard removed; `make check-agent`
     632; after the final review's hand-listed record test, 633.
 - **Accepted, outside this fix** (plan review nit 4): a ship's budget and deferred list live in each watcher's own state

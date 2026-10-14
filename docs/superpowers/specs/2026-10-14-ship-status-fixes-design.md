@@ -28,7 +28,10 @@ never a spare.
 - **Bug:**
   - An entry on the watcher's deferred list skips the charge at entry (watch.py:114, `not listed`).
   - Normally that's right: the entry was charged at entry when it was new, then deferred.
-  - A hand-listed entry was never charged: a hand-edited state file, or a list carried over from an older watcher.
+  - A hand-listed entry was never charged: the only source of such an entry is the owner's hand edit of the state file.
+    A list carried over from an older watcher was charged at entry (every released watcher charged a ship's mention
+    before listing it, since d179f8d), so the new watcher stamps those entries at its first start (`listed_charged`)
+    and doesn't charge them again.
   - If the station's first answer to it is `defer`, the watcher keeps waiting. The station's eventual run carries
     `first_deferred`, which spares it under R37, so the mention is never charged at all.
 - **Test:** `test_a_hand_listed_entry_the_station_then_defers_is_charged_once` fails today: 0 charges.
@@ -101,7 +104,7 @@ never a spare.
 ## Security
 
 - The budget protects a ship from other ships' floods. Every change only adds charges or spares on the station's
-  word. Local state can withhold F2's charge, never create a spare (a hand-edited entry that already has `first_deferred`
+  word. Local state can withhold F2's charge, never create a spare (the first-start stamp only withholds a charge; a hand-edited entry that already has `first_deferred`
   skips F2's charge: it is the owner's own file, and the budget protects the owner from other ships).
 - The column holds the station's own timestamp. No client value is written to it.
 
@@ -129,12 +132,10 @@ pulling main: it's a change to `agent/superyak_agent/watch.py`, a runtime file, 
 
 ## Known limits
 
-- An entry a watcher listed before this change has no recorded `first_deferred`. If its next answer is `run`,
-  today's `held` check decides, as before. If it is `defer` again, F2 treats the entry as hand-listed: a watcher
-  upgraded with ship-authored entries already on its `deferred` list charges each of them once more at its next
-  `defer`. If that puts the author over the hour's budget, the mention is dropped with a pause note (simulated by the
-  final review: three such mentions in an hour, two charged again and the third dropped; five, all dropped).
-- A mention dropped at its `defer` this way leaves its station deferral row behind, because the station deletes a row
+- An entry a watcher listed before this change was charged at entry, so the new watcher stamps it at its first start
+  (`first_deferred: None` and the state flag `listed_charged`) and F2 never charges it again. An entry the owner hand-adds
+  later still lacks the key and is charged once at its `defer`.
+- A hand-edited entry dropped at its `defer` over budget leaves its station deferral row behind, because the station deletes a row
   only when the watcher asks again (or a breakout closes or the ship leaves it). That room's posts by the ship then
   carry a stale `deferred_here` id, and the mention keeps its R26 `deferred` mark. No safety or budget effect; a
   follow-up station spec will stop counting rows past the 120-minute bound, or already answered with `reply_to`, as

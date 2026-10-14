@@ -368,6 +368,7 @@ def test_a_run_from_a_deferral_carries_first_deferred_on_every_resend(env):
     again = ask(watcher, asked['id']).json()
     assert again['id'] == ran['id'] and again['first_deferred'] == first
     assert 'first_deferred' not in ask(watcher, asked['id'], decisions=False).json()
+    assert 'first_deferred' not in watcher.post(f'/api/ships/me/tickets/{ran["id"]}/finish', json={}).json()
 
 
 def test_a_run_never_deferred_carries_no_first_deferred(env):

@@ -568,7 +568,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   - `test_a_reask_without_a_station_deferral_is_charged` (R37: listed in the watcher's state only, eight re-asks run
     five and pause the rest, their tickets finished)
   - `test_a_reask_the_station_held_spends_no_budget` (R37: a run carrying `first_deferred`)
-  - `test_a_retry_of_a_held_reask_is_not_charged_again` (R37: the same running ticket, back without `first_deferred`; that is now true only of tickets issued before the migration)
+  - `test_a_retry_of_a_held_reask_is_not_charged_again` (R37: the same running ticket, back without `first_deferred`; that is now true only of tickets issued before the migration or while the station runs main's code)
   - `test_a_reask_asks_for_the_ticket_first_and_fetches_the_room_only_to_run` (S5: no room fetch while deferred)
 - **Mutation checks**, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared, on R1, R3, R5, R6, R7 (the notice
   exclusion), R8, R10 (the full-list path), R11, R13, R15, R18, R20 (422, not 409), R21, R22, R23, R25, R26 (the

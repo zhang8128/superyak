@@ -74,6 +74,10 @@ class Watcher:
                              ('ship_exchanges', {}), ('paused', []), ('rooms', {}), ('replies', {}), ('tickets', {}),
                              ('deferred', [])):
             self.state.setdefault(key, default)
+        if not self.state.get('listed_charged'):  # ship-status fixes F2, at upgrade: every older watcher charged a ship's
+            for entry in self.state['deferred']:  # mention at entry, before listing it, so what it listed isn't charged again
+                entry.setdefault('first_deferred', None)
+            self.state['listed_charged'] = True
         self.me = None
 
     def save(self):

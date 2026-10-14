@@ -5,7 +5,7 @@ import json
 
 import pytest
 from superyak_agent.runs import RunTimeout
-from superyak_agent.watch import FALLBACK, READ_ONLY_LINE, TIMEOUT_NOTE
+from superyak_agent.watch import DEFERRED_PER_CYCLE, FALLBACK, READ_ONLY_LINE, TIMEOUT_NOTE
 from test_watch import FakeRunner, bodies, watcher
 
 
@@ -500,6 +500,47 @@ def test_a_persons_hand_listed_entry_is_never_charged(station, ship_config, tmp_
 def test_a_hand_listed_entry_deferred_again_and_again_is_charged_once(station, ship_config, tmp_path):
     """F2: the first defer charges a hand-listed ship entry and records the station's first_deferred on it, so the
     defers after it charge nothing more."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = fake.say(room, defiant, '@serenity a ship question')
+    defer(fake, asked)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    w.me = w.client.me()
+    _listed(w, fake, asked)
+    for _ in range(3):
+        assert w.cycle() == 0
+    assert len(w.state['ship_exchanges'][f'{room}:{defiant["id"]}']) == 1
+    assert len(w.state['deferred']) == 1 and runner.calls == []
+    assert not any('Pausing my replies' in b for b in bodies(fake, room))
+
+
+def test_an_upgraded_watcher_charges_none_of_its_carried_over_entries(station, ship_config, tmp_path):
+    """Ship-status fixes S1: every released watcher charged a ship's mention at entry, before listing it, so the
+    entries an older watcher carried over were charged already. The upgraded watcher stamps them at its first start
+    and charges none of them again, nor drops any over the budget."""
+    fake, andy, jenn, serenity = station
+    defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
+    room = fake.room('Ops', andy, jenn, serenity, defiant)
+    asked = [fake.say(room, defiant, f'@serenity ship question {n}') for n in range(5)]
+    defer(fake, *asked)
+    runner = FakeRunner()
+    w0 = watcher(fake, ship_config, tmp_path, runner)
+    w0.me = w0.client.me()
+    _listed(w0, fake, *asked)
+    w0.state.pop('listed_charged', None)  # a file written by main's watcher: no flag, no first_deferred
+    w0.save()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    for _ in range(-(-len(asked) // DEFERRED_PER_CYCLE) + 1):
+        assert w.cycle() == 0
+    assert not w.state['ship_exchanges'].get(f'{room}:{defiant["id"]}')
+    assert not any('Pausing my replies' in b for b in bodies(fake, room))
+    assert runner.calls == [] and len(w.state['deferred']) == 5
+
+
+def test_an_entry_hand_added_after_the_first_start_is_still_charged_once(station, ship_config, tmp_path):
+    """S1: the stamp is for the first start only. An entry the owner lists by hand later is charged once."""
     fake, andy, jenn, serenity = station
     defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
     room = fake.room('Ops', andy, jenn, serenity, defiant)
