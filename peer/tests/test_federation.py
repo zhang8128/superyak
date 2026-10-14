@@ -878,7 +878,8 @@ def _roster_with(a, b, room, **fields):
 def test_a_received_rooms_linked_room_is_its_origins_own_or_none(two_peers, linked):
     """Remote room fields (follow-up of the section 2 review of 96030b0): a received room's linked_room_id names the
     origin's own earlier room, or nothing. An unhashable value would break Wormhole's replaced-room set; a bare id, a
-    local room's id or another station's would claim to replace a room the origin doesn't host."""
+    local room's id or another station's would claim to replace a room the origin doesn't host. The last assertion checks
+    that the refused event left the room stored by the honest first delivery alone."""
     a, b, ca, cb = two_peers
     room = a[0].create_room(a[1], 'Linked', [ca['id']])
     deliver(a, b)
@@ -919,3 +920,16 @@ def test_a_received_message_cannot_claim_activity_after_it_arrived(two_peers):
     arrived = time.time()
     listed, viewed = _pinned(b, 'Future')
     assert [listed <= arrived, viewed <= arrived] == [True, True]
+
+
+def test_the_inbox_received_table_is_added_once_and_inbox_is_unchanged(tmp_path):
+    """Remote room fields, requirement 7: the migration is additive and idempotent. inbox keeps its seven columns, so
+    main's positional INSERT still writes it after a rollback."""
+    from superyak_peer.db import Store
+    Store(tmp_path / 'peer')
+    store = Store(tmp_path / 'peer')
+    with store.transaction() as db:
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='inbox_received'")]
+        columns = [r[1] for r in db.execute('PRAGMA table_info(inbox)')]
+    assert tables == ['inbox_received']
+    assert columns == ['origin', 'resource_id', 'kind', 'recipient', 'revision', 'actor', 'payload']

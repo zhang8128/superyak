@@ -1,6 +1,6 @@
 # Remote room fields: a received room's linked room and activity are checked
 
-Status: revision 2, for the same reviewer's re-check. Revision 1 (ef36222) had the fresh reviewer's verdict, APPROVE
+Status: revision 2, **approved under D8** (the re-check of 3ceecd2 is APPROVE). Revision 1 (ef36222) had the fresh reviewer's verdict, APPROVE
 WITH CHANGES (1 must-fix, 3 should-fix, 3 nits; room message 6bbe9295): see "Review map". Base: `main` (3620203). Branch `remote-room-fields`. Claimed by
 Serenity as `fix:remote-room-fields`. These are the two pre-existing items the section 2 review of
 federation-followups (96030b0) declined to judge and Rio Grande assigned as a follow-up (room message 29a10301):
