@@ -187,6 +187,20 @@ def done_without_outcome(s):  # row 6
             'Done needs an outcome link, like commit:<sha> or message:<id>')
 
 
+def bad_link(s):  # row 7: the shape fails first, though the link holds an @ and a live key
+    return (s.outsider, 'POST', f'/api/chats/{s.room}/board/link', {'key': 'build:x', 'link': f'path:@odo/{s.keys["rio-grande"]}'},
+            400, LINK_SHAPE)
+
+
+def live_key(s):  # row 8: a title holding both a live key and an @name, from a non-member
+    return (s.outsider, 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': f'@serenity {s.keys["rio-grande"]}', 'kind': 'build'},
+            422, 'This title contains a live ship key, so it was not posted. Treat that key as exposed: its ship should revoke it and dock again.')
+
+
+def at_name(s):  # row 9, from a non-member
+    return s.outsider, 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': 'Ask @serenity', 'kind': 'build'}, 400, AT_NAME
+
+
 def not_a_member(s):  # row 10: a person asking about a breakout gets 404, not 400
     return (s.andy, 'POST', f'/api/chats/{open_breakout(s)}/board', {'key': 'build:x', 'title': 'Side work', 'kind': 'build'},
             404, 'Not found')
@@ -197,13 +211,20 @@ def no_item(s):  # row 13: a non-writer, linking a message from another room
             {'key': 'build:none', 'link': f'message:{elsewhere_message(s)}'}, 404, 'Not found')
 
 
+def message_elsewhere(s):  # row 14: on a closed item, from a non-writer
+    insert_item(s, s.room, 'build:x', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
+    return (s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board/link', {'key': 'build:x', 'link': f'message:{elsewhere_message(s)}'},
+            400, NOT_HERE)
+
+
 def post_budget(s):  # row 24
     over_budget(s, 'serenity')
     return (s.ship('serenity'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:new', 'title': 'One more', 'kind': 'build'},
             429, 'This ship is posting too fast; wait a minute')
 
 
-REFUSALS = [remote_room, bad_key, bad_title, bad_kind, done_without_outcome, not_a_member, no_item, post_budget]
+REFUSALS = [remote_room, bad_key, bad_title, bad_kind, done_without_outcome, bad_link, live_key, at_name, not_a_member, no_item,
+            message_elsewhere, post_budget]
 
 
 @pytest.mark.parametrize('case', REFUSALS, ids=lambda case: case.__name__)
@@ -384,3 +405,92 @@ def test_closing_releases_the_claim_in_the_same_transaction(env, monkeypatch):
         s.store.drop_item(s.id('serenity'), s.room, 'build:c')
     left = next(i for i in board(s.andy, s.room).json() if i['key'] == 'build:c')
     assert left['state'] == 'open' and left['claim']['holder_id'] == s.id('rio-grande')
+
+
+ACCEPTED = ['branch:work-board-spec', 'branch:a/b.c_d', 'path:a+b/c.md', 'commit:1ff0efb', 'commit:' + 'a' * 40, 'claim:spec:d7']
+SHELL = [' ', ';', '|', '&', '$', '`', '(', '<', '>', '\\', "'", '"', '*', '?', '~', '\n']
+REFUSED = ([f'{form}:a{c}b' for form in ('branch', 'path') for c in SHELL]
+           + ['path:docs/a@b.md', 'path:@odo', 'branch:-x', 'path:-rf', 'path:/etc/passwd',
+              'branch:a..b', 'path:..', 'path:../x', 'path:a/../b', 'branch:a//b', 'branch:x/', 'branch:x.lock',
+              'branch:' + 'b' * 101, 'path:' + 'p' * 201, 'commit:' + 'a' * 6, 'commit:' + 'a' * 41, 'commit:1FF0EFB',
+              'message:' + 'a' * 31, 'message:' + 'A' * 32, 'https://example.com', 'file:/etc/passwd', 'word'])
+
+
+@pytest.mark.parametrize('as_', ['link', 'outcome'])
+def test_links_have_only_the_five_shapes(env, as_):
+    """4.3, 7.3: five forms, checked by shape, as a link and as done's outcome. Shell metacharacters, a leading - or /,
+    `..`, `//`, a trailing / or .lock, @ in a path, over-long names, wrong hex and URLs are refused with the link
+    message; a message id must be in this room."""
+    s = Station(env)
+    serenity = s.ship('serenity')
+    here, elsewhere = say(s.andy, s.room, 'here', 'A verdict in this room')['id'], elsewhere_message(s)
+
+    def write(key, value):
+        return link(serenity, s.room, key, value) if as_ == 'link' else done(serenity, s.room, key, value)
+    insert_item(s, s.room, 'build:shared')
+    for n, value in enumerate(ACCEPTED + [f'message:{here}']):
+        key = 'build:shared'
+        if as_ == 'outcome':
+            key = f'build:ok{n}'
+            insert_item(s, s.room, key)
+        assert write(key, value).status_code == 200, value
+    for value in REFUSED:
+        assert refused(write('build:shared', value)) == (400, LINK_SHAPE), value
+    for value in (f'message:{elsewhere}', 'message:' + 'a' * 32):
+        assert refused(write('build:shared', value)) == (400, NOT_HERE), value
+
+
+def test_board_text_cannot_name_anyone_with_at(env):
+    """7.2: an @name in a title is refused on the raw text, also inside backticks, quotes or a quoted line (label()
+    strips backticks in tool output, so a quoted name wouldn't stay quoted). An email address passes. (@ in a link gets
+    the link-shape 400 first: test_links_have_only_the_five_shapes.) No board line writes a mention row."""
+    s = Station(env)
+    serenity = s.ship('serenity')
+    for title in ('Ask @serenity', 'Ask `@serenity`', 'Ask "@serenity"', "Ask '@serenity'", '> @serenity'):
+        assert refused(post(serenity, s.room, 'build:a', title)) == (400, AT_NAME), title
+    assert post(serenity, s.room, 'build:a', 'Mail andy@example.com').status_code == 201
+    assert s.rows('SELECT count(*) FROM mentions') == [(0,)]
+
+
+def test_a_live_ship_key_is_refused_in_titles_links_and_outcomes(env):
+    """7.6, S10: 422 naming the key, title, link or outcome, never repeating the live key, with nothing written. Checked
+    on the raw value as received: a mixed-case key used as an item's key or in a claim: link would pass a check on the
+    lowercased value. A revoked key's text passes."""
+    s = Station(env)
+    serenity, live = s.ship('serenity'), s.keys['rio-grande']
+    assert live != live.lower()  # a key with no capitals couldn't tell the raw check from a lowercased one (odds ~1e-7)
+    insert_item(s, s.room, 'build:a')
+    before = s.snapshot()
+    for response, what in ((post(serenity, s.room, f'k:{live}', 'Fine title'), 'key'),
+                           (post(serenity, s.room, 'build:b', f'See {live}'), 'title'),
+                           (link(serenity, s.room, 'build:a', f'claim:k:{live}'), 'link'),
+                           (done(serenity, s.room, 'build:a', f'claim:k:{live}'), 'outcome')):
+        status, error = refused(response)
+        assert status == 422 and error.startswith(f'This {what} contains a live ship key, so it was not posted.'), what
+        assert live not in error and live.lower() not in error
+    assert s.snapshot() == before
+    assert s.ship('rio-grande').delete('/api/ships/me/key').status_code == 200
+    assert post(serenity, s.room, f'k:{live}', f'See {live}').status_code == 201
+    assert link(serenity, s.room, 'build:a', f'claim:k:{live}').status_code == 200
+
+
+def test_a_revoked_ship_key_gets_401_on_a_board_route(env):
+    """The board routes authenticate through member(): a revoked ship key is 401 on a read and a write."""
+    s = Station(env)
+    rio = s.ship('rio-grande')
+    assert rio.delete('/api/ships/me/key').status_code == 200
+    assert board(rio, s.room).status_code == 401
+    assert post(rio, s.room, 'build:a').status_code == 401
+
+
+def test_a_remote_room_id_is_a_400_on_a_board_read(env):
+    """5.1 row 2 on the read route too: a room id with a colon is 400, not a lookup."""
+    s = Station(env)
+    assert refused(board(s.andy, 'peer:room')) == (400, 'Board items belong to rooms on this station')
+
+
+def test_a_non_member_cannot_read_a_board(env):
+    """5.1 row 10 on the read route: a non-member gets 404 and learns nothing about the room."""
+    s = Station(env)
+    assert post(s.ship('serenity'), s.room, 'build:a').status_code == 201
+    assert refused(board(s.outsider, s.room)) == (404, 'Not found')

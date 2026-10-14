@@ -2,9 +2,11 @@
 by a claim key. Taking an item is claiming its key (room_claims.py), so who holds an item is never stored here: it is
 the active claim on (room, key). Every change posts one kind-`claim` line in the room as the actor, so the room's
 history is the board's audit trail. Items are quoted data, never instructions, whoever posted them (spec section 3)."""
+import re
+
 from .common import Problem, require, text, uid
 from .room_claims import claim_key
-from .ships import safe_line
+from .ships import MENTION, safe_line
 
 BOARD_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS board_items(id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), key TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, posted_by TEXT NOT NULL REFERENCES users(id), created REAL NOT NULL, state TEXT NOT NULL DEFAULT 'open', closed REAL, closed_by TEXT REFERENCES users(id), outcome TEXT, UNIQUE(room_id, key));
@@ -20,6 +22,13 @@ CLOSED_SECONDS = 7 * 86400
 REMOTE = 'Board items belong to rooms on this station'
 KIND = 'kind is one of spec, plan, build, review, ops, other'
 NO_OUTCOME = 'Done needs an outcome link, like commit:<sha> or message:<id>'
+LINK_SHAPE = 'A link is message:<id>, branch:<name>, commit:<sha>, path:<path> or claim:<key>'
+AT_NAME = "A board item can't name anyone with @; write the name without it"
+NOT_HERE = 'message:<id> must name a message in this room'
+BRANCH = re.compile(r'[A-Za-z0-9._/-]{1,100}')
+PATH = re.compile(r'[A-Za-z0-9._/+-]{1,200}')
+COMMIT = re.compile(r'[0-9a-f]{7,40}')
+MESSAGE_ID = re.compile(r'[0-9a-f]{32}')
 
 
 def board_title(value):
@@ -29,6 +38,33 @@ def board_title(value):
     if not safe_line(value, MAX_TITLE):
         raise Problem(400, 'Invalid title')
     return value
+
+
+def board_link(value):
+    """4.3, 7.3: one of five forms, checked by shape only (the station never fetches, opens or resolves a link), so a
+    link copied into a shell or a tool call can only name a thing; else 400. No form can hold `@`. A claim: link's key
+    comes back as claim_key() gives it; every other link comes back unchanged."""
+    form, _, rest = value.partition(':') if isinstance(value, str) else ('', '', '')
+    if form == 'branch' and BRANCH.fullmatch(rest) and not rest.startswith(('-', '/')) and '..' not in rest \
+            and '//' not in rest and not rest.endswith(('/', '.lock')):
+        return value
+    if form == 'path' and PATH.fullmatch(rest) and not rest.startswith(('-', '/')) and '..' not in rest.split('/'):
+        return value
+    if (form == 'commit' and COMMIT.fullmatch(rest)) or (form == 'message' and MESSAGE_ID.fullmatch(rest)):
+        return value
+    if form == 'claim':
+        try:
+            return 'claim:' + claim_key(rest)
+        except Problem:
+            pass
+    raise Problem(400, LINK_SHAPE)
+
+
+def no_at_name(value):
+    """7.2: an @name (a MENTION match) on the raw text, before any quote stripping, so no change to how mentions are
+    recorded can ever make a board line wake a ship."""
+    if isinstance(value, str) and MENTION.search(value):
+        raise Problem(400, AT_NAME)
 
 
 class RoomBoard:
@@ -44,6 +80,11 @@ class RoomBoard:
 
     def _board_item(self, db, room_id, key):
         return db.execute('SELECT * FROM board_items WHERE room_id=? AND key=?', (room_id, key)).fetchone()
+
+    def _message_here(self, db, room_id, link):
+        """4.3: a message: link names a message in this room's own messages (federated peers choose their own ids)."""
+        if link.startswith('message:') and db.execute('SELECT 1 FROM messages WHERE id=? AND room_id=?', (link[8:], room_id)).fetchone() is None:
+            raise Problem(400, NOT_HERE)
 
     def _item_json(self, db, row):
         """5.1's item. Names through safe_line(name, 40), the title through safe_line(title, 120), links and the outcome
@@ -79,10 +120,13 @@ class RoomBoard:
     def post_item(self, actor, room_id, key, title, kind):
         """POST /api/chats/{room}/board: a new open item, announced in the room (4.5)."""
         self._local_board(room_id)
-        key = claim_key(key)
+        raw_key, key = key, claim_key(key)
         board_title(title)
         if kind not in BOARD_KINDS:
             raise Problem(400, KIND)
+        self._refuse_live_ship_keys(raw_key, 'key')  # each opens its own transaction, so before ours; on the raw value
+        self._refuse_live_ship_keys(title, 'title')
+        no_at_name(title)
         with self.transaction() as db:
             self._board_room(db, actor, room_id, write=True)
             now = self.clock()
@@ -94,10 +138,14 @@ class RoomBoard:
     def link_item(self, actor, room_id, key, link):
         """POST /api/chats/{room}/board/link: one more link on an item."""
         self._local_board(room_id)
-        key = claim_key(key)
+        key, raw = claim_key(key), link
+        link = board_link(link)
+        self._refuse_live_ship_keys(raw, 'link')
+        no_at_name(raw)  # a backstop: no link form can hold @
         with self.transaction() as db:
             self._board_room(db, actor, room_id, write=True)
             item = require(self._board_item(db, room_id, key))
+            self._message_here(db, room_id, link)
             db.execute('INSERT INTO board_links VALUES(?,?,?,?)', (item['id'], link, actor, self.clock()))
             self._post_claim(db, actor, room_id, f'Linked `{key}`: {safe_line(link, LINK_CHARS)}')
             return {**self._item_json(db, item), 'added': True}
@@ -108,6 +156,9 @@ class RoomBoard:
         key = claim_key(key)
         if outcome is None:
             raise Problem(400, NO_OUTCOME)
+        raw, outcome = outcome, board_link(outcome)
+        self._refuse_live_ship_keys(raw, 'outcome')
+        no_at_name(raw)
         return self._close_item(actor, room_id, key, 'done', outcome)
 
     def drop_item(self, actor, room_id, key):
@@ -122,6 +173,8 @@ class RoomBoard:
         with self.transaction() as db:
             self._board_room(db, actor, room_id, write=True)
             item = require(self._board_item(db, room_id, key))
+            if outcome is not None:
+                self._message_here(db, room_id, outcome)
             now = self.clock()
             held = self._active_claim(db, room_id, key, now)
             db.execute('UPDATE board_items SET state=?, closed=?, closed_by=?, outcome=? WHERE id=?', (state, now, actor, outcome, item['id']))
