@@ -539,6 +539,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
         who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
         return store.save_brief(who, key, data.get('body'), data.get('revision'))
 
+    @app.get('/api/chats/{key}/brief/revisions')
+    def chat_brief_revisions(key: str, request: Request):
+        return store.brief_history(actor(request), key)  # the room's owner only; a ship key gets 403
+
     @app.post('/api/chats/{key}/participants', status_code=201)
     async def chat_add(key: str, request: Request):
         who, data = actor(request), await body(request)

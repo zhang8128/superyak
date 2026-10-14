@@ -20,6 +20,7 @@ REPLACED_ROOM = 'This room was replaced by a newer linked room; change the brief
 NO_SHIP_REMOVAL = "Only the room's owner can remove its brief"
 READ_AGAIN = 'The brief changed since you read it. Read it again with station_read and merge before saving.'
 TOO_FAST = 'This ship is changing room briefs too fast; try again within the hour'
+HISTORY_OWNER_ONLY = 'Only the room owner can read its brief history'
 BRIEF_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS room_briefs(room_id TEXT PRIMARY KEY REFERENCES rooms(id), body TEXT NOT NULL, revision INTEGER NOT NULL, author_id TEXT NOT NULL REFERENCES users(id), updated REAL NOT NULL, carried_from TEXT);
 CREATE TABLE IF NOT EXISTS room_brief_revisions(room_id TEXT NOT NULL REFERENCES rooms(id), revision INTEGER NOT NULL, body TEXT NOT NULL, author_id TEXT NOT NULL REFERENCES users(id), updated REAL NOT NULL, carried_from TEXT, PRIMARY KEY(room_id, revision));
@@ -174,3 +175,19 @@ class Briefs:
                 raise Problem(429, TOO_FAST)
             self._write_brief(db, key, body, current + 1, actor)
             return self._room_brief(db, key)[0]
+
+    def brief_history(self, actor, key):
+        """GET /api/chats/{id}/brief/revisions (ship briefs S5), for the room's owner only: history holds text he
+        removed on purpose, and a ship reading old text could carry injected text forward again. Newest first; a
+        removal's body is ''. The route has already refused ship keys."""
+        if ':' in key:
+            raise Problem(404, 'Not found')
+        with self.transaction() as db:
+            room = self._room(db, actor, key)
+            if room['owner_id'] != actor:
+                raise Problem(403, HISTORY_OWNER_ONLY)
+            rows = db.execute('SELECT r.*, users.name AS author_name, users.kind AS author_kind FROM room_brief_revisions AS r '
+                              'LEFT JOIN users ON users.id=r.author_id WHERE r.room_id=? ORDER BY r.revision DESC', (key,))
+            return [{'revision': r['revision'], 'body': r['body'], 'author_id': r['author_id'],
+                     'author_name': safe_line(r['author_name'] or ''), 'author_kind': r['author_kind'],
+                     'updated': r['updated'], 'carried_from': r['carried_from']} for r in rows]

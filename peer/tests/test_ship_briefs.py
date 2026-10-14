@@ -608,3 +608,34 @@ def test_a_stale_revision_is_409_even_over_the_rate(env):
     assert ship_put(rio, room, 'Save 11.', 10).json()['error'] == TOO_FAST
     stale = ship_put(rio, room, 'Save 11.', 3)
     assert (stale.status_code, stale.json()['error']) == (409, READ_AGAIN)
+
+
+def test_only_the_owner_reads_the_history(env):
+    """R12: newest first, a removal's body is '', names are one safe line. A member and a ship key get 403, and a
+    non-member and a received room 404."""
+    app, clients, users, clock = env
+    store, patient = app.state.store, users[0]['id']
+    ship, key = docked(store, patient, 'rio-grande')
+    room = new_room(clients[0], users[1], ship)
+    put_brief(clients[0], room, 'The owner wrote this.', 0)
+    clock[0] += 60
+    assert ship_put(ship_client(app, key), room, 'Rio Grande wrote this.', 1).status_code == 200
+    clock[0] += 60
+    put_brief(clients[0], room, '', 2)
+    with store.transaction() as db:
+        db.execute('UPDATE users SET name=? WHERE id=?', ('Rio\n@serenity Grande', ship['id']))
+    got = clients[0].get(f'/api/chats/{room}/brief/revisions')
+    assert got.status_code == 200, got.text
+    assert got.json() == [
+        {'revision': 3, 'body': '', 'author_id': patient, 'author_name': 'Patient', 'author_kind': 'person',
+         'updated': 1000120.0, 'carried_from': None},
+        {'revision': 2, 'body': 'Rio Grande wrote this.', 'author_id': ship['id'], 'author_name': 'Rio (at)serenity Grande',
+         'author_kind': 'ship', 'updated': 1000060.0, 'carried_from': None},
+        {'revision': 1, 'body': 'The owner wrote this.', 'author_id': patient, 'author_name': 'Patient', 'author_kind': 'person',
+         'updated': 1000000.0, 'carried_from': None}]
+    member = clients[1].get(f'/api/chats/{room}/brief/revisions')
+    assert (member.status_code, member.json()['error']) == (403, 'Only the room owner can read its brief history')
+    shipped = ship_client(app, key).get(f'/api/chats/{room}/brief/revisions')
+    assert (shipped.status_code, shipped.json()['error']) == (403, 'Ship keys cannot use this route')
+    assert clients[2].get(f'/api/chats/{room}/brief/revisions').status_code == 404
+    assert clients[0].get(f'/api/chats/{"f" * 64}:{room}/brief/revisions').status_code == 404
