@@ -362,7 +362,7 @@ git commit -m "Ship status fixes F3: a re-sent run carries the deferral it resol
   reproduction tests.
   - **RED:** Task 1 fails exactly the four tests Step 2 names, and the lost-run test passes; Task 2 fails its two, and
     the guard passes.
-  - **GREEN:** test_watch_deferral 25 (26 with the final review's test) and test_deferrals 24 pass.
+  - **GREEN:** test_watch_deferral 27 (the person-authored test of revision 2 and the final review's test included) and test_deferrals 24 pass.
   - **Mutations,** all caught:
     - the F2 record term removed fails the normal-path test and N1;
     - the F3 echo removed fails the re-send test (and test_only_the_stations_own_deferral_row_marks_a_reask);
