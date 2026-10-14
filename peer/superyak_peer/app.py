@@ -290,6 +290,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def breakout_close(key: str, request: Request):
         return store.close_breakout(ship_member(request)['id'], key)
 
+    @app.put('/api/ships/me/rooms/{key}/brief')
+    async def ship_brief(key: str, request: Request):
+        who, data = ship_member(request)['id'], await body(request)  # ship briefs S3: a ship key only; a person gets 403
+        return store.save_ship_brief(who, key, data.get('body'), data.get('revision'))
+
     @app.post('/api/ships/me/tickets/{key}/finish')
     def ticket_finish(key: str, request: Request):
         return store.finish_ticket(ship_member(request)['id'], key, app.state.federation.identity.peer_id)
@@ -533,6 +538,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     async def chat_brief(key: str, request: Request):
         who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403
         return store.save_brief(who, key, data.get('body'), data.get('revision'))
+
+    @app.get('/api/chats/{key}/brief/revisions')
+    def chat_brief_revisions(key: str, request: Request):
+        return store.brief_history(actor(request), key)  # the room's owner only; a ship key gets 403
 
     @app.post('/api/chats/{key}/participants', status_code=201)
     async def chat_add(key: str, request: Request):
