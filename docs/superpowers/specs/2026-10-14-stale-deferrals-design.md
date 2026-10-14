@@ -71,7 +71,7 @@ Measured on main with two tests, both red today (peer/tests/test_deferrals.py, u
    `send_message` writes `message_replies`. Test 3 builds the state by hand as a defence-in-depth guard: it passes today,
    and the "plain join" mutation below makes it fail.
 6. A reply to the mention by someone other than the ship (a person, another ship) doesn't stop it waiting (test 2's
-   first half).
+   first half, a person; `test_a_deferral_for_another_ship_never_marks_this_ships_unread`, a ship).
 
 ## Testing
 
@@ -99,6 +99,9 @@ Restart the lighthouse after the push, so the version check stays on. No agent c
 
 - Rows that no longer wait stay in `deferrals` until the watcher asks again, or for good if it never does. The table
   holds one small row per deferred mention, so no cleanup job (YAGNI).
+- `message_replies.reply_to` has no index, so each `_answered` call scans every reply on the station, now once per
+  waiting deferral on a read as well as per re-ask (section 2 review: about 14 ms per call at 100k replies on the Pi).
+  An index on `message_replies(reply_to)` is a separate follow-up, to land before replies reach tens of thousands.
 - An unread item is shown once per session, so a mark shown while the deferral waited isn't taken back if it goes
   stale later. The next read is accurate.
 - **A mention the watcher dropped** (case 2) keeps waiting until the bound: under the bound and unanswered, the rule

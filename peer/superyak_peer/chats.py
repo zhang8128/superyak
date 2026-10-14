@@ -99,6 +99,7 @@ class Chats:
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
             sent = dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
             if reply_to is None:  # R27: this ship's deferred mentions here that still wait (stale deferrals spec)
+                # The SQL bound only keeps the IN list to the last two hours' rows (rows past it never age out); the helper decides.
                 held = [r[0] for r in db.execute('''SELECT deferrals.message_id FROM deferrals JOIN messages
                     ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?
                     AND deferrals.first_deferred > ?''', (actor, key, self.clock() - DEFER_BOUND_SECONDS))]

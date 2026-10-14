@@ -440,6 +440,7 @@ def test_a_deferral_for_another_ship_never_marks_this_ships_unread(env):
     on_watch(ship_client(app, rio_key, **HEADERS))
     assert ask(ship_client(app, rio_key), asked['id']).json()['decision'] == 'defer'
     assert [(r['ship_id'], r['message_id']) for r in table(store, 'deferrals')] == [(rio['id'], asked['id'])]
+    reply(session, both, 'r', 'serenity answers it', asked['id'])  # another ship's reply never answers it (R7; section 2, S1)
     mine = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
     assert 'deferred' not in {m['message_id']: m for m in mine['messages']}[asked['id']]
     theirs = ship_client(app, rio_key, **HEADERS).post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
