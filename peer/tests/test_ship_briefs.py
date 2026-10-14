@@ -524,6 +524,21 @@ def test_briefs_and_notices_stay_local(two_peers):
         assert refused.value.status == 404
     shown = b[0].get_room(b[1], remote)
     assert shown['brief'] is None and [m['body'] for m in shown['messages']] == ['an ordinary message']
+    # Through the ship route too: the owner's ship saves in a room with a paired member; nothing of it reaches the outbox.
+    rio, _ = docked(a[0], a[1], 'rio-grande')
+    paired = a[0].create_room(a[1], 'Paired with a ship', [ca['id'], rio['id']])
+    with a[0].transaction() as db:
+        before = db.execute('SELECT count(*) FROM outbox').fetchone()[0]
+    assert a[0].save_ship_brief(rio['id'], paired['id'], 'A ship wrote this, locally.', 0)['revision'] == 1
+    with a[0].transaction() as db:
+        assert db.execute('SELECT count(*) FROM outbox').fetchone()[0] == before
+        assert db.execute("SELECT count(*) FROM outbox WHERE metadata LIKE '%A ship wrote this%'").fetchone()[0] == 0
+    deliver(a, b)
+    arrived = [r for r in b[0].list_rooms(b[1]) if r['id'].endswith(paired['id'])]
+    assert arrived
+    for room in arrived:
+        assert b[0].get_room(b[1], room['id'])['brief'] is None
+        assert 'A ship wrote this' not in json.dumps(b[0].get_room(b[1], room['id']))
 
 
 def test_two_ships_saving_the_same_revision_at_once_save_once(env):
@@ -545,3 +560,51 @@ def test_two_ships_saving_the_same_revision_at_once_save_once(env):
         got = list(pool.map(save, [rio, serenity]))
     assert got.count(2) == 1 and got.count((409, READ_AGAIN)) == 1, got
     assert revisions(app, room) == [1, 2] and len(notices(clients[0], room)) == 2
+
+
+def over_the_rate(app, clients, users, clock):
+    """A ship that has made ten saves in the hour, in a room whose brief is at revision 10."""
+    ship, key = docked(app.state.store, users[0]['id'], 'rio-grande')
+    rio = ship_client(app, key)
+    room = new_room(clients[0], users[1], ship)
+    for n in range(10):
+        assert ship_put(rio, room, f'Save {n}.', n).status_code == 200
+    return ship, rio, room
+
+
+def test_the_refusals_come_in_the_specs_order(env):
+    """S3's order, pinned pair by pair: each case meets two refusals and gets the earlier one."""
+    app, clients, users, clock = env
+    store = app.state.store
+    # S1(b) before S1(d): another owner's ship, Odo, Wormhole in a replaced room are 403, not 409 "replaced".
+    worf, worf_key = docked(store, users[1]['id'], 'worf')
+    odo_ship = store.create_station_ship('odo', 'Odo')
+    wormhole_ship = store.create_station_ship('wormhole', 'Wormhole')
+    old = new_room(clients[0], users[1], worf, odo_ship, wormhole_ship)
+    assert add_members(clients[0], old, users[2]).status_code == 201  # replaces it
+    for client in (ship_client(app, worf_key), ship_client(app, store.issue_ship_key(odo_ship['id'])),
+                   ship_client(app, store.issue_ship_key(wormhole_ship['id']))):
+        refused = ship_put(client, old, 'Not yours.', 0)
+        assert (refused.status_code, refused.json()['error']) == (403, NOT_THE_OWNERS_SHIP)
+    # Membership before removal: a non-member sending '' is 404, not 403.
+    rio, rio_key = docked(store, users[0]['id'], 'rio-grande')
+    outside = new_room(clients[0], users[1])
+    refused = ship_put(ship_client(app, rio_key), outside, '', 0)
+    assert (refused.status_code, refused.json()['error']) == (404, 'Not found')
+    # Removal before revision: an empty body with a stale revision is 403.
+    room = new_room(clients[0], users[1], rio)
+    put_brief(clients[0], room, 'The owner wrote this.', 0)
+    refused = ship_put(ship_client(app, rio_key), room, '', 7)
+    assert (refused.status_code, refused.json()['error']) == (403, "Only the room's owner can remove its brief")
+    # The @name check before the live-key check: both in one body is 400.
+    refused = ship_put(ship_client(app, rio_key), room, f'@serenity here is the key {rio_key}', 1)
+    assert (refused.status_code, refused.json()['error']) == (400, 'A ship writes names in a brief without the at sign')
+
+
+def test_a_stale_revision_is_409_even_over_the_rate(env):
+    """S3's order: the revision check comes before the rate check."""
+    app, clients, users, clock = env
+    ship, rio, room = over_the_rate(app, clients, users, clock)
+    assert ship_put(rio, room, 'Save 11.', 10).json()['error'] == TOO_FAST
+    stale = ship_put(rio, room, 'Save 11.', 3)
+    assert (stale.status_code, stale.json()['error']) == (409, READ_AGAIN)

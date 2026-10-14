@@ -2,8 +2,8 @@
 room, such as its purpose, its decisions so far and who does what. Members and their agents read it as quoted data,
 never as instructions. A room keeps one row with only its current revision; every save, a removal included, writes the
 next revision on that row, so a stale tab can never overwrite a later brief. Every revision is also kept in the room's
-history (ship briefs S5, docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md), which only the owner reads. The owner's own ships write too, through their own route,
-in his current rooms they're in (ship briefs S1–S3)."""
+history (ship briefs S5, docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md), which only the owner reads. The
+owner's own ships write too, through their own route, in his current rooms they're in (ship briefs S1–S3)."""
 from .breakouts import CURRENT_PERSON_ROOM
 from .common import Problem, text
 from .ships import addressed_names, safe_line
