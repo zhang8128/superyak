@@ -166,7 +166,7 @@ replaced (removing Wormhole in the browser does not, so an earlier room would co
 The bridge relays only what is said after its first run, and never messages from `wormhole` or `odo`. It never relays the room's brief, only messages.
 
 - **Out.** A message with an explicit `@persona` that is in the persona map (case-insensitive, trailing
-  punctuation dropped; as on the station, a name in code, in double quotes or on a `>` line does not count) becomes a new memo `coord_<YYYY_MM_DD>_station_to_<persona>_<slug>.md` in
+  punctuation dropped; as on the station, a name in code, in quotes or on a `>` line does not count) becomes a new memo `coord_<YYYY_MM_DD>_station_to_<persona>_<slug>.md` in
   `who/coordination/outbound/`. The slug is up to six words; a number makes the name unique. The memo
   is `status: staged`, `reply_required: true`, expires after 14 days, and quotes the message with
   secrets redacted. Wormhole posts `Sent to Venus (Network.aDNA) as <file>.` in the room. Unknown
