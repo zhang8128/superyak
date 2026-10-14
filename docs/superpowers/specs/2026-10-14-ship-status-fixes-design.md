@@ -135,6 +135,8 @@ pulling main: it's a change to `agent/superyak_agent/watch.py`, a runtime file, 
 - An entry a watcher listed before this change was charged at entry, so the new watcher stamps it at its first start
   (`first_deferred: None` and the state flag `listed_charged`) and F2 never charges it again. An entry the owner hand-adds
   later still lacks the key and is charged once at its `defer`.
+- Mentions a watcher running main's code lists during a rollback lack the key, and the flag is already set, so when the
+  new code returns they're charged once more at their next `defer`.
 - A hand-edited entry dropped at its `defer` over budget leaves its station deferral row behind, because the station deletes a row
   only when the watcher asks again (or a breakout closes or the ship leaves it). That room's posts by the ship then
   carry a stale `deferred_here` id, and the mention keeps its R26 `deferred` mark. No safety or budget effect; a

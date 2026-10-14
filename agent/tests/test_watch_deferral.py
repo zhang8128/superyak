@@ -540,7 +540,8 @@ def test_an_upgraded_watcher_charges_none_of_its_carried_over_entries(station, s
 
 
 def test_an_entry_hand_added_after_the_first_start_is_still_charged_once(station, ship_config, tmp_path):
-    """S1: the stamp is for the first start only. An entry the owner lists by hand later is charged once."""
+    """S1: the stamp is for the first start only. An entry the owner lists by hand later is charged once, across a
+    restart."""
     fake, andy, jenn, serenity = station
     defiant = fake.user('defiant', 'Defiant', 'ship', jenn['id'], key='defiant-key')
     room = fake.room('Ops', andy, jenn, serenity, defiant)
@@ -550,6 +551,7 @@ def test_an_entry_hand_added_after_the_first_start_is_still_charged_once(station
     w = watcher(fake, ship_config, tmp_path, runner)
     w.me = w.client.me()
     _listed(w, fake, asked)
+    w = watcher(fake, ship_config, tmp_path, runner)  # a restart: the flag is on the file now, so nothing is stamped
     for _ in range(3):
         assert w.cycle() == 0
     assert len(w.state['ship_exchanges'][f'{room}:{defiant["id"]}']) == 1

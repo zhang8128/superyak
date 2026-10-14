@@ -33,9 +33,10 @@ whole-branch review. Rio Grande approves the merge and the Pi suites must pass (
 
 ## Review Focus
 
-1. **A watcher state from before F2:** entries without `first_deferred`. They're charged at most once more, at their
-   next `defer`, never at a `run` (Task 1: `test_a_hand_listed_entry_the_station_then_defers_is_charged_once` and
-   the normal-path test).
+1. **A watcher state from before F2:** entries without `first_deferred`. The new watcher stamps them at its first start
+   (`listed_charged`), so they're never charged again (`test_an_upgraded_watcher_charges_none_of_its_carried_over_entries`);
+   an entry hand-added after that start is charged once, at its next `defer`, never at a `run`, across a restart
+   (`test_an_entry_hand_added_after_the_first_start_is_still_charged_once`).
 2. **A station restarted mid-run:** a running ticket issued before the migration has `first_deferred` NULL, so its
    re-send carries none, as today (Task 2: the column test checks NULL on old rows).
 3. **An old watcher (no `decisions`):** never sees `first_deferred`, on issue or re-send (Task 2).
