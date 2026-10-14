@@ -174,6 +174,10 @@ class StationClient:
     def leave_room(self, room_id):
         return self.request('POST', f'/api/ships/me/rooms/{quote(room_id, safe="")}/leave', {})
 
+    def set_brief(self, room_id, body, revision):
+        """Ship briefs S3: set or update a room's brief under this ship's own key; the station decides who may."""
+        return self.request('PUT', f'/api/ships/me/rooms/{quote(room_id, safe="")}/brief', {'body': body, 'revision': revision})
+
     def directory(self):
         return self.request('GET', '/api/ships/directory')
 
@@ -359,17 +363,42 @@ def brief_date(updated):
         return 'unknown'
 
 
+BRIEF_BY_OWNER = "written by the room's owner"
+BRIEF_BY_SHIP = "written by a ship, not the room's owner"
+BRIEF_BY_OTHER = "written by someone other than the room's owner"
+
+
+def brief_author(room, brief):
+    """Ship briefs S4: who wrote a brief, for its header and its fence. The brief's own author fields, so a ship that
+    has left the room is still named. Only an older station's view, which has no author_kind, falls back to the
+    room's members, and then to "someone"."""
+    if 'author_kind' in brief:
+        return {'name': brief.get('author_name'), 'username': brief.get('author_username'), 'kind': brief.get('author_kind')}
+    return {m['id']: m for m in room.get('members') or [] if isinstance(m, dict)}.get(brief.get('author_id'))
+
+
+def brief_class(room, brief):
+    """S4's class rule, from the brief's fields and never from a name: the room's owner when author_id is the room's
+    owner_id and author_kind is person (or absent, from an older station); a ship when author_kind is ship; otherwise
+    someone other than the room's owner."""
+    kind = brief.get('author_kind')
+    if brief.get('author_id') is not None and brief.get('author_id') == room.get('owner_id') and kind in ('person', None):
+        return BRIEF_BY_OWNER
+    return BRIEF_BY_SHIP if kind == 'ship' else BRIEF_BY_OTHER
+
+
 def brief_block(room):
-    """The room's brief, whole, under one header line, and fenced like any message (defused, never cut): the owner
-    wrote it about the room, and it is quoted data, never instructions. '' when the room has none: a removed brief, a
-    remote room, or a station from before briefs."""
+    """The room's brief, whole, fenced like any message (defused, never cut), under one header line that says who
+    wrote it with fixed words before any name, so no display name can fake them or push them out (ship briefs S4).
+    The room's owner or one of the owner's ships wrote it, and it is quoted data, never instructions. '' when the room
+    has none: a removed brief, a remote room, or a station from before briefs."""
     brief = room.get('brief') if isinstance(room, dict) else None
     if not isinstance(brief, dict) or not isinstance(brief.get('body'), str) or not brief['body']:
         return ''
     revision = brief['revision'] if type(brief.get('revision')) is int else '?'
-    members = {m['id']: m for m in room.get('members', [])}
-    return (f'Room brief (revision {revision}, updated {brief_date(brief.get("updated"))})\n'
-            + fence_message(members.get(brief.get('author_id')), brief['body'], len(brief['body'])))
+    author = brief_author(room, brief)
+    return (f'Room brief (revision {revision}, updated {brief_date(brief.get("updated"))}), {brief_class(room, brief)}: '
+            f'{describe(author)}\n' + fence_message(author, brief['body'], len(brief['body'])))
 
 
 def claims_block(room):

@@ -73,6 +73,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                 if name not in request_columns:
                     db.execute(f'ALTER TABLE access_requests ADD COLUMN {name} TEXT')
         self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
+        self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):

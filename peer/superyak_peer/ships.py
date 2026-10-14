@@ -12,9 +12,13 @@ SHIP_NAME = re.compile(r'[a-z][a-z0-9-]{1,31}')
 CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 POSTS_PER_MINUTE = 30
 MENTION = re.compile(r'(?<![\w@])@([a-z0-9][a-z0-9_.-]{1,63})', re.IGNORECASE)
-# A name shown as code, in double quotes or on a quoted line is talked about, not addressed. Each span
+# A name shown as code, in quotes or on a quoted line is talked about, not addressed. Each span
 # stops at its own opening mark too, so unclosed marks cannot make one message cost quadratic time.
-NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^“”\n]*”|^[ \t]*>[^\n]*', re.MULTILINE)
+# A single quote opens only at the start, after a space or after a bracket, and closes only where no letter
+# follows, so an apostrophe (Rio Grande's, don't, it’s) quotes nothing. Known limits: a word-start apostrophe and a
+# word-end one on the same line ('90s ... the ships') pair up and hide a name between them; a quote holding an
+# apostrophe ('@x, don't') still mentions.
+NOT_ADDRESSED = re.compile(r'```[\s\S]*?(?:```|\Z)|`[^`\n]*`|"[^"\n]*"|“[^“”\n]*”|(?<![^\s(\[{])\'[^\'\n]*\'(?!\w)|‘[^‘’\n]*’(?!\w)|^[ \t]*>[^\n]*', re.MULTILINE)
 # A ship key is secrets.token_urlsafe(32): 43 URL-safe characters. Every such token standing on its own is a candidate,
 # so a key is caught however it is quoted (JSON, a Bearer header, a URL parameter).
 KEY_TOKEN = re.compile(r'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])')
@@ -32,6 +36,13 @@ def safe_line(value, limit=80):
     a run on that ship's machine, so no '@' survives; control characters and newlines cannot start a new line."""
     value = ''.join(c if c.isprintable() else ' ' for c in str(value))
     return ' '.join(value.split()).replace('@', '(at)')[:limit].rstrip()
+
+
+def addressed_names(body):
+    """The usernames a text addresses with @, lower-cased, in order, once each: MENTION after NOT_ADDRESSED, so names
+    in code, in double quotes or on a quoted line, and email addresses, are talked about, not addressed. Mentions and
+    the ship brief route (ship briefs S3) share it, so the two scans can't drift."""
+    return list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(NOT_ADDRESSED.sub(' ', body))))
 
 
 class Ships:
@@ -307,8 +318,7 @@ class Ships:
     def _record_mentions(self, db, room_id, message_id, body):
         if self._breakout_closed(db, room_id) is not None:
             return  # breakouts S4: a closed breakout records no mention
-        addressed = NOT_ADDRESSED.sub(' ', body)
-        names = list(dict.fromkeys(m.group(1).rstrip('._-').lower() for m in MENTION.finditer(addressed)))[:20]
+        names = addressed_names(body)[:20]
         if not names:
             return
         marks = ','.join('?' * len(names))

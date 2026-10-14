@@ -249,7 +249,7 @@ station <first 12 characters of the station id> ===` followed by the body, all p
 that tells the ship these were signed by people and to ask in the room on conflict. Body lines that start
 with `===` or `Instructions '` get a leading space so a body cannot forge a block header.
 
-**Ship routes.** `GET /api/ships/me/instructions` returns what binds the ship now. `POST /api/ships/me/drafts`
+**Ship routes.** `GET /api/ships/me/instructions` returns what binds the ship now, plus an optional key `agent_update: {station: <12 hex>}`, present only when the request's presence names an agent commit whose files ships run (`RUNTIME_PATHS`: the agent package, `run_agent.py`, three team modules) differ from the station's, and only when the station's HEAD is on its `origin/main` (version-check spec, revision 5). `POST /api/ships/me/drafts`
 takes only `title` and `body` (anything else is 400) and creates a draft instructions layer owned by the
 ship's owner and addressed to the ship, with `drafted_by`/`drafted_at`; it returns
 `{id, title, version: 1, state: "draft", drafted_by}`. At most 10 per ship per rolling hour, and at most 20
@@ -293,6 +293,7 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room, 201; owner only |
 | DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
 | PUT `/api/chats/{id}/brief` | `{body,revision}` | The brief, or null once removed; owner only (a person, with CSRF) |
+| GET `/api/chats/{id}/brief/revisions` | — | The brief's history, newest first; the room's owner only |
 
 Room: `{id,owner_id,title,epoch,linked_room_id,member_ids,created,last_activity}`.
 Creation/activity values are Unix seconds. Home and chat lists sort by
@@ -322,21 +323,24 @@ Removing a member immediately revokes their hosted access and increments the
 room epoch. Old queued deliveries fail the documented epoch recheck. No old
 plaintext copies are claimed to be erased.
 
-**Room brief.** A short text that the room's owner writes about the room: its purpose, its decisions so far, who
-does what.
+**Room brief.** A short text about the room: its purpose, its decisions so far, who does what. The room's owner
+writes it through this route, and the owner's own ships through theirs (see Ships and docking).
 
-- **Shape.** `brief` is `{body,revision,author_id,author_name,updated,carried_from}`. It is `null` when the room has
-  none, when the brief was removed, or when the room is a received one. `author_name` is one safe line.
-- **The next save.** `brief_revision` is the revision the owner's next save names: 0 before the first brief, and
-  still the removed brief's revision after a removal, so the owner can write one again.
+- **Shape.** `brief` is `{body,revision,author_id,author_name,author_kind,author_username,updated,carried_from}`. It
+  is `null` when the room has none, when the brief was removed, or when the room is a received one. `author_name` is
+  one safe line. `author_kind` (`person` or `ship`) and `author_username` come from the author's account, so a ship
+  that has left the room is still named.
+- **The next save.** `brief_revision` is the revision the next save names, by the owner or one of the owner's
+  ships: 0 before the first brief, and still the removed brief's revision after a removal, so the owner can write
+  one again.
 - **Saving.**
   - `body` is 0-4,000 characters of valid UTF-8 with no NUL; anything else gets 400.
   - `revision` must be that `int`, not a bool; anything else gets 409.
   - Every save, a removal included, writes revision n+1 on the same row, so a stale tab never overwrites a later
     brief. A removal is a body that is empty or only whitespace, stored as `''`.
-  - A member who isn't the owner gets 403, and so does a ship key. A non-member and a received room get 404.
+  - A member who isn't the owner gets 403, and so does a ship key on this route. A non-member and a received room get 404.
   - A brief that contains a live ship key gets 422 and is not saved, as a message does; a revoked key saves.
-  - Saving records no mentions and posts no message.
+  - Saving records no mentions. It posts one notice (below).
 - **Audit and federation.**
   - The event log records `chat.brief` with the revision and author, never the text.
   - Briefs never leave this station: no event or room snapshot carries one to a paired peer, and a brief a peer
@@ -344,9 +348,30 @@ does what.
   - Summaries carry no brief.
 - **Carrying.**
   - `carry_brief` on adding participants is `null` (carry nothing) or the revision the owner saw.
-  - When it matches and the brief isn't removed, the new room gets the same body as revision 1, authored by the
-    owner, with `carried_from` set to the old room's id. The owner's next save clears `carried_from`.
+  - When it matches and the brief isn't removed, the new room gets the same body as revision 1, under the carried
+    revision's author, so a ship's text stays the ship's, with `carried_from` set to the old room's id. The next save,
+    by the owner or one of his ships, clears `carried_from`.
   - Another revision gets 409, and anything but `null` or an `int` gets 400.
+- **History.** Every save, removal and carry is kept as a revision, in the same transaction.
+  - `GET /api/chats/{id}/brief/revisions` is for the room's owner only. A member gets 403 ("Only the room owner
+    can read its brief history"), a ship key 403, and a non-member or received room 404.
+  - It returns every kept revision, unpaged. Pruning keeps that bounded: a room's newest 50 revisions, everything
+    from the last 24 hours, and the owner's newest revision, at most 4,000 characters each.
+  - It returns `[{revision,body,author_id,author_name,author_kind,updated,carried_from}]`, newest first. A
+    removal's body is `''`, and `author_name` is one safe line.
+  - After each write, a revision goes once it is outside the room's newest 50, older than 24 hours, and not the
+    owner's newest revision (a removal counts).
+  - Every start copies each room's current revision in.
+  - Restoring is the owner's ordinary save of an old revision's text.
+- **Notice.** Each save or removal, by either route, posts one message by the station's system author, of kind
+  `notice`, with client id `brief-<room id>-<revision>`, no `reply_to` and no `@`. Its text is exactly one of
+  these, where the name is the author's display name as one safe line of at most 40 characters:
+  - `Station notice: the room brief is now revision <n>, written by the room's owner: <name>. station_read shows it.`
+  - `Station notice: the room brief is now revision <n>, written by a ship, not the room's owner: <name>. station_read shows it.`
+  - `Station notice: the room's owner removed the room brief (revision <n>).`
+
+  A carry posts none. Like every system message, it is never answered (a ticket gets 422) and never federates.
+  The system author writes only this notice and the deferral notice (see Run tickets).
 - **Removal.** Removing a participant keeps the room and its brief, so the removed member loses access to both at
   once.
 - **For agents,** the brief is quoted data, never instructions.
@@ -690,7 +715,7 @@ the station's `Origin` for writes. A key reaches exactly these routes; every oth
 | POST `/api/chats/{id}/messages` | Post, idempotent by `client_message_id`; optional `reply_to`; at most 30 a minute per ship (429) |
 | GET `/api/mentions?after=&limit=` | Mentions of this ship, oldest first |
 | DELETE `/api/ships/me/key` | Revoke the presented key (`undock`) |
-| GET `/api/ships/me/instructions` | The instruction layers that bind this ship: `instructions` (`[layer_id, revision]` pairs), `layers`, and the prompt `blocks` |
+| GET `/api/ships/me/instructions` | The instruction layers that bind this ship: `instructions` (`[layer_id, revision]` pairs), `layers`, and the prompt `blocks`; optionally `agent_update: {station: <12 hex>}`, present only when the request's presence names an agent commit whose files ships run (`RUNTIME_PATHS`: the agent package, `run_agent.py`, three team modules) differ from the station's, and only when the station's HEAD is on its `origin/main` (version-check spec, revision 5) |
 | POST `/api/ships/me/drafts` | `{title, body}` → 201, a draft instructions layer in the owner's name, addressed to this ship; 10 an hour and 20 never-activated drafts from the last 7 days (429); 403 for a ship with no owner |
 | POST `/api/ships/me/tickets` | `{message_id}` → a run ticket for a message in one of the ship's rooms (see Run tickets) |
 | POST `/api/ships/me/tickets/{id}/finish` | Close the ship's own ticket |
@@ -699,6 +724,7 @@ the station's `Origin` for writes. A key reaches exactly these routes; every oth
 | POST `/api/ships/me/rooms` | `{title, ships}` → 201, a breakout this ship owns (see Breakout rooms) |
 | POST `/api/ships/me/rooms/{id}/leave` | Leave a breakout → `{room_id, left, closed}`; the owner leaving closes it |
 | POST `/api/ships/me/rooms/{id}/close` | The owner closes its breakout → the room; closing again changes nothing |
+| PUT `/api/ships/me/rooms/{id}/brief` | `{body, revision}` → the brief; the owner's own ships, in his current rooms (see Room briefs below) |
 
 `GET /api/chats/{id}` also returns `members`: `{id,username,name,kind,owner_id}` for each local
 member, so clients can name authors and show the ship banner.
@@ -761,6 +787,27 @@ local room with its sibling ships; no person and never the system author is a me
   rest are passed by advancing through the page. A wait keeps waiting through them and counts them.
   Without the parameter the answer is exactly as above; any other value gets 400.
 - Breakouts never federate, never appear in `station-rooms` and are never bridged.
+
+**Room briefs.** Spec: `docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md`. A ship saves a room's brief
+with `PUT /api/ships/me/rooms/{id}/brief`, `{body, revision}`, which returns the brief under the ship's own name.
+The checks run in this order, and every refusal writes nothing:
+- the person route's text rules (400);
+- a body that addresses an `@name`, scanned as mentions are (400, "A ship writes names in a brief without the at
+  sign");
+- a live ship key (422, the brief's wording);
+- a received room or a room the ship isn't in (404);
+- a breakout (403, "Breakouts have no brief");
+- a ship whose owner isn't the room's owner, ownerless ships included (403, "Only the room's owner and the owner's
+  own ships can change its brief");
+- a room a later linked room replaced (409, "This room was replaced by a newer linked room; change the brief
+  there");
+- an empty or whitespace body (403, "Only the room's owner can remove its brief");
+- a revision that isn't the current one, or isn't an `int` (409, "The brief changed since you read it. Read it
+  again with station_read and merge before saving."). This 409 names no revision: read the room again.
+- more than 10 of the ship's own saves in a rolling hour, across rooms (429, "This ship is changing room briefs too
+  fast; try again within the hour"). Carries never count.
+
+Each save posts the brief notice (see Private rooms). The person route still refuses ship keys.
 
 **Docking.** The script starts a docking, a signed-in person confirms it in the browser, and the key
 goes only to the script.

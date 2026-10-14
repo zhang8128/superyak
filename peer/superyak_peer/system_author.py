@@ -1,7 +1,8 @@
 """The system author (spec S11): the one place the station writes a message. One users row, kind 'system', username
 '_station', found only by the id in system_meta; never a room member, never keyed, never signed in. Its only writer
-is _post_as_system, called only by the ticket decision's notice. message_kinds marks claim and notice messages, which
-are never answered (422) and never federate."""
+is _post_as_system, which exactly two notices call (ship briefs R18): the ticket decision's (tickets.py _post_notice)
+and the room brief's (briefs.py _write_brief). message_kinds marks claim and notice messages, which are never answered
+(422) and never federate."""
 import secrets
 from .common import uid
 
@@ -29,16 +30,17 @@ class SystemAuthor:
     def system_author_public(self, db):
         return dict(db.execute('SELECT id,username,name,kind,owner_id FROM users WHERE id=?', (self.system_author_id(db),)).fetchone())
 
-    def _post_as_system(self, db, room_id, ship_id, message_id, text):
-        """S5's notice, in the caller's transaction: the message under client id notice-<ship id>-<mention id>, its
-        message_kinds row and its chat.message event. No reply_to, no ticket, no mentions, no post budget; local rooms
-        only. Returns the message id, or None when the text holds a live ship key (the caller still sets
-        notice_posted). A retry for the same mention returns the message already posted."""
+    def _post_as_system(self, db, room_id, client_id, text):
+        """One station notice, in the caller's transaction: the message under the caller's client id, its message_kinds
+        row and its chat.message event. Its two callers (R18) pass notice-<ship id>-<mention id> (the deferral) or
+        brief-<room id>-<revision> (the brief). No reply_to, no ticket, no mentions, no post budget; local rooms only.
+        Returns the message id, or None when the text holds a live ship key or the room is a closed breakout; the
+        caller's own write still stands. A retry under the same client id returns the message already posted."""
         if ':' in room_id:
             raise ValueError('The system author posts in local rooms only')
         if self._live_ship_key_in(db, text) or self._breakout_closed(db, room_id) is not None:
             return None  # a closed breakout gets no notice
-        author, client_id = self.system_author_id(db), f'notice-{ship_id}-{message_id}'
+        author = self.system_author_id(db)
         existing = db.execute('SELECT id FROM messages WHERE room_id=? AND author_id=? AND client_message_id=?',
                               (room_id, author, client_id)).fetchone()
         if existing:

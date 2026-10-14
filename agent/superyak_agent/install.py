@@ -100,6 +100,23 @@ def _hook_commands(config_path, messages):
             'SessionEnd': f'{ENV_RUN} SUPERYAK_HOOK_EVENT=session-end {base}{GUARD}'}
 
 
+def messages_installed(settings_path, config_path):
+    """Version check V5: whether this checkout's installed UserPromptSubmit hook shows room messages. True when there
+    is at least one and none carries SUPERYAK_HOOK_MESSAGES=0 (the flag _hook_commands writes), False when every one
+    does, None when there is none, they disagree, or the file can't be read as the hooks install_hooks writes."""
+    try:
+        settings = json.loads(Path(settings_path).read_text())
+        wanted = hook_command(config_path)
+        ours = [h.get('command') for entry in settings['hooks']['UserPromptSubmit'] for h in entry.get('hooks', [])
+                if is_station_hook(h.get('command'), wanted)]
+    except Exception:  # noqa: BLE001 - unknown, never an error: the hook falls back to the general wording
+        return None
+    off = ['SUPERYAK_HOOK_MESSAGES=0' in _hook_words(c) for c in ours]
+    if not off:
+        return None
+    return False if all(off) else (True if not any(off) else None)
+
+
 def _same_hook(command, wanted):
     """Whether an installed station hook is the wanted one in kind, whichever interpreter it was installed with.
     A command without the guard is a different hook, so docking again upgrades it."""
@@ -284,6 +301,16 @@ def service_names(home):
     if kind_of(home) == 'project':
         return f'{LABEL}.{home.name}', f'superyak-ship-{home.name}.service', home / 'ship.log'
     return LABEL, UNIT, Path.home() / '.superyak' / 'ship.log'
+
+
+def service_installed(home):
+    """Version check V5: whether this ship's watcher file exists at either place install_service writes it. Never raises."""
+    try:
+        label, unit, _ = service_names(home)
+        return (Path.home() / '.config' / 'systemd' / 'user' / unit).exists() or \
+            (Path.home() / 'Library' / 'LaunchAgents' / f'{label}.plist').exists()
+    except Exception:  # noqa: BLE001 - unknown counts as not installed
+        return False
 
 
 def install_service(argv, out, system=None, names=None):

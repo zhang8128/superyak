@@ -67,8 +67,8 @@ passing. Doc-only branches follow the same rule.
 
 ## Phase 4: the backlog
 
-- A mention inside single quotes still counts (backticks, double and curly quotes and quoted lines are already ignored,
-  471ab86).
+- ~~A mention inside single quotes still counts~~: done on branch single-quote-mentions (Serenity, reviewed by a
+  fresh reviewer for Rio Grande, room message af694c14).
 - Federation: the browser doesn't show the unverified mark, and a remote message's state should come from the local
   outbox.
 - The Pi browser-test flake (`test_late_home_refresh_cannot_replace_the_next_accounts_data`).

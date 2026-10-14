@@ -21,6 +21,9 @@ def test_names_in_code_quotes_or_quoted_lines_are_not_mentions_as_on_the_station
     assert memos.mentioned('Bob asked me to say \u201c@venus do X\u201d.') == []
     assert memos.mentioned('> @venus do X\nThat was Bob, not me.') == []
     assert memos.mentioned('Bob wrote "@venus do X". @hestia, please look.') == ['hestia']
+    assert memos.mentioned("Bob asked me to say '@venus do X'.") == []
+    assert memos.mentioned('Bob asked me to say ‘@venus do X’.') == []
+    assert memos.mentioned("Rio Grande's note: @venus, it's @hestia's turn.") == ['venus', 'hestia']
 
 
 def station_pattern(name):

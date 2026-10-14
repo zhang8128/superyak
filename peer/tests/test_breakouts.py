@@ -405,7 +405,7 @@ def test_the_owner_closes_a_breakout_and_only_the_owner(env):
     assert ticket(fleet.ship('rio-grande'), asked['id']).json() == CLOSED
     with fleet.store.transaction() as db:   # behind the refusals: a closed breakout records no mention, gets no notice
         fleet.store._record_mentions(db, room, asked['id'], '@tardis again')
-        notice = fleet.store._post_as_system(db, room, fleet.id('rio-grande'), asked['id'], 'Station notice: waited')
+        notice = fleet.store._post_as_system(db, room, f'notice-{fleet.id("rio-grande")}-{asked["id"]}', 'Station notice: waited')
     assert notice is None and fleet.rows('SELECT user_id FROM mentions WHERE room_id=?', room) == [(fleet.id('rio-grande'),)]
     assert fleet.rows('SELECT count(*) FROM messages WHERE room_id=?', room) == [(1,)]
     assert fleet.ship('serenity').post(f'/api/ships/me/rooms/{room}/leave').json()['closed'] == closed_at
