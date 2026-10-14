@@ -360,7 +360,7 @@ message, so it's fenced, never a mention and never ticketed (ship-status R20).
   same rows and the same fencing as the per-room list. Section 2's goal says Andy sees the whole board, and room by
   room doesn't meet it.
 - **Open items carry to a replacement room.** When adding members or bridging makes a new room (chats.py
-  `_replace_room`, as `carry_brief` does for briefs), the room's **open** items and their links move to the new room
+  `add_participants`, as its `carry_brief` / `_brief_to_carry` does for briefs; the bridge's replacement too), the room's **open** items and their links move to the new room
   in the same transaction. The keys, posters and created times are kept, and one "Carried n open items" line is
   posted in the new room. Done and dropped items stay in the old room as the record. Claims don't carry, because a
   claim belongs to its room: a carried item that was taken shows as waiting in the new room until its holder claims
