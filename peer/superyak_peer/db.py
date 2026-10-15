@@ -86,6 +86,7 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
         if signing:  # G4a: the door and the station commands that never sign hold no key, check none and backfill nothing
             self._load_station_identity()  # spec A step 3, G4: a station that can't load its identity doesn't start
             self._backfill_revision_signatures()  # G5: after the schema, at every start
+            self._backfill_revocation_signatures()  # spec A step 3, G12: what the restore reconcile revoked
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):

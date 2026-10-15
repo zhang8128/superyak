@@ -500,6 +500,11 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def grant_people(request: Request):
         return store.grant_people(actor(request))
 
+    @app.post('/api/grants/{key}/revoke')
+    async def grant_revoke(key: str, request: Request):
+        who, data = actor(request), await body(request)
+        return store.revoke_grant(who, key, data.get('reason'))
+
     @app.get('/api/grants/{key}/signed')
     def grant_signed(key: str, request: Request):
         return store.grant_signed(actor(request), key)

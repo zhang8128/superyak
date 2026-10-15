@@ -346,7 +346,7 @@ def test_a_ship_key_gets_403_on_every_grants_route(env):
     grant = make(store, users[0], users[1], [ship])
     made = {'grantee': users[1]['id'], 'targets': [ship['id']], 'rooms': '*', 'hours': 24, 'budget': 5}
     routes = [('POST', '/api/grants', made), ('GET', '/api/grants', None), ('GET', '/api/grants/people', None),
-              ('GET', f'/api/grants/{grant}/signed', None)]
+              ('GET', f'/api/grants/{grant}/signed', None), ('POST', f'/api/grants/{grant}/revoke', {})]
     for method, path, body in routes:
         response = ship_client(app, key).request(method, path, json=body)
         assert (response.status_code, response.json()) == (403, {'error': 'Ship keys cannot use this route'}), (method, path)
@@ -482,3 +482,111 @@ def test_a_grant_made_in_the_browser_is_stored_signed_and_shown(station):
     assert verify_record(card_of(s['store']._station_identity()), stored_grant_record(s['store'], view['id']), row['signature'])
     anywhere = client.post('/api/grants', json={**s['good'], 'rooms': '*'})
     assert anywhere.status_code == 201 and anywhere.json()['rooms'] == '*'
+
+
+def revoke(client, grant_id, **body):
+    return client.post(f'/api/grants/{grant_id}/revoke', json=body)
+
+
+def test_the_issuer_or_a_targets_owner_revokes_and_no_one_else(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    rio, _ = docked(store, patient['id'], 'rio-grande')
+    first = make(store, patient, doctor, [rio])
+    second = make(store, patient, doctor, [rio])
+    with store.transaction() as db:  # by hand: in step 3 the target's owner is the issuer, so this splits the two rules
+        db.execute('UPDATE users SET owner_id=? WHERE id=?', (family['id'], rio['id']))
+    assert revoke(clients[1], first).status_code == 403  # the grantee sees it but may not revoke it
+    assert revoke(clients[2], first).status_code == 404  # an admin with no other tie doesn't see it
+    assert revoke(clients[0], 'no-such-grant').status_code == 404
+    done = revoke(clients[0], first)  # the issuer, who no longer owns rio-grande
+    assert done.status_code == 200, done.text
+    assert (done.json()['revoked'], done.json()['revoked_by'], done.json()['revoke_reason'], done.json()['valid'],
+            done.json()['reason']) == (1000000.0, {'id': patient['id'], 'name': 'Patient'}, 'revoked', False,
+                                       f'Grant #{first[:4]} was revoked by Patient')
+    assert revoke(clients[0], first).status_code == 409  # a second revoke
+    assert revoke(clients[1], first).status_code == 403  # 403 before 409
+    assert revoke(clients[2], first).status_code == 404  # 404 before both
+    by_owner = revoke(clients[3], second, reason='Not this week')  # rio-grande's owner, who didn't issue it
+    assert by_owner.status_code == 200, by_owner.text
+    assert (by_owner.json()['revoked_by']['id'], by_owner.json()['revoke_reason']) == (family['id'], 'Not this week')
+
+
+def test_the_issuer_of_a_grant_above_may_revoke_it(env):
+    """G10's walk, which step 3 never reaches: a child row made by hand, as step 5's delegation will make them."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, _ = docked(store, patient['id'], 'serenity')
+    root = make(store, patient, doctor, [serenity])
+    child = make(store, doctor, family, [serenity])
+    with store.transaction() as db:  # patient now neither issued the child nor owns its ship: only the walk reaches it
+        db.execute('UPDATE grants SET parent_id=? WHERE id=?', (root, child))
+        db.execute('UPDATE users SET owner_id=? WHERE id=?', (organizer['id'], serenity['id']))
+    revoked = revoke(clients[0], child)
+    assert revoked.status_code == 200, revoked.text
+
+
+def test_a_revoke_reason_is_one_line_of_at_most_200_characters(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, _ = docked(store, users[0]['id'], 'serenity')
+    grant = make(store, users[0], users[1], [ship])
+    for reason in ('x' * 201, 'two\nlines', 'two lines', 'nul\x00', 5, ['x']):
+        assert revoke(clients[0], grant, reason=reason).status_code == 400, reason
+    assert revoke(clients[0], grant, reason='   ').json()['revoke_reason'] == 'revoked'  # blank is no reason
+    longest = make(store, users[0], users[1], [ship])
+    assert revoke(clients[0], longest, reason='x' * 200).json()['revoke_reason'] == 'x' * 200
+
+
+def test_a_revocations_signature_verifies_and_the_signed_route_carries_it(env, tmp_path):
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, _ = docked(store, users[0]['id'], 'serenity')
+    grant = make(store, users[0], users[1], [ship])
+    assert 'revocation' not in clients[1].get(f'/api/grants/{grant}/signed').json()
+    clock[0] += 60
+    assert revoke(clients[0], grant, reason='Done').status_code == 200
+    signed = clients[1].get(f'/api/grants/{grant}/signed').json()  # the grantee reads it too
+    identity = store._station_identity()
+    card = card_of(identity)
+    record, signature = signed['revocation']['record'], signed['revocation']['signature']
+    assert set(signed) == {'station', 'record', 'signature', 'revocation'} and set(signed['revocation']) == {'record', 'signature'}
+    assert set(record) == RECORD_KEYS['grant-revocation']
+    assert record == {'kind': 'grant-revocation', 'station': identity.peer_id, 'grant': grant, 'revoked': 1000060.0,
+                      'revoked_by': users[0]['id'], 'reason': 'Done'}
+    assert verify_record(card, record, signature)
+    assert verify_record(card, signed['record'], signed['signature'])  # the grant's own signature still verifies
+    assert not verify_record(card, {**record, 'reason': 'revoked'}, signature)  # one changed value
+    assert not verify_record(card, signed['record'], signature)  # a revocation's signature never passes for its grant's
+    other = PeerIdentity.load_or_create(tmp_path / 'other')
+    named_other = {**record, 'station': other.peer_id}
+    assert not verify_record(card, named_other, raw_sign(identity, named_other))
+    added = {**record, 'note': 'x'}
+    assert not verify_record(card, added, raw_sign(identity, added))
+    missing = {key: value for key, value in record.items() if key != 'reason'}
+    assert not verify_record(card, missing, raw_sign(identity, missing))
+    forged = {**record, 'station': '0' * 64}
+    assert not verify_record({**card, 'peer_id': '0' * 64}, forged, raw_sign(identity, forged))
+
+
+def test_startup_signs_each_unsigned_revocation_once(env, monkeypatch):
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, _ = docked(store, users[0]['id'], 'serenity')
+    revoked, kept = make(store, users[0], users[1], [ship]), make(store, users[0], users[1], [ship])
+    assert revoke(clients[0], revoked).status_code == 200
+    with store.transaction() as db:  # as the restore reconcile leaves a revocation (G13)
+        db.execute('UPDATE grants SET revocation_signature=NULL WHERE id=?', (revoked,))
+    from superyak_peer.db import Store
+    assert grant_row(Store(store.data_dir, signing=False), revoked)['revocation_signature'] is None  # G4a: no backfill there
+    restarted = Store(store.data_dir)
+    rows = {grant: grant_row(restarted, grant)['revocation_signature'] for grant in (revoked, kept)}
+    assert rows[kept] is None  # nothing to sign on a grant still in force
+    with restarted.transaction() as db:
+        assert verify_record(card_of(restarted._station_identity()), restarted._revocation_record(db, revoked), rows[revoked])
+    signed, real = [], PeerIdentity.sign_record
+    monkeypatch.setattr(PeerIdentity, 'sign_record', lambda self, record: signed.append(record) or real(self, record))
+    Store(store.data_dir)
+    assert signed == [] and grant_row(restarted, revoked)['revocation_signature'] == rows[revoked]  # a second start signs nothing

@@ -141,10 +141,36 @@ class Signatures:
         db.execute('UPDATE grants SET signature=? WHERE id=?',
                    (self._station_identity(db).sign_record(self._grant_record(db, grant_id)), grant_id))
 
+    def _revocation_record(self, db, grant_id):
+        """G12: a revocation's record, with exactly RECORD_KEYS['grant-revocation']; None while the grant is in force."""
+        row = db.execute('SELECT id, revoked, revoked_by, revoke_reason FROM grants WHERE id=?', (grant_id,)).fetchone()
+        if row is None or row['revoked'] is None:
+            return None
+        return {'kind': 'grant-revocation', 'station': self._station_identity(db).peer_id, 'grant': row['id'],
+                'revoked': row['revoked'], 'revoked_by': row['revoked_by'], 'reason': row['revoke_reason']}
+
+    def _sign_revocation(self, db, grant_id):
+        """G12: in the transaction that revokes, or at the next start for a revocation the restore reconcile wrote."""
+        db.execute('UPDATE grants SET revocation_signature=? WHERE id=?',
+                   (self._station_identity(db).sign_record(self._revocation_record(db, grant_id)), grant_id))
+
+    def _backfill_revocation_signatures(self):
+        """G12: at every signing start, each revocation without a signature is signed once. Only the restore reconcile
+        writes one (G13): it works on a staged file and holds no key. With none to sign, the identity is never touched,
+        so a new station's first card still names its host (G4)."""
+        with self.transaction() as db:
+            for row in db.execute('SELECT id FROM grants WHERE revoked IS NOT NULL AND revocation_signature IS NULL '
+                                  'ORDER BY id').fetchall():
+                self._sign_revocation(db, row['id'])
+
     def grant_signed(self, actor, grant_id):
-        """G12: GET /api/grants/{id}/signed, {station, record, signature} for anyone G11 shows the grant to; anyone else,
-        and an unknown id, gets 404."""
+        """G12: GET /api/grants/{id}/signed, {station, record, signature}, plus revocation: {record, signature} once it
+        is revoked, for anyone G11 shows the grant to; anyone else, and an unknown id, gets 404."""
         with self.transaction() as db:
             grant = self._visible_grant(db, actor, grant_id)
-            return {'station': self._station_identity(db).peer_id, 'record': self._grant_record(db, grant['id']),
-                    'signature': grant['signature']}
+            signed = {'station': self._station_identity(db).peer_id, 'record': self._grant_record(db, grant['id']),
+                      'signature': grant['signature']}
+            if grant['revoked'] is not None:
+                signed['revocation'] = {'record': self._revocation_record(db, grant['id']),
+                                        'signature': grant['revocation_signature']}
+            return signed

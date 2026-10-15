@@ -26,6 +26,7 @@ GRANTEE_IS_YOU = 'You cannot grant to yourself'
 TARGETS_SHAPE = 'targets is a list of 1 to 20 ship ids, each listed once'
 TARGET_NOT_YOURS = 'Each target must be a ship you own'
 BUDGET_RANGE = 'budget is a whole number from 1 to 500'
+REASON_SHAPE = 'A reason is one line of at most 200 characters'
 
 
 def short_id(grant_id):
@@ -259,3 +260,27 @@ class Grants:
                 raise Problem(400, BUDGET_RANGE)
             key = self._insert_grant(db, actor, grantee, targets, rooms, hours, budget)
             return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone())
+
+    def _may_revoke(self, db, actor, grant):
+        """G10: the issuer, the issuer of any grant above it (none in step 3, but the walk is the same), or the owner of
+        any target ship. Being an admin gives no power over other people's grants."""
+        return any(link['issuer_id'] == actor for link in self._grant_chain(db, grant)) or self._owns_a_target(db, actor, grant)
+
+    def revoke_grant(self, actor, grant_id, reason=None):
+        """G10: POST /api/grants/{id}/revoke. 404 for anyone G11 doesn't show the grant to, then 403 for one who sees it
+        but may not revoke it, then 409 when it is already revoked. The revocation is signed in this transaction (G12).
+        A missing or blank reason is `revoked`."""
+        if reason is None or (isinstance(reason, str) and not reason.strip()):
+            reason = 'revoked'
+        if not isinstance(reason, str) or len(reason) > 200 or reason.splitlines() != [reason] or '\x00' in reason:
+            raise Problem(400, REASON_SHAPE)
+        with self.transaction() as db:
+            grant = self._visible_grant(db, actor, grant_id)
+            if not self._may_revoke(db, actor, grant):
+                raise Problem(403, 'Only its issuer or the owner of one of its ships can revoke this grant')
+            if grant['revoked'] is not None:
+                raise Problem(409, f'Grant {short_id(grant["id"])} is already revoked')
+            db.execute('UPDATE grants SET revoked=?, revoked_by=?, revoke_reason=? WHERE id=?',
+                       (self.clock(), actor, reason, grant['id']))
+            self._sign_revocation(db, grant['id'])
+            return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (grant['id'],)).fetchone())
