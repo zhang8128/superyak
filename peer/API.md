@@ -299,6 +299,9 @@ Room: `{id,owner_id,title,epoch,linked_room_id,member_ids,created,last_activity}
 Creation/activity values are Unix seconds. Home and chat lists sort by
 `last_activity` descending, then stable `id` ascending. Activity is the greater of
 room creation and latest message time; summaries expose no message bodies.
+A received room's activity is the origin's, but no later than when this station
+last stored an event for it; this station's queued replies count at their own
+time. Message times inside the room stay the origin's.
 The additive `room_activity` table preserves existing room records; rooms created
 before timestamp support have `created:0` and use their latest message time for
 activity until a new message arrives. Empty members creates a
@@ -512,7 +515,8 @@ Locally hosted room summaries retain local/remote-contact `member_ids`. Received
 room summaries have qualified `owner_id`, qualified `member_ids`, plus a `members`
 array of `{peer,id}` that can be matched to contact `peer_id,user_id`; no local
 account is inferred from an origin-local ID. Their epoch/linked-room references
-remain origin-controlled. Messages received in remote rooms have qualified
+remain origin-controlled within the origin's own namespace (`<origin>:<id>` or
+null). Messages received in remote rooms have qualified
 `author_id`; remote replies in locally hosted rooms also preserve qualified
 `author_id`. Locally authored messages in locally hosted rooms retain the local ID.
 The UI can distinguish self by local ID or by `/api/me`'s `peer_id:id`. The

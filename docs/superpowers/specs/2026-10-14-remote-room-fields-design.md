@@ -4,7 +4,7 @@ Status: revision 2, **approved under D8** (the re-check of 3ceecd2 is APPROVE). 
 WITH CHANGES (1 must-fix, 3 should-fix, 3 nits; room message 6bbe9295): see "Review map". Base: `main` (3620203). Branch `remote-room-fields`. Claimed by
 Serenity as `fix:remote-room-fields`. These are the two pre-existing items the section 2 review of
 federation-followups (96030b0) declined to judge and Rio Grande assigned as a follow-up (room message 29a10301):
-"linked_room_id isn't validated when a room is received... an unhashable value would break Wormhole" and
+"linked_room_id isn't validated when a room is received..." and
 "last_activity can be as large as 2^53, so an origin can pin its room to the top of the chat list".
 
 ## Where this sits
@@ -17,10 +17,10 @@ view (`_remote_room`, peer_store.py) passes `REMOTE_ROOM_KEYS` through, includin
 (peer_store.py:102). Two gaps:
 
 1. **`linked_room_id` is never checked.** An honest origin sends `None` or `<origin>:<its earlier room id>` (federation.py:85).
-   A hostile one can send a list or a dict (Wormhole's `_bridged` builds a set from every room's `linked_room_id`,
-   wormhole.py:93, and an unhashable value raises), or the id of one of this station's own rooms, or another station's
-   room: a claim to replace a room the origin doesn't host. Wormhole skips a room that another room replaces, so a
-   received room naming a local room would hide that local room from the bridge.
+   A hostile one can send a list or a dict, or the id of one of this station's own rooms, or another station's
+   room: a claim to replace a room the origin doesn't host. F1 hardens what API clients receive (the browser and any
+   reader of the chat list). Wormhole is not exposed: it already skips every received room (wormhole.py:78, before
+   `_bridged`), as the final review found.
 2. **The origin chooses the activity.** `last_activity` and each message's `created` may be anything from 0 to 2^53
    (federation.py:331-334, 343-344), and the chat list sorts on `last_activity` (chats.py:40). A hostile origin can pin
    its room to the top of every member's list for good, with a far-future date beside it (app.js:615).
@@ -34,8 +34,8 @@ Measured on main with eight peer tests, all red today (peer/tests/test_federatio
   snapshot) each fail with `[False, False] == [True, True]`: today both `list_rooms` and `get_room` show the pinned
   time.
 
-Exposure today is nil: the Pi has no paired peers (Rio Grande counted, read-only). Wormhole would need to be a member
-of a received room, and a ship's pairing card comes only from the CLI.
+Exposure today is nil: the Pi has no paired peers (Rio Grande counted, read-only). A hostile origin would need a pairing
+card, which comes only from the CLI.
 
 ## The change
 
@@ -94,8 +94,8 @@ of a received room, and a ship's pairing card comes only from the CLI.
 
 ## Security
 
-- Every change narrows what a paired origin controls: no value it sends can name a room it doesn't host or break a
-  reader that builds a set from the field, and no value it sends can move its room ahead of when it really arrived,
+- Every change narrows what a paired origin controls: no value it sends can name a room it doesn't host or hand an
+  API client anything but `<origin>:<id>` or null (Wormhole already skips received rooms, wormhole.py:78), and no value it sends can move its room ahead of when it really arrived,
   in the list. (Inside the room, the origin still orders and dates its messages.)
 - `received` is this station's clock alone. No client value is written to it.
 

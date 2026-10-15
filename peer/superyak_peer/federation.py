@@ -5,7 +5,7 @@ import json
 import re
 import threading
 from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse
-from .common import Problem, require, uid, encode, text
+from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
     pass
@@ -331,8 +331,7 @@ class Federation:
             for field in ('created','last_activity'):
                 if type(p.get(field)) not in (int,float) or not 0 <= p[field] <= 2**53:
                     raise Problem(400, 'Invalid room timestamp')
-            linked = p.get('linked_room_id')  # remote room fields: the origin's own earlier room, or nothing
-            if linked is not None and not (isinstance(linked, str) and re.fullmatch(re.escape(origin) + r':[A-Za-z0-9_-]{1,64}', linked)):
+            if not linked_room_ok(p.get('linked_room_id'), origin):  # remote room fields: the origin's own earlier room, or nothing
                 raise Problem(400, 'Invalid linked room')
             if p.get('member_ids') != expected or p.get('owner_id') != origin+':'+e['actor']['id'] or p['owner_id'] not in expected:
                 raise Problem(403, 'Invalid room authority')

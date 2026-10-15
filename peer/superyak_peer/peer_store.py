@@ -1,7 +1,7 @@
 """Remote contacts and received resources never become local accounts."""
 import json
 import re
-from .common import Problem, require, uid, text, ids, encode
+from .common import Problem, require, uid, text, ids, encode, linked_room_ok
 
 # What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
 # columns (only those: plus this station's own delivery state and unverified mark, never the origin's). An allowlist, never a denylist (R44).
@@ -86,8 +86,7 @@ class PeerStore:
                              if isinstance(m, dict) and isinstance(m.get('peer'), str) and isinstance(m.get('id'), str)]
         result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', []) if _stored_message_ok(m)]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
-        linked = result.get('linked_room_id')  # remote room fields: the view's backstop for what an older receiver stored
-        if linked is not None and not (isinstance(linked, str) and re.fullmatch(re.escape(row['origin']) + r':[A-Za-z0-9_-]{1,64}', linked)):
+        if not linked_room_ok(result.get('linked_room_id'), row['origin']):  # remote room fields: the backstop for what an older receiver stored
             result['linked_room_id'] = None
         claimed = max([result['last_activity']] + [m['created'] for m in result['messages']])
         arrived = db.execute('SELECT received FROM inbox_received WHERE origin=? AND resource_id=? AND recipient=?',

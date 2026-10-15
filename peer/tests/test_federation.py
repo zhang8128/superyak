@@ -874,19 +874,23 @@ def _roster_with(a, b, room, **fields):
                                   action='room.roster', recipients=[b[1]], payload={**snapshot, **fields})
 
 
-@pytest.mark.parametrize('linked', [['a', 'list'], {'a': 'dict'}, 7, 'no-colon', 'another-station', 'a-local-room'])
+@pytest.mark.parametrize('linked', [['a', 'list'], {'a': 'dict'}, 7, 'no-colon', 'another-station', 'a-local-room',
+                                    'empty-id', 'two-segments', 'long-id'])
 def test_a_received_rooms_linked_room_is_its_origins_own_or_none(two_peers, linked):
     """Remote room fields (follow-up of the section 2 review of 96030b0): a received room's linked_room_id names the
-    origin's own earlier room, or nothing. An unhashable value would break Wormhole's replaced-room set; a bare id, a
-    local room's id or another station's would claim to replace a room the origin doesn't host. The last assertion checks
-    that the refused event left the room stored by the honest first delivery alone."""
+    origin's own earlier room, or nothing. The API clients (the browser, any reader of the chat list) get nothing else: a
+    list, a bare id, a local room's id or another station's would claim to replace a room the origin doesn't host. (Wormhole
+    already skips received rooms, wormhole.py:78, as the final review found.) The last assertion checks that the refused
+    event left the room stored by the honest first delivery alone."""
     a, b, ca, cb = two_peers
     room = a[0].create_room(a[1], 'Linked', [ca['id']])
     deliver(a, b)
     claims = {'another-station': 'f' * 64 + ':' + room['id'],  # a well-formed id, under a station that isn't the origin
               'a-local-room': b[2].identity.peer_id + ':' + b[0].create_room(b[1], 'Mine', [])['id']}  # one of b's own
+    origin = a[2].identity.peer_id
+    claims.update({'empty-id': origin + ':', 'two-segments': origin + ':a:b', 'long-id': origin + ':' + 'a' * 65})
     value = claims.get(linked, linked) if isinstance(linked, str) else linked
-    with pytest.raises(Problem):
+    with pytest.raises(Problem, match='Invalid linked room'):
         b[2].receive(_roster_with(a, b, room, linked_room_id=value))
     [shown] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Linked']
     assert shown.get('linked_room_id') is None
@@ -950,7 +954,8 @@ def test_an_honest_linked_room_is_received_with_its_origins_earlier_room(two_pee
     assert shown['linked_room_id'] == a[2].identity.peer_id + ':' + room['id']
 
 
-def test_a_stored_bad_linked_room_shows_as_none(two_peers):
+@pytest.mark.parametrize('bad', [['not', 'hashable'], 'f' * 64 + ':some-room'])
+def test_a_stored_bad_linked_room_shows_as_none(two_peers, bad):
     """Remote room fields, requirement 3 (a guard): the view's backstop for a value an older receiver stored."""
     a, b, ca, cb = two_peers
     a[0].create_room(a[1], 'Old link', [ca['id']])
@@ -958,7 +963,7 @@ def test_a_stored_bad_linked_room_shows_as_none(two_peers):
     with b[0].transaction() as db:
         row = db.execute("SELECT * FROM inbox WHERE kind='room' AND recipient=?", (b[1],)).fetchone()
         stored = json.loads(row['payload'])
-        stored['linked_room_id'] = ['not', 'hashable']
+        stored['linked_room_id'] = bad
         db.execute('UPDATE inbox SET payload=? WHERE origin=? AND resource_id=? AND kind=? AND recipient=?',
                    (json.dumps(stored), row['origin'], row['resource_id'], row['kind'], row['recipient']))
     [shown] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Old link']
