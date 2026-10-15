@@ -2779,7 +2779,7 @@ for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; s
 **Expected:** five lines ending in `active`. If any isn't active, show its log, then go to Step 8:
 
 ```bash
-for unit in lighthouse door ship odo wormhole; do systemctl --user is-active --quiet superyak-$unit || journalctl --user -u superyak-$unit -n 50 --no-pager; done
+for unit in lighthouse door ship odo wormhole; do systemctl --user is-active --quiet superyak-$unit || journalctl --user-unit superyak-$unit -n 50 --no-pager; done
 ```
 
 The Pi may also run project-ship watchers (`superyak-ship-<home>.service`). List them, restart them, and check them:
@@ -2839,7 +2839,7 @@ the "Brief history" button.
 
 ```bash
 systemctl --user restart superyak-lighthouse && systemctl --user is-active superyak-lighthouse
-journalctl --user --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'
+journalctl --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'
 ```
 
 **Expected:** `active`, then `superyak: version check on: <HEAD 12>, N behind`. On this Pi, `journalctl --user -u`
