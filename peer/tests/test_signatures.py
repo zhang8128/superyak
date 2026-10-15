@@ -2,7 +2,7 @@
 import base64
 import pytest
 from superyak_peer.identity import PeerIdentity, RECORD_KEYS, canonical, verify_record
-from test_instructions import activate, docked, new_layer
+from test_instructions import activate, docked, new_layer, ship_client
 
 ENDPOINT = 'https://station.test'  # a card needs an HTTPS endpoint; any will do for checking signatures
 
@@ -196,3 +196,38 @@ def test_the_first_signature_creates_a_missing_identity(tmp_path):
     assert (store.data_dir / 'identity.json').exists()
     card = card_of(PeerIdentity.load_or_create(store.data_dir))
     assert verify_record(card, stored_record(store, layer['id'], 1), signature_rows(store)[(layer['id'], 1)])
+
+
+def test_only_the_layers_owner_reads_a_signed_revision(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    mine, key = docked(store, users[0]['id'], 'serenity')
+    theirs, _ = docked(store, users[1]['id'], 'jenn-ship')
+    layer = new_layer(clients[0], kind='instructions', title='Law', body='Be kind.', audience_users=[mine['id'], theirs['id']])
+    assert activate(clients[0], layer).status_code == 200
+    path = f'/api/layers/{layer["id"]}/revisions/1/signed'
+    answer = clients[0].get(path)
+    assert answer.status_code == 200, answer.text
+    signed = answer.json()
+    assert set(signed) == {'station', 'record', 'signature'} and signed['station'] == store._station_identity().peer_id
+    assert verify_record(card_of(store._station_identity()), signed['record'], signed['signature'])
+    assert clients[1].get(path).status_code == 404  # owns a ship in the audience, but the layer binds only its owner's
+    assert clients[2].get(path).status_code == 404  # an admin with no tie to it
+    assert clients[0].get('/api/layers/no-such-layer/revisions/1/signed').status_code == 404
+    for missing in (7, 0, 2 ** 63):  # none of them is a revision, and 2**63 is past SQLite's integers
+        assert clients[0].get(f'/api/layers/{layer["id"]}/revisions/{missing}/signed').status_code == 404
+    assert ship_client(app, key).get(path).status_code == 403
+
+
+def test_a_notes_revision_has_no_signed_record_and_a_withdrawn_layers_still_does(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, _ = docked(store, users[0]['id'], 'serenity')
+    note = new_layer(clients[0], title='Note')
+    assert activate(clients[0], note).status_code == 200
+    assert clients[0].get(f'/api/layers/{note["id"]}/revisions/1/signed').status_code == 404
+    law = new_layer(clients[0], kind='instructions', title='Law', body='Be kind.', audience_users=[ship['id']])
+    assert activate(clients[0], law).status_code == 200
+    assert clients[0].post(f'/api/layers/{law["id"]}/withdraw').status_code == 200
+    kept = clients[0].get(f'/api/layers/{law["id"]}/revisions/1/signed')
+    assert kept.status_code == 200 and verify_record(card_of(store._station_identity()), kept.json()['record'], kept.json()['signature'])

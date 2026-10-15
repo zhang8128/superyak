@@ -2,7 +2,7 @@
 key signs each instructions revision, so a revision can be checked against the station's card. Merge 3b adds grants
 and revocations here."""
 import json
-from .common import require
+from .common import Problem, require
 from .identity import PeerIdentity
 
 SIGNATURE_SCHEMA = '''
@@ -55,3 +55,15 @@ class Signatures:
                                   "AND revision_signatures.revision=layer_revisions.revision)").fetchall()
             for row in unsigned:
                 self._sign_revision(db, row['layer_id'], row['revision'])
+
+    def revision_signed(self, actor, layer_id, revision):
+        """G6: {station, record, signature} for the layer's owner. Anyone else, and any revision without a signature
+        (a note's, or one that doesn't exist), gets 404, so the route never says whether a layer exists."""
+        with self.transaction() as db:
+            self._owned_layer(db, actor, layer_id)
+            if not 1 <= revision <= 2 ** 63 - 1:  # past SQLite's integers sqlite3 raises OverflowError; no such revision
+                raise Problem(404, 'Not found')
+            row = require(db.execute('SELECT signature FROM revision_signatures WHERE layer_id=? AND revision=?',
+                                     (layer_id, revision)).fetchone())
+            return {'station': self._station_identity().peer_id, 'record': self._revision_record(db, layer_id, revision),
+                    'signature': row['signature']}
