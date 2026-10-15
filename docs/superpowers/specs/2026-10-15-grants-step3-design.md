@@ -13,7 +13,8 @@ the section 2 review of merge 3a (findings 1 and 4); their D8 re-check (APPROVE 
 check and `_own_peer_id`'s single loader; its second re-check (APPROVE WITH CHANGES: 0 must-fix, 1 should-fix, 3 nits)
 added G4c's handling of leftover TLS files and its fuller warning, the lazy path's use of the caller's connection, and
 the read-only `serve --peer-tls` check. All are built in merge 3b, and with them G4a-G4c are approved under D8.
-G17's web label reads "builder run for Andy, via Jenn", matching the existing label, and G19's sentence and the fresh
+G19's sentence applies only where a grant is possible (a person author, an owned ship), from merge 3c's final review
+(I1; narrows, no new D8 round). G17's web label reads "builder run for Andy, via Jenn", matching the existing label, and G19's sentence and the fresh
 owner mentions spec's reason sentence replace one another rather than stack (both found drafting merge 3c's plan;
 align, no new D8 round). G11's current room carries no id for a non-member from merge 3c (merge 3b's section 2 review; narrows, no new D8
 round). Clarifications from drafting merge 3b's plan, with no new D8 round: G4b counts only signed grant rows; G4a's
@@ -310,7 +311,9 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
 - **G19.** The read-only run prompt (`agent/superyak_agent/watch.py`) says the author "can ask the ship's owner". It
   now says the author "can ask the ship's owner for a grant, or check the Grants page". For an `old` or `answered`
   ticket, the fresh owner mentions spec's reason sentence replaces that last sentence (as its test 9 pins, byte for
-  byte); every other read-only run ends with this one. The two never stack. `agent/superyak_agent/runs.py`'s
+  byte); every other read-only run ends with this one. The two never stack. Only where a grant is possible: when the
+  author is a person and the ship has an owner (not a resident ship). A ship author (ships hold no grants in step 3)
+  and a resident ship's run (Odo, Wormhole, which no grant can target) keep the sentence they had before step 3. `agent/superyak_agent/runs.py`'s
   docstring ("builder for the ship's owner") gains "or a person the owner granted". The watcher otherwise needs no
   change: it already runs in the ticket's mode and posts the ticket's footer. An old watcher without tickets keeps
   its local rule, under which only the owner builds, so nothing widens there.
