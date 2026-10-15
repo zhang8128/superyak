@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 import pytest
 from superyak_agent.station import StationClient, StationError, describe, label, read_json, source_label, urllib_transport, write_private
 
@@ -70,8 +71,9 @@ def test_malformed_http_from_the_wire_is_an_oserror():
         server.close()
 
 
-def answer_once(head, body):
-    """A one-shot HTTP answer on a random localhost port: (server socket, thread). The client may hang up early."""
+def answer_once(head, body, hold=0):
+    """A one-shot HTTP answer on a random localhost port: (server socket, thread). The client may hang up early. With
+    `hold`, the server keeps the connection open after the body until the client hangs up, `hold` seconds at most."""
     server = socket.socket()
     server.bind(('127.0.0.1', 0))
     server.listen(1)
@@ -81,6 +83,9 @@ def answer_once(head, body):
         try:
             conn.recv(65536)
             conn.sendall(head + body)
+            if hold:
+                conn.settimeout(hold)
+                conn.recv(1)
         except OSError:
             pass  # the client read its limit and hung up
         finally:
@@ -109,6 +114,21 @@ def test_a_transport_with_a_limit_refuses_a_longer_answer(status, size, length, 
                 send('GET', url, {}, None)
     finally:
         thread.join(5)
+        server.close()
+
+
+def test_a_transport_with_a_limit_reads_no_further_than_it():
+    """Work board step 3 review I1: with more than its limit in, the transport raises at once. It never reads on to the
+    end of the answer, so one held open after that costs no time (the server holds it 8 s; urllib alone would wait for
+    its 5 s timeout)."""
+    server, thread = answer_once(b'HTTP/1.1 200 X\r\nConnection: close\r\n\r\n', b'x' * 3000, hold=8)
+    try:
+        began = time.monotonic()
+        with pytest.raises(ValueError):
+            urllib_transport(timeout=5, limit=1000)('GET', f'http://127.0.0.1:{server.getsockname()[1]}/api/ships/me/board', {}, None)
+        assert time.monotonic() - began < 2
+    finally:
+        thread.join(10)
         server.close()
 
 
