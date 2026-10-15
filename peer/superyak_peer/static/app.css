@@ -323,6 +323,15 @@ a.button { display: inline-block; text-decoration: none; }
 .room-brief { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: #fffefa; }
 .room-brief h3 { margin: 0 0 8px; }
 .room-brief-body, .carry-brief-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.room-board { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; }
+.room-board h3 { margin: 0 0 8px; }
+.board-open, .board-closed { list-style: none; margin: 0; padding: 0; }
+.board-item { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.board-kind { font-size: 0.85em; opacity: 0.75; }
+.board-post, #board-done-form { margin-top: 12px; }
+.board-ask { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.board-ask p { margin: 0 0 8px; }
+.carry-board ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
 .carry-brief-text { max-height: 200px; margin-top: 10px; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 
 .brief-author { margin: 8px 0 0; }
