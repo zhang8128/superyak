@@ -171,6 +171,38 @@ def seed_demo(data_dir):
     private_json(data_dir / 'demo-marker.json', {'application': 'superyak-demo', 'version': 1})
 
 
+NEW_IDENTITY = ('New station identity in {path}; the station\'s peer id is now {peer}. Every signature made with the lost '
+                'key stops verifying against the new card. The peer id is the key\'s hash, so every paired peer must pair '
+                'again with the new card, and replies this station already sent into remote rooms carry the old peer id and '
+                'show as unverified. The lighthouse must be stopped while this runs: a running one keeps signing with the '
+                'old key until it restarts. Nothing in the database was changed.')
+
+
+def new_identity_for(data_dir, endpoint=None):
+    """G4c: station-new-identity, the one deliberate way to a new key, for an identity.json that is truly lost. It
+    refuses while the file exists, moves the lost identity's leftover TLS files aside (PeerIdentity refuses TLS files
+    that differ), creates the identity as load_or_create does with the endpoint's host, and never opens the database.
+    Returns what it tells Andy."""
+    from .identity import PeerIdentity
+    from urllib.parse import urlsplit
+    import time
+    directory = Path(data_dir).absolute()
+    path = directory / 'identity.json'
+    if path.exists() or path.is_symlink():
+        raise ValueError(f'{path} exists, so nothing was changed: station-new-identity only replaces a lost identity')
+    host = urlsplit(endpoint).hostname if endpoint else None
+    if endpoint and (urlsplit(endpoint).scheme != 'https' or not host):
+        raise ValueError('--endpoint is https://HOST:PORT')
+    stamp, said = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()), []
+    for name in ('peer-cert.pem', 'peer-key.pem'):
+        leftover = directory / name
+        if leftover.exists() or leftover.is_symlink():
+            leftover.rename(directory / f'{name}.lost-{stamp}')
+            said.append(f'Moved the lost identity\'s {name} aside to {name}.lost-{stamp}.')
+    identity = PeerIdentity.load_or_create(directory, hosts=tuple(dict.fromkeys(['localhost', '127.0.0.1', *([host] if host else [])])))
+    return '\n'.join([*said, NEW_IDENTITY.format(path=path, peer=identity.peer_id)])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='superyak-peer')
     commands = parser.add_subparsers(dest='command', required=True)
@@ -191,6 +223,10 @@ def main(argv=None):
     card.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     card.add_argument('--username', required=True)
     card.add_argument('--endpoint', required=True)
+    new_identity = commands.add_parser('station-new-identity', help='Trusted local, with the lighthouse stopped: a new station '
+                                       'identity on purpose, when identity.json is truly lost; every old signature stops verifying')
+    new_identity.add_argument('--data-dir', type=Path, required=True)  # no default: never a key in the wrong place
+    new_identity.add_argument('--endpoint', help='https://HOST:PORT, so the new certificate names the host (as card --endpoint does)')
     notices = commands.add_parser('station-notices', help='Trusted local listing of what Odo announces in Ops')
     notices.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
     notices.add_argument('--backup-dir', type=Path, help='The backup rotation (default: backups/station beside the data dir)')
@@ -370,6 +406,8 @@ def main(argv=None):
             host = urlsplit(args.endpoint).hostname
             identity = PeerIdentity.load_or_create(store.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
             print(json.dumps(Federation(store, endpoint=args.endpoint, identity=identity).card(user[0]), indent=2))
+        elif args.command == 'station-new-identity':
+            print(new_identity_for(args.data_dir, args.endpoint))
         elif args.command == 'demo':
             seed_demo(args.data_dir)
             print(f'Demo ready. Private credentials: {args.data_dir / "demo-credentials.json"}')

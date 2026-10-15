@@ -492,3 +492,35 @@ def test_the_restore_test_passes_on_a_copy_holding_signed_records(tmp_path, monk
     assert run_restore_test('--backup-dir', rotation) == 0, capsys.readouterr().err
     assert capsys.readouterr().out.rstrip().endswith('; users 3, rooms 1, messages 1.')
     assert list(run.iterdir()) == []  # the scratch directory, and the throwaway identity in it, are gone
+
+
+def test_station_new_identity_is_the_one_deliberate_way_to_a_new_key(tmp_path, capsys, monkeypatch):
+    """G4c, test 4c: refused while identity.json exists, and without --data-dir; with it lost (its TLS files left behind),
+    it moves those aside, creates an identity whose certificate names the endpoint's host, says what changes, leaves the
+    database byte for byte the same, and the station starts."""
+    from cryptography import x509
+    from superyak_peer.db import Store
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    data, identity = store.data_dir, store.data_dir / 'identity.json'
+    kept = identity.read_bytes()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data)
+    assert code == 1 and 'exists' in err and identity.read_bytes() == kept
+    monkeypatch.chdir(tmp_path)  # without --data-dir it refuses; a default would mint a key in the wrong directory
+    code, out, err = run_cli(capsys, 'station-new-identity', '--endpoint', 'https://peer.example:7435')
+    assert code == 2 and '--data-dir' in err and not (tmp_path / '.engram').exists()
+    old_peer = store._station_identity().peer_id
+    identity.unlink()  # lost; peer-cert.pem and peer-key.pem survive, as they usually do
+    database = (data / 'peer.sqlite3').read_bytes()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data, '--endpoint', 'https://peer.example:7435')
+    assert code == 0, err
+    moved = sorted(path.name for path in data.glob('peer-*.pem.lost-*'))
+    assert [name.split('.lost-')[0] for name in moved] == ['peer-cert.pem', 'peer-key.pem']
+    new = PeerIdentity.load_or_create(data)
+    assert new.peer_id != old_peer and new.peer_id in out
+    for words in ('stops verifying', 'pair again', 'unverified', 'stopped'):
+        assert words in out, words
+    names = x509.load_pem_x509_certificate(new.certificate.encode()).extensions.get_extension_for_class(
+        x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+    assert 'peer.example' in names
+    assert (data / 'peer.sqlite3').read_bytes() == database
+    assert Store(data)._station_identity().peer_id == new.peer_id  # the station starts, on the new key
