@@ -140,3 +140,11 @@ class Signatures:
         serves, so what was signed and what is served can't drift apart."""
         db.execute('UPDATE grants SET signature=? WHERE id=?',
                    (self._station_identity(db).sign_record(self._grant_record(db, grant_id)), grant_id))
+
+    def grant_signed(self, actor, grant_id):
+        """G12: GET /api/grants/{id}/signed, {station, record, signature} for anyone G11 shows the grant to; anyone else,
+        and an unknown id, gets 404."""
+        with self.transaction() as db:
+            grant = self._visible_grant(db, actor, grant_id)
+            return {'station': self._station_identity(db).peer_id, 'record': self._grant_record(db, grant['id']),
+                    'signature': grant['signature']}

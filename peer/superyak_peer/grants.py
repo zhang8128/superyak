@@ -4,7 +4,7 @@ This module holds the tables, the policy, validity, making, revoking and reading
 and revocations live in signatures.py, beside the revisions'. Merge 3c spends grants from tickets.py."""
 from datetime import datetime, timezone
 import json
-from .common import encode, uid
+from .common import Problem, encode, uid
 from .ships import safe_line
 
 GRANT_SCHEMA = '''
@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS budget_uses(grant_id TEXT NOT NULL REFERENCES grants(
 CREATE INDEX IF NOT EXISTS budget_uses_by_grant ON budget_uses(grant_id, created);
 '''
 HOUR, DAY = 3600, 86400
+NOT_IN_ROOM = 'a room you are not in'  # G11: the title anyone outside a listed room sees
 
 
 def short_id(grant_id):
@@ -88,3 +89,94 @@ class Grants:
                     issuer = db.execute('SELECT name FROM users WHERE id=?', (root['issuer_id'],)).fetchone()
                     return False, f'{safe_line(issuer["name"])} no longer owns {safe_line(ship["name"]) if ship else "a ship that is gone"}'
         return True, None
+
+    def _owns_a_target(self, db, actor, grant):
+        ships = json.loads(grant['targets'])
+        marks = ','.join('?' * len(ships))
+        return bool(ships) and db.execute(f"SELECT 1 FROM users WHERE kind='ship' AND owner_id=? AND id IN ({marks})",
+                                          (actor, *ships)).fetchone() is not None
+
+    def _grant_visible(self, db, actor, grant):
+        """G11: the caller issued it (or a grant above it, so G10's issuer above can reach it; in step 3 every grant is its
+        own root), holds it, or owns one of its ships. No one else sees a grant, an admin included."""
+        return (grant['grantee_id'] == actor or any(link['issuer_id'] == actor for link in self._grant_chain(db, grant))
+                or self._owns_a_target(db, actor, grant))
+
+    def _visible_grant(self, db, actor, grant_id):
+        """The grant, or 404 when there is none or G11 doesn't show it to the caller: the same answer, so no route says
+        whether a grant exists."""
+        grant = db.execute('SELECT * FROM grants WHERE id=?', (grant_id,)).fetchone() if isinstance(grant_id, str) else None
+        if grant is None or not self._grant_visible(db, actor, grant):
+            raise Problem(404, 'Not found')
+        return grant
+
+    def _room_label(self, db, actor, room_id):
+        """G11: a room's title for its members only; anyone else sees NOT_IN_ROOM."""
+        row = db.execute('SELECT rooms.title FROM rooms JOIN room_members ON room_members.room_id=rooms.id '
+                         'WHERE rooms.id=? AND room_members.user_id=?', (room_id, actor)).fetchone()
+        return row['title'] if row else NOT_IN_ROOM
+
+    def _current_room(self, db, room_id):
+        """G11: the current room a replaced room now covers, following linked_room_id forward (S5); None for a current
+        room. add_participants never forks a chain (work board 8.4), so a fork or a cycle (only an older or hand-edited
+        database has one) ends the walk with None too."""
+        key, seen = room_id, {room_id}
+        while True:
+            later = db.execute('SELECT id FROM rooms WHERE linked_room_id=?', (key,)).fetchall()
+            if not later:
+                return None if key == room_id else key
+            if len(later) > 1 or later[0]['id'] in seen:
+                return None
+            key = later[0]['id']
+            seen.add(key)
+
+    def _grant_view(self, db, actor, grant):
+        """G11: a grant as its issuer, grantee and target owners see it. Names and titles are people's text, sent as they
+        are; the web app escapes them. `reason` is there only when the grant is not valid."""
+        now, policy = self.clock(), self._grant_policy(db)
+
+        def person(user_id):
+            if user_id is None:
+                return None
+            row = db.execute('SELECT name FROM users WHERE id=?', (user_id,)).fetchone()
+            return {'id': user_id, 'name': row['name'] if row else None}
+
+        targets = []
+        for ship_id in json.loads(grant['targets']):
+            # G11: the ship's grant builds in the last 24 hours, under every grant. Merge 3c writes these tickets.
+            built = db.execute("SELECT count(*) FROM tickets WHERE ship_id=? AND mode='build' AND basis='grant' AND created>?",
+                               (ship_id, now - DAY)).fetchone()[0]
+            targets.append({**person(ship_id), 'ship_builds_left': max(0, policy['builds_per_ship_per_day'] - built)})
+        rooms = json.loads(grant['rooms'])
+        if rooms != '*':
+            listed = []
+            for room_id in rooms:
+                entry, current = {'id': room_id, 'title': self._room_label(db, actor, room_id)}, self._current_room(db, room_id)
+                if current is not None:
+                    entry['current'] = {'id': current, 'title': self._room_label(db, actor, current)}
+                listed.append(entry)
+            rooms = listed
+        valid, reason = self._grant_validity(db, grant)
+        view = {'id': grant['id'], 'short': short_id(grant['id']), 'issuer': person(grant['issuer_id']),
+                'grantee': person(grant['grantee_id']), 'targets': targets, 'rooms': rooms, 'expires': grant['expires'],
+                'budget': grant['budget'], 'budget_left': max(0, grant['budget'] - self._budget_used(db, grant['id'], now)),
+                'created': grant['created'], 'revoked': grant['revoked'], 'revoked_by': person(grant['revoked_by']),
+                'revoke_reason': grant['revoke_reason'], 'valid': valid}
+        if not valid:
+            view['reason'] = reason
+        return view
+
+    def list_grants(self, actor):
+        """G11: GET /api/grants, newest first. A station holds tens of grants, so each is checked here in Python, through
+        the one visibility rule the other routes use."""
+        with self.transaction() as db:
+            rows = db.execute('SELECT * FROM grants ORDER BY created DESC, id DESC').fetchall()
+            return [self._grant_view(db, actor, row) for row in rows if self._grant_visible(db, actor, row)]
+
+    def grant_people(self, actor):
+        """G21's person list (GET /api/grants/people): this station's active people other than the caller, by name.
+        Ships, residents, the system author, accounts awaiting activation and remote contacts are never in it."""
+        with self.transaction() as db:
+            self._person(db, actor)
+            return [dict(row) for row in db.execute("SELECT id, name FROM users WHERE kind='person' AND activation_pending=0 "
+                                                    'AND id!=? ORDER BY name, id', (actor,))]

@@ -486,6 +486,18 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def revision_signed(key: str, revision: int, request: Request):
         return store.revision_signed(actor(request), key, revision)
 
+    @app.get('/api/grants')
+    def grants(request: Request):
+        return store.list_grants(actor(request))  # G14: a person only; current_user gives a ship key 403
+
+    @app.get('/api/grants/people')
+    def grant_people(request: Request):
+        return store.grant_people(actor(request))
+
+    @app.get('/api/grants/{key}/signed')
+    def grant_signed(key: str, request: Request):
+        return store.grant_signed(actor(request), key)
+
     @app.get('/api/shared/layers')
     def shared(request: Request):
         return store.shared_layers(actor(request))

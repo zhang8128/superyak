@@ -4,7 +4,7 @@ import pytest
 from superyak_peer.common import uid
 from superyak_peer.grants import short_id
 from superyak_peer.identity import PeerIdentity, RECORD_KEYS, verify_record
-from test_instructions import docked
+from test_instructions import docked, ship_client
 from test_signatures import card_of, raw_sign
 
 DAY = 86400
@@ -212,3 +212,139 @@ def test_a_station_holding_grants_does_not_start_without_its_identity(tmp_path):
     (store.data_dir / 'identity.json').unlink()
     with pytest.raises(ValueError, match='identity.json'):
         Store(store.data_dir)
+
+
+def listed(client):
+    response = client.get('/api/grants')
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def ids(client):
+    return [grant['id'] for grant in listed(client)]
+
+
+def test_each_person_sees_the_grants_they_issued_hold_or_that_cover_their_ships(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, _ = docked(store, patient['id'], 'serenity')
+    rio, _ = docked(store, patient['id'], 'rio-grande')
+    held = make(store, patient, doctor, [serenity])
+    clock[0] += 1
+    covering = make(store, patient, doctor, [rio])
+    with store.transaction() as db:  # by hand: in step 3 a ship's owner is its grants' issuer
+        db.execute('UPDATE users SET owner_id=? WHERE id=?', (family['id'], rio['id']))
+    assert ids(clients[0]) == [covering, held]  # the issuer, newest first
+    assert ids(clients[1]) == [covering, held]  # the grantee
+    assert ids(clients[3]) == [covering]  # rio-grande's owner now
+    assert ids(clients[2]) == []  # an admin with no tie sees nothing
+    card = card_of(store._station_identity())
+    for client, grant in ((clients[0], held), (clients[1], held), (clients[3], covering)):
+        signed = client.get(f'/api/grants/{grant}/signed')
+        assert signed.status_code == 200, signed.text
+        assert set(signed.json()) == {'station', 'record', 'signature'} and signed.json()['record']['id'] == grant
+        assert signed.json()['station'] == store._station_identity().peer_id
+        assert verify_record(card, signed.json()['record'], signed.json()['signature'])
+    for client, grant in ((clients[3], held), (clients[2], held), (clients[2], covering), (clients[0], 'no-such-grant')):
+        assert client.get(f'/api/grants/{grant}/signed').status_code == 404, grant
+
+
+def test_a_grant_shows_its_people_ships_rooms_budget_and_validity(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, _ = docked(store, patient['id'], 'serenity')
+    rio, _ = docked(store, patient['id'], 'rio-grande')
+    ops = store.create_room(patient['id'], 'Ops', [doctor['id'], serenity['id']])
+    grant = make(store, patient, doctor, [serenity, rio], rooms=[ops['id']], hours=24, budget=5)
+    other = make(store, patient, family, [serenity])
+    charge(store, grant, 10, 20, DAY)  # two in the last 24 hours; one exactly 24 hours old, which no longer counts
+    sent = [store.send_message(patient['id'], ops['id'], f'm{n}', f'@serenity {n}')['id'] for n in range(5)]
+    with store.transaction() as db:  # serenity's tickets, as merge 3c will write them: two grant builds count
+        for message, mode, basis, age in ((sent[0], 'build', 'grant', 10), (sent[1], 'build', 'grant', DAY - 1),
+                                          (sent[2], 'build', 'grant', DAY), (sent[3], 'build', 'owner', 10),
+                                          (sent[4], 'read', 'none', 10)):
+            db.execute("INSERT INTO tickets(id,ship_id,message_id,mode,basis,status,created) VALUES(?,?,?,?,?,'finished',?)",
+                       (uid(), serenity['id'], message, mode, basis, clock[0] - age))
+    views = {view['id']: view for view in listed(clients[0])}
+    assert views[grant] == {
+        'id': grant, 'short': '#' + grant[:4], 'issuer': {'id': patient['id'], 'name': 'Patient'},
+        'grantee': {'id': doctor['id'], 'name': 'Doctor'},
+        'targets': [{'id': serenity['id'], 'name': 'Serenity', 'ship_builds_left': 18},
+                    {'id': rio['id'], 'name': 'Rio Grande', 'ship_builds_left': 20}],
+        'rooms': [{'id': ops['id'], 'title': 'Ops'}], 'expires': 1000000.0 + DAY, 'budget': 5, 'budget_left': 3,
+        'created': 1000000.0, 'revoked': None, 'revoked_by': None, 'revoke_reason': None, 'valid': True}
+    assert views[other]['targets'] == [{'id': serenity['id'], 'name': 'Serenity', 'ship_builds_left': 18}]  # every grant's
+    assert views[other]['rooms'] == '*' and views[other]['budget_left'] == 5
+    charge(store, other, *range(1, 8))  # more uses than its budget (only by hand): none left, never fewer
+    revoke_by_hand(store, grant, patient, 'Done for now')
+    views = {view['id']: view for view in listed(clients[1])}
+    assert views[grant]['valid'] is False and views[grant]['reason'] == f'Grant #{grant[:4]} was revoked by Patient'
+    assert (views[grant]['revoked'], views[grant]['revoked_by'], views[grant]['revoke_reason']) == \
+        (1000000.0, {'id': patient['id'], 'name': 'Patient'}, 'Done for now')
+    views = {view['id']: view for view in listed(clients[0])}
+    assert views[other]['budget_left'] == 0 and views[other]['reason'].endswith('has used its 5 builds for the last 24 hours')
+
+
+def test_room_titles_show_only_to_members_and_a_replaced_room_shows_the_current_one(env):
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, _ = docked(store, patient['id'], 'serenity')
+    ops = store.create_room(patient['id'], 'Ops', [doctor['id']])
+    plans = store.create_room(patient['id'], 'Plans', [doctor['id']])
+    grant = make(store, patient, doctor, [serenity], rooms=[ops['id'], plans['id']])
+    removed = clients[0].delete(f'/api/chats/{ops["id"]}/participants/{doctor["id"]}')  # the room's owner removes the grantee
+    assert removed.status_code == 200, removed.text
+    second = clients[0].post(f'/api/chats/{plans["id"]}/participants', json={'member_ids': [family['id']]}).json()
+    third = clients[0].post(f'/api/chats/{second["id"]}/participants', json={'member_ids': [organizer['id']]}).json()
+    current = {'id': third['id'], 'title': 'Plans'}  # Plans was replaced twice: the grant covers the newest
+    assert listed(clients[1])[0]['rooms'] == [
+        {'id': ops['id'], 'title': 'a room you are not in'}, {'id': plans['id'], 'title': 'Plans', 'current': current}]
+    assert listed(clients[0])[0]['rooms'] == [
+        {'id': ops['id'], 'title': 'Ops'}, {'id': plans['id'], 'title': 'Plans', 'current': current}]
+    with store.transaction() as db:  # by hand, so serenity's new owner sees the grant: added later, never in Plans itself
+        db.execute('UPDATE users SET owner_id=? WHERE id=?', (family['id'], serenity['id']))
+    assert listed(clients[3])[0]['rooms'] == [
+        {'id': ops['id'], 'title': 'a room you are not in'},
+        {'id': plans['id'], 'title': 'a room you are not in', 'current': current}]
+    loop_a = store.create_room(patient['id'], 'Loop A', [doctor['id']])
+    loop_b = store.create_room(patient['id'], 'Loop B', [doctor['id']])
+    with store.transaction() as db:  # a linked_room_id cycle, made by hand, ends the walk: no current room
+        db.execute('UPDATE rooms SET linked_room_id=? WHERE id=?', (loop_b['id'], loop_a['id']))
+        db.execute('UPDATE rooms SET linked_room_id=? WHERE id=?', (loop_a['id'], loop_b['id']))
+    looped = make(store, patient, doctor, [serenity], rooms=[loop_a['id']])
+    shown = next(view for view in listed(clients[0]) if view['id'] == looped)
+    assert shown['rooms'] == [{'id': loop_a['id'], 'title': 'Loop A'}]
+
+
+def test_the_people_list_has_active_people_only(env, tmp_path):
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    docked(store, patient['id'], 'serenity')
+    store.create_station_ship('odo', 'Odo')  # a resident
+    store.bootstrap_super_admin('root', 'Root', tmp_path / 'activation.json')  # awaiting activation
+    with store.transaction() as db:
+        db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", ('ab' * 32,))
+        db.execute("INSERT INTO remote_contacts(id, peer_id, user_id, name) VALUES('contact-1', ?, 'remote-user', 'Aaron')",
+                   ('ab' * 32,))
+    people = clients[0].get('/api/grants/people')
+    assert people.status_code == 200, people.text
+    assert people.json() == [{'id': doctor['id'], 'name': 'Doctor'}, {'id': family['id'], 'name': 'Family'},
+                             {'id': organizer['id'], 'name': 'Organizer'}]  # by name; no caller, ship, resident, system author
+
+
+def test_a_ship_key_gets_403_on_every_grants_route(env):
+    """G14: every /api/grants route takes a person session only (spec A Testing 3). The body is current_user's own
+    refusal, so no store-level check can be what refused the ship."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'], 'serenity')
+    grant = make(store, users[0], users[1], [ship])
+    routes = [('GET', '/api/grants', None), ('GET', '/api/grants/people', None),
+              ('GET', f'/api/grants/{grant}/signed', None)]
+    for method, path, body in routes:
+        response = ship_client(app, key).request(method, path, json=body)
+        assert (response.status_code, response.json()) == (403, {'error': 'Ship keys cannot use this route'}), (method, path)
