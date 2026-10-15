@@ -113,6 +113,7 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
                               capture_output=True, text=True, timeout=60)
 
     before = sorted(str(path.relative_to(units)) for path in units.rglob('*'))
+    contents = {path: path.read_bytes() for path in units.rglob('*') if path.is_file()}   # R16: compared by bytes, not by name
     refused = make('station-units')
     assert refused.returncode != 0 and 'No station database' in refused.stdout + refused.stderr
     assert sorted(str(path.relative_to(units)) for path in units.rglob('*')) == before and not calls.exists()
@@ -125,12 +126,14 @@ def test_station_units_install_and_remove_only_their_own_files(tmp_path):
     for service in services:
         assert (units / f'{service}.service.d' / '50-alerts.conf').read_bytes() == (UNITS / '50-alerts.conf').read_bytes()
     assert stat.S_IMODE(andys.parent.stat().st_mode) == 0o700
+    assert {path: path.read_bytes() for path in contents} == contents      # R16: no existing unit or drop-in is edited
     assert calls.read_text().splitlines() == ['--user daemon-reload',
                                               '--user enable --now superyak-backup.timer superyak-restore-test.timer']
     calls.unlink()
     removed = make('station-units-remove')
     assert removed.returncode == 0, removed.stderr
     assert sorted(str(path.relative_to(units)) for path in units.rglob('*')) == before
+    assert {path: path.read_bytes() for path in units.rglob('*') if path.is_file()} == contents
     assert andys.read_text() == '[Service]\nNice=5\n'
     assert stray.read_text() == '[Service]\nNice=7\n'
     assert calls.read_text().splitlines() == [
