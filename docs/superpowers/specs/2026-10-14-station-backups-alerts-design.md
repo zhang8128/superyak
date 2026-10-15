@@ -462,7 +462,7 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 - **R13.** Alerts are queued as 0600 files in `<data-dir>/alerts/`. `station-notices` lists, from the last 7 days,
   at most the 20 newest plus every `down` and `failed` alert, and Odo posts each once in Ops through its existing
   path. Files more than 30 days old are deleted. When the store can't be opened, the queued alerts are still listed
-  and the command exits 0. A file whose `at` is not a finite number is not an alert: it is skipped, and deleted once
+  and the command exits 0. A file whose `at` is not a finite number (an integer too big for a float included), or is more than a day ahead of now, is not an alert: it is skipped, and deleted once
   the file itself is over 30 days old. An alert whose text sanitises to nothing is not listed. (Follow-up from the
   final reviews; narrows, no new D8 round.)
 - **R14.** A rotation whose newest copy is more than 36 hours old gives exactly one `backup-stale-<name>` notice. No

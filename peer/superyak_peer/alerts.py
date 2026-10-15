@@ -250,9 +250,12 @@ def record(alerts_dir, unit, kind, fields, now, *, lock_wait=LOCK_WAIT):
         return alert
 
 
-def queued(alerts_dir):
+def queued(alerts_dir, now=None):
     """Every readable alert, oldest first. A file that is empty, half-written or not shaped like ours is skipped, never
-    fatal: station-notices runs under Odo's check=True."""
+    fatal: station-notices runs under Odo's check=True. An alert's "at" must be a number (_number: not a bool, NaN,
+    Infinity or an int too big for a float) and not more than a day ahead of now, so no hand-made time can sit in the queue
+    for good; clean() removes such a file by its own age."""
+    now = time.time() if now is None else now
     try:
         entries = list(os.scandir(alerts_dir))
     except OSError:
@@ -268,8 +271,7 @@ def queued(alerts_dir):
             continue
         if (isinstance(alert, dict) and alert.get('id') == match[1] and isinstance(alert.get('unit'), str)
                 and UNIT.fullmatch(alert['unit']) and alert.get('kind') in KINDS
-                and isinstance(alert.get('at'), (int, float)) and not isinstance(alert['at'], bool) and math.isfinite(alert['at'])
-                and isinstance(alert.get('text'), str)):
+                and _number(alert.get('at')) and alert['at'] <= now + DAY and isinstance(alert.get('text'), str)):
             found.append(alert)
     return sorted(found, key=lambda alert: (alert['at'], alert['id']))
 
@@ -278,7 +280,7 @@ def clean(alerts_dir, now):
     """S10: alert files more than 30 days old are deleted each time the notifier runs."""
     if Path(alerts_dir).is_symlink():
         raise OSError(f'{alerts_dir} is a symlink')  # never unlink files in a link's target
-    waiting = queued(alerts_dir)
+    waiting = queued(alerts_dir, now)
     for alert in waiting:
         if alert['at'] < now - KEPT_DAYS * DAY:
             (Path(alerts_dir) / f'{alert["id"]}.json').unlink(missing_ok=True)
@@ -314,7 +316,7 @@ def station_alert(data_dir, unit, *, monitor, environ, now=None):
 def listed(alerts_dir, now):
     """S10: the last 7 days' alerts, oldest first: at most the 20 newest, plus every down and failed alert of those
     days, so a give-up line is never pushed out by restarts. The text goes through safe_line again on the way out."""
-    waiting = queued(alerts_dir)
+    waiting = queued(alerts_dir, now)
     shown = {alert['id']: safe_line(alert['text'], LINE_LIMIT) for alert in waiting}
     # follow-up 6: text of only invisible characters would list as nothing, so it is not an alert to list (or to count)
     recent = [alert for alert in waiting if alert['at'] > now - LISTED_DAYS * DAY and shown[alert['id']]]
@@ -336,7 +338,7 @@ def notices_beside(data_dir, backup_dir, now):
 def describe_queue(alerts_dir, now):
     """make station-alerts (S13): the queue and the held-back counts. Every value here is ours: checked units and
     rendered lines."""
-    waiting = queued(alerts_dir)
+    waiting = queued(alerts_dir, now)
     lines = ['Queued alerts, oldest first (Odo posts each once in Ops; files over 30 days old are deleted):'] if waiting else ['No alerts are queued.']
     lines += [f'  {_local(alert["at"], "%Y-%m-%d %H:%M")}  {alert["kind"]:<7}  {alert["unit"]}  {alert["id"]}' for alert in waiting]
     held = [(unit, state) for unit, state in ((unit, _state(value, now)) for unit, value in sorted(_rates(alerts_dir).items()))
