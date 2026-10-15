@@ -1,5 +1,6 @@
 """Remote contacts and received resources never become local accounts."""
 import json
+import math
 import re
 from .common import Problem, require, uid, text, ids, encode, linked_room_ok
 
@@ -19,9 +20,10 @@ def _stored_message_ok(m):
             and type(m.get('created')) in (int, float))
 
 def _stored_time(value, otherwise=0):
-    # The view's backstop for a hand-edited time, beside receive's check (remote room fields review, N3): a bool or
-    # anything else that is not a number counts as `otherwise`.
-    return value if type(value) in (int, float) else otherwise
+    # The view's backstop for a hand-edited time, beside receive's check (remote room fields review, N3): a bool, a NaN
+    # or an infinity (JSON reads both, and the HTTP answer refuses NaN) or anything else that is not a finite number
+    # counts as `otherwise`.
+    return value if type(value) in (int, float) and math.isfinite(value) else otherwise
 
 PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
