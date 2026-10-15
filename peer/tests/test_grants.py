@@ -1,11 +1,15 @@
 """Grants (spec A step 3, merge 3b: G7-G14 of docs/superpowers/specs/2026-10-15-grants-step3-design.md)."""
 import base64
+from contextlib import closing
+import shutil
+import sqlite3
 import pytest
-from superyak_peer.common import uid
 from superyak_peer import grants as G
+from superyak_peer.common import uid
 from superyak_peer.grants import short_id
 from superyak_peer.identity import PeerIdentity, RECORD_KEYS, verify_record
 from test_instructions import docked, ship_client
+from test_restore import reconcile as run_reconcile, staged
 from test_signatures import card_of, raw_sign
 
 DAY = 86400
@@ -590,3 +594,118 @@ def test_startup_signs_each_unsigned_revocation_once(env, monkeypatch):
     monkeypatch.setattr(PeerIdentity, 'sign_record', lambda self, record: signed.append(record) or real(self, record))
     Store(store.data_dir)
     assert signed == [] and grant_row(restarted, revoked)['revocation_signature'] == rows[revoked]  # a second start signs nothing
+
+
+def lighthouse(tmp_path):
+    """A station on a clock the test moves, with andy granting jenn: (store, clock, andy, jenn, serenity)."""
+    from superyak_peer.db import Store
+    clock = [1000000.0]
+    store = Store(tmp_path / 'lighthouse', clock=lambda: clock[0])
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn')
+    serenity, _ = docked(store, andy['id'], 'serenity')
+    return store, clock, andy, jenn, serenity
+
+
+def revocations(path):
+    with closing(sqlite3.connect(path)) as db:
+        return {row[0]: row[1:] for row in db.execute('SELECT id, revoked, revoked_by, revoke_reason, revocation_signature FROM grants')}
+
+
+def uses(path):
+    with closing(sqlite3.connect(path)) as db:
+        return db.execute('SELECT grant_id, ticket_id, created FROM budget_uses ORDER BY grant_id, created').fetchall()
+
+
+def report_line(out, start):
+    return next((line for line in out.splitlines() if line.startswith(start)), None)
+
+
+def test_the_reconcile_takes_back_revoked_grants_and_spent_budgets(tmp_path, capsys):
+    """Test 10, with a replaced file: a grant revoked there is revoked here as it was there, a grant missing there is
+    revoked, the budget uses there are added once, and the station's next start signs those revocations."""
+    store, clock, andy, jenn, serenity = lighthouse(tmp_path)
+    kept = make(store, andy, jenn, [serenity])  # in force in both files
+    clock[0] += 1
+    later = make(store, andy, jenn, [serenity])  # revoked after the copy
+    clock[0] += 1
+    lost = make(store, andy, jenn, [serenity])  # missing from the replaced file
+    clock[0] += 1
+    early = make(store, andy, jenn, [serenity])  # revoked before the copy: left as it is
+    store.revoke_grant(andy['id'], early, 'before the copy')
+    charge(store, kept, 100)
+    copy = staged(tmp_path, store)  # A
+    early_row = revocations(copy)[early]
+    clock[0] += 60  # B moves on
+    store.revoke_grant(andy['id'], later, 'Not this week')
+    charge(store, kept, 50, 10)  # two builds after the copy
+    newer = make(store, andy, jenn, [serenity])  # made after the copy: gone after the restore, with its use
+    charge(store, newer, 5)
+    with store.transaction() as db:  # by hand: grants are never deleted, so a missing one means damage
+        db.execute('DELETE FROM grants WHERE id=?', (lost,))
+    there = revocations(store.db_path)
+    code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    here = revocations(copy)
+    assert here[later] == there[later][:3] + (None,)  # the same time, person and reason; signed at the next start
+    assert here[lost][0] is not None and here[lost][1:] == (None, 'restored', None)  # now, with no person
+    assert here[kept] == (None, None, None, None) and here[early] == early_row
+    assert [(grant, created) for grant, _, created in uses(copy)] == [(kept, clock[0] - 60 - 100), (kept, clock[0] - 50), (kept, clock[0] - 10)]
+    assert report_line(out, 'Grants revoked: ') == (f'Grants revoked: #{later[:4]} (andy to jenn, as in the replaced file); '
+                                                   f'#{lost[:4]} (andy to jenn, missing from the replaced file).')
+    assert 'budget uses added (2)' in report_line(out, 'Taken back: ')
+    code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', store.db_path)  # a second run adds none
+    assert code == 0, err
+    assert report_line(out, 'Grants revoked: ') is None and 'budget uses added (0)' in report_line(out, 'Taken back: ')
+    assert len(uses(copy)) == 3
+    live = tmp_path / 'live'
+    live.mkdir(mode=0o700)
+    shutil.copyfile(store.data_dir / 'identity.json', live / 'identity.json')  # the identity stays put (runbook step 6)
+    shutil.copyfile(copy, live / 'peer.sqlite3')
+    from superyak_peer.db import Store
+    started = Store(live)
+    card = card_of(started._station_identity())
+    with started.transaction() as db:
+        for grant in (later, lost, early):
+            row = db.execute('SELECT signature, revocation_signature FROM grants WHERE id=?', (grant,)).fetchone()
+            assert verify_record(card, started._revocation_record(db, grant), row['revocation_signature']), grant
+            assert verify_record(card, started._grant_record(db, grant), row['signature']), grant
+
+
+def test_without_a_replaced_file_the_reconcile_revokes_every_grant(tmp_path, capsys):
+    store, clock, andy, jenn, serenity = lighthouse(tmp_path)
+    first = make(store, andy, jenn, [serenity])
+    clock[0] += 1
+    second = make(store, andy, jenn, [serenity])
+    clock[0] += 1
+    done = make(store, andy, jenn, [serenity])
+    store.revoke_grant(andy['id'], done, 'before the copy')
+    copy = staged(tmp_path, store)
+    done_row = revocations(copy)[done]
+    code, out, err = run_reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    here = revocations(copy)
+    for grant in (first, second):
+        assert here[grant][1:] == (None, 'restored', None), grant
+    assert here[done] == done_row  # already revoked: kept as it was, with its signature
+    assert report_line(out, 'Grants revoked: ') == (f'Grants revoked: #{first[:4]} (andy to jenn, no usable replaced file); '
+                                                   f'#{second[:4]} (andy to jenn, no usable replaced file).')
+    assert 'grants revoked (2)' in report_line(out, 'Taken back: ')
+
+
+def test_a_replaced_file_without_the_grants_tables_is_treated_as_absent(tmp_path, capsys):
+    """G13: the grants columns join COMPARED, so a replaced file lacking them (the wrong file, or a damaged one) is
+    treated as absent and the reconcile fails closed: every grant is revoked, rather than none compared."""
+    store, clock, andy, jenn, serenity = lighthouse(tmp_path)
+    grant = make(store, andy, jenn, [serenity])
+    copy = staged(tmp_path, store)
+    replaced = copy.parent / 'peer.sqlite3'
+    shutil.copyfile(store.db_path, replaced)
+    with closing(sqlite3.connect(replaced)) as db:
+        db.execute('DROP TABLE budget_uses')
+        db.execute('DROP TABLE grants')
+        db.commit()
+    code, out, err = run_reconcile(capsys, '--db', copy, '--replaced', replaced)
+    assert code == 0, err
+    assert 'The replaced file was treated as absent (it lacks tables or columns the copy has: ' in out
+    assert revocations(copy)[grant][2] == 'restored'
