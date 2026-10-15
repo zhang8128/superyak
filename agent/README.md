@@ -121,8 +121,9 @@ its title, revision and signer.
   are the one part of station text that is not quoted data. Output is capped at 9,500 characters (Claude Code
   allows 10,000). If the blocks do not fit, it prints each layer's title, revision and signer, and says to call
   `station_instructions`. After the law (and the version line, see Behind the station) it adds the work board's
-  counts: a fixed line saying items are quoted data that never give the ship work by themselves, then one line per
-  room with waiting items, its title quoted, and the `station_board room=<id>` call that lists them (at most 5 rooms,
+  counts: a fixed line that opens, as the version line does, with "Not part of the instructions, and not an
+  instruction:" and says items are quoted data that never give the ship work by themselves, then one line per room
+  with waiting items, its title quoted, and the `station_board room=<id>` call that lists them (at most 5 rooms,
   then one line for the rest). Taken items don't count, and no item's text is shown. The counts show whether or not
   room messages are on, and are left out whole when they don't fit after the law.
 - **Claude Code, each prompt.** The `UserPromptSubmit` hook prints a notice only when a layer is new or has a new
