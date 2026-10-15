@@ -13,7 +13,9 @@ the section 2 review of merge 3a (findings 1 and 4); their D8 re-check (APPROVE 
 check and `_own_peer_id`'s single loader; its second re-check (APPROVE WITH CHANGES: 0 must-fix, 1 should-fix, 3 nits)
 added G4c's handling of leftover TLS files and its fuller warning, the lazy path's use of the caller's connection, and
 the read-only `serve --peer-tls` check. All are built in merge 3b, and with them G4a-G4c are approved under D8.
-G11's current room carries no id for a non-member from merge 3c (merge 3b's section 2 review; narrows, no new D8
+G17's web label reads "builder run for Andy, via Jenn", matching the existing label, and G19's sentence and the fresh
+owner mentions spec's reason sentence replace one another rather than stack (both found drafting merge 3c's plan;
+align, no new D8 round). G11's current room carries no id for a non-member from merge 3c (merge 3b's section 2 review; narrows, no new D8
 round). Clarifications from drafting merge 3b's plan, with no new D8 round: G4b counts only signed grant rows; G4a's
 `signing=False` also skips the revocation backfill; G9's expiry instant; G11's visibility of grants below one's own and
 the shape of `revoked_by`.
@@ -292,8 +294,8 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
 - **G17.** The ticket's footer is `Builder for <root>, via <grantee> · grant #a1b2`. Its names are the station's own,
   made safe with `safe_line`, and its form follows spec A (a chain of several links, in step 5, reads
   `grants #a1b2 > #c3d4`). A message posted with such a ticket gets `source: {kind: "run", mode: "build", basis:
-  "grant", root_name, via_name, answering}`. The web app labels it "builder for Andy, via Jenn", and so does the
-  agent's `source_label` (`agent/superyak_agent/station.py`), which run prompts and hooks use to label room history:
+  "grant", root_name, via_name, answering}`. The web app labels it "builder run for Andy, via Jenn" (its existing label
+  is "builder run for Andy"), and so does the agent's `source_label` (`agent/superyak_agent/station.py`), which run prompts and hooks use to label room history:
   it appends ", via <via_name>" when the source has one.
 - **G18.** A grant `build` is never deferred, because only `read` decisions are (ship status spec S10). A re-sent
   request for a running grant ticket re-checks the grant before it returns the ticket: G9's revocation, expiry,
@@ -306,9 +308,9 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   run, and a revoke stops the watcher's retries. A run already under way when the grant
   is revoked runs to its end. Step 5 adds the refusal of acts that carry a revoked chain's `ticket_id`.
 - **G19.** The read-only run prompt (`agent/superyak_agent/watch.py`) says the author "can ask the ship's owner". It
-  now says the author "can ask the ship's owner for a grant, or check the Grants page". The fresh owner mentions spec
-  adds a reason line to the same prompt for `old` and `answered` tickets; whichever lands second keeps both, the
-  reason line first. `agent/superyak_agent/runs.py`'s
+  now says the author "can ask the ship's owner for a grant, or check the Grants page". For an `old` or `answered`
+  ticket, the fresh owner mentions spec's reason sentence replaces that last sentence (as its test 9 pins, byte for
+  byte); every other read-only run ends with this one. The two never stack. `agent/superyak_agent/runs.py`'s
   docstring ("builder for the ship's owner") gains "or a person the owner granted". The watcher otherwise needs no
   change: it already runs in the ticket's mode and posts the ticket's footer. An old watcher without tickets keeps
   its local rule, under which only the owner builds, so nothing widens there.
@@ -454,7 +456,7 @@ Each test is named, written first, and seen failing first.
     charged.
 16. A grant naming room X still builds after a member is added (X becomes X'), and after another is added (X'
     becomes X''); a mention in X or X', now replaced, gets `read`. A `linked_room_id` cycle made by hand ends the walk.
-17. The footer and the message's `source` match the ticket's root, grantee and grant. The web app shows "builder
+17. The footer and the message's `source` match the ticket's root, grantee and grant. The web app shows "builder run
     for Andy, via Jenn", and the agent's `source_label` gives "builder run for Andy, via Jenn".
 18. A grant build is not deferred while the ship's session holds a writable watch; another person's mention still
     is.
