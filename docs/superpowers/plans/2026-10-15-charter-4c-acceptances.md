@@ -38,8 +38,20 @@ the wrong place.
 interfaces below, written for the dry run only and never committed. Each RED below is the one seen, each GREEN ran, and
 each Step 5 mutation was applied alone and failed the test it names, except where a step says otherwise. The code blocks
 are the dry run's own text: Appendix A and then every task in order reproduce its tree. At the end the peer suite ran
-973 passed and 1 skipped, this plan's 32 new tests among them. On the real 4a, the counts in Steps 2 and
+975 passed and 1 skipped, this plan's 34 new tests among them. On the real 4a, the counts in Steps 2 and
 4 grow by 4a's own tests, and a RED message that 4a's code writes may read differently; each such place says so.
+
+**Plan revision 2.** A fresh review of revision 1 (`446e013`: APPROVE WITH CHANGES, 0 must-fix, 4 should-fix, 7 nits;
+it transcribed every step, matched every RED and GREEN, and ran all 60 mutations) is answered here: S1 (Task 5:
+`test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active` and its mutation; Known
+limits), S2 (Task 5: `test_an_own_layer_that_would_send_a_follower_back_past_a_large_revision_is_refused` and its
+mutation; R11's reason), S3 (Known limits: display names), S4 (the reconciliation risk; Task 3 Step 4's two flagged
+assertions), N1 (Task 7 Step 5's anchor), N2 (Task 3 Step 3's blank line), N3 (`_accepted_pair` compares with
+`_active_charter`, from Task 2), N4 (Task 9: "accepted revision"), N5 (Known limits: a charter alone can pass the
+caps), N6 (two line references), N7 (Task 3's test 26 also reads the person list and makes a second grant), and the
+review's 3c (Known limits: re-activating a withdrawn layer can be refused). The coordinator has posted I1-I16 to Rio
+Grande for 4a's planner. Every task was replayed after these changes, with the counts below; each new or changed
+mutation was run and bites.
 
 Tasks: 1 the table and its two signed records (R29: records, G4b, the backfill, the signed route); 2 a pinned acceptance
 binds its owner's ships (R29, R31; C15, C19, C22); 3 reading, accepting and leaving (R30, R32; C17, C18, C20); 4 follow
@@ -72,13 +84,19 @@ what a row means, not for how 4a writes it.
 | I15 | Spec-defined data and routes, read directly | a charter revision's snapshot holds `charter: true`, `audience_users: []` and the full `policy`; `POST/PUT /api/layers` take `charter` and `policy`; `POST /api/layers/{id}/activate` takes `confirm_widenings`; `POST /api/layers/{id}/withdraw` takes `{confirm_widenings}` | Data; Routes | `acceptances.py` reads snapshots; every test helper uses these routes |
 | I16 | The agent's charter line | `superyak_agent.station.charter_line(charter: dict \| None) -> str \| None`, R20's line from the ship route's field | R20 | Task 2's status test only |
 
-**Reconciling.** Before Task 1, read 4a's plan and its merged code. For each row, find 4a's name: either rename the
-uses this plan lists (the last column) or give 4a's module a one-line alias. Rows I12 to I14 are edits inside 4a's
+**Reconciling: medium risk.** I1 to I7, I9, I11 to I13 and I15 are behaviours 4a must have, under some name; I8
+(`_own_layers` with `replace`), I10 (`_charter_status`), I14 (`_may_read_charter_revision`) and I16 (`charter_line`)
+assume 4a builds them as separate functions. If 4a inlines one of those four, reconciling means extracting it from 4a's
+code, not renaming. Tests also pin two texts whose exact form is 4a's: the message after "Confirm exactly these
+widenings: " and the shape of a narrowed `grantees` item (Task 3 Step 4 names both). The coordinator has posted I1-I16
+to Rio Grande, so 4a's plan can build these seams. Before Task 1, read 4a's plan and its merged code. For each row,
+find 4a's name: either rename the uses this plan lists (the last column) or give 4a's module a one-line alias. Rows I12 to I14 are edits inside 4a's
 functions; their anchors are 4a's code, shown here as Appendix A writes it. If 4a computes a row differently (say
 `_charter_pair` takes `replace`), keep 4c's code behind the same name and adjust only the call. If 4a's `status` prints
 the charter line inline rather than through a function (I16), Task 2's status test calls the function 4a's own test 20
 calls, or runs `superyak-agent status` against the station as `test_ship_agent.py` runs the hook. Tests reach 4a only
-through spec routes and I6 to I11 and I16, so reconciling renames, it doesn't redesign.
+through spec routes and I6 to I11 and I16, so the tests need renames at most (and the two texts above); the code may
+also need one of the four seams extracted from 4a's code, never a change to 4c's design.
 
 **Not from 4a.** 4b's signing dialog also has a line diff and widened paths in words (C30, R25). If 4b merged before
 4c with helpers for both, Task 9 uses 4b's helpers in place of `lineDiff` and `wideningWords`; Task 9's tests read the
@@ -100,7 +118,7 @@ Decisions this plan makes where the spec leaves a choice. A fresh reviewer check
 | R8 | The follow walk also stops before a revision that isn't a charter revision. | C6 makes it unreachable; a hand-edited database can't make the walk read a policy that isn't there. |
 | R9 | `_too_large` answers for every caps question 4c asks (accept step 6, `pending.too_large`, the re-bound check): the person's ships, by name, that the revision with each ship's own layers puts over the caps. A 409 names the first. | C23: one rule, one function, as the spec's Binding says ("the caps check uses the same function"). |
 | R10 | The re-bound check runs only when the layer has no active revision at activation, and checks each acceptance's own revision, pinned or following. | C23 and Binding: a follower re-bound after a withdrawal "starts its walk at a revision it can't stop before"; a layer active now binds no one again. |
-| R11 | An owner's own activation that would change their charter pair, either way, gets 409 `<ship> would be bound by charter revision <after> instead of revision <before>`, naming the ship whose caps made the difference. It runs after 4a's caps check (I13), which already refuses a move back (the revision binding now, with the new layer, is over the caps); this check is what refuses a move forward, when shrinking an own layer would let a follower take a revision they haven't seen. | Binding: "if any pair differs, the activation gets 409 naming the ship". The spec gives no words. |
+| R11 | An owner's own activation that would change their charter pair, either way, gets 409 `<ship> would be bound by charter revision <after> instead of revision <before>`, naming the ship whose caps made the difference. It runs after 4a's caps check (I13). That check refuses a move back only when the revision binding now stops fitting; a move back past an earlier large revision (her walk is at r4 through a large r3, and the new layer still fits r4 but not r3) and every move forward (shrinking an own layer lets a follower take a revision they haven't accepted by hand) are refused by this check alone. A move forward through an own layer's withdrawal or narrowing is allowed, and must stay so: C23 checks activations only, C21's follow consents to non-widening revisions, and refusing it would stop owners withdrawing their own layers. | Binding: "if any pair differs, the activation gets 409 naming the ship"; re-check SA(b). The spec gives no words. |
 | R12 | The reconcile's report: `Charter acceptances ended, as the replaced file holds none in force for them: …`, `Charter acceptances kept: …`, `Charter acceptances lost: in the replaced file, not in this copy, and a restore never adds one: … Ask them to accept again on the Charter page.`, by username. A copy from before 4c (no table) is skipped as any step is, and every acceptance in force in the replaced file is listed as lost. No count joins "Taken back:". | C27 and Security ("names every acceptance it couldn't keep"). Ending an acceptance takes law away, not access. |
 | R13 | Test 35 is a new 500-step test beside 4a's oracle (test 23), not a rewrite of it. | 4a owns test 23. Caps need layer sizes, which the 60-case oracle doesn't have. |
 | R14 | The Charter page states the limits in words, shows the line diff, one checkbox per widened path, the ships a revision is too large for, and pin or follow; its button stays disabled until every box is ticked and while a ship is too large; one write at a time; "Stop accepting" asks in place, Cancel focused. Narrowings aren't listed: the limits list shows the new values. | R35; 3c's R17 and R18 for the ask and the one write. |
@@ -149,12 +167,28 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
 - The follow walk runs at every binding computation (tickets, the ship route, `GET /api/ships`, `GET /api/charter`):
   each step renders the candidate revision with each of the owner's ships' own layers. A station holds a handful of
   revisions and ships.
-- Which 409 answers an own activation that would move a follower back depends on 4a (R11): 4a's caps check names the
-  ship with the caps message; were 4a to compute the pair with the new layer, R11's check would answer instead. Tests
-  assert the status and the ship's name only.
-- A pinned owner whose binding grows over the caps while bound (only a longer display name in a block header can do it)
-  isn't checked at the signer's next revision, which doesn't change their binding (C23 checks only ships whose binding
-  changes). No test can tell that rule from checking them, so Task 5 lists no mutation for it.
+- When an own activation makes the revision binding now stop fitting, which 409 answers depends on 4a (R11): 4a's caps
+  check names the ship with the caps message; were 4a to compute the pair with the new layer, R11's check would answer
+  instead. That test asserts the status and the ship's name only.
+- `_check_rebound_caps` returns at once for a layer that is active now (R10). That early return is what keeps a
+  follower's accepted revision, which their walk has left, from being checked again at each later revision: without it,
+  one follower whose own layers fit where their walk is but not the revision they accepted would block every revision
+  of the charter (the spec review's S6). Task 5's `test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active`
+  pins it.
+- Display-name growth breaks the caps in silence. Every block prints "signed by <name>", and `rename_user` checks no
+  binding, so a longer name (up to 200 characters) can move a follower near the caps back to an earlier revision (a
+  signer's rename can do it to every such follower at once), and can push a pinned owner's, a signer's or a resident's
+  binding past the caps. C23's last check covers activations only; a check at renaming is for a later spec.
+- A charter alone can pass the caps: instructions are capped at 20,000 characters, not bytes. On a station with no
+  resident and a signer who owns no ships, such a charter activates, and an owner who accepts it before docking (no
+  ship to check) is bound over the caps by the ship they dock later. The live station has residents, whose check
+  refuses such a charter.
+- Re-activating a withdrawn charter layer can be refused (409 naming the ship) by re-bound owners, pinned or following,
+  whose ships would pass the caps at their accepted revision (R10; spec C23). The signer's way out is a new charter
+  layer, the spec's own rollback path, at the cost of every owner accepting again. The narrower rule, leaving such an
+  owner unbound with the revision shown as pending, needs a spec change under D8 (C23, Binding, spec A amendment 4,
+  R33, test 33's two re-activation cases, R20's status words) and is recorded for the next spec revision (the plan
+  review's 3c).
 - The restore report names people by username, as the grants' lines do.
 - Test 35's seed reaches each event its last assertion lists; "own refused: moved" occurs once in 500 steps.
 - Task 9's RED takes about a minute and a half: three tests wait 30 s for the Charter link.
@@ -184,7 +218,7 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
 | R30 accept's order, idempotence, supersede; leave; the signed route | 3, 1 | `test_accepting_refuses_in_the_spec_order_and_the_same_acceptance_twice_is_one_row`, `test_accepting_a_newer_revision_supersedes_the_old_one_in_one_transaction`, `test_an_acceptances_signed_record_goes_to_its_person_and_its_signer_only` |
 | R31 pin; follow over rows, never across a withdrawal, a widening or a revision too large | 2, 4, 5 | `test_a_pin_stays_at_its_revision_through_later_ones`, the three follow tests, `test_a_revision_too_large_for_a_followers_ship_stops_the_follower_and_is_never_refused` |
 | R32 `GET /api/charter`'s shape and baseline; no one else's acceptance | 3 | `test_get_charter_shows_each_state_and_never_another_persons_acceptance`, `test_a_first_acceptance_and_one_after_leaving_compare_with_the_defaults` |
-| R33 caps at acceptance, at re-activation (pinned and following), a follower's next revision, an owner's own activation | 3, 5 | the order test's caps row; `test_a_charter_activated_again_checks_the_caps_of_every_owner_it_binds_again[False/True]`, the follower test, `test_an_owners_own_activation_never_moves_their_ships_to_another_charter_revision` |
+| R33 caps at acceptance, at re-activation (pinned and following), a follower's next revision, an owner's own activation | 3, 5 | the order test's caps row; `test_a_charter_activated_again_checks_the_caps_of_every_owner_it_binds_again[False/True]`, the follower test, `test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active`, `test_an_owners_own_activation_never_moves_their_ships_to_another_charter_revision`, `test_an_own_layer_that_would_send_a_follower_back_past_a_large_revision_is_refused` |
 | R34 reconcile by person, `COMPARED`, the report | 7 | the three reconcile tests |
 | R35 the Charter page | 9 | `test_an_owner_accepts_the_charter_on_its_page_and_stops_accepting_after_the_ask` and the Review Focus tests |
 | Test 25 | 1, 2, 3 | record; `test_a_pinned_acceptance_binds_every_ship_its_owner_has_and_docks_later`; the row through the route (supersede test) |
@@ -195,7 +229,7 @@ Inputs no spec test names, most likely to bite a person first. Each is pinned by
 | Test 30 | 4 | `test_a_follower_compares_each_revision_with_the_one_binding_them_then`, `test_a_follower_is_never_carried_across_a_withdrawal` |
 | Test 31 | 3 | `test_a_first_acceptance_and_one_after_leaving_compare_with_the_defaults` |
 | Test 32 | 2 | `test_a_withdrawn_charter_binds_no_one_and_binds_a_pin_again_when_activated_again` |
-| Test 33 | 3, 5 | the order test's caps row; the three caps tests |
+| Test 33 | 3, 5 | the order test's caps row; the five caps tests |
 | Test 34 | 7 | `test_the_reconcile_treats_acceptances_by_person_and_never_adds_one`, `test_without_a_usable_replaced_file_the_reconcile_keeps_every_acceptance` |
 | Test 35 | 8 | `test_charter_binding_matches_an_independent_reading_over_500_seeded_steps` |
 | Test 36 | 3 | the `GET /api/charter` test, `test_a_ship_key_gets_403_on_every_charter_route` |
@@ -709,8 +743,9 @@ git commit -m "Charter 4c: the charter_acceptances table and its two signed reco
   (`_charter_status`), I11 (`_active_charter`), I15 (the charter routes), I16 (`charter_line`).
 - Produces:
   - `Acceptances._acceptance_in_force(db, person_id) -> sqlite3.Row | None`; `Acceptances._accepts(db, person_id,
-    layer_id) -> bool`; `Acceptances._accepted_pair(db, owner_id) -> tuple[str, int] | None` (a pin binds its
-    revision; Task 4 adds follow, Task 5 a `replace` argument).
+    layer_id) -> bool`; `Acceptances._accepted_pair(db, owner_id) -> tuple[str, int] | None` (None unless the
+    acceptance's layer is the active charter, compared through I11 rather than trusting C6; a pin binds its revision;
+    Task 4 adds follow, Task 5 a `replace` argument).
   - 4a's `_charter_pair` answers an accepting owner's ships with `_accepted_pair`, so every binding reader (tickets,
     `GET /api/ships/me/instructions`, `GET /api/ships`, the caps checks) carries the acceptance.
   - Test helpers: `super_admin(store, user)`, `new_charter(client, title='Station law', body='Be kind.', policy=None)
@@ -901,14 +936,14 @@ In `peer/superyak_peer/acceptances.py`, append to the `Acceptances` class, after
 
     def _accepted_pair(self, db, owner_id):
         """Spec Binding 2, the owner who neither signed the active charter nor is absent: the (layer_id, revision) their
-        acceptance in force binds, or None. None while the acceptance's layer has no active revision: a withdrawn
+        acceptance in force binds, or None. None unless its layer holds the active charter revision: a withdrawn
         charter binds no ship, and the acceptance binds again if that layer is activated again (C15). A pin binds its
         revision."""
         held = self._acceptance_in_force(db, owner_id)
         if held is None:
             return None
-        layer = db.execute('SELECT active_revision FROM layers WHERE id=?', (held['layer_id'],)).fetchone()
-        if layer is None or layer['active_revision'] is None:
+        active = self._active_charter(db)
+        if active is None or active['id'] != held['layer_id']:
             return None
         return held['layer_id'], held['revision']
 ```
@@ -944,9 +979,9 @@ Expected: `57 passed` on Appendix A.
 
 Apply each alone, run `tests/test_acceptances.py`, see the named test fail, restore:
 - `_charter_pair`'s last statement back to `return None` → `test_a_pinned_acceptance_binds_every_ship_its_owner_has_and_docks_later`;
-- `_accepted_pair` without its `if layer is None or layer['active_revision'] is None: return None` →
+- `_accepted_pair` without its `if active is None or active['id'] != held['layer_id']: return None` →
   `test_a_withdrawn_charter_binds_no_one_and_binds_a_pin_again_when_activated_again` (pinned text outlives its charter);
-- `return held['layer_id'], layer['active_revision']` (a pin that moves) → `test_a_pin_stays_at_its_revision_through_later_ones`;
+- `return held['layer_id'], active['active_revision']` (a pin that moves) → `test_a_pin_stays_at_its_revision_through_later_ones`;
 - `_charter_status` without the `_accepts` clause → `test_a_pinned_acceptance_binds_every_ship_its_owner_has_and_docks_later`
   (`accepted` false for Jenn's ship);
 - `_accepts` without `and held['layer_id'] == layer_id` → `test_a_withdrawn_charter_binds_no_one_and_binds_a_pin_again_when_activated_again`
@@ -1187,8 +1222,8 @@ def test_a_ship_key_gets_403_on_every_charter_route(station):
 
 def test_step_3s_grant_readers_never_see_an_acceptance(station):
     """Test 26 (R29, C18), as one table: with Andy's direct grant to Jenn over Rio Grande, every grant reader answers
-    the same before and after Jenn accepts Andy's charter; Andy's mention of Jenn's ship reads, and Jenn's mention of
-    Rio Grande builds under the grant."""
+    the same before and after Jenn accepts Andy's charter, the person list included; Andy's mention of Jenn's ship
+    reads, Jenn's mention of Rio Grande builds under the grant, and Andy can still make her another."""
     s = station
     store, law = s['store'], s['law']
     room = store.create_room(s['andy']['id'], 'Ops', [s['jenn']['id'], s['rio']['id'], s['defiant']['id']])
@@ -1197,9 +1232,10 @@ def test_step_3s_grant_readers_never_see_an_acceptance(station):
 
     def answers():
         lists = [client.get('/api/grants').json() for client in (s['j'], s['a'], s['s'])]  # never inside a transaction
+        people = [client.get('/api/grants/people').json() for client in (s['j'], s['a'], s['s'])]
         with store.transaction() as db:
             row = db.execute('SELECT * FROM grants WHERE id=?', (grant,)).fetchone()
-            return {'lists': lists, 'view': store._grant_view(db, s['andy']['id'], row), 'validity': store._grant_validity(db, row),
+            return {'lists': lists, 'people': people, 'view': store._grant_view(db, s['andy']['id'], row), 'validity': store._grant_validity(db, row),
                     'visible': [store._grant_visible(db, user['id'], row) for user in (s['jenn'], s['andy'], s['stanley'])],
                     'owns': [store._owns_a_target(db, user['id'], row) for user in (s['jenn'], s['andy'], s['stanley'])]}
     before = answers()
@@ -1211,10 +1247,12 @@ def test_step_3s_grant_readers_never_see_an_acceptance(station):
     spent = store.send_message(s['jenn']['id'], room['id'], 'j1', '@rio-grande please fix the notes')
     ticket = store.issue_ticket(s['rio']['id'], spent['id'])
     assert (ticket['mode'], ticket['basis'], ticket['chain']) == ('build', 'grant', [grant])
+    assert store.make_grant(s['andy']['id'], s['jenn']['id'], [s['rio']['id']], [room['id']], 24, 5)['valid'] is True
 ```
 
 The order test carries plan Review Focus 1 (the retry) and 3 (`2 ** 70`); the `GET /api/charter` test's end carries
-Review Focus 2.
+Review Focus 2. The grant-reader test also reads the person list before and after, and makes a second grant after the
+ticket (made last, since a ticket uses the oldest qualifying grant by `created, id`, and the clock doesn't move).
 
 - [ ] **Step 2: Run the tests to see them fail**
 
@@ -1241,7 +1279,7 @@ from .ships import safe_line
 ```
 
 (The first and fourth import lines are 4a's names, I1-I6.) Between the schema's closing `'''` and `class Acceptances:`
-insert, right after the `'''` line, keeping two blank lines before the class:
+insert this, with one blank line after the `'''` line and two blank lines before the class:
 
 ```python
 ACCEPT_FIELDS = {'layer_id', 'revision', 'follow', 'confirm_widenings'}
@@ -1411,6 +1449,12 @@ In `peer/superyak_peer/app.py`, before `    @app.get('/api/charter/acceptances/{
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py`
 Expected: `15 passed`.
 
+Two assertions pin text whose exact form is 4a's, and may need 4a's form (plan review S4): every
+`'Confirm exactly these widenings: delegation.max_depth'` in the order test and the baseline test (the spec writes
+"Confirm exactly these widenings: …", so 4a may join or end the list differently), and the narrowed `grantees` item
+`{'path': 'grantees', 'before': None, 'after': {'people': [...], 'ships_of': []}}` in the `GET /api/charter` test (the
+spec defines narrowed paths only as "the same paths where P is smaller or lacks a member"). If 4a's I3 or I5 writes
+them otherwise, change the expected values to 4a's, not 4a's code.
 - [ ] **Step 5: Check the tests bite**
 
 Apply each alone, run `tests/test_acceptances.py`, see the named test fail, restore:
@@ -1533,14 +1577,14 @@ In `peer/superyak_peer/acceptances.py`, replace `_accepted_pair` with:
 ```python
     def _accepted_pair(self, db, owner_id):
         """Spec Binding 2, the owner who neither signed the active charter nor is absent: the (layer_id, revision) their
-        acceptance in force binds, or None. None while the acceptance's layer has no active revision: a withdrawn
+        acceptance in force binds, or None. None unless its layer holds the active charter revision: a withdrawn
         charter binds no ship, and the acceptance binds again if that layer is activated again (C15). A pin binds its
         revision; a follow binds where its walk stops (C21)."""
         held = self._acceptance_in_force(db, owner_id)
         if held is None:
             return None
-        layer = db.execute('SELECT active_revision FROM layers WHERE id=?', (held['layer_id'],)).fetchone()
-        if layer is None or layer['active_revision'] is None:
+        active = self._active_charter(db)
+        if active is None or active['id'] != held['layer_id']:
             return None
         if not held['follow']:
             return held['layer_id'], held['revision']
@@ -1682,20 +1726,64 @@ def test_an_owners_own_activation_never_moves_their_ships_to_another_charter_rev
     refused = s['j'].post(f'/api/layers/{big}/activate', json={'version': smaller['version']})
     assert (refused.status_code, refused.json()) == (409, {'error': 'Defiant would be bound by charter revision 4 instead of revision 3'})
     assert bound(store, s['defiant'])[0] == (law, 3)
+
+
+def test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active(station):
+    """Plan review S1 (C21, C23, R10): Jenn follows from a large revision 2 and her walk moves on to a small revision 3;
+    her own layers then fit 3 but not 2, which her walk has left. Andy's revision 4 activates, and her ship moves to it:
+    a layer that is active now binds no one again, so her accepted revision isn't checked, and one follower never blocks
+    every later revision."""
+    s = station
+    store, law = s['store'], s['law']
+    sign(s['a'], law)
+    sign(s['a'], law, body='c' * 6000)
+    assert accept(s['j'], law, 2, follow=True)[0] == 200
+    sign(s['a'], law, body='Small.')
+    for n in range(3):
+        assert own_layer(s['j'], s['defiant'], 'b' * 14500, f'Big {n}')[1].status_code == 200
+    assert bound(store, s['defiant'])[0] == (law, 3)
+    assert sign(s['a'], law, body='Smaller.') == 4
+    assert bound(store, s['defiant'])[0] == (law, 4)
+
+
+def test_an_own_layer_that_would_send_a_follower_back_past_a_large_revision_is_refused(station):
+    """Plan review S2 (C23's last check, R11): Jenn follows from revision 2 and her walk reaches revision 4 through a
+    large revision 3. A new own layer still fits 4, so 4a's caps check lets it through, but it no longer fits 3, so her
+    walk would fall back to 2: the activation gets 409 naming the ship, and her ship stays at 4."""
+    s = station
+    store, law = s['store'], s['law']
+    sign(s['a'], law)
+    sign(s['a'], law, body='Second.')
+    assert accept(s['j'], law, 2, follow=True)[0] == 200
+    sign(s['a'], law, body='c' * 8000)
+    sign(s['a'], law, body='Small.')
+    for n in range(2):
+        assert own_layer(s['j'], s['defiant'], 'b' * 15000, f'Big {n}')[1].status_code == 200
+    assert bound(store, s['defiant'])[0] == (law, 4)
+    refused = own_layer(s['j'], s['defiant'], 'd' * 12000, 'One more')[1]
+    assert (refused.status_code, refused.json()) == (409, {'error': 'Defiant would be bound by charter revision 2 instead of revision 4'})
+    assert bound(store, s['defiant'])[0] == (law, 4) and len(bound(store, s['defiant'])) == 3
 ```
 
 The sizes: three own layers of 15,500 characters with a short charter block render to about 47,000 bytes, and a
 revision 1,500 characters longer passes 48,000; three of 15,000 with a 2,000-character revision render to about 47,400,
-and one more layer of 1,000 passes it, as does a 5,000-character revision.
+and one more layer of 1,000 passes it, as does a 5,000-character revision. In the S1 test, three of 14,500 fit a short
+revision 3 but not the 6,000-character revision 2 she accepted; in the S2 test, two of 15,000 and one of 12,000 fit the
+short revision 4 but not the 8,000-character revision 3 her walk passed through.
+
+`test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active` (plan review S1) passes before
+this task: nothing checks re-bound owners yet. It guards `_check_rebound_caps`' early return for a layer that is active
+now, and Step 5's mutation shows it bites.
 
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py tests/test_instructions.py`
-Expected: `4 failed, 41 passed` on Appendix A. Both re-activation cases with `assert (200, {…}) == (409, {'error': …})`
+Expected: `5 failed, 42 passed` on Appendix A. Both re-activation cases with `assert (200, {…}) == (409, {'error': …})`
 (the activation goes through); the too-large test at `assert bound(store, s['defiant'])[0] == (law, 2)` with `3 != 2`
 (the follower moved onto the revision too large for her); the own-activation test at the line after revision 4 with
 `4 != 3` (the walk took revision 4, which is too large). Its backward half already passes on Appendix A: 4a's caps check
-refuses one more own layer, naming Defiant.
+refuses one more own layer, naming Defiant. The S2 test with `assert (200, {…}) == (409, {'error': '… revision 4'})`:
+the layer that would send her back past revision 3 goes through. The S1 test passes (see above).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1710,14 +1798,14 @@ Replace `_accepted_pair` with:
 ```python
     def _accepted_pair(self, db, owner_id, replace=None):
         """Spec Binding 2, the owner who neither signed the active charter nor is absent: the (layer_id, revision) their
-        acceptance in force binds, or None. None while the acceptance's layer has no active revision: a withdrawn
+        acceptance in force binds, or None. None unless its layer holds the active charter revision: a withdrawn
         charter binds no ship, and the acceptance binds again if that layer is activated again (C15). A pin binds its
         revision; a follow binds where its walk stops (C21). replace is _own_layers' (an own activation being checked)."""
         held = self._acceptance_in_force(db, owner_id)
         if held is None:
             return None
-        layer = db.execute('SELECT active_revision FROM layers WHERE id=?', (held['layer_id'],)).fetchone()
-        if layer is None or layer['active_revision'] is None:
+        active = self._active_charter(db)
+        if active is None or active['id'] != held['layer_id']:
             return None
         if not held['follow']:
             return held['layer_id'], held['revision']
@@ -1808,7 +1896,7 @@ With Appendix A that is in `Layers.activate_layer`, inside `if snapshot.get('kin
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py tests/test_instructions.py`
-Expected: `45 passed` on Appendix A.
+Expected: `47 passed` on Appendix A.
 
 - [ ] **Step 5: Check the tests bite**
 
@@ -1821,9 +1909,13 @@ Apply each alone, run `tests/test_acceptances.py`, see the named test fail, rest
 - drop the `_refuse_a_moved_charter` call → `test_an_owners_own_activation_never_moves_their_ships_to_another_charter_revision`
   (the forward half: shrinking a layer moves her to revision 4 in silence);
 - `self._own_layers(db, ship)` for `self._own_layers(db, ship, replace)` in `_follow_walk` → the same test (the walk
-  can't see the activation being checked).
-
-(Dropping `_check_rebound_caps`' early return for a layer that is active survives: see Known limits.)
+  can't see the activation being checked);
+- drop `_check_rebound_caps`' `if layer is None or layer['active_revision'] is not None: return` →
+  `test_a_followers_accepted_revision_is_not_checked_again_while_its_charter_stays_active` (Andy's revision 4 gets 409
+  for Defiant: one follower blocks every revision);
+- `if after > before:` for `if before != after:` in `_refuse_a_moved_charter` (forward moves only) →
+  `test_an_own_layer_that_would_send_a_follower_back_past_a_large_revision_is_refused`; it survives the older
+  own-activation test, whose refused move is forward.
 
 - [ ] **Step 6: Commit**
 
@@ -1885,7 +1977,7 @@ def test_a_past_charter_revision_goes_to_its_signer_and_to_people_whose_acceptan
 - [ ] **Step 2: Run the test to see it fail**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py tests/test_signatures.py`
-Expected: `1 failed, 50 passed` on Appendix A: `AssertionError: 2` with `(200, 404, 404, 404) == (200, 200, 404, 404)`
+Expected: `1 failed, 52 passed` on Appendix A: `AssertionError: 2` with `(200, 404, 404, 404) == (200, 200, 404, 404)`
 (Jenn can't read the revision she accepted).
 
 - [ ] **Step 3: Write the implementation**
@@ -1920,7 +2012,7 @@ no, the same 404 a revision that doesn't exist gets (Routes `/signed`).
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py tests/test_signatures.py`
-Expected: `51 passed` on Appendix A.
+Expected: `53 passed` on Appendix A.
 
 - [ ] **Step 5: Check the test bites**
 
@@ -1943,7 +2035,7 @@ git commit -m "Charter 4c: a past charter revision's signature goes to the peopl
 
 **Files:**
 - Modify: `peer/superyak_peer/backups.py` (`COMPARED`, `:380-387`; four functions before `_member_name`; the report's
-  keys and two steps in `reconcile`, `:879`, `:910`, `:913`; three report lines in `describe_reconcile`, before
+  keys and two steps in `reconcile`, `:879`, `:910`, `:914`; three report lines in `describe_reconcile`, before
   `if report['removed']:`, `:956`)
 - Test: `peer/tests/test_acceptances.py`
 
@@ -2073,7 +2165,7 @@ The usernames in the expected lines are the conftest's: `doctor` is Jenn, `famil
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py tests/test_restore.py tests/test_grants.py`
-Expected: `3 failed, 107 passed` on Appendix A. The first fails at `assert after[organizer_then][3] is not None` (`assert
+Expected: `3 failed, 109 passed` on Appendix A. The first fails at `assert after[organizer_then][3] is not None` (`assert
 (None is not None)`: nothing ended); the second at its kept line (`assert None == 'Charter acceptances kept: doctor
 (revision 1, pinned); family (revision 1, following).'`); the third at `'Skipped, because this copy lacks them:
 charter_acceptances.id' in out` (no step reads the table yet).
@@ -2200,7 +2292,7 @@ In `describe_reconcile`, before `    if report['removed']:` insert:
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py tests/test_restore.py tests/test_grants.py`
-Expected: `110 passed` on Appendix A. `test_every_table_is_either_reconciled_or_named_coordination` still reports no
+Expected: `112 passed` on Appendix A. `test_every_table_is_either_reconciled_or_named_coordination` still reports no
 "Skipped" or "Not compared" line: a station started today has the table in both files.
 
 - [ ] **Step 5: Check the tests bite**
@@ -2209,7 +2301,8 @@ Apply each alone, run `tests/test_acceptances.py`, see the named test fail, rest
 - `if key in {row[0] for row in there.values()}:` for `if person in there:` (by row, not by person) →
   `test_the_reconcile_treats_acceptances_by_person_and_never_adds_one` (Jenn's copy row ends, leaving her unbound);
 - drop the `elif here[person][0] != key:` branch → the same test (her lost re-acceptance passes in silence);
-- `revoked_by=person_id` for `revoked_by=NULL` → the same test;
+- in `_reconcile_acceptances_like_replaced`'s `UPDATE charter_acceptances SET revoked=?, revoked_by=NULL, ...`,
+  `revoked_by=person_id` (the grants' UPDATE has `revoked_by=NULL` too; leave it) → the same test;
 - drop the `_keep_every_acceptance(db, old, now, report)` line → `test_without_a_usable_replaced_file_the_reconcile_keeps_every_acceptance`;
 - `COMPARED` without its seven `charter_acceptances` entries → `test_a_copy_from_before_4c_reconciles_and_names_every_acceptance_it_lost`
   (a replaced file without the table is compared, not treated as absent);
@@ -2472,7 +2565,7 @@ def test_charter_binding_matches_an_independent_reading_over_500_seeded_steps(en
 - [ ] **Step 2: Run it**
 
 Run: `cd peer && uv run --locked python -m pytest -q tests/test_acceptances.py`
-Expected: `27 passed`, the oracle in about 5 seconds. It passes as soon as it is written: it guards Tasks 2-5 as a
+Expected: `29 passed`, the oracle in about 5 seconds. It passes as soon as it is written: it guards Tasks 2-5 as a
 whole, and Step 4's mutations show it bites.
 
 - [ ] **Step 3: Nothing to implement**
@@ -2490,7 +2583,7 @@ see it fail (each message names the step, its kind and the ship), restore:
   (across a withdrawal);
 - drop the caps check in `accept_charter`;
 - `revision = row['revision']` for `revision, policy = row['revision'], snapshot['policy']`;
-- drop `_accepted_pair`'s withdrawn-layer check;
+- drop `_accepted_pair`'s `if active is None or active['id'] != held['layer_id']: return None`;
 - 4a's `_charter_pair` last statement back to `return None`.
 
 - [ ] **Step 5: Commit**
@@ -2507,7 +2600,7 @@ git commit -m "Charter 4c: the binding oracle over 500 seeded steps with pins, f
 **Files:**
 - Modify: `peer/superyak_peer/static/app.js` (`bindEditorIdentity` `:112`, `routeParts` `:142`, the sidebar `:165`, the
   page's functions before the board's one-write comment `:803`, `loadRoute` `:1090`, `render`'s view and title maps
-  `:1117`, `:1137`, the submit, click and change handlers `:1769`, `:1886`, `:2043`)
+  `:1117`, `:1137`, the submit, click and change handlers `:1769`, `:1887`, `:2043`)
 - Modify: `peer/superyak_peer/static/app.css` (after `.grant-make form`, `:338`)
 - Test: `peer/tests/test_browser.py`
 
@@ -2589,7 +2682,7 @@ def test_an_owner_accepts_the_charter_on_its_page_and_stops_accepting_after_the_
             page.get_by_role("link", name="Charter", exact=True).click()
             expect(page.get_by_role("heading", name="You signed this charter; it binds your ships")).to_be_visible()
             expect(page.locator(".charter-accepted li")).to_have_count(1)
-            expect(page.locator(".charter-accepted li")).to_contain_text("<img src=x onerror=alert(3)>: revision 1, following")
+            expect(page.locator(".charter-accepted li")).to_contain_text("<img src=x onerror=alert(3)>: accepted revision 1, following")
             assert page.locator("#main-content img, #main-content b, #main-content i").count() == 0
         sign(andy, law, body="Be kind.\nAsk in the room first.",
              policy={"version": 1, "delegation": {"max_depth": 4}, "budgets": {"builds_per_ship_per_day": 30}},
@@ -2804,7 +2897,7 @@ function charterPendingMarkup(view) {
 }
 
 function charterSignerMarkup(view) {
-  const list = view.acceptances.length ? `<ul class="grant-list charter-accepted">${view.acceptances.map((item) => `<li class="grant-item">${escapeHtml(`${item.person.name}: revision ${item.revision}, ${item.follow ? "following" : "pinned"} · ${formatDate(item.accepted)}`)}</li>`).join("")}</ul>`
+  const list = view.acceptances.length ? `<ul class="grant-list charter-accepted">${view.acceptances.map((item) => `<li class="grant-item">${escapeHtml(`${item.person.name}: accepted revision ${item.revision}, ${item.follow ? "following" : "pinned"} · ${formatDate(item.accepted)}`)}</li>`).join("")}</ul>`
     : `<p class="meta">No one else has accepted it yet.</p>`;
   return `<section class="section charter-signer" aria-labelledby="charter-signer-title"><h2 id="charter-signer-title">You signed this charter; it binds your ships</h2><h3>Accepted by</h3>${list}</section>`;
 }
@@ -3107,8 +3200,8 @@ and in step 7, after the sentence that ends `a grant made after the copy is gone
 - [ ] **Step 2: Run the whole suite**
 
 Run: `cd peer && uv run --locked python -m pytest -q -ra --tb=short`
-Expected: `973 passed, 1 skipped` on Appendix A, this plan's 32 new tests among them, in about 7 minutes; on the real
-4a, the suite's count before Task 1 plus 32. The skip is `test_station_units.py:73`'s, away from the station host. `test_restore.py` reads
+Expected: `975 passed, 1 skipped` on Appendix A, this plan's 34 new tests among them, in about 7 minutes; on the real
+4a, the suite's count before Task 1 plus 34. The skip is `test_station_units.py:73`'s, away from the station host. `test_restore.py` reads
 `docs/station-restore.md`'s commands and still passes: no command changed.
 
 - [ ] **Step 3: Check that no step 3 grant code changed**
