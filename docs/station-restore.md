@@ -14,48 +14,81 @@ Before you start, know two things:
   Step 5 takes back everything that only grants access (a peer's pairing included) before the copy goes live, and lists
   the rest for you.
 
-Run every step on the Pi, from `~/superyak`, in one terminal that you keep open. If it closes, set `ASIDE` again (step 1)
-to the existing `replaced-…` directory instead of making a new one.
+Run every step on the Pi, from `~/superyak`, in one terminal that you keep open: the steps share `ASIDE`, the directory
+step 1 makes for this restore. If the terminal closes or the Pi restarts, open a new one in `~/superyak` and set `ASIDE`
+again with the line below; never run step 1 again for that. The directory names are the local time of step 1, all of
+one width, so the last one listed is the newest: this restore's. Check that its name holds the date and time you ran
+step 1. From step 4 on (until a rollback's 10.3) it holds `peer.sqlite3`.
+```bash
+ASIDE=$(ls -d ~/.local/share/superyak/backups/replaced-* | tail -n 1); ls -la "$ASIDE"
+```
 
-Between steps 3 and 8, run no `make station-*` command and nothing else that opens the station's data directory: opening
-it with nothing there creates a fresh, empty `peer.sqlite3`. If the Pi restarts mid-restore, stop everything again as in
-step 3 before going on.
+**A database file and its `-journal`, `-wal` and `-shm` files always move together, never alone.** SQLite applies a
+journal to whatever database it finds beside it, so a journal beside a different database corrupts it. Every move
+below takes the whole set, and moves nothing when the place it goes to already holds a `peer.sqlite3` file.
+
+Between steps 3 and 8, run no `make station-*` command the steps don't give, and nothing else that opens the station's
+data directory: opening it with nothing there creates a fresh, empty `peer.sqlite3`. Step 3 disables everything but
+the lighthouse and the door, so if the Pi restarts mid-restore only those two start again, on whatever is in the data
+directory then (between steps 4 and 6, a new, empty `peer.sqlite3`, which step 6 finds). Set `ASIDE` again and stop
+everything as in step 3 before going on.
+
+If `make station-units` has never run, the backup timers don't exist yet, and the lines in steps 3 and 8 that name
+`superyak-backup` or `superyak-restore-test` print that the unit does not exist or is not loaded. Ignore that.
 
 1. **Choose the copy and take it out of the rotation.** `ls -l ~/.local/share/superyak/backups/station/`. The names are
    UTC times (`peer-20261014T033112Z.sqlite3`). Take the newest copy from before the damage. Make the directory for this
-   restore and copy the choice into it; later steps use that copy, and nothing in the rotation is needed again:
+   restore and copy the choice into it; later steps use that copy, and nothing in the rotation is needed again. Run this
+   step once per restore; only a failed step 2 sends you back to it:
    ```bash
    ASIDE=~/.local/share/superyak/backups/replaced-$(date +%Y%m%d-%H%M%S)
    install -d -m 700 "$ASIDE"
    install -m 600 ~/.local/share/superyak/backups/station/<chosen copy> "$ASIDE/chosen.sqlite3"
    ```
-2. **Test it:** `make station-restore-test BACKUP="$ASIDE/chosen.sqlite3"`. It must pass.
-3. **Stop everything.** First write down the project ships' watchers that are running; step 8 starts them again:
+2. **Test it:** `make station-restore-test BACKUP="$ASIDE/chosen.sqlite3"`. It must pass. If it fails, that copy is no
+   good: go back to step 1 and choose the next older one. Step 1 then makes a new directory, which is fine, since nothing
+   has been moved yet; the old one keeps only the failed `chosen.sqlite3`, and setting `ASIDE` again finds the new one.
+3. **Stop everything.** The first line saves the project ships' watchers (`superyak-ship-…`) in `$ASIDE/watchers.txt`
+   (empty when there are none); step 8 starts them again. Running these lines again, after a restart or from steps 6
+   and 10, keeps the list from the first run. The ship, odo, wormhole, the listed watchers and both timers are
+   disabled as well as stopped, so a restart starts none of them before step 8 does. The lighthouse and the door stay
+   enabled: step 8 starts them first anyway.
    ```bash
-   systemctl --user list-units --plain --no-legend 'superyak-ship-*'
-   systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a reboot must not run a catch-up backup on a half-restored station
+   test -e "$ASIDE/watchers.txt" || { systemctl --user list-units --all --plain --no-legend 'superyak-ship-*' > "$ASIDE/watchers.new" && mv "$ASIDE/watchers.new" "$ASIDE/watchers.txt"; }; cat "$ASIDE/watchers.txt"
+   systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer   # a restart must not run a catch-up backup on a half-restored station
+   for unit in superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user disable --now "$unit"; done
    systemctl --user stop superyak-backup.service superyak-door superyak-odo superyak-wormhole superyak-ship superyak-lighthouse
    systemctl --user list-units 'superyak-*'
    ```
-   Stop every `superyak-ship-*` watcher the first command listed, and any the last list still shows.
-4. **Set the current state aside.** Nothing may have the database open: `fuser -v ~/.local/share/superyak/lighthouse/peer.sqlite3`
-   must print nothing. Move `peer.sqlite3` and every `peer.sqlite3-*` into `$ASIDE` (`mv -n` never overwrites). A
-   `peer.sqlite3-journal` left beside the restored file would be applied to it and corrupt it.
+   Stop any unit the last list still shows as active: `systemctl --user stop <unit>`.
+4. **Set the current state aside.** Move the station's database and its sidecars into `$ASIDE`, as one set. The lines
+   move nothing, and print why, when `ASIDE` is not set, when `$ASIDE` already holds a `peer.sqlite3` file (step 4 ran
+   before), or when a process still has the database open (`fuser -v ~/.local/share/superyak/lighthouse/peer.sqlite3*`
+   shows which: stop everything again as in step 3). A `peer.sqlite3-journal` left beside the restored file would be
+   applied to it and corrupt it.
    ```bash
-   for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$ASIDE"/; done
+   if [ ! -d "$ASIDE" ]; then echo 'NOT moved: ASIDE is not set; set it again (see the top)'
+   elif [ -e "$ASIDE/peer.sqlite3" ] || ls -d "$ASIDE"/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT moved: $ASIDE already holds a peer.sqlite3 file, so step 4 ran before. A peer.sqlite3 file in the data directory now is a stray: see step 6, the stray case'
+   elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
+   else for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$ASIDE"/; done
+   fi
    ls -la "$ASIDE" ~/.local/share/superyak/lighthouse/   # every peer.sqlite3 file is in $ASIDE, none in the data dir
    ```
-   If a `peer.sqlite3` file is still in the data directory, `$ASIDE` already held one and `mv -n` left the newer one
-   alone: that is the stray case of step 6. Do not go on until you have dealt with it there.
-5. **Stage and reconcile the copy:**
+   If it printed that step 4 ran before and the `ls` shows no `peer.sqlite3` file in the data directory, step 4 is
+   done: go on. If one is there, it is a stray: deal with it in step 6's stray case before going on. If after the first
+   run the `ls` shows `peer.sqlite3` in neither directory, the data directory had no database to set aside: run step 5
+   without `REPLACED=`.
+5. **Stage and reconcile the copy.** The first line stages a fresh copy, unless a killed reconcile left its journal
+   beside the staged one; then it leaves that copy alone, and the reconcile on the next line rolls the killed run back
+   before it starts.
    ```bash
-   install -m 600 "$ASIDE/chosen.sqlite3" "$ASIDE/restored.sqlite3"
+   if ls -d "$ASIDE"/restored.sqlite3-* >/dev/null 2>&1; then echo 'NOT staged again: a killed reconcile left its journal; the next line rolls it back'; else install -m 600 "$ASIDE/chosen.sqlite3" "$ASIDE/restored.sqlite3"; fi
    make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3"
    ```
    Leave out `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those
    machines dock again, and no peer is unpaired (see the peers paragraph below). It refuses a swapped `DB=` and
    `REPLACED=`, the same file twice, and a hard link. Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent
-   (there is no such file), `REPLACED=` is wrong: stop, find step 1's directory, stage the copy again (the `install` line above), then run both lines. Don't go on, and don't
+   (there is no such file), `REPLACED=` is wrong: stop, set `ASIDE` again as at the top, then run both lines (the first stages the copy again). Don't go on, and don't
    just run the reconcile again on the same file: the first run raised its sequences and a second one is refused as "swapped". If it
    says that for another reason (for example "a hot journal beside it"), the room and space members, admins, law layers
    and peer pairings weren't compared. Law layers, members and admins you check by hand in step 8; peers you handle in this
@@ -73,25 +106,46 @@ step 3 before going on.
    ```bash
    python3 -I -c 'import pathlib, sqlite3, sys; db = sqlite3.connect(pathlib.Path(sys.argv[1]).absolute().as_uri() + "?mode=ro", uri=True); rows = db.execute("SELECT p.peer_id, json_extract(p.card, ?), group_concat(c.name, ?) FROM peers p LEFT JOIN remote_contacts c USING (peer_id) WHERE p.paired = 1 GROUP BY p.peer_id ORDER BY p.peer_id", ("$.endpoint", ", ")).fetchall(); [print(row[0] if sum(r[0][:12] == row[0][:12] for r in rows) > 1 else row[0][:12], row[1], row[2], sep="  ") for row in rows]' "$ASIDE/restored.sqlite3"
    ```
-   For each peer you had cut off since the copy, run the reconcile again on the same staged copy, naming it by the
-   12-character id in the first column: `make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3" UNPAIR="<id> <id>"`
+   For each peer you had cut off since the copy, run the reconcile again on the same staged copy, naming it by the id
+   in the first column. That is 12 characters, or the full id when two listed peers share their first 12; `UNPAIR=`
+   takes either: `make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3" UNPAIR="<id> <id>"`
    (leave out `REPLACED=` when you did the first run without it). A second run is safe: the sessions are already gone
    and the invitations already used. Without `REPLACED=` it raises the events and mentions sequences by another
    1,000,000, which is harmless. An id that matches no peer or more than one is refused with exit 2 and nothing is changed.
-6. **Put it in place** (it refuses to overwrite a live file that step 4 didn't set aside):
+6. **Put it in place.** It installs only when no `peer.sqlite3` file is in the data directory (so never over a live
+   file that step 4 didn't set aside, nor beside another database's journal) and no journal is beside the staged copy:
    ```bash
-   test ! -e ~/.local/share/superyak/lighthouse/peer.sqlite3 && install -m 600 "$ASIDE/restored.sqlite3" ~/.local/share/superyak/lighthouse/peer.sqlite3 && echo INSTALLED || echo 'NOT installed: a live file is already there, or the install failed; do not go on (read step 6)'
+   if [ -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] || ls -d ~/.local/share/superyak/lighthouse/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT installed: a peer.sqlite3 file is already in the data directory; do not go on (read step 6)'
+   elif ls -d "$ASIDE"/restored.sqlite3-* >/dev/null 2>&1; then echo 'NOT installed: a journal is beside restored.sqlite3, so a reconcile did not finish; do not go on (read step 6)'
+   elif install -m 600 "$ASIDE/restored.sqlite3" ~/.local/share/superyak/lighthouse/peer.sqlite3; then echo INSTALLED
+   else echo 'NOT installed: the install failed; do not go on (read step 6)'
+   fi
    ```
    Go on only when it prints `INSTALLED`. If it prints `NOT installed`, do not go on, and read which case you are in:
-   - `$ASIDE/peer.sqlite3` exists: step 4 ran, and the file now in the data directory is a new, empty one (something
-     opened the data directory, or the Pi restarted), not the station. Stop everything as in step 3, move the data
-     directory's `peer.sqlite3` and `peer.sqlite3-*` into a new directory (never over `$ASIDE/peer.sqlite3`), and run
-     step 6 again:
+   - **A `peer.sqlite3` file is already in the data directory, and `$ASIDE/peer.sqlite3` exists: the stray case.** Step 4
+     ran, and what is in the data directory now is a new, empty database (something opened the data directory, or the
+     Pi restarted), not the station. Stop everything again as in step 3, then move the stray set into a new directory
+     of its own, never over `$ASIDE/peer.sqlite3`. The lines move nothing, and print why, when `$ASIDE` holds no
+     `peer.sqlite3` (then this is not the stray case) or a process still has the stray open (`fuser -v` as in step 4
+     shows which):
      ```bash
-     STRAY="$ASIDE/stray-$(date +%H%M%S)"; install -d -m 700 "$STRAY"
-     for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$STRAY"/; done
+     STRAY="$ASIDE/stray-$(date +%Y%m%d-%H%M%S)"
+     if [ ! -e "$ASIDE/peer.sqlite3" ]; then echo 'NOT moved: $ASIDE holds no peer.sqlite3, so this is not the stray case (read step 6)'
+     elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the stray open; stop everything again as in step 3'
+     else mkdir -m 700 "$STRAY" && for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$STRAY"/; done; ls -la "$STRAY"
+     fi
+     ls -la "$ASIDE" ~/.local/share/superyak/lighthouse/   # $ASIDE still holds peer.sqlite3; no peer.sqlite3 file in the data dir
      ```
-   - `$ASIDE/peer.sqlite3` does not exist: step 4 never ran (or `$ASIDE` is unset, so the install itself failed). Go back to step 4.
+     Then, if `$ASIDE/restored.sqlite3` exists, run step 6 again. If it doesn't (step 4's note sent you here before
+     step 5 ran), go on from step 5.
+   - **A `peer.sqlite3` file is already in the data directory, and `$ASIDE/peer.sqlite3` does not exist:** step 4 never
+     ran, or `ASIDE` is not this restore's directory (set it again as at the top). Go back to step 4.
+   - **A journal is beside `restored.sqlite3`:** a reconcile was killed. Run step 5 again (its first line keeps the
+     staged copy, and the reconcile rolls the killed run back), and the `UNPAIR=` run too if you made one; then step 6.
+   - **The install failed:** its error says why. `$ASIDE/restored.sqlite3` must exist: set `ASIDE` again as at the top
+     if it is not set, and run step 5 if it hasn't made the file. Then run step 6 again; if the failed install left a
+     partial file in the data directory, step 6 sends you to the stray case.
+
    The peer identity files stay where they are; nothing here moves them.
 7. **Act on the report.** Change again any password it lists that was changed for a reason. Issue again any invitation
    still wanted. Tell the owners of ships whose keys were revoked to dock again. Requests and dockings since the copy
@@ -106,34 +160,52 @@ step 3 before going on.
    ```
 8. **Start the lighthouse and the door.** Set the law layers the report listed as they should be, in the browser, and
    check by hand the members, admins and law layers step 5 said weren't compared (not peers: those were done in step 5). Then
-   start ship and odo, run `make station-rooms` and check the `bridged` column before starting wormhole: if a room shows
-   bridged that should not be, run `make station-unbridge ID=<short id>`. Start again every `superyak-ship-*` watcher
-   that step 3 listed. Check each with `is-active`, then enable both timers again.
+   enable and start ship and odo, run `make station-rooms` and check the `bridged` column before enabling and starting
+   wormhole: if a room shows bridged that should not be, run `make station-unbridge ID=<short id>`. Enable and start
+   again the watchers step 3 saved. Check each with `is-active`, then enable both timers again.
    ```bash
    systemctl --user start superyak-lighthouse superyak-door
    # now the law layers, in the browser
-   systemctl --user start superyak-ship superyak-odo
+   for unit in superyak-ship superyak-odo; do systemctl --user enable --now "$unit"; done
    make station-rooms                                   # check the bridged column first
-   systemctl --user start superyak-wormhole
-   systemctl --user start <each superyak-ship-… watcher from step 3>
-   for unit in lighthouse door ship odo wormhole; do printf '%s ' superyak-$unit; systemctl --user is-active superyak-$unit; done
+   systemctl --user enable --now superyak-wormhole
+   for unit in $(awk '{print $1}' "$ASIDE/watchers.txt"); do systemctl --user enable --now "$unit"; done   # the watchers step 3 saved
+   for unit in superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(awk '{print $1}' "$ASIDE/watchers.txt"); do printf '%s ' "$unit"; systemctl --user is-active "$unit"; done
    systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer   # as make station-units does
    ```
 9. **Say in the room** what was restored and from when. Everything said after the copy's time is gone.
 10. **Rolling back** (only if the restored station is wrong; once it has taken posts, rolling back loses them too):
-    1. Stop everything as in step 3, and check `fuser -v ~/.local/share/superyak/lighthouse/peer.sqlite3` prints nothing.
-    2. Move the live `peer.sqlite3` and every `peer.sqlite3-*` into a new subdirectory of `$ASIDE`, so the data directory
-       holds none. The `ls` must show the data directory without any `peer.sqlite3` file:
+    1. Stop everything: set `ASIDE` again if the terminal closed (see the top), and run step 3's lines again. Its first
+       line keeps the watchers list from step 3's first run.
+    2. Move the live database and its sidecars, as one set, into `$ASIDE/restored-live`. The lines move nothing, and
+       print why, when `ASIDE` is not set, when `restored-live` already holds a `peer.sqlite3` file (10.2 ran before),
+       or when a process still has the database open (stop everything again). The `ls` must show the data directory
+       without any `peer.sqlite3` file:
        ```bash
-       install -d -m 700 "$ASIDE/restored-live"
-       for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$ASIDE/restored-live"/; done
+       if [ ! -d "$ASIDE" ]; then echo 'NOT moved: ASIDE is not set; set it again (see the top)'
+       elif [ -e "$ASIDE/restored-live/peer.sqlite3" ] || ls -d "$ASIDE"/restored-live/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT moved: $ASIDE/restored-live already holds a peer.sqlite3 file, so 10.2 ran before (read 10.2)'
+       elif fuser -s ~/.local/share/superyak/lighthouse/peer.sqlite3* 2>/dev/null; then echo 'NOT moved: a process has the database open; stop everything again as in step 3'
+       else install -d -m 700 "$ASIDE/restored-live" && for f in ~/.local/share/superyak/lighthouse/peer.sqlite3 ~/.local/share/superyak/lighthouse/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" "$ASIDE/restored-live"/; done
+       fi
        ls -la "$ASIDE" "$ASIDE/restored-live" ~/.local/share/superyak/lighthouse/
        ```
-    3. Move the set-aside `$ASIDE/peer.sqlite3` and its `peer.sqlite3-*` files back together (`mv -n` never overwrites).
-       Never leave a `-journal` beside a different database. The `ls` must show them in the data directory and none left
-       in `$ASIDE`:
+       If it says 10.2 ran before and `$ASIDE/peer.sqlite3` still exists, any `peer.sqlite3` file now in the data
+       directory is a stray: set it aside with step 6's stray-case lines, then go on with 10.3. If `$ASIDE/peer.sqlite3`
+       is gone, 10.3 has run: go on with 10.4.
+    3. Move the set-aside `$ASIDE/peer.sqlite3` and its sidecars back, as one set. The lines move nothing, and print
+       why, when `$ASIDE` holds no `peer.sqlite3` (10.3 ran before, or `ASIDE` is not this restore's directory) or a
+       `peer.sqlite3` file is in the data directory. The `ls` must show them in the data directory and none left in
+       `$ASIDE`:
        ```bash
-       for f in "$ASIDE"/peer.sqlite3 "$ASIDE"/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" ~/.local/share/superyak/lighthouse/; done
+       if [ ! -e "$ASIDE/peer.sqlite3" ]; then echo 'NOT moved: $ASIDE holds no peer.sqlite3 (read 10.3)'
+       elif [ -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] || ls -d ~/.local/share/superyak/lighthouse/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT moved: a peer.sqlite3 file is in the data directory (read 10.3)'
+       else for f in "$ASIDE"/peer.sqlite3 "$ASIDE"/peer.sqlite3-*; do [ -e "$f" ] && mv -n "$f" ~/.local/share/superyak/lighthouse/; done
+       fi
        ls -la "$ASIDE" ~/.local/share/superyak/lighthouse/
        ```
-    4. Start as in step 8, which enables the timers again.
+       If a `peer.sqlite3` file is in the data directory: when 10.2 ran, it is a stray, so set it aside with step 6's
+       stray-case lines and run 10.3 again; when 10.2 didn't run, run 10.2 first.
+    4. Run step 8's commands, in its order. They start the lighthouse and the door, enable and start the ship, odo,
+       wormhole and the watchers step 3 saved, and enable the timers again. Step 8's checks that act on step 5's report
+       (the law layers, the members and admins, the `bridged` column) are for a restored copy and don't apply to a
+       rollback.
