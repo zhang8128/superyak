@@ -158,3 +158,66 @@ def test_a_reply_prefix_without_a_ticket_is_not_a_run(env):
     owner = say(clients[0], room, 'a', '@serenity add notes')
     assert post(serenity, room, f'reply-{owner["id"]}', 'Pretending to be a run').status_code == 201
     assert sources(clients[0], room)['Pretending to be a run'] == {'kind': 'post'}
+
+
+def test_an_owner_mention_builds_for_exactly_a_day_then_reads_old(env):
+    """Fresh owner mentions R1, R2, R9: exactly 86,400 s still builds; just after, read with basis old, and a reply
+    under that ticket is labelled a read-only run with basis old."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    edge = say(clients[0], room, 'a', '@serenity add notes')
+    late = say(clients[0], room, 'b', '@serenity add more notes')
+    clock[0] += 86400
+    got = ticket(serenity, edge['id']).json()
+    assert (got['mode'], got['basis']) == ('build', 'owner')
+    clock[0] += 0.5
+    got = ticket(serenity, late['id']).json()
+    assert (got['mode'], got['basis'], got['root_id'], got['footer']) == ('read', 'old', None, '')
+    assert post(serenity, room, 'reply-late', 'That was a day ago', got['id']).status_code == 201
+    assert sources(serenity, room)['That was a day ago'] == {  # as the ship: a person's login lasts exactly a day
+        'kind': 'run', 'mode': 'read', 'basis': 'old', 'root_name': None, 'answering': late['id']}
+
+
+def test_an_owner_mention_with_an_unusable_created_reads_old_and_never_raises(env):
+    """Fresh owner mentions R4: infinity and text both read old with status 200."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    store = app.state.store
+    for cid, value in (('a', float('inf')), ('b', 'abc')):
+        sent = say(clients[0], room, cid, f'@serenity add {cid}')
+        with store.transaction() as db:
+            db.execute('UPDATE messages SET created=? WHERE id=?', (value, sent['id']))
+        got = ticket(serenity, sent['id'])
+        assert got.status_code == 200, got.text
+        assert (got.json()['mode'], got.json()['basis']) == ('read', 'old')
+
+
+def test_an_owner_mention_from_the_far_future_reads_old_but_a_minute_ahead_builds(env):
+    """Fresh owner mentions R4: within a day either side."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    store = app.state.store
+    far, near = say(clients[0], room, 'a', '@serenity far'), say(clients[0], room, 'b', '@serenity near')
+    with store.transaction() as db:
+        db.execute('UPDATE messages SET created=? WHERE id=?', (clock[0] + 90000, far['id']))
+        db.execute('UPDATE messages SET created=? WHERE id=?', (clock[0] + 60, near['id']))
+    assert (lambda g: (g['mode'], g['basis']))(ticket(serenity, far['id']).json()) == ('read', 'old')
+    assert (lambda g: (g['mode'], g['basis']))(ticket(serenity, near['id']).json()) == ('build', 'owner')
+
+
+def test_a_running_build_ticket_sent_again_after_a_day_is_the_same_ticket(env):
+    """Fresh owner mentions R5: the decision is made at issue only."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    owner = say(clients[0], room, 'a', '@serenity add notes')
+    clock[0] += 84600
+    first = ticket(serenity, owner['id']).json()
+    assert (first['mode'], first['basis']) == ('build', 'owner')
+    clock[0] += 3600
+    again = ticket(serenity, owner['id']).json()
+    assert (again['id'], again['mode'], again['basis']) == (first['id'], 'build', 'owner')
+
+
+def test_a_non_owners_old_mention_is_read_with_basis_none(env):
+    """Fresh owner mentions R5: only the owner's mention is bounded."""
+    app, clients, users, clock, ship, serenity, room = setup(env)
+    other = say(clients[1], room, 'a', '@serenity what is this?')
+    clock[0] += 172800
+    got = ticket(serenity, other['id']).json()
+    assert (got['mode'], got['basis']) == ('read', 'none')

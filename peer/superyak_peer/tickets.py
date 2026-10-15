@@ -2,11 +2,13 @@
 build moves today's rule here unchanged: the ship's owner, mentioning it, gets a builder; everyone else gets a
 read-only run. Later steps add grants and directs to the same decision."""
 import json
+import math
 from .common import Problem, require, text, uid
 from .instructions import render_blocks
 from .ships import safe_line
 
 TICKET_LIFETIME = 7200  # outlives the watcher's three tries of 20 minutes each
+MENTION_FRESH_SECONDS = 86400  # fresh owner mentions: within a day of the ticket, either side (step 3's G15 bound)
 DEFER_BOUND_SECONDS = 7200   # S5: a mention first deferred this long ago runs even while a watch is on (R21)
 NOTICE_AFTER_SECONDS = 1800  # S5: the station's notice, at most once per mention (Task 6)
 NOTICE_TEMPLATE = ("Station notice: a mention of {ship} has waited {waited} minutes for {ship}'s session on watch. "
@@ -82,12 +84,14 @@ class Tickets:
         return decided
 
     def _mode_for(self, db, ship, message):
-        """Today's rule, unchanged: the owner's own mention builds; everything else reads."""
+        """Spec A rule 2, bounded (fresh owner mentions spec): the owner's own fresh mention builds; an old or answered
+        one reads, its basis saying why; everything else reads."""
         author = require(db.execute('SELECT id,kind FROM users WHERE id=?', (message['author_id'],)).fetchone())
         mentioned = db.execute('SELECT 1 FROM mentions WHERE message_id=? AND user_id=?', (message['id'], ship['id'])).fetchone()
         owner = ship['owner_id']
         if owner and mentioned and author['kind'] == 'person' and author['id'] == owner:
-            return 'build', 'owner', owner
+            stale = self._mention_stale(db, ship['id'], message)
+            return ('build', 'owner', owner) if stale is None else ('read', stale, None)
         return 'read', 'none', None
 
     def _answered(self, db, ship_id, message_id):
@@ -96,6 +100,18 @@ class Tickets:
         return db.execute('''SELECT 1 FROM message_replies JOIN messages ON messages.id=message_replies.message_id
             WHERE message_replies.reply_to=? AND messages.author_id=?
             AND message_replies.message_id NOT IN (SELECT message_id FROM message_kinds)''', (message_id, ship_id)).fetchone() is not None
+
+    def _mention_stale(self, db, ship_id, message):
+        """Fresh owner mentions: None while the mention may build, else why not. 'old' unless `created` is a finite int or
+        float within MENTION_FRESH_SECONDS of now on either side; then 'answered' (R7). Grants step 3's 3c calls it too."""
+        created = message['created']
+        if (isinstance(created, bool) or not isinstance(created, (int, float))
+                or (isinstance(created, float) and not math.isfinite(created))
+                or abs(self.clock() - created) > MENTION_FRESH_SECONDS):
+            return 'old'
+        if self._answered(db, ship_id, message['id']):
+            return 'answered'
+        return None
 
     def _waiting_deferrals(self, db, ship_id, message_ids):
         """Stale deferrals spec: of the given mentions, those whose deferral still waits for the session, oldest first.

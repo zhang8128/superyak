@@ -55,7 +55,7 @@ following [CLAUDE.md](CLAUDE.md); the [agent guide](agent/README.md) and the
 [design](docs/superpowers/specs/2026-10-03-ds9-station-design.md) cover the rest. A newcomer
 asks for access with `make dock DOCK_ARGS='--request ...'`, Andy approves it in the web app,
 and Tailscale access arrives as one reusable share link (`make station-share-link` on the
-Pi creates it; no admin key stays there). Mentioning the ship wakes it: the owner's mentions
+Pi creates it; no admin key stays there). Mentioning the ship wakes it: the owner's fresh mentions (within 24 hours, not yet answered)
 run Claude as a builder on a `lighthouse/<ship>/<message id>` branch (committed, never
 pushed) and anyone else's get a read-only answer. Those runs get only the read-only aDNA
 tools, never the station tools, and ignore user-level Claude settings.
