@@ -1689,8 +1689,6 @@ def test_without_a_brief_the_carry_box_is_hidden(browser_peer):
     assert store.get_room(patient, removed["id"])["brief"]["revision"] == 3
 
 
-
-
 def test_the_add_dialog_says_open_items_are_carried_without_a_brief(browser_peer):
     """Review Focus 1: the help text lived inside the brief's checkbox, which a room without a brief doesn't show, yet
     open board items are carried all the same (work board 5.x). A room with neither shows no help text."""
@@ -1711,6 +1709,7 @@ def test_the_add_dialog_says_open_items_are_carried_without_a_brief(browser_peer
                 expect(dialog.get_by_text("The new room starts with no messages.", exact=True)).to_be_visible()
                 expect(dialog.get_by_text(carried)).to_have_count(count)
                 dialog.get_by_role("button", name="Cancel").click()
+
 
 def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
     """Break caught: a member who is not the owner can change the brief, or cannot see it."""
@@ -1796,6 +1795,36 @@ def test_a_carry_refused_for_a_newer_brief_shows_it_and_carries_it_on_a_second_t
             expect(page.locator(".room-brief .room-brief-body")).to_have_text("Plan for everyone, revised.")
     rooms = store.list_rooms(doctor)
     assert len(rooms) == 1 and store.get_room(doctor, rooms[0]["id"])["brief"]["body"] == "Plan for everyone, revised."
+
+
+def test_a_replaced_room_offers_no_add_and_a_stale_add_says_why(browser_peer):
+    """Work board 8.4 (final review): a room another add replaced takes no more members. A page opened before that add
+    gets the station's 409 in the dialog, not the brief's message, and nothing is added. After a reload the replaced
+    room offers no "Change participants" (its other controls stay), and its replacement does."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "Plan for everyone.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.get_by_role("checkbox", name="Dr. Morgan")).to_be_visible()
+            replacement = store.add_participants(patient, room["id"], [users["organizer"]["id"]])  # another tab
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(dialog.get_by_role("alert")).to_have_text("This room was replaced by a newer linked room; add members there")
+            assert store.list_rooms(doctor) == []
+            dialog.get_by_role("button", name="Cancel").click()
+            page.reload()
+            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_be_visible()
+            expect(page.get_by_role("button", name="Change participants")).to_have_count(0)
+            page.goto(f"{base}/#chats/{replacement['id']}")
+            page.reload()
+            expect(page.get_by_role("button", name="Change participants")).to_be_visible()
 
 
 def test_the_brief_editor_saves_4000_emoji_and_shows_the_limit_past_it(browser_peer):

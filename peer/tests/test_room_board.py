@@ -98,7 +98,9 @@ def claims(client, room):
 
 
 def refused(response):
-    return response.status_code, response.json().get('error')
+    body = response.json()
+    assert isinstance(body, dict), body  # a route that wrongly answers 200 with a list fails here, not on .get
+    return response.status_code, body.get('error')
 
 
 def lines(client, room):
@@ -161,6 +163,8 @@ def elsewhere_message(s):
 
 # 5.1's refusal table, one case per row (Global Constraints numbers them). Each case breaks its own row and every later
 # row it can, so only the earliest answer may come back. A case returns (client, method, path, body, status, error).
+# Post checks the writer 403 (row 17) before the used-key 409 (row 15), as 5.1 now lists it, so not_a_writer, a post,
+# comes before key_used; link keeps row 17 after rows 13, 14 and 16.
 
 def count_from_a_person(s):  # row 1
     return s.andy, 'GET', '/api/ships/me/board', None, 403, 'Only a ship key can use this route'
@@ -232,10 +236,21 @@ def message_elsewhere(s):  # row 14: on a closed item, from a non-writer
             400, NOT_HERE)
 
 
-def key_used(s):  # row 15: a non-writer, on a full board
+def not_a_writer(s):  # row 17, post's half, checked before row 15 (final review): a used key, on a full board, from
+    # another owner's ship that posted 10 items this hour on its own owner's board and is over its post budget. A
+    # member who may not post learns nothing about which keys were used, or their state.
     insert_item(s, s.room, 'build:x', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
     fill(s, s.room, 100)
-    return (s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': 'Again', 'kind': 'build'}, 409,
+    fill(s, s.store.create_room(s.id('doctor'), "Doctor's room", [s.id('defiant')])['id'], 10, poster='defiant', created=s.clock[0])
+    over_budget(s, 'defiant')
+    return s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': 'Mine', 'kind': 'build'}, 403, WRITER
+
+
+def key_used(s):  # row 15: a board writer, on a full board, who posted 10 items this hour, over its post budget
+    insert_item(s, s.room, 'build:x', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
+    fill(s, s.room, 100, created=s.clock[0])
+    over_budget(s, 'serenity')
+    return (s.ship('serenity'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': 'Again', 'kind': 'build'}, 409,
             '`build:x` is already on this board or a room it replaced (done); new work needs a new key')
 
 
@@ -244,12 +259,6 @@ def closed(s):  # row 16: a holder's retried done gets 409, not 403
     insert_item(s, s.room, 'build:x')
     assert claim(rio, s.room, 'build:x').status_code == 201 and done(rio, s.room, 'build:x').status_code == 200
     return rio, 'POST', f'/api/chats/{s.room}/board/done', {'key': 'build:x', 'outcome': 'commit:1ff0efb'}, 409, '`build:x` is already done'
-
-
-def not_a_writer(s):  # row 17: another owner's ship, on a full board, over its post budget
-    fill(s, s.room, 100)
-    over_budget(s, 'defiant')
-    return s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:new', 'title': 'Mine', 'kind': 'build'}, 403, WRITER
 
 
 def done_by_a_non_writer(s):  # row 18: the holder isn't a board writer, and is over its post budget
@@ -306,7 +315,7 @@ def reading_too_fast(s):  # row 25
 
 
 REFUSALS = [count_from_a_person, remote_room, bad_key, bad_title, bad_kind, done_without_outcome, bad_link, live_key, at_name,
-            not_a_member, breakout, replaced, no_item, message_elsewhere, key_used, closed, not_a_writer, done_by_a_non_writer,
+            not_a_member, breakout, replaced, no_item, message_elsewhere, not_a_writer, key_used, closed, done_by_a_non_writer,
             drop_by_a_non_poster, link_it_has, board_full, ten_an_hour, eight_links_full, post_budget, reading_too_fast]
 
 
@@ -371,8 +380,9 @@ def test_each_board_route_answers_as_5_1_says(env):
 
 def test_each_change_posts_one_line_as_the_actor(env):
     """4.5: Posted, Linked, Done and Dropped, kind `claim`, as the actor, with no mention rows and no reply_to, each value
-    through safe_line. Closing another member's claim names its holder in the same line, as one line without an @;
-    there is no separate Released line, and a holder closing its own claim gets no ending."""
+    through safe_line, as the item's title, poster_name and closer_name are (5.1). Closing another member's claim names
+    its holder in the same line, as one line without an @; there is no separate Released line, and a holder closing its
+    own claim gets no ending."""
     s = Station(env)
     serenity, rio = s.ship('serenity'), s.ship('rio-grande')
     with s.store.transaction() as db:  # names are checked when set; this stands in for one set before that
@@ -395,6 +405,9 @@ def test_each_change_posts_one_line_as_the_actor(env):
         (s.id('serenity'), "Done `build:a`: commit:1ff0efb; released Rio Grande (at)serenity run's claim"),
         (s.id('rio-grande'), 'Posted `build:b` (other): Second'),
         (s.id('rio-grande'), 'Dropped `build:b`')]
+    items = {i['key']: i for i in board(s.andy, s.room).json()}  # the item's own fields go through safe_line too (5.1)
+    assert items['build:a']['title'] == 'Build the board'
+    assert items['build:b']['poster_name'] == items['build:b']['closer_name'] == 'Rio Grande (at)serenity run'
     assert not any(body.startswith('Released') for _, body in lines(s.andy, s.room))
     assert s.rows('SELECT count(*) FROM mentions') == [(0,)]
     assert all(m['reply_to'] is None for m in s.andy.get(f'/api/chats/{s.room}').json()['messages'])
@@ -432,14 +445,20 @@ def test_a_long_link_is_shown_whole(env):
 
 def test_a_title_is_1_to_120_characters_and_shown_whole(env):
     """4.2, 4.6: 120 characters come back whole in the item and its Posted line (safe_line's default would cut them at
-    80). 121 characters, an empty title, a blank one and (Review Focus 2) one of only invisible characters get
-    `Invalid title`."""
+    80), also when email addresses in them turn each at sign into (at), three characters longer (7.2). 121 characters,
+    an empty title, a blank one and (Review Focus 2) one of only invisible characters get `Invalid title`."""
     s = Station(env)
     serenity = s.ship('serenity')
     title = 'T' * 119 + 'é'
     posted = post(serenity, s.room, 'build:a', title)
     assert posted.status_code == 201 and posted.json()['title'] == title
     assert (s.id('serenity'), f'Posted `build:a` (build): {title}') in board_lines(s.andy, s.room)
+    mail = 'Mail andy@example.com, cc stan@example.org: '
+    title = mail + 'm' * (120 - len(mail))
+    shown = title.replace('@', '(at)')
+    posted = post(serenity, s.room, 'build:mail', title)
+    assert posted.status_code == 201 and posted.json()['title'] == shown and shown.endswith('m' * 10)
+    assert (s.id('serenity'), f'Posted `build:mail` (build): {shown}') in board_lines(s.andy, s.room)
     for bad in ('x' * 121, '', '   ', '​', '‏​', 42, None):
         assert refused(post(serenity, s.room, 'build:b', bad)) == (400, 'Invalid title'), bad
 
@@ -491,7 +510,8 @@ def test_closing_releases_the_claim_in_the_same_transaction(env, monkeypatch):
     with pytest.raises(RuntimeError):
         s.store.drop_item(s.id('serenity'), s.room, 'build:c')
     left = next(i for i in board(s.andy, s.room).json() if i['key'] == 'build:c')
-    assert left['state'] == 'open' and left['claim']['holder_id'] == s.id('rio-grande')
+    assert left['state'] == 'open' and left['claim'] is not None, 'the claim was released though the close rolled back'
+    assert left['claim']['holder_id'] == s.id('rio-grande')
 
 
 ACCEPTED = ['branch:work-board-spec', 'branch:a/b.c_d', 'path:a+b/c.md', 'commit:1ff0efb', 'commit:' + 'a' * 40, 'claim:spec:d7']
@@ -507,7 +527,7 @@ REFUSED = ([f'{form}:a{c}b' for form in ('branch', 'path') for c in SHELL]
 def test_links_have_only_the_five_shapes(env, as_):
     """4.3, 7.3: five forms, checked by shape, as a link and as done's outcome. Shell metacharacters, a leading - or /,
     `..`, `//`, a trailing / or .lock, @ in a path, over-long names, wrong hex and URLs are refused with the link
-    message; a message id must be in this room."""
+    message; a message id must be in this room. A mixed-case claim: link is stored lowercased."""
     s = Station(env)
     serenity = s.ship('serenity')
     here, elsewhere = say(s.andy, s.room, 'here', 'A verdict in this room')['id'], elsewhere_message(s)
@@ -521,6 +541,10 @@ def test_links_have_only_the_five_shapes(env, as_):
             key = f'build:ok{n}'
             insert_item(s, s.room, key)
         assert write(key, value).status_code == 200, value
+    insert_item(s, s.room, 'build:case')  # Decision 3: a claim: link's key is stored as claim_key() gives it, lowercased
+    assert write('build:case', 'claim:Fix:X').status_code == 200
+    stored = 'SELECT link FROM board_links' if as_ == 'link' else "SELECT outcome FROM board_items WHERE key='build:case'"
+    assert ('claim:fix:x',) in s.rows(stored) and ('claim:Fix:X',) not in s.rows(stored)
     for value in REFUSED:
         assert refused(write('build:shared', value)) == (400, LINK_SHAPE), value
     for value in (f'message:{elsewhere}', 'message:' + 'a' * 32):
@@ -600,7 +624,8 @@ def test_only_the_owner_and_the_owners_ships_post_and_link(env, who, writes):
 
 def test_done_needs_an_outcome_link_and_a_writer(env):
     """4.4, 6.1: without an outcome, 400. The room's owner, the poster, and a holder who is a board writer may mark it
-    done; a holder who isn't one (another owner's ship) and a writer who is neither poster nor holder get 403."""
+    done; a holder who isn't one (another owner's ship) and a writer who is neither poster nor holder get 403, also on
+    an item someone else holds."""
     s = Station(env)
     serenity, rio, defiant = s.ship('serenity'), s.ship('rio-grande'), s.ship('defiant')
     insert_item(s, s.room, 'build:x')
@@ -614,6 +639,7 @@ def test_done_needs_an_outcome_link_and_a_writer(env):
     assert claim(defiant, s.room, 'build:held').status_code == 201
     insert_item(s, s.room, 'build:other')
     assert refused(done(defiant, s.room, 'build:held')) == (403, DONE_BY)
+    assert refused(done(rio, s.room, 'build:held')) == (403, DONE_BY)  # a writer, but another member holds it
     assert refused(done(rio, s.room, 'build:other')) == (403, DONE_BY)
 
 
@@ -728,11 +754,26 @@ def test_adding_members_carries_open_items_and_leaves_the_record(env):
         assert {f: item[f] for f in same} == {f: was[key][f] for f in same} and item['room_id'] == new
     assert moved['build:waiting']['claim'] is None and moved['build:left']['claim'] is None
     taken, held = moved['build:taken']['claim'], was['build:taken']['claim']
+    assert taken is not None and held is not None, 'the taken item arrived waiting'
     assert (taken['id'], taken['room_id'], taken['holder_id'], taken['note'], taken['expires']) == (
         held['id'], new, s.id('rio-grande'), 'on it', held['expires'])
     assert s.rows('SELECT count(*) FROM claims WHERE holder_id=? AND released IS NULL', s.id('rio-grande')) == rio_holds
     assert [c['key'] for c in claims(s.andy, s.room)] == ['build:left']
     assert {i['key']: i['state'] for i in board(s.andy, s.room).json()} == {'build:done': 'done', 'build:dropped': 'dropped'}
+
+
+def test_a_holder_removed_and_added_back_in_the_add_keeps_its_claim(env):
+    """5.x: the carry moves a claim when its holder is a member of the *new* room. Defiant was removed from the room but
+    still holds `build:back`; the add brings it back, so the claim moves with the item. (Reading members from the old
+    room would leave the claim behind.)"""
+    s = Station(env)
+    insert_item(s, s.room, 'build:back')
+    assert claim(s.ship('defiant'), s.room, 'build:back').status_code == 201
+    assert s.andy.delete(f'/api/chats/{s.room}/participants/{s.id("defiant")}').status_code == 200
+    added = s.andy.post(f'/api/chats/{s.room}/participants', json={'member_ids': [s.users[3]['id'], s.id('defiant')]})
+    assert added.status_code == 201, added.text
+    moved = board(s.andy, added.json()['id']).json()[0]['claim']
+    assert moved is not None and moved['holder_id'] == s.id('defiant')
 
 
 def test_a_key_is_used_once_per_room_for_all_time(env):
@@ -767,8 +808,8 @@ def test_a_board_holds_100_open_items(env):
 
 
 def test_a_poster_posts_10_items_an_hour(env):
-    """4.6, 7.4: the 11th item within the hour gets 429, in the same room or another; another poster isn't held back,
-    and an hour later it works."""
+    """4.6, 7.4: the 11th item within the hour gets 429, in the same room or another, still a second before the hour is
+    up; another poster isn't held back, and an hour later it works."""
     s = Station(env)
     serenity, other = s.ship('serenity'), s.make_room('Other room')
     for n in range(10):
@@ -776,7 +817,9 @@ def test_a_poster_posts_10_items_an_hour(env):
     for room in (s.room, other):
         assert refused(post(serenity, room, 'build:10')) == (429, 'You posted 10 items in the last hour; wait before posting another')
     assert post(s.ship('rio-grande'), s.room, 'build:rio').status_code == 201
-    s.tick(3601)
+    s.tick(3599)
+    assert refused(post(serenity, s.room, 'build:10')) == (429, 'You posted 10 items in the last hour; wait before posting another')
+    s.tick(2)
     assert post(serenity, s.room, 'build:10').status_code == 201
 
 
@@ -831,6 +874,52 @@ def test_the_carry_leaves_claims_that_are_not_on_open_items(env):
     new = add_member(s, s.room)
     assert sorted(c['key'] for c in claims(s.andy, s.room)) == ['adhoc:x', 'build:done']
     assert claims(s.andy, new) == []
+
+
+def test_adding_members_to_a_replaced_room_is_refused(env):
+    """Final review (Serenity F2): once an add has replaced a room, adding members to it again gets 409 before anything
+    is written, so the replacement chain never forks. Without it a second add would make a second current room beside
+    the first, and `fix:x`, carried to the first, could be posted again in the second. The 409 comes after the 404 for a
+    non-member and the owner's 403, so only the owner learns the room was replaced."""
+    s = Station(env)
+    assert post(s.ship('serenity'), s.room, 'fix:x').status_code == 201
+    first = add_member(s, s.room)
+    assert [i['key'] for i in board(s.andy, first).json()] == ['fix:x']
+    tables = ('rooms', 'room_members', 'room_activity', 'room_briefs', 'events')
+    before = s.snapshot(), {t: s.rows(f'SELECT * FROM {t} ORDER BY rowid') for t in tables}
+
+    def add(client):
+        return client.post(f'/api/chats/{s.room}/participants', json={'member_ids': [s.users[2]['id']]})
+    assert refused(add(s.andy)) == (409, 'This room was replaced by a newer linked room; add members there')
+    assert refused(add(s.outsider)) == (404, 'Not found')
+    assert refused(add(s.doctor)) == (403, 'Room owner required')
+    assert (s.snapshot(), {t: s.rows(f'SELECT * FROM {t} ORDER BY rowid') for t in tables}) == before
+
+
+def test_a_bridge_that_meets_a_replaced_room_says_so(tmp_path, capsys, monkeypatch):
+    """Final review (Serenity F2): station-bridge picks a current room in one transaction and adds the wormhole in the
+    next. If an add replaces the room in between, the bridge prints add_participants' 409 for a replaced room, not the
+    brief's message, also when the room has a brief to carry. A replaced room's short id names no room at all."""
+    store = Store(tmp_path / 'station')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    family = store.create_user('family', 'Family', 'long-password-family')
+    store.create_station_ship('wormhole', 'Wormhole')
+    room = store.create_room(andy['id'], 'Gamma Quadrant', [])['id']
+    store.save_brief(andy['id'], room, 'Keep the lights on.', 0)
+    real = Store.add_participants
+
+    def someone_adds_first(self, actor, key, member_ids, carry_brief=None):
+        real(self, actor, key, [family['id']], carry_brief)  # another add lands between the bridge's read and its add
+        return real(self, actor, key, member_ids, carry_brief)
+    monkeypatch.setattr(Store, 'add_participants', someone_adds_first)
+    with pytest.raises(SystemExit) as stopped:
+        cli(['station-bridge', '--data-dir', str(store.data_dir), '--id', room[:6], '--as', 'andy'])
+    assert stopped.value.code == 1
+    assert capsys.readouterr().err == 'This room was replaced by a newer linked room; add members there\n'
+    monkeypatch.undo()
+    with pytest.raises(SystemExit):
+        cli(['station-bridge', '--data-dir', str(store.data_dir), '--id', room[:6], '--as', 'andy'])
+    assert capsys.readouterr().err == f'No room you own starts with {room[:6]}\n'
 
 
 def test_bridging_carries_open_items_and_unbridging_moves_none(tmp_path, capsys):
@@ -925,8 +1014,9 @@ def test_a_replaced_room_takes_no_board_writes(env):
 
 def test_the_count_route_counts_waiting_and_taken_for_ships(env):
     """5.1: per current room with open items, how many wait and how many are taken. Rooms are ordered by their oldest
-    waiting item, and a room with only taken items comes last. A room with only closed items isn't listed, nor a
-    replaced room. A person gets 403, and the 61st read in a minute gets 429."""
+    waiting item, not its oldest open one (a taken item older than any waiting one doesn't count), and a room with only
+    taken items comes last. A room with only closed items isn't listed, nor a replaced room. A person gets 403, and the
+    61st read in a minute gets 429."""
     s = Station(env)
     serenity, rio = s.ship('serenity'), s.ship('rio-grande')
     later, taken_only, closed_only = s.make_room('Later room'), s.make_room('Taken only'), s.make_room('Closed only')
@@ -935,7 +1025,7 @@ def test_the_count_route_counts_waiting_and_taken_for_ships(env):
     insert_item(s, secret, 'build:secret', created=s.clock[0] - 300)
     insert_item(s, later, 'build:old', created=s.clock[0] - 100)
     insert_item(s, s.room, 'build:a', created=s.clock[0] - 50)
-    insert_item(s, s.room, 'build:b', created=s.clock[0] - 60)
+    insert_item(s, s.room, 'build:b', created=s.clock[0] - 150)  # taken, and older than Later room's waiting item
     insert_item(s, taken_only, 'build:t', created=s.clock[0] - 200)
     insert_item(s, closed_only, 'build:x', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
     assert claim(rio, s.room, 'build:b').status_code == 201 and claim(rio, taken_only, 'build:t').status_code == 201
@@ -967,28 +1057,37 @@ def test_an_expired_claim_leaves_the_item_waiting_silently(env):
     assert s.rows('SELECT count(*) FROM messages') == messages
 
 
-def test_the_board_view_lists_a_persons_current_rooms(env, two_peers):
-    """5.x: GET /api/board lists open items from every current local room the person belongs to, grouped by room, each
-    room's oldest first, with the per-room list's fields. A replaced room, a room they aren't in and a received room
-    are left out. A ship key gets 403 `Ship keys cannot use this route`, and no session 401 `Sign in required`."""
+def test_the_board_view_lists_a_persons_current_rooms(env, two_peers, monkeypatch):
+    """5.x: GET /api/board lists open items from every current local room the person belongs to, as owner or member,
+    grouped by room, each room's oldest first, with the per-room list's fields. Rooms come in the order of their oldest
+    open item (plan Decision 2), not by id: the room whose id sorts first holds the newest item. A replaced room, a room
+    they aren't in and a received room are left out. A ship key gets 403 `Ship keys cannot use this route`, and no
+    session 401 `Sign in required`."""
     s = Station(env)
     second = s.make_room('Second room')
+    with monkeypatch.context() as patch:  # a fixed id that sorts before any random one, so id order can't pass by chance
+        patch.setattr('superyak_peer.chats.uid', lambda: '0' * 32)
+        first = s.make_room('First by id')
     hidden = s.store.create_room(s.users[2]['id'], 'Not yours', [])['id']
     insert_item(s, s.room, 'build:b', created=s.clock[0] - 10)
     insert_item(s, s.room, 'build:a', created=s.clock[0] - 20)
     insert_item(s, second, 'build:c', created=s.clock[0] - 5)
+    insert_item(s, first, 'build:newest', created=s.clock[0] - 2)
     insert_item(s, s.room, 'build:closed', state='dropped', closed=s.clock[0])
     s.store.post_item(s.users[2]['id'], hidden, 'build:hidden', 'Not for Patient', 'build')
     view = s.andy.get('/api/board')
     assert view.status_code == 200
     rooms = view.json()['rooms']
     assert [(r['room_id'], r['title'], [i['key'] for i in r['items']]) for r in rooms] == [
-        (s.room, 'Superyak: all hands', ['build:a', 'build:b']), (second, 'Second room', ['build:c'])]
+        (s.room, 'Superyak: all hands', ['build:a', 'build:b']), (second, 'Second room', ['build:c']),
+        (first, 'First by id', ['build:newest'])]
     assert rooms[0]['items'] == [i for i in board(s.andy, s.room).json() if i['state'] == 'open']
+    as_member = s.doctor.get('/api/board')  # Doctor is a member of these rooms, not their owner, and not in the hidden one
+    assert as_member.status_code == 200 and [r['room_id'] for r in as_member.json()['rooms']] == [s.room, second, first]
     replacement = add_member(s, second)
-    assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [s.room, replacement]
+    assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [s.room, replacement, first]
     insert_item(s, second, 'build:left', created=s.clock[0] - 1)  # an open item left behind in the replaced room
-    assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [s.room, replacement]
+    assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [s.room, replacement, first]
     assert refused(s.ship('serenity').get('/api/board')) == (403, 'Ship keys cannot use this route')
     assert refused(TestClient(s.app, base_url='http://testserver').get('/api/board')) == (401, 'Sign in required')
     a, b, ca, cb = two_peers

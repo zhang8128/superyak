@@ -50,6 +50,12 @@ def board_title(value):
     return value
 
 
+def shown_title(title):
+    """safe_line(title, 120), with three more characters for each at sign, since safe_line turns one into (at) before it
+    cuts: a 120-character title holding an email address comes back whole (4.6, 7.2). The title is at most 120."""
+    return safe_line(title, MAX_TITLE + 3 * title.count('@'))
+
+
 def board_link(value):
     """4.3, 7.3: one of five forms, checked by shape only (the station never fetches, opens or resolves a link), so a
     link copied into a shell or a tool call can only name a thing; else 400. No form can hold `@`. A claim: link's key
@@ -126,14 +132,15 @@ class RoomBoard:
         return None
 
     def _item_json(self, db, row):
-        """5.1's item. Names through safe_line(name, 40), the title through safe_line(title, 120), links and the outcome
-        through safe_line(link, 210), and `claim`: the active claim on the key as _claim_json gives it, or None."""
+        """5.1's item. Names through safe_line(name, 40), the title through shown_title (safe_line(title, 120), with room
+        for each (at)), links and the outcome through safe_line(link, 210), and `claim`: the active claim on the key as
+        _claim_json gives it, or None."""
         def name(user_id):
             found = db.execute('SELECT name FROM users WHERE id=?', (user_id,)).fetchone()
             return safe_line(found['name'] if found else '', NAME_CHARS)
         held = self._active_claim(db, row['room_id'], row['key'], self.clock())
         links = db.execute('SELECT link, added_by, added FROM board_links WHERE item_id=? ORDER BY added, rowid', (row['id'],)).fetchall()
-        return {'id': row['id'], 'room_id': row['room_id'], 'key': row['key'], 'title': safe_line(row['title'], MAX_TITLE),
+        return {'id': row['id'], 'room_id': row['room_id'], 'key': row['key'], 'title': shown_title(row['title']),
                 'kind': row['kind'], 'state': row['state'], 'posted_by': row['posted_by'], 'poster_name': name(row['posted_by']),
                 'created': row['created'], 'closed': row['closed'], 'closed_by': row['closed_by'],
                 'closer_name': name(row['closed_by']) if row['closed_by'] else None,
@@ -224,11 +231,11 @@ class RoomBoard:
         no_at_name(title)
         with self.transaction() as db:
             room = self._board_room(db, actor, room_id, write=True)
+            if not self._board_writer(db, room, actor):  # before the key's 409, so a non-writer learns nothing of used keys (5.1)
+                raise Problem(403, WRITER)
             used = self._key_used(db, room_id, key)
             if used is not None:
                 raise Problem(409, f'`{key}` is already on this board or a room it replaced ({used}); new work needs a new key')
-            if not self._board_writer(db, room, actor):
-                raise Problem(403, WRITER)
             now = self.clock()
             if db.execute("SELECT count(*) FROM board_items WHERE room_id=? AND state='open'", (room_id,)).fetchone()[0] >= OPEN_PER_ROOM:
                 raise Problem(429, FULL)
@@ -236,7 +243,7 @@ class RoomBoard:
                 raise Problem(429, HOURLY)
             db.execute('INSERT INTO board_items(id,room_id,key,title,kind,posted_by,created) VALUES(?,?,?,?,?,?,?)',
                        (uid(), room_id, key, title, kind, actor, now))
-            self._post_claim(db, actor, room_id, f'Posted `{key}` ({kind}): {safe_line(title, MAX_TITLE)}')
+            self._post_claim(db, actor, room_id, f'Posted `{key}` ({kind}): {shown_title(title)}')
             return self._item_json(db, self._board_item(db, room_id, key))
 
     def link_item(self, actor, room_id, key, link):
