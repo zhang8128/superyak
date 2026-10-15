@@ -416,6 +416,32 @@ def test_a_resent_two_link_ticket_checks_the_held_grant_and_the_roots_issuer(env
     assert refused(store, s['beta'], asked['beta']) == (409, 'Patient is no longer in this room', 'finished')
 
 
+def test_a_two_link_grant_builds_only_where_the_roots_issuer_is_in_the_room(env):
+    """Section 2 review of merge 3c, minor 3 (the Mac's m1): at issue time a chain of two links needs the root's issuer in
+    the room (G16), not the held link's issuer. Each case has its own ship, so its own grants and tickets. Without the
+    patient the held link's issuer (the doctor) is not enough and nothing is charged; without the doctor the root's
+    issuer (the patient) is enough."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    s = ships(store, patient['id'], 'no-root', 'no-holder')
+    grants = {}
+    for name in s:
+        root = make(store, patient, doctor, [s[name]], hours=48)
+        grants[name] = (root, make(store, doctor, family, [s[name]], hours=48))
+        with store.transaction() as db:
+            db.execute('UPDATE grants SET parent_id=? WHERE id=?', (root, grants[name][1]))
+    without_patient = room(store, doctor, 'Without patient', family, s['no-root'])  # the held link's issuer is here, the root's is not
+    without_doctor = room(store, patient, 'Without doctor', family, s['no-holder'])  # the root's issuer is here, the held link's is not
+    asked = mention(store, family, without_patient, s['no-root'])
+    assert decide(store, s['no-root'], asked) == ('read', 'none')
+    assert [uses(store, key) for key in grants['no-root']] == [[], []]
+    asked = mention(store, family, without_doctor, s['no-holder'])
+    got = store.issue_ticket(s['no-holder']['id'], asked['id'])
+    root, held = grants['no-holder']
+    assert (got['mode'], got['basis'], got['root_id'], got['chain']) == ('build', 'grant', patient['id'], [root, held])
+
+
 def test_a_resend_whose_issuers_row_is_gone_is_refused_and_never_raises(env):
     """R11's rule, never to raise, on G18's re-check: an issuer's row that is gone (only in a hand-edited database; users
     are never deleted) reads as a grant that is gone, a 409, never a 500."""
