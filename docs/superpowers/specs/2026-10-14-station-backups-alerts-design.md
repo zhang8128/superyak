@@ -393,9 +393,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   - **It never writes the live database.** It writes only the staged copy, and if any step fails the transaction rolls
     back and the copy is unchanged.
   - **The mark.** As its last act inside the same transaction, the command writes a `system_meta` row, key
-    `restore_reconcile`, value `{"at": <time>, "replaced": <true when a replaced file was compared>}`, creating the
+    `restore_reconcile`, value `{"at": <time>, "replaced": <true when a replaced file was compared>, "path": <the staged file's absolute path>}`, creating the
     table (the station's own key/value table) when a copy from before the system author lacks it. A rolled-back run
-    leaves none. Runbook step 6 reads it read-only before it installs, and refuses a copy whose mark is missing or
+    leaves none. Runbook step 6 reads it read-only before it installs, and refuses a copy whose mark is missing, names another path than "$ASIDE/restored.sqlite3", or is
     older than `chosen.sqlite3` (a restored station's own backups carry the mark of their restore): "step 5 hasn't
     run on this copy". The restore test's call writes it too, harmlessly, on its scratch copy. (Follow-up from the
     final reviews; narrows, no new D8 round.)
@@ -696,6 +696,10 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
   outside the station is on Andy's decision list.
 - **Logs vanish at reboot** (volatile journald). On this Pi, `journalctl --user -u` finds nothing; use
   `--user-unit`.
+- **A restore can revive a running builder ticket and reset lockout counters.** A `tickets` row marked running is
+  honoured for 2 hours (tickets.py), so restoring a copy less than 2 hours old can revive a ticket that finished since;
+  `login_attempts` returns to the copy's counts, so a lockout that had begun starts over. Accepted limits: the
+  reconcile does not touch either table (the ticket expires by itself; a lockout is only a brake on guessing).
 - **A peer is unpaired on the replaced file's word** (S16, revision 4). If that file is damaged but passes its check, a
   wanted peer is cut off; Andy pairs it again, and the withdrawn outbox rows and nulled inbox payloads don't come
   back. Without a usable replaced file no peer is unpaired, and the runbook's hand step covers it.
@@ -800,4 +804,4 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | A restore brings back a changed or removed room brief | Reported by room short id and title, "reported, not applied", never the text | S16 ("Reported, never applied"), runbook step 7, `test_reconcile_reports_briefs_changed_since_the_copy_without_their_text` |
 | A colliding short id prints twice | The two peer lines print the full id for a peer sharing its 12-character prefix | S16 ("What it prints"), `test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line` |
 | Odd alert files | `at` must be finite, else the file is skipped and cleaned by its mtime; an alert whose text sanitises to empty is not listed | R13, `test_an_alert_with_a_non_finite_time_is_skipped_and_cleaned`, `test_an_alert_whose_text_sanitises_to_nothing_is_not_listed` |
-| The work board's tables (`board_items`, `board_links`, `claims`) | Checked: the reconcile skips nothing. Board items and claims are coordination, not access, and are not compared; a test makes any new table be classified | S16, `test_every_table_is_either_reconciled_or_named_coordination` |
+| The work board's tables (`board_items`, `board_links`, `claims`) are coordination, not access | Not compared. `test_every_table_is_either_reconciled_or_named_coordination` checks only that every table is in one of two lists and that a reconcile leaves the coordination tables' rows as they were; the other coordination tables listed there are not each argued (`tickets` and `login_attempts` are in Known limits) | S16, Known limits |

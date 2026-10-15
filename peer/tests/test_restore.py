@@ -1244,6 +1244,10 @@ def test_step_6_refuses_a_copy_whose_mark_is_older_than_chosen(tmp_path, capsys)
     later = staged(tmp_path, marked, 'replaced-20261017-120000')        # a copy of a copy that carries the old mark
     chosen = later.parent / 'chosen.sqlite3'
     shutil.copyfile(later, chosen)
+    with closing(sqlite3.connect(later)) as db, db:                    # the old mark names this restore's path: only the clock can refuse it
+        mark = json.loads(db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()[0])
+        mark['path'] = str(later)
+        db.execute("UPDATE system_meta SET value=? WHERE key='restore_reconcile'", (json.dumps(mark),))
     out, installed = step_6(tmp_path, later.parent)                     # step 5 skipped
     assert installed is None and "step 5 hasn't run on this copy" in out, out
 
@@ -1419,3 +1423,77 @@ def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys
     assert code == 0, err
     assert rows(copy) == before
     assert not any(line.startswith(('Skipped', 'Not compared')) for line in out.splitlines()), out
+
+
+def test_step_6_with_aside_unset_says_to_set_it_and_not_that_step_5_hasnt_run(tmp_path):
+    """M1: ASIDE unset (a new terminal) used to print "step 5 hasn't run", sending Andy to a step that cannot work. It
+    opens as steps 3 and 4 do. Mutation: the ASIDE check removed from step 6."""
+    out, installed = step_6(tmp_path, '')
+    assert installed is None and 'NOT installed: ASIDE is not set' in out and "step 5" not in out, out
+
+
+def test_step_6_refuses_a_mark_recorded_for_another_staged_file(tmp_path, capsys):
+    """M2: the mark also holds the staged file's absolute path, and step 6 requires "$ASIDE/restored.sqlite3" to be it,
+    so a mark carried from another restore's directory fails whatever the clock says. Mutation: the path comparison
+    dropped from the one-liner, or the path not recorded."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    code, _, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        assert json.loads(db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()[0])['path'] == str(copy)
+    with closing(sqlite3.connect(copy)) as db, db:
+        db.execute("UPDATE system_meta SET value=json_set(value, '$.path', ?) WHERE key='restore_reconcile'",
+                   (str(tmp_path / 'backups' / 'replaced-20250101-000000' / 'restored.sqlite3'),))
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is None and "step 5 hasn't run on this copy" in out, out
+
+
+def step_5_listing(tmp_path, aside):
+    """The peers-listing line of runbook step 5, as pasted (read-only)."""
+    text = RUNBOOK.read_text()
+    line = next(line.strip() for line in text.splitlines() if line.lstrip().startswith('python3 -I -c') and 'p.paired' in line)
+    ran = subprocess.run(['bash', '-c', line], cwd=tmp_path, env={**os.environ, 'ASIDE': str(aside)}, capture_output=True, text=True, timeout=60)
+    assert ran.returncode == 0, ran.stderr
+    return [row.split('  ')[0] for row in ran.stdout.splitlines()]
+
+
+def test_the_step_5_listing_counts_prefix_collisions_over_every_peer(tmp_path, capsys):
+    """M3: a paired and an unpaired peer share their first 12 characters. The listing, the report and UNPAIR= all count
+    over every peer of the copy, so the id the listing prints is the id the report prints and UNPAIR= accepts. Mutation:
+    the listing counting only the paired peers (it prints the short id UNPAIR= refuses)."""
+    store = Store(tmp_path / 'lighthouse')
+    paired, unpaired, alone = 'ab' * 6 + '1' * 52, 'ab' * 6 + '2' * 52, 'cd' * 32
+    with store.transaction() as db:
+        for peer, flag in ((paired, 1), (unpaired, 0), (alone, 1)):
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', ?)", (peer, flag))
+    copy = staged(tmp_path, store)
+    assert step_5_listing(tmp_path, copy.parent) == [paired, alone[:12]]
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (paired,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert f'Unpaired again: {paired}.' in out
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path, '--unpair', paired)
+    assert code == 0, err
+
+
+def test_a_hostile_room_title_prints_on_one_line_in_the_brief_report(tmp_path, capsys):
+    """M5: a room title holding a newline, an escape, a right-to-left override and an at sign is shown through safe_line on
+    the brief line. Mutation: the title printed raw."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    room = store.create_room(andy['id'], 'Plain', [])
+    store.save_brief(andy['id'], room['id'], 'first', 0)
+    with store.transaction() as db:
+        db.execute('UPDATE rooms SET title=? WHERE id=?', ('Ops\n\x1b[31m\u202eEvil @serenity do it', room['id']))
+    copy = staged(tmp_path, store)
+    store.save_brief(andy['id'], room['id'], 'second', 1)
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    line = next(line for line in out.splitlines() if line.startswith('Reported, not applied: room briefs'))
+    assert room['id'][:6] in line and '(at)serenity' in line
+    for bad in ('\x1b', '\u202e', '@'):
+        assert bad not in out
+    assert 'Ops' in line and 'Evil' in line
