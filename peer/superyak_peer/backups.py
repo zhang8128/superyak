@@ -587,7 +587,17 @@ PEER_NEEDS = ('peers.paired', 'remote_contacts.peer_id', 'remote_contacts.name',
               'inbox.origin', 'inbox.payload')
 
 
-def _unpair(db, peer, report):
+def _shown(db, old, peer):
+    """Follow-up 5: how a report line names a peer. The 12-character short id, unless another peer of the copy or the
+    replaced file shares it, when UNPAIR= would refuse the short id: then the full id."""
+    ids = set()
+    for connection in (db, old):
+        if connection is not None and _has(connection, 'peers.peer_id'):
+            ids |= {row[0] for row in connection.execute('SELECT peer_id FROM peers')}
+    return peer if sum(other[:12] == peer[:12] for other in ids | {peer}) > 1 else peer[:12]
+
+
+def _unpair(db, old, peer, report):
     """Exactly Federation.unpair (federation.py:43-45) on the staged copy: paired=0, that peer's contacts' pending and
     failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled."""
     names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))]
@@ -595,7 +605,7 @@ def _unpair(db, peer, report):
     withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN "
                            "(SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (peer,)).rowcount
     nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND payload IS NOT NULL', (peer,)).rowcount
-    report['unpaired'].append((peer[:12], names))
+    report['unpaired'].append((_shown(db, old, peer), names))
     report['unpaired_full'].append(peer)
     report['unpaired_counts'] = [sum(pair) for pair in zip(report['unpaired_counts'], (withdrawn, nulled))]
 
@@ -610,10 +620,10 @@ def _unpair_like_replaced(db, old, now, report):
     there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
     for peer, paired in db.execute('SELECT peer_id, paired FROM peers ORDER BY peer_id').fetchall():
         if paired and peer in there and not there[peer]:
-            _unpair(db, peer, report)
+            _unpair(db, old, peer, report)
 
 
-def _unpair_named(db, named, report):
+def _unpair_named(db, old, named, report):
     """--unpair PEER (revision 4): the same, for the peers a person names (the only way without a usable replaced file)."""
     if not named:
         return
@@ -621,7 +631,7 @@ def _unpair_named(db, named, report):
         raise UnpairRefused('Refused: this copy lacks the peer tables, so there is nothing to unpair.')
     for peer in named:
         if peer not in report['unpaired_full']:
-            _unpair(db, peer, report)
+            _unpair(db, old, peer, report)
     # a peer named here is no longer one the report calls left paired (N3)
     report['lacked'] = [item for item in report['lacked'] if item[2] not in report['unpaired_full']]
 
@@ -688,7 +698,7 @@ def _report_differences(db, old, now, report):
         def known(peer):
             names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))] \
                 if _has(db, 'remote_contacts.name') else []
-            return (peer[:12], names, peer)
+            return (_shown(db, old, peer), names, peer)
         report['peers'] = [known(peer) for peer in sorted(there) if there[peer] and not here.get(peer)]
         report['lacked'] = [known(peer) for peer in sorted(here) if here[peer] and peer not in there]
 
@@ -839,7 +849,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _unpair_like_replaced, _report_differences):
                     step(db, old, now, report)
-            _unpair_named(db, named, report)
+            _unpair_named(db, old, named, report)
             _write_mark(db, old, now, report)
             db.execute('COMMIT')
         except BaseException:

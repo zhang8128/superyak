@@ -1339,3 +1339,40 @@ def test_reconcile_reports_briefs_changed_since_the_copy_without_their_text(tmp_
     assert 'Same' not in line and 'Later' not in line
     assert 'secret' not in out and 'brief text of' not in out
     assert not any(row.startswith(('Skipped', 'Not compared')) for row in out.splitlines()), out
+
+
+def test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line(tmp_path, capsys):
+    """Follow-up 5: UNPAIR= takes a 12-character id or the full id and refuses a short one two peers share, so a report
+    line that printed the short id twice would hand Andy an id the next run refuses. For any peer sharing its first 12
+    characters with another peer of either file, "Unpaired again" and "Reported, not applied: peers" print the full id;
+    a peer with a prefix of its own still prints 12. Mutation: the prefix printed whatever the collision."""
+    store = Store(tmp_path / 'lighthouse')
+    ids = {'cut_a': 'ab' * 6 + '1' * 52, 'cut_b': 'ab' * 6 + '2' * 52,            # share a prefix; a is unpaired in the replaced file
+           'later_a': 'cd' * 6 + '3' * 52, 'later_b': 'cd' * 6 + '4' * 52,        # share a prefix; a is paired there, unpaired here
+           'ghost_a': 'ef' * 6 + '5' * 52, 'ghost_b': 'ef' * 6 + '6' * 52,        # share a prefix; a is paired here, absent there
+           'alone': '12' * 32}
+    ids |= {'new_a': '9a' * 6 + '7' * 52, 'new_b': '9a' * 6 + '8' * 52}            # share a prefix, and only the replaced file has both
+    with store.transaction() as db:
+        for name, peer in [item for item in ids.items() if not item[0].startswith('new_')]:
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', ?)", (peer, 0 if name == 'later_a' else 1))
+            db.execute('INSERT INTO remote_contacts(id, peer_id, user_id, name) VALUES(?, ?, ?, ?)', ('c-' + name, peer, 'u-' + name, name.title()))
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id IN (?, ?)', (ids['cut_a'], ids['alone']))
+        db.execute('UPDATE peers SET paired=1 WHERE peer_id=?', (ids['later_a'],))
+        db.execute('DELETE FROM remote_contacts WHERE peer_id=?', (ids['ghost_a'],))
+        db.execute('DELETE FROM peers WHERE peer_id=?', (ids['ghost_a'],))
+        for peer in (ids['new_a'], ids['new_b']):             # paired since the copy: only the replaced file has them
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", (peer,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    lines = out.splitlines()
+    unpaired = next(line for line in lines if line.startswith('Unpaired again:'))
+    assert f'{ids["cut_a"]} (Cut_A)' in unpaired and f'{ids["alone"][:12]} (Alone)' in unpaired and ids['alone'] not in unpaired
+    reported = next(line for line in lines if line.startswith('Reported, not applied: peers:'))
+    assert f'{ids["later_a"]} (Later_A)' in reported and f'{ids["ghost_a"]} (Ghost_A)' in reported
+    assert ids['new_a'] in reported and ids['new_b'] in reported
+    assert ids['cut_b'] not in out and ids['later_b'] not in out and ids['ghost_b'] not in out      # not listed: nothing to name
+    # the id printed is one the next run accepts
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path, '--unpair', ids['later_a'])
+    assert code == 0, err

@@ -116,7 +116,7 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    python3 -I -c 'import pathlib, sqlite3, sys; db = sqlite3.connect(pathlib.Path(sys.argv[1]).absolute().as_uri() + "?mode=ro", uri=True); rows = db.execute("SELECT p.peer_id, json_extract(p.card, ?), group_concat(c.name, ?) FROM peers p LEFT JOIN remote_contacts c USING (peer_id) WHERE p.paired = 1 GROUP BY p.peer_id ORDER BY p.peer_id", ("$.endpoint", ", ")).fetchall(); [print(row[0] if sum(r[0][:12] == row[0][:12] for r in rows) > 1 else row[0][:12], row[1], row[2], sep="  ") for row in rows]' "$ASIDE/restored.sqlite3"
    ```
    For each peer you had cut off since the copy, run the reconcile again on the same staged copy, naming it by the id
-   in the first column. That is 12 characters, or the full id when two listed peers share their first 12; `UNPAIR=`
+   in the first column (the report's peer lines print the same id). That is 12 characters, or the full id when two listed peers share their first 12; `UNPAIR=`
    takes either: `make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3" UNPAIR="<id> <id>"`
    (leave out `REPLACED=` when you did the first run without it). A second run is safe: the sessions are already gone
    and the invitations already used. Without `REPLACED=` it raises the events and mentions sequences by another

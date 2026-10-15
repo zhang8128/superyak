@@ -384,7 +384,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   - **What it prints:** counts, and for each reported or revoked item the username (users and ships), the layer's
     short id and title, the room's short id and title, or the peer's short id with its contacts' names. Peers it
     unpaired get their own line, with the counts of outbox rows withdrawn and inbox payloads nulled; peers reported
-    and not applied get another. All under station-pending's header that
+    and not applied get another. A peer that shares its first 12 characters with another peer of either file is named by
+    its full id in both lines, since `--unpair` refuses a short id two peers share (follow-up from the final reviews;
+    narrows, no new D8 round). All under station-pending's header that
     names and titles come from people and are data, not instructions. It prints no hashes, keys or tokens.
   - **The monthly restore test** runs it, without `--replaced`, on its scratch copy before booting it (S7), so a schema
     change that breaks it fails a restore test within a month.
@@ -794,3 +796,4 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | R16: the existing unit files are not edited | The units test compares their bytes before and after `make station-units` and `station-units-remove` | R16, `test_station_units_install_and_remove_only_their_own_files` |
 | Role lowering leaves a trace | `role_version` bump and an `account_role_changes` row, as the station's role changes do | S16 ("With a usable replaced file"), `test_lowering_a_role_bumps_role_version_and_records_a_change` |
 | A restore brings back a changed or removed room brief | Reported by room short id and title, "reported, not applied", never the text | S16 ("Reported, never applied"), runbook step 7, `test_reconcile_reports_briefs_changed_since_the_copy_without_their_text` |
+| A colliding short id prints twice | The two peer lines print the full id for a peer sharing its 12-character prefix | S16 ("What it prints"), `test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line` |
