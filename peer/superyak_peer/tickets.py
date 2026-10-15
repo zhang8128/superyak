@@ -53,8 +53,9 @@ class Tickets:
                 'status': 'running' if self._ticket_running(row) else 'finished', 'created': row['created']}
 
     def issue_ticket(self, actor, message_id, station='', decisions=False):
-        """S5's order: 0 never answered (422), 1 answered, 2 running, 3 finished (409), 4 defer, 5 run. Steps 1 and 4
-        only for a watcher that asked for them (R23); without them the answer is exactly today's."""
+        """S5's order: 0 never answered (422), 1 answered, 2 running (a grant ticket re-checked first, G18), 3 finished
+        (409), 4 defer, 5 run. Steps 1 and 4 only for a watcher that asked for them (R23); without them the answer is
+        exactly today's."""
         text(message_id, 'message ID', 100)
         with self.transaction() as db:
             ship = self._ticket_ship(db, actor)
@@ -69,6 +70,10 @@ class Tickets:
             existing = db.execute('SELECT * FROM tickets WHERE ship_id=? AND message_id=?', (actor, message_id)).fetchone()
             if existing:
                 if self._ticket_running(existing):
+                    lapsed = self._grant_lapsed(db, existing, message) if existing['basis'] == 'grant' else None
+                    if lapsed is not None:  # G18: finished and saved with the refusal, so it can never label a post
+                        db.execute("UPDATE tickets SET status='finished',finished=? WHERE id=?", (self.clock(), existing['id']))
+                        raise Problem(409, lapsed, keep=True)
                     return self._decided(db, existing, station, decisions)
                 raise Problem(409, 'This message has already been answered')
             mode, basis, root, chain = self._mode_for(db, ship, message)
@@ -136,6 +141,22 @@ class Tickets:
             if (_in_room(db, room_id, chain[0]['issuer_id']) and all(link['confirm'] != 'each' for link in chain)
                     and self._grant_validity(db, grant)[0]):
                 return chain
+        return None
+
+    def _grant_lapsed(self, db, ticket, message):
+        """G18: a running grant ticket asked for again. None while its grant still holds, else why not: G9's revocation,
+        expiry, policy and ownership checks, then the root issuer's membership of the message's room. Not the budget or
+        the per-ship cap, which this ticket already paid. Never raises: a missing grant or issuer row (only by hand) is
+        "gone"."""
+        links = [db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone() for key in json.loads(ticket['chain'])]
+        if not links or any(link is None for link in links):
+            return 'The grant behind this run is gone'
+        valid, reason = self._grant_validity(db, links[-1], budget=False)
+        if not valid:
+            return reason
+        if not _in_room(db, message['room_id'], links[0]['issuer_id']):
+            issuer = db.execute('SELECT name FROM users WHERE id=?', (links[0]['issuer_id'],)).fetchone()
+            return f'{safe_line(issuer["name"])} is no longer in this room' if issuer else 'The grant behind this run is gone'
         return None
 
     def _answered(self, db, ship_id, message_id):

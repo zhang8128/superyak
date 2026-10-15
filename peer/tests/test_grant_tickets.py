@@ -1,8 +1,12 @@
 """Spending a grant (spec A step 3, merge 3c: G15-G18 of docs/superpowers/specs/2026-10-15-grants-step3-design.md)."""
+from contextlib import closing
 import json
+import sqlite3
+import pytest
 from superyak_peer import grants as G
-from superyak_peer.common import uid
-from test_grants import charge, make, revoke_by_hand
+from superyak_peer.common import Problem, uid
+from test_grants import charge, make, narrowed, revoke_by_hand
+from test_presence import HEADERS, docked, ship_client
 
 DAY = 86400
 
@@ -279,3 +283,170 @@ def test_a_grantees_mention_with_an_unusable_created_reads_old_and_never_raises(
         with store.transaction() as db:
             db.execute('UPDATE messages SET created=? WHERE id=?', (value, asked['id']))
         assert decide(store, serenity, asked) == ('read', 'old'), value
+
+
+def ask(watcher, message, decisions=False):
+    return watcher.post('/api/ships/me/tickets', json={'message_id': message['id'], **({'decisions': ['defer', 'answered']} if decisions else {})})
+
+
+def test_a_revoke_before_the_ticket_reads_and_after_it_the_resend_is_refused_and_finished(env):
+    """Test 12: revoked between the mention and the ticket, the mention reads. Revoked between a ticket and its re-send,
+    the re-send gets 409 with the reason, the ticket reads finished (saved with the refusal), a post carrying it gets
+    409, and asking again is the finished ticket's 409."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, key = docked(store, patient['id'])
+    watcher = ship_client(app, key)
+    ops = room(store, patient, 'Ops', doctor, serenity)
+    early = make(store, patient, doctor, [serenity], hours=48)
+    first = mention(store, doctor, ops, serenity)
+    assert clients[0].post(f'/api/grants/{early}/revoke', json={}).status_code == 200
+    assert (ask(watcher, first).json()['mode'], ask(watcher, first).json()['basis']) == ('read', 'none')
+    later = make(store, patient, doctor, [serenity], hours=48)
+    second = mention(store, doctor, ops, serenity)
+    issued = ask(watcher, second).json()
+    assert (issued['mode'], issued['basis']) == ('build', 'grant')
+    assert clients[0].post(f'/api/grants/{later}/revoke', json={'reason': 'Done for now'}).status_code == 200
+    again = ask(watcher, second)
+    assert (again.status_code, again.json()) == (409, {'error': f'Grant #{later[:4]} was revoked by Patient'})
+    assert (ticket_row(store, serenity, second)['status'], ticket_row(store, serenity, second)['finished']) == ('finished', clock[0])
+    labelled = watcher.post(f'/api/chats/{ops}/messages', json={'client_message_id': f'reply-{second["id"]}',
+                                                                'body': "I couldn't answer this one.", 'ticket_id': issued['id']})
+    assert (labelled.status_code, labelled.json()) == (409, {'error': 'This ticket cannot label a message here'})
+    assert (ask(watcher, second).status_code, ask(watcher, second).json()) == (409, {'error': 'This message has already been answered'})
+
+
+def test_a_resent_grant_ticket_is_the_same_ticket_and_charges_nothing_more(env):
+    """Test 12, G18: a re-send re-checks neither the budget nor the per-ship cap, which the ticket already paid: one that
+    spent its grant's last build, and the ship's 20th grant build of the day, come back as they were, charging nothing."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, key = docked(store, patient['id'])
+    watcher = ship_client(app, key)
+    ops = room(store, patient, 'Ops', doctor, serenity)
+    earlier = [store.send_message(patient['id'], ops, f'old-{n}', 'earlier work')['id'] for n in range(19)]
+    with store.transaction() as db:  # 19 grant builds of serenity today, written by hand
+        db.executemany("INSERT INTO tickets(id,ship_id,message_id,mode,basis,status,created) VALUES(?,?,?,'build','grant','finished',?)",
+                       [(uid(), serenity['id'], message_id, clock[0]) for message_id in earlier])
+    grant = make(store, patient, doctor, [serenity], hours=48, budget=1)
+    asked = mention(store, doctor, ops, serenity)
+    issued = ask(watcher, asked).json()
+    assert (issued['mode'], issued['basis']) == ('build', 'grant')
+    clock[0] += 600
+    again = ask(watcher, asked)
+    assert again.status_code == 200 and (again.json()['id'], again.json()['mode']) == (issued['id'], 'build')
+    assert ask(watcher, asked, decisions=True).json()['decision'] == 'run'
+    assert len(uses(store, grant)) == 1
+
+
+def test_a_resend_after_the_room_gains_a_member_keeps_its_ticket(env):
+    """Plan Review Focus 5: the owner adds a member while a granted build runs, so the room is replaced. The re-send checks
+    only that the issuer is still in the message's room, which he is; whether the room is current was decided at issue."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity = ships(store, patient['id'], 'serenity')['serenity']
+    plans = room(store, patient, 'Plans', doctor, serenity)
+    make(store, patient, doctor, [serenity], rooms=[plans], hours=48)
+    asked = mention(store, doctor, plans, serenity)
+    issued = store.issue_ticket(serenity['id'], asked['id'])
+    store.add_participants(patient['id'], plans, [family['id']])
+    assert store.issue_ticket(serenity['id'], asked['id'])['id'] == issued['id']
+
+
+def refused(store, ship, message):
+    with pytest.raises(Problem) as caught:
+        store.issue_ticket(ship['id'], message['id'])
+    return caught.value.status, caught.value.message, ticket_row(store, ship, message)['status']
+
+
+def test_a_resend_is_refused_once_the_grant_expires_ownership_moves_the_issuer_leaves_or_the_policy_narrows(env, monkeypatch):
+    """G18's other re-checks: G9's expiry, ownership and policy, and the root issuer's membership of the room. A grant
+    row that is gone (only by hand) refuses too. Each refusal finishes the ticket."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    s = ships(store, patient['id'], 'expiring', 'moved', 'left', 'gone', 'narrowed')
+    ops = room(store, patient, 'Ops', doctor, *[s[name] for name in ('expiring', 'moved', 'gone', 'narrowed')])
+    theirs = room(store, doctor, 'Theirs', patient, s['left'])  # doctor's room, so doctor can remove patient
+    expiring = make(store, patient, doctor, [s['expiring']], hours=1)
+    grants = {name: make(store, patient, doctor, [s[name]], hours=48) for name in ('moved', 'gone', 'narrowed')}
+    grants['left'] = make(store, patient, doctor, [s['left']], rooms=[theirs], hours=48)
+    asked = {name: mention(store, doctor, theirs if name == 'left' else ops, s[name]) for name in s}
+    clock[0] += 3599
+    for name in s:
+        assert store.issue_ticket(s[name]['id'], asked[name]['id'])['mode'] == 'build', name
+    clock[0] += 1  # the expiring grant's expiry instant
+    assert refused(store, s['expiring'], asked['expiring']) == (409, f'Grant #{expiring[:4]} expired 1970-01-12 14:46 UTC', 'finished')
+    with store.transaction() as db:  # by hand: ownership never changes today
+        db.execute('UPDATE users SET owner_id=? WHERE id=?', (family['id'], s['moved']['id']))
+        db.execute('DELETE FROM budget_uses WHERE grant_id=?', (grants['gone'],))
+        db.execute('DELETE FROM grants WHERE id=?', (grants['gone'],))
+    assert refused(store, s['moved'], asked['moved']) == (409, 'Patient no longer owns Moved', 'finished')
+    assert refused(store, s['gone'], asked['gone']) == (409, 'The grant behind this run is gone', 'finished')
+    store.remove_participant(doctor['id'], theirs, patient['id'])
+    assert refused(store, s['left'], asked['left']) == (409, 'Patient is no longer in this room', 'finished')
+    narrowed(store, monkeypatch, max_expiry_hours=24)
+    assert refused(store, s['narrowed'], asked['narrowed']) == (
+        409, f'Grant #{grants["narrowed"][:4]} lasts longer than the station now allows', 'finished')
+
+
+def test_a_resent_two_link_ticket_checks_the_held_grant_and_the_roots_issuer(env):
+    """G18 with a chain of two links, made by hand as step 5 will make them: the re-send checks the validity of the grant
+    the author holds (its walk covers the root), and the membership of the root's issuer, not the held link's issuer."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    s = ships(store, patient['id'], 'alpha', 'beta')
+    theirs = room(store, family, 'Theirs', patient, doctor, s['alpha'], s['beta'])  # family's room: family can remove patient
+    held = {}
+    for name in ('alpha', 'beta'):
+        root = make(store, patient, doctor, [s[name]], hours=48)
+        held[name] = make(store, doctor, family, [s[name]], hours=48)
+        with store.transaction() as db:
+            db.execute('UPDATE grants SET parent_id=? WHERE id=?', (root, held[name]))
+    asked = {name: mention(store, family, theirs, s[name]) for name in held}
+    for name in held:
+        assert store.issue_ticket(s[name]['id'], asked[name]['id'])['chain'][1:] == [held[name]], name
+    revoke_by_hand(store, held['alpha'], doctor)  # the link family holds, not its root
+    assert refused(store, s['alpha'], asked['alpha']) == (409, f'Grant #{held["alpha"][:4]} was revoked by Doctor', 'finished')
+    store.remove_participant(family['id'], theirs, patient['id'])  # the root's issuer leaves; the held link's issuer stays
+    assert refused(store, s['beta'], asked['beta']) == (409, 'Patient is no longer in this room', 'finished')
+
+
+def test_a_resend_whose_issuers_row_is_gone_is_refused_and_never_raises(env):
+    """R11's rule, never to raise, on G18's re-check: an issuer's row that is gone (only in a hand-edited database; users
+    are never deleted) reads as a grant that is gone, a 409, never a 500."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    issuer = store.create_user('vanished', 'Vanished', 'long-password-vanished')
+    orphan = ships(store, issuer['id'], 'orphan')['orphan']
+    theirs = room(store, doctor, 'Theirs', issuer, orphan)
+    make(store, issuer, doctor, [orphan], hours=48)
+    asked = mention(store, doctor, theirs, orphan)
+    assert store.issue_ticket(orphan['id'], asked['id'])['mode'] == 'build'
+    with closing(sqlite3.connect(store.db_path)) as db:  # by hand, on a connection without the store's foreign keys
+        db.execute('DELETE FROM room_members WHERE user_id=?', (issuer['id'],))
+        db.execute('DELETE FROM users WHERE id=?', (issuer['id'],))
+        db.commit()
+    assert refused(store, orphan, asked) == (409, 'The grant behind this run is gone', 'finished')
+
+
+def test_a_grant_build_is_never_deferred_but_another_persons_mention_is(env):
+    """Test 18: only read decisions defer (ship status S10), so a grantee's build runs while the ship's session holds a
+    writable watch; another person's mention of the same ship still defers to that session."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, key = docked(store, patient['id'])
+    session, watcher = ship_client(app, key, **HEADERS), ship_client(app, key)
+    ops = room(store, patient, 'Ops', doctor, organizer, serenity)
+    make(store, patient, doctor, [serenity], hours=48)
+    assert session.post('/api/ships/me/watch', json={'minutes': 20, 'writable': True}).status_code == 200
+    granted, other = mention(store, doctor, ops, serenity), mention(store, organizer, ops, serenity)
+    decided = ask(watcher, granted, decisions=True).json()
+    assert (decided['decision'], decided['mode'], decided['basis']) == ('run', 'build', 'grant')
+    assert ask(watcher, other, decisions=True).json()['decision'] == 'defer'

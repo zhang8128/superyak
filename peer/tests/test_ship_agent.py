@@ -142,6 +142,43 @@ def test_watcher_answers_owner_as_builder_and_others_read_only_through_the_real_
         assert [r['status'] for r in db.execute('SELECT status FROM tickets ORDER BY created')] == ['finished', 'finished']
 
 
+def granted_room(env, tmp_path):
+    """Patient's ship serenity in Ops with doctor, who holds a grant over it (merge 3c): (app, clients, users, clock,
+    ship, key, room, grant, config)."""
+    app, clients, users, clock = env
+    ship, key = docked_ship(app.state.store, users[0]['id'])
+    room = clients[0].post('/api/chats', json={'title': 'Ops', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    made = clients[0].post('/api/grants', json={'grantee': users[1]['id'], 'targets': [ship['id']], 'rooms': [room],
+                                                'hours': 24, 'budget': 5})
+    assert made.status_code == 201, made.text
+    config = {'station': 'http://testserver', 'origin': None, 'ship': 'serenity', 'ship_id': ship['id'], 'ship_name': 'Serenity',
+              'owner_id': users[0]['id'], 'key': key, 'workspace': str(tmp_path), 'machine': 'test-host'}
+    return app, clients, users, clock, ship, key, room, made.json(), config
+
+
+def test_a_revoke_between_tries_stops_the_retry_and_the_fallback_goes_out_unlabelled(env, tmp_path):
+    """G18, test 12, through the real station: a grantee's mention gets a builder ticket and its run fails; the owner
+    revokes the grant; the watcher's retry gets 409, so it runs nothing and posts the fallback note, which the finished
+    ticket can't label, so it goes out unlabelled, as a reply to the mention. Nothing asks again."""
+    from superyak_agent.station import StationClient
+    from superyak_agent.watch import FALLBACK, Watcher
+    app, clients, users, clock, ship, key, room, grant, config = granted_room(env, tmp_path)
+    asked = clients[1].post(f'/api/chats/{room}/messages', json={'client_message_id': 'g', 'body': '@serenity add a NOTES file'}).json()
+    calls = []
+
+    class Failing:
+        def run(self, mode, prompt, message_id, instructions=''):
+            calls.append(mode)
+            raise RuntimeError('model unavailable')
+    watcher = Watcher(StationClient('http://testserver', key, transport=transport_for(app)), config, tmp_path / 'state.json', Failing())
+    assert watcher.cycle() == 0 and calls == ['build']
+    assert clients[0].post(f'/api/grants/{grant["id"]}/revoke', json={}).status_code == 200
+    assert watcher.cycle() == 1 and calls == ['build']
+    reply = clients[0].get(f'/api/chats/{room}').json()['messages'][-1]
+    assert (reply['body'], reply['source'], reply['reply_to']) == (FALLBACK, {'kind': 'post'}, asked['id'])
+    assert watcher.cycle() == 0 and calls == ['build']
+
+
 def test_the_hook_reads_the_real_stations_instructions_and_hears_a_withdrawal(env, tmp_path):
     """Break caught: the station's instructions response and the hook drift apart (a renamed field), and the hook
     falls silent, which looks exactly like "no instructions"."""

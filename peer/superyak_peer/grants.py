@@ -92,11 +92,11 @@ class Grants:
         return db.execute("SELECT count(*) FROM tickets WHERE ship_id=? AND mode='build' AND basis='grant' AND created>?",
                           (ship_id, now - DAY)).fetchone()[0]
 
-    def _grant_validity(self, db, grant):
+    def _grant_validity(self, db, grant, budget=True):
         """G9: (True, None), or (False, the reason of the first check that fails). Each link, from the grant up to its
         root, is checked in the spec's order: 1 revoked, 2 expired, 3 the policy in force now (lifetime, chain length,
         grantee set), 4 budget, 5 the root's issuer still owns every target. Names are the station's own, through
-        safe_line."""
+        safe_line. budget=False skips check 4, for a ticket that has already paid (G18)."""
         now, policy = self.clock(), self._grant_policy(db)
         chain = self._grant_chain(db, grant)
         root = chain[-1]
@@ -111,7 +111,7 @@ class Grants:
                 return False, f'Grant {short} lasts longer than the station now allows'
             if len(chain) > policy['max_depth'] or (policy['grantees'] is not None and link['grantee_id'] not in policy['grantees']):
                 return False, f"Grant {short} is no longer allowed by the station's policy"
-            if self._budget_used(db, link['id'], now) >= link['budget']:
+            if budget and self._budget_used(db, link['id'], now) >= link['budget']:
                 builds = f'{link["budget"]} build' + ('' if link['budget'] == 1 else 's')
                 return False, f'Grant {short} has used its {builds} for the last 24 hours'
             for ship_id in json.loads(link['targets']):
