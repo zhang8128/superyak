@@ -8,7 +8,9 @@ approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9)
 aligning, with no new D8 round: G4 (the identity is created at the first signature; plan review of merge 3a, M1);
 S6, G15 and G19 (the fresh owner mentions spec, approved under D8 at 1faeff8, bounds owner builds the same way, and
 its `_mention_stale` and basis values are shared). G4a, G4b, tests 4a and 4b and the identity Known limit come from
-the section 2 review of merge 3a (findings 1 and 4) and are built in merge 3b; the D8 reviewer re-checks them.
+the section 2 review of merge 3a (findings 1 and 4); their D8 re-check (APPROVE WITH CHANGES: 2 must-fix, 2 should-fix,
+3 nits) added G4c, test 4c, the restore test's throwaway identity, the `serve --peer-tls` check, the lazy path's
+check and `_own_peer_id`'s single loader. All are built in merge 3b.
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
 Serenity as `build:grants`; Rio Grande reviews each merge under section 2.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md) (approved 2026-10-08), its build order step 3
@@ -105,16 +107,35 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   creates the identity inside the signing transaction, so nothing is ever written unsigned. The door
   (`create_door`) and the station commands that open a store but never sign (`station-pending`, `station-approve`,
   `station-deny`, `station-rooms`, `station-bridge`, `station-unbridge`, `station-notices`) open it with
-  `signing=False`. So the internet-facing door never holds the private key, and a damaged `identity.json` stops the
-  lighthouse alone: the door keeps taking access requests, and Andy can still list and approve what waits. The
-  lighthouse (`create_app`), `init`, `card` and every other opener keep `signing=True`.
+  `signing=False`. So the internet-facing door keeps no private key in memory, and a damaged `identity.json` stops the
+  lighthouse alone: the door keeps taking access requests, Odo's notices keep coming, and Andy can still list and
+  approve what waits. This narrows exposure; it is not a privilege boundary, since the door runs as the same Unix user
+  and could read the file from disk. The lighthouse (`create_app`), `init`, `card`, `bootstrap-super-admin`,
+  `create-ship` and every other opener keep `signing=True`, so a damaged identity blocks them, as intended.
+  `_own_peer_id` (remote rooms) reads the store's identity through `_station_identity()` instead of loading the file
+  itself, so there is one loader and G4 to G4b hold by construction.
 - **G4b. A lost identity is not replaced silently (built in merge 3b; section 2 review of 3a, finding 4).** At a
   `signing=True` start, if `identity.json` is missing (not a file, not a symlink) while the station holds signed
   records (a row in `revision_signatures`, or, from merge 3b, in `grants`), the store refuses to start with a
   `ValueError` naming the file: a new identity would void every stored signature. The message says to restore the
-  file. A station with no signed records still creates its identity at the first signature (G4), so a new station's
-  first `card --endpoint` still names its host. `card` opens the store with `signing=True`, so it refuses too rather
-  than make a new key.
+  file, or, if it is truly gone, to run `station-new-identity` (below). A station with no signed records still creates
+  its identity at the first signature (G4), so a new station's first `card --endpoint` still names its host. The same
+  check (the lost-identity check) guards every place that could create an identity:
+  - `card` opens the store with `signing=True`, so it refuses before its own create;
+  - `serve --peer-tls` runs the check before it creates or loads the identity with its hosts (`__main__.py`), so a
+    federating station can't mint a new key on its usual start;
+  - `_station_identity()` creates a missing identity only when the station holds no signed records, and otherwise
+    raises, which rolls the signed write back (so a `signing=False` opener that someday signs can't mint one either);
+  - `station-restore-test` serves a copy in a scratch directory that has no identity file: it creates a throwaway
+    identity in that directory (mode 0700, removed with it) before it starts the server and reads the counts, so a
+    copy holding signed revisions still passes, and `serve` stays as it is.
+- **G4c. A deliberate new identity (built in merge 3b; D8 re-check of G4a and G4b, S1).** `station-new-identity
+  --data-dir DIR [--endpoint https://HOST:PORT]` is the one supported way to give a station a new identity on purpose,
+  when the old `identity.json` is lost. It refuses if `identity.json` exists. It creates the identity as
+  `PeerIdentity.load_or_create` does, with the endpoint's host beside `localhost` and `127.0.0.1` when an endpoint is
+  given (so plan review M1 holds), prints that every signature made with the lost key will stop verifying against the
+  station's new card, and changes nothing in the database. The station then starts, and later records are signed with
+  the new key.
 - **G5.** At startup, every revision whose snapshot has `kind: "instructions"` and that has no signature is signed
   once, from its stored snapshot. The active station law (layer c879372542444e4c8f95f2c0db69f8fb) is one of them. A
   second start signs nothing.
@@ -324,9 +345,11 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
 - The 24-hour bound on mentions (S6) means a grantee's mention that waits a day for an offline watcher runs
   read-only.
 - The nightly copies leave out the identity files (backups spec). From merge 3b, a station whose `identity.json` is
-  missing while it holds signed records refuses to start (G4b) instead of taking a new key. Someone who deletes the
-  file on purpose to get a station up, or rebuilds it on purpose with a new key, voids every stored signature: they
-  stop verifying against the new card, and the backfill doesn't sign them again, since they aren't unsigned.
+  missing while it holds signed records refuses to start (G4b) instead of taking a new key. If the file is truly
+  lost, `station-new-identity` (G4c) gives the station a new one on purpose: every stored signature then stops
+  verifying against the new card, and the backfill doesn't sign them again, since they aren't unsigned. A rebuilt Pi
+  keeps its signatures only if a copy of `identity.json` is kept somewhere safe, which belongs with Andy's pending
+  choice of the off-Pi backup (roadmap 1.2).
 - Checking a signature needs the station's card, which exists only when the station has an HTTPS federation
   endpoint (`identity.py` `validate_card`); the CLI prints one with `--endpoint`. Tests build the card with a
   placeholder endpoint.
@@ -357,11 +380,16 @@ Each test is named, written first, and seen failing first.
 4a. The door and the listed station commands start and work with a damaged `identity.json` (not JSON) while the
     lighthouse refuses to start; the door's store holds no key after starting (`_identity` unset), and an access
     request through it still works. A `signing=False` store that signs (an activation through it) still writes a
-    signed revision, creating the identity if it is missing.
+    signed revision, creating the identity if it is missing on a station with no signed records, and refusing (the
+    activation fails, nothing written) when the station holds signed records and the file is missing. `_own_peer_id`
+    returns the store identity's peer id.
 4b. On a station with a signed revision, removing `identity.json` makes a `signing=True` start refuse with a
-    `ValueError` naming the file (`Store`, `create_app` and `card`); a `signing=False` start still opens; a station with
-    no signed records and no identity starts and creates none (G4's first-card behavior is unchanged); a dangling
-    symlink still refuses as before.
+    `ValueError` naming the file and `station-new-identity` (`Store`, `create_app`, `card`, and `serve --peer-tls`,
+    which must not create a key); a `signing=False` start still opens; a station with no signed records and no
+    identity starts and creates none (G4's first-card behavior is unchanged); a dangling symlink still refuses as before.
+4c. `station-restore-test` passes on a copy that holds a signed revision (the copy has no identity file).
+    `station-new-identity` refuses when `identity.json` exists; with it missing, it creates one whose certificate names
+    the endpoint's host, prints the warning, leaves the database byte for byte the same, and the station then starts.
 5. Making a grant, as a table of refusals, each with its status: an unknown, remote or breakout room id or a room
    the caller is not in (404, the same body for each); a replaced room or one without the grantee (400); grantee is
    the caller, a ship, the system author or awaiting activation; a target is another person's ship, a resident ship
