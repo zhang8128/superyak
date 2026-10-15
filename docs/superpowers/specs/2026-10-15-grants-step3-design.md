@@ -92,7 +92,7 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   it loads the file if it exists and keeps it; if the file can't be loaded, the station fails to start rather than
   write unsigned records. A missing file is created, exactly as `PeerIdentity.load_or_create` does today, only when
   the store first signs, inside the transaction that signs. That transaction holds the dispatch gate, so two
-  processes can't both create it, and a failed create rolls the signed write back. (Plan review of merge 3a, M1:
+  signers can't both create it, and a failed create rolls the signed write back. (Plan review of merge 3a, M1:
   creating the file at every start would fix a new station's certificate before `card --endpoint` can add the
   station's hostname to it.)
 - **G5.** At startup, every revision whose snapshot has `kind: "instructions"` and that has no signature is signed

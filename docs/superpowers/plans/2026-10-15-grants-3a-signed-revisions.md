@@ -420,9 +420,10 @@ mutation in Step 5 that creates the identity at every start must fail it.
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && uv run --locked python -m pytest -q -p no:cacheprovider tests/test_signatures.py`
-Expected: the narrowing, note, startup and first-signature tests fail with `sqlite3.OperationalError: no such table:
-revision_signatures` (or `AttributeError: 'Store' object has no attribute '_station_identity'`), the identity test
-with `Failed: DID NOT RAISE`; the first-card test passes (see above).
+Expected: the narrowing, note and startup tests fail with `sqlite3.OperationalError: no such table:
+revision_signatures` (or `AttributeError: 'Store' object has no attribute '_station_identity'`), the first-signature
+test with an `AssertionError` (no identity file is created), the identity test with `Failed: DID NOT RAISE`; the
+first-card test passes (see above).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -515,7 +516,7 @@ and in `revoke_layer_routes`, right after
 ```
 
 In `peer/pyproject.toml`, add `"superyak_peer/signatures.py",` after `"superyak_peer/ships.py",` in the sdist
-`include` list and in the wheel `only-include` list.
+`only-include` list and in the wheel `only-include` list.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -531,7 +532,7 @@ Apply each alone, run `tests/test_signatures.py`, see a failure, restore:
   the note-then-instructions test fails (revision 1 gets signed by the backfill or the record isn't None);
 - delete the `self._load_station_identity()` line in `Store.__init__` → the identity test fails (`DID NOT RAISE`);
 - replace that line with `self._station_identity()` (create at every start, the plan's first version) → the
-  first-card test fails (`peer.example` missing from the certificate);
+  first-card test fails (the store created `identity.json`; the certificate line, run alone, fails too);
 - delete `self._backfill_revision_signatures()` → the startup test fails.
 
 - [ ] **Step 6: Commit**
@@ -675,7 +676,7 @@ Anyone else, and any revision without a signature, gets 404; a ship key gets 403
 `identity.verify_record(card, record, signature)` returns True only when the card is valid, the record has exactly its
 kind's keys (`instructions-revision`, `grant` or `grant-revocation`), its `station` is the card's peer id, and the
 signature verifies. It never raises. A card exists only for a station with an HTTPS federation endpoint (`serve
---endpoint`). A station that can't load its identity doesn't start; a new station creates it at its first
+--federation-endpoint`; `card --endpoint` prints one). A station that can't load its identity doesn't start; a new station creates it at its first
 signature, so its first card export still names its host. The nightly copies leave out the identity files: a station
 rebuilt from a copy without its own `identity.json` gets a new key, and its stored signatures stop verifying against
 its new card (the backfill signs only unsigned revisions).
