@@ -1,9 +1,10 @@
 # Spec A step 3: grants a person can spend, and station signatures
 
-Status: revision 2, for the D8 reviewer's re-check. Under the station law (section 3, D8), a fresh reviewer agent
-approves this spec in Andy's place, and its summary and decisions are posted in "Superyak: city of AI". Andy can veto
-anything. Revision 1 (6483e3d) was reviewed: APPROVE WITH CHANGES, 1 must-fix, 10 should-fix and 11 nits, posted
-whole in the room (message 75396e96). This revision makes every one of them; "Review map" at the end says where.
+Status: approved. Under the station law (section 3, D8), a fresh reviewer agent approves this spec in Andy's place,
+and its summary and decisions are posted in "Superyak: city of AI". Andy can veto anything. Revision 1 (6483e3d) was
+reviewed: APPROVE WITH CHANGES, 1 must-fix, 10 should-fix and 11 nits, posted whole in the room (message 75396e96).
+Revision 2 (113f71a) made every one of them ("Review map" at the end says where), and the same reviewer's re-check
+approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9).
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
 Serenity as `build:grants`; Rio Grande reviews each merge under section 2.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md) (approved 2026-10-08), its build order step 3
@@ -229,8 +230,11 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   request for a running grant ticket re-checks the grant before it returns the ticket: G9's revocation, expiry,
   policy and ownership checks, and the root issuer's membership of the room. It does not re-check the budget or the
   per-ship cap, which this ticket already paid. If a check fails, the ticket is finished and the request gets 409
-  with the reason. The watcher already answers a 409 by posting its stored reply or the fallback note, so a mention
-  still never goes without a reply, and a revoke stops the watcher's retries. A run already under way when the grant
+  with the reason. The finish is saved with the refusal (the `Problem` keeps what was saved, `keep=True`, as a
+  breakout's closure is), so the ticket can never label a post again. The watcher answers a 409 from a ticket request
+  by posting the fallback note (`watch.py`), and that note, sent with the finished ticket's id, gets 409 and goes out
+  unlabelled (`_post_unlabelled`). So a mention still never goes without a reply, the note never reads as a builder
+  run, and a revoke stops the watcher's retries. A run already under way when the grant
   is revoked runs to its end. Step 5 adds the refusal of acts that carry a revoked chain's `ticket_id`.
 - **G19.** The read-only run prompt (`agent/superyak_agent/watch.py`) says the author "can ask the ship's owner". It
   now says the author "can ask the ship's owner for a grant, or check the Grants page". `agent/superyak_agent/runs.py`'s
@@ -288,6 +292,9 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   `created` and `expires` the same way.
 - The 24-hour bound on mentions (S6) means a grantee's mention that waits a day for an offline watcher runs
   read-only.
+- Checking a signature needs the station's card, which exists only when the station has an HTTPS federation
+  endpoint (`identity.py` `validate_card`); the CLI prints one with `--endpoint`. Tests build the card with a
+  placeholder endpoint.
 - After a restore, the tickets issued since the copy are gone, so the per-ship cap undercounts for up to a day.
   Budget uses are restored from the replaced file (G13), so each grant's own budget does not.
 
@@ -324,7 +331,7 @@ Each test is named, written first, and seen failing first.
 8. A grant's signature and its revocation's signature verify. Each of G3's failures applies to them too. The record
    carries `kind` and `station`, holds parsed `targets` and `rooms`, and has exactly G12's keys.
 9. `GET /api/grants` shows each person the grants they issued, hold or that cover their ships, and no others;
-   `/signed` gives 404 to the others. A grantee who has left a listed room sees "a room you are not in" for it.
+   `/signed` gives 404 to the others. A grantee whom the room's owner has removed from a listed room sees "a room you are not in" for it.
    A grant whose room was replaced shows the current room. `GET /api/grants/people` lists active people only,
    without the caller, ships, residents, pending accounts or remote contacts.
 10. The reconcile: with a replaced file, a grant revoked there is revoked here, a grant missing there is revoked, and
@@ -340,8 +347,8 @@ Each test is named, written first, and seen failing first.
     without the issuer, and a listed room after its owner removed the issuer. Only the owner's mentions and the valid
     grantee's mentions in a room with the issuer give `build`.
 12. Revoking between the mention and the ticket gives `read`. Revoking between a ticket and its re-send gives 409 with
-    the reason, and the ticket is then finished (the watcher's existing 409 path, already tested, posts its stored
-    reply or the fallback note). A re-send of a valid grant ticket, including one that used the grant's last build,
+    the reason; the ticket's status then reads finished, and a post carrying its id gets 409, so the watcher's
+    fallback note goes out unlabelled (its existing 409 paths, already tested). A re-send of a valid grant ticket, including one that used the grant's last build,
     returns the same ticket and charges nothing more.
 13. After `budget` builds the next mention gets `read`, and 24 hours later it builds again. A grant over two ships
     shares one budget: builds of either ship count against it.
@@ -403,3 +410,6 @@ first a person can see.
 | N9 identity at startup | G4; test 3 |
 | N10 `max_depth` and grantee set | S8; G9 step 3; test 6 |
 | N11 own ships and what a grant allows | G8 step 4; G21 |
+| Re-check N1 the finish survives the 409 | G18 (`keep=True`); test 12 |
+| Re-check N2 verifying needs a card | Known limits |
+| Re-check N3 removed, not left | test 9 |
