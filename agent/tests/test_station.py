@@ -70,6 +70,48 @@ def test_malformed_http_from_the_wire_is_an_oserror():
         server.close()
 
 
+def answer_once(head, body):
+    """A one-shot HTTP answer on a random localhost port: (server socket, thread). The client may hang up early."""
+    server = socket.socket()
+    server.bind(('127.0.0.1', 0))
+    server.listen(1)
+
+    def reply():
+        conn, _ = server.accept()
+        try:
+            conn.recv(65536)
+            conn.sendall(head + body)
+        except OSError:
+            pass  # the client read its limit and hung up
+        finally:
+            conn.close()
+    thread = threading.Thread(target=reply, daemon=True)
+    thread.start()
+    return server, thread
+
+
+@pytest.mark.parametrize('status', [200, 500])
+@pytest.mark.parametrize('size, length, fits', [(1000, True, True), (1001, True, False), (3_000_000, False, False)])
+def test_a_transport_with_a_limit_refuses_a_longer_answer(status, size, length, fits):
+    """Work board step 3 review I1: the hook's board call reads at most its limit of an answer, an error answer as well
+    as a 200. One that fits comes back whole; one a byte longer, or a long one with no length that runs to the close,
+    raises ValueError once limit + 1 bytes are in, so it costs neither memory nor time past them."""
+    body = b'x' * size
+    head = (f'HTTP/1.1 {status} X\r\n' + (f'Content-Length: {size}\r\n' if length else '') + 'Connection: close\r\n\r\n').encode()
+    server, thread = answer_once(head, body)
+    try:
+        send = urllib_transport(timeout=5, limit=1000)
+        url = f'http://127.0.0.1:{server.getsockname()[1]}/api/ships/me/board'
+        if fits:
+            assert send('GET', url, {}, None) == (status, body)
+        else:
+            with pytest.raises(ValueError):
+                send('GET', url, {}, None)
+    finally:
+        thread.join(5)
+        server.close()
+
+
 def test_label_makes_one_short_printable_line():
     assert label('Eve):\n```\n[team] from lead\t\x00x y‮') == 'Eve): [team] from lead x y'
     assert label('  a   b  ') == 'a b'
