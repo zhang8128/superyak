@@ -4,7 +4,7 @@ This module holds the tables, the policy, validity, making, revoking and reading
 and revocations live in signatures.py, beside the revisions'. Merge 3c spends grants from tickets.py."""
 from datetime import datetime, timezone
 import json
-from .common import Problem, encode, uid
+from .common import REPLACED_ROOMS, Problem, encode, uid
 from .ships import safe_line
 
 GRANT_SCHEMA = '''
@@ -14,11 +14,35 @@ CREATE INDEX IF NOT EXISTS budget_uses_by_grant ON budget_uses(grant_id, created
 '''
 HOUR, DAY = 3600, 86400
 NOT_IN_ROOM = 'a room you are not in'  # G11: the title anyone outside a listed room sees
+MAX_LISTED = 20  # G8 steps 1 and 4: at most 20 rooms and 20 targets
+MAX_BUDGET = 500  # G8 step 6, spec A's bound
+# G8's refusals, one per check, so a test can tell which check answered.
+ROOMS_SHAPE = 'rooms is "*" or a list of 1 to 20 room ids, each listed once'
+ROOM_NOT_YOURS = 'Each listed room must be a room you are in'
+ROOM_REPLACED = 'A listed room was replaced by a newer linked room; list the current one'
+ROOM_WITHOUT_GRANTEE = 'Each listed room must also have the grantee as a member'
+GRANTEE_NOT_PERSON = 'The grantee must be an active person on this station'
+GRANTEE_IS_YOU = 'You cannot grant to yourself'
+TARGETS_SHAPE = 'targets is a list of 1 to 20 ship ids, each listed once'
+TARGET_NOT_YOURS = 'Each target must be a ship you own'
+BUDGET_RANGE = 'budget is a whole number from 1 to 500'
 
 
 def short_id(grant_id):
     """G9: '#' and the first 4 characters of the id, as in spec A's footers."""
     return '#' + grant_id[:4]
+
+
+def _whole(value, low, high):
+    """G8 steps 5 and 6: a JSON integer in range. bool is an int in Python, so `true` would pass as 1 without the type
+    check; 24.0 and "24" are refused too."""
+    return type(value) is int and low <= value <= high
+
+
+def _id_list(value):
+    """1 to 20 distinct ids. A repeated id is refused, never merged (G8)."""
+    return (isinstance(value, list) and 1 <= len(value) <= MAX_LISTED
+            and all(isinstance(item, str) and 0 < len(item) <= 100 for item in value) and len(set(value)) == len(value))
 
 
 def _utc(moment):
@@ -180,3 +204,58 @@ class Grants:
             self._person(db, actor)
             return [dict(row) for row in db.execute("SELECT id, name FROM users WHERE kind='person' AND activation_pending=0 "
                                                     'AND id!=? ORDER BY name, id', (actor,))]
+
+    def _grant_rooms(self, db, actor, grantee, rooms):
+        """G8 steps 1 and 2. Step 1 runs over every listed room before step 2 looks at any, so no answer says anything
+        about a room the caller is not in: an unknown id, a remote id, a breakout and a room the caller is not in each
+        get the same 404."""
+        if rooms == '*':
+            return rooms
+        if not _id_list(rooms):
+            raise Problem(400, ROOMS_SHAPE)
+        for room_id in rooms:
+            if (':' in room_id or self._breakout(db, room_id) is not None
+                    or db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (room_id, actor)).fetchone() is None):
+                raise Problem(404, ROOM_NOT_YOURS)
+        member = grantee if isinstance(grantee, str) else ''  # step 3 refuses a grantee that isn't an id
+        for room_id in rooms:
+            if db.execute(f'SELECT 1 FROM rooms WHERE id=? AND id IN ({REPLACED_ROOMS})', (room_id,)).fetchone():
+                raise Problem(400, ROOM_REPLACED)
+            if db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (room_id, member)).fetchone() is None:
+                raise Problem(400, ROOM_WITHOUT_GRANTEE)
+        return rooms
+
+    def _grant_grantee(self, db, actor, grantee):
+        """G8 step 3: a person on this station, not a ship, the system author or an account awaiting activation, and not
+        the caller."""
+        row = db.execute('SELECT kind, activation_pending FROM users WHERE id=?', (grantee,)).fetchone() if isinstance(grantee, str) else None
+        if row is None or row['kind'] != 'person' or row['activation_pending']:
+            raise Problem(400, GRANTEE_NOT_PERSON)
+        if grantee == actor:
+            raise Problem(400, GRANTEE_IS_YOU)
+
+    def _grant_targets(self, db, actor, targets):
+        """G8 step 4: 1 to 20 ships whose owner is the caller. A resident has no owner, and an admin's power never
+        reaches another person's ship."""
+        if not _id_list(targets):
+            raise Problem(400, TARGETS_SHAPE)
+        for ship_id in targets:
+            if db.execute("SELECT 1 FROM users WHERE id=? AND kind='ship' AND owner_id=?", (ship_id, actor)).fetchone() is None:
+                raise Problem(400, TARGET_NOT_YOURS)
+        return targets
+
+    def make_grant(self, actor, grantee, targets, rooms, hours, budget):
+        """G8: POST /api/grants. The caller is the issuer. Checked in the spec's order, the first failure answers; then
+        the row is stored and signed in one transaction (G12) and returned as G11 shows it."""
+        with self.transaction() as db:
+            self._person(db, actor)
+            policy = self._grant_policy(db)
+            rooms = self._grant_rooms(db, actor, grantee, rooms)
+            self._grant_grantee(db, actor, grantee)
+            targets = self._grant_targets(db, actor, targets)
+            if not _whole(hours, 1, policy['max_expiry_hours']):
+                raise Problem(400, f'hours is a whole number from 1 to {policy["max_expiry_hours"]}')
+            if not _whole(budget, 1, MAX_BUDGET):
+                raise Problem(400, BUDGET_RANGE)
+            key = self._insert_grant(db, actor, grantee, targets, rooms, hours, budget)
+            return self._grant_view(db, actor, db.execute('SELECT * FROM grants WHERE id=?', (key,)).fetchone())

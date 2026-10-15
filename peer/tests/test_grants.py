@@ -2,6 +2,7 @@
 import base64
 import pytest
 from superyak_peer.common import uid
+from superyak_peer import grants as G
 from superyak_peer.grants import short_id
 from superyak_peer.identity import PeerIdentity, RECORD_KEYS, verify_record
 from test_instructions import docked, ship_client
@@ -343,8 +344,141 @@ def test_a_ship_key_gets_403_on_every_grants_route(env):
     store = app.state.store
     ship, key = docked(store, users[0]['id'], 'serenity')
     grant = make(store, users[0], users[1], [ship])
-    routes = [('GET', '/api/grants', None), ('GET', '/api/grants/people', None),
+    made = {'grantee': users[1]['id'], 'targets': [ship['id']], 'rooms': '*', 'hours': 24, 'budget': 5}
+    routes = [('POST', '/api/grants', made), ('GET', '/api/grants', None), ('GET', '/api/grants/people', None),
               ('GET', f'/api/grants/{grant}/signed', None)]
     for method, path, body in routes:
         response = ship_client(app, key).request(method, path, json=body)
         assert (response.status_code, response.json()) == (403, {'error': 'Ship keys cannot use this route'}), (method, path)
+
+
+def fleet(store, owner_id, count):
+    """count ships owned by owner_id, written directly (docking allows 20 an hour, and scrypt is slow): their ids."""
+    with store.transaction() as db:
+        ships = [uid() for _ in range(count)]
+        db.executemany("INSERT INTO users(id,username,name,salt,password_hash,is_admin,created,kind,owner_id) "
+                       "VALUES(?,?,?,?,?,0,?,'ship',?)",
+                       [(ship, f'fleet-{n}', f'Fleet {n}', b'\0' * 16, b'\0' * 32, store.clock(), owner_id)
+                        for n, ship in enumerate(ships)])
+    return ships
+
+
+@pytest.fixture
+def station(env, tmp_path):
+    """Test 5's station: patient makes grants to doctor. Every refused room is one the caller (and, where it matters,
+    the grantee) is in by hand, so the check named is the only one that can refuse it."""
+    app, clients, users, clock = env
+    store = app.state.store
+    patient, doctor, organizer, family = users
+    serenity, _ = docked(store, patient['id'], 'serenity')
+    rio, _ = docked(store, patient['id'], 'rio-grande')
+    theirs, _ = docked(store, doctor['id'], 'jenn-ship')
+    odo = store.create_station_ship('odo', 'Odo')
+    pending = store.bootstrap_super_admin('root', 'Root', tmp_path / 'activation.json')
+    shared = store.create_room(patient['id'], 'Ops', [doctor['id'], serenity['id'], rio['id']])
+    alone = store.create_room(patient['id'], 'Alone', [])
+    elsewhere = store.create_room(family['id'], 'Elsewhere', [doctor['id']])
+    old = store.create_room(patient['id'], 'Old', [doctor['id']])
+    store.add_participants(patient['id'], old['id'], [family['id']])  # Old is replaced now
+    side = store.open_breakout(serenity['id'], 'Side', ['rio-grande'])
+    remote = 'ab' * 32 + ':room-1'
+    with store.transaction() as db:
+        db.executemany('INSERT INTO room_members(room_id, user_id) VALUES(?,?)', [(side['id'], patient['id']), (side['id'], doctor['id'])])
+        db.execute('INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES(?,?,?,1,NULL)', (remote, patient['id'], 'Remote'))
+        db.executemany('INSERT INTO room_members(room_id, user_id) VALUES(?,?)', [(remote, patient['id']), (remote, doctor['id'])])
+        system = store.system_author_id(db)
+    good = {'grantee': doctor['id'], 'targets': [serenity['id']], 'rooms': [shared['id']], 'hours': 24, 'budget': 5}
+    return dict(app=app, clients=clients, users=users, clock=clock, store=store, serenity=serenity, rio=rio,
+                theirs=theirs, odo=odo, pending=pending, shared=shared, alone=alone, elsewhere=elsewhere, old=old,
+                side=side, remote=remote, system=system, good=good)
+
+
+def answer(station, client=None, **changes):
+    response = (client or station['clients'][0]).post('/api/grants', json={**station['good'], **changes})
+    return response.status_code, response.json().get('error')
+
+
+def test_making_a_grant_refuses_each_bad_field_with_its_status(station):
+    s = station
+    patient, doctor, organizer, family = s['users']
+    for rooms in (['no-such-room'], [s['remote']], [s['side']['id']], [s['elsewhere']['id']]):
+        assert answer(s, rooms=rooms) == (404, G.ROOM_NOT_YOURS), rooms  # the same body for each (G8 step 1)
+    hours = 'hours is a whole number from 1 to 720'
+    for changes, error in (
+            ({'rooms': [s['old']['id']]}, G.ROOM_REPLACED), ({'rooms': [s['alone']['id']]}, G.ROOM_WITHOUT_GRANTEE),
+            ({'rooms': [s['shared']['id'], s['shared']['id']]}, G.ROOMS_SHAPE), ({'rooms': []}, G.ROOMS_SHAPE),
+            ({'rooms': 'everywhere'}, G.ROOMS_SHAPE), ({'rooms': [5]}, G.ROOMS_SHAPE),
+            ({'rooms': '*', 'grantee': patient['id']}, G.GRANTEE_IS_YOU),
+            ({'rooms': '*', 'grantee': s['serenity']['id']}, G.GRANTEE_NOT_PERSON),
+            ({'rooms': '*', 'grantee': s['system']}, G.GRANTEE_NOT_PERSON),
+            ({'rooms': '*', 'grantee': s['pending']['id']}, G.GRANTEE_NOT_PERSON),
+            ({'rooms': '*', 'grantee': 'no-such-person'}, G.GRANTEE_NOT_PERSON),
+            ({'rooms': '*', 'grantee': ['x']}, G.GRANTEE_NOT_PERSON),
+            ({'targets': [s['theirs']['id']]}, G.TARGET_NOT_YOURS), ({'targets': [s['odo']['id']]}, G.TARGET_NOT_YOURS),
+            ({'targets': ['no-such-ship']}, G.TARGET_NOT_YOURS), ({'targets': [doctor['id']]}, G.TARGET_NOT_YOURS),
+            ({'targets': [s['serenity']['id'], s['serenity']['id']]}, G.TARGETS_SHAPE), ({'targets': []}, G.TARGETS_SHAPE),
+            ({'targets': s['serenity']['id']}, G.TARGETS_SHAPE),
+            ({'hours': 0}, hours), ({'hours': 721}, hours), ({'hours': 1.5}, hours), ({'hours': True}, hours),
+            ({'hours': '24'}, hours), ({'hours': None}, hours),
+            ({'budget': 0}, G.BUDGET_RANGE), ({'budget': 501}, G.BUDGET_RANGE), ({'budget': 2.0}, G.BUDGET_RANGE),
+            ({'budget': True}, G.BUDGET_RANGE), ({'budget': '5'}, G.BUDGET_RANGE)):
+        assert answer(s, **changes) == (400, error), changes
+    admin = {'rooms': '*', 'targets': [s['serenity']['id']]}  # an admin's power never reaches another person's ships
+    assert answer(s, s['clients'][2], **admin) == (400, G.TARGET_NOT_YOURS)
+    with s['store'].transaction() as db:
+        assert db.execute('SELECT count(*) FROM grants').fetchone()[0] == 0
+
+
+def test_making_a_grant_checks_in_the_spec_order(station):
+    """G8's order, rooms first: each request fails two steps, and the earlier one answers."""
+    s = station
+    patient, doctor, organizer, family = s['users']
+    assert answer(s, rooms=['no-such-room'], grantee=patient['id'], targets=[s['theirs']['id']], hours=0,
+                  budget=0) == (404, G.ROOM_NOT_YOURS)  # 1 before everything
+    assert answer(s, rooms=[s['alone']['id'], 'no-such-room']) == (404, G.ROOM_NOT_YOURS)  # every room's 1 before any 2
+    assert answer(s, rooms=[s['old']['id']], grantee=patient['id']) == (400, G.ROOM_REPLACED)  # 2 before 3
+    assert answer(s, rooms=[s['alone']['id']], grantee=s['serenity']['id']) == (400, G.ROOM_WITHOUT_GRANTEE)  # 2 before 3
+    assert answer(s, rooms='*', grantee=patient['id'], targets=[s['theirs']['id']]) == (400, G.GRANTEE_IS_YOU)  # 3 before 4
+    assert answer(s, targets=[s['theirs']['id']], hours=0) == (400, G.TARGET_NOT_YOURS)  # 4 before 5
+    assert answer(s, hours=721, budget=0) == (400, 'hours is a whole number from 1 to 720')  # 5 before 6
+
+
+def test_making_a_grant_takes_the_edges_and_refuses_one_past_them(station):
+    s = station
+    patient, doctor, organizer, family = s['users']
+    ships = fleet(s['store'], patient['id'], 21)
+    rooms = [s['store'].create_room(patient['id'], f'Room {n}', [doctor['id']])['id'] for n in range(21)]
+    assert answer(s, targets=ships) == (400, G.TARGETS_SHAPE)
+    assert answer(s, rooms=rooms) == (400, G.ROOMS_SHAPE)
+    assert answer(s, targets=ships[:20], rooms=rooms[:20], hours=1, budget=1) == (201, None)
+    assert answer(s, hours=720, budget=500) == (201, None)
+
+
+def test_making_a_grant_reads_the_policy_in_force(station, monkeypatch):
+    s = station
+    narrowed(s['store'], monkeypatch, max_expiry_hours=24)
+    assert answer(s, hours=25) == (400, 'hours is a whole number from 1 to 24')
+    assert answer(s, hours=24) == (201, None)
+
+
+def test_a_grant_made_in_the_browser_is_stored_signed_and_shown(station):
+    s = station
+    patient, doctor, organizer, family = s['users']
+    client = s['clients'][0]
+    assert client.post('/api/grants', json=s['good'], headers={'x-csrf-token': 'stale'}).status_code == 403  # CSRF
+    made = client.post('/api/grants', json=s['good'])
+    assert made.status_code == 201, made.text
+    view = made.json()
+    assert view == {'id': view['id'], 'short': '#' + view['id'][:4], 'issuer': {'id': patient['id'], 'name': 'Patient'},
+                    'grantee': {'id': doctor['id'], 'name': 'Doctor'},
+                    'targets': [{'id': s['serenity']['id'], 'name': 'Serenity', 'ship_builds_left': 20}],
+                    'rooms': [{'id': s['shared']['id'], 'title': 'Ops'}], 'expires': 1000000.0 + 24 * 3600, 'budget': 5,
+                    'budget_left': 5, 'created': 1000000.0, 'revoked': None, 'revoked_by': None, 'revoke_reason': None,
+                    'valid': True}
+    assert listed(client) == [view]  # the grant as G11 shows it
+    row = grant_row(s['store'], view['id'])
+    assert (row['actions'], row['depth'], row['confirm'], row['parent_id'], row['charter_layer_id'],
+            row['charter_revision'], row['follow']) == ('["direct"]', 0, 'none', None, None, None, 0)
+    assert verify_record(card_of(s['store']._station_identity()), stored_grant_record(s['store'], view['id']), row['signature'])
+    anywhere = client.post('/api/grants', json={**s['good'], 'rooms': '*'})
+    assert anywhere.status_code == 201 and anywhere.json()['rooms'] == '*'
