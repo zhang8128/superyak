@@ -573,8 +573,8 @@ function briefHistory(room) {
   const history = state.briefHistory?.roomId === room.id ? state.briefHistory : null;
   if (!history) return "";
   let rows = "";
-  if (history.items?.length === 0) rows = `<p class="meta">No revisions yet.</p>`;
-  else if (history.items) {
+  if (history.items?.length === 0 && !history.error) rows = `<p class="meta">No revisions yet.</p>`;
+  else if (history.items?.length) {
     rows = `<ol class="brief-revisions">${history.items.map((item) => `<li class="brief-revision">${briefAuthor(room, item)}<p class="meta">${escapeHtml(`Revision ${item.revision} · ${formatDate(item.updated)}${item.carried_from ? " · carried from the previous room" : ""}`)}</p>${item.body ? `<div class="brief-revision-body">${escapeHtml(item.body)}</div>${history.ask === item.revision ? briefUseAsk(item.revision) : `<button class="button ghost" type="button" data-action="use-brief-revision" data-revision="${escapeHtml(item.revision)}">Use this text</button>`}` : '<p class="meta">Removed</p>'}</li>`).join("")}</ol>`;
   } else if (!history.error) rows = `<p class="meta">Loading the brief's history…</p>`;
   // A failed reload keeps the rows already shown and puts its error under them.
@@ -1382,6 +1382,7 @@ function useBriefRevision(room, revision, confirmed = false) {
   if (open && open.body !== open.opened && !confirmed) {  // unsaved typing: ask before it goes
     state.briefHistory.ask = revision;
     render();
+    document.querySelector('.board-ask [data-action="brief-use-cancel"]')?.focus();  // the safe choice, as the board's Drop
     return;
   }
   state.briefHistory.ask = null;
@@ -1758,7 +1759,7 @@ document.addEventListener("click", async (event) => {
   if (action === "hide-brief-history") { state.briefHistory = null; render(); }
   if (action === "use-brief-revision" && state.room) useBriefRevision(state.room, Number(target.dataset.revision));
   if (action === "brief-use-confirm" && state.room) useBriefRevision(state.room, Number(target.dataset.revision), true);
-  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); }
+  if (action === "brief-use-cancel" && state.briefHistory) { state.briefHistory.ask = null; render(); document.querySelector("#brief-body")?.focus(); }
   if (action === "profile") { state.profileDialog = true; render(); }
   if (action === "logout") await logout();
   if (action === "invite") {

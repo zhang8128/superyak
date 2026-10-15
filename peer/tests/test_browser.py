@@ -2814,6 +2814,38 @@ def test_the_ship_warning_goes_while_the_box_is_blank(browser_peer):
     assert store.get_room(patient, room["id"])["brief"] is None
 
 
+def test_the_blank_box_keeps_the_warning_hidden_through_a_re_render(browser_peer):
+    """Fix round 1: the render-time `hidden` matters when the editor re-renders with a blank box: the ask that "Use this
+    text" opens over his blanking, and a failed Save."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_brief(patient, room["id"], "The owner's first words.", 0)
+    store.save_ship_brief(ship["id"], room["id"], "Rio Grande's words, all of them.", 1)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            expect(panel.locator(".brief-revision")).to_have_count(2)
+            panel.get_by_role("button", name="Edit brief").click()
+            expect(panel.locator(".brief-warning")).to_be_visible()
+            panel.get_by_label("Edit brief").fill("")
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+            panel.locator(".brief-revision").filter(has_text="The owner's first words.").get_by_role("button", name="Use this text").click()
+            expect(panel.locator(".board-ask")).to_be_visible()  # the editor re-rendered, blank
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+            panel.locator(".board-ask").get_by_role("button", name="Cancel").click()
+            page.route("**/api/chats/*/brief", lambda route: route.fulfill(
+                status=500, content_type="application/json", body=json.dumps({"error": "Save is down"}))
+                if route.request.method == "PUT" else route.fallback())
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator("#brief-status")).to_contain_text("Save is down")  # re-rendered after the failure
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+
+
 def test_an_empty_history_says_so(browser_peer):
     """Follow-up from the final reviews: for a room that never had a brief, "Brief history" showed nothing under its
     heading."""
@@ -2857,14 +2889,17 @@ def test_use_this_text_asks_before_replacing_unsaved_typing(browser_peer):
             rows.filter(has_text="Second words.").get_by_role("button", name="Use this text").click()
             ask = panel.locator(".board-ask")
             expect(ask).to_contain_text("Replace your unsaved text with revision 2?")
+            assert page.evaluate("document.activeElement?.textContent") == "Cancel"  # the safe choice, as the board's Drop
             expect(box).to_have_value("My unsaved <b>typing</b>.")
             ask.get_by_role("button", name="Cancel").click()
             expect(panel.locator(".board-ask")).to_have_count(0)
             expect(box).to_have_value("My unsaved <b>typing</b>.")
+            assert page.evaluate("document.activeElement?.id") == "brief-body"  # back to the typing
             rows.filter(has_text="Second words.").get_by_role("button", name="Use this text").click()
             panel.locator(".board-ask").get_by_role("button", name="Yes").click()
             expect(panel.locator(".board-ask")).to_have_count(0)
             expect(panel.get_by_label("Edit brief")).to_have_value("Second words.")
+            assert page.evaluate("document.activeElement?.id") == "brief-body"
 
 
 def test_a_failed_reload_after_a_save_keeps_the_history_rows(browser_peer):
@@ -2894,3 +2929,26 @@ def test_a_failed_reload_after_a_save_keeps_the_history_rows(browser_peer):
             order = history.evaluate("el => [...el.children].map((c) => c.className || c.tagName)")
             assert order.index("brief-revisions") < order.index("inline-message error")
     assert store.get_room(patient, room["id"])["brief"]["revision"] == 2
+
+
+def test_a_failed_first_reload_does_not_say_no_revisions(browser_peer):
+    """Fix round 1: "No revisions yet." was still shown above the error when the open, empty history failed to reload
+    after the first save, though the panel already showed revision 1."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "Never had a brief", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            expect(panel.locator(".brief-history")).to_contain_text("No revisions yet.")
+            page.route("**/brief/revisions", lambda route: route.fulfill(status=500, content_type="application/json",
+                                                                       body=json.dumps({"error": "History is down"})))
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill("First words.")
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text("First words.")
+            expect(panel.locator(".brief-history .inline-message.error")).to_have_text("History is down")
+            expect(panel.locator(".brief-history")).not_to_contain_text("No revisions yet.")
