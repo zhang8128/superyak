@@ -296,11 +296,12 @@ order:
 
 1. `build`, `direct`: a `ready` direct for this message and ship, with a valid chain, no breaker on the
    issuer, and budget left. The direct becomes `used`.
-2. `build`, `owner`: the author is a person who owns the ship.
+2. `build`, `owner`: the author is a person who owns the ship, and the mention is fresh: posted within 24 hours of
+   the ticket, and not yet answered by the ship (fresh owner mentions spec).
 3. `build`, `grant`: the author is a person holding a valid `direct` chain for this ship and room, with budget,
    and no link in the chain says `confirm: each`. Such grants are spent only through directs, which wait for
    confirmation.
-4. Otherwise `read`, basis `none`. A resident ship (no owner) always gets `read`.
+4. Otherwise `read`, basis `none`, or basis `old` or `answered` when rule 2 failed only on freshness (fresh owner mentions spec). A resident ship (no owner) always gets `read`.
 
 Bases 1 and 3 also need the target ship to be under the charter's `builds_per_ship_per_day`: it counts every
 `direct` and `grant` build ticket for that ship in the last 24 hours. Owner builds are not counted. A build under
