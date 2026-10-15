@@ -502,7 +502,7 @@ def test_a_run_prompt_marks_a_ship_written_brief(station, ship_config):
 
 READ_TAIL = ("mentions you (@serenity). You are in read-only mode: you can read and search the repository and use the "
              "aDNA tools, but you cannot run commands or change files. If the request needs changes, say what you would "
-             "do and that Andy can ask the ship's owner.\n")
+             "do and that Andy can ask the ship's owner for a grant, or check the Grants page.\n")
 BUILD_TAIL = ("mentions you (@serenity). You are in builder mode, in a fresh git worktree of the repository. Make the "
               "change the last message asks for, run the relevant tests, and end with a short summary of what you "
               "changed. Do not commit or push; the watcher commits your work on its own branch.\n")
@@ -534,6 +534,25 @@ def test_a_limited_read_prompt_says_why_and_nothing_else_changes(station, ship_c
         assert build_prompt(view, mention, 'serenity', 'read', limited=value) == plain_read
     for value in (None, 'old', 'answered'):
         assert build_prompt(view, mention, 'serenity', 'build', limited=value) == plain_build
+
+
+def test_a_grantees_read_prompt_points_to_a_grant_and_a_limited_one_says_only_why(station, ship_config):
+    """Grants step 3, G19, beside fresh owner mentions R8: a read-only run tells a person who isn't the owner that they
+    can ask the ship's owner for a grant, or check the Grants page. When the ticket's basis is old or answered, its
+    reason line replaces that sentence: a grantee whose mention is a day old holds a grant already."""
+    from superyak_agent.watch import LIMITED_SENTENCES
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, jenn, '@serenity fix it')
+    view = fake.view(fake.rooms[room])
+    mention = {'message_id': asked['id'], 'room_id': room, 'author': jenn, 'body': asked['body']}
+    assert build_prompt(view, mention, 'serenity', 'read').endswith(
+        "If the request needs changes, say what you would do and that Jenn can ask the ship's owner for a grant, or "
+        "check the Grants page.\n")
+    for limited in ('old', 'answered'):
+        prompt = build_prompt(view, mention, 'serenity', 'read', limited=limited)
+        assert prompt.endswith(f'cannot run commands or change files. {LIMITED_SENTENCES[limited]}\n'), limited
+        assert 'Grants page' not in prompt and 'for a grant' not in prompt, limited
 
 
 def test_the_watcher_passes_an_old_basis_to_the_prompt(station, ship_config, tmp_path):
