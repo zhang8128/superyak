@@ -4,7 +4,11 @@ Status: approved. Under the station law (section 3, D8), a fresh reviewer agent 
 and its summary and decisions are posted in "Superyak: city of AI". Andy can veto anything. Revision 1 (6483e3d) was
 reviewed: APPROVE WITH CHANGES, 1 must-fix, 10 should-fix and 11 nits, posted whole in the room (message 75396e96).
 Revision 2 (113f71a) made every one of them ("Review map" at the end says where), and the same reviewer's re-check
-approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9).
+approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9). Later notes, each narrowing or
+aligning, with no new D8 round: G4 (the identity is created at the first signature; plan review of merge 3a, M1);
+S6, G15 and G19 (the fresh owner mentions spec, approved under D8 at 1faeff8, bounds owner builds the same way, and
+its `_mention_stale` and basis values are shared). G4a, G4b, tests 4a and 4b and the identity Known limit come from
+the section 2 review of merge 3a (findings 1 and 4) and are built in merge 3b; the D8 reviewer re-checks them.
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
 Serenity as `build:grants`; Rio Grande reviews each merge under section 2.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md) (approved 2026-10-08), its build order step 3
@@ -58,7 +62,7 @@ Each line is this spec's ruling. A fresh reviewer checks it; Andy can veto any o
 | S3 | `instruct` grants | Moved to step 4 with pins, follow, pending revisions, diffs, caps at grant creation and bracketed titles. | Shares its machinery with charter acceptance. |
 | S4 | Room-scoped grants | Not in step 3, and not in spec A. A grant such as `board` or `brief` (work board spec, ship room briefs spec) scopes a room the issuer owns, not ships, so it needs its own spec. | Different shape. |
 | S5 | Where a grant builds | Only in a room the issuer is in when the ticket is issued, whatever the grant lists. A grant that names room X covers the current room that replaced X, following `linked_room_id` forward, and never a replaced room, X included. | The issuer keeps sight of every build he granted (review M1: any person can open a room with any ship). Adding a member or bridging makes a new room id (`chats.py` `add_participants`; survey 3.2), and the issuer stays a member of the new room. Briefs, open board items and claims already carry forward. Without following forward, Andy bridging a room would silently end every grant in it. |
-| S6 | Old and answered mentions | A grant build needs a mention posted no earlier than the grant was created, at most 24 hours before the ticket, and not yet answered by the ship. Otherwise the ticket is `read`. Owner builds are unchanged. | HANDOFF's parked note: once acts spend build tickets, the station must refuse old or answered messages (survey 3.13). A grant must not reach back to words written before it. |
+| S6 | Old and answered mentions | A grant build needs a mention posted no earlier than the grant was created, at most 24 hours before the ticket, and not yet answered by the ship. Otherwise the ticket is `read`. Owner builds get the same bound from the fresh owner mentions spec (`2026-10-15-owner-mention-fresh-design.md`, approved under D8 at 1faeff8), which amends this line: its `_mention_stale` is the one check both use (G15). | HANDOFF's parked note: once acts spend build tickets, the station must refuse old or answered messages (survey 3.13). A grant must not reach back to words written before it. |
 | S7 | What the station signs | Grant records, revocations and instructions revisions. Each record has a fixed set of keys, including a `kind` and the station's peer id. A revision's record carries its audience. A revocation's signature gets its own column. | Spec A's records name no station or kind for grants and no audience for revisions (survey 3.8). A fixed key set keeps old signatures valid when later steps add columns, and a kind keeps one record from passing as another (review S1, S2). Rows never change except the revocation fields, so the revocation signature needs somewhere to go. |
 | S8 | Policy with no charter | One function returns spec A's no-charter defaults. Validity reads `max_expiry_hours` (720), `max_depth` (3) and the grantee set (unrestricted); tickets read `builds_per_ship_per_day` (20). A root's budget is 1 to 500 builds a day, and its depth is 0. | Step 4 swaps the charter in behind the same function without changing validity. A budget of 0 could never be spent. Depth only matters once delegation exists. |
 | S9 | Restoring a backup | With a usable replaced file, the reconcile revokes every grant revoked there or missing there, and adds the budget uses recorded there. Without one, it revokes every grant, with reason `restored`. | A restored copy must not bring back a revoked grant or a spent budget (backups spec S16, survey 3.14). |
@@ -95,6 +99,22 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   signers can't both create it, and a failed create rolls the signed write back. (Plan review of merge 3a, M1:
   creating the file at every start would fix a new station's certificate before `card --endpoint` can add the
   station's hostname to it.)
+- **G4a. Only the lighthouse holds the key at startup (built in merge 3b; section 2 review of 3a, finding 1).**
+  `Store` takes `signing=True` by default. With `signing=False` it skips G4's startup load, G4b's check and G5's
+  backfill, and holds no key unless something it does signs, in which case `_station_identity()` still loads or
+  creates the identity inside the signing transaction, so nothing is ever written unsigned. The door
+  (`create_door`) and the station commands that open a store but never sign (`station-pending`, `station-approve`,
+  `station-deny`, `station-rooms`, `station-bridge`, `station-unbridge`, `station-notices`) open it with
+  `signing=False`. So the internet-facing door never holds the private key, and a damaged `identity.json` stops the
+  lighthouse alone: the door keeps taking access requests, and Andy can still list and approve what waits. The
+  lighthouse (`create_app`), `init`, `card` and every other opener keep `signing=True`.
+- **G4b. A lost identity is not replaced silently (built in merge 3b; section 2 review of 3a, finding 4).** At a
+  `signing=True` start, if `identity.json` is missing (not a file, not a symlink) while the station holds signed
+  records (a row in `revision_signatures`, or, from merge 3b, in `grants`), the store refuses to start with a
+  `ValueError` naming the file: a new identity would void every stored signature. The message says to restore the
+  file. A station with no signed records still creates its identity at the first signature (G4), so a new station's
+  first `card --endpoint` still names its host. `card` opens the store with `signing=True`, so it refuses too rather
+  than make a new key.
 - **G5.** At startup, every revision whose snapshot has `kind: "instructions"` and that has no signature is signed
   once, from its stored snapshot. The active station law (layer c879372542444e4c8f95f2c0db69f8fb) is one of them. A
   second start signs nothing.
@@ -213,14 +233,19 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   - when the ticket is issued, the author, the ship and G's root issuer are all members of R (S5);
   - G is valid now (G9), and no link in its chain says `confirm: each`;
   - G was created no later than the message (equal times count), the message was posted at most 24 hours before the
-    ticket (exactly 24 hours still counts), and the ship has not answered it (S6; `_answered`, whether or not the
+    ticket (exactly 24 hours still counts), and the ship has not answered it (S6; the age and answered parts are the
+    fresh owner mentions spec's `_mention_stale(db, ship_id, message)`, which returns None, `old` or `answered`;
+    `_answered`, whether or not the
     watcher asked for decisions);
   - the ship has had fewer than `builds_per_ship_per_day` grant build tickets in the last 24 hours, under any
     grant. Owner builds are not counted, as in spec A.
 
   When several grants qualify, the oldest one is used (by `created`, then `id`), so the choice never depends on the
   database's row order. A grant that fails a condition, for example one with no budget left, is skipped, and the
-  next oldest is tried.
+  next oldest is tried. When the only thing that keeps a grantee's mention from building is its age or an earlier
+  answer (`_mention_stale` returns `old` or `answered` and a grant would otherwise qualify), the `read` ticket's basis
+  is that value, as for an owner mention under the fresh owner mentions spec, so the labels agree; any other refusal
+  is basis `none`.
 - **G16.** The ticket records basis `grant`, `root_id` as the root's issuer, and `chain` as the grant ids, root
   first. The station inserts one `budget_uses` row per link in the same transaction. One message that mentions two
   ships under one grant charges it once per ship's ticket.
@@ -241,7 +266,9 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   run, and a revoke stops the watcher's retries. A run already under way when the grant
   is revoked runs to its end. Step 5 adds the refusal of acts that carry a revoked chain's `ticket_id`.
 - **G19.** The read-only run prompt (`agent/superyak_agent/watch.py`) says the author "can ask the ship's owner". It
-  now says the author "can ask the ship's owner for a grant, or check the Grants page". `agent/superyak_agent/runs.py`'s
+  now says the author "can ask the ship's owner for a grant, or check the Grants page". The fresh owner mentions spec
+  adds a reason line to the same prompt for `old` and `answered` tickets; whichever lands second keeps both, the
+  reason line first. `agent/superyak_agent/runs.py`'s
   docstring ("builder for the ship's owner") gains "or a person the owner granted". The watcher otherwise needs no
   change: it already runs in the ticket's mode and posts the ticket's footer. An old watcher without tickets keeps
   its local rule, under which only the owner builds, so nothing widens there.
@@ -296,9 +323,10 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   `created` and `expires` the same way.
 - The 24-hour bound on mentions (S6) means a grantee's mention that waits a day for an offline watcher runs
   read-only.
-- The nightly copies leave out the identity files (backups spec). A station rebuilt from a copy without its own
-  `identity.json` gets a new key: its stored signatures stop verifying against its new card, and the startup backfill
-  doesn't sign them again, since they aren't unsigned.
+- The nightly copies leave out the identity files (backups spec). From merge 3b, a station whose `identity.json` is
+  missing while it holds signed records refuses to start (G4b) instead of taking a new key. Someone who deletes the
+  file on purpose to get a station up, or rebuilds it on purpose with a new key, voids every stored signature: they
+  stop verifying against the new card, and the backfill doesn't sign them again, since they aren't unsigned.
 - Checking a signature needs the station's card, which exists only when the station has an HTTPS federation
   endpoint (`identity.py` `validate_card`); the CLI prints one with `--endpoint`. Tests build the card with a
   placeholder endpoint.
@@ -326,6 +354,14 @@ Each test is named, written first, and seen failing first.
 
 **Merge 3b**
 
+4a. The door and the listed station commands start and work with a damaged `identity.json` (not JSON) while the
+    lighthouse refuses to start; the door's store holds no key after starting (`_identity` unset), and an access
+    request through it still works. A `signing=False` store that signs (an activation through it) still writes a
+    signed revision, creating the identity if it is missing.
+4b. On a station with a signed revision, removing `identity.json` makes a `signing=True` start refuse with a
+    `ValueError` naming the file (`Store`, `create_app` and `card`); a `signing=False` start still opens; a station with
+    no signed records and no identity starts and creates none (G4's first-card behavior is unchanged); a dangling
+    symlink still refuses as before.
 5. Making a grant, as a table of refusals, each with its status: an unknown, remote or breakout room id or a room
    the caller is not in (404, the same body for each); a replaced room or one without the grantee (400); grantee is
    the caller, a ship, the system author or awaiting activation; a target is another person's ship, a resident ship
