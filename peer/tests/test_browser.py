@@ -1711,9 +1711,13 @@ def test_the_add_dialog_says_open_items_are_carried_without_a_brief(browser_peer
                 dialog.get_by_role("button", name="Cancel").click()
 
 
-def settle(page):
+def settle(page, ready=None):
     """Board clicks are ignored for 400 ms after the panel renders (a double click must not land on what a re-render moved
-    under the pointer), so a test waits out the window before it clicks."""
+    under the pointer), so a test waits out the window before it clicks. After a reload the page renders only when its
+    reads come back, which on a slow machine is later than the wait would end: pass what the render shows as ready, and
+    the wait counts from when it is visible."""
+    if ready is not None:
+        expect(ready).to_be_visible()
     page.wait_for_timeout(450)
 
 
@@ -1857,6 +1861,7 @@ def test_drop_and_release_ask_first_and_a_hurried_double_click_touches_nothing(b
             page.reload()
             panel = page.locator(".room-board")
             item = lambda key: panel.locator(".board-item", has_text=key)
+            expect(panel).to_be_visible()
             for name, text in (("Drop spec:a", "Drop spec:a for good? Its key can't be used again."), ("Release claim on spec:a", "Release Serenity's claim on spec:a?")):
                 settle(page)
                 double_click_apart(page, item("spec:a").get_by_role("button", name=name))
@@ -1918,7 +1923,7 @@ def test_a_key_press_on_an_ask_is_not_swallowed_by_the_click_guard(browser_peer)
             page.goto(f"{base}/#chats/{room['id']}")
             page.reload()
             item = page.locator(".room-board .board-item", has_text="spec:a")
-            settle(page)
+            settle(page, ready=item)
             item.get_by_role("button", name="Drop spec:a").click()
             expect(item.get_by_role("button", name="Cancel")).to_be_focused()
             page.keyboard.press("Enter")  # at once, inside the guard window
@@ -1941,8 +1946,10 @@ def test_a_board_write_made_while_the_next_room_loads_goes_nowhere(browser_peer)
             page.goto(f"{base}/#chats/{room_a['id']}")
             page.reload()
             panel = page.locator(".room-board")
-            settle(page)
+            settle(page, ready=panel)
             panel.get_by_role("button", name="Drop spec:same").click()
+            confirm = panel.get_by_role("button", name="Yes, drop spec:same")
+            expect(confirm).to_be_visible()  # the ask is open on A's panel
             held = []
             page.route(f"**/api/chats/{room_b['id']}/board", lambda route: held.append(route))
             page.evaluate("id => { location.hash = `chats/${id}`; }", room_b["id"])
@@ -1953,7 +1960,7 @@ def test_a_board_write_made_while_the_next_room_loads_goes_nowhere(browser_peer)
             assert held, "room B's board read never started"
             expect(panel).to_have_attribute("data-room", room_a["id"])  # A's panel is still what is shown
             settle(page)
-            panel.get_by_role("button", name="Yes, drop spec:same").click()
+            confirm.click()
             page.wait_for_timeout(400)
             held[0].continue_()
             expect(page.get_by_role("heading", name="Room B")).to_be_visible()
@@ -1993,7 +2000,7 @@ def test_a_board_form_and_view_do_not_follow_a_new_sign_in_in_the_same_tab(brows
             page.goto(f"{base}/#chats/{mine['id']}")
             page.reload()
             panel = page.locator(".room-board")
-            settle(page)
+            settle(page, ready=panel)
             panel.get_by_role("button", name="Mark done spec:mine").click()
             panel.get_by_label("Outcome link").fill("commit:abc1234")
             panel.get_by_label("Key").fill("spec:draft")
