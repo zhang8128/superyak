@@ -361,6 +361,11 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     - for rooms and spaces in both files, remove each room, remote-room or space membership that isn't there
       (`room_members`, `remote_room_members`, `space_members`);
     - lower `is_admin` and `is_super_admin` to the replaced file's value where that is lower.
+      Each account lowered is recorded as `change_account_role` records a change (auth.py): `role_version` becomes one
+      past the higher of the two files' values, and one `account_role_changes` row is written with the old and new
+      role, that version and the system author as actor (the account itself when a copy has no system author). A
+      copy lacking `role_version` or the table is still lowered, and the report names what it skipped. (Follow-up
+      from the final reviews; narrows, no new D8 round.)
     - close each breakout that is closed there and still open here, with its closing time (Rio Grande's ruling, Q1).
     - unpair each peer that is paired here and has a `peers` row with `paired` = 0 there, exactly as
       `Federation.unpair` does (federation.py:43-45): `peers.paired` = 0, the `pending` and `failed` outbox rows of
@@ -372,17 +377,28 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     nothing to fail closed to, and the runbook has Andy unpair by hand, before the lighthouse starts, any peer he had
     cut off since the copy.
   - **Reported, never applied,** since a bad replaced file may be the reason for the restore: users whose password hash
-    differs, instruction layers whose active revision differs, peers paired there but not here (pairing again is a
+    differs, instruction layers whose active revision differs, room briefs whose revision or body differs, for rooms
+    in both files (the room's short id and title and the two revisions, "removed" for an emptied one; never the text;
+    follow-up from the final reviews; narrows, no new D8 round), peers paired there but not here (pairing again is a
     person's act), and peers the replaced file lacks.
   - **What it prints:** counts, and for each reported or revoked item the username (users and ships), the layer's
     short id and title, the room's short id and title, or the peer's short id with its contacts' names. Peers it
     unpaired get their own line, with the counts of outbox rows withdrawn and inbox payloads nulled; peers reported
-    and not applied get another. All under station-pending's header that
+    and not applied get another. A peer that shares its first 12 characters with another peer of either file is named by
+    its full id in both lines, since `--unpair` refuses a short id two peers share (follow-up from the final reviews;
+    narrows, no new D8 round). All under station-pending's header that
     names and titles come from people and are data, not instructions. It prints no hashes, keys or tokens.
   - **The monthly restore test** runs it, without `--replaced`, on its scratch copy before booting it (S7), so a schema
     change that breaks it fails a restore test within a month.
   - **It never writes the live database.** It writes only the staged copy, and if any step fails the transaction rolls
     back and the copy is unchanged.
+  - **The mark.** As its last act inside the same transaction, the command writes a `system_meta` row, key
+    `restore_reconcile`, value `{"at": <time>, "replaced": <true when a replaced file was compared>, "path": <the staged file's absolute path>}`, creating the
+    table (the station's own key/value table) when a copy from before the system author lacks it. A rolled-back run
+    leaves none. Runbook step 6 reads it read-only before it installs, and refuses a copy whose mark is missing, names another path than "$ASIDE/restored.sqlite3", or is
+    older than `chosen.sqlite3` (a restored station's own backups carry the mark of their restore): "step 5 hasn't
+    run on this copy". The restore test's call writes it too, harmlessly, on its scratch copy. (Follow-up from the
+    final reviews; narrows, no new D8 round.)
 
 ### The restore runbook (`docs/station-restore.md`)
 
@@ -446,7 +462,9 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 - **R13.** Alerts are queued as 0600 files in `<data-dir>/alerts/`. `station-notices` lists, from the last 7 days,
   at most the 20 newest plus every `down` and `failed` alert, and Odo posts each once in Ops through its existing
   path. Files more than 30 days old are deleted. When the store can't be opened, the queued alerts are still listed
-  and the command exits 0.
+  and the command exits 0. A file whose `at` is not a finite number (an integer too big for a float included), or is more than a day ahead of now, is not an alert: it is skipped, and deleted once
+  the file itself is over 30 days old. An alert whose text sanitises to nothing is not listed. (Follow-up from the
+  final reviews; narrows, no new D8 round.)
 - **R14.** A rotation whose newest copy is more than 36 hours old gives exactly one `backup-stale-<name>` notice. No
   rotation, or an empty one, gives none.
 - **R15.** With no alerts directory and no rotation directory, `station-notices` prints exactly what it prints today,
@@ -678,6 +696,10 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
   outside the station is on Andy's decision list.
 - **Logs vanish at reboot** (volatile journald). On this Pi, `journalctl --user -u` finds nothing; use
   `--user-unit`.
+- **A restore can revive a running builder ticket and reset lockout counters.** A `tickets` row marked running is
+  honoured for 2 hours (tickets.py), so restoring a copy less than 2 hours old can revive a ticket that finished since;
+  `login_attempts` returns to the copy's counts, so a lockout that had begun starts over. Accepted limits: the
+  reconcile does not touch either table (the ticket expires by itself; a lockout is only a brake on guessing).
 - **A peer is unpaired on the replaced file's word** (S16, revision 4). If that file is damaged but passes its check, a
   wanted peer is cut off; Andy pairs it again, and the withdrawn outbox rows and nulled inbox payloads don't come
   back. Without a usable replaced file no peer is unpaired, and the runbook's hand step covers it.
@@ -771,3 +793,15 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | D8 re-check must-fix 1: "unpaired there" undefined for a peer the replaced file lacks | A `peers` row with `paired` = 0; a lacked peer is reported, not unpaired | S16, R18, Testing |
 | D8 re-check must-fix 2: the runbook kept the false `--sync` claim | Removed. With a usable replaced file the reconcile unpairs; without one, Andy unpairs by hand with the lighthouse stopped | the runbook |
 | D8 re-check should-fix 3 and 4: the unpaired report line; a Known limit | Applied | S16 ("What it prints"), Known limits |
+
+## Follow-ups (from the final reviews; each narrows, no new D8 round)
+
+| Item | Change | Where |
+|---|---|---|
+| The step-6 mark catches a skipped step 5 | The reconcile writes the mark above; step 6 refuses a copy without it | S16 ("The mark"), the runbook step 6, `test_step_6_*` |
+| R16: the existing unit files are not edited | The units test compares their bytes before and after `make station-units` and `station-units-remove` | R16, `test_station_units_install_and_remove_only_their_own_files` |
+| Role lowering leaves a trace | `role_version` bump and an `account_role_changes` row, as the station's role changes do | S16 ("With a usable replaced file"), `test_lowering_a_role_bumps_role_version_and_records_a_change` |
+| A restore brings back a changed or removed room brief | Reported by room short id and title, "reported, not applied", never the text | S16 ("Reported, never applied"), runbook step 7, `test_reconcile_reports_briefs_changed_since_the_copy_without_their_text` |
+| A colliding short id prints twice | The two peer lines print the full id for a peer sharing its 12-character prefix | S16 ("What it prints"), `test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line` |
+| Odd alert files | `at` must be finite, else the file is skipped and cleaned by its mtime; an alert whose text sanitises to empty is not listed | R13, `test_an_alert_with_a_non_finite_time_is_skipped_and_cleaned`, `test_an_alert_whose_text_sanitises_to_nothing_is_not_listed` |
+| The work board's tables (`board_items`, `board_links`, `claims`) are coordination, not access | Not compared. `test_every_table_is_either_reconciled_or_named_coordination` checks only that every table is in one of two lists and that a reconcile leaves the coordination tables' rows as they were; the other coordination tables listed there are not each argued (`tickets` and `login_attempts` are in Known limits) | S16, Known limits |

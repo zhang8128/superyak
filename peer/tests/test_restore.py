@@ -1179,3 +1179,321 @@ def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
                         '--user enable superyak-ship-failed.service', '--user start superyak-ship-running.service',
                         '--user start superyak-ship-byhand.service', '--user start superyak-ship-crashed.service']
     assert 'make station-rooms' in calls
+
+
+def step_6(tmp_path, aside):
+    """Runbook step 6 as pasted, with HOME in tmp_path: (stdout, the installed peer.sqlite3 or None)."""
+    if not (tmp_path / 'home').exists():
+        run_runbook(tmp_path, 3, '')                     # only to lay out the shims and HOME; with ASIDE unset it does nothing
+    data = tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse'
+    data.mkdir(parents=True, exist_ok=True)
+    out, _ = run_runbook(tmp_path, 6, aside)
+    return out, (data / 'peer.sqlite3') if (data / 'peer.sqlite3').exists() else None
+
+
+def staged_for_step_6(tmp_path, store, label='replaced-20261017-120000'):
+    """Runbook steps 1, 4 and 5 up to the reconcile: chosen.sqlite3, restored.sqlite3 staged from it, peer.sqlite3 set aside."""
+    copy = staged(tmp_path, store, label)
+    chosen = copy.parent / 'chosen.sqlite3'
+    shutil.copyfile(copy, chosen)
+    return copy, chosen, set_aside(store, copy)
+
+
+def test_step_6_installs_a_reconciled_copy_and_refuses_one_step_5_never_ran_on(tmp_path, capsys):
+    """Follow-up 1: the reconcile writes a mark into the staged copy in its own transaction; step 6's one-liner reads it
+    read-only and refuses a copy without it. Mutations: the reconcile writing no mark (the reconciled copy is refused);
+    the one-liner not reading the mark (the unreconciled copy is installed)."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    before = copy.read_bytes()
+    out, installed = step_6(tmp_path, copy.parent)                      # step 5 skipped
+    assert installed is None and "NOT installed: step 5 hasn't run on this copy" in out and 'INSTALLED' not in out.split()
+    assert copy.read_bytes() == before                                 # the check wrote nothing
+    code, report, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        mark = json.loads(db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()[0])
+    assert mark['replaced'] is True and abs(mark['at'] - time.time()) < 300
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is not None and out.split()[-1] == 'INSTALLED' and 'replaced file compared' in out, out
+    assert not Path(f'{copy}-journal').exists()
+
+
+def test_step_6_says_when_the_replaced_file_was_not_compared(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    code, report, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is not None and 'replaced file NOT compared' in out and out.split()[-1] == 'INSTALLED', out
+
+
+def test_step_6_refuses_a_copy_whose_mark_is_older_than_chosen(tmp_path, capsys):
+    """A restored station's own backups carry the mark of its restore. Choosing one of those and skipping step 5 must not
+    pass: the mark has to be newer than chosen.sqlite3, which step 1 installed after the mark was written. Mutation: the
+    one-liner dropping the comparison with chosen.sqlite3."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    first = staged(tmp_path, store, 'replaced-20261016-120000')
+    code, _, err = reconcile(capsys, '--db', first)
+    assert code == 0, err
+    marked = Store(tmp_path / 'restored-station')
+    shutil.copyfile(first, marked.db_path)
+    later = staged(tmp_path, marked, 'replaced-20261017-120000')        # a copy of a copy that carries the old mark
+    chosen = later.parent / 'chosen.sqlite3'
+    shutil.copyfile(later, chosen)
+    with closing(sqlite3.connect(later)) as db, db:                    # the old mark names this restore's path: only the clock can refuse it
+        mark = json.loads(db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()[0])
+        mark['path'] = str(later)
+        db.execute("UPDATE system_meta SET value=? WHERE key='restore_reconcile'", (json.dumps(mark),))
+    out, installed = step_6(tmp_path, later.parent)                     # step 5 skipped
+    assert installed is None and "step 5 hasn't run on this copy" in out, out
+
+
+def test_a_rolled_back_reconcile_leaves_no_mark(tmp_path, monkeypatch, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+
+    def broken(*args):
+        raise RuntimeError('a step failed')
+    monkeypatch.setattr(backups, '_end_sessions', broken)
+    code, _, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 1
+    with closing(sqlite3.connect(copy)) as db:
+        assert not db.execute("SELECT 1 FROM system_meta WHERE key='restore_reconcile'").fetchall()
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is None and "step 5 hasn't run" in out
+
+
+def test_lowering_a_role_bumps_role_version_and_records_a_change(tmp_path, capsys):
+    """Follow-up 3: a role the reconcile lowers is recorded as the station's own role changes are (auth.py
+    change_account_role): role_version goes up past both files' value, so a browser tab holding the old version is
+    refused, and one account_role_changes row names the user, the old and the new role, the new version and the system
+    author as actor. A role it does not lower has no row. Mutations: no version bump; no row."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    jenn = store.create_user('jenn', 'Jenn', 'long-password-jenn', is_admin=True)
+    sam = store.create_user('sam', 'Sam', 'long-password-sam', is_admin=True)
+    kept = store.create_user('kept', 'Kept', 'long-password-kept', is_admin=True)
+    with store.transaction() as db:
+        db.execute('UPDATE users SET is_super_admin=1 WHERE id IN (?, ?)', (andy['id'], sam['id']))
+    copy = staged(tmp_path, store)                                                # A
+    store.change_account_role(andy['id'], jenn['id'], 'participant', 1)           # B: jenn 2, then sam 2
+    store.change_account_role(andy['id'], sam['id'], 'admin', 1)
+    with store.transaction() as db:
+        db.execute('UPDATE users SET role_version=5 WHERE id=?', (jenn['id'],))  # B's version is ahead of the copy's
+        system = db.execute("SELECT value FROM system_meta WHERE key='system_author'").fetchone()[0]
+    with closing(sqlite3.connect(copy)) as db:
+        before = db.execute('SELECT count(*) FROM account_role_changes').fetchone()[0]
+        copy_versions = dict(db.execute('SELECT username, role_version FROM users'))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    live = go_live(copy, tmp_path / 'live')
+    with live.transaction() as db:
+        versions = dict(db.execute('SELECT username, role_version FROM users'))
+        roles = dict(db.execute('SELECT username, is_admin + is_super_admin FROM users'))
+        rows = [dict(row) for row in db.execute('SELECT * FROM account_role_changes ORDER BY id DESC LIMIT ?', (2,))]
+        total = db.execute('SELECT count(*) FROM account_role_changes').fetchone()[0]
+    assert (roles['jenn'], roles['sam'], roles['kept']) == (0, 1, 1)
+    assert versions['jenn'] == 6 and versions['sam'] == 3 and versions['kept'] == copy_versions['kept']
+    assert total == before + 2
+    by_user = {row['user_id']: row for row in rows}
+    assert {key: by_user[jenn['id']][key] for key in ('actor_id', 'old_role', 'new_role', 'role_version')} == {
+        'actor_id': system, 'old_role': 'admin', 'new_role': 'participant', 'role_version': 6}
+    assert {key: by_user[sam['id']][key] for key in ('actor_id', 'old_role', 'new_role', 'role_version')} == {
+        'actor_id': system, 'old_role': 'super_admin', 'new_role': 'admin', 'role_version': 3}
+    assert kept['id'] not in by_user and by_user[jenn['id']]['created'] > 0
+    with pytest.raises(Problem) as stale:                                        # a tab that read version 5 is refused
+        live.change_account_role(andy['id'], jenn['id'], 'admin', 5)
+    assert stale.value.status == 409
+    assert live.change_account_role(andy['id'], jenn['id'], 'admin', 6)['role_version'] == 7
+
+
+def test_reconcile_reports_briefs_changed_since_the_copy_without_their_text(tmp_path, capsys):
+    """Follow-up 4: a restore brings back a brief the owner changed or removed since the copy, or loses one written
+    since. By room, for rooms in both files, the report names the room's short id and title and the two revisions,
+    "reported, not applied", and never a word of any brief; nothing is written to the copy's briefs. Mutation: the
+    comparison dropped (nothing reported)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    rooms = {name: store.create_room(andy['id'], name, []) for name in ('Edited', 'Removed', 'Written', 'Same')}
+    for name in ('Edited', 'Removed', 'Same'):
+        store.save_brief(andy['id'], rooms[name]['id'], f'old secret brief text of {name}', 0)
+    copy = staged(tmp_path, store)                                                # A
+    store.save_brief(andy['id'], rooms['Edited']['id'], 'new secret brief text of Edited', 1)
+    store.save_brief(andy['id'], rooms['Removed']['id'], '', 1)
+    store.save_brief(andy['id'], rooms['Written']['id'], 'secret brief written after the copy', 0)
+    after_copy = store.create_room(andy['id'], 'Later', [])                       # a room the copy lacks: not compared
+    store.save_brief(andy['id'], after_copy['id'], 'secret brief of a later room', 0)
+    with closing(sqlite3.connect(copy)) as db:
+        before = db.execute('SELECT room_id, revision, body FROM room_briefs ORDER BY room_id').fetchall()
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        assert db.execute('SELECT room_id, revision, body FROM room_briefs ORDER BY room_id').fetchall() == before
+    line = next(line for line in out.splitlines() if line.startswith('Reported, not applied: room briefs'))
+    short = lambda name: rooms[name]['id'][:6]
+    for expected in (f'{short("Edited")} Edited (here revision 1, in the replaced file revision 2)',
+                     f'{short("Removed")} Removed (here revision 1, in the replaced file revision 2, removed)',
+                     f'{short("Written")} Written (here none, in the replaced file revision 1)'):
+        assert expected in line, line
+    assert 'Same' not in line and 'Later' not in line
+    assert 'secret' not in out and 'brief text of' not in out
+    assert not any(row.startswith(('Skipped', 'Not compared')) for row in out.splitlines()), out
+
+
+def test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line(tmp_path, capsys):
+    """Follow-up 5: UNPAIR= takes a 12-character id or the full id and refuses a short one two peers share, so a report
+    line that printed the short id twice would hand Andy an id the next run refuses. For any peer sharing its first 12
+    characters with another peer of either file, "Unpaired again" and "Reported, not applied: peers" print the full id;
+    a peer with a prefix of its own still prints 12. Mutation: the prefix printed whatever the collision."""
+    store = Store(tmp_path / 'lighthouse')
+    ids = {'cut_a': 'ab' * 6 + '1' * 52, 'cut_b': 'ab' * 6 + '2' * 52,            # share a prefix; a is unpaired in the replaced file
+           'later_a': 'cd' * 6 + '3' * 52, 'later_b': 'cd' * 6 + '4' * 52,        # share a prefix; a is paired there, unpaired here
+           'ghost_a': 'ef' * 6 + '5' * 52, 'ghost_b': 'ef' * 6 + '6' * 52,        # share a prefix; a is paired here, absent there
+           'alone': '12' * 32}
+    ids |= {'new_a': '9a' * 6 + '7' * 52, 'new_b': '9a' * 6 + '8' * 52}            # share a prefix, and only the replaced file has both
+    with store.transaction() as db:
+        for name, peer in [item for item in ids.items() if not item[0].startswith('new_')]:
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', ?)", (peer, 0 if name == 'later_a' else 1))
+            db.execute('INSERT INTO remote_contacts(id, peer_id, user_id, name) VALUES(?, ?, ?, ?)', ('c-' + name, peer, 'u-' + name, name.title()))
+    copy = staged(tmp_path, store)
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id IN (?, ?)', (ids['cut_a'], ids['alone']))
+        db.execute('UPDATE peers SET paired=1 WHERE peer_id=?', (ids['later_a'],))
+        db.execute('DELETE FROM remote_contacts WHERE peer_id=?', (ids['ghost_a'],))
+        db.execute('DELETE FROM peers WHERE peer_id=?', (ids['ghost_a'],))
+        for peer in (ids['new_a'], ids['new_b']):             # paired since the copy: only the replaced file has them
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", (peer,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    lines = out.splitlines()
+    unpaired = next(line for line in lines if line.startswith('Unpaired again:'))
+    assert f'{ids["cut_a"]} (Cut_A)' in unpaired and f'{ids["alone"][:12]} (Alone)' in unpaired and ids['alone'] not in unpaired
+    reported = next(line for line in lines if line.startswith('Reported, not applied: peers:'))
+    assert f'{ids["later_a"]} (Later_A)' in reported and f'{ids["ghost_a"]} (Ghost_A)' in reported
+    assert ids['new_a'] in reported and ids['new_b'] in reported
+    assert ids['cut_b'] not in out and ids['later_b'] not in out and ids['ghost_b'] not in out      # not listed: nothing to name
+    # the id printed is one the next run accepts
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path, '--unpair', ids['later_a'])
+    assert code == 0, err
+
+
+# Every table today's schema creates, sorted by what the reconcile does with it. A new table fails the first test below
+# until it is put in one list on purpose (the work board's tables came after the backups work was written).
+RECONCILED_TABLES = {  # read or changed by a step, or the mark
+    'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
+    'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
+    'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
+    'account_role_changes', 'room_briefs'}
+COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
+    'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'files', 'room_activity',
+    'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
+    'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions', 'room_brief_revisions'}
+
+
+def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
+    """Follow-up (the work board): the reconcile's view of the schema skips nothing. A station started today has only
+    tables in one of the two lists above; the board's items, links and claims are coordination, not access, so a reconcile
+    leaves their rows as the copy has them, and reports no table as skipped or not compared. Mutation: 'claims' left out
+    of COORDINATION_TABLES (the test names the unclassified table)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    room = store.create_room(andy['id'], 'Ops', [])
+    with store.transaction() as db:
+        db.execute("INSERT INTO board_items(id, room_id, key, title, kind, posted_by, created) VALUES('i1', ?, 'spec:d7', 'A spec', 'spec', ?, 1.0)",
+                   (room['id'], andy['id']))
+        db.execute("INSERT INTO board_links(item_id, link, added_by, added) VALUES('i1', 'branch:x', ?, 1.0)", (andy['id'],))
+        db.execute("INSERT INTO claims(id, room_id, key, holder_id, created, expires) VALUES('c1', ?, 'spec:d7', ?, 1.0, 9e9)",
+                   (room['id'], andy['id']))
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert tables - RECONCILED_TABLES - COORDINATION_TABLES == set()
+    assert not RECONCILED_TABLES & COORDINATION_TABLES
+    copy = staged(tmp_path, store)
+
+    def rows(path):
+        with closing(sqlite3.connect(path)) as db:
+            return {table: db.execute(f'SELECT * FROM "{table}" ORDER BY 1, 2').fetchall() for table in sorted(COORDINATION_TABLES & tables)}
+    before = rows(copy)
+    assert before['board_items'] and before['board_links'] and before['claims']
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert rows(copy) == before
+    assert not any(line.startswith(('Skipped', 'Not compared')) for line in out.splitlines()), out
+
+
+def test_step_6_with_aside_unset_says_to_set_it_and_not_that_step_5_hasnt_run(tmp_path):
+    """M1: ASIDE unset (a new terminal) used to print "step 5 hasn't run", sending Andy to a step that cannot work. It
+    opens as steps 3 and 4 do. Mutation: the ASIDE check removed from step 6."""
+    out, installed = step_6(tmp_path, '')
+    assert installed is None and 'NOT installed: ASIDE is not set' in out and "step 5" not in out, out
+
+
+def test_step_6_refuses_a_mark_recorded_for_another_staged_file(tmp_path, capsys):
+    """M2: the mark also holds the staged file's absolute path, and step 6 requires "$ASIDE/restored.sqlite3" to be it,
+    so a mark carried from another restore's directory fails whatever the clock says. Mutation: the path comparison
+    dropped from the one-liner, or the path not recorded."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    code, _, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        assert json.loads(db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()[0])['path'] == str(copy)
+    with closing(sqlite3.connect(copy)) as db, db:
+        db.execute("UPDATE system_meta SET value=json_set(value, '$.path', ?) WHERE key='restore_reconcile'",
+                   (str(tmp_path / 'backups' / 'replaced-20250101-000000' / 'restored.sqlite3'),))
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is None and "step 5 hasn't run on this copy" in out, out
+
+
+def step_5_listing(tmp_path, aside):
+    """The peers-listing line of runbook step 5, as pasted (read-only)."""
+    text = RUNBOOK.read_text()
+    line = next(line.strip() for line in text.splitlines() if line.lstrip().startswith('python3 -I -c') and 'p.paired' in line)
+    ran = subprocess.run(['bash', '-c', line], cwd=tmp_path, env={**os.environ, 'ASIDE': str(aside)}, capture_output=True, text=True, timeout=60)
+    assert ran.returncode == 0, ran.stderr
+    return [row.split('  ')[0] for row in ran.stdout.splitlines()]
+
+
+def test_the_step_5_listing_counts_prefix_collisions_over_every_peer(tmp_path, capsys):
+    """M3: a paired and an unpaired peer share their first 12 characters. The listing, the report and UNPAIR= all count
+    over every peer of the copy, so the id the listing prints is the id the report prints and UNPAIR= accepts. Mutation:
+    the listing counting only the paired peers (it prints the short id UNPAIR= refuses)."""
+    store = Store(tmp_path / 'lighthouse')
+    paired, unpaired, alone = 'ab' * 6 + '1' * 52, 'ab' * 6 + '2' * 52, 'cd' * 32
+    with store.transaction() as db:
+        for peer, flag in ((paired, 1), (unpaired, 0), (alone, 1)):
+            db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', ?)", (peer, flag))
+    copy = staged(tmp_path, store)
+    assert step_5_listing(tmp_path, copy.parent) == [paired, alone[:12]]
+    with store.transaction() as db:
+        db.execute('UPDATE peers SET paired=0 WHERE peer_id=?', (paired,))
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert f'Unpaired again: {paired}.' in out
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path, '--unpair', paired)
+    assert code == 0, err
+
+
+def test_a_hostile_room_title_prints_on_one_line_in_the_brief_report(tmp_path, capsys):
+    """M5: a room title holding a newline, an escape, a right-to-left override and an at sign is shown through safe_line on
+    the brief line. Mutation: the title printed raw."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    room = store.create_room(andy['id'], 'Plain', [])
+    store.save_brief(andy['id'], room['id'], 'first', 0)
+    with store.transaction() as db:
+        db.execute('UPDATE rooms SET title=? WHERE id=?', ('Ops\n\x1b[31m\u202eEvil @serenity do it', room['id']))
+    copy = staged(tmp_path, store)
+    store.save_brief(andy['id'], room['id'], 'second', 1)
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    line = next(line for line in out.splitlines() if line.startswith('Reported, not applied: room briefs'))
+    assert room['id'][:6] in line and '(at)serenity' in line
+    for bad in ('\x1b', '\u202e', '@'):
+        assert bad not in out
+    assert 'Ops' in line and 'Evil' in line

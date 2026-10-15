@@ -490,3 +490,66 @@ def test_station_alerts_shows_the_queue_and_what_is_held_back(tmp_path, capsys):
     out = capsys.readouterr().out
     assert f'stopped  superyak-alerttest.service  {first["id"]}' in out
     assert 'superyak-alerttest.service: 3 stops held back since ' in out
+
+
+def hand_made(queue, name, **fields):
+    """An alert file as a person might write it: the shape of ours with fields changed."""
+    body = {'id': name, 'unit': 'superyak-odo.service', 'kind': 'down', 'at': time.time(), 'text': 'Odo gave up'} | fields
+    (queue / f'{name}.json').write_text(json.dumps(body).replace('"INF"', 'Infinity').replace('"-INF"', '-Infinity').replace('"NAN"', 'NaN'))
+    return queue / f'{name}.json'
+
+
+def test_an_alert_with_a_non_finite_time_is_skipped_and_cleaned(tmp_path, capsys):
+    """Follow-up 6 (I1, M4, M5): a hand-made "at" that is Infinity, -Infinity, NaN, true, an integer too big for a float,
+    1e300 or more than a day ahead is not an alert. queued() skips it, so station-alerts (describe_queue), station-notices
+    and clean() don't raise on it (Odo runs station-notices with check=True), and clean() removes it once the file is
+    over 30 days old by its own mtime, as it never could by "at". A valid, recent alert whose file is old stays.
+    Mutations: the number check dropped (queued skips nothing); `_number` replaced by isfinite() alone (the big integer
+    raises OverflowError); the bool exclusion dropped (true is read as 1); the day-ahead rule dropped (1e300 and
+    tomorrow's-after stay queued); clean() deleting a kept alert."""
+    store = Store(tmp_path / 'lighthouse')
+    queue = store.data_dir / 'alerts'
+    now = time.time()
+    good = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, now)
+    values = {'INF': 'INF', 'NINF': '-INF', 'NAN': 'NAN', 'BIG': 10 ** 400, 'TRUE': True, 'HUGE': 1e300, 'AHEAD': now + 2 * 86400}
+    odd = {name: hand_made(queue, f'{index:012x}', at=value) for index, (name, value) in enumerate(values.items(), 1)}
+    recent_but_old_file = hand_made(queue, 'f' * 12, at=now - 60)           # valid and recent; only its file is old
+    old = now - 40 * 86400
+    os.utime(recent_but_old_file, (old, old))
+    assert [alert['id'] for alert in alerts.queued(queue)] == ['f' * 12, good['id']]
+    assert good['id'] in alerts.describe_queue(queue, time.time())
+    code, out, err = notices(capsys, store.data_dir)
+    assert code == 0 and [notice['id'] for notice in json.loads(out)] == ['alert-' + 'f' * 12, f'alert-{good["id"]}'], err
+    alerts.clean(queue, time.time())
+    assert all(path.exists() for path in odd.values())                  # fresh files may be mid-write: not cleaned yet
+    for path in odd.values():
+        os.utime(path, (old, old))
+    alerts.clean(queue, time.time())
+    assert not any(path.exists() for path in odd.values())
+    assert recent_but_old_file.exists() and (queue / f'{good["id"]}.json').exists()      # a valid alert is never cleaned by its mtime
+
+
+def test_an_alert_whose_text_sanitises_to_nothing_is_not_listed(tmp_path, capsys):
+    """Follow-up 6: text of only invisible characters shows as an empty notice. listed() skips it. Mutation: the empty
+    check dropped (the notice is listed with empty text)."""
+    store = Store(tmp_path / 'lighthouse')
+    queue = store.data_dir / 'alerts'
+    good = alerts.record(queue, 'superyak-door.service', 'stopped', CRASH, time.time())
+    hand_made(queue, 'dddddddddddd', text='​‮ ​')
+    hand_made(queue, 'eeeeeeeeeeee', text='')
+    code, out, err = notices(capsys, store.data_dir)
+    assert code == 0 and [notice['id'] for notice in json.loads(out)] == [f'alert-{good["id"]}']
+    assert all(notice['text'] for notice in alerts.listed(queue, time.time()))
+
+
+def test_an_empty_newest_alert_does_not_take_one_of_the_twenty_places(tmp_path, capsys):
+    """M5: twenty stopped alerts and, newest of all, one whose text sanitises to nothing. The empty one is dropped before
+    the cut to the 20 newest, so all twenty real ones are listed. Mutation: the filter after the cut (nineteen listed)."""
+    store = Store(tmp_path / 'lighthouse')
+    queue = store.data_dir / 'alerts'
+    now = time.time()
+    queue.mkdir(mode=0o700)
+    real = [hand_made(queue, f'{index:012x}', kind='stopped', at=now - 1000 + index, text=f'stop {index}') for index in range(20)]
+    hand_made(queue, 'f' * 12, kind='stopped', at=now - 1, text='\u200b')
+    listed = alerts.listed(queue, now)
+    assert [item['text'] for item in listed] == [f'stop {index}' for index in range(20)] and len(real) == 20
