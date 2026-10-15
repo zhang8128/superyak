@@ -1,9 +1,9 @@
-"""Run tickets: just before a run, the station decides its mode and records it (spec A, section 4). Step 1 of the
-build moves today's rule here unchanged: the ship's owner, mentioning it, gets a builder; everyone else gets a
-read-only run. Later steps add grants and directs to the same decision."""
+"""Run tickets: just before a run, the station decides its mode and records it (spec A, section 4). The ship's owner,
+mentioning it, gets a builder; so does a person holding a grant over it (spec A step 3, G15); everyone else gets a
+read-only run. Step 5 adds directs to the same decision."""
 import json
 import math
-from .common import Problem, require, text, uid
+from .common import REPLACED_ROOMS, Problem, require, text, uid
 from .instructions import render_blocks
 from .ships import safe_line
 
@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS tickets(id TEXT PRIMARY KEY, ship_id TEXT NOT NULL RE
 CREATE TABLE IF NOT EXISTS message_sources(message_id TEXT PRIMARY KEY REFERENCES messages(id), ticket_id TEXT UNIQUE NOT NULL REFERENCES tickets(id));
 CREATE TABLE IF NOT EXISTS deferrals(ship_id TEXT NOT NULL REFERENCES users(id), message_id TEXT NOT NULL REFERENCES messages(id), first_deferred REAL NOT NULL, notice_posted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(ship_id, message_id));
 '''
+
+
+def _in_room(db, room_id, user_id):
+    return db.execute('SELECT 1 FROM room_members WHERE room_id=? AND user_id=?', (room_id, user_id)).fetchone() is not None
+
+
+def _made_by(grant, created):
+    """G15: the grant was made no later than the message (equal times count). A `created` that isn't a number can't be
+    compared: it passes here, and _mention_stale reads it `old`, so the read's basis says old, as an owner's would."""
+    return not isinstance(created, (int, float)) or grant['created'] <= created
 
 
 class Tickets:
@@ -61,17 +71,20 @@ class Tickets:
                 if self._ticket_running(existing):
                     return self._decided(db, existing, station, decisions)
                 raise Problem(409, 'This message has already been answered')
-            mode, basis, root = self._mode_for(db, ship, message)
+            mode, basis, root, chain = self._mode_for(db, ship, message)
             if decisions and mode == 'read' and self._writable_on_watch(db, actor):
                 deferred = self._defer(db, ship, message)
                 if deferred is not None:
                     return deferred
             held = db.execute('SELECT first_deferred FROM deferrals WHERE ship_id=? AND message_id=?', (actor, message_id)).fetchone()
             db.execute('DELETE FROM deferrals WHERE ship_id=? AND message_id=?', (actor, message_id))
-            key = uid()
+            key, now = uid(), self.clock()
             bound = json.dumps([[l['layer_id'], l['revision']] for l in self._binding_layers(db, actor)])
-            db.execute('INSERT INTO tickets(id,ship_id,message_id,mode,basis,root_id,instructions,status,created,first_deferred) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                       (key, actor, message_id, mode, basis, root, bound, 'running', self.clock(), held['first_deferred'] if held is not None else None))
+            db.execute('INSERT INTO tickets(id,ship_id,message_id,mode,basis,root_id,chain,instructions,status,created,first_deferred) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                       (key, actor, message_id, mode, basis, root, json.dumps([link['id'] for link in chain]), bound, 'running',
+                        now, held['first_deferred'] if held is not None else None))
+            for link in chain:  # G16: one budget use per link, in the ticket's own transaction
+                db.execute('INSERT INTO budget_uses(grant_id,ticket_id,created) VALUES(?,?,?)', (link['id'], key, now))
             return self._decided(db, db.execute('SELECT * FROM tickets WHERE id=?', (key,)).fetchone(), station, decisions)
 
     def _decided(self, db, row, station, decisions):
@@ -84,15 +97,46 @@ class Tickets:
         return decided
 
     def _mode_for(self, db, ship, message):
-        """Spec A rule 2, bounded (fresh owner mentions spec): the owner's own fresh mention builds; an old or answered
-        one reads, its basis saying why; everything else reads."""
+        """Spec A section 4, rules 2 and 3 (step 3's basis grant, G15), bounded by fresh owner mentions: the owner's own
+        fresh mention builds; so does a person's fresh mention under the oldest grant that covers it. An old or answered
+        mention that would otherwise build reads, its basis saying why; everything else reads, basis none. Returns
+        (mode, basis, root_id, chain), chain being the spent grant's rows, root first."""
         author = require(db.execute('SELECT id,kind FROM users WHERE id=?', (message['author_id'],)).fetchone())
         mentioned = db.execute('SELECT 1 FROM mentions WHERE message_id=? AND user_id=?', (message['id'], ship['id'])).fetchone()
         owner = ship['owner_id']
-        if owner and mentioned and author['kind'] == 'person' and author['id'] == owner:
+        if not (owner and mentioned and author['kind'] == 'person'):
+            return 'read', 'none', None, []
+        if author['id'] == owner:
             stale = self._mention_stale(db, ship['id'], message)
-            return ('build', 'owner', owner) if stale is None else ('read', stale, None)
-        return 'read', 'none', None
+            return ('build', 'owner', owner, []) if stale is None else ('read', stale, None, [])
+        chain = self._spendable_grant(db, ship, message)
+        if chain is None:
+            return 'read', 'none', None, []
+        stale = self._mention_stale(db, ship['id'], message)  # G15: age and answered decide only the read's basis
+        return ('build', 'grant', chain[0]['issuer_id'], chain) if stale is None else ('read', stale, None, [])
+
+    def _spendable_grant(self, db, ship, message):
+        """G15, every condition but the mention's age and answer (the caller asks _mention_stale): the chain, root first,
+        of the oldest grant (by created, then id) that lets this message's author direct this ship in this room now, or
+        None. issue_ticket has already refused (404) a ship that isn't in the room."""
+        room_id, author_id, now = message['room_id'], message['author_id'], self.clock()
+        if (':' in room_id or self._breakout(db, room_id) is not None
+                or db.execute(f'SELECT 1 FROM rooms WHERE id=? AND id IN ({REPLACED_ROOMS})', (room_id,)).fetchone()
+                or not _in_room(db, room_id, author_id)):
+            return None  # R must be local, not a breakout and current, and the author still in it
+        if self._ship_grant_builds(db, ship['id'], now) >= self._grant_policy(db)['builds_per_ship_per_day']:
+            return None  # the per-ship cap, under every grant; owner builds never count
+        covered = self._rooms_back(db, room_id)
+        for grant in db.execute('SELECT * FROM grants WHERE grantee_id=? ORDER BY created, id', (author_id,)).fetchall():
+            rooms = json.loads(grant['rooms'])
+            if (ship['id'] not in json.loads(grant['targets']) or 'direct' not in json.loads(grant['actions'])
+                    or (rooms != '*' and not any(key in rooms for key in covered)) or not _made_by(grant, message['created'])):
+                continue
+            chain = self._grant_chain(db, grant)[::-1]  # root first
+            if (_in_room(db, room_id, chain[0]['issuer_id']) and all(link['confirm'] != 'each' for link in chain)
+                    and self._grant_validity(db, grant)[0]):
+                return chain
+        return None
 
     def _answered(self, db, ship_id, message_id):
         """R7: a message by this ship whose reply_to is the mention. A kind message never counts, and the system
