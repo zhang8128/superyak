@@ -105,7 +105,7 @@ class PeerStore:
         replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply'", (row['resource_id'],row['origin'])).fetchall()
         # Every reply this station sent proves its own words, withdrawn ones too: a reply can reach the origin and then
         # be withdrawn here when its acknowledgement was lost (review of e9a6712). Only queued ones are shown below.
-        self._unverified_local_authors(replies, row['origin'], result['messages'], actor)
+        self._unverified_local_authors(db, replies, row['origin'], result['messages'], actor)
         for delivery in replies:
             meta = json.loads(delivery['metadata'])
             if meta['actor'] != actor or delivery['status'] == 'withdrawn':
@@ -122,14 +122,12 @@ class PeerStore:
             result.pop('messages', None)
         return result
 
-    def _own_peer_id(self):
-        """This station's peer id, read from its identity file once: the id never changes for a data directory."""
-        if not hasattr(self, '_peer_id_cache'):
-            from .identity import PeerIdentity
-            self._peer_id_cache = PeerIdentity.load_or_create(self.data_dir).peer_id
-        return self._peer_id_cache
+    def _own_peer_id(self, db=None):
+        """This station's peer id, from the store's one identity loader (G4a). A read that fails is not kept. Inside a
+        transaction pass its db (see Signatures._station_identity)."""
+        return self._station_identity(db).peer_id
 
-    def _unverified_local_authors(self, replies, origin, messages, actor):
+    def _unverified_local_authors(self, db, replies, origin, messages, actor):
         """The origin hosts its room and can say anything in it, but never as one of this station's users. A message
         attributed to a local user (<this peer>:<id>) stands only when this station sent that exact reply, its
         room.reply outbox row (author, client message id and body), and only once: an honest origin holds one copy
@@ -139,7 +137,7 @@ class PeerStore:
         message, and with a replayed copy it chooses which copy comes first (PROTOCOL.md, room.message).
         A copy that stands and matches the viewer's own row shows "delivered": the origin holds those exact words, so
         the reply arrived even if its acknowledgement was lost. Another local user's copy stands with no state here."""
-        own = self._own_peer_id() + ':'
+        own = self._own_peer_id(db) + ':'
         sent = {}  # (author, client message id, body) -> whether the row is the viewer's
         for delivery in replies:
             data = json.loads(delivery['metadata'])

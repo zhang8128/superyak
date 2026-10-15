@@ -290,3 +290,116 @@ def test_a_notes_revision_has_no_signed_record_and_a_withdrawn_layers_still_does
     assert clients[0].post(f'/api/layers/{law["id"]}/withdraw').status_code == 200
     kept = clients[0].get(f'/api/layers/{law["id"]}/revisions/1/signed')
     assert kept.status_code == 200 and verify_record(card_of(store._station_identity()), kept.json()['record'], kept.json()['signature'])
+
+
+def signed_station(tmp_path):
+    """A station with one signed revision, a person, a room, a waiting docking and the wormhole ship, so each station
+    command below has something to do: (store, owner, ship, room, docking)."""
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    owner = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    ship, _ = docked(store, owner['id'], 'serenity')
+    law = store.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Law', 'body': 'Be kind.', 'audience_users': [ship['id']]})
+    store.activate_layer(owner['id'], law['id'], law['version'])
+    store.create_station_ship('wormhole', 'Wormhole')
+    room = store.create_room(owner['id'], 'Ops', [])
+    return store, owner, ship, room, store.start_docking('defiant', 'bazzite')
+
+
+def run_cli(capsys, *argv):
+    """The CLI's exit code, stdout and stderr."""
+    from superyak_peer.__main__ import main
+    try:
+        main([str(arg) for arg in argv])
+        code = 0
+    except SystemExit as stopped:
+        code = stopped.code
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_the_door_and_the_station_commands_work_while_the_identity_is_damaged(tmp_path, capsys):
+    """G4a, test 4a: a damaged identity.json stops the lighthouse alone. The door takes access requests, and each
+    station command that never signs starts and does its work. A revision left unsigned shows they skip the backfill."""
+    from fastapi.testclient import TestClient
+    from superyak_peer.app import create_app
+    from superyak_peer.db import Store
+    from superyak_peer.door import create_door
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    late = store.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Later', 'body': 'x', 'audience_users': [ship['id']]})
+    store.activate_layer(owner['id'], late['id'], late['version'])
+    with store.transaction() as db:  # unsigned, as from before merge 3a: a backfill here would need the key
+        db.execute('DELETE FROM revision_signatures WHERE layer_id=?', (late['id'],))
+    (store.data_dir / 'identity.json').write_text('not json')
+    with pytest.raises(ValueError, match='identity.json'):
+        Store(store.data_dir)
+    with pytest.raises(ValueError, match='identity.json'):
+        create_app(store.data_dir, allowed_origins=['http://testserver'])
+    door = create_door(store.data_dir)
+    assert getattr(door.state.store, '_identity', None) is None
+    asked = TestClient(door, base_url='https://door.example:8443').post(
+        '/api/access-requests', json={'name': 'Eve', 'contact': 'eve@example.org'})
+    assert asked.status_code == 201, asked.text
+    data = ['--data-dir', store.data_dir]
+    (tmp_path / 'rotation').mkdir()
+    for argv in (['station-pending', *data], ['station-notices', *data],
+                 ['station-notices', *data, '--backup-dir', tmp_path / 'rotation'],  # the branch that lists alerts too
+                 ['station-approve', *data, '--id', docking['id'][:8], '--as', 'andy'],
+                 ['station-deny', *data, '--id', asked.json()['id'][:8], '--as', 'andy'],
+                 ['station-rooms', *data, '--as', 'andy'], ['station-bridge', *data, '--id', room['id'][:8], '--as', 'andy']):
+        code, out, err = run_cli(capsys, *argv)
+        assert code == 0 and 'could not be read' not in err, (argv[0], err)
+    bridged = next(listed for listed in Store(store.data_dir, signing=False).station_rooms('andy') if listed['bridged'])
+    code, out, err = run_cli(capsys, 'station-unbridge', *data, '--id', bridged['id'][:8], '--as', 'andy')
+    assert code == 0, err
+    with Store(store.data_dir, signing=False).transaction() as db:
+        assert db.execute('SELECT count(*) FROM revision_signatures WHERE layer_id=?', (late['id'],)).fetchone()[0] == 0
+
+
+def test_the_door_holds_no_key_even_when_the_identity_is_sound(tmp_path):
+    from superyak_peer.door import create_door
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    assert (store.data_dir / 'identity.json').is_file()
+    assert getattr(create_door(store.data_dir).state.store, '_identity', None) is None
+
+
+def test_a_store_opened_without_signing_still_signs_what_it_writes(tmp_path):
+    """G4a: signing=False holds no key at the start, but an activation through it is still signed, and the first
+    signature on a station with no signed records creates the identity (G4)."""
+    from superyak_peer.db import Store
+    quiet = Store(tmp_path / 'station', signing=False)
+    owner = quiet.create_user('owner', 'Owner', 'long-password')
+    ship, _ = docked(quiet, owner['id'], 'serenity')
+    layer = quiet.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Law', 'body': 'Be kind.', 'audience_users': [ship['id']]})
+    assert not (quiet.data_dir / 'identity.json').exists()
+    quiet.activate_layer(owner['id'], layer['id'], layer['version'])
+    card = card_of(PeerIdentity.load_or_create(quiet.data_dir))
+    assert verify_record(card, stored_record(quiet, layer['id'], 1), signature_rows(quiet)[(layer['id'], 1)])
+
+
+def test_own_peer_id_reads_the_stores_one_identity(tmp_path):
+    """G4a: remote rooms read this station's peer id through _station_identity(), the one loader."""
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    other = PeerIdentity.load_or_create(tmp_path / 'other')
+    store._identity = other  # whatever the store holds is what _own_peer_id answers
+    assert store._own_peer_id() == other.peer_id
+
+
+def test_own_peer_id_inside_a_room_read_does_not_stall(tmp_path):
+    """G4a, test 4c: a remote room's read runs in a transaction and asks for this station's peer id; on a station without
+    an identity that creates it through the caller's connection, never a second BEGIN IMMEDIATE that waits 30 s."""
+    import json
+    import time
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy')
+    peer = 'ab' * 32
+    with store.transaction() as db:
+        db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", (peer,))
+        db.execute("INSERT INTO inbox(origin, resource_id, kind, recipient, revision, actor, payload) "
+                   "VALUES(?, 'r1', 'room', ?, 1, 'remote-user', ?)", (peer, andy['id'], json.dumps({'title': 'Theirs'})))
+    assert not (store.data_dir / 'identity.json').exists()
+    started = time.monotonic()
+    assert store.get_room(andy['id'], f'{peer}:r1')['title'] == 'Theirs'
+    assert time.monotonic() - started < 10 and (store.data_dir / 'identity.json').is_file()

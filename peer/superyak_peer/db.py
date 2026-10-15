@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEX
 '''
 
 class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures):
-    def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None):
+    def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True):
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
         self.share_link_file = Path(share_link_file) if share_link_file else None
@@ -82,8 +82,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
                        "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))
         self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
         self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
-        self._load_station_identity()  # spec A step 3, G4: a station that can't load its identity doesn't start
-        self._backfill_revision_signatures()  # G5: after the schema, at every start
+        if signing:  # G4a: the door and the station commands that never sign hold no key, check none and backfill nothing
+            self._load_station_identity()  # spec A step 3, G4: a station that can't load its identity doesn't start
+            self._backfill_revision_signatures()  # G5: after the schema, at every start
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):

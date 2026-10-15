@@ -282,16 +282,16 @@ def main(argv=None):
             print(f'Station ship {ship["username"]} created. Private config: {args.config}')
         elif args.command == 'station-pending':
             import time
-            print(describe_pending(Store(args.data_dir).station_pending(), time.time(), args.person))
+            print(describe_pending(Store(args.data_dir, signing=False).station_pending(), time.time(), args.person))
         elif args.command in ('station-approve', 'station-deny'):
             approve = args.command == 'station-approve'
-            item, result = Store(args.data_dir).station_decide(args.person, args.id, approve)
+            item, result = Store(args.data_dir, signing=False).station_decide(args.person, args.id, approve)
             print(describe_decision(item, result, args.person, approve))
         elif args.command == 'station-rooms':
-            print(describe_rooms(args.person, Store(args.data_dir).station_rooms(args.person)))
+            print(describe_rooms(args.person, Store(args.data_dir, signing=False).station_rooms(args.person)))
         elif args.command in ('station-bridge', 'station-unbridge'):
             bridge = args.command == 'station-bridge'
-            room, changed = Store(args.data_dir).station_bridge(args.person, args.id, bridge)
+            room, changed = Store(args.data_dir, signing=False).station_bridge(args.person, args.id, bridge)
             print(describe_bridge(room, changed, bridge))
         elif args.command == 'station-notices':
             import time
@@ -299,10 +299,10 @@ def main(argv=None):
             from .backups import default_backup_dir
             extra = notices_beside(args.data_dir, args.backup_dir or default_backup_dir(args.data_dir), time.time())
             if extra is None:  # R15: neither directory, so exactly today's output and today's failures
-                print(json.dumps(Store(args.data_dir).station_notices(), indent=2))
+                print(json.dumps(Store(args.data_dir, signing=False).station_notices(), indent=2))
             else:
                 try:
-                    listed = Store(args.data_dir).station_notices()
+                    listed = Store(args.data_dir, signing=False).station_notices()
                 except Exception as error:  # noqa: BLE001 - S10: a damaged store must not silence the alerts
                     print(f'station-notices: listing the queued alerts only; the store could not be read ({type(error).__name__})',
                           file=sys.stderr)

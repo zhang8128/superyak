@@ -23,10 +23,15 @@ class Signatures:
                 raise ValueError(f'The station identity {path} could not be loaded ({type(error).__name__}); '
                                  'the station will not start until it is restored') from error
 
-    def _station_identity(self):
-        """The identity, created if missing. Only a signing transaction creates it: that holds the dispatch gate, so
-        two processes can't both create it, and a failed create rolls the signed write back (G4)."""
+    def _station_identity(self, db=None):
+        """The station's one identity loader (G4, G4a): loaded once, or created if missing, always inside a transaction
+        that holds the dispatch gate, so two processes can't both create it and a failed create rolls the caller's
+        signed write back. A caller inside a transaction passes its db: a second BEGIN IMMEDIATE on a new connection
+        would wait out SQLite's timeout (the gate is reentrant; SQLite's write lock is not). With none, it opens one."""
         if getattr(self, '_identity', None) is None:
+            if db is None:
+                with self.transaction() as own:
+                    return self._station_identity(own)
             self._identity = PeerIdentity.load_or_create(self.data_dir)
         return self._identity
 
@@ -38,7 +43,7 @@ class Signatures:
         snapshot = json.loads(row['snapshot']) if row else {}
         if snapshot.get('kind') != 'instructions':  # the revision's own kind, never the layer's current draft (S3)
             return None
-        return {'kind': 'instructions-revision', 'station': self._station_identity().peer_id, 'layer_id': layer_id,
+        return {'kind': 'instructions-revision', 'station': self._station_identity(db).peer_id, 'layer_id': layer_id,
                 'revision': revision, 'owner_id': row['owner_id'], 'title': snapshot['title'], 'body': snapshot['body'],
                 'audience_users': snapshot['audience_users'], 'policy': None, 'created': row['created']}
 
@@ -47,7 +52,7 @@ class Signatures:
         record = self._revision_record(db, layer_id, revision)
         if record is not None:
             db.execute('INSERT INTO revision_signatures(layer_id, revision, signature) VALUES(?,?,?)',
-                       (layer_id, revision, self._station_identity().sign_record(record)))
+                       (layer_id, revision, self._station_identity(db).sign_record(record)))
 
     def _backfill_revision_signatures(self):
         """G5: at every start, each instructions revision without a signature (written before this release) is
@@ -69,5 +74,5 @@ class Signatures:
                 raise Problem(404, 'Not found')
             row = require(db.execute('SELECT signature FROM revision_signatures WHERE layer_id=? AND revision=?',
                                      (layer_id, revision)).fetchone())
-            return {'station': self._station_identity().peer_id, 'record': self._revision_record(db, layer_id, revision),
+            return {'station': self._station_identity(db).peer_id, 'record': self._revision_record(db, layer_id, revision),
                     'signature': row['signature']}
