@@ -1,5 +1,6 @@
 """Remote contacts and received resources never become local accounts."""
 import json
+import math
 import re
 from .common import Problem, require, uid, text, ids, encode, linked_room_ok
 
@@ -17,6 +18,12 @@ def _stored_message_ok(m):
     return (isinstance(m, dict) and isinstance(m.get('author_id'), str) and PARTICIPANT_ID.fullmatch(m['author_id']) is not None
             and all(isinstance(m.get(k), str) for k in ('id', 'body', 'client_message_id'))
             and type(m.get('created')) in (int, float))
+
+def _stored_time(value, otherwise=0):
+    # The view's backstop for a hand-edited time, beside receive's check (remote room fields review, N3): a bool, a NaN
+    # or an infinity (JSON reads both, and the HTTP answer refuses NaN) or anything else that is not a finite number
+    # counts as `otherwise`.
+    return value if type(value) in (int, float) and math.isfinite(value) else otherwise
 
 PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
@@ -88,7 +95,8 @@ class PeerStore:
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
         if not linked_room_ok(result.get('linked_room_id'), row['origin']):  # remote room fields: the backstop for what an older receiver stored
             result['linked_room_id'] = None
-        claimed = max([result['last_activity']] + [m['created'] for m in result['messages']])
+        stored = _stored_time(result.get('last_activity'), _stored_time(result.get('created')))
+        claimed = max([stored] + [m['created'] for m in result['messages']])
         arrived = db.execute('SELECT received FROM inbox_received WHERE origin=? AND resource_id=? AND recipient=?',
                              (row['origin'], row['resource_id'], actor)).fetchone()
         if arrived is not None:  # remote room fields: the origin's claims count only up to when this station received them
