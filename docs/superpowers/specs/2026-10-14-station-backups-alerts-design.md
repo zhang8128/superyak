@@ -383,6 +383,13 @@ The decisions below rest on these facts, each checked on 2026-10-14.
     change that breaks it fails a restore test within a month.
   - **It never writes the live database.** It writes only the staged copy, and if any step fails the transaction rolls
     back and the copy is unchanged.
+  - **The mark.** As its last act inside the same transaction, the command writes a `system_meta` row, key
+    `restore_reconcile`, value `{"at": <time>, "replaced": <true when a replaced file was compared>}`, creating the
+    table (the station's own key/value table) when a copy from before the system author lacks it. A rolled-back run
+    leaves none. Runbook step 6 reads it read-only before it installs, and refuses a copy whose mark is missing or
+    older than `chosen.sqlite3` (a restored station's own backups carry the mark of their restore): "step 5 hasn't
+    run on this copy". The restore test's call writes it too, harmlessly, on its scratch copy. (Follow-up from the
+    final reviews; narrows, no new D8 round.)
 
 ### The restore runbook (`docs/station-restore.md`)
 
@@ -771,3 +778,10 @@ ship asks him once, after step 3. Rollback is a revert: the merging ship runs it
 | D8 re-check must-fix 1: "unpaired there" undefined for a peer the replaced file lacks | A `peers` row with `paired` = 0; a lacked peer is reported, not unpaired | S16, R18, Testing |
 | D8 re-check must-fix 2: the runbook kept the false `--sync` claim | Removed. With a usable replaced file the reconcile unpairs; without one, Andy unpairs by hand with the lighthouse stopped | the runbook |
 | D8 re-check should-fix 3 and 4: the unpaired report line; a Known limit | Applied | S16 ("What it prints"), Known limits |
+
+## Follow-ups (from the final reviews; each narrows, no new D8 round)
+
+| Item | Change | Where |
+|---|---|---|
+| The step-6 mark catches a skipped step 5 | The reconcile writes the mark above; step 6 refuses a copy without it | S16 ("The mark"), the runbook step 6, `test_step_6_*` |
+| R16: the existing unit files are not edited | The units test compares their bytes before and after `make station-units` and `station-units-remove` | R16, `test_station_units_install_and_remove_only_their_own_files` |

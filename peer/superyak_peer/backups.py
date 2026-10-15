@@ -620,6 +620,19 @@ def _resolve_peers(db, names):
     return found
 
 
+MARK_KEY = 'restore_reconcile'
+
+
+def _write_mark(db, old, now, report):
+    """Follow-up 1: the proof, inside the staged copy, that the reconcile ran on it. It is a system_meta row (the station's
+    own key/value table, which a copy from before the system author lacks, so it is created here), written in the
+    reconcile's transaction: a rolled-back run leaves none. Runbook step 6 reads it before it installs. It records when
+    the reconcile ran and whether a replaced file was compared; it holds no account, key or token."""
+    db.execute('CREATE TABLE IF NOT EXISTS system_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    db.execute('INSERT OR REPLACE INTO system_meta(key, value) VALUES(?, ?)',
+               (MARK_KEY, json.dumps({'at': now, 'replaced': old is not None})))
+
+
 def _title(draft):
     try:
         return json.loads(draft).get('title') or 'Untitled'
@@ -797,6 +810,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                              _close_breakouts_like_replaced, _unpair_like_replaced, _report_differences):
                     step(db, old, now, report)
             _unpair_named(db, named, report)
+            _write_mark(db, old, now, report)
             db.execute('COMMIT')
         except BaseException:
             if db.in_transaction:  # SQLite rolls back by itself on some errors (SQLITE_FULL, IOERR); the CLI reports those

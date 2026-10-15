@@ -1179,3 +1179,86 @@ def test_runbook_steps_3_and_8_put_each_watcher_back_as_it_was(tmp_path):
                         '--user enable superyak-ship-failed.service', '--user start superyak-ship-running.service',
                         '--user start superyak-ship-byhand.service', '--user start superyak-ship-crashed.service']
     assert 'make station-rooms' in calls
+
+
+def step_6(tmp_path, aside):
+    """Runbook step 6 as pasted, with HOME in tmp_path: (stdout, the installed peer.sqlite3 or None)."""
+    if not (tmp_path / 'home').exists():
+        run_runbook(tmp_path, 3, '')                     # only to lay out the shims and HOME; with ASIDE unset it does nothing
+    data = tmp_path / 'home' / '.local' / 'share' / 'superyak' / 'lighthouse'
+    data.mkdir(parents=True, exist_ok=True)
+    out, _ = run_runbook(tmp_path, 6, aside)
+    return out, (data / 'peer.sqlite3') if (data / 'peer.sqlite3').exists() else None
+
+
+def staged_for_step_6(tmp_path, store, label='replaced-20261017-120000'):
+    """Runbook steps 1, 4 and 5 up to the reconcile: chosen.sqlite3, restored.sqlite3 staged from it, peer.sqlite3 set aside."""
+    copy = staged(tmp_path, store, label)
+    chosen = copy.parent / 'chosen.sqlite3'
+    shutil.copyfile(copy, chosen)
+    return copy, chosen, set_aside(store, copy)
+
+
+def test_step_6_installs_a_reconciled_copy_and_refuses_one_step_5_never_ran_on(tmp_path, capsys):
+    """Follow-up 1: the reconcile writes a mark into the staged copy in its own transaction; step 6's one-liner reads it
+    read-only and refuses a copy without it. Mutations: the reconcile writing no mark (the reconciled copy is refused);
+    the one-liner not reading the mark (the unreconciled copy is installed)."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    before = copy.read_bytes()
+    out, installed = step_6(tmp_path, copy.parent)                      # step 5 skipped
+    assert installed is None and "NOT installed: step 5 hasn't run on this copy" in out and 'INSTALLED' not in out.split()
+    assert copy.read_bytes() == before                                 # the check wrote nothing
+    code, report, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 0, err
+    with closing(sqlite3.connect(copy)) as db:
+        mark = json.loads(db.execute("SELECT value FROM system_meta WHERE key='restore_reconcile'").fetchone()[0])
+    assert mark['replaced'] is True and abs(mark['at'] - time.time()) < 300
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is not None and out.split()[-1] == 'INSTALLED' and 'replaced file compared' in out, out
+    assert not Path(f'{copy}-journal').exists()
+
+
+def test_step_6_says_when_the_replaced_file_was_not_compared(tmp_path, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+    code, report, err = reconcile(capsys, '--db', copy)
+    assert code == 0, err
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is not None and 'replaced file NOT compared' in out and out.split()[-1] == 'INSTALLED', out
+
+
+def test_step_6_refuses_a_copy_whose_mark_is_older_than_chosen(tmp_path, capsys):
+    """A restored station's own backups carry the mark of its restore. Choosing one of those and skipping step 5 must not
+    pass: the mark has to be newer than chosen.sqlite3, which step 1 installed after the mark was written. Mutation: the
+    one-liner dropping the comparison with chosen.sqlite3."""
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    first = staged(tmp_path, store, 'replaced-20261016-120000')
+    code, _, err = reconcile(capsys, '--db', first)
+    assert code == 0, err
+    marked = Store(tmp_path / 'restored-station')
+    shutil.copyfile(first, marked.db_path)
+    later = staged(tmp_path, marked, 'replaced-20261017-120000')        # a copy of a copy that carries the old mark
+    chosen = later.parent / 'chosen.sqlite3'
+    shutil.copyfile(later, chosen)
+    out, installed = step_6(tmp_path, later.parent)                     # step 5 skipped
+    assert installed is None and "step 5 hasn't run on this copy" in out, out
+
+
+def test_a_rolled_back_reconcile_leaves_no_mark(tmp_path, monkeypatch, capsys):
+    store = Store(tmp_path / 'lighthouse')
+    store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    copy, chosen, original = staged_for_step_6(tmp_path, store)
+
+    def broken(*args):
+        raise RuntimeError('a step failed')
+    monkeypatch.setattr(backups, '_end_sessions', broken)
+    code, _, err = reconcile(capsys, '--db', copy, '--replaced', original)
+    assert code == 1
+    with closing(sqlite3.connect(copy)) as db:
+        assert not db.execute("SELECT 1 FROM system_meta WHERE key='restore_reconcile'").fetchall()
+    out, installed = step_6(tmp_path, copy.parent)
+    assert installed is None and "step 5 hasn't run" in out

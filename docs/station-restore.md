@@ -122,10 +122,13 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    and the invitations already used. Without `REPLACED=` it raises the events and mentions sequences by another
    1,000,000, which is harmless. An id that matches no peer or more than one is refused with exit 2 and nothing is changed.
 6. **Put it in place.** It installs only when no `peer.sqlite3` file is in the data directory (so never over a live
-   file that step 4 didn't set aside, nor beside another database's journal) and no journal is beside the staged copy:
+   file that step 4 didn't set aside, nor beside another database's journal), no journal is beside the staged copy,
+   and the staged copy carries the mark that step 5's reconcile writes into it as it finishes (read-only check, so a
+   skipped step 5 cannot install an unreconciled copy; it prints when step 5 ran and whether the replaced file was compared):
    ```bash
    if [ -e ~/.local/share/superyak/lighthouse/peer.sqlite3 ] || ls -d ~/.local/share/superyak/lighthouse/peer.sqlite3-* >/dev/null 2>&1; then echo 'NOT installed: a peer.sqlite3 file is already in the data directory; do not go on (read step 6)'
    elif ls -d "$ASIDE"/restored.sqlite3-* >/dev/null 2>&1; then echo 'NOT installed: a journal is beside restored.sqlite3, so a reconcile did not finish; do not go on (read step 6)'
+   elif ! python3 -I -c 'import datetime, json, os, pathlib, sqlite3, sys; db = sqlite3.connect(pathlib.Path(sys.argv[1]).absolute().as_uri() + "?mode=ro", uri=True); row = db.execute("SELECT value FROM system_meta WHERE key = ?", ("restore_reconcile",)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE name = ?", ("system_meta",)).fetchone() else None; mark = json.loads(row[0]) if row else None; ok = bool(mark) and mark["at"] >= os.stat(sys.argv[2]).st_mtime; print("step 5 ran " + datetime.datetime.fromtimestamp(mark["at"], datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ") + (", replaced file compared" if mark["replaced"] else ", replaced file NOT compared") if ok else "no step 5 mark"); sys.exit(not ok)' "$ASIDE/restored.sqlite3" "$ASIDE/chosen.sqlite3" 2>/dev/null; then echo "NOT installed: step 5 hasn't run on this copy; do not go on (read step 6)"
    elif install -m 600 "$ASIDE/restored.sqlite3" ~/.local/share/superyak/lighthouse/peer.sqlite3; then echo INSTALLED
    else echo 'NOT installed: the install failed; do not go on (read step 6)'
    fi
@@ -149,6 +152,9 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
      step 5 ran), go on from step 5.
    - **A `peer.sqlite3` file is already in the data directory, and `$ASIDE/peer.sqlite3` does not exist:** step 4 never
      ran, or `ASIDE` is not this restore's directory (set it again as at the top). Go back to step 4.
+   - **Step 5 hasn't run on this copy:** the staged copy has no mark from a finished reconcile that is newer than
+     `chosen.sqlite3`, so step 5 was skipped, or its reconcile did not exit 0. Run step 5 (both lines), go on only when
+     the reconcile exits 0, then run step 6 again. Nothing was installed.
    - **A journal is beside `restored.sqlite3`:** a reconcile was killed. Run step 5 again (its first line keeps the
      staged copy, and the reconcile rolls the killed run back), and the `UNPAIR=` run too if you made one; then step 6.
    - **The install failed:** its error says why. `$ASIDE/restored.sqlite3` must exist: set `ASIDE` again as at the top
