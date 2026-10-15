@@ -31,7 +31,7 @@ was written.
   - 3a, signed instructions revisions: 57c4322. The law's revision 1 verifies against the station's key;
   - 3b, the grants core (making, reading, revoking and signing grants, the lost-identity refusal, signing off for the
     door): d5843b8. No grant has been made yet.
-  3c, grant builds, is being planned on grants-3c. It reuses `_mention_stale` from fresh owner mentions.
+  3c, grant builds, is being planned on grants-3c (room message 541db5cd). It reuses `_mention_stale` from fresh owner mentions.
 - **Fresh owner mentions** (Phase 5): 3f2973b. An owner's mention over a day old, or already answered, gets a read-only
   ticket that says why.
 - **The live station on 2026-10-15:**

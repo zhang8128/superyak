@@ -104,11 +104,11 @@ one question at a time, fastest through AskUserQuestion in the Pi terminal.
   - Every machine gets the SessionEnd hook only by running `make dock` again. Serenity's Mac is on 456fabd as of
     2026-10-12; its already-open sessions get the breakout tools when their MCP servers restart (Andy's call).
   - Waiting for Andy, one question at a time, in the order of the roadmap's last section: the go-ahead for
-    `make station-units`, then City of AI's brief (keep, edit or remove), then signing ed4a8c, then the off-Pi destination (and where a copy of the station identity may live), an outage alert channel, and Tardis's
-    role.
+    `make station-units`, then City of AI's brief (keep, edit or remove), then signing ed4a8c, then the off-Pi
+    destination (and where a copy of the station identity may live), an outage alert channel, and Tardis's role.
 - **Next:**
   - spec A step 3, grants and revision signatures: 3a (57c4322) and 3b (d5843b8) are live; Serenity is planning 3c,
-    grant builds, under `build:grants`, and Rio Grande reviews each merge. Bracket layer titles before "signed by" once other
+    grant builds, on grants-3c (room message 541db5cd), under `build:grants`, and Rio Grande reviews each merge. Bracket layer titles before "signed by" once other
     signers can bind a ship;
   - the law's revision 2: section 7's watch line, now that the hook takes the watch (Rio Grande drafts, Andy signs);
   - then spec A step 4, the charter, and spec B: reviews, merging, deploying and admitting under the charter.
