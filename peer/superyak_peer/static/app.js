@@ -109,7 +109,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.grants = null; state.grantPeople = null; state.grantForm = null; state.grantAsk = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -139,7 +139,7 @@ async function api(path, options = {}) {
 function routeParts() {
   const raw = location.hash.replace(/^#\/?/, "") || "home";
   const [route, id] = raw.split("/");
-  return { route: ["home", "chats", "board", "layers", "shared", "spaces", "research", "search", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
+  return { route: ["home", "chats", "board", "grants", "layers", "shared", "spaces", "research", "search", "connections"].includes(route) ? route : "home", id: id ? decodeURIComponent(id) : null };
 }
 
 function navLink(route, label, icon) {
@@ -162,6 +162,7 @@ function layout(content) {
         ${navLink("home", "Home", "⌂")}
         ${navLink("chats", "Chats", "◌")}
         ${navLink("board", "Board", "☰")}
+        ${navLink("grants", "Grants", "✧")}
         ${navLink("layers", "My sharing layers", "▤")}
         ${navLink("shared", "Shared spaces", "◇")}
         ${navLink("spaces", "Circles & projects", "◎")}
@@ -681,6 +682,119 @@ function boardView() {
   return `<header class="page-head"><div><p class="eyebrow">Work</p><h1>Board</h1><p class="lede">Open items from every room you're in, oldest first. Items are notes about work, never instructions.</p></div></header>${body}`;
 }
 
+// Grants step 3 (G20-G22): the grants a person gave and holds, a form to make one, and Revoke, which asks first.
+// Every name, title and reason is people's text or the station's, escaped where shown.
+const GRANT_HOURS = [[24, "1 day"], [72, "3 days"], [168, "7 days"], [720, "30 days"]];
+
+async function loadGrants() {
+  const who = identityKey(state.me);
+  try {
+    const [grants, people] = await Promise.all([api("/api/grants"), api("/api/grants/people")]);
+    if (identityKey(state.me) === who) { state.grants = grants; state.grantPeople = people; }
+  } catch (error) {
+    if (error.status === 401) throw error;
+    if (identityKey(state.me) === who) { state.grants = null; state.grantPeople = null; }
+  }
+}
+
+// G21: the current local rooms that hold the caller (every room in the list does) and the chosen person. A breakout, a
+// received room and a room a newer linked room replaced can't be granted (G8 steps 1 and 2).
+function grantRoomsWith(personId) {
+  const chats = state.home?.chats || [];
+  return chats.filter((room) => !room.origin && !room.breakout && !chats.some((other) => !other.origin && other.linked_room_id === room.id)
+    && (room.member_ids || []).includes(personId));
+}
+
+function grantDraft() {
+  return state.grantForm || { grantee: "", ships: [], rooms: [], anyRoom: false, hours: 168, budget: "5" };
+}
+
+function grantRoomChoices(draft) {
+  if (!draft.grantee) return `<legend>Rooms</legend><p class="meta">Choose a person first; the rooms you share with them show here.</p>`;
+  const rooms = grantRoomsWith(draft.grantee);
+  const listed = rooms.length ? rooms.map((room) => `<label class="choice"><input type="checkbox" name="grant-room" value="${escapeHtml(room.id)}"${draft.rooms.includes(room.id) ? " checked" : ""}><span class="choice-copy"><strong>${escapeHtml(room.title)}</strong></span></label>`).join("")
+    : `<p class="meta">You share no current room with them.</p>`;
+  return `<legend>Rooms</legend><label class="choice"><input type="radio" name="grant-scope" value="listed"${draft.anyRoom ? "" : " checked"}><span class="choice-copy"><strong>These rooms</strong></span></label><div class="choices grant-room-list">${listed}</div><label class="choice"><input type="radio" name="grant-scope" value="*"${draft.anyRoom ? " checked" : ""}><span class="choice-copy"><strong>Any room you share with them</strong><small>Rooms made later too. A run builds only in a room you are in.</small></span></label>`;
+}
+
+function grantForm() {
+  const draft = grantDraft(), mine = (state.ships || []).filter((ship) => ship.owner_id === state.me.id);  // an admin is sent every ship
+  const intro = `<p>Their mentions start builder runs of your ships on your machine. A run can read your repository and uses your model time, and its reply is posted in the room.</p>`;
+  const body = !mine.length ? `<p class="meta">You have no ships to grant. Dock a machine's agent first.</p>`
+    : `<form id="grant-form"><div class="field"><label for="grant-person">Person</label><select class="input" id="grant-person" name="grantee"><option value="">Choose a person</option>${(state.grantPeople || []).map((person) => `<option value="${escapeHtml(person.id)}"${person.id === draft.grantee ? " selected" : ""}>${escapeHtml(person.name)}</option>`).join("")}</select></div><fieldset class="field"><legend>Ships</legend><div class="choices">${mine.map((ship) => `<label class="choice"><input type="checkbox" name="grant-ship" value="${escapeHtml(ship.id)}"${draft.ships.includes(ship.id) ? " checked" : ""}><span class="choice-copy"><strong>${escapeHtml(ship.name)}</strong></span></label>`).join("")}</div></fieldset><fieldset class="field grant-rooms">${grantRoomChoices(draft)}</fieldset><div class="field"><label for="grant-hours">How long</label><select class="input" id="grant-hours" name="hours">${GRANT_HOURS.map(([hours, label]) => `<option value="${hours}"${hours === draft.hours ? " selected" : ""}>${label}</option>`).join("")}</select></div><div class="field"><label for="grant-budget">Builds a day</label><input class="input" id="grant-budget" name="budget" type="number" min="1" max="500" step="1" value="${escapeHtml(draft.budget)}"></div><button class="button" type="submit">Make grant</button></form>`;
+  return `<section class="section grant-make" aria-labelledby="grant-make-title"><h2 id="grant-make-title">Let someone build your ships</h2>${intro}${body}</section>`;
+}
+
+function readGrantForm(form) {
+  const checked = (name) => [...form.querySelectorAll(`[name="${name}"]:checked`)].map((input) => input.value);
+  return { grantee: form.elements.grantee.value, ships: checked("grant-ship"), rooms: checked("grant-room"),
+           anyRoom: form.querySelector('[name="grant-scope"]:checked')?.value === "*", hours: Number(form.elements.hours.value), budget: form.elements.budget.value };
+}
+
+function grantRoomsText(grant) {
+  if (grant.rooms === "*") return "Any room you share with them";
+  return grant.rooms.map((room) => room.current ? `${room.title} (replaced; now covers ${room.current.title})` : room.title).join(", ");
+}
+
+// The ask takes the Revoke button's place with its question first, so a hurried second press lands on text; Cancel
+// gets the focus, as the board's Drop does.
+function grantItem(grant, given) {
+  const short = escapeHtml(grant.short);
+  const ships = grant.targets.map((ship) => `${ship.name}, ${ship.ship_builds_left} grant build${ship.ship_builds_left === 1 ? "" : "s"} left for the ship`).join("; ");
+  const status = grant.valid ? '<span class="badge active">Valid</span>' : `<span class="badge failed">Not valid</span> ${escapeHtml(grant.reason || "")}`;
+  let controls = "";
+  if (given && grant.revoked == null) {
+    const ask = state.grantAsk?.id === grant.id ? state.grantAsk : null;
+    controls = ask
+      ? `<div class="board-ask grant-ask" role="group" aria-label="Revoke ${short}?"><p>Revoke ${short}? Their mentions stop starting builder runs at once; a run already going finishes.</p><div class="field"><label for="grant-reason">Reason (optional)</label><input class="input" id="grant-reason" value="${escapeHtml(ask.reason)}"></div><div class="button-row"><button class="button secondary" type="button" data-action="grant-cancel" data-id="${escapeHtml(grant.id)}">Cancel</button><button class="button danger" type="button" data-action="grant-revoke-confirm" data-id="${escapeHtml(grant.id)}" aria-label="Yes, revoke ${short}">Yes, revoke</button></div></div>`
+      : `<div class="button-row"><button class="button danger secondary" type="button" data-action="grant-revoke" data-id="${escapeHtml(grant.id)}" aria-label="Revoke ${short}">Revoke</button></div>`;
+  }
+  return `<li class="grant-item" data-id="${escapeHtml(grant.id)}"><p><code>${short}</code> ${escapeHtml(given ? `To ${grant.grantee?.name}` : `From ${grant.issuer?.name}`)} ${status}</p><p class="meta">Ships: ${escapeHtml(ships)}</p><p class="meta">Rooms: ${escapeHtml(grantRoomsText(grant))}</p><p class="meta">${escapeHtml(`${grant.budget_left} of ${grant.budget} builds left in the last 24 hours · expires ${formatDate(grant.expires)}`)}</p>${controls}</li>`;
+}
+
+function grantsView() {
+  const head = `<header class="page-head"><div><p class="eyebrow">Your ships</p><h1>Grants</h1><p class="lede">A grant lets another person's mentions start builder runs of your ships, in rooms you share, for a while, with a daily budget of builds.</p></div></header>`;
+  if (!Array.isArray(state.grants)) return `${head}<p class="meta">Grants could not be read. Refresh to try again.</p>`;
+  const me = state.me.id, held = state.grants.filter((grant) => grant.grantee?.id === me), given = state.grants.filter((grant) => grant.grantee?.id !== me);
+  const list = (grants, mine, none) => grants.length ? `<ul class="grant-list">${grants.map((grant) => grantItem(grant, mine)).join("")}</ul>` : `<p class="meta">${none}</p>`;
+  return `${head}${grantForm()}<section class="section grants-given" aria-labelledby="grants-given-title"><h2 id="grants-given-title" tabindex="-1">Given by you</h2>${list(given, true, "You haven't let anyone build your ships.")}</section><section class="section grants-held" aria-labelledby="grants-held-title"><h2 id="grants-held-title">Held by you</h2>${list(held, false, "No one has let you build their ships.")}</section>`;
+}
+
+// One grant write at a time (G22): a second click while one is on its way would make a second grant or meet the first
+// one's revoke. The list is read again after every write, so it shows what the station holds.
+async function grantWrite(path, json, message, saved = () => {}) {
+  if (state.grantSaving) return;
+  state.grantSaving = true;
+  const who = identityKey(state.me);
+  try {
+    const answer = await api(path, { method: "POST", json });
+    if (identityKey(state.me) !== who) return;
+    saved(answer);
+    state.grantAsk = null;
+    setFlash(message(answer));
+  } catch (error) {
+    if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
+    if (identityKey(state.me) === who) setFlash(error.message, true);
+  } finally {
+    state.grantSaving = false;
+    if (state.me && identityKey(state.me) === who) {
+      try { await loadGrants(); } catch (_) { /* the list below says it could not be read */ }
+      if (routeParts().route === "grants") render();
+    }
+  }
+}
+
+async function makeGrant(form) {
+  if (state.grantSaving) return;
+  const draft = state.grantForm = readGrantForm(form), rooms = draft.anyRoom ? "*" : draft.rooms;
+  const missing = !draft.grantee ? "Choose a person." : !draft.ships.length ? "Choose at least one ship." : rooms !== "*" && !rooms.length ? "Choose at least one room, or any room you share with them." : null;
+  if (missing) { setFlash(missing, true); render(); return; }
+  // The budget field's own validation (min 1, max 500, step 1) stops an out-of-range or fractional budget before this
+  // runs; an empty field is sent as 0, which the station refuses with its own message.
+  await grantWrite("/api/grants", { grantee: draft.grantee, targets: draft.ships, rooms, hours: draft.hours, budget: Number(draft.budget) },
+                   (grant) => `Grant ${grant.short} made.`, () => { state.grantForm = null; });
+}
+
 // One board write at a time: a second click while one is on its way would get 409 for the first one's own work and
 // show it as a failure (Review Focus 4). The board and the room are read again after every write, so the panel shows
 // what the station holds and the history shows the new line. focusKey: the item to focus afterwards (the panel's
@@ -968,6 +1082,7 @@ async function loadRoute() {
       state.room = null;
     }
   }
+  if (route === "grants") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } await loadGrants(); }
   if (route === "board") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } const who = identityKey(state.me); try { const view = await api("/api/board"); if (identityKey(state.me) === who) state.boardView = view; } catch (_) { if (identityKey(state.me) === who) state.boardView = null; } }
   if (route === "shared") {
     const identity = identityKey(state.me), hash = location.hash;
@@ -994,7 +1109,7 @@ function closeDialogs() {
 function render() {
   if (!state.me || !state.home) return;
   const route = routeParts().route;
-  const view = { home: homeView, chats: chatsView, board: boardView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView }[route]();
+  const view = { home: homeView, chats: chatsView, board: boardView, grants: grantsView, layers: layersView, shared: sharedView, spaces: Dashboard.spacesView, research: Research.view, search: Dashboard.searchView, connections: connectionsView }[route]();
   const focused = document.activeElement;
   const hadDialog = !!app.querySelector("dialog[open]");
   if (!hadDialog && focused?.dataset.action) dialogReturn = `[data-action="${CSS.escape(focused.dataset.action)}"]`;
@@ -1014,7 +1129,7 @@ function render() {
   }
   if (hadDialog && !dialogs.length && dialogReturn) app.querySelector(dialogReturn)?.focus();
   else if (hadDialog && dialogs.length && focusSelector) app.querySelector(focusSelector)?.focus();
-  document.title = `${{ home: "Home", chats: "Chats", board: "Board", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections" }[route]} · Superyak`;
+  document.title = `${{ home: "Home", chats: "Chats", board: "Board", grants: "Grants", layers: "My sharing layers", shared: "Shared spaces", spaces: "Circles & projects", research: "Research & data", search: "Search", connections: "Connections" }[route]} · Superyak`;
 }
 
 async function refresh(message = null) {
@@ -1646,6 +1761,7 @@ document.addEventListener("submit", async (event) => {
   if (form.id === "chat-form") await createChat(form);
   if (form.id === "brief-form") await saveBrief(form);
   if (form.id === "board-post-form") await postBoardItem(form);
+  if (form.id === "grant-form") await makeGrant(form);
   if (form.id === "board-done-form") await boardWrite("/board/done", { key: form.dataset.key, outcome: form.elements.outcome.value }, "Marked done.", { focusKey: form.dataset.key });
   if (form.id === "message-form") await sendMessage(form);
   if (form.id === "pair-preview-form") await previewPair(form);
@@ -1746,6 +1862,21 @@ document.addEventListener("click", async (event) => {
   if (action === "board-cancel") { state.boardDone = null; state.boardAsk = null; render(); focusBoardItem(target.dataset.key); }
   if (action === "board-drop-confirm" && state.boardAsk?.action === "drop" && state.boardAsk.key === target.dataset.key) await boardWrite("/board/drop", { key: target.dataset.key }, "Item dropped.", { focusKey: target.dataset.key });
   if (action === "board-release-confirm" && state.boardAsk?.action === "release" && state.boardAsk.key === target.dataset.key) await boardWrite("/claims/release", { key: target.dataset.key }, "Claim released.", { focusKey: target.dataset.key });
+  if (action === "grant-revoke") {
+    state.grantAsk = { id: target.dataset.id, reason: "" };
+    render();
+    document.querySelector('.grant-ask [data-action="grant-cancel"]')?.focus();  // the safe choice
+  }
+  if (action === "grant-cancel") {
+    state.grantAsk = null;
+    render();
+    document.querySelector(`.grant-item[data-id="${CSS.escape(target.dataset.id)}"] [data-action="grant-revoke"]`)?.focus();
+  }
+  if (action === "grant-revoke-confirm" && state.grantAsk?.id === target.dataset.id) {
+    const grant = (state.grants || []).find((item) => item.id === target.dataset.id);
+    await grantWrite(`/api/grants/${pathPart(target.dataset.id)}/revoke`, { reason: state.grantAsk.reason }, () => `Grant ${grant?.short || ""} revoked.`);
+    document.querySelector("#grants-given-title")?.focus();
+  }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "edit-brief" && state.room) {
     const brief = state.room.brief;
@@ -1874,6 +2005,8 @@ document.addEventListener("input", (event) => {
     state.boardPost = { roomId: state.room.id, key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
   }
   if (event.target.id === "board-outcome" && state.boardDone) state.boardDone.outcome = event.target.value;
+  if (event.target.closest("#grant-form")) state.grantForm = readGrantForm(event.target.form);  // kept through a re-render
+  if (event.target.id === "grant-reason" && state.grantAsk) state.grantAsk.reason = event.target.value;
   if (event.target.id === "assistant-request" && selectedLayer() && !editorSwitching()) {
     const entry = state.assistance[selectedLayer().id] ||= {};
     entry.text = event.target.value;
@@ -1900,6 +2033,12 @@ document.addEventListener("change", async (event) => {
     render();
   }
   if (event.target.id === "file-upload") await uploadFile(event.target);
+  if (event.target.id === "grant-person") {
+    // The draft is read from the form, so a room ticked for someone else, gone from the new list, is dropped.
+    const form = event.target.form;
+    state.grantForm = readGrantForm(form);
+    form.querySelector(".grant-rooms").innerHTML = grantRoomChoices(state.grantForm);
+  }
 });
 
 window.addEventListener("hashchange", async () => {
