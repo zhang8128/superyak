@@ -120,6 +120,11 @@ def test_activation_and_narrowing_sign_each_instructions_revision(env):
         assert record['title'] == 'Règles · 規則' and record['body'] == 'Run the tests. ✓'
         assert record['owner_id'] == users[0]['id'] and record['station'] == store._station_identity().peer_id
         assert verify_record(card, record, rows[(layer['id'], revision)])
+    read = clients[0].get(f'/api/layers/{layer["id"]}/revisions/2/signed')
+    assert read.status_code == 200, read.text
+    body = read.json()
+    assert body['record']['revision'] == 2 and body['record']['audience_users'] == [first['id']]
+    assert verify_record(card, body['record'], body['signature'])
 
 
 def test_a_note_is_never_signed_and_the_kind_comes_from_the_revision(env):
@@ -162,10 +167,21 @@ def test_startup_signs_each_unsigned_instructions_revision_once(env, monkeypatch
 
 def test_a_station_whose_identity_cannot_be_read_does_not_start(tmp_path):
     from superyak_peer.db import Store
-    (tmp_path / 'station').mkdir(mode=0o700)
-    (tmp_path / 'station' / 'identity.json').write_text('not json')
+    for index, damaged in enumerate(('not json', '{}')):  # unreadable, and valid JSON without the keys
+        directory = tmp_path / f'station{index}'
+        directory.mkdir(mode=0o700)
+        (directory / 'identity.json').write_text(damaged)
+        with pytest.raises(ValueError, match='identity.json'):
+            Store(directory)
+
+
+def test_a_dangling_identity_symlink_does_not_start(tmp_path):
+    from superyak_peer.db import Store
+    directory = tmp_path / 'station'
+    directory.mkdir(mode=0o700)
+    (directory / 'identity.json').symlink_to(tmp_path / 'missing.json')
     with pytest.raises(ValueError):
-        Store(tmp_path / 'station')
+        Store(directory)
 
 
 def test_a_new_stations_first_card_still_names_its_host(tmp_path, capsys):

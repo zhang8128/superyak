@@ -236,8 +236,8 @@ Body is plain authored text; this API does not resolve/fetch URLs or citations.
 A layer has `kind`: `note` (default) or `instructions`. An instructions layer binds ships: its
 `audience_users` are ships, it needs at least one, its title is one line of at most 200 characters, its
 title and body never contain a NUL character (400 at create, save, preview and activation), and activating
-it labels it with its owner's name, and the station signs each of its revisions with its Ed25519 key (see
-Signed records).
+it labels it with its owner's name, and the station signs each revision activated as instructions with its
+Ed25519 key (see Signed records).
 Stored drafts carry two server keys, `drafted_by` (the ship that wrote it) and `drafted_at`; browser input
 containing either is rejected with 400, and they survive saves, previews and activation unchanged. A note's
 stored draft and snapshot have no `kind` key (readers treat a missing `kind` as `note`), so a station rolled
@@ -268,8 +268,11 @@ stays in that session's context.
 
 The station signs records with its Ed25519 identity key, the one in `identity.json` that federation signs envelopes
 with (spec A step 3, `docs/superpowers/specs/2026-10-15-grants-step3-design.md`). A record is a JSON object with
-exactly its kind's keys (`identity.RECORD_KEYS`), and its signature is base64 Ed25519 over `identity.canonical(record)`.
-Merge 3a signs one kind:
+exactly its kind's keys (`identity.RECORD_KEYS`), and its signature is base64 Ed25519 over
+`identity.canonical(record)`. Canonical JSON has its keys sorted, `,` and `:` as separators with no spaces, UTF-8
+output (no `\u` escapes), NaN and Infinity refused, and floats in Python's shortest form, so another implementation
+must write `created` the same way (Python writes `1000000.0` where JavaScript writes `1000000`). Every process that
+opens the store, the public door included, reads `identity.json` at startup when it exists. Merge 3a signs one kind:
 
 - `instructions-revision`: `{kind, station, layer_id, revision, owner_id, title, body, audience_users, policy, created}`.
   It is written in the transaction that writes a revision whose snapshot has `kind: "instructions"` (an activation or a
@@ -283,10 +286,10 @@ Anyone else, and any revision without a signature, gets 404; a ship key gets 403
 `identity.verify_record(card, record, signature)` returns True only when the card is valid, the record has exactly its
 kind's keys (`instructions-revision`, `grant` or `grant-revocation`), its `station` is the card's peer id, and the
 signature verifies. It never raises. A card exists only for a station with an HTTPS federation endpoint (`serve
---federation-endpoint`; `card --endpoint` prints one). A station that can't load its identity doesn't start; a new station creates it at its first
-signature, so its first card export still names its host. The nightly copies leave out the identity files: a station
-rebuilt from a copy without its own `identity.json` gets a new key, and its stored signatures stop verifying against
-its new card (the backfill signs only unsigned revisions).
+--federation-endpoint`; `card --endpoint` prints one). A station that can't load its identity doesn't start; a new
+station creates it at its first signature, so its first card export still names its host. The nightly copies leave
+out the identity files: a station rebuilt from a copy without its own `identity.json` gets a new key, and its stored
+signatures stop verifying against its new card (the backfill signs only unsigned revisions).
 
 ## Files
 

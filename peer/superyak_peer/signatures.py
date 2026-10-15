@@ -17,7 +17,11 @@ class Signatures:
         signature, so a new station's first `card --endpoint` still names its host (plan review M1)."""
         path = self.data_dir / 'identity.json'
         if path.exists() or path.is_symlink():
-            self._identity = PeerIdentity.load_or_create(self.data_dir)
+            try:
+                self._identity = PeerIdentity.load_or_create(self.data_dir)
+            except Exception as error:
+                raise ValueError(f'The station identity {path} could not be loaded ({type(error).__name__}); '
+                                 'the station will not start until it is restored') from error
 
     def _station_identity(self):
         """The identity, created if missing. Only a signing transaction creates it: that holds the dispatch gate, so
