@@ -413,8 +413,11 @@ Board of room "<quoted_title(title)>" (<id>): 2 waiting, 1 taken; 1 done or drop
     32-hex ids and 80-character titles; the block is shown whole or left out) follow only if they fit in what's left.
     If they don't, they're left out whole, and `station_board` still lists the items. (At a prompt the inbox comes first because shown messages are consumed: the cursor advances. A
     count is never consumed, and the law is the one binding text.)
-  - A failed call prints no board lines. Like any failed call, a timeout may mark the station unreachable for a minute
-    (hook.py:117-124). It moves no cursor and writes no other state.
+  - A failed call prints no board lines: the session start reads byte for byte as one with nothing waiting. The call is
+    capped in wall-clock time (within `INBOX_CALL_TIMEOUT` and what is left of the deadline) and in the bytes it reads, so
+    a slow or dripping station can't cost a session its law. Unlike the other calls, a board failure never marks the
+    station unreachable (step 3's section 2 reviews): the law has already answered. It moves no cursor and writes no
+    other state.
 - **Who sees it:** only ships' interactive sessions, whether or not room messages are on. The `--hook` choice governs
   message bodies at a prompt. These lines hold only counts and room titles the ship's `station_rooms` already lists.
   (The SessionStart command never carries `SUPERYAK_HOOK_MESSAGES`, install.py:98, so a gate on it would hold
