@@ -5,7 +5,7 @@ import json
 import re
 import threading
 from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse
-from .common import Problem, require, uid, encode, text
+from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
     pass
@@ -331,6 +331,8 @@ class Federation:
             for field in ('created','last_activity'):
                 if type(p.get(field)) not in (int,float) or not 0 <= p[field] <= 2**53:
                     raise Problem(400, 'Invalid room timestamp')
+            if not linked_room_ok(p.get('linked_room_id'), origin):  # remote room fields: the origin's own earlier room, or nothing
+                raise Problem(400, 'Invalid linked room')
             if p.get('member_ids') != expected or p.get('owner_id') != origin+':'+e['actor']['id'] or p['owner_id'] not in expected:
                 raise Problem(403, 'Invalid room authority')
             if any({'peer':self.identity.peer_id,'id':r} not in members for r in e['recipients']):
@@ -369,6 +371,9 @@ class Federation:
                         history.append(message)
                 payload['messages'] = history
             db.execute('INSERT INTO inbox VALUES(?,?,?,?,?,?,?) ON CONFLICT(origin,resource_id,kind,recipient) DO UPDATE SET revision=excluded.revision,payload=excluded.payload', (origin,rid,kind,recipient,revision,e['actor']['id'],encode(payload) if payload is not None else None))
+            if kind == 'room' and payload is not None:  # remote room fields: this station's own time, for the list's clamp
+                db.execute('INSERT INTO inbox_received VALUES(?,?,?,?) ON CONFLICT(origin,resource_id,recipient) DO UPDATE SET received=excluded.received',
+                           (origin, rid, recipient, self.store.clock()))
             if action == 'room.withdraw':
                 self._cancel_replies(db, origin, rid, recipient, revision)
 

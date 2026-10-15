@@ -76,6 +76,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships
             ticket_columns = {row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
             if 'first_deferred' not in ticket_columns:  # ship-status fixes F3: the deferral a run resolved, on its ticket
                 db.execute('ALTER TABLE tickets ADD COLUMN first_deferred REAL')
+            # remote room fields: a received room stored before inbox_received existed gets a time once: the first start that finds it without one, this start's
+            db.execute("INSERT OR IGNORE INTO inbox_received SELECT origin, resource_id, recipient, ? FROM inbox "
+                       "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))
         self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
         self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
 

@@ -1,5 +1,6 @@
 """Shared validation and public-safe domain failures."""
 import json
+import re
 import uuid
 
 # Rooms that a later linked room replaced (members were added): such a room is no longer current. One subquery for every
@@ -54,3 +55,7 @@ def require(row):
     if row is None:
         raise Problem(404, 'Not found')
     return row
+
+def linked_room_ok(value, origin):
+    """A received room's linked_room_id: null, or one of the origin's own room ids, `<origin>:<id>` (remote room fields)."""
+    return value is None or (isinstance(value, str) and re.fullmatch(re.escape(origin) + r':[A-Za-z0-9_-]{1,64}', value) is not None)

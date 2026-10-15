@@ -1,4 +1,5 @@
 import re
+import time
 import json
 
 import pytest
@@ -863,3 +864,178 @@ def test_a_hand_edited_malformed_member_cannot_break_the_room_list(two_peers):
     assert all(isinstance(m['peer'], str) and isinstance(m['id'], str) for m in got['members'])
     assert len(got['members']) == len(snapshot['members'])
     assert any(r['id'] == remote_id for r in b[0].list_rooms(b[1]))
+
+
+def _roster_with(a, b, room, action='room.roster', **fields):
+    """A room event the origin (a) signs (a roster unless `action` says otherwise), with some of its room snapshot's
+    fields replaced."""
+    with a[0].transaction() as db:
+        snapshot = a[2]._room_snapshot(db, db.execute('SELECT * FROM rooms WHERE id=?', (room['id'],)).fetchone())
+    return a[2].identity.envelope(destination=b[2].identity.peer_id, actor=a[1], resource_id=room['id'], revision=1,
+                                  action=action, recipients=[b[1]], payload={**snapshot, **fields})
+
+
+@pytest.mark.parametrize('linked', [['a', 'list'], {'a': 'dict'}, 7, 'no-colon', 'another-station', 'a-local-room',
+                                    'empty-id', 'two-segments', 'long-id'])
+def test_a_received_rooms_linked_room_is_its_origins_own_or_none(two_peers, linked):
+    """Remote room fields (follow-up of the section 2 review of 96030b0): a received room's linked_room_id names the
+    origin's own earlier room, or nothing. The API clients (the browser, any reader of the chat list) get nothing else: a
+    list, a bare id, a local room's id or another station's would claim to replace a room the origin doesn't host. (Wormhole
+    already skips received rooms, wormhole.py:78, as the final review found.) The last assertion checks that the refused
+    event left the room stored by the honest first delivery alone."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Linked', [ca['id']])
+    deliver(a, b)
+    claims = {'another-station': 'f' * 64 + ':' + room['id'],  # a well-formed id, under a station that isn't the origin
+              'a-local-room': b[2].identity.peer_id + ':' + b[0].create_room(b[1], 'Mine', [])['id']}  # one of b's own
+    origin = a[2].identity.peer_id
+    claims.update({'empty-id': origin + ':', 'two-segments': origin + ':a:b', 'long-id': origin + ':' + 'a' * 65})
+    value = claims.get(linked, linked) if isinstance(linked, str) else linked
+    with pytest.raises(Problem, match='Invalid linked room'):
+        b[2].receive(_roster_with(a, b, room, linked_room_id=value))
+    [shown] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Linked']
+    assert shown.get('linked_room_id') is None
+
+
+def _pinned(b, title):
+    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == title]
+    return listed['last_activity'], b[0].get_room(b[1], listed['id'])['last_activity']
+
+
+def test_a_received_roster_cannot_claim_activity_after_it_arrived(two_peers):
+    """Remote room fields: the origin chooses its snapshot's last_activity (anything up to 2**53), and the room list sorts
+    on it, so a hostile origin could pin its room to the top for good with a roster alone. A received room's activity
+    counts only up to when this station last received an event for it (D8 review of ef36222, M1: the roster alone)."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Pinned', [ca['id']])
+    deliver(a, b)
+    assert b[2].receive(_roster_with(a, b, room, last_activity=2**53))['ok']
+    arrived = time.time()
+    listed, viewed = _pinned(b, 'Pinned')
+    assert [listed <= arrived, viewed <= arrived] == [True, True]
+
+
+def test_a_received_message_cannot_claim_activity_after_it_arrived(two_peers):
+    """Remote room fields: the same for a message's created (anything up to 2**53), with an honest snapshot."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Future', [ca['id']])
+    deliver(a, b)
+    assert b[2].receive(_forged_message(a, b, room, 'm-future', 'f-1', 'from the future', 2**53,
+                                        author=a[2].identity.peer_id + ':' + a[1]))['ok']
+    arrived = time.time()
+    listed, viewed = _pinned(b, 'Future')
+    assert [listed <= arrived, viewed <= arrived] == [True, True]
+
+
+def test_the_inbox_received_table_is_added_once_and_inbox_is_unchanged(tmp_path):
+    """Remote room fields, requirement 7: the migration is additive and idempotent. inbox keeps its seven columns, so
+    main's positional INSERT still writes it after a rollback."""
+    from superyak_peer.db import Store
+    Store(tmp_path / 'peer')
+    store = Store(tmp_path / 'peer')
+    with store.transaction() as db:
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='inbox_received'")]
+        columns = [r[1] for r in db.execute('PRAGMA table_info(inbox)')]
+    assert tables == ['inbox_received']
+    assert columns == ['origin', 'resource_id', 'kind', 'recipient', 'revision', 'actor', 'payload']
+
+
+def test_an_honest_linked_room_is_received_with_its_origins_earlier_room(two_peers):
+    """Remote room fields, requirement 2 (a guard): adding a member makes a new linked room on the origin, and the receiver
+    still takes it, showing `<origin>:<earlier id>`."""
+    a, b, ca, cb = two_peers
+    second = b[0].create_user('second', 'Second person', 'long-password', is_admin=True)['id']
+    c2 = a[2].pair(a[1], b[2].card(second))
+    b[2].pair(second, a[2].card(a[1]))
+    room = a[0].create_room(a[1], 'Growing', [ca['id']])
+    deliver(a, b)
+    grown = a[0].add_participants(a[1], room['id'], [c2['id']])
+    deliver(a, b)
+    [shown] = [r for r in b[0].list_rooms(b[1]) if r['id'] == a[2].identity.peer_id + ':' + grown['id']]
+    assert shown['linked_room_id'] == a[2].identity.peer_id + ':' + room['id']
+
+
+@pytest.mark.parametrize('bad', [['not', 'hashable'], 'f' * 64 + ':some-room'])
+def test_a_stored_bad_linked_room_shows_as_none(two_peers, bad):
+    """Remote room fields, requirement 3 (a guard): the view's backstop for a value an older receiver stored."""
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Old link', [ca['id']])
+    deliver(a, b)
+    with b[0].transaction() as db:
+        row = db.execute("SELECT * FROM inbox WHERE kind='room' AND recipient=?", (b[1],)).fetchone()
+        stored = json.loads(row['payload'])
+        stored['linked_room_id'] = bad
+        db.execute('UPDATE inbox SET payload=? WHERE origin=? AND resource_id=? AND kind=? AND recipient=?',
+                   (json.dumps(stored), row['origin'], row['resource_id'], row['kind'], row['recipient']))
+    [shown] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Old link']
+    assert shown['linked_room_id'] is None
+
+
+def test_this_stations_queued_reply_still_moves_a_received_room(two_peers):
+    """Remote room fields, requirement 6 (a guard): the clamp is for the origin's claims; this station's own queued reply
+    still moves the room to its own time."""
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Busy', [ca['id']])
+    deliver(a, b)
+    remote = b[0].list_rooms(b[1])[0]['id']
+    time.sleep(0.01)
+    sent = b[0].send_message(b[1], remote, 'q-1', 'my reply')
+    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Busy']
+    assert listed['last_activity'] == sent['created']
+
+
+def _received(store, origin, rid, recipient):
+    with store.transaction() as db:
+        row = db.execute('SELECT received FROM inbox_received WHERE origin=? AND resource_id=? AND recipient=?',
+                         (origin, rid, recipient)).fetchone()
+    return row[0] if row else None
+
+
+def test_a_room_stored_before_the_change_is_clamped_after_the_next_start(two_peers):
+    """Remote room fields (plan review of fd22b65, should-fix 1): a room received before inbox_received existed has no
+    row; the next start's backfill gives it one, so a room already pinned at 2**53 is clamped from then on."""
+    from superyak_peer.db import Store
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Old pin', [ca['id']])
+    deliver(a, b)
+    assert b[2].receive(_roster_with(a, b, room, last_activity=2**53))['ok']
+    with b[0].transaction() as db:  # as a station that stored it before this change would hold it
+        db.execute('DELETE FROM inbox_received')
+    reopened = Store(b[0].data_dir)
+    started = time.time()
+    assert _received(reopened, a[2].identity.peer_id, room['id'], b[1]) is not None
+    [listed] = [r for r in reopened.list_rooms(b[1]) if r['title'] == 'Old pin']
+    assert listed['last_activity'] <= started
+
+
+def test_received_follows_each_event_and_a_restart_leaves_it(two_peers):
+    """Remote room fields (plan review of fd22b65, should-fix 2): each room event refreshes this station's receive time,
+    so an honest room's later message counts; a restart's backfill touches only rooms without a row."""
+    from superyak_peer.db import Store
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Steady', [ca['id']])
+    deliver(a, b)
+    author = a[2].identity.peer_id + ':' + a[1]
+    assert b[2].receive(_forged_message(a, b, room, 'm-one', 'one', 'first words', time.time() - 100, author=author))['ok']
+    time.sleep(0.02)
+    later = time.time()
+    assert b[2].receive(_forged_message(a, b, room, 'm-two', 'two', 'later words', later, author=author))['ok']
+    [listed] = [r for r in b[0].list_rooms(b[1]) if r['title'] == 'Steady']
+    before = _received(b[0], a[2].identity.peer_id, room['id'], b[1])
+    # the honest snapshot's own last_activity is the origin's clock a moment after `later`, and before this receive
+    assert later <= listed['last_activity'] <= before
+    reopened = Store(b[0].data_dir)
+    assert _received(reopened, a[2].identity.peer_id, room['id'], b[1]) == before
+    assert [r['last_activity'] for r in reopened.list_rooms(b[1]) if r['title'] == 'Steady'] == [listed['last_activity']]
+
+
+def test_a_received_message_with_a_foreign_linked_room_is_refused(two_peers):
+    """Remote room fields (section 2 review of 997ab69, S1): the rule holds for room.message too, not only rosters."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Linked message', [ca['id']])
+    deliver(a, b)
+    message = {'id': 'm-l', 'room_id': room['id'], 'author_id': a[2].identity.peer_id + ':' + a[1],
+               'client_message_id': 'l-1', 'body': 'words', 'epoch': 1, 'created': time.time()}
+    with pytest.raises(Problem, match='Invalid linked room'):
+        b[2].receive(_roster_with(a, b, room, action='room.message', message=message,
+                                  linked_room_id='f' * 64 + ':' + room['id']))
