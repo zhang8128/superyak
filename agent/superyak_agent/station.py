@@ -441,3 +441,54 @@ def claims_block(room):
         return ''
     body = defuse('\n'.join(lines))
     return f'Active claims ({len(lines)})\n' + fence_external('the station (claims in this room)', body, limit=len(body))
+
+
+BOARD_SENDER = 'the station (board items in this room)'
+
+
+def board_item_lines(item):
+    """Work board 5.3: one item as quoted lines. Every value goes through label(): keys at 100, links and the outcome at
+    210 (N1, so a valid link shows whole), names at 40, the title at 480 (the station widens a title by 3 per @, so 120 characters of title can come back as 480)."""
+    key, kind, state = label(item.get('key'), 100), label(item.get('kind'), 20), item.get('state')
+    claim = item.get('claim') if isinstance(item.get('claim'), dict) else None
+    posted = f'posted by {label(item.get("poster_name"), 40)} {utc_time(item.get("created"))}'
+    if state == 'done':
+        status = f'done {utc_time(item.get("closed"))} by {label(item.get("closer_name"), 40)}, outcome {label(item.get("outcome"), 210)}'
+    elif state == 'dropped':
+        status = f'dropped {utc_time(item.get("closed"))} by {label(item.get("closer_name"), 40)}'
+    elif claim is not None:
+        status = f'taken by {label(claim.get("holder_name"), 40)} until {utc_time(claim.get("expires"))}, {posted}'
+    else:
+        status = f'waiting, {posted}'
+    lines = [f'- `{key}` ({kind}), {status}: {label(item.get("title"), 480)}']
+    links = [label(entry.get('link'), 210) for entry in item.get('links') or [] if isinstance(entry, dict)]
+    if links:
+        lines.append('  links: ' + ', '.join(links))
+    return '\n'.join(lines)
+
+
+def board_block(title, room_id, items, budget):
+    """Work board 5.3: a room's board under one header line of counts, every item fenced as quoted data from the
+    station, and after the fence the call that takes a waiting item. Items stop at `budget` characters, and a last line
+    after the fence counts what was left out. The fixed words sit outside the fence; everything people or ships wrote
+    sits inside it, defused."""
+    items = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+    if not items:
+        return '(nothing on this board)'
+    open_items = [item for item in items if item.get('state') == 'open']
+    taken = sum(isinstance(item.get('claim'), dict) for item in open_items)
+    head = (f'Board of room {label(title)} ({shown_id(room_id)}): {len(open_items) - taken} waiting, {taken} taken; '
+            f'{len(items) - len(open_items)} done or dropped in the last 7 days')
+    how = f'`station_claim room={room_id} key=<key>`' if plain_id(room_id) else 'station_claim on its key'
+    tail = f'{how} takes a waiting item that is already your work (see above).'
+    shown, size = [], len(head) + len(tail) + 300  # 300: the fence's own words and the line counting what was left out
+    for item in items:
+        block = board_item_lines(item)
+        if shown and size + len(block) + 1 > budget:
+            break
+        shown.append(block)
+        size += len(block) + 1
+    body = defuse('\n'.join(shown))
+    text = '\n'.join([head, fence_external(BOARD_SENDER, body, limit=len(body)), tail])
+    left = len(items) - len(shown)
+    return text + (f'\n[{left} more board item{"s" if left > 1 else ""} not shown]' if left else '')
