@@ -1376,3 +1376,46 @@ def test_a_peer_sharing_its_short_id_prints_its_full_id_in_every_peer_line(tmp_p
     # the id printed is one the next run accepts
     code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path, '--unpair', ids['later_a'])
     assert code == 0, err
+
+
+# Every table today's schema creates, sorted by what the reconcile does with it. A new table fails the first test below
+# until it is put in one list on purpose (the work board's tables came after the backups work was written).
+RECONCILED_TABLES = {  # read or changed by a step, or the mark
+    'sessions', 'invitations', 'account_activations', 'dockings', 'access_requests', 'ship_keys', 'users', 'mentions',
+    'events', 'sqlite_sequence', 'rooms', 'room_members', 'remote_room_members', 'remote_contacts', 'spaces',
+    'space_members', 'breakouts', 'deferrals', 'messages', 'layers', 'peers', 'outbox', 'inbox', 'system_meta',
+    'account_role_changes', 'room_briefs'}
+COORDINATION_TABLES = {  # content and coordination, not access: copied as they are
+    'board_items', 'board_links', 'claims', 'account_corrections', 'login_attempts', 'files', 'room_activity',
+    'message_kinds', 'message_replies', 'message_sources', 'tickets', 'presence', 'read_cursors', 'inbox_meta',
+    'inbox_received', 'receipts', 'peer_messages', 'federation_cursor', 'layer_revisions', 'room_brief_revisions'}
+
+
+def test_every_table_is_either_reconciled_or_named_coordination(tmp_path, capsys):
+    """Follow-up (the work board): the reconcile's view of the schema skips nothing. A station started today has only
+    tables in one of the two lists above; the board's items, links and claims are coordination, not access, so a reconcile
+    leaves their rows as the copy has them, and reports no table as skipped or not compared. Mutation: 'claims' left out
+    of COORDINATION_TABLES (the test names the unclassified table)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    room = store.create_room(andy['id'], 'Ops', [])
+    with store.transaction() as db:
+        db.execute("INSERT INTO board_items(id, room_id, key, title, kind, posted_by, created) VALUES('i1', ?, 'spec:d7', 'A spec', 'spec', ?, 1.0)",
+                   (room['id'], andy['id']))
+        db.execute("INSERT INTO board_links(item_id, link, added_by, added) VALUES('i1', 'branch:x', ?, 1.0)", (andy['id'],))
+        db.execute("INSERT INTO claims(id, room_id, key, holder_id, created, expires) VALUES('c1', ?, 'spec:d7', ?, 1.0, 9e9)",
+                   (room['id'], andy['id']))
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert tables - RECONCILED_TABLES - COORDINATION_TABLES == set()
+    assert not RECONCILED_TABLES & COORDINATION_TABLES
+    copy = staged(tmp_path, store)
+
+    def rows(path):
+        with closing(sqlite3.connect(path)) as db:
+            return {table: db.execute(f'SELECT * FROM "{table}" ORDER BY 1, 2').fetchall() for table in sorted(COORDINATION_TABLES & tables)}
+    before = rows(copy)
+    assert before['board_items'] and before['board_links'] and before['claims']
+    code, out, err = reconcile(capsys, '--db', copy, '--replaced', store.db_path)
+    assert code == 0, err
+    assert rows(copy) == before
+    assert not any(line.startswith(('Skipped', 'Not compared')) for line in out.splitlines()), out
