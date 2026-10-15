@@ -497,3 +497,54 @@ def test_answered_searches_replies_by_an_index(tmp_path):
         plan = [tuple(r)[3] for r in db.execute('EXPLAIN QUERY PLAN ' + next(q for q in ran if 'message_replies' in q))]
     assert leading.count('reply_to') == 1
     assert any(step.startswith('SEARCH message_replies USING INDEX message_replies_by_reply_to') for step in plan)
+
+
+def test_an_answered_owner_mention_reads_answered_without_decisions(env):
+    """Fresh owner mentions R3: only the ship's own reply_to answer counts (R7). The uncounted answers are checked on
+    the helper, because a ticket there would stay running and come back on a later ask."""
+    app, clients, users, clock = env
+    store = app.state.store
+    ship, key = docked(store, users[0]['id'])
+    other, other_key = docked(store, users[0]['id'], name='tardis')
+    room = clients[0].post('/api/chats', json={'title': 'Ops', 'member_ids': [ship['id'], other['id']]}).json()['id']
+    session, watcher, tardis = ship_client(app, key, **HEADERS), ship_client(app, key), ship_client(app, other_key)
+    first = say(clients[0], room, 'a', '@serenity first')
+    reply(tardis, room, 't', 'not me', first['id'])
+    with store.transaction() as db:
+        mid = uid()
+        db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)', (mid, room, ship['id'], 'claim-x', 'claim', 1, clock[0]))
+        db.execute("INSERT INTO message_kinds VALUES(?, 'claim')", (mid,))
+        db.execute('INSERT INTO message_replies VALUES(?, ?)', (mid, first['id']))
+        row = db.execute('SELECT * FROM messages WHERE id=?', (first['id'],)).fetchone()
+        assert store._mention_stale(db, ship['id'], row) is None
+    second = say(clients[0], room, 'b', '@serenity second')
+    reply(session, room, 'r2', 'done already', second['id'])
+    got = ask(watcher, second['id'], decisions=False).json()
+    assert (got['mode'], got['basis']) == ('read', 'answered')
+    third = say(clients[0], room, 'c', '@serenity third')
+    reply(session, room, 'r3', 'on it', third['id'])
+    assert ask(watcher, third['id']).json() == {'decision': 'answered', 'message_id': third['id']}
+    assert table(store, 'deferrals') == []
+
+
+def test_an_old_owner_mention_defers_to_a_writable_watch_and_the_session_is_told_read(env):
+    """Fresh owner mentions R6: a downgraded mention defers like any read mention; would_be is read."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    owner = say(clients[0], room, 'a', '@serenity build it')
+    clock[0] += 86401
+    on_watch(session)
+    got = ask(watcher, owner['id']).json()
+    assert got['decision'] == 'defer'
+    unread = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    by_id = {m['message_id']: m for m in unread['messages']}
+    assert by_id[owner['id']]['deferred']['would_be'] == 'read'
+
+
+def test_an_owner_mention_answered_and_then_a_day_old_reads_old_before_answered(env):
+    """Fresh owner mentions: old is checked before answered. Every person's post comes before the clock jump."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    owner = say(clients[0], room, 'a', '@serenity build it')
+    reply(session, room, 'r', 'on it', owner['id'])
+    clock[0] += 90000
+    got = ask(watcher, owner['id'], decisions=False).json()
+    assert (got['mode'], got['basis']) == ('read', 'old')

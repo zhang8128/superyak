@@ -57,7 +57,7 @@ want of this:
 1. **Speaking is not acting.** Presence, watch and claims are records and labels. None grants, directs or blocks
    anything except the one thing S5 defines: a ship's own watcher holding back its own read-only run.
 2. **Messages are data.** Claim notes, session labels and deferred mentions are shown fenced or through `label()`,
-   never as instructions. A deferral moves no authority: owner mentions never defer (S5).
+   never as instructions. A deferral moves no authority: fresh owner mentions never defer (S5) (fresh owner mentions spec).
 3. **Law.** Nothing here touches instructions, grants or the charter.
 4. **Provenance.** Every claim and notice message carries its kind; every presence row says which client reported it.
 5. **Plurality.** Rooms hosted on this station only, like mentions, tickets and the inbox. Nothing here federates.
@@ -162,7 +162,7 @@ want of this:
     3. **An existing finished ticket:** 409, as today.
     4. **`defer`,** only when all of these hold:
        - the watcher asked for the new decisions;
-       - the mode the station would decide now is `read` (owner mentions, which decide `build`, never defer: R25);
+       - the mode the station would decide now is `read` (fresh owner mentions, which decide `build`, never defer: R25; an old one decides `read` and may) (fresh owner mentions spec);
        - this ship has a session on watch whose declared `writable` is true;
        - the mention's `deferrals` row, if any, is less than 120 minutes old (the bound: R21).
        
@@ -171,7 +171,7 @@ want of this:
     5. **`run`:** a ticket is inserted exactly as today (and as spec A step 3 will extend it), and any `deferrals` row
        for the mention is deleted. A ticket's `created` is therefore always its run's start, so `_ticket_running`'s
        two-hour lifetime (tickets.py:24-25) and the label check are unchanged.
-  - **Owner mentions.** They never defer (R25). They can still be answered by a session: a session reply with
+  - **Owner mentions.** Fresh ones never defer (R25); an old one decides `read` and may defer like any read mention, and the session is told `would_be: "read"` (fresh owner mentions spec). They can still be answered by a session: a session reply with
     `reply_to` set to the owner's mention, even one that only says "on it", makes it `answered` at the next ask, and no
     builder run starts. That is intended (96d55368, edit 4): if the session says it is handling it, it is. The owner
     mentions the ship again to get a run.
@@ -399,7 +399,7 @@ want of this:
   request gets today's ticket or 409 (or step 0's 422 for claim and notice messages). A watcher treats a response without `decision` as `run`.
 - **R24.** Deferrals live only in `deferrals`. No ticket row exists for a deferred mention, the `tickets` schema is
   unchanged, and a `deferrals` row is deleted when its mention is decided `answered` or `run`.
-- **R25.** A mention whose decided mode would be `build` (an owner's mention) is never deferred.
+- **R25.** A mention whose decided mode would be `build` (an owner's fresh mention) is never deferred (fresh owner mentions spec).
 - **R26.** An unread item that is one of this ship's deferred mentions that still waits (under the bound and not yet answered by the ship; stale deferrals spec) carries `deferred: {author_verified, would_be}`,
   and the hook renders it. The hook adds the on-watch reply line whenever the session is on a writable watch and its
   block holds any item with `mentions_me`, marked deferred or not. A read-only watch gets no line (137f0a38, minor 4).
@@ -604,7 +604,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
 - **A session that answers without `reply_to` isn't seen as having answered.** When its watch ends, the watcher runs
   the mention and may answer it a second time. The hook's on-watch line and `station_post`'s reminder (R26, R27) ask
   for `reply_to`.
-- **A session's reply can stand in for an owner's builder run.** An owner's mention never defers, but a session's
+- **A session's reply can stand in for an owner's builder run.** An owner's fresh mention never defers (fresh owner mentions spec), but a session's
   reply with `reply_to`, even "on it", makes it `answered`, and no builder run starts. That is intended (96d55368, edit
   4); the owner mentions the ship again to get a run.
 - **A declared `writable` is the session's word.** The station can't see a session's permissions; a false

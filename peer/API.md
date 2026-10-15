@@ -888,7 +888,9 @@ approval still succeeds and `share` is `missing`; Odo posts a notice in `Ops` so
 
 Spec A, section 4. Before each run, a ship's watcher asks for a ticket, and the station decides the run's mode at
 that moment. In this step, `build` with basis `owner` goes to a message by the ship's owner (a person) that
-mentions the ship. Everything else, and every resident ship, gets `read` with basis `none`. Any member of the
+mentions the ship and is fresh: posted within 24 hours of the ticket, and not yet answered by the ship. An owner's
+mention that isn't fresh gets `read` with basis `old` or `answered` (fresh owner mentions spec). Everything else, and every resident ship,
+gets `read` with basis `none`. Any member of the
 message's room can get a ticket. Ticket: `{id, ship_id, message_id, mode, basis, root_id, root_name, chain,
 hops, instructions, blocks, footer, status, created}`. `footer` is `Builder for <owner> (owner)` for a build,
 written without `@`, and empty otherwise. Asking again for the same message returns the same ticket while it is
