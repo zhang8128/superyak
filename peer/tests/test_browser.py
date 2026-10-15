@@ -3158,3 +3158,138 @@ def test_any_room_you_share_sends_the_star_and_a_room_made_after_sign_in_is_offe
             expect(page.locator(".grants-given .grant-item")).to_contain_text("Rooms: Any room you share with them")
             assert [body["rooms"] for body in sent] == ["*"]
     assert store.list_grants(patient)[0]["rooms"] == "*"
+
+
+def test_a_second_press_of_yes_revoke_while_the_first_is_on_its_way_sends_nothing(browser_peer):
+    """Section 2 review of merge 3c, minor 4: the revoke path has no guard of its own, only grantWrite's one write at a
+    time. With the first POST held the button is still on screen; a second press must not send a second POST (which the
+    station would answer with a 409 that the page then shows). The POSTs are counted."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            posts, held = [], []
+            page.on("request", lambda request: posts.append(request.url) if request.method == "POST" and request.url.endswith("/revoke") else None)
+            page.route("**/api/grants/*/revoke", lambda route: held.append(route))
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            confirm = item.get_by_role("button", name=f"Yes, revoke {made['short']}")
+            with page.expect_request("**/api/grants/*/revoke"):
+                confirm.click()
+            assert len(held) == 1
+            expect(confirm).to_be_visible()
+            expect(confirm).to_be_enabled()
+            confirm.click()  # the first write is still on its way
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts  # held requests are counted when sent
+            for route in held:
+                route.continue_()
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts
+            expect(page.locator(".notice.error")).to_have_count(0)
+    assert store.list_grants(patient)[0]["revoked"] is not None
+
+
+def test_focus_moves_to_given_by_you_only_after_a_revoke_that_worked(browser_peer):
+    """The Mac's final review of 3c, m4: after a revoke that went through the item is gone, so focus goes to the "Given by
+    you" heading; after a refused one the ask stays open with its error and focus returns to its "Yes, revoke" button."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            title = page.locator("#grants-given-title")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            refuse = lambda route: route.fulfill(status=409, content_type="application/json", body='{"error": "Grant is already revoked"}')
+            page.route("**/api/grants/*/revoke", refuse)
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(page.locator(".notice.error", has_text="Grant is already revoked")).to_be_visible()
+            page.wait_for_timeout(300)
+            expect(item.locator(".grant-ask")).to_have_count(1)
+            expect(title).not_to_be_focused()
+            expect(item.get_by_role("button", name=f"Yes, revoke {made['short']}")).to_be_focused()  # the keyboard user keeps their place
+            page.unroute("**/api/grants/*/revoke", refuse)
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            expect(title).to_be_focused()
+    assert store.list_grants(patient)[0]["revoked"] is not None
+
+
+def test_a_revoke_whose_reload_finds_the_session_ended_shows_the_sign_in(browser_peer):
+    """The Mac's final review of 3c, m4: the revoke went through, then the list's reload answered 401 (the session ended
+    meanwhile). The sign-in prompt shows, not a list that quietly went stale."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            posted = []
+
+            def after_the_post(route):
+                posted.append(route.request.url)  # the reload is answered 401 from here on
+                route.continue_()
+
+            page.route("**/api/grants/*/revoke", after_the_post)
+            page.route("**/api/grants", lambda route: route.fulfill(status=401, content_type="application/json", body='{"error": "Sign in"}')
+                       if posted else route.continue_())
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(page.get_by_text("Your session ended. Sign in again;")).to_be_visible()
+            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+    assert store.list_grants(patient)[0]["revoked"] is not None
+
+
+def test_names_written_as_html_show_as_text_in_a_held_revoked_grant(browser_peer):
+    """Section 2 review of merge 3c, minor 4 (the Mac's m2): the grantee's list shows revoked grants too ("Grant #xxxx was revoked by ..."),
+    so the doctor's view carries the patient's name twice, in the From line and in the reason. Both show as literal text,
+    and no element comes out of them."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    name = "<i>Pat</i><img src=x onerror=alert(2)>"
+    made = store.make_grant(patient, doctor, [ship["id"]], [room["id"]], 24, 5)
+    store.rename_user(patient, name)
+    store.revoke_grant(patient, made["id"], "Done")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "doctor") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            held = page.locator(".grants-held .grant-item")
+            expect(held).to_have_count(1)
+            expect(held.locator("p").first).to_contain_text(f"{made['short']} From {name}")
+            expect(held).to_contain_text(f"Grant {made['short']} was revoked by {name}")
+            assert page.locator(".grant-list img, .grant-list i").count() == 0
+
+
+def test_the_rooms_offered_for_a_grant_leave_out_breakouts_and_received_rooms(browser_peer):
+    """Section 2 review of merge 3c, minor 4 (the Mac's m2): a breakout or a received room can't be granted (G8 step 1). Real data can't show
+    it, since a breakout holds no person, so the home response is given two such rooms that list the doctor as a member;
+    the form still offers only the real shared room."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    doctor = users["doctor"]["id"]
+
+    served = []
+
+    def with_extra_rooms(route):
+        served.append(route.request.url)
+        home = route.fetch().json()
+        real = next(chat for chat in home["chats"] if chat["id"] == room["id"])
+        home["chats"] += [dict(real, id="made-up-breakout", title="Made-up breakout", breakout=real["id"], member_ids=[doctor]),
+                          dict(real, id="made-up-received", title="Made-up received", origin="far-station", member_ids=[doctor])]
+        route.fulfill(json=home)
+
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route("**/api/home", with_extra_rooms)
+            page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_label("Person").select_option(label="<img src=x onerror=alert(1)>")
+            expect(page.get_by_label("<b>City</b> of AI")).to_be_visible()
+            expect(page.locator("#grant-form input[name='grant-room']")).to_have_count(1)
+            expect(page.get_by_label("Made-up breakout")).to_have_count(0)
+            expect(page.get_by_label("Made-up received")).to_have_count(0)
+            assert served  # the interception ran, so the two added rooms were in the page's data

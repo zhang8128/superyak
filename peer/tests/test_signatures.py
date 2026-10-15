@@ -514,9 +514,12 @@ def test_the_peer_tls_check_never_plays_back_a_hot_journal(tmp_path):
     crashed = tmp_path / 'crashed'
     before = hot_journal(crashed)
     assert sorted(before) == ['peer.sqlite3', 'peer.sqlite3-journal']
-    with pytest.raises(ValueError, match='peer.sqlite3 could not be read read-only'):
+    with pytest.raises(ValueError, match='peer.sqlite3 could not be read read-only') as refusal:
         refuse_a_lost_identity_before_the_store(crashed)
     assert {path.name: path.read_bytes() for path in crashed.iterdir()} == before
+    # Section 2 review of merge 3c, minor 2 (the Mac's m3): the way out a person reads at 2 a.m. is the message's last clause.
+    assert ('Any normal opener plays a hot journal back (for example `make station-pending`, '
+            'or `serve` without `--peer-tls`)') in str(refusal.value)
 
 
 def test_the_restore_test_passes_on_a_copy_holding_signed_records(tmp_path, monkeypatch, capsys):

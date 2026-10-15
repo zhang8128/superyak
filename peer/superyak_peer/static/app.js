@@ -1880,7 +1880,9 @@ document.addEventListener("click", async (event) => {
   if (action === "grant-revoke-confirm" && state.grantAsk?.id === target.dataset.id) {
     const grant = (state.grants || []).find((item) => item.id === target.dataset.id);
     const revoked = await grantWrite(`/api/grants/${pathPart(target.dataset.id)}/revoke`, { reason: state.grantAsk.reason }, () => `Grant ${grant?.short || ""} revoked.`);
-    if (revoked) document.querySelector("#grants-given-title")?.focus();  // a refused revoke keeps the ask open, focus where it was
+    if (revoked) document.querySelector("#grants-given-title")?.focus();
+    // A refused revoke re-renders its ask: focus goes back to "Yes, revoke". With the ask gone (sign-in shown, another account) nothing is focused.
+    else if (state.grantAsk?.id === target.dataset.id) document.querySelector('.grant-ask [data-action="grant-revoke-confirm"]')?.focus();
   }
   if (action === "remove-participant") await removeParticipant(target.dataset.id);
   if (action === "edit-brief" && state.room) {
