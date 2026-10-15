@@ -38,7 +38,8 @@ layers. The brief:
   new room's brief records which room it came from.
 
 The brief never contains the old room's messages, unless the owner copies text into it on purpose. A new member sees
-only what the owner chose to carry.
+only what the owner chose to carry, and the board's open items, which move to the new room with their claims when the
+holder is in it (work-board 5.x; the add dialog says so first).
 
 ## Station (peer)
 
@@ -70,7 +71,7 @@ only what the owner chose to carry.
   remote members of a local room don't see the brief. The web panel says "Visible to members on this station only."
 - The event log gets `chat.brief` (room id, revision, author) for audit. The body is not stored in the event.
 - `make station-bridge`, which adds Wormhole and so creates a linked room, carries the brief: bridging is the same
-  room continuing. Unbridging removes Wormhole in place (see above). The wormhole relays only `@persona` mentions from
+  room continuing. The room's open board items come along too (work-board 5.x). Unbridging removes Wormhole in place (see above). The wormhole relays only `@persona` mentions from
   messages, never the brief.
 
 ## Agent
@@ -91,7 +92,9 @@ only what the owner chose to carry.
 - The add-participants dialog ("Start a new linked chat") gets a checkbox "Carry the room brief into the new room",
   shown only when the room has a brief, and the brief's text beside it (escaped), so the owner sees what will carry. It
   is unchecked by default, so carrying is always a choice. Its help text: "Only the brief is carried. Earlier messages
-  stay with their original participants." Ticking it sends `carry_brief` = the revision shown.
+  stay with their original participants." (Work-board 5.x changes it to "Only the brief, if ticked, and the board's
+  open items are carried. Earlier messages stay with their original participants.", shown whenever the room has a
+  brief or open items.) Ticking it sends `carry_brief` = the revision shown.
 - A carried brief shows "Carried from the previous room on <date>". The title is the same, because linked rooms keep
   their title, so nothing more is needed.
 - All brief text is shown escaped (`escapeHtml`).

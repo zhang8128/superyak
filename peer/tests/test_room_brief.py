@@ -196,14 +196,16 @@ def test_carrying_copies_the_brief_into_the_new_room_and_never_its_messages(env)
 def test_without_carry_the_new_room_has_no_brief(env):
     app, clients, users, clock = env
     patient, organizer = clients[0], clients[2]
-    room = new_room(patient, users[1])
-    patient.post(f'/api/chats/{room}/messages', json={'client_message_id': 'a', 'body': 'An old secret.'})
-    put_brief(patient, room, 'Plan.', 0)
-    for extra in ({}, {'carry_brief': None}):
+    for extra in ({}, {'carry_brief': None}):  # a fresh room each time: a replaced room takes no more adds (work board 8.4)
+        room = new_room(patient, users[1])
+        patient.post(f'/api/chats/{room}/messages', json={'client_message_id': 'a', 'body': 'An old secret.'})
+        put_brief(patient, room, 'Plan.', 0)
         response = add_members(patient, room, users[2], **extra)
         assert response.status_code == 201, response.text
         got = organizer.get(f'/api/chats/{response.json()["id"]}').json()
         assert got['brief'] is None and got['brief_revision'] == 0 and got['messages'] == []
+    room = new_room(patient, users[1])
+    put_brief(patient, room, 'Plan.', 0)
     put_brief(patient, room, '', 1)
     removed = add_members(patient, room, users[2], carry_brief=2)  # a removed brief leaves nothing to carry
     assert removed.status_code == 201 and brief_of(organizer, removed.json()['id']) is None

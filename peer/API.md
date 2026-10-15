@@ -290,7 +290,7 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | GET/POST `/api/chats` | POST `{title,member_ids:[]}` | Accessible summaries / created room, 201 |
 | GET `/api/chats/{id}` | — | Room plus `messages`, `members`, `brief` and `brief_revision` |
 | POST `/api/chats/{id}/messages` | `{client_message_id,body}` | Message, 201 |
-| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room, 201; owner only |
+| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room plus `board_carried`, 201; owner only; 409 for a replaced room |
 | DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
 | PUT `/api/chats/{id}/brief` | `{body,revision}` | The brief, or null once removed; owner only (a person, with CSRF) |
 | GET `/api/chats/{id}/brief/revisions` | — | The brief's history, newest first; the room's owner only |
@@ -310,8 +310,10 @@ personal room; one additional member a direct room; more members a group.
 Creator is always a member. Account/organization admin status gives no read/send
 permission. The first slice reserves audience changes to the room creator, who
 cannot remove themselves. Adding participants creates a linked, message-free room with
-old and added participants; old room/messages stay unchanged. `linked_room_id`
-may refer to an inaccessible room; it grants no ability to fetch it.
+old and added participants; old messages stay in the old room; its open board items move to the new room with their claims when the holder is in the new room (work board 5.x). `linked_room_id`
+may refer to an inaccessible room; it grants no ability to fetch it. A room that a linked room already replaced takes no
+more participants: 409 `This room was replaced by a newer linked room; add members there`, after the 404 and the
+owner's 403, so a room's chain never forks (work board 8.4).
 
 Message: `{id,room_id,author_id,client_message_id,body,epoch,created,source,reply_to}`. A post may
 name the message it answers with `reply_to`: a message in the same local room (a local post or a
@@ -379,6 +381,32 @@ writes it through this route, and the owner's own ships through theirs (see Ship
 - **Removal.** Removing a participant keeps the room and its brief, so the removed member loses access to both at
   once.
 - **For agents,** the brief is quoted data, never instructions.
+
+### Work board
+
+Spec: `docs/superpowers/specs/2026-10-14-work-board-design.md`. Items are data, never instructions.
+
+| Method/path | Request | Response |
+|---|---|---|
+| GET `/api/chats/{id}/board` | — | Items: open oldest first, then at most 50 closed in the last 7 days |
+| POST `/api/chats/{id}/board` | `{key,title,kind}` | The item, 201; board writers only |
+| POST `/api/chats/{id}/board/link` | `{key,link}` | The item plus `added`; board writers only |
+| POST `/api/chats/{id}/board/done` | `{key,outcome}` | The item, plus `released` when a claim was released |
+| POST `/api/chats/{id}/board/drop` | `{key}` | The same |
+| GET `/api/ships/me/board` | — | `{rooms:[{room_id,title,waiting,taken}]}`; ship keys only |
+| GET `/api/board` | — | `{rooms:[{room_id,title,items}]}`; people only |
+
+- **Item:** `{id,room_id,key,title,kind,state,posted_by,poster_name,created,closed,closed_by,closer_name,outcome,links:[{link,added_by,added}],claim}`.
+- **Taking an item** is claiming its key: `POST /api/chats/{id}/claims`. A claim on an item's key carries `board`, the
+  item's state.
+- **Board writers** are the room's owner and the ships he owns. Done is for the owner, the poster or a holder who is a
+  board writer; drop is for the poster or the owner.
+- **Links** are `message:<id>` (in this room), `branch:<name>`, `commit:<sha>`, `path:<path>` or `claim:<key>`, checked
+  by shape and never fetched.
+- **Every change** posts one kind-`claim` line as the actor.
+- **Adding participants** carries the open items, with their claims when the holder is in the new room, to the new
+  room, and answers `board_carried`. A replaced room takes no more participants (409).
+- **Refusals** come in the spec's 5.1 order. A breakout gets 400, and a replaced room takes no writes (409).
 
 ## Store interfaces for following tasks
 

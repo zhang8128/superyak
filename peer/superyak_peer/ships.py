@@ -3,7 +3,7 @@ import hmac
 import re
 import secrets
 from .auth import token_hash, public_user
-from .common import Problem, require, text, uid
+from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, require, text, uid
 
 DOCKING_LIFETIME = 600
 DOCKING_HOURLY_LIMIT = 20
@@ -206,7 +206,7 @@ class Ships:
         return person['id']
 
     def _current_rooms(self, db, actor):
-        return db.execute('SELECT id,title FROM rooms WHERE owner_id=? AND id NOT IN (SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL) ORDER BY title,id', (actor,)).fetchall()
+        return db.execute(f'SELECT id,title FROM rooms WHERE owner_id=? AND id NOT IN ({REPLACED_ROOMS}) ORDER BY title,id', (actor,)).fetchall()
 
     def _wormhole_id(self, db):
         ship = db.execute("SELECT id FROM users WHERE username='wormhole' AND kind='ship'").fetchone()
@@ -266,7 +266,7 @@ class Ships:
             try:
                 new = self.add_participants(actor, room['id'], [wormhole], carry)
             except Problem as exc:
-                if exc.status == 409 and carry is not None:  # the brief was saved between the read and the carry
+                if exc.status == 409 and carry is not None and exc.message != REPLACED_ADD:  # the brief was saved between the read and the carry
                     raise Problem(409, 'The room brief changed while bridging; run station-bridge again') from exc
                 raise
             return {**new, 'brief_carried': carry is not None}, True  # the operator tells Andy whether it came along

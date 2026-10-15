@@ -3,6 +3,13 @@ import json
 import re
 import uuid
 
+# Rooms that a later linked room replaced (members were added): such a room is no longer current. One subquery for every
+# current-room check, so they can't drift (work board 5.1): CURRENT_PERSON_ROOM (which the breakouts and the brief route
+# use), Ships._current_rooms, the board's replaced-room refusal and add_participants' (work board 8.4).
+REPLACED_ROOMS = 'SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL'
+# Adding members to a replaced room would make a second current room beside its replacement: a fork (work board 8.4).
+REPLACED_ADD = 'This room was replaced by a newer linked room; add members there'
+
 class Problem(Exception):
     def __init__(self, status, message, *, keep=False):
         # keep: the transaction keeps what it saved before this refusal (a breakout's closure, saved on first sight)
