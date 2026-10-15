@@ -331,7 +331,7 @@ Today:
   revision after a removal (S3).
 - **R5.** A ship's body with an addressed `@name` gets 400. No brief save, by anyone, records a mention.
 - **R6.** A ship saves at most 10 revisions per rolling hour across rooms. The 11th gets 429 and writes nothing.
-  Carried revisions never count.
+  Carried revisions never count. A ship's save of the current text is no save: it counts nothing (S3) (follow-up from the final reviews; narrows, no new D8 round).
 - **R7.** Every revision's author is the id that saved it. A carry, by adding members or by bridging, keeps the carried
   revision's author.
 - **R8.** The `brief` object carries `author_kind` and `author_username`, and `author_name` is still `safe_line`.
@@ -349,7 +349,8 @@ Today:
   404. Names in it are `safe_line`, and the web shows its text escaped.
 - **R13.** A revert is a save of an old revision's text through the person route, and makes a new revision by the
   owner.
-- **R14.** Every save and removal posts exactly one notice:
+- **R14.** Every save and removal posts exactly one notice (a ship's save of the current text is no save: it writes,
+  posts and counts nothing, S3 (follow-up from the final reviews; narrows, no new D8 round)):
   - by the system author, with kind `notice`;
   - with client id `brief-<room id>-<revision>`;
   - with text exactly one of S6's templates;
