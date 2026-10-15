@@ -3,7 +3,7 @@ import hmac
 import re
 import secrets
 from .auth import token_hash, public_user
-from .common import Problem, require, text, uid
+from .common import REPLACED_ROOMS, Problem, require, text, uid
 
 DOCKING_LIFETIME = 600
 DOCKING_HOURLY_LIMIT = 20
@@ -206,7 +206,7 @@ class Ships:
         return person['id']
 
     def _current_rooms(self, db, actor):
-        return db.execute('SELECT id,title FROM rooms WHERE owner_id=? AND id NOT IN (SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL) ORDER BY title,id', (actor,)).fetchall()
+        return db.execute(f'SELECT id,title FROM rooms WHERE owner_id=? AND id NOT IN ({REPLACED_ROOMS}) ORDER BY title,id', (actor,)).fetchall()
 
     def _wormhole_id(self, db):
         ship = db.execute("SELECT id FROM users WHERE username='wormhole' AND kind='ship'").fetchone()

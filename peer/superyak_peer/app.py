@@ -237,6 +237,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def ship_directory(request: Request):
         return store.directory(member(request)['id'])
 
+    @app.get('/api/ships/me/board')
+    def ship_board(request: Request):
+        return store.board_counts(ship_member(request)['id'])  # work board 5.1: about the ship itself, so ships only
+
     @app.post('/api/ships/me/tickets')
     async def ticket_issue(request: Request):
         who, data = ship_member(request)['id'], await body(request)
@@ -557,6 +561,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     async def chat_board_drop(key: str, request: Request):
         who, data = member(request)['id'], await body(request)
         return store.drop_item(who, key, data.get('key'))
+
+    @app.get('/api/board')
+    def person_board(request: Request):
+        return store.board_view(actor(request))  # a person's Board view; current_user: a ship key 403, no session 401
 
     @app.put('/api/chats/{key}/brief')
     async def chat_brief(key: str, request: Request):

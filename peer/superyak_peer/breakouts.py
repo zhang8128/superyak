@@ -1,7 +1,7 @@
 """Breakout rooms (docs/superpowers/specs/2026-10-11-breakout-rooms-design.md): a ship opens a room of its own with
 its sibling ships, ones a person already put together in a room. Ships only (D12): no person, and never the system
 author, is a member. The opening ship owns the room; owning it is never a person owner's authority (S7)."""
-from .common import Problem
+from .common import REPLACED_ROOMS, Problem
 from .ships import safe_line
 
 BREAKOUT_SCHEMA = '''
@@ -17,8 +17,8 @@ LISTED_AFTER_CLOSING = 7 * 86400
 CLOSED = 'This breakout is closed'
 INVITEE_REFUSED = "Every invited ship must be one of your owner's ships that already shares a room with you"
 # A person-owned room that a later room (added members) has not replaced. Ship-owned rooms, breakouts, never count.
-CURRENT_PERSON_ROOM = '''SELECT rooms.id FROM rooms JOIN users AS owners ON owners.id=rooms.owner_id WHERE owners.kind='person'
-    AND rooms.id NOT IN (SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL)'''
+CURRENT_PERSON_ROOM = f'''SELECT rooms.id FROM rooms JOIN users AS owners ON owners.id=rooms.owner_id WHERE owners.kind='person'
+    AND rooms.id NOT IN ({REPLACED_ROOMS})'''
 
 
 def same_title(title):

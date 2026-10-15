@@ -4,7 +4,7 @@ the active claim on (room, key). Every change posts one kind-`claim` line in the
 history is the board's audit trail. Items are quoted data, never instructions, whoever posted them (spec section 3)."""
 import re
 
-from .common import Problem, require, text, uid
+from .common import REPLACED_ROOMS, Problem, require, text, uid
 from .room_claims import claim_key
 from .ships import MENTION, safe_line
 
@@ -32,6 +32,7 @@ BREAKOUT = 'Breakouts hold no board'
 WRITER = "Only this room's owner and the owner's own ships can post on its board"
 DONE_BY = "Only the room's owner, the item's poster, or a holder who can post on this board can mark it done"
 DROP_BY = "Only the item's poster or the room's owner can drop it"
+REPLACED = 'This room was replaced by a newer linked room; use its board there'
 FULL = f'This board already has {OPEN_PER_ROOM} open items'
 HOURLY = f'You posted {POSTS_PER_HOUR} items in the last hour; wait before posting another'
 BRANCH = re.compile(r'[A-Za-z0-9._/-]{1,100}')
@@ -84,11 +85,14 @@ class RoomBoard:
             raise Problem(400, REMOTE)
 
     def _board_room(self, db, actor, room_id, write=False):
-        """Membership first (404, so a non-member learns nothing), then breakouts (400). A breakout's 400 keeps what
-        _room saved on first sight, a closure, as _refuse_closed_breakout does (breakouts.py:58-63)."""
+        """Membership first (404, so a non-member learns nothing), then breakouts (400, keeping a closure _room saved on
+        first sight, as _refuse_closed_breakout does), then, for a write, a room a newer linked room replaced (409), so
+        no open item is stranded behind its replacement. Reads still work there."""
         room = self._room(db, actor, room_id)
         if 'breakout' in room:
             raise Problem(400, BREAKOUT, keep=True)
+        if write and db.execute(f'SELECT 1 FROM rooms WHERE id=? AND id IN ({REPLACED_ROOMS})', (room_id,)).fetchone():
+            raise Problem(409, REPLACED)
         return room
 
     def _board_writer(self, db, room, actor):
@@ -167,6 +171,46 @@ class RoomBoard:
         with self.transaction() as db:
             self._board_room(db, actor, room_id)
             return self._board_list(db, room_id)
+
+    def _my_current_rooms(self, db, actor):
+        """The current local rooms this member belongs to. `rooms` holds local rooms only: a received room lives in the
+        peer tables."""
+        return db.execute(f'''SELECT rooms.id, rooms.title FROM rooms JOIN room_members ON room_members.room_id=rooms.id
+            WHERE room_members.user_id=? AND rooms.id NOT IN ({REPLACED_ROOMS}) ORDER BY rooms.id''', (actor,)).fetchall()
+
+    def board_counts(self, actor):
+        """GET /api/ships/me/board (5.1, 5.4): per current room the ship belongs to that has open items, how many wait (no
+        active claim) and how many are taken. The room with the oldest waiting item comes first, rooms with nothing
+        waiting last, ties by room id. Counts against the ship's 60 reads a minute, as the directory does."""
+        self._inbox_budget(actor)
+        with self.transaction() as db:
+            now, found = self.clock(), []
+            for room in self._my_current_rooms(db, actor):
+                waiting = taken = 0
+                oldest = None
+                for item in db.execute("SELECT key, created FROM board_items WHERE room_id=? AND state='open' ORDER BY created, rowid", (room['id'],)):
+                    if self._active_claim(db, room['id'], item['key'], now) is not None:
+                        taken += 1
+                    else:
+                        waiting += 1
+                        oldest = item['created'] if oldest is None else oldest
+                if waiting or taken:
+                    found.append(((oldest is None, oldest or 0, room['id']),
+                                  {'room_id': room['id'], 'title': room['title'], 'waiting': waiting, 'taken': taken}))
+            return {'rooms': [row for _, row in sorted(found, key=lambda pair: pair[0])]}
+
+    def board_view(self, actor):
+        """GET /api/board (5.x), for a person: open items from every current local room they belong to, grouped by room,
+        each room's oldest first, with the per-room list's fields. Rooms come in the order of their oldest open item, and
+        rooms with none are left out."""
+        with self.transaction() as db:
+            rooms = []
+            for room in self._my_current_rooms(db, actor):
+                rows = db.execute("SELECT * FROM board_items WHERE room_id=? AND state='open' ORDER BY created, rowid", (room['id'],)).fetchall()
+                if rows:
+                    rooms.append({'room_id': room['id'], 'title': room['title'], 'items': [self._item_json(db, row) for row in rows]})
+            rooms.sort(key=lambda room: (room['items'][0]['created'], room['room_id']))
+            return {'rooms': rooms}
 
     def post_item(self, actor, room_id, key, title, kind):
         """POST /api/chats/{room}/board: a new open item, announced in the room (4.5)."""

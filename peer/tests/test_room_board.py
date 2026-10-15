@@ -162,6 +162,10 @@ def elsewhere_message(s):
 # 5.1's refusal table, one case per row (Global Constraints numbers them). Each case breaks its own row and every later
 # row it can, so only the earliest answer may come back. A case returns (client, method, path, body, status, error).
 
+def count_from_a_person(s):  # row 1
+    return s.andy, 'GET', '/api/ships/me/board', None, 403, 'Only a ship key can use this route'
+
+
 def remote_room(s):  # row 2, with a bad key, title and kind too
     return (s.andy, 'POST', '/api/chats/peer:room/board', {'key': '-bad', 'title': '', 'kind': 'nope'}, 400,
             'Board items belong to rooms on this station')
@@ -209,6 +213,12 @@ def not_a_member(s):  # row 10: a person asking about a breakout gets 404, not 4
 def breakout(s):  # row 11: a member ship, who isn't a board writer there either
     return (s.ship('rio-grande'), 'POST', f'/api/chats/{open_breakout(s)}/board', {'key': 'build:x', 'title': 'Side work', 'kind': 'build'},
             400, 'Breakouts hold no board')
+
+
+def replaced(s):  # row 12: a non-writer, with a key already used there
+    assert post(s.ship('serenity'), s.room, 'build:x').status_code == 201
+    add_member(s, s.room)
+    return s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': 'Again', 'kind': 'build'}, 409, REPLACED
 
 
 def no_item(s):  # row 13: a non-writer, linking a message from another room
@@ -288,9 +298,16 @@ def post_budget(s):  # row 24
             429, 'This ship is posting too fast; wait a minute')
 
 
-REFUSALS = [remote_room, bad_key, bad_title, bad_kind, done_without_outcome, bad_link, live_key, at_name, not_a_member, breakout,
-            no_item, message_elsewhere, key_used, closed, not_a_writer, done_by_a_non_writer, drop_by_a_non_poster, link_it_has,
-            board_full, ten_an_hour, eight_links_full, post_budget]
+def reading_too_fast(s):  # row 25
+    serenity = s.ship('serenity')
+    for _ in range(60):
+        assert serenity.get('/api/ships/me/board').status_code == 200
+    return serenity, 'GET', '/api/ships/me/board', None, 429, 'This ship is reading too fast; wait a minute or use wait'
+
+
+REFUSALS = [count_from_a_person, remote_room, bad_key, bad_title, bad_kind, done_without_outcome, bad_link, live_key, at_name,
+            not_a_member, breakout, replaced, no_item, message_elsewhere, key_used, closed, not_a_writer, done_by_a_non_writer,
+            drop_by_a_non_poster, link_it_has, board_full, ten_an_hour, eight_links_full, post_budget, reading_too_fast]
 
 
 @pytest.mark.parametrize('case', REFUSALS, ids=lambda case: case.__name__)
@@ -346,6 +363,10 @@ def test_each_board_route_answers_as_5_1_says(env):
             assert refused(response) == (403, 'Refresh the page before making changes')
     finally:
         s.andy.headers['x-csrf-token'] = token
+    assert post(serenity, s.room, 'spec:e1').status_code == 201
+    counts = serenity.get('/api/ships/me/board')
+    assert counts.status_code == 200
+    assert counts.json() == {'rooms': [{'room_id': s.room, 'title': 'Superyak: all hands', 'waiting': 1, 'taken': 0}]}
 
 
 def test_each_change_posts_one_line_as_the_actor(env):
@@ -882,3 +903,104 @@ def test_the_board_mark_on_a_claim_is_scoped_to_its_room(env):
     answer = claim(s.ship('rio-grande'), s.room, 'adhoc:x')
     assert answer.status_code == 201 and 'board' not in answer.json()
     assert all('board' not in c for c in claims(s.andy, s.room))
+
+
+def test_a_replaced_room_takes_no_board_writes(env):
+    """5.1, ruling 4: after an add, each write in the old room gets 409 and nothing is written; GET still lists its
+    items; the count route and GET /api/board leave the old room out, even with an open item left in it."""
+    s = Station(env)
+    insert_item(s, s.room, 'build:a')
+    insert_item(s, s.room, 'build:closed', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
+    new = add_member(s, s.room)
+    insert_item(s, s.room, 'build:stranded')  # an open item left behind, as a step 1 rollback can leave one (plan review S2)
+    before = s.snapshot()
+    for response in (post(s.andy, s.room, 'build:new'), link(s.andy, s.room, 'build:a', 'branch:x'),
+                     done(s.andy, s.room, 'build:a'), drop(s.andy, s.room, 'build:a')):
+        assert refused(response) == (409, REPLACED)
+    assert s.snapshot() == before
+    assert [i['key'] for i in board(s.andy, s.room).json()] == ['build:stranded', 'build:closed']
+    assert [r['room_id'] for r in s.ship('serenity').get('/api/ships/me/board').json()['rooms']] == [new]
+    assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [new]
+
+
+def test_the_count_route_counts_waiting_and_taken_for_ships(env):
+    """5.1: per current room with open items, how many wait and how many are taken. Rooms are ordered by their oldest
+    waiting item, and a room with only taken items comes last. A room with only closed items isn't listed, nor a
+    replaced room. A person gets 403, and the 61st read in a minute gets 429."""
+    s = Station(env)
+    serenity, rio = s.ship('serenity'), s.ship('rio-grande')
+    later, taken_only, closed_only = s.make_room('Later room'), s.make_room('Taken only'), s.make_room('Closed only')
+    s.make_room('Quiet')
+    insert_item(s, later, 'build:old', created=s.clock[0] - 100)
+    insert_item(s, s.room, 'build:a', created=s.clock[0] - 50)
+    insert_item(s, s.room, 'build:b', created=s.clock[0] - 60)
+    insert_item(s, taken_only, 'build:t', created=s.clock[0] - 200)
+    insert_item(s, closed_only, 'build:x', state='done', closed=s.clock[0], outcome='commit:1ff0efb')
+    assert claim(rio, s.room, 'build:b').status_code == 201 and claim(rio, taken_only, 'build:t').status_code == 201
+    counts = serenity.get('/api/ships/me/board')
+    assert counts.status_code == 200 and counts.json() == {'rooms': [
+        {'room_id': later, 'title': 'Later room', 'waiting': 1, 'taken': 0},
+        {'room_id': s.room, 'title': 'Superyak: all hands', 'waiting': 1, 'taken': 1},
+        {'room_id': taken_only, 'title': 'Taken only', 'waiting': 0, 'taken': 1}]}
+    new = add_member(s, later)
+    assert [r['room_id'] for r in serenity.get('/api/ships/me/board').json()['rooms']] == [new, s.room, taken_only]
+    assert refused(s.andy.get('/api/ships/me/board')) == (403, 'Only a ship key can use this route')
+    for _ in range(58):  # 60 reads in the minute, these two above included
+        assert serenity.get('/api/ships/me/board').status_code == 200
+    assert refused(serenity.get('/api/ships/me/board')) == (429, 'This ship is reading too fast; wait a minute or use wait')
+
+
+def test_an_expired_claim_leaves_the_item_waiting_silently(env):
+    """4.1, 8.4: past the claim's expiry the board and the count route show the item waiting, and nothing was posted."""
+    s = Station(env)
+    insert_item(s, s.room, 'build:a', poster='andy')
+    assert claim(s.ship('rio-grande'), s.room, 'build:a', minutes=10).status_code == 201
+    serenity = s.ship('serenity')
+    assert serenity.get('/api/ships/me/board').json()['rooms'][0]['taken'] == 1
+    messages = s.rows('SELECT count(*) FROM messages')
+    s.tick(601)
+    assert board(s.andy, s.room).json()[0]['claim'] is None
+    assert serenity.get('/api/ships/me/board').json() == {
+        'rooms': [{'room_id': s.room, 'title': 'Superyak: all hands', 'waiting': 1, 'taken': 0}]}
+    assert s.rows('SELECT count(*) FROM messages') == messages
+
+
+def test_the_board_view_lists_a_persons_current_rooms(env, two_peers):
+    """5.x: GET /api/board lists open items from every current local room the person belongs to, grouped by room, each
+    room's oldest first, with the per-room list's fields. A replaced room, a room they aren't in and a received room
+    are left out. A ship key gets 403 `Ship keys cannot use this route`, and no session 401 `Sign in required`."""
+    s = Station(env)
+    second = s.make_room('Second room')
+    hidden = s.store.create_room(s.users[2]['id'], 'Not yours', [])['id']
+    insert_item(s, s.room, 'build:b', created=s.clock[0] - 10)
+    insert_item(s, s.room, 'build:a', created=s.clock[0] - 20)
+    insert_item(s, second, 'build:c', created=s.clock[0] - 5)
+    insert_item(s, s.room, 'build:closed', state='dropped', closed=s.clock[0])
+    s.store.post_item(s.users[2]['id'], hidden, 'build:hidden', 'Not for Patient', 'build')
+    view = s.andy.get('/api/board')
+    assert view.status_code == 200
+    rooms = view.json()['rooms']
+    assert [(r['room_id'], r['title'], [i['key'] for i in r['items']]) for r in rooms] == [
+        (s.room, 'Superyak: all hands', ['build:a', 'build:b']), (second, 'Second room', ['build:c'])]
+    assert rooms[0]['items'] == [i for i in board(s.andy, s.room).json() if i['state'] == 'open']
+    replacement = add_member(s, second)
+    assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [s.room, replacement]
+    assert refused(s.ship('serenity').get('/api/board')) == (403, 'Ship keys cannot use this route')
+    assert refused(TestClient(s.app, base_url='http://testserver').get('/api/board')) == (401, 'Sign in required')
+    a, b, ca, cb = two_peers
+    a[0].create_room(a[1], 'Across peers', [ca['id']])
+    deliver(a, b)
+    assert b[0].list_rooms(b[1]) and b[0].board_view(b[1]) == {'rooms': []}
+
+
+def test_a_linked_room_cycle_cannot_hang_the_key_check(env):
+    """Task 5's review: _key_used walks linked_room_id with a seen set, so two rooms that link to each other end the
+    walk instead of looping forever (it returns when it meets a room twice)."""
+    s = Station(env)
+    other = s.make_room('Other room')
+    with s.store.transaction() as db:
+        db.execute('UPDATE rooms SET linked_room_id=? WHERE id=?', (other, s.room))
+        db.execute('UPDATE rooms SET linked_room_id=? WHERE id=?', (s.room, other))
+    assert post(s.ship('serenity'), other, 'build:cycle').status_code == 409  # both rooms replaced each other
+    with s.store.transaction() as db:
+        assert s.store._key_used(db, s.room, 'build:cycle') is None
