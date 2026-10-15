@@ -1,6 +1,6 @@
 """Station signatures (spec A step 3, merge 3a; 2026-10-15-grants-step3-design.md G1-G6): the station's Ed25519
 key signs each instructions revision, so a revision can be checked against the station's card. Merge 3b adds grants
-and revocations here."""
+and revocations here (G12)."""
 from contextlib import closing
 import json
 from pathlib import Path
@@ -13,7 +13,10 @@ CREATE TABLE IF NOT EXISTS revision_signatures(layer_id TEXT NOT NULL, revision 
 '''
 # G4b: the records a new identity would void, as (table, query). A table the database lacks (one from before merge 3a
 # or 3b) holds none.
-SIGNED_RECORDS = (('revision_signatures', 'SELECT 1 FROM revision_signatures LIMIT 1'),)
+SIGNED_RECORDS = (('revision_signatures', 'SELECT 1 FROM revision_signatures LIMIT 1'),
+                  # a grant's row holds an empty signature only inside the transaction that inserts and signs it, which
+                  # mustn't count itself: the first grant on a new station creates the identity (G4)
+                  ('grants', "SELECT 1 FROM grants WHERE signature!='' LIMIT 1"))
 LOST_IDENTITY = ('The station identity {path} is missing, and this station holds signed records that a new identity would '
                  'void. Restore the file; if it is truly gone, run station-new-identity. Nothing was signed.')
 
@@ -117,3 +120,23 @@ class Signatures:
                                      (layer_id, revision)).fetchone())
             return {'station': self._station_identity(db).peer_id, 'record': self._revision_record(db, layer_id, revision),
                     'signature': row['signature']}
+
+    def _grant_record(self, db, grant_id):
+        """G12: a grant's record, with exactly RECORD_KEYS['grant'], from its stored row: actions, targets and rooms as
+        parsed JSON values, not their stored text. Columns a later step adds stay out, so old signatures keep verifying.
+        None for no such grant."""
+        row = db.execute('SELECT * FROM grants WHERE id=?', (grant_id,)).fetchone()
+        if row is None:
+            return None
+        return {'kind': 'grant', 'station': self._station_identity(db).peer_id, 'id': row['id'],
+                'issuer_id': row['issuer_id'], 'grantee_id': row['grantee_id'], 'actions': json.loads(row['actions']),
+                'targets': json.loads(row['targets']), 'rooms': json.loads(row['rooms']), 'expires': row['expires'],
+                'budget': row['budget'], 'depth': row['depth'], 'confirm': row['confirm'], 'parent_id': row['parent_id'],
+                'charter_layer_id': row['charter_layer_id'], 'charter_revision': row['charter_revision'],
+                'follow': row['follow'], 'created': row['created']}
+
+    def _sign_grant(self, db, grant_id):
+        """G12: in the transaction that inserts the grant. The record is built from the stored row, the one grant_signed
+        serves, so what was signed and what is served can't drift apart."""
+        db.execute('UPDATE grants SET signature=? WHERE id=?',
+                   (self._station_identity(db).sign_record(self._grant_record(db, grant_id)), grant_id))
