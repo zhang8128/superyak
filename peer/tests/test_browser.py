@@ -3195,7 +3195,7 @@ def test_a_second_press_of_yes_revoke_while_the_first_is_on_its_way_sends_nothin
 
 def test_focus_moves_to_given_by_you_only_after_a_revoke_that_worked(browser_peer):
     """The Mac's final review of 3c, m4: after a revoke that went through the item is gone, so focus goes to the "Given by
-    you" heading; after a refused one the ask stays open with its error and focus is not moved there."""
+    you" heading; after a refused one the ask stays open with its error and focus returns to its "Yes, revoke" button."""
     store, users, ship, room, lone = grant_station(browser_peer)
     patient = users["patient"]["id"]
     made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
@@ -3212,6 +3212,7 @@ def test_focus_moves_to_given_by_you_only_after_a_revoke_that_worked(browser_pee
             page.wait_for_timeout(300)
             expect(item.locator(".grant-ask")).to_have_count(1)
             expect(title).not_to_be_focused()
+            expect(item.get_by_role("button", name=f"Yes, revoke {made['short']}")).to_be_focused()  # the keyboard user keeps their place
             page.unroute("**/api/grants/*/revoke", refuse)
             item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
             expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
