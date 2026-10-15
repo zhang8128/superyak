@@ -46,7 +46,7 @@ class Signatures:
         """G2: in the transaction that writes the revision. A note's revision is not signed."""
         record = self._revision_record(db, layer_id, revision)
         if record is not None:
-            db.execute('INSERT INTO revision_signatures VALUES(?,?,?)',
+            db.execute('INSERT INTO revision_signatures(layer_id, revision, signature) VALUES(?,?,?)',
                        (layer_id, revision, self._station_identity().sign_record(record)))
 
     def _backfill_revision_signatures(self):
