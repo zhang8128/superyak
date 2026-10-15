@@ -10,7 +10,9 @@ S6, G15 and G19 (the fresh owner mentions spec, approved under D8 at 1faeff8, bo
 its `_mention_stale` and basis values are shared). G4a, G4b, tests 4a and 4b and the identity Known limit come from
 the section 2 review of merge 3a (findings 1 and 4); their D8 re-check (APPROVE WITH CHANGES: 2 must-fix, 2 should-fix,
 3 nits) added G4c, test 4c, the restore test's throwaway identity, the `serve --peer-tls` check, the lazy path's
-check and `_own_peer_id`'s single loader. All are built in merge 3b.
+check and `_own_peer_id`'s single loader; its second re-check (APPROVE WITH CHANGES: 0 must-fix, 1 should-fix, 3 nits)
+added G4c's handling of leftover TLS files and its fuller warning, the lazy path's use of the caller's connection, and
+the read-only `serve --peer-tls` check. All are built in merge 3b, and with them G4a-G4c are approved under D8.
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
 Serenity as `build:grants`; Rio Grande reviews each merge under section 2.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md) (approved 2026-10-08), its build order step 3
@@ -123,19 +125,29 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   check (the lost-identity check) guards every place that could create an identity:
   - `card` opens the store with `signing=True`, so it refuses before its own create;
   - `serve --peer-tls` runs the check before it creates or loads the identity with its hosts (`__main__.py`), so a
-    federating station can't mint a new key on its usual start;
+    federating station can't mint a new key on its usual start. It runs before any `Store` opens, so it opens the
+    database read-only (creating and migrating nothing) and treats a missing database file, or a missing
+    `revision_signatures` or `grants` table (a database from before 3a or 3b), as no signed records;
   - `_station_identity()` creates a missing identity only when the station holds no signed records, and otherwise
-    raises, which rolls the signed write back (so a `signing=False` opener that someday signs can't mint one either);
+    raises, which rolls the signed write back (so a `signing=False` opener that someday signs can't mint one either).
+    It is called inside write transactions (signing, and `_own_peer_id` within a room read), so it takes the caller's
+    connection and opens a transaction of its own only when it is given none: a second `BEGIN IMMEDIATE` on a new
+    connection would wait out SQLite's timeout, since the dispatch gate is reentrant but SQLite's write lock is not;
   - `station-restore-test` serves a copy in a scratch directory that has no identity file: it creates a throwaway
     identity in that directory (mode 0700, removed with it) before it starts the server and reads the counts, so a
     copy holding signed revisions still passes, and `serve` stays as it is.
 - **G4c. A deliberate new identity (built in merge 3b; D8 re-check of G4a and G4b, S1).** `station-new-identity
   --data-dir DIR [--endpoint https://HOST:PORT]` is the one supported way to give a station a new identity on purpose,
-  when the old `identity.json` is lost. It refuses if `identity.json` exists. It creates the identity as
-  `PeerIdentity.load_or_create` does, with the endpoint's host beside `localhost` and `127.0.0.1` when an endpoint is
-  given (so plan review M1 holds), prints that every signature made with the lost key will stop verifying against the
-  station's new card, and changes nothing in the database. The station then starts, and later records are signed with
-  the new key.
+  when the old `identity.json` is lost. It refuses if `identity.json` exists. Before it creates anything, it moves
+  any leftover `peer-cert.pem` and `peer-key.pem` aside with a dated suffix (for example `peer-cert.pem.lost-20261015T120000Z`)
+  and says so: `PeerIdentity` refuses to load an identity whose TLS files differ, and those files usually survive when
+  only `identity.json` is lost. It then creates the identity as `PeerIdentity.load_or_create` does, with the
+  endpoint's host beside `localhost` and `127.0.0.1` when an endpoint is given (so plan review M1 holds), and changes
+  nothing in the database. It prints what changes: every signature made with the lost key stops verifying against the
+  new card; the station's peer id changes (it is the key's hash), so every paired peer must pair again with the new
+  card; replies this station already sent into remote rooms carry the old peer id and will show as unverified; and the
+  lighthouse must be stopped first, since a running one keeps signing with the old key it holds until it restarts.
+  The station then starts, and later records are signed with the new key.
 - **G5.** At startup, every revision whose snapshot has `kind: "instructions"` and that has no signature is signed
   once, from its stored snapshot. The active station law (layer c879372542444e4c8f95f2c0db69f8fb) is one of them. A
   second start signs nothing.
@@ -388,8 +400,12 @@ Each test is named, written first, and seen failing first.
     which must not create a key); a `signing=False` start still opens; a station with no signed records and no
     identity starts and creates none (G4's first-card behavior is unchanged); a dangling symlink still refuses as before.
 4c. `station-restore-test` passes on a copy that holds a signed revision (the copy has no identity file).
-    `station-new-identity` refuses when `identity.json` exists; with it missing, it creates one whose certificate names
-    the endpoint's host, prints the warning, leaves the database byte for byte the same, and the station then starts.
+    `station-new-identity` refuses when `identity.json` exists; with it missing (and the old `peer-cert.pem` and
+    `peer-key.pem` still there), it moves those two aside, creates an identity whose certificate names the endpoint's
+    host, prints the warning, leaves the database byte for byte the same, and the station then starts. `serve
+    --peer-tls`'s check opens a database from before 3a (no `revision_signatures` table) and a missing database
+    without creating or changing either. `_own_peer_id` called inside a room read on a station without an identity
+    doesn't stall.
 5. Making a grant, as a table of refusals, each with its status: an unknown, remote or breakout room id or a room
    the caller is not in (404, the same body for each); a replaced room or one without the grantee (400); grantee is
    the caller, a ship, the system author or awaiting activation; a target is another person's ship, a resident ship
