@@ -130,6 +130,8 @@ Today:
        - S1(d) (409);
        - S2's removal (403);
        - the revision (409);
+       - a body equal to the current brief's: answer with the current brief, unchanged, and stop. It writes no
+         revision, posts no notice, spends no rate slot, and the author stays whoever wrote it (follow-up from the final reviews; narrows, no new D8 round);
        - the rate (429);
        - the write.
   - **The expected revision** is the person route's check: an `int` that isn't a `bool`, equal to the current
@@ -204,7 +206,8 @@ Today:
       `briefMeta` shows only "Carried from…" (app.js:521).
     - **The carry dialog** shows the same author line beside the text it would carry, so the owner sees when he is
       carrying a ship's text. Today it shows the text with no author (app.js:545).
-    - **The editor** shows the warning above when its text is a ship's.
+    - **The editor** shows the warning above when its text is a ship's. The warning hides while the box is blank
+      (trimmed), because Save then removes the brief and nothing becomes the owner's (follow-up from the final reviews; narrows, no new D8 round).
   - **The hook** shows no brief text today (the room-brief spec left it out of scope), and this spec doesn't add it.
     It shows the notice (S6), which names the author the same way.
 - **S5. History, and the owner's revert.**
@@ -231,11 +234,17 @@ Today:
       carried_from}`. A removal has body `''`.
     - `author_name` goes through `safe_line`.
     - The web History list shows every body and name escaped. "Use this text" sets the textarea's value, never HTML.
+    - **Empty and failed lists:** a room that never had a brief shows "No revisions yet." under the heading. When a
+      save succeeds but reloading the open list fails, the rows already shown stay and the error shows under them
+      (follow-up from the final reviews; narrows, no new D8 round).
     - **Why owner only:** history holds text the owner removed on purpose. Members and ships need only the current
       brief, and a ship reading old text could carry injected text forward again.
   - **Revert:** in the web panel's "History" list, the owner's "Use this text" opens the editor with that revision's
     body, at the current revision. Save is the existing PUT, so the result is a new revision by the owner. There is no
     restore route.
+    - When the editor is open and its text differs from what it opened with, "Use this text" asks first, inline, as the
+      board's Drop does: "Replace your unsaved text with revision N?", with Yes and Cancel. Cancel keeps the typing
+      (follow-up from the final reviews; narrows, no new D8 round).
     - **Why:** saving is the owner's act, he sees what he saves, and the editor's warning (S4) tells him when the
       text is a ship's. Restoring a ship's revision this way makes it his, which it is once he saves it.
   - **How a steered ship's bad brief is noticed, undone and stopped:**
@@ -302,6 +311,12 @@ Today:
   - **Its result:** "Saved the brief of room <id> as revision N. Every member is told in a station notice, and the
     room's owner can restore earlier revisions." When `redact` changed the text, it adds " Text that looked like a
     secret was masked."
+  - **When nothing changed:** the route answers the current brief with the revision the ship passed, and the tool
+    says "The brief of room <id> already says that; nothing was saved (it stays revision N)." It reads the same
+    revision back, so the route's answer shape is unchanged (follow-up from the final reviews; narrows, no new D8 round).
+  - **`station_rooms`** shows `replaces: <id>` on a room that replaced an earlier one (the station's
+    `linked_room_id`), through the id helpers, so a ship that gets the replaced-room 409 can find the newer room
+    (follow-up from the final reviews; narrows, no new D8 round).
   - **Refusals** come back as "station error: <the station's words>", like every tool.
 
 ## Requirements
@@ -316,7 +331,7 @@ Today:
   revision after a removal (S3).
 - **R5.** A ship's body with an addressed `@name` gets 400. No brief save, by anyone, records a mention.
 - **R6.** A ship saves at most 10 revisions per rolling hour across rooms. The 11th gets 429 and writes nothing.
-  Carried revisions never count.
+  Carried revisions never count. A ship's save of the current text is no save: it counts nothing (S3) (follow-up from the final reviews; narrows, no new D8 round).
 - **R7.** Every revision's author is the id that saved it. A carry, by adding members or by bridging, keeps the carried
   revision's author.
 - **R8.** The `brief` object carries `author_kind` and `author_username`, and `author_name` is still `safe_line`.
@@ -334,7 +349,8 @@ Today:
   404. Names in it are `safe_line`, and the web shows its text escaped.
 - **R13.** A revert is a save of an old revision's text through the person route, and makes a new revision by the
   owner.
-- **R14.** Every save and removal posts exactly one notice:
+- **R14.** Every save and removal posts exactly one notice (a ship's save of the current text is no save: it writes,
+  posts and counts nothing, S3 (follow-up from the final reviews; narrows, no new D8 round)):
   - by the system author, with kind `notice`;
   - with client id `brief-<room id>-<revision>`;
   - with text exactly one of S6's templates;

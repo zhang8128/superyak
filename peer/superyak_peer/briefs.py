@@ -151,8 +151,9 @@ class Briefs:
     def save_ship_brief(self, actor, key, body, revision):
         """PUT /api/ships/me/rooms/{id}/brief (ship briefs S1-S3), under the ship's own key, which the route has
         checked. A ship of the room's owner, in his current local room that isn't a breakout, edits but never removes.
-        The checks run in S3's order, and every refusal writes nothing. The 409 names no revision: the ship must read
-        again before it overwrites anything."""
+        The checks run in S3's order, and every refusal writes nothing. A body equal to the current one, once the
+        revision check has passed, answers with the current brief and writes nothing (follow-up from the final
+        reviews). The 409 names no revision: the ship must read again before it overwrites anything."""
         body = brief_body(body)                                     # 1. the person route's text rules (400)
         if addressed_names(body):                                   # 2. law section 7: names without the at sign
             raise Problem(400, NO_AT_SIGN)
@@ -171,9 +172,11 @@ class Briefs:
                 raise Problem(409, REPLACED_ROOM)
             if body == '':                                          # S2: only a person removes
                 raise Problem(403, NO_SHIP_REMOVAL)
-            current = self._room_brief(db, key)[1]
+            shown, current = self._room_brief(db, key)
             if type(revision) is not int or revision != current:
                 raise Problem(409, READ_AGAIN)
+            if shown and shown['body'] == body:                     # follow-up: the text already says that; write nothing
+                return shown                                        # no revision, notice or rate charge; the author stays
             # S3: the history keeps the last day whole, so this count sees the full hour. Carries never count.
             recent = db.execute('SELECT count(*) FROM room_brief_revisions WHERE author_id=? AND carried_from IS NULL '
                                 'AND updated>?', (actor, self.clock() - BRIEF_RATE_SECONDS)).fetchone()[0]

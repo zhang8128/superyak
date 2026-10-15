@@ -199,6 +199,8 @@ class FakeStation:
             return 403, json.dumps({'error': "Only the room's owner can remove its brief"}).encode()
         if type(revision) is not int or revision != self.brief_revisions.get(room_id, 0):
             return 409, json.dumps({'error': 'The brief changed since you read it. Read it again with station_read and merge before saving.'}).encode()
+        if self.briefs.get(room_id) and self.briefs[room_id]['body'] == body:  # unchanged text: the station writes nothing
+            return 200, json.dumps(self.briefs[room_id]).encode()
         self.brief(room_id, self.users[me], body, revision + 1)
         return 200, json.dumps(self.briefs[room_id]).encode()
 
