@@ -122,7 +122,10 @@ last_activity}`. `owner_id` is origin-qualified; `members` is an array of
 room origin distributes roster and message events, signed by its original owner.
 Initial epoch is 1; removals increment it. Existing room recipients reject newly
 added members and changes at the same epoch. Adding people locally creates a
-separate linked empty room. A linked reference grants no old-room access.
+separate linked empty room. A linked reference grants no old-room access. A
+receiver refuses a roster whose `linked_room_id` is not null or `<origin>:<id>`
+(`<id>` as a participant id, `[A-Za-z0-9_-]{1,64}`) under the envelope's own
+origin (400); `room.message` carries the same fields and is refused the same way.
 
 `room.message`: same roster fields plus `message={id,room_id,author_id,
 client_message_id,body,epoch,created}`. Here `room_id` is origin-local and

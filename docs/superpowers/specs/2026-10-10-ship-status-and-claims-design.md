@@ -267,7 +267,7 @@ want of this:
     - So the inbox, the hook and every reader already carry claims, with no new channel.
   - **Message kinds have their own table:** `message_kinds(message_id PRIMARY KEY REFERENCES messages(id), kind NOT
     NULL CHECK (kind IN ('claim','notice')))`. A `notice` row's message is always the system author's (S11); a
-    `claim` row's is its claimant's. `message_sources`, which needs a ticket (tickets.py:13), is unchanged.
+    `claim` row's is its claimant's, or the actor of a board change (work-board 4.5). `message_sources`, which needs a ticket (tickets.py:13), is unchanged.
     `_sources` (tickets.py:81-92) gives a message with a `message_kinds` row that kind as its source, whoever posted it,
     people included. Claim and notice messages record no mention rows, the ticket decision refuses them, and the
     resident watcher skips them, so they never wake a ship (R20).
@@ -334,7 +334,7 @@ want of this:
     | The directory (S7; ships.py:340-351) | Ships only, `kind='ship'` | Never listed: it isn't a ship, has no presence and no tickets |
     | `answered` (S5, R7) | Messages with `reply_to` by `messages.author_id = ship` | Never counts: its author isn't the ship, and its messages have no `reply_to` (R32) |
     | The mention scan (ships.py:305-316 `_record_mentions`, 325-338 `mentions`; tickets.py:37-59) | Mentions are recorded on `send_message`; tickets need a mention for `build` | `_post_as_system` records no mentions, and `@_station` can't be mentioned. `issue_ticket` refuses any message by the system author or with a `message_kinds` row with 422 (S5, R20), and the resident watcher (watch.py:220-253) skips them |
-    | `message_kinds` (S8) | (new) | `notice` rows belong to system-authored messages only; `claim` rows to their claimants |
+    | `message_kinds` (S8) | (new) | `notice` rows belong to system-authored messages only; `claim` rows to their claimants, or the actor of a board change (work-board 4.5) |
     | The room UI (static/app.js:458-464 `participantName`, 504-509 `sourceLabel`, 511-513 `messageMarkup`) | An author who isn't a contact shows as "Someone in this chat" | `messageMarkup` shows "Station" for a message whose author is the room's `system_author`, and `sourceLabel` shows "station notice" or "claim" |
     | Federation (federation.py:67-70, 140) | Every `chat.message` event goes to the room's remote members, its author id prefixed with this peer's id | Never federates: an event whose message is by the system author, or has a `message_kinds` row, is skipped before the outbox (R33). Claim messages stay local too, since the claim board they describe is local (R19) |
     | Room membership checks (chats.py:5-12 `_room`; 89-113 `add_participants`, `remove_participant`) | Reading and posting need membership | The system author is never a member and can't be added: adding a participant of kind `system` is refused (400). `_post_as_system` checks only that the room is local (no `:` in its id) |

@@ -97,8 +97,11 @@ def describe_bridge(room, changed, bridge):
         return f'The {where} is already bridged. Nothing changed.' if bridge else f'The {where} is not bridged. Nothing changed.'
     if bridge:
         brief = "The room's brief came along." if room.get('brief_carried') else 'The room had no brief to carry.'
+        carried = room.get('board_carried') or 0
+        board = (f'{carried} open board item{"" if carried == 1 else "s"} came along.' if carried
+                 else 'The room had no open board items.')
         return (f'Bridged. Wormhole is in a new {where} with the same members; the room it replaces, {room["linked_room_id"][:6]}, '
-                f'stays as it was but is no longer the current room. {brief}')
+                f'keeps its messages and closed board items but is no longer the current room. {brief} {board}')
     return f'Unbridged. Wormhole left the {where}.'
 
 

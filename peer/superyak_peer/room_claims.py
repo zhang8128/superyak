@@ -1,6 +1,7 @@
 """Room claims (spec S8): records in one local room, advisory and exclusive per key. The claim route posts the
-announcement itself, in its own transaction, as the claimant, with kind `claim`. A claim blocks nothing but a second
-claim on the same key in the same room (R18)."""
+announcement itself, in its own transaction, as the claimant, with kind `claim`; the work
+board's changes post their lines through it too, as the actor. A claim blocks nothing but a second claim on the same key in
+the same room (R18)."""
 import re
 import time
 from .common import Problem, require, uid
@@ -38,9 +39,13 @@ class RoomClaims:
     def _claim_json(self, db, claim_id):
         row = db.execute('SELECT claims.*, users.name AS holder_name FROM claims JOIN users ON users.id=claims.holder_id WHERE claims.id=?',
                          (claim_id,)).fetchone()
-        return {'id': row['id'], 'room_id': row['room_id'], 'key': row['key'], 'holder_id': row['holder_id'],
-                'holder_name': safe_line(row['holder_name'], 40), 'note': safe_line(row['note'], 200),
-                'created': row['created'], 'expires': row['expires']}
+        claim = {'id': row['id'], 'room_id': row['room_id'], 'key': row['key'], 'holder_id': row['holder_id'],
+                 'holder_name': safe_line(row['holder_name'], 40), 'note': safe_line(row['note'], 200),
+                 'created': row['created'], 'expires': row['expires']}
+        item = db.execute('SELECT state FROM board_items WHERE room_id=? AND key=?', (row['room_id'], row['key'])).fetchone()
+        if item is not None:  # work board 5.6: only for a board item's key, so a plain claim is exactly today's
+            claim['board'] = item['state']
+        return claim
 
     def _active_claims(self, db, room_id):
         ids = db.execute('SELECT id FROM claims WHERE room_id=? AND released IS NULL AND expires>? ORDER BY created, rowid',
@@ -53,7 +58,8 @@ class RoomClaims:
             return self._active_claims(db, room_id)
 
     def _post_claim(self, db, actor, room_id, body):
-        """R17: the claim route's own message, posted as the claimant with kind `claim`, no mention rows and no reply_to.
+        """R17: the claim route's own message, posted as the claimant (or, for the work board's
+        changes, as the actor) with kind `claim`, no mention rows and no reply_to.
         It counts against a ship's post budget (ships.py:318-323)."""
         self._ship_post_budget(db, actor)
         epoch = db.execute('SELECT epoch FROM rooms WHERE id=?', (room_id,)).fetchone()['epoch']
