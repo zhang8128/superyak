@@ -557,3 +557,25 @@ def test_an_entry_hand_added_after_the_first_start_is_still_charged_once(station
     assert len(w.state['ship_exchanges'][f'{room}:{defiant["id"]}']) == 1
     assert len(w.state['deferred']) == 1 and runner.calls == []
     assert not any('Pausing my replies' in b for b in bodies(fake, room))
+
+
+def test_a_full_deferred_list_watcher_gets_answered_and_tells_the_run(station, ship_config, tmp_path):
+    """Fresh owner mentions, R8: with 100 deferred, the next mention asks without `decisions`, so the station's
+    `answered` basis reaches the watcher, and the read-only run is told why."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    held = [fake.say(room, jenn, f'@serenity question {n}') for n in range(100)]
+    defer(fake, *held)
+    runner = FakeRunner()
+    w = watcher(fake, ship_config, tmp_path, runner)
+    for _ in range(2):
+        assert w.cycle() == 0
+    assert len(w.state['deferred']) == 100
+    extra = fake.say(room, andy, '@serenity question 101')
+    defer(fake, extra)
+    fake.ticket_override[extra['id']] = (200, {'id': 'tx', 'mode': 'read', 'basis': 'answered', 'footer': '', 'status': 'running'})
+    fake.ticket_bodies.clear()
+    assert w.cycle() == 1 and [mid for _, mid, _ in runner.calls] == [extra['id']]
+    sent = {b['message_id']: b for b in fake.ticket_bodies}
+    assert 'decisions' not in sent[extra['id']]
+    assert 'already answered this mention in this room' in runner.calls[0][2]

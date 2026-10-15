@@ -498,3 +498,56 @@ def test_a_run_prompt_marks_a_ship_written_brief(station, ship_config):
     assert "written by the room's owner" not in prompt
     fake.brief(room, andy, '', revision=2)
     assert 'Room brief' not in build_prompt(fake.view(fake.rooms[room]), mention, 'serenity', 'read')
+
+
+READ_TAIL = ("mentions you (@serenity). You are in read-only mode: you can read and search the repository and use the "
+             "aDNA tools, but you cannot run commands or change files. If the request needs changes, say what you would "
+             "do and that Andy can ask the ship's owner.\n")
+BUILD_TAIL = ("mentions you (@serenity). You are in builder mode, in a fresh git worktree of the repository. Make the "
+              "change the last message asks for, run the relevant tests, and end with a short summary of what you "
+              "changed. Do not commit or push; the watcher commits your work on its own branch.\n")
+
+
+def test_a_limited_read_prompt_says_why_and_nothing_else_changes(station, ship_config):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    view = fake.view(fake.rooms[room])
+    mention = {'message_id': asked['id'], 'room_id': room, 'author': andy, 'body': asked['body']}
+    plain_read = build_prompt(view, mention, 'serenity', 'read')
+    plain_build = build_prompt(view, mention, 'serenity', 'build')
+    assert plain_read.endswith(READ_TAIL) and plain_build.endswith(BUILD_TAIL)
+    old = build_prompt(view, mention, 'serenity', 'read', limited='old')
+    answered = build_prompt(view, mention, 'serenity', 'read', limited='answered')
+    assert 'more than 24 hours old, so this run is read-only' in old
+    assert 'already answered this mention in this room' in answered
+    for prompt in (old, answered):
+        assert "can ask the ship's owner" not in prompt and "from the ship's owner" not in prompt
+    for value in (None, 'none', 'grant', ['old'], 5):
+        assert build_prompt(view, mention, 'serenity', 'read', limited=value) == plain_read
+    for value in (None, 'old', 'answered'):
+        assert build_prompt(view, mention, 'serenity', 'build', limited=value) == plain_build
+
+
+def test_the_watcher_passes_an_old_basis_to_the_prompt(station, ship_config, tmp_path):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    fake.ticket_override[asked['id']] = (200, {'id': 'tx', 'mode': 'read', 'basis': 'old', 'footer': '', 'status': 'running'})
+    runner = FakeRunner()
+    assert watcher(fake, ship_config, tmp_path, runner).cycle() == 1
+    assert 'more than 24 hours old, so this run is read-only' in runner.calls[0][2]
+
+
+@pytest.mark.parametrize('basis', ['none', 'grant', ['old'], 5, 'missing'])
+def test_the_watcher_gives_the_plain_read_prompt_for_any_other_basis(station, ship_config, tmp_path, basis):
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    asked = fake.say(room, andy, '@serenity fix it')
+    ticket = {'id': 'tx', 'mode': 'read', 'footer': '', 'status': 'running'}
+    if basis != 'missing':
+        ticket['basis'] = basis
+    fake.ticket_override[asked['id']] = (200, ticket)
+    runner = FakeRunner()
+    assert watcher(fake, ship_config, tmp_path, runner).cycle() == 1
+    assert runner.calls[0][0] == 'read' and runner.calls[0][2].endswith(READ_TAIL)
