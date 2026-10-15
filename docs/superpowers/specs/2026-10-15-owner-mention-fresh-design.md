@@ -1,7 +1,8 @@
 # Fresh owner mentions: an old or already answered owner mention gets a read-only ticket
 
-Status: revision 2, for the D8 re-check. Revision 1 (2688265) had the fresh reviewer's verdict, APPROVE WITH CHANGES
-(0 must-fix, 8 should-fix, 8 nits; room message ce9facd6); see "Review map". Base: `main` (3e823a8). Branch
+Status: revision 3, **approved under D8**. Revision 1 (2688265) had the fresh reviewer's verdict, APPROVE WITH CHANGES
+(0 must-fix, 8 should-fix, 8 nits; room message ce9facd6). The same reviewer's re-check of revision 2 (66de370) is
+APPROVE, with one should-fix and five nits, all folded into this revision; see "Review map". Base: `main` (3e823a8). Branch
 `owner-mention-fresh`. Claimed by Rio Grande as `spec:owner-mention-fresh` (room message 984a346e). Source: HANDOFF's
 parked note, now roadmap Phase 5: "the station gives a build ticket for any owner mention, however old. Once acts spend
 build tickets, it must refuse messages that are old or already answered." Serenity confirmed that grants step 3 does not
@@ -70,7 +71,7 @@ way, with one helper that both use.
   doesn't ask it to quote that answer. Any other basis, or none, and build mode with any value, leave the prompt byte
   for byte as today.
 - **Docs.** peer/API.md's "Run tickets" paragraph names the new basis values. agent/README.md line 50 ("an owner's
-  mention still runs as a builder") becomes "a fresh owner's mention (posted within 24 hours, not yet answered by the
+  mention still runs as a builder") becomes "an owner's fresh mention (posted within 24 hours, not yet answered by the
   ship) still runs as a builder".
 
 ## Amended rules
@@ -84,8 +85,11 @@ Each amendment is made in place, with the note "(fresh owner mentions spec)".
     freshness*".
 - **Ship status,** docs/superpowers/specs/2026-10-10-ship-status-and-claims-design.md:
   - line 60, S5 step 4 (line 165), the "Owner mentions" bullet (line 174) and R25 (line 402): "owner mentions never
-    defer" becomes "*fresh* owner mentions never defer". An old or answered owner mention decides `read`, so it may
-    defer like any read mention. No authority moves: the session is told `would_be: "read"`.
+    defer" becomes "*fresh* owner mentions never defer". An old owner mention decides `read`, so it may defer like
+    any read mention. An answered one never reaches the defer step: only a request with `decisions` can defer, and
+    with `decisions` step 1 returns `answered` first. No authority moves: the session is told `would_be: "read"`.
+- **Watch default,** docs/superpowers/specs/2026-10-14-watch-default-design.md line 133: "an owner's mention still
+  builds through the watcher (S5)" becomes "an owner's *fresh* mention still builds through the watcher (S5)".
 - **Grants step 3** (Serenity's branch): S6's "Owner builds are unchanged" becomes "Owner builds are bounded the same
   way (fresh owner mentions spec)", and G15 cites `_mention_stale`. Serenity makes that amendment in her branch.
 
@@ -125,15 +129,17 @@ catches; the ones marked *guard* pass on today's code and fail on a plausible wr
 1. Owner mention: at `created + 86400`, `build`, `owner` (guard: `<` in place of `<=`). In a fresh store, at `created +
    86400.5`, `read`, `old`, no root, no footer (fails today). A reply posted with that ticket has source mode `read`,
    basis `old` (R9).
-2. One sequence for answered: a reply by another ship with `reply_to`, then the ship's own kind message (guards: a
-   looser answered query); the mention still builds. Then the ship's own `reply_to` answer: without `decisions`,
-   `read`, `answered` (fails today); with `decisions`, the `answered` decision and the deferral row gone, as today.
+2. Answered. After a reply by another ship with `reply_to`, and after the ship's own kind message, `_mention_stale`
+   still returns `None` (guards: a looser answered query). It is called directly, because issuing a ticket there
+   would leave a running build ticket that later asks get back. Then the ship's own `reply_to` answer, on a second
+   owner mention with no ticket yet: without `decisions`, `read`, `answered` (fails today); on a third, with
+   `decisions`, the `answered` decision and the deferral row gone, as today.
 3. A message whose `created` is set by hand to infinity, and one set to the text `'abc'`: `read`, `old`, with no
    exception (fails today: both build; a naive `math.isfinite` would raise on the text).
 4. A `created` set to now plus 90,000 seconds: `read`, `old`. Now plus 60 seconds still builds (guard: a bound that
    rejects every future time).
-5. An old owner mention, `decisions` asked, while the ship holds a writable watch: `defer`, `would_be` `read` (fails
-   today: it builds).
+5. An old owner mention, `decisions` asked, while the ship holds a writable watch: `defer` (fails today: it builds).
+   The session's unread item for it carries `deferred.would_be` `read` (inbox.py:165).
 6. A builder ticket issued at 23.5 hours, sent again at 24.5 hours, inside its two-hour lifetime: the same `build`
    ticket (guard: a recheck on resend).
 7. A non-owner's mention 48 hours old: `read`, `none`, as today (guard: a bound applied to everyone).
@@ -179,9 +185,10 @@ and `build`. Delete the copy afterwards.
   tickets"). Such a ship needs `make dock` first.
 - **Decided at issue.** Without `decisions`, an answer posted after a builder ticket was issued doesn't stop that build:
   a resend returns the running ticket (step 2), as today.
-- **The clock.** A clock stepped back by less than a day makes a message look younger, or from the future, and it
-  builds. A clock stepped forward makes it look older, and it reads. Neither widens what a ship may do beyond today's
-  rule.
+- **The clock.** A clock stepped back makes a message look younger, or from the future. A step back of X makes
+  messages posted about X ago, within a day either side, look fresh, so they build: after a 3-day step back, a mention
+  posted 2.5 days ago looks half a day ahead. A clock stepped forward makes messages look older, and they read.
+  Neither widens what a ship may do beyond today's rule, under which every owner mention builds.
 - **Not a refusal.** An old owner mention still gets an answer, read-only. A long outage can bring one read-only reply
   per old mention, as non-owner mentions already do today.
 
@@ -211,3 +218,9 @@ and `build`. Delete the copy afterwards.
 | N6: an answer after issue doesn't stop the build | Known limits | The change; Known limits |
 | N7: copy the live database safely | SQLite backup API, never `cp` | Deploy |
 | N8: resend path line numbers | 57-61 | The change |
+| Re-check R1: test 2 couldn't run as one sequence | Uncounted answers checked on the helper; second and third mentions | Testing 2 |
+| Re-check R2: an answered owner mention never defers | Says only an old one may | Amended rules |
+| Re-check R3: `would_be` is on the unread item | Test 5 reads it there | Testing 5 |
+| Re-check R4: the watch-default spec's line 133 | Amended too | Amended rules |
+| Re-check R5: "a fresh owner's mention" | "an owner's fresh mention" | The change (Docs) |
+| Re-check R6: a step back of more than a day | The clock limit says how | Known limits |
