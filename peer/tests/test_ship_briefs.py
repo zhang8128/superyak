@@ -539,6 +539,8 @@ def test_a_ships_save_of_unchanged_text_writes_nothing(env):
     assert ship_put(rio, room, 'Save 10.', 9).status_code == 200      # the ship's ninth save
     assert ship_put(rio, room, 'Save 11.', 10).status_code == 200     # its tenth still fits: the unchanged save cost nothing
     assert ship_put(rio, room, 'Save 12.', 11).status_code == 429
+    again = ship_put(rio, room, 'Save 11.', 11)  # at the limit, the unchanged save is still a 200: it comes before the rate check
+    assert again.status_code == 200 and again.json()['revision'] == 11
 
 
 def test_a_ship_writes_names_without_the_at_sign(env):
