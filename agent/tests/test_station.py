@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 import pytest
 from superyak_agent.station import StationClient, StationError, describe, label, read_json, source_label, urllib_transport, write_private
 
@@ -67,6 +68,67 @@ def test_malformed_http_from_the_wire_is_an_oserror():
             urllib_transport(timeout=5)('GET', f'http://127.0.0.1:{server.getsockname()[1]}/api/me', {}, None)
     finally:
         thread.join(5)
+        server.close()
+
+
+def answer_once(head, body, hold=0):
+    """A one-shot HTTP answer on a random localhost port: (server socket, thread). The client may hang up early. With
+    `hold`, the server keeps the connection open after the body until the client hangs up, `hold` seconds at most."""
+    server = socket.socket()
+    server.bind(('127.0.0.1', 0))
+    server.listen(1)
+
+    def reply():
+        conn, _ = server.accept()
+        try:
+            conn.recv(65536)
+            conn.sendall(head + body)
+            if hold:
+                conn.settimeout(hold)
+                conn.recv(1)
+        except OSError:
+            pass  # the client read its limit and hung up
+        finally:
+            conn.close()
+    thread = threading.Thread(target=reply, daemon=True)
+    thread.start()
+    return server, thread
+
+
+@pytest.mark.parametrize('status', [200, 500])
+@pytest.mark.parametrize('size, length, fits', [(1000, True, True), (1001, True, False), (3_000_000, False, False)])
+def test_a_transport_with_a_limit_refuses_a_longer_answer(status, size, length, fits):
+    """Work board step 3 review I1: the hook's board call reads at most its limit of an answer, an error answer as well
+    as a 200. One that fits comes back whole; one a byte longer, or a long one with no length that runs to the close,
+    raises ValueError once limit + 1 bytes are in, so it costs neither memory nor time past them."""
+    body = b'x' * size
+    head = (f'HTTP/1.1 {status} X\r\n' + (f'Content-Length: {size}\r\n' if length else '') + 'Connection: close\r\n\r\n').encode()
+    server, thread = answer_once(head, body)
+    try:
+        send = urllib_transport(timeout=5, limit=1000)
+        url = f'http://127.0.0.1:{server.getsockname()[1]}/api/ships/me/board'
+        if fits:
+            assert send('GET', url, {}, None) == (status, body)
+        else:
+            with pytest.raises(ValueError):
+                send('GET', url, {}, None)
+    finally:
+        thread.join(5)
+        server.close()
+
+
+def test_a_transport_with_a_limit_reads_no_further_than_it():
+    """Work board step 3 review I1: with more than its limit in, the transport raises at once. It never reads on to the
+    end of the answer, so one held open after that costs no time (the server holds it 8 s; urllib alone would wait for
+    its 5 s timeout)."""
+    server, thread = answer_once(b'HTTP/1.1 200 X\r\nConnection: close\r\n\r\n', b'x' * 3000, hold=8)
+    try:
+        began = time.monotonic()
+        with pytest.raises(ValueError):
+            urllib_transport(timeout=5, limit=1000)('GET', f'http://127.0.0.1:{server.getsockname()[1]}/api/ships/me/board', {}, None)
+        assert time.monotonic() - began < 2
+    finally:
+        thread.join(10)
         server.close()
 
 

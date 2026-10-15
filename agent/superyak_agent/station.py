@@ -73,14 +73,25 @@ class StationError(Exception):
         super().__init__(f'{status}: {message}')
 
 
-def urllib_transport(timeout=30):
+def urllib_transport(timeout=30, limit=None):
+    """`timeout` bounds each socket operation (connect, each read), not the call. With `limit`, an answer longer than
+    that many bytes raises ValueError once limit + 1 are in, so a huge or endless one costs no more than that (the
+    hook's board call, work board step 3 review I1)."""
+    def read(response):
+        if limit is None:
+            return response.read()
+        raw = response.read(limit + 1)
+        if len(raw) > limit:
+            raise ValueError(f'the station answered more than {limit} bytes')
+        return raw
+
     def send(method, url, headers, data):
         request = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                return response.status, response.read()
+                return response.status, read(response)
         except urllib.error.HTTPError as error:
-            return error.code, error.read()
+            return error.code, read(error)
         except http.client.HTTPException as error:
             # A proxy or station that speaks broken HTTP is an unreachable station, not a crash.
             raise OSError(f'malformed response from the station: {error!r}') from error

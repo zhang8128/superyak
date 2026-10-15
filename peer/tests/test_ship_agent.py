@@ -352,10 +352,10 @@ def test_a_ship_reads_the_room_brief_through_the_real_station(env, tmp_path):
     assert 'Decisions D1-D9.' not in removed
 
 
-def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path):
+def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path, monkeypatch):
     """Work board 8.1, end to end: one of Andy's ships posts an item; another lists it, takes it with station_claim, links
     a branch and marks it done with a commit, through the agent's tools against the real station. The claim is released,
-    and the room's history labels the lines. (Step 3 adds the session-start counts.)"""
+    and the room's history labels the lines. The session-start hook counts it while it waits, and not once it is done."""
     from superyak_agent.mcp import Tools, handle
     from superyak_agent.station import StationClient
     app, clients, users, clock = env
@@ -363,6 +363,17 @@ def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path):
     serenity, serenity_key = docked_ship(store, users[0]['id'], 'serenity')
     rio, rio_key = docked_ship(store, users[0]['id'], 'rio-grande')
     room = clients[0].post('/api/chats', json={'title': 'All hands', 'member_ids': [serenity['id'], rio['id']]}).json()['id']
+    from superyak_agent import hook
+    from superyak_agent.station import write_private
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))  # the hook reads ~/.superyak/projects.json (D7): never the machine's
+    monkeypatch.delenv('CLAUDE_PROJECT_DIR', raising=False)
+    config = tmp_path / 'rio' / 'station.json'
+    write_private(config, {'station': 'http://testserver', 'origin': None, 'ship': 'rio-grande', 'ship_id': rio['id'], 'key': rio_key,
+                           'owner_id': users[0]['id'], 'workspace': str(tmp_path), 'machine': 'test-host'})
+
+    def session_start():
+        return hook.run(config, transport=transport_for(app), clock=lambda: clock[0], event='session-start',
+                        sessions_dir=tmp_path / 'rio' / 'sessions')
 
     def call(ship_key, name, **arguments):  # not `key`: the board tools take a `key` argument of their own
         tools = Tools(StationClient('http://testserver', ship_key, transport=transport_for(app)))
@@ -371,6 +382,7 @@ def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path):
         return result['content'][0]['text']
     posted = call(serenity_key, 'station_post_item', room='All hands', key='build:board-routes', title='[Pi] board routes', kind='build')
     assert posted.startswith(f'Posted `build:board-routes` (build) on the board of room {room}; the room has been told.')
+    assert session_start().endswith(f'{hook.BOARD_LINE}\n1 waiting on the board in "All hands"; `station_board room={room}` lists them')
     assert call(rio_key, 'station_board') == f'1 waiting, 0 taken in "All hands" ({room}); `station_board room={room}` lists them'
     listed = call(rio_key, 'station_board', room=room)
     assert listed.startswith(f'Board of room "All hands" ({room}): 1 waiting, 0 taken; 0 done or dropped in the last 7 days\n')
@@ -387,6 +399,7 @@ def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path):
     assert call(rio_key, 'station_board') == '(no open items in your rooms)'
     read = call(serenity_key, 'station_read', room=room)
     assert read.count(' (board)\n') == 3 and read.count(' (claim)\n') == 1  # Posted, Linked, Done; Claimed
+    assert hook.BOARD_LINE not in session_start()  # done: nothing waits, so the next session start counts nothing
 
 
 def watched_room(env, tmp_path, monkeypatch):
