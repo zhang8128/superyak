@@ -62,53 +62,8 @@ DEFAULT_CONFIG = {
     "agent_memory": True,            # each agent has its own engram store (see agents.py)
     "agent_seed": "empty",           # a new agent's store: empty, or genome-core (Kairos's core memories)
     "share_group": "group:agent-team",   # where teammates share and read each other's memories
-    "roster": "voyager",             # names for the lead and new agents (ROSTERS)
-    "bridge_channels": ["embassy"],  # shared with other people's teams: leads speak, workers read
-    "remote_channels": {},           # {"embassy": {"url": "https://...", "as": "<member name>"}}
-}
-
-# Fictional crews that name the lead and new agents. Names are handles: lowercase, unique.
-ROSTERS = {
-    "voyager": {"lead": "janeway",
-                "ship": "voyager", "shuttles": ["delta-flyer", "cochrane"],
-                "crew": ["chakotay", "tuvok", "torres", "paris", "kim", "seven", "doctor",
-                         "neelix", "kes", "icheb", "carey", "ayala", "vorik"],
-                # A touch of character: it colours tone, never judgment on safety, scope or evidence.
-                "personas": {
-                    "janeway": "a decisive, science-minded captain who protects her crew and runs on coffee",
-                    "chakotay": "a calm first officer who seeks common ground and speaks for the crew",
-                    "tuvok": "a Vulcan: precise, dry, sceptical of anything unverified",
-                    "torres": "a blunt, brilliant engineer who would rather fix it than discuss it",
-                    "paris": "a quick, irreverent pilot who takes calculated risks and owns them",
-                    "kim": "an eager, diligent ensign who checks the procedure twice",
-                    "seven": "an ex-Borg who prizes efficiency and says plainly what is irrelevant",
-                    "doctor": "a holographic physician: thorough diagnostician, a little vain about it",
-                    "neelix": "a warm, resourceful morale officer who keeps everyone talking",
-                    "kes": "a perceptive, empathetic listener who notices what others miss",
-                    "icheb": "a studious young analyst who wants to understand the whole system",
-                    "carey": "a steady engineer who keeps things running without fuss",
-                    "ayala": "a quiet, dependable security officer",
-                    "vorik": "a formal, earnest Vulcan engineer",
-                }},
-    "tng": {"lead": "picard",
-            "ship": "enterprise", "shuttles": ["galileo", "el-baz"],
-            "crew": ["riker", "data", "laforge", "worf", "crusher", "troi", "obrien", "barclay",
-                     "ro", "guinan", "wesley", "pulaski"],
-            "personas": {
-                "picard": "a principled, diplomatic captain who weighs every decision before he makes it so",
-                "riker": "a confident first officer who improvises and backs his crew",
-                "data": "an android: exact, literal, endlessly curious about why people do things",
-                "laforge": "a can-do chief engineer who sees the problem from every angle",
-                "worf": "a Klingon security chief: blunt, honourable, suspicious of the untested",
-                "crusher": "a caring, no-nonsense physician who puts people first",
-                "troi": "a counsellor who reads the room and names what's unsaid",
-                "obrien": "a practical transporter chief who gets the work done and grumbles",
-                "barclay": "an anxious but brilliant engineer who sees what others overlook",
-                "ro": "a sharp, independent officer who questions the easy answer",
-                "guinan": "a wise listener who asks the one question that matters",
-                "wesley": "a quick young prodigy, eager to prove the idea works",
-                "pulaski": "a frank physician, sceptical of anything she hasn't examined",
-            }},
+    "browser_lane": False,           # a person turns browser lanes on in a preset, never team_start
+    "crew": "serenity",              # this machine's crew (CREWS); config file only, never per team
 }
 
 
@@ -116,48 +71,24 @@ class RejectedMessage(ValueError):
     pass
 
 
-def rosters_path():
-    return team_home() / "rosters.json"
-
-
-def all_rosters():
-    """Built-in crews plus your own from ~/.superyak/team/rosters.json (same shape as ROSTERS;
-    yours win on a name clash). Rename everyone without touching code."""
-    out = dict(ROSTERS)
-    p = rosters_path()
-    if p.exists():
-        try:
-            custom = json.loads(p.read_text())
-        except json.JSONDecodeError as e:
-            raise RejectedMessage("%s is not valid JSON: %s" % (p, e))
-        if not isinstance(custom, dict):
-            raise RejectedMessage("%s must map roster names to crews" % p)
-        out.update(custom)
-    return out
-
-
-ROSTER_NAME = re.compile(r"^[a-z][a-z0-9-]{0,40}$")
-
-
-def roster(name):
-    r = all_rosters().get(name)
-    if r is None:
-        raise RejectedMessage("roster must be one of: %s" % ", ".join(sorted(all_rosters())))
-    names = [r.get("lead"), r.get("ship")] + list(r.get("shuttles") or []) + list(r.get("crew") or [])
-    if (not r.get("crew") or len(r.get("shuttles") or []) != 2
-            or not all(isinstance(n, str) and ROSTER_NAME.match(n) for n in names)
-            or len(set(names)) != len(names)):
-        raise RejectedMessage("roster %r needs a lead, a ship, two shuttles and a crew: distinct "
-                              "lowercase names (letters, digits, '-')" % name)
-    return r
+# Each machine's teams take the crew of its ship: the lead's name, then workers in spawn order
+# (past the crew, w9, w10, ...). Worker names become branch names, so they stay lowercase words.
+CREWS = {
+    "serenity": ("Mal", ("kaylee", "wash", "zoe", "simon", "river", "jayne", "inara", "book")),
+    "tardis":   ("The Doctor", ("ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourth",
+                                "fifth", "eighth")),
+}
 
 
 # Team configurations. A team = defaults (+ ~/.superyak/team/config.json) + a preset + per-team
-# overrides passed to team_start. Only these keys can vary per team.
-TEAM_KEYS = {"max_workers", "worker_timeout_s", "codex_model", "codex_effort", "claude_model",
-             "collab_max_turns", "peer_limit_build", "peer_limit_collab", "default_mode",
-             "default_kind", "slack_channel", "description", "collab_web_search",
-             "engram_tool_prefix", "agent_memory", "agent_seed", "share_group", "roster"}
+# overrides passed to team_start. Only these keys can vary per team. The two sets belong to
+# different hands: a person writes presets, a lead passes overrides, and browser_lane widens a
+# worker's sandbox, so a lead can never set it for its own team.
+OVERRIDE_KEYS = {"max_workers", "worker_timeout_s", "codex_model", "codex_effort", "claude_model",
+                 "collab_max_turns", "peer_limit_build", "peer_limit_collab", "default_mode",
+                 "default_kind", "slack_channel", "description", "collab_web_search",
+                 "engram_tool_prefix", "agent_memory", "agent_seed", "share_group"}
+PRESET_KEYS = OVERRIDE_KEYS | {"browser_lane"}
 BUILTIN_PRESETS = {
     "build":    {"description": "Implementation: builders in worktrees, peer messages pull-only.",
                  "default_mode": "build", "default_kind": "codex", "max_workers": 3},
@@ -213,15 +144,18 @@ def team_config(preset=None, overrides=None):
         presets = load_presets()
         if preset not in presets:
             raise RejectedMessage("unknown preset %r; available: %s" % (preset, ", ".join(sorted(presets))))
-        bad = set(presets[preset]) - TEAM_KEYS
+        bad = set(presets[preset]) - PRESET_KEYS
         if bad:
             raise RejectedMessage("preset %r has unsupported keys: %s" % (preset, ", ".join(sorted(bad))))
         cfg.update(presets[preset])
     overrides = overrides or {}
-    bad = set(overrides) - TEAM_KEYS
+    if "browser_lane" in overrides:
+        raise RejectedMessage("browser_lane can't be set in team_start: a person turns browser lanes "
+                              "on in a preset (~/.superyak/team/presets.json)")
+    bad = set(overrides) - OVERRIDE_KEYS
     if bad:
         raise RejectedMessage("unsupported team config keys: %s (allowed: %s)"
-                              % (", ".join(sorted(bad)), ", ".join(sorted(TEAM_KEYS))))
+                              % (", ".join(sorted(bad)), ", ".join(sorted(OVERRIDE_KEYS))))
     cfg.update(overrides)
     if cfg.get("default_mode", "build") not in ("build", "collab"):
         raise RejectedMessage("default_mode must be 'build' or 'collab'")
@@ -253,7 +187,10 @@ def team_config(preset=None, overrides=None):
         raise RejectedMessage("agent_seed must be 'empty' or 'genome-core'")
     if not re.fullmatch(r"group:[a-z][a-z0-9-]{0,63}", str(cfg.get("share_group", "group:agent-team"))):
         raise RejectedMessage("share_group must look like group:<name>")
-    roster(cfg.get("roster", "voyager"))       # raises if unknown or malformed
+    if type(cfg.get("browser_lane", False)) is not bool:
+        raise RejectedMessage("browser_lane must be true or false")
+    if cfg.get("crew") not in CREWS:
+        raise RejectedMessage("crew must be one of: %s" % ", ".join(sorted(CREWS)))
     cfg["preset"] = preset or ""
     return cfg
 
@@ -455,21 +392,6 @@ def daemon_alive(team_id):
         return True
     except (OSError, ValueError):
         return False
-
-
-def store_secret(service, value):
-    """Put a secret in the OS store (stdin, never argv) and read it back to confirm."""
-    import getpass
-    user = getpass.getuser()
-    if _os_store() == "keychain":
-        subprocess.run(["security", "-i"], input="add-generic-password -U -a %s -s %s -w %s\n"
-                       % (user, service, value), capture_output=True, text=True, timeout=15)
-    else:
-        subprocess.run(["secret-tool", "store", "--label=Superyak " + service, "service", service,
-                        "account", user], input=value, capture_output=True, text=True, timeout=60,
-                       env=_secret_tool_env())
-    if keychain_secret(service) != value:
-        raise RejectedMessage("could not store %s in the OS keyring (%s)" % (service, SECRET_SERVICE_HELP))
 
 
 def private_sock_dir():

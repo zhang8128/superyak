@@ -5,7 +5,7 @@
   CLI:          superyak-runtime team <op> ...    — any shell, e.g. `superyak-runtime team status`
   Daemon:       run_team.py teamd --team ...      — started by team_start, never by hand
 
-Mode: SUPERYAK_TEAM_ROLE=w<N> (set by teamd for workers) → worker; otherwise lead.
+Mode: SUPERYAK_TEAM_ROLE=<worker name> (set by teamd for workers, e.g. kaylee) → worker; unset or lead → lead.
 The lead may be Claude Code or Codex; its kind is detected from the environment
 (or SUPERYAK_TEAM_LEAD_KIND) and only changes the display name.
 Lead tools resolve the active team from the current repo (one active team per repo).
@@ -20,7 +20,7 @@ from pathlib import Path
 from . import agents, channels, teamlib
 
 ROLE = os.environ.get("SUPERYAK_TEAM_ROLE", "")
-IS_WORKER = ROLE.startswith("w")
+IS_WORKER = bool(ROLE) and ROLE != "lead"
 
 
 def lead_kind():
@@ -58,6 +58,11 @@ def resolve_team(requested=None):
     return active_team(repo)
 
 
+# Lead calls that can start or end a browser lane wait for it: a first install, a broker start and a lane's cleanup
+# all run inside them, past rpc's usual 30 s, and a lead must never see an error for a spawn that succeeded.
+SLOW_OPS = {"spawn": 900, "message": 900, "stop": 900, "end": 900}
+
+
 def call(op, args=None):
     args = dict(args or {})
     if IS_WORKER:
@@ -67,34 +72,10 @@ def call(op, args=None):
     token = teamlib.get_token(team_id, caller)
     if not daemon_alive(team_id):
         raise teamlib.RejectedMessage("team %s daemon is not running (team_start to restart)" % team_id)
-    resp = teamlib.rpc(team_id, op, caller, args, token=token)
+    resp = teamlib.rpc(team_id, op, caller, args, timeout=SLOW_OPS.get(op, 30), token=token)
     if not resp.get("ok"):
         raise teamlib.RejectedMessage(resp.get("error", "unknown error"))
     return resp["result"]
-
-
-def next_ship(cfg):
-    """A new team flies the roster's ship if it's free, else a free shuttle: one ship and two
-    shuttles, so at most three unnamed teams at once (this machine's RAM agrees). A vessel is
-    free when it has never flown or its last mission ended; that mission's state is archived.
-    One that crashed mid-mission is not free: team_start(name=...) restarts it."""
-    roster = teamlib.roster(cfg.get("roster", "voyager"))
-    fleet = [roster["ship"]] + roster["shuttles"]
-    for name in fleet:
-        d = teamlib.team_dir(name)
-        if not d.exists():
-            return name
-        try:
-            ended = json.loads((d / "state.json").read_text()).get("ended")
-        except (OSError, json.JSONDecodeError):
-            ended = False
-        if ended and not daemon_alive(name):
-            archive = teamlib.teams_root() / "archive" / ("%s-%s" % (name, time.strftime("%Y%m%d-%H%M%S")))
-            archive.parent.mkdir(parents=True, exist_ok=True)
-            d.rename(archive)
-            return name
-    raise teamlib.RejectedMessage("the whole fleet is out (%s); end a mission first, or pass name=..."
-                                  % ", ".join(fleet))
 
 
 def team_start(args):
@@ -107,7 +88,8 @@ def team_start(args):
     if isinstance(overrides, str):          # CLI: config='{"max_workers": 2}'
         overrides = json.loads(overrides)
     cfg = teamlib.team_config(preset, overrides)   # validate before starting anything
-    team_id = teamlib.slugify(args.get("name") or next_ship(cfg), 40)
+    team_id = args.get("name") or "%s-%s" % (teamlib.slugify(goal, 20), time.strftime("%m%d%H%M"))
+    team_id = teamlib.slugify(team_id, 40)
     if team_id in teamlib.active_teams(repo) and daemon_alive(team_id):
         return {"team": team_id, "note": "already running; use a different name to start another team"}
     tdir = teamlib.team_dir(team_id)
@@ -165,24 +147,19 @@ def team_end(args):
     return res
 
 
-def _repo_for(channel):
-    """Remote channels live on another machine: no local repo needed to use them."""
-    return "." if channel and channels.remote_cfg(channel) else git_root()
-
-
 def lead_channel_read(args):
-    repo = _repo_for(args.get("channel"))
+    repo = git_root()
     ch = args.get("channel") or channels.team_channel(active_team(repo))
     return {"channel": ch, "messages": channels.fenced(
-        channels.read_any(repo, ch, int(args.get("after") or 0), int(args.get("limit") or 30)))}
+        channels.read(repo, ch, int(args.get("after") or 0), int(args.get("limit") or 30)))}
 
 
 def lead_channel_post(args):
-    repo = _repo_for(args.get("channel"))
+    """The lead posts under its crew's name (Mal, The Doctor), as an agent."""
+    repo = git_root()
     ch = args.get("channel") or channels.team_channel(active_team(repo))
-    cfg = teamlib.load_config()
-    me = teamlib.roster(cfg.get("roster", "voyager"))["lead"]
-    rec = channels.post_any(repo, ch, me, teamlib.sanitize(args.get("text", "")))
+    crew = teamlib.CREWS.get(teamlib.load_config().get("crew", "serenity"), teamlib.CREWS["serenity"])
+    rec = channels.post(repo, ch, crew[0], teamlib.sanitize(args.get("text", "")))
     return {"channel": ch, "id": rec["id"]}
 
 
@@ -216,13 +193,16 @@ LEAD_TOOLS = [
       "base": {"type": "string", "description": "build only: branch/tag/commit to branch from "
                                                 "(default: the lead's HEAD)"},
       "agent": {"type": "string", "description": "persistent agent name to seat (its own memory "
-                                                 "comes along); omit for the next new one"},
+                                                 "comes along); omit for a new one. Not for browser workers"},
       "prepare": {"type": "string", "enum": ["npm-ci", "pnpm-install"],
                   "description": "build only: install dependencies (outside the sandbox) before "
                                  "the first turn; workers have no network"},
+      "browser": {"type": "boolean",
+                  "description": "kind='claude', mode='build' only (macOS): run the worker in a browser lane, "
+                                 "with Playwright's headless shell on its own loopback ports. Needs the team's "
+                                 "browser_lane, which only a person sets"},
       "team": {"type": "string"}}, ["task"], lambda a: call("spawn", a)),
-    ("team_message", "Send a message to a crew member, by name (e.g. 'tuvok') or seat (w1); "
-                     "delivered into its running turn when possible.",
+    ("team_message", "Send a message to a worker (delivered into its running turn when possible).",
      {"worker": {"type": "string"}, "text": {"type": "string"}, "team": {"type": "string"}}, ["worker", "text"],
      lambda a: call("message", a)),
     ("team_plan", "Publish or update a plan as a document (Slack canvas in the team channel, plus a "
@@ -242,7 +222,7 @@ LEAD_TOOLS = [
      {"summary": {"type": "string"}, "keep_worktrees": {"type": "boolean"}, "team": {"type": "string"}},
      [], team_end),
     ("team_channels", "List this repo's channels (persistent, no Slack needed) with message counts.",
-     {}, [], lambda a: {"channels": channels.list_any(git_root())}),
+     {}, [], lambda a: {"channels": channels.list_channels(git_root())}),
     ("team_shared_recall", SHARED_DESC, SHARED_PROPS, [], lambda a: call("shared_recall", a)),
     ("team_agents", "Persistent named agents: kind, teams worked in, current seat. Spawn one by "
                     "name with team_spawn(agent=...) to bring its memory along.",
@@ -254,7 +234,7 @@ LEAD_TOOLS = [
 WORKER_TOOLS = [
     ("team_post", "Post progress to your task thread (team + human can see it). Keep it short and factual.",
      {"text": {"type": "string"}}, ["text"], lambda a: call("post", a)),
-    ("team_message", "Message teammates: to=<name> (e.g. 'seven'), the lead's name or 'lead', or 'all'. Collaborators "
+    ("team_message", "Message teammates: to='lead', a worker id (e.g. 'w2'), or 'all'. Collaborators "
                      "receive it live; builders read it with team_read. Short and specific.",
      {"to": {"type": "string"}, "text": {"type": "string"}}, ["to", "text"],
      lambda a: call("message", a)),
@@ -345,11 +325,6 @@ def cli(argv):
     if argv[0] == "brief":
         print((teamlib.package_dir() / "roles" / "lead.md").read_text())
         return 0
-    if argv[0] == "join" and len(argv) == 2:
-        try:
-            return channels.join_cli(argv[1])
-        except teamlib.RejectedMessage as e:
-            sys.exit("error: %s" % e)
     if argv[0] == "channels":
         try:
             return channels.cli(argv[1:], git_root())

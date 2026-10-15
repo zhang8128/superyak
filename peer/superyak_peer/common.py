@@ -1,10 +1,19 @@
 """Shared validation and public-safe domain failures."""
 import json
+import re
 import uuid
 
+# Rooms that a later linked room replaced (members were added): such a room is no longer current. One subquery for every
+# current-room check, so they can't drift (work board 5.1): CURRENT_PERSON_ROOM (which the breakouts and the brief route
+# use), Ships._current_rooms, the board's replaced-room refusal and add_participants' (work board 8.4).
+REPLACED_ROOMS = 'SELECT linked_room_id FROM rooms WHERE linked_room_id IS NOT NULL'
+# Adding members to a replaced room would make a second current room beside its replacement: a fork (work board 8.4).
+REPLACED_ADD = 'This room was replaced by a newer linked room; add members there'
+
 class Problem(Exception):
-    def __init__(self, status, message):
-        self.status, self.message = status, message
+    def __init__(self, status, message, *, keep=False):
+        # keep: the transaction keeps what it saved before this refusal (a breakout's closure, saved on first sight)
+        self.status, self.message, self.keep = status, message, keep
         super().__init__(message)
 
 def uid():
@@ -46,3 +55,7 @@ def require(row):
     if row is None:
         raise Problem(404, 'Not found')
     return row
+
+def linked_room_ok(value, origin):
+    """A received room's linked_room_id: null, or one of the origin's own room ids, `<origin>:<id>` (remote room fields)."""
+    return value is None or (isinstance(value, str) and re.fullmatch(re.escape(origin) + r':[A-Za-z0-9_-]{1,64}', value) is not None)

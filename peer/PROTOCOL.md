@@ -122,7 +122,10 @@ last_activity}`. `owner_id` is origin-qualified; `members` is an array of
 room origin distributes roster and message events, signed by its original owner.
 Initial epoch is 1; removals increment it. Existing room recipients reject newly
 added members and changes at the same epoch. Adding people locally creates a
-separate linked empty room. A linked reference grants no old-room access.
+separate linked empty room. A linked reference grants no old-room access. A
+receiver refuses a roster whose `linked_room_id` is not null or `<origin>:<id>`
+(`<id>` as a participant id, `[A-Za-z0-9_-]{1,64}`) under the envelope's own
+origin (400); `room.message` carries the same fields and is refused the same way.
 
 `room.message`: same roster fields plus `message={id,room_id,author_id,
 client_message_id,body,epoch,created}`. Here `room_id` is origin-local and
@@ -132,6 +135,17 @@ The origin attests authorship of forwarded replies only after separately verifyi
 the replying peer and its current membership. Message ID collisions with differing
 content fail. Old message bodies already received remain for remaining members.
 Old queued messages are never relabeled with a newer epoch.
+A receiver shows a message attributed to one of its own users only when it matches
+a reply that receiver sent (author, client ID and body), and only the first copy;
+anything else is shown as the origin's, marked unverified. Known limit: the origin
+orders and timestamps its own room, so it can drop a reply and show it elsewhere,
+beside a different message; when it holds a replayed copy, it also chooses which
+copy comes first and is shown as the reply. The receiver cannot detect either.
+A received message's delivery state is the receiver's alone: its own reply shows
+delivered once the origin's copy matches its outbox row, a reply still queued
+shows that row's status, and any state the origin sends is ignored. A second copy
+of a verified reply is shown as unverified: it may be a replay, and the receiver
+cannot tell a replay from a forgery.
 
 `room.withdraw`: empty payload. Removes that recipient's hosted room/messages;
 stale/equal events cannot reintroduce them. The same receipt transaction marks

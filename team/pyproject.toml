@@ -23,12 +23,19 @@ ignore-vcs = true
 [tool.hatch.build.targets.wheel]
 only-include = [
     "superyak_team/__init__.py",
+    "superyak_team/lane.py",
+    "superyak_team/lane_broker.js",
+    "superyak_team/lane/broker.sb.tmpl",
+    "superyak_team/lane/browsers.json",
+    "superyak_team/lane/preload.cjs",
+    "superyak_team/lane/profile_probe.js",
     "superyak_team/mcp.py",
     "superyak_team/slack.py",
     "superyak_team/teamd.py",
     "superyak_team/teamlib.py",
     "superyak_team/workers.py",
     "superyak_team/slack-manifest.yml",
+    "superyak_team/roles/browser-lane.md",
     "superyak_team/roles/lead.md",
     "superyak_team/roles/worker.md",
     "superyak_team/roles/collaborator.md",
@@ -38,3 +45,4 @@ only-include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["real_scan: runs the real loopback scan instead of the empty one every other test gets"]

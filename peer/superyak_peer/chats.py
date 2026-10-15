@@ -1,5 +1,6 @@
 """Member-only rooms, linked new audiences, epoch-rechecked messages."""
-from .common import Problem, text, ids, uid, require
+from .common import REPLACED_ADD, REPLACED_ROOMS, Problem, text, ids, uid, require
+from .tickets import DEFER_BOUND_SECONDS
 
 class Chats:
     def _room(self, db, actor, key):
@@ -9,11 +10,17 @@ class Chats:
         activity = db.execute('SELECT (SELECT created FROM room_activity WHERE room_id=?) AS created, (SELECT MAX(created) FROM messages WHERE room_id=?) AS latest_message', (key, key)).fetchone()
         remote_activity = db.execute('SELECT MAX(created) FROM peer_messages WHERE room_id=?', (key,)).fetchone()[0] or 0.0
         created = activity['created'] or 0.0
-        return {**dict(row), 'member_ids': members, 'created': created, 'last_activity': max(created, activity['latest_message'] or 0.0, remote_activity)}
+        room = {**dict(row), 'member_ids': members, 'created': created, 'last_activity': max(created, activity['latest_message'] or 0.0, remote_activity)}
+        breakout = self._breakout_mark(db, key)
+        if breakout is not None:  # S6: only a breakout carries the key, so every other room is unchanged (R10)
+            room['breakout'] = breakout
+        return room
 
     def _create_room(self, db, actor, title, members, linked_room_id=None):
         text(title, 'title')
         members = ids([actor] + members)
+        if self.system_author_id(db) in members:
+            raise Problem(400, "The station's system author is never a room member")
         self._known_contacts(db, members)
         key = uid()
         db.execute('INSERT INTO rooms VALUES(?,?,?,1,?)', (key, actor, title, linked_room_id))
@@ -30,20 +37,42 @@ class Chats:
     def list_rooms(self, actor):
         with self.transaction() as db:
             rooms = [self._room(db, actor, r[0]) for r in db.execute('SELECT room_id FROM room_members WHERE user_id=?', (actor,)).fetchall()]
+        rooms = [room for room in rooms if not self._off_the_lists(room)]  # breakouts S12: still readable by id
         return sorted(rooms + self.remote_rooms(actor), key=lambda room: (-room['last_activity'], room['id']))
 
     def get_room(self, actor, key):
         if ":" in key:
-            return self.remote_room(actor, key)
+            room = self.remote_room(actor, key)
+            for message in room.get('messages', []):
+                message['source'] = None  # a paired peer's payload is passed through: a label in it is never ours
+                message['reply_to'] = None
+            room['brief'], room['brief_revision'] = None, 0  # briefs never cross stations
+            return room
         with self.transaction() as db:
             room = self._room(db, actor, key)
-            room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created,id', (key,))]
-            room['messages'] += [dict(r) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created,id', (key,))]
-            room['messages'].sort(key=lambda m: (m['created'], m['id']))
+            room['messages'] = [dict(r) for r in db.execute('SELECT * FROM messages WHERE room_id=? ORDER BY created, rowid', (key,))]
+            sources, replies = self._sources(db, key), self._replies(db, key)
+            for message in room['messages']:
+                message['source'], message['reply_to'] = sources.get(message['id']), replies.get(message['id'])
+            room['messages'] += [dict(r, reply_to=None) for r in db.execute('SELECT * FROM peer_messages WHERE room_id=? ORDER BY created, rowid', (key,))]
+            room['messages'].sort(key=lambda m: m['created'])  # stable: ids are random, so one instant keeps insertion order
+            room['members'] = [dict(r) for r in db.execute(
+                'SELECT users.id,users.username,users.name,users.kind,users.owner_id FROM room_members JOIN users ON users.id=room_members.user_id WHERE room_members.room_id=? ORDER BY users.id',
+                (key,))]
+            room['brief'], room['brief_revision'] = self._room_brief(db, key)
+            system = self.system_author_id(db)
+            if any(m.get('author_id') == system for m in room['messages']):
+                room['system_author'] = self.system_author_public(db)
+            room['claims'] = self._active_claims(db, key)
             return room
 
-    def send_message(self, actor, key, client_message_id, body):
+    def send_message(self, actor, key, client_message_id, body, ticket_id=None, reply_to=None):
+        self._refuse_live_ship_keys(body)
         if ':' in key:
+            if ticket_id is not None:
+                raise Problem(409, 'Tickets label messages in local rooms only')
+            if reply_to is not None:
+                raise Problem(400, 'Replies are labelled in local rooms only')
             return self.remote_send(actor, key, client_message_id, body)
         text(client_message_id, 'client message ID', 100)
         text(body, 'message', 20000)
@@ -51,20 +80,50 @@ class Chats:
             room = self._room(db, actor, key)
             existing = db.execute('SELECT * FROM messages WHERE room_id=? AND author_id=? AND client_message_id=?', (key, actor, client_message_id)).fetchone()
             if existing:
-                if existing['body'] != body:
+                if existing['body'] != body or self._reply_to(db, existing['id']) != reply_to:
                     raise Problem(409, 'Message ID already used with different text')
-                return dict(existing)
+                return dict(existing, replayed=True)  # a retry: nothing new was posted
+            self._refuse_closed_breakout(db, key)
+            if reply_to is not None:
+                self._check_reply_to(db, key, reply_to)
+            self._ship_post_budget(db, actor)
+            if ticket_id is not None:
+                self._check_ticket_label(db, actor, key, ticket_id)
             message_id = uid()
             db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)', (message_id, key, actor, client_message_id, body, room['epoch'], self.clock()))
+            if ticket_id is not None:
+                db.execute('INSERT INTO message_sources VALUES(?,?)', (message_id, ticket_id))
+            if reply_to is not None:
+                db.execute('INSERT INTO message_replies VALUES(?,?)', (message_id, reply_to))
+            self._record_mentions(db, key, message_id, body)
             self.emit(db, 'chat.message', key, room['epoch'], {'message_id': message_id, 'author_id': actor})
-            return dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
+            sent = dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone(), replayed=False)
+            if reply_to is None:  # R27: this ship's deferred mentions here that still wait (stale deferrals spec)
+                # The SQL bound only keeps the IN list to the last two hours' rows (rows past it never age out); the helper decides.
+                held = [r[0] for r in db.execute('''SELECT deferrals.message_id FROM deferrals JOIN messages
+                    ON messages.id=deferrals.message_id WHERE deferrals.ship_id=? AND messages.room_id=?
+                    AND deferrals.first_deferred > ?''', (actor, key, self.clock() - DEFER_BOUND_SECONDS))]
+                waiting = self._waiting_deferrals(db, actor, held)
+                if waiting:  # R35: present only when it has something to say
+                    sent['deferred_here'] = waiting
+            return sent
 
-    def add_participants(self, actor, key, member_ids):
+    def add_participants(self, actor, key, member_ids, carry_brief=None):
+        if carry_brief is not None and type(carry_brief) is not int:
+            raise Problem(400, 'carry_brief is the revision of the brief you saw, or null')
         with self.transaction() as db:
             room = self._room(db, actor, key)
             if room['owner_id'] != actor:
                 raise Problem(403, 'Room owner required')
-            return self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
+            if db.execute(f'SELECT 1 FROM rooms WHERE id=? AND id IN ({REPLACED_ROOMS})', (key,)).fetchone():
+                raise Problem(409, REPLACED_ADD)  # one replacement per room, so the chain never forks (work board 8.4)
+            carried = self._brief_to_carry(db, key, carry_brief)
+            new = self._create_room(db, actor, room['title'], ids(room['member_ids'] + ids(member_ids)), key)
+            if carried is not None:  # the brief, under its own author; open board items move too (below), but the old room's messages stay with their participants
+                body, author = carried
+                self._write_brief(db, new['id'], body, 1, author, carried_from=key)
+            new['board_carried'] = self._carry_board(db, key, new['id'])  # work board 5.x: open items, with claims whose holder is in the new room
+            return new
 
     def remove_participant(self, actor, key, user_id):
         text(user_id, 'user ID', 100)

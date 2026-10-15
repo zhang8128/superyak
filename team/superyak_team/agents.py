@@ -1,11 +1,11 @@
 """Persistent named agents: each one has its own engram memory, carried from team to team.
 
 An agent (e.g. `sol-1`, `claude-2`, or a name Kairos gives) is a registry entry in
-~/.superyak/team/agents.json plus an engram instance `agent-<name>`. A team seats agents as
-workers (w1, w2, ...); one agent sits in at most one live team at a time. What an agent
-remembers stays in its own store; it shares deliberately (`share(..., audience=
-"group:agent-team", reason)`) and teammates read the group through teamd (`shared`), because
-worker sandboxes cannot open the published house themselves.
+~/.superyak/team/agents.json plus an engram instance `agent-<name>`. A team seats agents in
+its workers (kaylee, wash, ... from the machine's crew); one agent sits in at most one live
+team at a time. What an agent remembers stays in its own store; it shares deliberately
+(`share(..., audience="group:agent-team", reason)`) and teammates read the group through
+teamd (`shared`), because worker sandboxes cannot open the published house themselves.
 
 The engram side is engram/cli.py (agent-create, house-init, shared), run with the engram
 venv and ENGRAM_HOME from the Superyak runtime config. Every call fails closed: if a store
@@ -54,23 +54,20 @@ def list_agents():
         return _load(f)
 
 
-def claim(name, kind, team_id, wid, seed="empty", live=lambda team_id: False, roster="voyager"):
+def claim(name, kind, team_id, wid, seed="empty", live=lambda team_id: False):
     """Register (first time) and seat an agent; returns its registry entry.
-    name=None picks the roster's next unused crew name (then `<sol|claude>-<n>`). An agent
-    keeps its kind: its memory belongs to one model's line. live(team_id) says whether
-    another team's seat still holds."""
-    crew = teamlib.roster(roster)
+    name=None makes a new agent, `<sol|claude>-<n>`: the worker keeps its crew name (teamlib.CREWS)
+    and the agent is its memory. An agent keeps its kind: its memory belongs to one model's line.
+    live(team_id) says whether another team's seat still holds."""
     with teamlib.locked(registry_path()) as f:
         data = _load(f)
-        if not name:                       # a new agent: next crew name, then <sol|claude>-<n>
-            name = next((c for c in crew["crew"] if c not in data), None)
-            n = 1
-            while not name:
-                candidate = "%s-%d" % (NAME_PREFIX[kind], n)
-                name = candidate if candidate not in data else None
-                n += 1
+        n = 1
+        while not name:                    # a new agent: <sol|claude>-<n>
+            candidate = "%s-%d" % (NAME_PREFIX[kind], n)
+            name = candidate if candidate not in data else None
+            n += 1
         name = name.lower()
-        if name in ("lead", "all", "teamd") or any(name == r.get("lead") for r in teamlib.all_rosters().values()):
+        if name in ("lead", "all", "teamd") or any(name == lead.lower() for lead, _ in teamlib.CREWS.values()):
             raise teamlib.RejectedMessage("%r is reserved (the lead or a channel keyword)" % name)
         if not NAME_RE.match(name):
             raise teamlib.RejectedMessage("agent names are lowercase letters, digits and '-', "

@@ -10,6 +10,19 @@ from .spaces import Spaces
 from .layers import Layers
 from .files import Files
 from .chats import Chats
+from .access_requests import AccessRequests, ACCESS_SCHEMA
+from .ships import Ships, SHIP_SCHEMA
+from .tickets import Tickets, TICKET_SCHEMA
+from .instructions import Instructions
+from .inbox import Inbox, INBOX_SCHEMA
+from .briefs import Briefs, BRIEF_SCHEMA
+from .presence import Presence, PRESENCE_SCHEMA
+from .system_author import SystemAuthor, SYSTEM_SCHEMA
+from .room_claims import RoomClaims, CLAIM_SCHEMA
+from .room_board import RoomBoard, BOARD_SCHEMA
+from .breakouts import Breakouts, BREAKOUT_SCHEMA
+from .signatures import Signatures, SIGNATURE_SCHEMA
+from .grants import Grants, GRANT_SCHEMA
 from .common import encode, Problem
 from .peer_store import PeerStore, PEER_SCHEMA
 from .dispatch import DispatchGate
@@ -34,10 +47,11 @@ CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL R
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, payload TEXT NOT NULL, created REAL NOT NULL);
 '''
 
-class Store(PeerStore, Auth, Spaces, Layers, Files, Chats):
-    def __init__(self, data_dir: Path, *, clock=time.time):
+class Store(PeerStore, Auth, Spaces, Layers, Files, Chats, AccessRequests, Ships, Tickets, Instructions, Inbox, Briefs, Presence, SystemAuthor, RoomClaims, RoomBoard, Breakouts, Signatures, Grants):
+    def __init__(self, data_dir: Path, *, clock=time.time, share_link_file=None, signing=True):
         self.data_dir = Path(data_dir).absolute()
         self.clock = clock
+        self.share_link_file = Path(share_link_file) if share_link_file else None
         self._check_paths()
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.data_dir, 0o700)
@@ -47,13 +61,32 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats):
         os.close(fd)
         os.chmod(self.db_path, 0o600)
         with self.transaction() as db:
-            db.executescript(SCHEMA + PEER_SCHEMA)
+            db.executescript(SCHEMA + PEER_SCHEMA + ACCESS_SCHEMA + SHIP_SCHEMA + TICKET_SCHEMA + INBOX_SCHEMA + BRIEF_SCHEMA + PRESENCE_SCHEMA + SYSTEM_SCHEMA + CLAIM_SCHEMA + BOARD_SCHEMA + BREAKOUT_SCHEMA + SIGNATURE_SCHEMA + GRANT_SCHEMA)
         # Additive migration preserves every existing identity and credential.
         with self.transaction() as db:
             columns = {row['name'] for row in db.execute('PRAGMA table_info(users)')}
             for name, default in [('is_super_admin', 0), ('role_version', 1), ('activation_pending', 0)]:
                 if name not in columns:
                     db.execute(f'ALTER TABLE users ADD COLUMN {name} INTEGER NOT NULL DEFAULT {default}')
+            for name, ddl in [('kind', "TEXT NOT NULL DEFAULT 'person'"), ('owner_id', 'TEXT REFERENCES users(id)')]:
+                if name not in columns:
+                    db.execute(f'ALTER TABLE users ADD COLUMN {name} {ddl}')
+            request_columns = {row['name'] for row in db.execute('PRAGMA table_info(access_requests)')}
+            for name in ('share_url', 'share_status'):
+                if name not in request_columns:
+                    db.execute(f'ALTER TABLE access_requests ADD COLUMN {name} TEXT')
+            ticket_columns = {row['name'] for row in db.execute('PRAGMA table_info(tickets)')}
+            if 'first_deferred' not in ticket_columns:  # ship-status fixes F3: the deferral a run resolved, on its ticket
+                db.execute('ALTER TABLE tickets ADD COLUMN first_deferred REAL')
+            # remote room fields: a received room stored before inbox_received existed gets a time once: the first start that finds it without one, this start's
+            db.execute("INSERT OR IGNORE INTO inbox_received SELECT origin, resource_id, recipient, ? FROM inbox "
+                       "WHERE kind='room' AND payload IS NOT NULL", (self.clock(),))
+        self._ensure_system_author()  # after the migration, where users.kind surely exists (spec S11)
+        self._backfill_brief_history()  # ship briefs S5: after the schema, at every start
+        if signing:  # G4a: the door and the station commands that never sign hold no key, check none and backfill nothing
+            self._load_station_identity()  # spec A step 3, G4: a station that can't load its identity doesn't start
+            self._backfill_revision_signatures()  # G5: after the schema, at every start
+            self._backfill_revocation_signatures()  # spec A step 3, G12: what the restore reconcile revoked
 
     def _check_paths(self):
         for path in (self.data_dir, *self.data_dir.parents):
@@ -83,6 +116,9 @@ class Store(PeerStore, Auth, Spaces, Layers, Files, Chats):
         except UnicodeError:
             db.rollback()
             raise Problem(400, 'Text must be valid UTF-8') from None
+        except Problem as refused:
+            db.commit() if refused.keep else db.rollback()
+            raise
         except BaseException:
             db.rollback()
             raise

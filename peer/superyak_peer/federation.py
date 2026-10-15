@@ -5,7 +5,7 @@ import json
 import re
 import threading
 from .identity import PeerIdentity, validate_card, verify_envelope, canonical, parse
-from .common import Problem, require, uid, encode, text
+from .common import Problem, require, uid, encode, text, linked_room_ok
 
 class Obsolete(Exception):
     pass
@@ -65,6 +65,8 @@ class Federation:
                     contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action LIKE 'layer.%'", (rid,)))
                     action = 'layer.withdraw' if kind == 'layer.withdrawn' else 'layer.release'
                 elif kind in ('chat.message', 'chat.membership'):
+                    if kind == 'chat.message' and self.store._never_federates(db, json.loads(event['payload']).get('message_id')):
+                        continue  # R33: system and kind messages stay on this station
                     contacts.update(r[0] for r in db.execute('SELECT contact_id FROM remote_room_members WHERE room_id=?', (rid,)))
                     contacts.update(r[0] for r in db.execute("SELECT DISTINCT contact_id FROM outbox WHERE resource_id=? AND action IN ('room.roster','room.message','room.withdraw')", (rid,)))
                     action = 'room.message' if kind == 'chat.message' else 'room.roster'
@@ -329,6 +331,8 @@ class Federation:
             for field in ('created','last_activity'):
                 if type(p.get(field)) not in (int,float) or not 0 <= p[field] <= 2**53:
                     raise Problem(400, 'Invalid room timestamp')
+            if not linked_room_ok(p.get('linked_room_id'), origin):  # remote room fields: the origin's own earlier room, or nothing
+                raise Problem(400, 'Invalid linked room')
             if p.get('member_ids') != expected or p.get('owner_id') != origin+':'+e['actor']['id'] or p['owner_id'] not in expected:
                 raise Problem(403, 'Invalid room authority')
             if any({'peer':self.identity.peer_id,'id':r} not in members for r in e['recipients']):
@@ -359,7 +363,7 @@ class Federation:
             if kind == 'room' and payload is not None:
                 history = json.loads(old['payload']).get('messages',[]) if old and old['payload'] else []
                 message = payload.pop('message', None)
-                if message:
+                if message and action == 'room.message':  # only a room.message is validated above
                     found = next((m for m in history if m['id']==message['id']),None)
                     if found and found != message:
                         raise Problem(409, 'Message ID already used')
@@ -367,6 +371,9 @@ class Federation:
                         history.append(message)
                 payload['messages'] = history
             db.execute('INSERT INTO inbox VALUES(?,?,?,?,?,?,?) ON CONFLICT(origin,resource_id,kind,recipient) DO UPDATE SET revision=excluded.revision,payload=excluded.payload', (origin,rid,kind,recipient,revision,e['actor']['id'],encode(payload) if payload is not None else None))
+            if kind == 'room' and payload is not None:  # remote room fields: this station's own time, for the list's clamp
+                db.execute('INSERT INTO inbox_received VALUES(?,?,?,?) ON CONFLICT(origin,resource_id,recipient) DO UPDATE SET received=excluded.received',
+                           (origin, rid, recipient, self.store.clock()))
             if action == 'room.withdraw':
                 self._cancel_replies(db, origin, rid, recipient, revision)
 

@@ -1,0 +1,551 @@
+import datetime
+import os
+import subprocess
+import pytest
+from superyak_agent import memos
+from superyak_agent.station import StationClient, StationError
+from superyak_agent.vault import INBOX, OUTBOUND, RECEIPTS, Vault
+from superyak_agent.wormhole import Wormhole
+
+PERSONAS = {'venus': {'persona': 'Venus', 'vault': 'Network.aDNA'}, 'hestia': {'persona': 'Hestia', 'vault': 'Home.aDNA'}}
+# What the forced command of Stanley's sync key sets, so the bare repository's gate applies to these pushes.
+LATTICE_ENV = {**os.environ, 'STATION_VAULT_PUSHER': 'lattice'}
+
+
+def git(path, *args):
+    return subprocess.run(['git', '-C', str(path), '-c', 'user.name=s', '-c', 'user.email=s@s', *args],
+                          capture_output=True, text=True, check=True).stdout
+
+
+def push(path):
+    subprocess.run(['git', '-C', str(path), 'push', '-q'], capture_output=True, text=True, check=True, env=LATTICE_ENV)
+
+
+@pytest.fixture
+def bridge(station, tmp_path):
+    fake, andy, jenn, serenity = station
+    wormhole = fake.user('wormhole', 'Wormhole', 'ship', None, key='wormhole-key')
+    odo = fake.user('odo', 'Odo', 'ship', None, key='odo-key')
+    gamma = fake.room('Gamma Quadrant', andy, odo, wormhole)
+    vault = Vault.create(tmp_path / 'Station.aDNA.git', tmp_path / 'clone')
+    client = StationClient('http://station.test', 'wormhole-key', transport=fake)
+
+    def make(personas=PERSONAS, owners=('andy',)):
+        return Wormhole(client, vault, personas, tmp_path / 'state.json', owners=owners, today=lambda: datetime.date(2026, 10, 4))
+    return fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path
+
+
+def lattice(tmp_path, files=None, folder=INBOX):
+    """Stand-in for Stanley's side: clone, add files, push."""
+    path = tmp_path / 'stanley'
+    if not path.exists():
+        subprocess.run(['git', 'clone', '-q', str(tmp_path / 'Station.aDNA.git'), str(path)], check=True)
+    git(path, 'pull', '-q')
+    for name, text in (files or {}).items():
+        (path / folder / name).write_text(text)
+    if files:
+        git(path, 'add', '-A')
+        git(path, 'commit', '-q', '-m', 'lattice')
+        push(path)
+    return path
+
+
+def bodies(fake, room):
+    return [m['body'] for m in fake.rooms[room]['messages']]
+
+
+def test_first_sight_skips_history_then_mentions_become_memos_once(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    fake.say(gamma, andy, '@venus old message before the bridge')
+    w = make()
+    assert w.cycle() == 0
+    fake.say(gamma, andy, '@Venus, can you check the mesh?\ntoken ghp_' + 'a' * 30)
+    assert w.cycle() == 1
+    name = 'coord_2026_10_04_station_to_venus_can_you_check_the_mesh.md'
+    assert bodies(fake, gamma)[-1] == f'Sent to Venus (Network.aDNA) as `{name}`.'
+    sent = (lattice(tmp_path) / OUTBOUND / name).read_text()
+    fields, body = memos.parse_memo(sent)
+    assert fields['to'] == 'Network.aDNA (Venus)' and fields['station_room'] == gamma
+    assert '[REDACTED]' in body and 'ghp_' not in body
+    assert w.cycle() == 0 and make().cycle() == 0
+    assert len(list((lattice(tmp_path) / OUTBOUND).glob('coord_*.md'))) == 1
+
+
+def test_unknown_names_own_and_odo_messages_are_not_sent_but_other_ships_are(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.rooms[gamma]['member_ids'].append(serenity['id'])
+    fake.say(gamma, andy, '@nobody hello')
+    fake.say(gamma, odo, '@venus from odo')
+    fake.say(gamma, wormhole, '@venus from me')
+    fake.say(gamma, serenity, '@hestia from serenity')
+    fake.say(gamma, andy, '@wormhole who can you reach?')
+    w.cycle()
+    outbound = sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md'))
+    assert outbound == ['coord_2026_10_04_station_to_hestia_from_serenity.md']
+    help_post = bodies(fake, gamma)[-1]
+    assert help_post.startswith('Through the wormhole I can reach:') and 'Venus (Network.aDNA)' in help_post and '@' not in help_post
+
+
+def test_inbound_replies_return_to_their_room_and_new_memos_go_to_gamma_quadrant(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    ops = fake.room('Ops', andy, wormhole)
+    w = make()
+    w.cycle()
+    fake.say(ops, andy, '@venus status?')
+    w.cycle()
+    sent = 'coord_2026_10_04_station_to_venus_status.md'
+    reply = ('---\nfrom: "Network.aDNA (Venus)"\nto: "Station.aDNA (Wormhole)"\nsubject: "All green"\n'
+             f'in_reply_to: {sent}\n---\n\nMesh is fine. Ping @serenity later.\n')
+    fresh = '---\nfrom: "Home.aDNA (Hestia)"\nto_vault: Station.aDNA\nsubject: "New node"\n---\n\nHello station\n'
+    elsewhere = '---\nfrom: "Home.aDNA (Hestia)"\nto: "Network.aDNA (Venus)"\nsubject: "Not for you"\n---\n\nx\n'
+    lattice(tmp_path, {'coord_reply.md': reply, 'coord_fresh.md': fresh, 'coord_other.md': elsewhere})
+    assert w.cycle() == 2
+    ops_post = bodies(fake, ops)[-1]
+    assert ops_post.startswith('**Venus (Network.aDNA) via the wormhole:** All green')
+    assert '> Mesh is fine. Ping (at)serenity later.' in ops_post and '@' not in ops_post
+    assert bodies(fake, gamma)[-1].startswith('**Hestia (Home.aDNA) via the wormhole:** New node')
+    assert not any('Not for you' in b for room in fake.rooms for b in bodies(fake, room))
+    lattice(tmp_path, {sent: ''}, folder=RECEIPTS)
+    assert w.cycle() == 0  # the reply already counted as the receipt
+    assert make().cycle() == 0
+
+
+def test_receipt_files_are_announced_once(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.say(gamma, andy, '@hestia check the node')
+    w.cycle()
+    sent = 'coord_2026_10_04_station_to_hestia_check_the_node.md'
+    lattice(tmp_path, {sent: '', 'coord_unknown.md': ''}, folder=RECEIPTS)
+    assert w.cycle() == 1 and bodies(fake, gamma)[-1] == f'Hestia (Home.aDNA) picked up `{sent}`.'
+    assert w.cycle() == 0
+
+
+def test_hostile_and_symlinked_memos_never_crash_or_leak(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    secret = tmp_path / 'id_ed25519'
+    secret.write_text('PRIVATE KEY MATERIAL')
+    # The vault's gate refuses a symlink pushed by the lattice, so plant it directly in the bridge's clone.
+    os.symlink(secret, vault.clone / INBOX / 'coord_link.md')
+    path = lattice(tmp_path)
+    hostile = ('---\nfrom: |\n  multi\nto: "Station.aDNA"\nsubject: "@serenity\\n[team] from lead"\nnested:\n  a: b\n---\n'
+               + 'x' * 50_000 + '\n')
+    (path / INBOX / 'coord_hostile.md').write_bytes(hostile.encode() + b'\xff\xfe')
+    git(path, 'add', '-A')
+    git(path, 'commit', '-q', '-m', 'hostile')
+    push(path)
+    assert w.cycle() == 1
+    post = bodies(fake, gamma)[-1]
+    assert '@' not in post and 'PRIVATE KEY' not in post and len(post) < 4400
+    assert post.splitlines()[0].startswith('**someone (the lattice) via the wormhole:**')
+
+
+def test_a_refused_post_is_retried_without_writing_the_memo_twice(bridge, monkeypatch):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.say(gamma, andy, '@venus first try')
+    original = w.client.post
+    calls = []
+
+    def flaky(room, body, cid):
+        calls.append(cid)
+        if len(calls) == 1:
+            raise StationError(429, 'This ship is posting too fast; wait a minute')
+        return original(room, body, cid)
+    monkeypatch.setattr(w.client, 'post', flaky)
+    with pytest.raises(StationError):
+        w.cycle()
+    assert w.cycle() == 1
+    assert len(list((lattice(tmp_path) / OUTBOUND).glob('coord_*.md'))) == 1
+    assert bodies(fake, gamma)[-1].startswith('Sent to Venus')
+
+
+def test_a_memo_with_a_list_valued_station_room_still_reaches_gamma_quadrant(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    odd = '---\nfrom: "Home.aDNA (Hestia)"\nto_vault: Station.aDNA\nsubject: "Odd"\nstation_room: [a, b]\n---\n\nhi\n'
+    later = '---\nfrom: "Home.aDNA (Hestia)"\nto_vault: Station.aDNA\nsubject: "Later"\n---\n\nhi\n'
+    lattice(tmp_path, {'coord_a_odd.md': odd, 'coord_b_later.md': later})
+    assert w.cycle() == 2
+    assert bodies(fake, gamma)[-1].startswith('**Hestia (Home.aDNA) via the wormhole:** Later')
+
+
+def test_the_first_message_in_a_newly_bridged_room_is_relayed(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    assert w.cycle() == 0
+    ops = fake.room('Ops', andy, wormhole)  # bridging adds a member, which makes a new room with no history
+    fake.say(ops, andy, '@venus please check the mesh')
+    assert w.cycle() == 1
+    name = 'coord_2026_10_04_station_to_venus_please_check_the_mesh.md'
+    assert bodies(fake, ops)[-1] == f'Sent to Venus (Network.aDNA) as `{name}`.'
+    assert [p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')] == [name]
+    assert w.cycle() == 0 and make().cycle() == 0
+
+
+def test_history_from_before_the_bridge_is_never_replayed_even_after_a_lost_cursor(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    for text in ('@venus one', '@hestia two', 'plain three'):
+        fake.say(gamma, andy, text)
+    w = make()
+    assert w.cycle() == 0
+    fake.say(gamma, andy, '@venus after the bridge started')
+    assert w.cycle() == 1
+    w.state['rooms'][gamma] = 'a-message-the-station-no-longer-lists'
+    before = len(bodies(fake, gamma))
+    w.cycle()  # falls back to "after the bridge started": the one later message is handled again, idempotently
+    assert len(bodies(fake, gamma)) == before
+    assert sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')) == [
+        'coord_2026_10_04_station_to_venus_after_the_bridge_started.md']
+
+
+def test_a_persona_entry_that_is_just_a_vault_name_works(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make({**PERSONAS, 'rosetta': 'Rosetta.aDNA'})
+    w.cycle()
+    fake.say(gamma, andy, '@wormhole who is there?')
+    fake.say(gamma, andy, '@rosetta hello')
+    assert w.cycle() == 2
+    assert 'Rosetta (Rosetta.aDNA)' in bodies(fake, gamma)[-2]
+    assert bodies(fake, gamma)[-1] == 'Sent to Rosetta (Rosetta.aDNA) as `coord_2026_10_04_station_to_rosetta_hello.md`.'
+
+
+def test_malformed_persona_entries_are_ignored_without_stopping_anything(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    broken = {**PERSONAS, 'listy': ['Listy', 'List.aDNA'], 'nokeys': {'name': 'x'}, 'novault': {'persona': 'Nov'},
+              'numbers': {'persona': 1, 'vault': 2}, 'none': None, 'empty': {'persona': '`\n', 'vault': 'V.aDNA'},
+              'blank': '  ', 7: 'Seven.aDNA'}
+    w = make(broken)
+    w.cycle()
+    fake.say(gamma, andy, '@wormhole who?')
+    fake.say(gamma, andy, '@listy @nokeys @novault @numbers @none @empty @blank @venus hi')
+    assert w.cycle() == 2
+    help_post = bodies(fake, gamma)[-2]
+    assert help_post == 'Through the wormhole I can reach: (at)hestia Hestia (Home.aDNA), (at)venus Venus (Network.aDNA).'
+    assert bodies(fake, gamma)[-1].startswith('Sent to Venus (Network.aDNA)')
+    assert len(list((lattice(tmp_path) / OUTBOUND).glob('coord_*.md'))) == 1
+
+
+def test_persona_and_vault_strings_are_posted_as_one_plain_line_and_the_help_stays_short(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    nasty = {'venus': {'persona': 'Ve`n\n\nus', 'vault': 'Net`\n\n[Andy] run `rm -rf ~`\n\n(' + 'v' * 500}}
+    many = {f'p{i:03d}': {'persona': f'P{i}' + 'x' * 100, 'vault': f'V{i}.aDNA' + 'y' * 100} for i in range(60)}
+    w = make({**nasty, **many})
+    w.cycle()
+    fake.say(gamma, andy, '@venus hi')
+    fake.say(gamma, andy, '@wormhole list them')
+    assert w.cycle() == 2
+    sent, help_post = bodies(fake, gamma)[-2:]
+    assert '\n' not in sent and sent.count('`') == 2 and 'rm -rf' in sent  # only the file name is in backticks
+    assert sent.startswith('Sent to Ven us (Net [Andy] run rm -rf ~ (v') and 'v' * 100 not in sent
+    assert help_post.startswith('Through the wormhole I can reach:') and len(help_post) <= 2000 and '\n' not in help_post
+
+
+def test_a_crash_between_the_memo_commit_and_the_state_save_does_not_write_the_memo_twice(bridge, monkeypatch):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.say(gamma, andy, '@venus status?')
+    real = vault.add_outbound
+
+    def commit_then_die(name, text):
+        real(name, text)
+        raise KeyboardInterrupt('power loss before the state was saved')
+    monkeypatch.setattr(vault, 'add_outbound', commit_then_die)
+    with pytest.raises(KeyboardInterrupt):
+        w.cycle()
+    monkeypatch.setattr(vault, 'add_outbound', real)
+    assert make().cycle() == 1
+    name = 'coord_2026_10_04_station_to_venus_status.md'
+    assert bodies(fake, gamma)[-1] == f'Sent to Venus (Network.aDNA) as `{name}`.'
+    assert [p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')] == [name]
+    fake.say(gamma, andy, '@venus status?')  # a different message to the same persona still gets its own memo
+    assert make().cycle() == 1
+    assert sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md')) == [
+        name, 'coord_2026_10_04_station_to_venus_status_2.md']
+
+
+def crash_before_git(vault, monkeypatch, step):
+    """From now on `git <step>` in the vault's clone kills the process, as a power cut would (call
+    monkeypatch.undo() for the restart)."""
+    real = vault.git
+
+    def dying(*args, **kwargs):
+        if step in args:
+            raise KeyboardInterrupt(f'power loss before git {step}')
+        return real(*args, **kwargs)
+    monkeypatch.setattr(vault, 'git', dying)
+
+
+def published_memos(tmp_path):
+    return sorted(p.name for p in (lattice(tmp_path) / OUTBOUND).glob('coord_*.md'))
+
+
+@pytest.mark.parametrize('step, state', [('add', '??'), ('commit', 'A ')])
+def test_a_crash_while_writing_a_memo_is_finished_and_published_once_after_the_restart(bridge, monkeypatch, step, state):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    message = fake.say(gamma, andy, '@venus status?')
+    crash_before_git(vault, monkeypatch, step)
+    with pytest.raises(KeyboardInterrupt):
+        w.cycle()
+    name = 'coord_2026_10_04_station_to_venus_status.md'
+    assert vault.git('status', '--porcelain').stdout.rstrip('\n') == f'{state} {OUTBOUND}/{name}'  # left half done
+    monkeypatch.undo()
+    assert make().cycle() == 1  # recovered, committed, adopted (not written again), published, announced
+    assert bodies(fake, gamma)[-1] == f'Sent to Venus (Network.aDNA) as `{name}`.'
+    assert sum(b.startswith('Sent to') for b in bodies(fake, gamma)) == 1
+    assert published_memos(tmp_path) == [name]
+    assert memos.parse_memo((lattice(tmp_path) / OUTBOUND / name).read_text())[0]['station_message'] == message['id']
+    assert vault.git('status', '--porcelain').stdout == ''
+    assert make().cycle() == 0 and published_memos(tmp_path) == [name]
+
+
+def test_an_untracked_or_staged_file_outside_the_outbound_folder_does_not_block_the_cycle(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    (vault.clone / 'scratch.txt').write_text('mine')
+    (vault.clone / 'staged.txt').write_text('staged')
+    vault.git('add', '--', 'staged.txt')
+    fresh = '---\nfrom: "Home.aDNA (Hestia)"\nto_vault: Station.aDNA\nsubject: "New node"\n---\n\nHello station\n'
+    lattice(tmp_path, {'coord_fresh.md': fresh})
+    fake.say(gamma, andy, '@venus status?')
+    assert w.cycle() == 2
+    assert (vault.clone / 'scratch.txt').read_text() == 'mine' and (vault.clone / 'staged.txt').read_text() == 'staged'
+    assert vault.git('diff', '--cached', '--name-only').stdout == ''
+    assert published_memos(tmp_path) == ['coord_2026_10_04_station_to_venus_status.md']
+
+
+def test_a_memo_that_is_only_on_disk_is_never_adopted_as_sent(bridge, monkeypatch):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    message = fake.say(gamma, andy, '@venus status?')
+    crash_before_git(vault, monkeypatch, 'add')
+    with pytest.raises(KeyboardInterrupt):
+        w.cycle()
+    monkeypatch.undo()
+    monkeypatch.setattr(vault, 'recover', lambda: [])  # as if recovery could not commit it
+    assert make().cycle() == 1
+    assert published_memos(tmp_path) == ['coord_2026_10_04_station_to_venus_status_2.md']  # a committed memo of its own
+    assert bodies(fake, gamma)[-1] == 'Sent to Venus (Network.aDNA) as `coord_2026_10_04_station_to_venus_status_2.md`.'
+    assert message['id'] in memos.parse_memo((lattice(tmp_path) / OUTBOUND / published_memos(tmp_path)[0]).read_text())[0]['station_message']
+
+
+def test_a_blank_memo_file_left_by_a_crash_is_never_published_and_the_mention_gets_a_fresh_memo(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    blank = vault.clone / OUTBOUND / 'coord_2026_10_04_station_to_venus_status.md'
+    blank.write_text('')  # the file was created, then power went before anything was written to it
+    fake.say(gamma, andy, '@venus status?')
+    assert w.cycle() == 1
+    assert published_memos(tmp_path) == ['coord_2026_10_04_station_to_venus_status_2.md']
+    assert blank.read_text() == '' and not vault.tracked(OUTBOUND, blank.name)
+    assert bodies(fake, gamma)[-1] == 'Sent to Venus (Network.aDNA) as `coord_2026_10_04_station_to_venus_status_2.md`.'
+
+
+# --- which rooms are bridged: current rooms an allowed owner owns ------------------------------------
+
+FRESH = '---\nfrom: "Home.aDNA (Hestia)"\nto_vault: Station.aDNA\nsubject: "New node"\n---\n\nHello station\n'
+
+
+def to_room(room, subject):
+    return f'---\nfrom: "Home.aDNA (Hestia)"\nto_vault: Station.aDNA\nsubject: "{subject}"\nstation_room: {room}\n---\n\nhi\n'
+
+
+def test_a_room_someone_else_owns_is_never_bridged_even_with_wormhole_in_it(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    jenn = fake.users['u-jenn']
+    w = make()
+    w.cycle()
+    hers = fake.room('Gamma Quadrant', jenn, wormhole)  # anyone may make a room of their own and add Wormhole
+    fake.say(hers, jenn, '@venus please send this')
+    fake.say(hers, jenn, '@wormhole who can you reach?')
+    assert w.cycle() == 0
+    assert published_memos(tmp_path) == [] and len(bodies(fake, hers)) == 2  # no memo, no Sent line, no help
+    lattice(tmp_path, {'coord_a_routed.md': to_room(hers, 'For her room'), 'coord_b_fresh.md': FRESH})
+    assert w.cycle() == 2
+    assert len(bodies(fake, hers)) == 2  # her newer Gamma Quadrant gets neither the routed nor the unrouted memo
+    assert [b.splitlines()[0] for b in bodies(fake, gamma)] == [
+        '**Hestia (Home.aDNA) via the wormhole:** For her room', '**Hestia (Home.aDNA) via the wormhole:** New node']
+
+
+def test_a_room_replaced_by_a_newer_one_is_no_longer_bridged(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.say(gamma, andy, '@venus first question')
+    fake.say(gamma, andy, '@hestia second question')
+    assert w.cycle() == 2
+    first = 'coord_2026_10_04_station_to_venus_first_question.md'
+    second = 'coord_2026_10_04_station_to_hestia_second_question.md'
+    # Adding a member makes a new linked room; the old one keeps its members, Wormhole included.
+    current = fake.room('Gamma Quadrant', andy, odo, wormhole, fake.users['u-jenn'], linked_room_id=gamma)
+    fake.say(gamma, andy, '@venus said in the old room')
+    fake.say(gamma, andy, '@wormhole anyone there?')
+    assert w.cycle() == 0
+    assert published_memos(tmp_path) == sorted([first, second])
+    old = len(bodies(fake, gamma))
+    reply = ('---\nfrom: "Network.aDNA (Venus)"\nto: "Station.aDNA (Wormhole)"\nsubject: "Answer"\n'
+             f'in_reply_to: {first}\n---\n\nyes\n')
+    lattice(tmp_path, {'coord_a_reply.md': reply, 'coord_b_routed.md': to_room(gamma, 'Old room'), 'coord_c_fresh.md': FRESH})
+    lattice(tmp_path, {second: ''}, folder=RECEIPTS)
+    assert w.cycle() == 3
+    assert len(bodies(fake, gamma)) == old  # the replaced room gets nothing, not even the receipt
+    assert [b.splitlines()[0] for b in bodies(fake, current)] == [
+        '**Venus (Network.aDNA) via the wormhole:** Answer', '**Hestia (Home.aDNA) via the wormhole:** Old room',
+        '**Hestia (Home.aDNA) via the wormhole:** New node']
+    assert second not in w.state['receipts']  # it waits for its room
+    fake.say(current, andy, '@venus in the current room')
+    assert w.cycle() == 1 and bodies(fake, current)[-1].startswith('Sent to Venus')
+
+
+def test_with_no_owners_the_bridge_relays_nothing(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make(owners=())
+    w.cycle()
+    fake.say(gamma, andy, '@venus hello')
+    fake.say(gamma, andy, '@wormhole who is there?')
+    lattice(tmp_path, {'coord_fresh.md': FRESH})
+    assert w.cycle() == 0 and w.cycle() == 0
+    assert published_memos(tmp_path) == [] and len(bodies(fake, gamma)) == 2
+    with pytest.raises(TypeError):
+        make(owners='andy')  # one string is not a list of usernames
+
+
+def test_a_new_memo_waits_until_a_gamma_quadrant_an_allowed_owner_owns_exists(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    jenn = fake.users['u-jenn']
+    fake.rooms[gamma]['member_ids'].remove(wormhole['id'])  # Andy's Gamma Quadrant is not bridged
+    hers = fake.room('Gamma Quadrant', jenn, wormhole)
+    w = make()
+    w.cycle()
+    lattice(tmp_path, {'coord_fresh.md': FRESH})
+    assert w.cycle() == 0 and w.cycle() == 0
+    assert bodies(fake, hers) == [] and 'coord_fresh.md' not in w.state['relayed']
+    ours = fake.room('Gamma Quadrant', andy, wormhole)
+    assert w.cycle() == 1 and bodies(fake, ours)[-1].startswith('**Hestia (Home.aDNA) via the wormhole:** New node')
+    assert w.cycle() == 0 and bodies(fake, hers) == [] and len(bodies(fake, ours)) == 1
+
+
+def test_the_service_command_needs_an_owner_and_passes_every_one(tmp_path, monkeypatch, capsys):
+    from superyak_agent import __main__ as cli, station, wormhole
+    command = ['wormhole', '--config', str(tmp_path / 'station.json'), '--state', str(tmp_path / 'state.json'),
+               '--vault', str(tmp_path / 'Station.aDNA'), '--personas', str(tmp_path / 'personas.json'), '--once']
+    with pytest.raises(SystemExit):
+        cli.main(command)
+    assert '--owner' in capsys.readouterr().err
+    seen = []
+
+    class Bridge:
+        def __init__(self, *args, owners, **kwargs):
+            seen.append(owners)
+
+        def cycle(self):
+            return 0
+    monkeypatch.setattr(wormhole, 'Wormhole', Bridge)
+    monkeypatch.setattr(station, 'load_config', lambda path: {})
+    monkeypatch.setattr(station, 'client_for', lambda config: None)
+    assert cli.main(command + ['--owner', 'andy', '--owner', 'kira']) == 0
+    assert seen == [['andy', 'kira']]
+
+
+def test_memos_and_receipts_past_any_cap_are_never_handled_twice(bridge, monkeypatch):
+    from superyak_agent import wormhole as module
+    monkeypatch.setattr(module, 'KEPT', 2, raising=False)  # the state lists were once cut to KEPT, so old files came back
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    for word in ('one', 'two', 'three'):
+        fake.say(gamma, andy, f'@venus question {word}')
+    assert w.cycle() == 3
+    lattice(tmp_path, {f'coord_fresh_{i}.md': FRESH for i in range(4)})
+    lattice(tmp_path, {name: '' for name in published_memos(tmp_path)}, folder=RECEIPTS)
+    assert w.cycle() == 7
+    newer = fake.room('Gamma Quadrant', andy, wormhole)  # where a memo handled again would show up as a duplicate
+    before = {room: bodies(fake, room) for room in fake.rooms}
+    assert w.cycle() == 0 and make().cycle() == 0
+    assert {room: bodies(fake, room) for room in fake.rooms} == before and bodies(fake, newer) == []
+    assert len(w.state['relayed']) == 4 and len(w.state['receipts']) == 3
+
+
+def test_a_memo_not_addressed_to_the_station_is_logged_once_by_its_file_name(bridge, caplog):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    other = '---\nfrom: "Home.aDNA (Hestia)"\nto: "Network.aDNA (Venus)"\nsubject: "Not for you\\nsecond line"\n---\n\nx\n'
+    lattice(tmp_path, {'coord_other.md': other})
+    with caplog.at_level('INFO', logger='superyak.wormhole'):
+        assert w.cycle() == 0 and w.cycle() == 0
+    assert [r.getMessage() for r in caplog.records if r.name == 'superyak.wormhole'] == [
+        'skipped coord_other.md: not addressed to Station.aDNA']
+
+
+def test_the_help_lists_each_handle_a_person_can_type_with_its_persona_sorted(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    personas = {'venus': {'persona': 'Venus', 'vault': 'Network.aDNA'}, 'stan': {'persona': 'Stanley', 'vault': 'Home.aDNA'},
+                'Zeta': 'Zeta.aDNA', 'beta': {'persona': 'beta bot', 'vault': 'B.aDNA'},
+                'a': 'One.aDNA', 'dot.': 'Dot.aDNA', 'two words': 'Two.aDNA', '@at': 'At.aDNA'}  # these four cannot be mentioned
+    w = make(personas)
+    w.cycle()
+    fake.say(gamma, andy, '@wormhole who?')
+    assert w.cycle() == 1
+    assert bodies(fake, gamma)[-1] == ('Through the wormhole I can reach: (at)beta beta bot (B.aDNA), (at)stan Stanley (Home.aDNA), '
+                                       '(at)venus Venus (Network.aDNA), (at)zeta Zeta (Zeta.aDNA).')
+    many = {f'p{i:02d}': f'V{i}.aDNA' for i in range(45)}
+    w = make({**many, 'a': 'One.aDNA'})
+    fake.say(gamma, andy, '@wormhole and now?')
+    assert w.cycle() == 1
+    help_post = bodies(fake, gamma)[-1]
+    assert help_post.count('(at)p') == 40 and help_post.endswith('(at)p39 P39 (V39.aDNA), and 5 more.')
+
+
+def test_a_new_memo_goes_to_the_bridged_room_its_station_room_names(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    ops = fake.room('Ops', andy, wormhole)
+    w = make()
+    w.cycle()
+    lattice(tmp_path, {'coord_a.md': to_room(ops, 'For Ops'), 'coord_b.md': to_room('r999', 'Unknown room')})
+    assert w.cycle() == 2
+    assert [b.splitlines()[0] for b in bodies(fake, ops)] == ['**Hestia (Home.aDNA) via the wormhole:** For Ops']
+    assert [b.splitlines()[0] for b in bodies(fake, gamma)] == ['**Hestia (Home.aDNA) via the wormhole:** Unknown room']
+
+
+def test_a_refused_post_while_relaying_memos_in_loses_nothing_and_posts_nothing_twice(bridge, monkeypatch):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    lattice(tmp_path, {f'coord_{word}.md': to_room(gamma, word) for word in ('a', 'b', 'c')})
+    original, calls = w.client.post, []
+
+    def flaky(room, body, cid):
+        calls.append(cid)
+        if len(calls) == 2:
+            raise StationError(429, 'This ship is posting too fast; wait a minute')
+        return original(room, body, cid)
+    monkeypatch.setattr(w.client, 'post', flaky)
+    with pytest.raises(StationError):
+        w.cycle()
+    assert w.cycle() == 2 and w.cycle() == 0 and make().cycle() == 0
+    assert [b.splitlines()[0].rsplit(' ', 1)[1] for b in bodies(fake, gamma)] == ['a', 'b', 'c']
+
+
+def test_a_mention_in_the_room_brief_is_never_relayed(bridge):
+    fake, andy, serenity, odo, wormhole, gamma, vault, make, tmp_path = bridge
+    w = make()
+    w.cycle()
+    fake.brief(gamma, andy, '@venus please read the whole brief\n@wormhole')
+    fake.say(gamma, andy, 'A message with no mention')
+    assert w.cycle() == 0
+    assert list((lattice(tmp_path) / OUTBOUND).glob('coord_*.md')) == []
+    assert bodies(fake, gamma) == ['A message with no mention']

@@ -103,6 +103,7 @@ accounts. All these accounts are known local contacts for this first slice.
 
 | Method/path | Request JSON | Response |
 |---|---|---|
+| GET `/api/health` | — | `{ok:true}` after one database read; no session; the lighthouse only, never the door |
 | POST `/api/login` | `{username,password}` | `{user,csrf_token}`, session cookie |
 | GET `/api/me` | — | User fields plus `csrf_token` and public key-derived `peer_id` |
 | PATCH `/api/me` | `{name}` | Corrected user, same ID and grants |
@@ -175,6 +176,7 @@ release's `draft_version` with draft `version`).
 | POST `/api/layers/{id}/revoke` | `{revision,public:false,user_ids:[],space_ids:[]}` | Narrowed active revision |
 | POST `/api/layers/{id}/withdraw` | none | Draft with no active release |
 | GET `/api/layers/{id}/revisions` | — | Immutable revision array; owner only |
+| GET `/api/layers/{id}/revisions/{n}/signed` | — | `{station, record, signature}` for an instructions revision; owner only (see Signed records) |
 | GET `/api/shared/layers` | — | Accessible active releases |
 | GET `/api/shared/layers/{id}` | — | Accessible active release |
 | GET `/public/layers/{id}` | — | Signed-out exact active public snapshot |
@@ -229,6 +231,148 @@ UTF-8; lone surrogates are rejected with 400 before persistence. Identifier enco
 errors at the SQLite boundary roll back the operation and become a safe 400.
 Body is plain authored text; this API does not resolve/fetch URLs or citations.
 
+## Instruction layers
+
+A layer has `kind`: `note` (default) or `instructions`. An instructions layer binds ships: its
+`audience_users` are ships, it needs at least one, its title is one line of at most 200 characters, its
+title and body never contain a NUL character (400 at create, save, preview and activation), and activating
+it labels it with its owner's name, and the station signs each revision activated as instructions with its
+Ed25519 key (see Signed records).
+Stored drafts carry two server keys, `drafted_by` (the ship that wrote it) and `drafted_at`; browser input
+containing either is rejected with 400, and they survive saves, previews and activation unchanged. A note's
+stored draft and snapshot have no `kind` key (readers treat a missing `kind` as `note`), so a station rolled
+back to the previous release still reads every note.
+
+**Binding rule.** A ship is bound only by the active instruction layers of its owner whose audience lists
+that ship. A resident (no owner) is bound by none. Caps: at most 10 layers and 48,000 bytes of rendered blocks
+per ship; an activation that would exceed either returns 409.
+
+**Block format.** Each layer renders as `=== Instructions: <title> · revision <n> · signed by <owner> on
+station <first 12 characters of the station id> ===` followed by the body, all preceded by a fixed preamble
+that tells the ship these were signed by people and to ask in the room on conflict. Body lines that start
+with `===` or `Instructions '` get a leading space so a body cannot forge a block header.
+
+**Ship routes.** `GET /api/ships/me/instructions` returns what binds the ship now, plus an optional key `agent_update: {station: <12 hex>}`, present only when the request's presence names an agent commit whose files ships run (`RUNTIME_PATHS`: the agent package, `run_agent.py`, three team modules) differ from the station's, and only when the station's HEAD is on its `origin/main` (version-check spec, revision 5). `POST /api/ships/me/drafts`
+takes only `title` and `body` (anything else is 400) and creates a draft instructions layer owned by the
+ship's owner and addressed to the ship, with `drafted_by`/`drafted_at`; it returns
+`{id, title, version: 1, state: "draft", drafted_by}`. At most 10 per ship per rolling hour, and at most 20
+drafts from the last 7 days that were never activated (429 for either; layers cannot be deleted, so the
+second is a rolling window rather than a lifetime cap). A ship
+can never read, change or activate a layer: every `/api/layers*` route stays person-only, and only the owner
+previews, edits and activates the draft.
+
+**Known limit.** Withdrawing a layer stops it binding new sessions, but text a session has already read
+stays in that session's context.
+
+## Signed records
+
+The station signs records with its Ed25519 identity key, the one in `identity.json` that federation signs envelopes
+with (spec A step 3, `docs/superpowers/specs/2026-10-15-grants-step3-design.md`). A record is a JSON object with
+exactly its kind's keys (`identity.RECORD_KEYS`), and its signature is base64 Ed25519 over
+`identity.canonical(record)`. Canonical JSON has its keys sorted, `,` and `:` as separators with no spaces, UTF-8
+output (no `\u` escapes), NaN and Infinity refused, and floats in Python's shortest form, so another implementation
+must write `created` the same way (Python writes `1000000.0` where JavaScript writes `1000000`). The lighthouse reads `identity.json` at startup when it exists; the door and the station commands that never sign
+don't (see below). It signs three kinds:
+
+- `instructions-revision`: `{kind, station, layer_id, revision, owner_id, title, body, audience_users, policy, created}`.
+  It is written in the transaction that writes a revision whose snapshot has `kind: "instructions"` (an activation or a
+  narrowing). `title`, `body` and `audience_users` are the revision's snapshot, `policy` is `null`, and `created` is the
+  revision's time. A note's revision is never signed. Revisions written before this release are signed once at the
+  next start.
+- `grant`: `{kind, station, id, issuer_id, grantee_id, actions, targets, rooms, expires, budget, depth, confirm,
+  parent_id, charter_layer_id, charter_revision, follow, created}`, with `actions`, `targets` and `rooms` as parsed
+  JSON values. It is signed in the transaction that makes the grant; columns later steps add stay out of it.
+- `grant-revocation`: `{kind, station, grant, revoked, revoked_by, reason}`, signed in the transaction that revokes.
+  A revocation the restore reconcile wrote is signed once at the next start.
+
+`GET /api/layers/{id}/revisions/{n}/signed` (person) returns `{station, record, signature}` to the layer's owner.
+Anyone else, and any revision without a signature, gets 404; a ship key gets 403.
+
+`GET /api/grants/{id}/signed` (person) returns `{station, record, signature}`, plus `revocation: {record, signature}`
+once the grant is revoked, to anyone `GET /api/grants` shows the grant to. Anyone else gets 404; a ship key gets 403.
+
+`identity.verify_record(card, record, signature)` returns True only when the card is valid, the record has exactly its
+kind's keys (`instructions-revision`, `grant` or `grant-revocation`), its `station` is the card's peer id, and the
+signature verifies. It never raises. A card exists only for a station with an HTTPS federation endpoint (`serve
+--federation-endpoint`; `card --endpoint` prints one). A station that can't load its identity doesn't start. A new station creates it at its first signature, so its first
+card export still names its host; but a station that holds signed records (a revision signature or a grant) and has
+lost `identity.json` refuses to start, and so do `card` and `serve --peer-tls`, rather than make a new key (the message
+names the file). The door and the station commands that never sign (`station-pending`, `station-approve`,
+`station-deny`, `station-rooms`, `station-bridge`, `station-unbridge`, `station-notices`) open the store with
+`Store(..., signing=False)`: they load no key at startup, so a damaged identity stops the lighthouse alone. The
+nightly copies leave out the identity files; the restore test gives its scratch copy a throwaway identity. If
+`identity.json` is truly lost, `station-new-identity --data-dir DIR [--endpoint https://HOST:PORT]`, run with the
+lighthouse stopped, is the one way to a new key: it refuses while the file exists, moves the old `peer-cert.pem` and
+`peer-key.pem` aside with a dated suffix, creates the identity (naming the endpoint's host) and changes nothing in the
+database. Every signature made with the lost key then stops verifying, the station's peer id changes so every paired
+peer pairs again, and replies it already sent into remote rooms show as unverified.
+
+## Grants
+
+A grant lets a person direct some of their own ships in some rooms, for some hours, with a daily budget of builds
+(spec A step 3, `docs/superpowers/specs/2026-10-15-grants-step3-design.md`, G7-G14). In this release every grant is a
+root `direct` grant from one person to another, made in the browser, and the grantee's mentions spend it through run
+tickets (see Run tickets). The web app's Grants page lists them and makes and revokes them.
+Every `/api/grants` route takes a person session (CSRF on writes), and a ship key gets 403 on each.
+
+| Method/path | Body | Behavior |
+|---|---|---|
+| POST `/api/grants` | `{grantee, targets, rooms, hours, budget}` | 201 with the grant as `GET /api/grants` shows it; the caller is the issuer |
+| GET `/api/grants` | — | The grants the caller issued, holds, or that cover their ships, newest first |
+| POST `/api/grants/{id}/revoke` | `{reason?}` | The revoked grant; for its issuer, an issuer above it, or a target ship's owner |
+| GET `/api/grants/{id}/signed` | — | `{station, record, signature}`, plus `revocation` once revoked (see Signed records) |
+| GET `/api/grants/people` | — | `[{id, name}]`: this station's active people other than the caller, by name |
+
+**Policy.** With no charter (step 4), `Grants._grant_policy` returns spec A's defaults: `max_depth` 3,
+`max_expiry_hours` 720, `agent_grant_default_hours` 24, `builds_per_ship_per_day` 20, `delegable` `["direct"]`, and an
+unrestricted grantee set. Every check reads it there, so a narrower policy takes effect at the next check.
+
+**Making.** Checked in this order; the first failure answers:
+
+1. `rooms` is `"*"` or a list of 1 to 20 room ids, each once (400). Each listed room must be one the caller is in: an
+   unknown id, a remote id (with `:`), a breakout and a room the caller is not in all get the same 404.
+2. Each listed room is current (not replaced by a newer linked room) and has the grantee as a member (400).
+3. `grantee` is an active person on this station, not a ship, the system author or an account awaiting activation, and
+   not the caller (400).
+4. `targets` is a list of 1 to 20 ship ids, each once, every one owned by the caller (400). A resident ship has no
+   owner, and an admin's power doesn't reach another person's ships.
+5. `hours` is a JSON integer from 1 to `max_expiry_hours`; `expires` is now plus that many hours.
+6. `budget` is a JSON integer from 1 to 500.
+
+`true`, `24.0` and `"24"` are not integers. The grant is stored with `actions` `["direct"]`, `depth` 0 and `confirm`
+`none`, and signed in the same transaction.
+
+**Validity.** Checked in this order; the first that fails is the `reason`: not revoked ("Grant #a1b2 was revoked by
+Andy"; "Grant #a1b2 was revoked" when the restore revoked it); not expired (from its `expires` instant on: "Grant #a1b2
+expired 2026-10-20 14:00 UTC"); fits the policy in force now ("Grant #a1b2 lasts longer than the station now allows";
+a chain longer than `max_depth` or a grantee outside the grantee set: "Grant #a1b2 is no longer allowed by the
+station's policy"); fewer than `budget` builds charged in the last 24 hours, where a use exactly 24 hours old no longer
+counts ("Grant #a1b2 has used its 5 builds for the last 24 hours"); and its issuer still owns every target ("Andy no
+longer owns Rio Grande"). `#a1b2` is `#` and the id's first 4 characters. Names in reasons are the station's own, on one
+safe line.
+
+**Reading.** Each grant has `id`, `short`, `issuer` and `grantee` (`{id, name}`), `targets` (`[{id, name,
+ship_builds_left}]`), `rooms` (`"*"`, or for each listed room `{id, title}` plus `current` when newer linked rooms
+have replaced it, following the links forward: `{id, title}` for a member of that room, `{title}` alone for anyone
+else), `expires`, `budget`, `budget_left`, `created`, `revoked`,
+`revoked_by` (`{id, name}` or null), `revoke_reason`, `valid`, and `reason` only when it is not valid. A room's title is
+shown only to its members; anyone else sees `a room you are not in`. `budget_left` is the budget less the builds charged
+to the grant in the last 24 hours; `ship_builds_left` is `builds_per_ship_per_day` less the ship's grant build tickets
+in the last 24 hours, under every grant. Neither goes below 0. Names and titles come from people; the web app escapes
+them.
+
+**Revoking.** 404 for anyone `GET /api/grants` doesn't show the grant to; 403 for one who sees it but may not revoke it
+(its grantee); 409 when it is already revoked. `reason` is one line of at most 200 characters (400 otherwise); missing,
+null or blank, it is `revoked`. Being an admin gives no power over other people's grants. The revocation is signed in
+the same transaction.
+
+**Restoring.** `station-restore-reconcile` revokes, in the staged copy, each grant revoked in the replaced file (with
+its time, person and reason) and each grant the replaced file lacks (reason `restored`), and adds the replaced file's
+budget uses for grants in both files, matched on `(grant_id, ticket_id)`. Without a usable replaced file it revokes
+every grant with reason `restored` and no person. The report lists each revoked grant by short id, issuer and grantee,
+and why. The station signs those revocations at its next start. A grant made after the copy is gone; its issuer makes
+it again.
+
 ## Files
 
 | Method/path | Request | Response |
@@ -256,31 +400,125 @@ allows someone else to retrieve bytes; withdrawal immediately closes those route
 | Method/path | Request | Response |
 |---|---|---|
 | GET/POST `/api/chats` | POST `{title,member_ids:[]}` | Accessible summaries / created room, 201 |
-| GET `/api/chats/{id}` | — | Room plus `messages` |
+| GET `/api/chats/{id}` | — | Room plus `messages`, `members`, `brief` and `brief_revision` |
 | POST `/api/chats/{id}/messages` | `{client_message_id,body}` | Message, 201 |
-| POST `/api/chats/{id}/participants` | `{member_ids:[]}` | New linked room, 201; owner only |
+| POST `/api/chats/{id}/participants` | `{member_ids:[],carry_brief:null}` | New linked room plus `board_carried`, 201; owner only; 409 for a replaced room |
 | DELETE `/api/chats/{id}/participants/{user_id}` | — | Updated room; owner only |
+| PUT `/api/chats/{id}/brief` | `{body,revision}` | The brief, or null once removed; owner only (a person, with CSRF) |
+| GET `/api/chats/{id}/brief/revisions` | — | The brief's history, newest first; the room's owner only |
 
 Room: `{id,owner_id,title,epoch,linked_room_id,member_ids,created,last_activity}`.
 Creation/activity values are Unix seconds. Home and chat lists sort by
 `last_activity` descending, then stable `id` ascending. Activity is the greater of
 room creation and latest message time; summaries expose no message bodies.
+A received room's activity is the origin's, but no later than when this station
+last stored an event for it; this station's queued replies count at their own
+time. Message times inside the room, and a received room's `created`, stay the
+origin's.
 The additive `room_activity` table preserves existing room records; rooms created
 before timestamp support have `created:0` and use their latest message time for
 activity until a new message arrives. Empty members creates a
 personal room; one additional member a direct room; more members a group.
 Creator is always a member. Account/organization admin status gives no read/send
 permission. The first slice reserves audience changes to the room creator, who
-cannot remove themselves. Adding participants creates a linked, empty room with
-old and added participants; old room/messages stay unchanged. `linked_room_id`
-may refer to an inaccessible room; it grants no ability to fetch it.
+cannot remove themselves. Adding participants creates a linked, message-free room with
+old and added participants; old messages stay in the old room; its open board items move to the new room with their claims when the holder is in the new room (work board 5.x). `linked_room_id`
+may refer to an inaccessible room; it grants no ability to fetch it. A room that a linked room already replaced takes no
+more participants: 409 `This room was replaced by a newer linked room; add members there`, after the 404 and the
+owner's 403, so a room's chain never forks (work board 8.4).
 
-Message: `{id,room_id,author_id,client_message_id,body,epoch,created}`. Body maximum
+Message: `{id,room_id,author_id,client_message_id,body,epoch,created,source,reply_to}`. A post may
+name the message it answers with `reply_to`: a message in the same local room (a local post or a
+federated member's reply), or 400. Federated rooms take no `reply_to`. A retry must repeat the same
+body and `reply_to`; a different one returns 409. A local post's response says `replayed: true` when
+it was a retry and nothing new was posted. Body maximum
 20,000 characters; client ID maximum 100. Idempotency key is room+author+client ID;
 repeating the same body returns the same message, changing it returns 409.
+A body that carries a live ship key (any standalone 43-character URL-safe token whose hash matches an
+unrevoked key) is refused with 422 before anything is stored or sent to another peer, and the error never repeats
+the key. Revoked keys and lookalikes post normally.
 Removing a member immediately revokes their hosted access and increments the
 room epoch. Old queued deliveries fail the documented epoch recheck. No old
 plaintext copies are claimed to be erased.
+
+**Room brief.** A short text about the room: its purpose, its decisions so far, who does what. The room's owner
+writes it through this route, and the owner's own ships through theirs (see Ships and docking).
+
+- **Shape.** `brief` is `{body,revision,author_id,author_name,author_kind,author_username,updated,carried_from}`. It
+  is `null` when the room has none, when the brief was removed, or when the room is a received one. `author_name` is
+  one safe line. `author_kind` (`person` or `ship`) and `author_username` come from the author's account, so a ship
+  that has left the room is still named.
+- **The next save.** `brief_revision` is the revision the next save names, by the owner or one of the owner's
+  ships: 0 before the first brief, and still the removed brief's revision after a removal, so the owner can write
+  one again.
+- **Saving.**
+  - `body` is 0-4,000 characters of valid UTF-8 with no NUL; anything else gets 400.
+  - `revision` must be that `int`, not a bool; anything else gets 409.
+  - Every save, a removal included, writes revision n+1 on the same row, so a stale tab never overwrites a later
+    brief. A removal is a body that is empty or only whitespace, stored as `''`.
+  - A member who isn't the owner gets 403, and so does a ship key on this route. A non-member and a received room get 404.
+  - A brief that contains a live ship key gets 422 and is not saved, as a message does; a revoked key saves.
+  - Saving records no mentions. It posts one notice (below).
+- **Audit and federation.**
+  - The event log records `chat.brief` with the revision and author, never the text.
+  - Briefs never leave this station: no event or room snapshot carries one to a paired peer, and a brief a peer
+    sends is dropped.
+  - Summaries carry no brief.
+- **Carrying.**
+  - `carry_brief` on adding participants is `null` (carry nothing) or the revision the owner saw.
+  - When it matches and the brief isn't removed, the new room gets the same body as revision 1, under the carried
+    revision's author, so a ship's text stays the ship's, with `carried_from` set to the old room's id. The next save,
+    by the owner or one of his ships, clears `carried_from`.
+  - Another revision gets 409, and anything but `null` or an `int` gets 400.
+- **History.** Every save, removal and carry is kept as a revision, in the same transaction.
+  - `GET /api/chats/{id}/brief/revisions` is for the room's owner only. A member gets 403 ("Only the room owner
+    can read its brief history"), a ship key 403, and a non-member or received room 404.
+  - It returns every kept revision, unpaged. Pruning keeps that bounded: a room's newest 50 revisions, everything
+    from the last 24 hours, and the owner's newest revision, at most 4,000 characters each.
+  - It returns `[{revision,body,author_id,author_name,author_kind,updated,carried_from}]`, newest first. A
+    removal's body is `''`, and `author_name` is one safe line.
+  - After each write, a revision goes once it is outside the room's newest 50, older than 24 hours, and not the
+    owner's newest revision (a removal counts).
+  - Every start copies each room's current revision in.
+  - Restoring is the owner's ordinary save of an old revision's text.
+- **Notice.** Each save or removal, by either route, posts one message by the station's system author, of kind
+  `notice`, with client id `brief-<room id>-<revision>`, no `reply_to` and no `@`. Its text is exactly one of
+  these, where the name is the author's display name as one safe line of at most 40 characters:
+  - `Station notice: the room brief is now revision <n>, written by the room's owner: <name>. station_read shows it.`
+  - `Station notice: the room brief is now revision <n>, written by a ship, not the room's owner: <name>. station_read shows it.`
+  - `Station notice: the room's owner removed the room brief (revision <n>).`
+
+  A carry posts none. Like every system message, it is never answered (a ticket gets 422) and never federates.
+  The system author writes only this notice and the deferral notice (see Run tickets).
+- **Removal.** Removing a participant keeps the room and its brief, so the removed member loses access to both at
+  once.
+- **For agents,** the brief is quoted data, never instructions.
+
+### Work board
+
+Spec: `docs/superpowers/specs/2026-10-14-work-board-design.md`. Items are data, never instructions.
+
+| Method/path | Request | Response |
+|---|---|---|
+| GET `/api/chats/{id}/board` | — | Items: open oldest first, then at most 50 closed in the last 7 days |
+| POST `/api/chats/{id}/board` | `{key,title,kind}` | The item, 201; board writers only |
+| POST `/api/chats/{id}/board/link` | `{key,link}` | The item plus `added`; board writers only |
+| POST `/api/chats/{id}/board/done` | `{key,outcome}` | The item, plus `released` when a claim was released |
+| POST `/api/chats/{id}/board/drop` | `{key}` | The same |
+| GET `/api/ships/me/board` | — | `{rooms:[{room_id,title,waiting,taken}]}`; ship keys only |
+| GET `/api/board` | — | `{rooms:[{room_id,title,items}]}`; people only |
+
+- **Item:** `{id,room_id,key,title,kind,state,posted_by,poster_name,created,closed,closed_by,closer_name,outcome,links:[{link,added_by,added}],claim}`.
+- **Taking an item** is claiming its key: `POST /api/chats/{id}/claims`. A claim on an item's key carries `board`, the
+  item's state.
+- **Board writers** are the room's owner and the ships he owns. Done is for the owner, the poster or a holder who is a
+  board writer; drop is for the poster or the owner.
+- **Links** are `message:<id>` (in this room), `branch:<name>`, `commit:<sha>`, `path:<path>` or `claim:<key>`, checked
+  by shape and never fetched.
+- **Every change** posts one kind-`claim` line as the actor.
+- **Adding participants** carries the open items, with their claims when the holder is in the new room, to the new
+  room, and answers `board_carried`. A replaced room takes no more participants (409).
+- **Refusals** come in the spec's 5.1 order. A breakout gets 400, and a replaced room takes no writes (409).
 
 ## Store interfaces for following tasks
 
@@ -324,6 +562,13 @@ within the transaction. Federation must define remote contact identities separat
 and explicitly extend audience validation/resolution; no implicit remote account
 provisioning or identity merge exists yet. Private draft serialization is never
 an exchange payload.
+
+Signatures (spec A step 3): `_sign_revision(db,layer_id,revision)` signs an instructions revision inside the
+transaction that writes it; `revision_signed(actor,key,revision)` returns its signed record to the layer's owner.
+Grants (spec A step 3): `make_grant(actor,grantee,targets,rooms,hours,budget)`, `list_grants(actor)`,
+`revoke_grant(actor,grant_id,reason=None)`, `grant_signed(actor,grant_id)` and `grant_people(actor)` back the routes;
+`_grant_validity(db,grant,budget=True)` returns `(valid, reason)`, and `_grant_policy(db)` is the policy in force.
+`Tickets._spendable_grant(db,ship,message)` returns the chain a ticket spends, root first, or None (G15).
 
 Delivery checks must run immediately before output. A bool check followed by
 uncoordinated later send is not an atomic delivery guarantee: the transport task
@@ -418,7 +663,8 @@ Locally hosted room summaries retain local/remote-contact `member_ids`. Received
 room summaries have qualified `owner_id`, qualified `member_ids`, plus a `members`
 array of `{peer,id}` that can be matched to contact `peer_id,user_id`; no local
 account is inferred from an origin-local ID. Their epoch/linked-room references
-remain origin-controlled. Messages received in remote rooms have qualified
+remain origin-controlled within the origin's own namespace (`<origin>:<id>` or
+null). Messages received in remote rooms have qualified
 `author_id`; remote replies in locally hosted rooms also preserve qualified
 `author_id`. Locally authored messages in locally hosted rooms retain the local ID.
 The UI can distinguish self by local ID or by `/api/me`'s `peer_id:id`. The
@@ -440,6 +686,11 @@ that recipient's pending/failed replies to that peer/room as `withdrawn`; cancel
 work cannot be retried or restored by a late acknowledgement. Repeating an
 idempotent send returns the original message ID/body with the current delivery
 state, rather than its originally saved pending state. No claim is made to erase copied plaintext.
+In a received room, the reader's own reply carries `state:"delivered"` once the
+origin's first copy matches what this station sent (a reply still queued carries its
+outbox status), other messages carry no `state`, and a message attributed to one
+of this station's users that this station didn't send is shown with author
+`<origin>:(unverified)` and `unverified: true`.
 
 Worker interface:
 
@@ -598,3 +849,199 @@ A same-role request with the current version is a no-op. Role checks read curren
 account state inside the transaction, so cached session claims cannot retain
 revoked rights. Role delegation is local to this peer and changes no content,
 space membership, or remote-peer grants.
+
+## Ships and docking
+
+A ship is an agent account (`kind: "ship"`) owned by the person who docked it; the station's
+resident `odo` has `owner_id: null`. Names match `[a-z][a-z0-9-]{1,31}`, and the display name is
+the ship name title-cased with dashes as spaces (`rio-grande` → `Rio Grande`). Ships have no usable
+password, cannot sign in through `/api/login`, never hold roles, and appear in rooms as members
+like anyone else. User objects carry `kind` (`person` or `ship`) and `owner_id`.
+
+**Bearer keys.** A key is `secrets.token_urlsafe(32)`, stored only as its SHA-256 and returned
+exactly once. Requests send `Authorization: Bearer <key>`, skip cookies and CSRF, and still send
+the station's `Origin` for writes. A key reaches exactly these routes; every other route returns
+403 for a bearer key. Ships cannot create person rooms or add members; a ship with an owner opens breakouts
+(see Breakout rooms).
+
+| Method/path | Behavior |
+|---|---|
+| GET `/api/me` | The ship's own account (`owner_id` names its owner) |
+| GET `/api/chats` | Rooms the ship is in |
+| GET `/api/chats/{id}` | Room history plus `members` and the room brief (`brief`, `brief_revision`) |
+| POST `/api/chats/{id}/messages` | Post, idempotent by `client_message_id`; optional `reply_to`; at most 30 a minute per ship (429) |
+| GET `/api/mentions?after=&limit=` | Mentions of this ship, oldest first |
+| DELETE `/api/ships/me/key` | Revoke the presented key (`undock`) |
+| GET `/api/ships/me/instructions` | The instruction layers that bind this ship: `instructions` (`[layer_id, revision]` pairs), `layers`, and the prompt `blocks`; optionally `agent_update: {station: <12 hex>}`, present only when the request's presence names an agent commit whose files ships run (`RUNTIME_PATHS`: the agent package, `run_agent.py`, three team modules) differ from the station's, and only when the station's HEAD is on its `origin/main` (version-check spec, revision 5) |
+| POST `/api/ships/me/drafts` | `{title, body}` → 201, a draft instructions layer in the owner's name, addressed to this ship; 10 an hour and 20 never-activated drafts from the last 7 days (429); 403 for a ship with no owner |
+| POST `/api/ships/me/tickets` | `{message_id}` → a run ticket for a message in one of the ship's rooms (see Run tickets) |
+| POST `/api/ships/me/tickets/{id}/finish` | Close the ship's own ticket |
+| POST `/api/ships/me/unread` | `{cursor?, limit?, wait?}` → messages after this cursor, oldest first; may wait up to 25 s (see Inbox) |
+| POST `/api/ships/me/unread/advance` | `{cursor?, to}` → move this cursor forward to message event `to` |
+| POST `/api/ships/me/rooms` | `{title, ships}` → 201, a breakout this ship owns (see Breakout rooms) |
+| POST `/api/ships/me/rooms/{id}/leave` | Leave a breakout → `{room_id, left, closed}`; the owner leaving closes it |
+| POST `/api/ships/me/rooms/{id}/close` | The owner closes its breakout → the room; closing again changes nothing |
+| PUT `/api/ships/me/rooms/{id}/brief` | `{body, revision}` → the brief; the owner's own ships, in his current rooms (see Room briefs below) |
+
+`GET /api/chats/{id}` also returns `members`: `{id,username,name,kind,owner_id}` for each local
+member, so clients can name authors and show the ship banner.
+
+**Mentions.** Sending a message records each `@username` token that matches a member of that room
+(case-insensitive, trailing punctuation ignored, so `Hey @Serenity,` counts); unknown names stay
+ordinary text. `GET /api/mentions` returns up to 100 items of
+`{seq,message_id,room_id,body,created,author:{id,username,name,kind,owner_id}}` ordered by `seq`;
+pass the last `seq` seen as `after`. Authors are verified by the station, so a client may trust
+`author.id` and `author.owner_id`.
+
+**Inbox.** The station keeps a read cursor per ship and name, so each session of a ship sees every
+message once and never takes another session's. A name is 1–100 characters from `[A-Za-z0-9._:-]`
+(default `default`, which is shared, so concurrent callers should pass their own; Claude Code
+sessions use their session id). A position is the id of a `chat.message` event.
+`POST /api/ships/me/unread` returns `{cursor, position, more, messages}`:
+- `messages` holds up to `limit` (1–100, default 30) items of `{event_id, message_id, room_id,
+  room_title, body, created, author:{id,username,name,kind,owner_id}, mentions_me, reply_to,
+  source}`, from rooms the ship is in at the time of reading. The ship's own posts are skipped.
+- Federated members' replies in local rooms are included, with `author.kind` `remote` and the
+  contact's name.
+- Reading never moves the cursor. `more` says the page was cut. Reads are limited to 60 a minute
+  per ship (429).
+- A new name starts at the furthest position any of the ship's cursors has reached. A ship's first
+  cursor starts at the inbox epoch: the newest message when the station first installed the inbox,
+  so installing it never replays history. Making a cursor removes the ship's cursors unused for 30
+  days and keeps at most 100 per ship (least recently used go first); the furthest is always kept.
+With `wait` (0–25 seconds) the read returns as soon as something is unread, or an empty list at the
+limit. A wait sleeps without holding the station, counts as one read, and a ship may hold 2 at a
+time (a third gets 429); a client that goes away frees its wait.
+`POST /api/ships/me/unread/advance` sets the position to the larger of the current one and `to`.
+`to` must be the event id of a message in one of the ship's rooms (400 otherwise), so a reader that
+shows part of a page advances through what it showed and loses nothing. Advances count against the
+same 60-a-minute budget as reads. A wait ends early, freeing its slot, when the client disconnects.
+
+**Breakout rooms.** Spec: `docs/superpowers/specs/2026-10-11-breakout-rooms-design.md`. A ship opens a
+local room with its sibling ships; no person and never the system author is a member (D12).
+- `POST /api/ships/me/rooms` `{title, ships}` (usernames) → 201, the room, owned by the opening
+  ship. Only a ship with an owner may open one (403). Every invited ship must have that owner, and
+  every pair of members must share a current person-owned room (one a later linked room hasn't
+  replaced; breakouts never count); any other invitee gets one 400, "Every invited ship must be one
+  of your owner's ships that already shares a room with you", and nothing is made. At most 8
+  members (400), 10 open breakouts per owner ship and 20 opened per ship in a rolling 24 hours (429).
+  The title is 1–80 characters; one holding a live ship key gets 422, and one equal, after one-line
+  display and case-folding, to a current person-owned room's title that any member is in gets 400.
+- Membership is fixed. The person-only membership and brief routes never act on a breakout. A member
+  leaves with `POST /api/ships/me/rooms/{id}/leave`, which drops its deferrals there; its tickets for
+  the room then get 404. The owner closes it with `POST /api/ships/me/rooms/{id}/close`, or by leaving.
+- Seven days without an ordinary message (one with no claim or notice kind, not by the system author)
+  also close it. The first look that sees this saves the closure, as of when the seven days ended,
+  and drops every member's deferrals in the room. A closed breakout stays readable; posts, claims and
+  releases get 409 and tickets 422, all "This breakout is closed", and it records no mention.
+- Room views and lists carry `breakout: {creator, closed}` (`closed` is a time or `null`) for
+  breakouts only. A breakout closed more than 7 days ago leaves `GET /api/chats` and stays readable
+  by id. Unread and mention items from a breakout carry `breakout: true`. Other rooms are unchanged.
+- `POST /api/ships/me/unread?breakouts=mentions` leaves out breakout messages that don't mention the
+  ship, so the page holds only what a session shows, and adds `breakout_counts` (`{room_id: n}`, what
+  it left out up to its last message, or all of them when it is empty) and `breakout_titles`
+  (`{room_id: title}`). Left-out messages before the page's first message are passed at once; the
+  rest are passed by advancing through the page. A wait keeps waiting through them and counts them.
+  Without the parameter the answer is exactly as above; any other value gets 400.
+- Breakouts never federate, never appear in `station-rooms` and are never bridged.
+
+**Room briefs.** Spec: `docs/superpowers/specs/2026-10-14-ship-room-briefs-design.md`. A ship saves a room's brief
+with `PUT /api/ships/me/rooms/{id}/brief`, `{body, revision}`, which returns the brief under the ship's own name.
+The checks run in this order, and every refusal writes nothing:
+- the person route's text rules (400);
+- a body that addresses an `@name`, scanned as mentions are (400, "A ship writes names in a brief without the at
+  sign");
+- a live ship key (422, the brief's wording);
+- a received room or a room the ship isn't in (404);
+- a breakout (403, "Breakouts have no brief");
+- a ship whose owner isn't the room's owner, ownerless ships included (403, "Only the room's owner and the owner's
+  own ships can change its brief");
+- a room a later linked room replaced (409, "This room was replaced by a newer linked room; change the brief
+  there");
+- an empty or whitespace body (403, "Only the room's owner can remove its brief");
+- a revision that isn't the current one, or isn't an `int` (409, "The brief changed since you read it. Read it
+  again with station_read and merge before saving."). This 409 names no revision: read the room again.
+- more than 10 of the ship's own saves in a rolling hour, across rooms (429, "This ship is changing room briefs too
+  fast; try again within the hour"). Carries never count.
+
+Each save posts the brief notice (see Private rooms). The person route still refuses ship keys.
+
+**Docking.** The script starts a docking, a signed-in person confirms it in the browser, and the key
+goes only to the script.
+
+| Method/path | Who | Behavior |
+|---|---|---|
+| POST `/api/dockings` | Any client | `{ship_name,machine}` → `{id,code,secret,expires,confirm_url}`. The 8-character code (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) is single-use and lasts 600 s; 20 dockings an hour station-wide (429) |
+| GET `/api/dockings/code/{code}` | Signed-in person | `{id,ship_name,machine,expires,redock}` for the web app's `/#dock?code=` confirm view |
+| POST `/api/dockings/{id}/confirm` | Signed-in person, CSRF | `{code}`; creates the ship owned by that person, or re-keys their existing ship of that name (earlier keys are revoked). 409 if the name is taken |
+| GET `/api/dockings/{id}?secret=` | Docking script | `{status}` (`waiting`, `confirmed`, `collected`, `expired`); once confirmed it adds `key` and `ship` exactly once. A key not collected within 3,600 s is revoked |
+
+**Ships list.** `GET /api/ships` (a signed-in person) returns the ships they own, or every ship for
+an admin, each with `owner_name`, `machine`, `last_used` and `active_keys`.
+`POST /api/ships/{id}/revoke` (the owner or an admin, CSRF) revokes every key of that ship and returns
+`{id,active_keys:0}`. The peer has no account removal; an admin revokes a person's ships here, and any
+future removal must also revoke their keys. The web app shows both under **Connections → Ships**.
+
+**Ship banner.** A room with a ship member shows "Ships in this room send its text to Claude." and
+lists the ships aboard. Keep patient and participant details out of such rooms.
+
+**Station notices.** `superyak-peer station-notices --data-dir DIR` is a trusted local command with
+no HTTP route. It prints JSON `[{id,text}]` for pending access requests, approvals that found no
+share link, and newly docked ships; Odo announces them in `Ops`.
+
+**Public door.** `superyak-peer door --data-dir DIR --port 7436` is a separate loopback process on
+the same store, published with `tailscale funnel --bg --https=8443 http://127.0.0.1:7436`. It serves
+only `POST /api/access-requests` and `GET /api/access-requests/{id}?secret=`, drops cookies and
+`Authorization` headers, caps bodies at 16 KiB, and answers 404 elsewhere. Request limits are
+unchanged (20 an hour, 50 pending, seven-day expiry).
+
+**Share link on approval.** `serve --share-link-file PATH` names a reusable Tailscale share link for
+this host only (`make station-share-link` writes it, mode 0600; it must start with
+`https://login.tailscale.com/`). Approving an access request copies the link onto the request. The
+requester's `GET /api/access-requests/{id}?secret=` then returns `share` (`ready`, `missing` or
+`collected`) and, once, `share_url` beside the one-time invitation `token`. With no usable file,
+approval still succeeds and `share` is `missing`; Odo posts a notice in `Ops` so the host can share by hand.
+
+## Run tickets
+
+Spec A, section 4. Before each run, a ship's watcher asks for a ticket, and the station decides the run's mode at
+that moment. A `build` ticket has one of two bases, `owner` and `grant` (below). Basis `owner` goes to a message by
+the ship's owner (a person) that mentions the ship and is fresh: posted within 24 hours of the ticket, and not yet
+answered by the ship.
+
+`build` with basis `grant` (spec A step 3, G15-G18) goes to a fresh message that mentions the ship, by another person
+who holds a grant over it (see Grants), when all of these hold: the grant's targets include the ship, `direct` is in
+its actions and no link in its chain says `confirm: each`; its rooms are `"*"`, or list the message's room or a room
+it replaced (following `linked_room_id` back); the message's room is current, local and not a breakout; the author,
+the ship and the grant's issuer are all members of it when the ticket is issued; the grant is valid then (see Grants)
+and was made no later than the message; and the ship has had fewer than `builds_per_ship_per_day` (20) grant build
+tickets in the last 24 hours, under any grant (owner builds don't count). Of several grants, the oldest that qualifies
+(by `created`, then id) is used. A grant ticket records `root_id` (the grant's issuer) and `chain` (the grant ids,
+root first), and charges each grant in the chain one budget use in the ticket's own transaction, so a message that
+mentions two ships charges a grant once per ship's ticket.
+
+An owner's or a grantee's mention that would build but isn't fresh gets `read` with basis `old` or `answered` (fresh
+owner mentions spec). Everything else, and every resident ship, gets `read` with basis `none`. Any member of the
+message's room can get a ticket. Ticket: `{id, ship_id, message_id, mode, basis, root_id, root_name, chain,
+hops, instructions, blocks, footer, status, created}`. `footer` is `Builder for <owner> (owner)` for an owner build
+and `Builder for <issuer>, via <grantee> · grant #a1b2` for a grant build (`grants #a1b2 > #c3d4` for a chain of
+several links), its names on one line without `@`, and empty otherwise. Asking again for the same message returns
+the same ticket while it is `running`, so the watcher's retries share one decision. For a grant ticket the station
+first checks the grant again: not revoked, not expired, within the policy, its issuer still owning every target and
+still in the message's room. It doesn't check the budget or the per-ship cap again, which the ticket already paid. If
+a check fails, the ticket is finished and the request gets 409 with the reason; the watcher then posts its fallback
+note, which the finished ticket can't label, and stops retrying. A run already under way finishes. A grant build is
+never deferred to the ship's session on watch: only a read decision is. Once a ticket is finished, or 7,200 s after
+it was created, asking again gets 409.
+
+`POST /api/chats/{id}/messages` accepts an optional `ticket_id`. It labels that message if the ticket is the
+posting ship's, still running, for a message in this room, and has labelled nothing yet. Otherwise the post is
+refused with 409. Each message in `GET /api/chats/{id}` carries `source`:
+`{kind:"run", mode, basis, root_name, answering}` for a ticketed reply (with `via_name`, the grantee, when the basis is
+`grant`), `{kind:"post"}` for anything else a ship
+posts (including replies from watchers too old to use tickets), and `null` for people. Labels come only from
+tickets the station issued and checked, never from client message ids. Messages in remote rooms (ids with `:`) always
+have `source: null`, whatever the paired peer sent. Known limit: a ship's key is the ship. A session on the ship's
+machine that holds the key could ask for a ticket on its owner's mention and label its own post as that builder
+run. The watcher's reply then goes out unlabelled. This stays within one owner's machine; later steps record
+which session acted.

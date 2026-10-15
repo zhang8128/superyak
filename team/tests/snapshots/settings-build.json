@@ -1,0 +1,92 @@
+{
+ "permissions": {
+  "defaultMode": "dontAsk",
+  "allow": [
+   "Read(//r/repo/**)",
+   "Grep(//r/repo/**)",
+   "Read(//r/wt/**)",
+   "Grep(//r/wt/**)",
+   "Bash",
+   "mcp__team__team_post",
+   "mcp__team__team_read",
+   "mcp__team__team_ask_lead",
+   "mcp__team__team_done",
+   "mcp__team__team_status",
+   "mcp__team__team_message",
+   "mcp__team__team_plan",
+   "mcp__team__team_channels",
+   "mcp__team__team_channel_read",
+   "mcp__team__team_channel_post",
+   "mcp__team__team_shared_recall",
+   "mcp__plugin_engram_engram__recall",
+   "mcp__plugin_engram_engram__remember",
+   "mcp__plugin_engram_engram__share",
+   "mcp__plugin_engram_engram__shares",
+   "mcp__plugin_engram_engram__signals",
+   "Edit(//r/wt/**)"
+  ],
+  "deny": [
+   "Read(//**/.env)",
+   "Read(//**/.env.*)",
+   "WebFetch",
+   "Bash(git push*)",
+   "Bash(git commit*)",
+   "Bash(git reset*)",
+   "Bash(git rebase*)",
+   "Bash(security*)",
+   "Bash(*security *)",
+   "Bash(secret-tool*)",
+   "Bash(*secret-tool *)",
+   "mcp__station",
+   "Read(//home/u/.superyak/station.json)",
+   "Grep(//home/u/.superyak/station.json)",
+   "Read(//home/u/.superyak/docking.json)",
+   "Grep(//home/u/.superyak/docking.json)",
+   "Read(//home/u/.superyak/access-request.json)",
+   "Grep(//home/u/.superyak/access-request.json)",
+   "Read(//home/u/.superyak/invitation.txt)",
+   "Grep(//home/u/.superyak/invitation.txt)",
+   "Read(//home/u/.superyak/ships/**)",
+   "Grep(//home/u/.superyak/ships/**)",
+   "Read(//home/u/.superyak/*.bak-superyak)",
+   "Grep(//home/u/.superyak/*.bak-superyak)",
+   "Read(//home/u/.claude/*.bak-superyak)",
+   "Grep(//home/u/.claude/*.bak-superyak)",
+   "Read(//home/u/.superyak/team/teams/*/tokens/**)",
+   "Grep(//home/u/.superyak/team/teams/*/tokens/**)",
+   "WebSearch",
+   "Edit(//r/wt/.git)",
+   "Edit(//r/wt/.git/**)"
+  ]
+ },
+ "sandbox": {
+  "enabled": true,
+  "failIfUnavailable": true,
+  "autoAllowBashIfSandboxed": true,
+  "allowUnsandboxedCommands": false,
+  "filesystem": {
+   "allowWrite": [
+    "/r/wt"
+   ],
+   "denyWrite": [
+    "/r/wt/.git"
+   ],
+   "denyRead": [
+    "/home/u",
+    "**/.env",
+    "**/.env.*"
+   ],
+   "allowRead": [
+    "/r/repo",
+    "/r/wt",
+    "/home/u/.gitconfig",
+    "/home/u/.config/git",
+    "/home/u/.local/bin",
+    "/home/u/.local/share/fnm",
+    "/home/u/.local/share/uv",
+    "/home/u/.cache/uv",
+    "/home/u/.bun"
+   ]
+  }
+ }
+}

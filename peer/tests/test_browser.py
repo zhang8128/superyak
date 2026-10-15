@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import urlopen
 
 import pytest
@@ -20,6 +21,17 @@ from superyak_peer.common import Problem
 from superyak_peer.db import Store
 from superyak_peer.federation import Federation
 from superyak_peer.identity import PeerIdentity
+
+
+def open_new_layer(page):
+    """Click "New layer" and wait for the new layer's own editor. The click creates the layer on the server before the
+    editor opens, so anything typed in between lands in the editor that was already open (this made the instructions
+    test save and activate a blank layer about 1 run in 8)."""
+    before = page.url
+    page.get_by_role("button", name="New layer").click()
+    page.wait_for_url(lambda url: url != before and "#layers/" in url)
+    expect(page.get_by_label("Layer title")).to_have_value("Untitled")
+
 
 
 # A unique run directory preserves prior screenshots and works in extracted source.
@@ -61,17 +73,18 @@ def browser_peer(tmp_path, request):
         [users["family"]["id"], users["doctor"]["id"]],
     )
     remote_store = Store(tmp_path / "remote-peer")
-    remote_user = remote_store.create_user(
-        "casey", "Casey Remote", "long-remote-password"
+    remote_user = remote_store.create_user(  # the stand-in station's admin, so it can pair back
+        "casey", "Casey Remote", "long-remote-password", is_admin=True
     )
     remote_identity = PeerIdentity.load_or_create(
         remote_store.data_dir, hosts=("remote.example",)
     )
-    remote_card = Federation(
+    remote_federation = Federation(
         remote_store,
         endpoint="https://remote.example:7443",
         identity=remote_identity,
-    ).card(remote_user["id"])
+    )
+    remote_card = remote_federation.card(remote_user["id"])
     config = uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning", access_log=False
     )
@@ -81,11 +94,13 @@ def browser_peer(tmp_path, request):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         try:
-            urlopen(base_url + "/", timeout=0.2)
+            urlopen(base_url + "/", timeout=2)
             break
         except HTTPError:
             break
-        except URLError:
+        except (URLError, TimeoutError, ConnectionError):
+            # A loaded Pi can take longer than one attempt for the first page; a read that times out raises a bare
+            # TimeoutError, not a URLError, so it is retried until the deadline like a refused connect.
             time.sleep(0.05)
     else:
         pytest.fail("browser test server did not start")
@@ -95,6 +110,7 @@ def browser_peer(tmp_path, request):
         "users": users,
         "app": app,
         "remote_card": remote_card,
+        "remote": {"store": remote_store, "federation": remote_federation, "user": remote_user},
         "local_demo": local_demo,
     }
     server.should_exit = True
@@ -111,7 +127,7 @@ def signed_in_browser(playwright, peer, username, *, viewport=None):
     page.get_by_label("Username", exact=True).fill(username)
     page.get_by_label("Password", exact=True).fill(peer["password"])
     page.get_by_role("button", name="Sign in").click()
-    expect(page.get_by_role("heading", name="Your home")).to_be_visible()
+    expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
     page.evaluate("scrollTo(0, 0)")
     page.wait_for_timeout(100)
     try:
@@ -282,7 +298,7 @@ def test_space_context_and_display_preferences_work_on_mobile(browser_peer):
         page.get_by_label('Quieter view', exact=True).check()
         page.get_by_role('button', name='Back to my home', exact=True).click()
         page.reload()
-        expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+        expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
         assert page.evaluate("document.documentElement.classList.contains('large-text')")
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         assert page.locator('nav[aria-label="Main navigation"] a').evaluate_all("nodes => nodes.every(node => node.getBoundingClientRect().bottom <= innerHeight)")
@@ -370,7 +386,7 @@ def test_late_home_refresh_cannot_replace_the_next_accounts_data(browser_peer):
         page.get_by_label('Username', exact=True).fill('doctor')
         page.get_by_label('Password', exact=True).fill(browser_peer['password'])
         page.get_by_role('button', name='Sign in', exact=True).click()
-        expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+        expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
         page.evaluate('async () => { window.__releaseHome(); await window.__oldRefresh; render(); }')
         expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Dr. Morgan')
         assert 'Patient-only private title' not in page.content()
@@ -430,7 +446,7 @@ def test_local_demo_opens_without_password_switches_accounts_and_renews_session(
     with sync_playwright() as playwright:
         with signed_out_browser(playwright) as page:
             page.goto(browser_peer['base_url'] + '/')
-            expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+            expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
             expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Alex Patient')
             page.get_by_role('link', name='My sharing layers').click()
             page.get_by_role('button', name='New layer').click()
@@ -438,7 +454,7 @@ def test_local_demo_opens_without_password_switches_accounts_and_renews_session(
             page.get_by_label('What do you want to share?').fill('Patient unsaved words')
             page.get_by_role('button', name='Account and sign out').click()
             page.get_by_role('button', name='Try doctor', exact=True).click()
-            expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+            expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
             expect(page.get_by_role('button', name='Account and sign out')).to_contain_text('Dr. Morgan')
             assert 'Patient unsaved words' not in page.content()
             assert page.request.get(browser_peer['base_url'] + '/api/me').json()['username'] == 'doctor'
@@ -479,7 +495,7 @@ def test_private_draft_exact_release_public_route_and_withdrawal(browser_peer):
                     "see what each audience would see, and turn them on when you're ready."
                 )
             ).to_be_visible()
-            patient.get_by_role("button", name="New layer").click()
+            open_new_layer(patient)
             patient.get_by_label("Layer title").fill("A steady update")
             patient.get_by_label("What do you want to share?").fill(
                 "The first words chosen for my family."
@@ -601,7 +617,7 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             "organizer",
             viewport={"width": 390, "height": 844},
         ) as (page, _):
-            expect(page.get_by_role("heading", name="Your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             page.evaluate("scrollTo(0, 0)")
             page.wait_for_timeout(100)
@@ -610,7 +626,8 @@ def test_mobile_home_and_admin_account_support_are_real_server_views(browser_pee
             expect(page.get_by_role("heading", name="Account support")).to_be_visible()
             expect(page.get_by_text("Account support does not open private chats or drafts.")).to_be_visible()
             page.get_by_role("button", name="Create invitation").click()
-            expect(page.get_by_text("One-use invitation")).to_be_visible()
+            # Exact: the access-requests panel also reads "Approving creates a one-use invitation …" once it loads.
+            expect(page.get_by_text("One-use invitation", exact=True)).to_be_visible()
             page.get_by_role("button", name="Show my peer card").click()
             expect(
                 page.locator("#main-content").get_by_text(
@@ -625,7 +642,7 @@ def test_attachment_stays_selected_through_upload_and_public_release(browser_pee
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Documents I chose")
             page.get_by_label("What do you want to share?").fill("A note with one file.")
             page.get_by_role("checkbox", name="Anyone with the public link").check()
@@ -661,7 +678,7 @@ def test_active_route_controls_preserve_overlapping_access(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Overlap test")
             page.get_by_role("checkbox", name="Sam Family").check()
             page.get_by_role("checkbox", name="Alex’s care circle").check()
@@ -689,7 +706,7 @@ def test_expired_session_relogin_preserves_unsaved_layer(browser_peer):
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Still in my editor")
             page.get_by_label("What do you want to share?").fill(
                 "This survives signing in again."
@@ -733,7 +750,7 @@ def test_conflict_and_untrusted_values_leave_the_browser_usable(browser_peer):
             expect(page.get_by_text("Date unavailable")).to_be_visible()
 
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.wait_for_url("**/#layers/*")
             layer_id = decode_fragment_id(page.url)
             page.get_by_label("What do you want to share?").fill("Keep my conflicting text.")
@@ -784,7 +801,7 @@ def test_invited_participant_chooses_local_account_details(browser_peer):
             page.get_by_label("Username", exact=True).fill("newperson")
             page.get_by_label("Password", exact=True).fill("another-long-password")
             page.get_by_role("button", name="Sign in").click()
-            expect(page.get_by_role("heading", name="Your home")).to_be_visible()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
 
 
 def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
@@ -809,7 +826,7 @@ def test_pairing_pending_delivery_and_peer_wide_disconnect_states(browser_peer):
             ).to_be_visible()
 
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Remote delivery")
             page.get_by_role("checkbox", name="Casey Remote").check()
             page.get_by_role("button", name="Save private draft").click()
@@ -842,7 +859,7 @@ def test_dirty_layer_survives_renders_conflicts_and_an_accepted_save(browser_pee
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             page.get_by_label("Layer title").fill("Kept through a dialog")
             page.get_by_label("What do you want to share?").fill("First current text")
             page.get_by_role("button", name="Account and sign out").click()
@@ -1033,7 +1050,7 @@ def test_overlapping_upload_and_save_merges_attachment_into_latest_layer_values(
     with sync_playwright() as playwright:
         with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
             page.get_by_role("link", name="My sharing layers").click()
-            page.get_by_role("button", name="New layer").click()
+            open_new_layer(page)
             expect(page.get_by_role("heading", name="Edit this layer")).to_be_visible()
             layer_id = decode_fragment_id(page.url)
             page.get_by_label("What do you want to share?").fill("Text captured when upload began")
@@ -1258,7 +1275,7 @@ def test_assistant_suggestion_stays_with_initiating_layer_and_is_cleared_on_logo
                 page.get_by_label('Username', exact=True).fill('doctor')
                 page.get_by_label('Password', exact=True).fill(browser_peer['password'])
                 page.get_by_role('button', name='Sign in', exact=True).click()
-                expect(page.get_by_role('heading', name='Your home')).to_be_visible()
+                expect(page.get_by_role('heading', name='Your home', exact=True)).to_be_visible()
                 with page.expect_response(lambda r: r.url.endswith('/api/assistant') and r.request.method == 'POST'):
                     finish.set()
                 # Wait for the completed real response to be consumed by the app.
@@ -1493,3 +1510,1786 @@ def test_super_admin_activation_and_named_role_preview_in_browser(browser_peer, 
         page.get_by_role('link', name='Connections', exact=True).click()
         expect(page.get_by_role('button', name='Create invitation', exact=True)).to_be_visible()
         expect(page.get_by_role('button', name='Review rights for Dr. Morgan', exact=True)).to_have_count(0)
+
+
+def test_docking_link_confirms_ship_lists_and_revokes_it_and_rooms_show_the_ship_banner(browser_peer):
+    """Break caught: a docking link confirms without review, or a ship room lacks the Claude notice."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    docking = store.start_docking("serenity", "andy-mac")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#dock?code={docking['code']}")
+            page.reload()
+            dialog = page.get_by_role("dialog")
+            expect(dialog.get_by_role("heading", name="Dock serenity")).to_be_visible()
+            expect(dialog.get_by_text("andy-mac")).to_be_visible()
+            dialog.get_by_role("button", name="Confirm docking").click()
+            expect(page.get_by_role("status")).to_contain_text("Serenity is docked.")
+            expect(page.locator("#announcer")).to_contain_text("Serenity is docked.")
+            assert store.docking_status(docking["id"], docking["secret"])["status"] == "confirmed"
+            ship = next(s for s in store.ships(users["organizer"]["id"]) if s["username"] == "serenity")
+            room = store.create_room(users["patient"]["id"], "Ops", [ship["id"]])
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.get_by_text("Ships in this room send its text to Claude.")).to_be_visible()
+            page.get_by_role("link", name="Connections", exact=True).click()
+            expect(page.get_by_role("heading", name="Ships")).to_be_visible()
+            page.get_by_role("button", name="Revoke key").click()
+            expect(page.get_by_text("Key revoked", exact=True)).to_be_visible()
+
+
+def test_a_room_shows_which_ship_messages_came_from_runs(browser_peer):
+    """Break caught: a run's reply and a ship's own post look the same to people."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    room = store.create_room(users["patient"]["id"], "Ops", [ship["id"]])
+    asked = store.send_message(users["patient"]["id"], room["id"], "a", "@serenity add notes")
+    ticket = store.issue_ticket(ship["id"], asked["id"])
+    store.send_message(ship["id"], room["id"], f"reply-{asked['id']}", "Added notes", ticket["id"])
+    store.send_message(ship["id"], room["id"], "post-1", "Hello from my session")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.get_by_text("builder run for Alex Patient")).to_be_visible()
+            expect(page.get_by_text("no run ticket")).to_be_visible()
+
+
+
+def test_a_grantees_build_reply_is_labelled_with_the_grantee(browser_peer):
+    """G17, test 17: a reply from a grant's builder run shows "builder run for Alex Patient, via <grantee>", and a grantee
+    name written as HTML shows as text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    room = store.create_room(users["patient"]["id"], "Ops", [ship["id"], users["doctor"]["id"]])
+    store.rename_user(users["doctor"]["id"], "<b>Dr. Morgan</b>")
+    store.make_grant(users["patient"]["id"], users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    asked = store.send_message(users["doctor"]["id"], room["id"], "a", "@serenity add notes")
+    ticket = store.issue_ticket(ship["id"], asked["id"])
+    store.send_message(ship["id"], room["id"], f"reply-{asked['id']}", "Added notes", ticket["id"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            label = page.locator(".message", has_text="Added notes").locator(".message-source")
+            expect(label).to_have_text("builder run for Alex Patient, via <b>Dr. Morgan</b>")
+            assert page.locator(".message-source b").count() == 0
+
+
+def test_a_room_labels_the_station_notice_by_id_never_by_name(browser_peer):
+    """R31, the room UI: the system author's message shows as "Station" with the "station notice" label; a person
+    who calls themselves "Station" gets no label."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    room = store.create_room(users["patient"]["id"], "Ops", [ship["id"], users["doctor"]["id"]])
+    store.rename_user(users["doctor"]["id"], "Station")
+    store.send_message(users["doctor"]["id"], room["id"], "p", "a person called Station")
+    with store.transaction() as db:
+        store._post_as_system(db, room["id"], f'notice-{ship["id"]}-m1', "Station notice: the notice itself")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            notice = page.locator(".message", has_text="the notice itself")
+            expect(notice.locator(".message-meta").first).to_contain_text("Station")
+            expect(notice.locator(".message-source")).to_have_text("station notice")
+            expect(page.locator(".message", has_text="a person called Station").locator(".message-source")).to_have_count(0)
+
+def test_a_person_writes_instructions_for_their_ship_and_sees_a_ships_draft(browser_peer):
+    """Break caught: instructions can't be written for ships, or a ship's draft looks like the person's own."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    other = store.confirm_docking(users["doctor"]["id"], *(lambda d: (d["id"], d["code"]))(store.start_docking("defiant", "lab")))
+    store.ship_draft(ship["id"], {"title": "Proposed by the ship", "body": "Write tests first."})
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            expect(page.get_by_text("Drafted by Serenity").first).to_be_visible()
+            page.get_by_role("button", name="Proposed by the ship").click()
+            editor = page.locator("section.editor")
+            expect(editor.get_by_text("Drafted by Serenity. Read it before you activate it.")).to_be_visible()
+            expect(editor.get_by_text("Unsaved changes")).to_have_count(0)
+            open_new_layer(page)
+            page.get_by_label("Kind").select_option("instructions")
+            expect(page.get_by_role("checkbox", name="Defiant")).to_have_count(0)
+            page.get_by_label("Layer title").fill("House rules")
+            page.get_by_label("What do you want to share?").fill("Run the tests first.")
+            page.get_by_role("checkbox", name="Serenity").check()
+            page.get_by_role("button", name="Save private draft").click()
+            expect(page.get_by_text("Saved version 2", exact=True)).to_be_visible()
+            page.get_by_role("button", name="Preview audience").click()
+            page.get_by_role("button", name="Turn on version 2").click()
+            expect(page.get_by_text("Active · version 2")).to_be_visible()
+    assert store.ship_instructions(ship["id"], "x")["instructions"]
+
+
+def test_an_unedited_note_shows_no_unsaved_changes_until_one_is_typed(browser_peer):
+    """Break caught: every layer opens marked "Unsaved changes" (Task 9's precedence bug); the drafted-layer check alone
+    cannot see it for a plain note."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    store.create_layer(users["patient"]["id"], {"title": "Plain note", "body": "Hello."})
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Plain note").click()
+            editor = page.locator("section.editor")
+            expect(editor.get_by_label("Layer title")).to_have_value("Plain note")
+            expect(editor.get_by_label("Kind")).to_have_value("note")
+            expect(editor.get_by_text("Private draft", exact=True)).to_be_visible()
+            expect(editor.get_by_text("Unsaved changes")).to_have_count(0)
+            editor.get_by_label("What do you want to share?").press_sequentially("!")
+            page.get_by_role("button", name="Account and sign out").click()  # typing does not rerender; the dialog does
+            page.get_by_role("button", name="Close").click()
+            expect(editor.get_by_label("What do you want to share?")).to_have_value("!Hello.")
+            expect(editor.get_by_text("Unsaved changes", exact=True)).to_be_visible()  # the absence above is not vacuous
+
+
+def test_the_owner_writes_a_brief_and_carries_it_into_a_new_linked_chat(browser_peer):
+    """Break caught: the owner cannot write a brief, it is carried without being chosen, or old messages come with it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    store.send_message(users["patient"]["id"], room["id"], "old", "An old message for the first audience.")
+    brief = "Purpose: a city of AI.\nD1–D9 are decided; Rio Grande builds the brief."
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            expect(panel.get_by_role("heading", name="Room brief")).to_be_visible()
+            expect(panel.get_by_text("Visible to members on this station only.")).to_be_visible()
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill(brief)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".notice", has_text="Room brief saved.")).to_be_visible()  # the announcer repeats it, hidden
+            expect(panel.locator(".room-brief-body")).to_have_text(brief)
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            carry = dialog.get_by_role("checkbox", name="Carry the room brief into the new room")
+            expect(carry).not_to_be_checked()
+            expect(dialog.locator(".carry-brief-text")).to_have_text(brief)
+            expect(dialog.get_by_text("Only the brief, if ticked, and the board's open items are carried. Earlier messages stay with their original participants.")).to_be_visible()
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            carry.check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(page.get_by_text("New room · earlier messages stay in the original chat")).to_be_visible()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text(brief)
+            expect(page.locator(".room-brief")).to_contain_text("Carried from the previous room on")
+            expect(page.get_by_text("An old message for the first audience.")).to_have_count(0)
+    rooms = store.list_rooms(users["doctor"]["id"])
+    assert len(rooms) == 1
+    carried = store.get_room(users["doctor"]["id"], rooms[0]["id"])["brief"]
+    assert (carried["body"], carried["revision"], carried["carried_from"]) == (brief, 1, room["id"])
+
+
+def test_without_a_brief_the_carry_box_is_hidden(browser_peer):
+    """Break caught: a missing or removed brief still offers to carry something, or a removed one can't be written again."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    quiet = store.create_room(patient, "Quiet room", [users["family"]["id"]])
+    removed = store.create_room(patient, "Removed brief", [users["family"]["id"]])
+    store.save_brief(patient, removed["id"], "Soon gone.", 0)
+    store.save_brief(patient, removed["id"], "", 1)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            for target in (quiet, removed):
+                page.goto(f"{base}/#chats/{target['id']}")
+                page.reload()
+                expect(page.locator(".room-brief")).to_contain_text("No brief yet.")
+                page.get_by_role("button", name="Change participants").click()
+                expect(page.locator("dialog").get_by_role("checkbox", name="Dr. Morgan")).to_be_visible()
+                expect(page.get_by_role("checkbox", name="Carry the room brief")).to_have_count(0)
+                page.locator("dialog").get_by_role("button", name="Cancel").click()
+            page.locator(".room-brief").get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("Back again.")
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Back again.")
+    assert store.get_room(patient, removed["id"])["brief"]["revision"] == 3
+
+
+def test_the_add_dialog_says_open_items_are_carried_without_a_brief(browser_peer):
+    """Review Focus 1: the help text lived inside the brief's checkbox, which a room without a brief doesn't show, yet
+    open board items are carried all the same (work board 5.x). A room with neither shows no help text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    busy = store.create_room(patient, "Busy room", [users["family"]["id"]])
+    store.post_item(patient, busy["id"], "build:panel", "Build the panel", "build")
+    quiet = store.create_room(patient, "Quiet room", [users["family"]["id"]])
+    carried = "Only the brief, if ticked, and the board's open items are carried. Earlier messages stay with their original participants."
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            for room, count in ((busy, 1), (quiet, 0)):
+                page.goto(f"{base}/#chats/{room['id']}")
+                page.reload()
+                page.get_by_role("button", name="Change participants").click()
+                dialog = page.locator("dialog")
+                expect(dialog.get_by_role("checkbox", name="Dr. Morgan")).to_be_visible()
+                expect(dialog.get_by_text("The new room starts with no messages.", exact=True)).to_be_visible()
+                expect(dialog.get_by_text(carried)).to_have_count(count)
+                dialog.get_by_role("button", name="Cancel").click()
+
+
+def settle(page, ready=None):
+    """Board clicks are ignored for 400 ms after the panel renders (a double click must not land on what a re-render moved
+    under the pointer), so a test waits out the window before it clicks. After a reload the page renders only when its
+    reads come back, which on a slow machine is later than the wait would end: pass what the render shows as ready, and
+    the wait counts from when it is visible."""
+    if ready is not None:
+        expect(ready).to_be_visible()
+    page.wait_for_timeout(450)
+
+
+def test_the_board_panel_posts_shows_and_closes_items(browser_peer):
+    """Work board 5.2, 5.x: the owner posts an item and it shows waiting; a ship's claim shows after a refresh; the owner
+    releases it and marks it done, and it moves to the closed list; the history labels its lines; a title like an HTML
+    tag shows literally; the Board view lists two rooms; the add dialog lists what moves; another person sees no post
+    button."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(patient, started["id"], started["code"])
+    room = store.create_room(patient, "City of AI", [ship["id"], users["family"]["id"]])
+    hands = store.create_room(patient, "All hands", [ship["id"]])
+    store.post_item(ship["id"], hands["id"], "ops:hands", "Work in All hands", "ops")
+    evil = "<img src=x onerror=alert(1)>"
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            expect(panel.get_by_role("heading", name="Board")).to_be_visible()
+            panel.get_by_label("Key").fill("spec:d7")
+            panel.get_by_label("Title").fill(evil)
+            panel.get_by_label("Kind").select_option("spec")
+            panel.get_by_role("button", name="Post item").click()
+            item = panel.locator(".board-item", has_text="spec:d7")
+            expect(item).to_contain_text(evil)
+            expect(item).to_contain_text("waiting")
+            assert page.locator(".room-board img").count() == 0
+            store.claim(ship["id"], room["id"], "spec:d7", None, 60)
+            page.reload()
+            expect(item).to_contain_text("taken by Serenity until")
+            settle(page)
+            item.get_by_role("button", name="Release claim on spec:d7").click()
+            expect(item).to_contain_text("Release Serenity's claim on spec:d7?")
+            expect(item).to_contain_text("taken by Serenity")  # nothing released before the confirm
+            settle(page)
+            item.get_by_role("button", name="Yes, release claim on spec:d7").click()
+            expect(item).to_contain_text("waiting")
+            expect(item).to_be_focused()
+            settle(page)
+            item.get_by_role("button", name="Mark done spec:d7").click()
+            panel.get_by_label("Outcome link").fill("commit:1ff0efb")
+            panel.get_by_role("button", name="Mark done spec:d7").click()
+            expect(panel.locator(".board-closed .board-item", has_text="spec:d7")).to_contain_text("outcome commit:1ff0efb")
+            page.reload()  # the history updates with the room; the panel updates after its own actions (5.2)
+            for line, label in (("Posted `spec:d7`", "board"), ("Claimed `spec:d7`", "claim"),
+                                ("Released Serenity", "claim"), ("Done `spec:d7`", "board")):
+                expect(page.locator(".message", has_text=line).locator(".message-source")).to_have_text(label)
+            store.post_item(patient, room["id"], "build:panel", "Build the <b>panel</b>", "build")
+            store.post_item(ship["id"], room["id"], "review:panel", "Review the panel", "review")
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.get_by_role("heading", name="Board", level=1)).to_be_visible()
+            expect(page.locator(".board-room")).to_have_count(2)
+            expect(page.get_by_text("Work in All hands")).to_be_visible()
+            expect(page.get_by_text("Build the <b>panel</b>")).to_be_visible()
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.get_by_text("Only the brief, if ticked, and the board's open items are carried. Earlier messages stay with their original participants.")).to_be_visible()
+            expect(dialog.get_by_text("These 2 open board items, with their links and claims, move to the new room. Drop any that shouldn't first.")).to_be_visible()
+            expect(dialog.locator(".carry-board li")).to_have_count(2)
+            expect(dialog.locator(".carry-board")).to_contain_text("build:panel Build the <b>panel</b>")
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-board .board-item", has_text="build:panel")).to_be_visible()
+            expect(page.get_by_role("button", name="Post item")).to_have_count(0)
+            expect(page.get_by_role("button", name="Mark done")).to_have_count(0)
+
+
+def test_a_double_click_on_post_item_posts_once(browser_peer):
+    """Review Focus 4: the second submit of a double click would get 409 for the first one's own item and show it as a
+    failure; the panel sends one write at a time. The POSTs to /board are counted, so a server that merely refuses the
+    second one cannot pass for a client that sent one."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            posts = []
+            page.on("request", lambda request: posts.append(request.url) if request.method == "POST" and request.url.endswith("/board") else None)
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            panel.get_by_label("Key").fill("spec:d7")
+            panel.get_by_label("Title").fill("Write the D7 spec")
+            panel.get_by_role("button", name="Post item").dblclick()
+            expect(panel.locator(".board-item", has_text="spec:d7")).to_be_visible()
+            expect(page.locator(".notice", has_text="Item posted.")).to_be_visible()
+            expect(page.get_by_text("already on this board")).to_have_count(0)
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts
+    assert [i["key"] for i in store.room_board(users["patient"]["id"], room["id"])] == ["spec:d7"]
+
+
+def test_a_120_character_emoji_title_posts_whole_from_the_panel(browser_peer):
+    """Review Focus 5: the station counts code points; a maxlength would count UTF-16 units and stop emoji at 60."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [])
+    title = "🛰" * 120
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            assert panel.get_by_label("Title").get_attribute("maxlength") is None
+            panel.get_by_label("Key").fill("spec:emoji")
+            panel.get_by_label("Title").fill(title)
+            panel.get_by_role("button", name="Post item").click()
+            expect(panel.locator(".board-item", has_text="spec:emoji")).to_contain_text(title)
+    assert store.room_board(users["patient"]["id"], room["id"])[0]["title"] == title
+
+
+def double_click_apart(page, locator, gap=180):
+    """Two real mouse clicks `gap` ms apart on the same spot, as a hurried double click lands."""
+    box = locator.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.click(x, y)
+    page.wait_for_timeout(gap)
+    page.mouse.click(x, y)
+
+
+def test_drop_and_release_ask_first_and_a_hurried_double_click_touches_nothing(browser_peer):
+    """Final review I1: Drop is final, and the first click's re-render moves the next item's Drop under the pointer. Both
+    buttons ask inline; two clicks 180 ms apart drop and release nothing and never reach a second item; a confirm drops
+    or releases exactly that item; Cancel changes nothing."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(patient, started["id"], started["code"])
+    room = store.create_room(patient, "City of AI", [ship["id"]])
+    for key in ("spec:a", "spec:b", "spec:c"):
+        store.post_item(patient, room["id"], key, f"Item {key}", "spec")
+        store.claim(ship["id"], room["id"], key, None, 60)
+    states = lambda: {i["key"]: (i["state"], bool(i["claim"])) for i in store.room_board(patient, room["id"])}
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            item = lambda key: panel.locator(".board-item", has_text=key)
+            expect(panel).to_be_visible()
+            for name, text in (("Drop spec:a", "Drop spec:a for good? Its key can't be used again."), ("Release claim on spec:a", "Release Serenity's claim on spec:a?")):
+                settle(page)
+                double_click_apart(page, item("spec:a").get_by_role("button", name=name))
+                expect(item("spec:a")).to_contain_text(text)
+                page.wait_for_timeout(600)
+                assert states() == {"spec:a": ("open", True), "spec:b": ("open", True), "spec:c": ("open", True)}
+                item("spec:a").get_by_role("button", name="Cancel").click()
+                expect(item("spec:a").get_by_role("button", name=name)).to_be_visible()
+                expect(item("spec:a")).to_be_focused()
+                settle(page)
+            assert states() == {"spec:a": ("open", True), "spec:b": ("open", True), "spec:c": ("open", True)}
+            item("spec:b").get_by_role("button", name="Drop spec:b").click()
+            settle(page)
+            item("spec:b").get_by_role("button", name="Yes, drop spec:b").click()
+            expect(panel.locator(".board-closed .board-item", has_text="spec:b")).to_contain_text("dropped")
+            expect(page.locator(".notice", has_text="Item dropped. Serenity's claim on it is released.")).to_be_visible()
+            expect(panel.locator("#room-board-title")).to_be_focused()
+            expect(page.locator(".message", has_text="Dropped `spec:b`").locator(".message-source")).to_have_text("board")  # the room was read again
+            settle(page)
+            item("spec:c").get_by_role("button", name="Release claim on spec:c").click()
+            settle(page)
+            item("spec:c").get_by_role("button", name="Yes, release claim on spec:c").click()
+            expect(item("spec:c")).to_contain_text("waiting")
+            assert states() == {"spec:a": ("open", True), "spec:b": ("dropped", False), "spec:c": ("open", False)}
+
+
+def test_a_hurried_double_click_at_phone_width_still_touches_nothing(browser_peer):
+    """S-4: at 390 px the Cancel button lands under the pointer after the first press of Release; only the click guard
+    keeps the second press from cancelling or confirming."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(patient, started["id"], started["code"])
+    room = store.create_room(patient, "City of AI", [ship["id"]])
+    store.post_item(patient, room["id"], "spec:a", "Item a", "spec")
+    store.claim(ship["id"], room["id"], "spec:a", None, 60)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            item = page.locator(".room-board .board-item", has_text="spec:a")
+            release = item.get_by_role("button", name="Release claim on spec:a")
+            release.scroll_into_view_if_needed()  # mouse clicks go to viewport coordinates
+            settle(page)
+            double_click_apart(page, release)
+            page.wait_for_timeout(600)
+            expect(item).to_contain_text("Release Serenity's claim on spec:a?")  # the ask is still open: nothing cancelled
+            assert [bool(i["claim"]) for i in store.room_board(patient, room["id"])] == [True]
+
+
+def test_a_key_press_on_an_ask_is_not_swallowed_by_the_click_guard(browser_peer):
+    """The guard is for a double click; Enter on the focused Cancel right after the ask opens closes it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [])
+    store.post_item(patient, room["id"], "spec:a", "Item a", "spec")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            item = page.locator(".room-board .board-item", has_text="spec:a")
+            settle(page, ready=item)
+            item.get_by_role("button", name="Drop spec:a").click()
+            expect(item.get_by_role("button", name="Cancel")).to_be_focused()
+            page.keyboard.press("Enter")  # at once, inside the guard window
+            expect(item.get_by_role("button", name="Drop spec:a")).to_be_visible()
+            expect(item.locator(".board-ask")).to_have_count(0)
+
+
+def test_a_board_write_made_while_the_next_room_loads_goes_nowhere(browser_peer):
+    """M-1: room B is already state.room while its board loads, but room A's panel is still on screen; a click on A's
+    confirm must not drop B's item."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room_a = store.create_room(patient, "Room A", [users["family"]["id"]])
+    room_b = store.create_room(patient, "Room B", [users["family"]["id"]])
+    for room in (room_a, room_b):
+        store.post_item(patient, room["id"], "spec:same", "Same key", "spec")
+    open_keys = lambda room: [i["key"] for i in store.room_board(patient, room["id"]) if i["state"] == "open"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room_a['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            settle(page, ready=panel)
+            panel.get_by_role("button", name="Drop spec:same").click()
+            confirm = panel.get_by_role("button", name="Yes, drop spec:same")
+            expect(confirm).to_be_visible()  # the ask is open on A's panel
+            held = []
+            page.route(f"**/api/chats/{room_b['id']}/board", lambda route: held.append(route))
+            page.evaluate("id => { location.hash = `chats/${id}`; }", room_b["id"])
+            for _ in range(50):
+                if held:
+                    break
+                page.wait_for_timeout(100)
+            assert held, "room B's board read never started"
+            expect(panel).to_have_attribute("data-room", room_a["id"])  # A's panel is still what is shown
+            settle(page)
+            confirm.click()
+            page.wait_for_timeout(400)
+            held[0].continue_()
+            expect(page.get_by_role("heading", name="Room B")).to_be_visible()
+            expect(page.locator(".room-board")).to_have_attribute("data-room", room_b["id"])
+    assert open_keys(room_b) == ["spec:same"]
+    assert open_keys(room_a) == ["spec:same"]
+
+
+def test_an_expired_session_during_a_board_write_shows_the_sign_in_prompt(browser_peer):
+    """S-2: a 401 on a board write leaves the sign-in prompt, not a blank panel."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, context):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            panel.get_by_label("Key").fill("spec:late")
+            panel.get_by_label("Title").fill("Typed before it ended")
+            context.clear_cookies()
+            panel.get_by_role("button", name="Post item").click()
+            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            expect(page.get_by_text("Your session ended. Sign in again; text in an open form has not been sent.")).to_be_visible()
+    assert store.room_board(users["patient"]["id"], room["id"]) == []
+
+
+def test_a_board_form_and_view_do_not_follow_a_new_sign_in_in_the_same_tab(browser_peer):
+    """S-3: a started Mark done, a post draft and the Board view belong to the account that made them."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    mine = store.create_room(patient, "Patient only", [])
+    shared = store.create_room(patient, "Shared room", [family])
+    store.post_item(patient, mine["id"], "spec:mine", "Private to patient", "spec")
+    store.post_item(patient, shared["id"], "spec:shared", "Shared item", "spec")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{mine['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            settle(page, ready=panel)
+            panel.get_by_role("button", name="Mark done spec:mine").click()
+            panel.get_by_label("Outcome link").fill("commit:abc1234")
+            panel.get_by_label("Key").fill("spec:draft")
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.locator(".board-room")).to_have_count(2)
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            page.get_by_label("Username", exact=True).fill("family")
+            page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.get_by_role("heading", name="Board", level=1)).to_be_visible()
+            expect(page.locator(".board-room")).to_have_count(1)
+            expect(page.locator(".board-room")).to_contain_text("Shared room")
+            assert "Patient only" not in page.locator("main").inner_text()
+            page.get_by_role("link", name="Shared room").click()  # no reload: what the tab still holds is what is under test
+            fam_panel = page.locator(".room-board")
+            expect(fam_panel.locator(".board-item", has_text="spec:shared")).to_be_visible()
+            assert fam_panel.locator("#board-done-form, #board-post-form").count() == 0
+            assert "commit:abc1234" not in page.content() and "spec:draft" not in page.content()
+
+
+def test_a_replaced_rooms_board_takes_no_changes(browser_peer):
+    """Final review I2: a replaced room shows its items but offers no Post form and no item buttons, and says why."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.post_item(patient, room["id"], "spec:old", "Closed before", "spec")
+    store.drop_item(patient, room["id"], "spec:old")
+    store.post_item(patient, room["id"], "spec:open", "Still open", "spec")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            expect(panel.get_by_role("button", name="Drop spec:open")).to_be_visible()
+            expect(panel.get_by_role("button", name="Post item")).to_be_visible()
+            replacement = store.add_participants(patient, room["id"], [users["organizer"]["id"]])
+            page.reload()
+            expect(panel.locator(".board-closed .board-item", has_text="spec:old")).to_be_visible()
+            expect(panel.get_by_text("This room was replaced by a newer linked room; its board takes no changes.")).to_be_visible()
+            expect(panel.get_by_role("button", name="Post item")).to_have_count(0)
+            expect(panel.locator("#board-post-form")).to_have_count(0)
+            expect(panel.get_by_role("button")).to_have_count(0)
+            page.goto(f"{base}/#chats/{replacement['id']}")
+            page.reload()
+            expect(panel.get_by_role("button", name="Drop spec:open")).to_be_visible()
+            expect(panel.get_by_role("button", name="Post item")).to_be_visible()
+            expect(panel.get_by_text("takes no changes")).to_have_count(0)
+
+
+def test_board_drafts_are_kept_per_room_and_a_failed_done_keeps_its_outcome(browser_peer):
+    """Final review I3: a post draft survives a re-render and belongs to its room; a failed done keeps what was typed and
+    puts focus back on the outcome."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room_a = store.create_room(patient, "Room A", [users["family"]["id"]])
+    room_b = store.create_room(patient, "Room B", [users["family"]["id"]])
+    store.post_item(patient, room_a["id"], "spec:x", "Item x", "spec")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room_a['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            panel.get_by_label("Key").fill("spec:draft")
+            panel.get_by_label("Title").fill("Half typed")
+            panel.get_by_label("Kind").select_option("review")
+            page.get_by_label("Message", exact=True).fill("hello")
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator(".message", has_text="hello")).to_be_visible()  # the room re-rendered
+            expect(panel.get_by_label("Key")).to_have_value("spec:draft")
+            expect(panel.get_by_label("Title")).to_have_value("Half typed")
+            expect(panel.get_by_label("Kind")).to_have_value("review")
+            panel.get_by_label("Title").fill("")  # a post the station refuses
+            panel.get_by_role("button", name="Post item").click()
+            expect(page.locator(".notice.error")).to_be_visible()
+            expect(panel.get_by_label("Key")).to_have_value("spec:draft")
+            expect(panel.get_by_label("Key")).to_be_focused()  # a refused post leaves focus on the key, as a refused done does on the outcome
+            # S-1: the draft's values are escaped where they are put back (value=), not only in text
+            panel.get_by_label("Key").fill('"><b>x</b>')
+            panel.get_by_label("Title").fill('"><b>y</b>')
+            page.get_by_label("Message", exact=True).fill("again")
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator(".message", has_text="again")).to_be_visible()  # re-rendered with the draft
+            expect(panel.get_by_label("Key")).to_have_value('"><b>x</b>')
+            expect(panel.get_by_label("Title")).to_have_value('"><b>y</b>')
+            assert panel.locator("b").count() == 0
+            panel.get_by_label("Key").fill("spec:draft")
+            panel.get_by_label("Title").fill("")
+            page.goto(f"{base}/#chats/{room_b['id']}")
+            expect(page.get_by_role("heading", name="Room B")).to_be_visible()
+            expect(page.locator(".room-board").get_by_label("Key")).to_have_value("")
+            expect(page.locator(".room-board").get_by_label("Kind")).to_have_value("build")
+            page.goto(f"{base}/#chats/{room_a['id']}")
+            expect(page.locator(".room-board").get_by_label("Key")).to_have_value("spec:draft")
+            settle(page)
+            page.locator(".room-board").get_by_role("button", name="Mark done spec:x").click()
+            page.locator(".room-board").get_by_label("Outcome link").fill("not a link")
+            page.locator(".room-board").get_by_role("button", name="Mark done spec:x").click()
+            expect(page.locator(".notice.error")).to_be_visible()
+            outcome = page.locator(".room-board").get_by_label("Outcome link")
+            expect(outcome).to_have_value("not a link")
+            expect(outcome).to_be_focused()
+            outcome.fill('"><b>x</b>')  # S-1: the outcome is put back through value=
+            with page.expect_response(lambda r: r.url.endswith("/board/done")):
+                page.locator(".room-board").get_by_role("button", name="Mark done spec:x").click()
+            page.wait_for_timeout(500)  # the panel is read again and re-rendered after the refusal
+            expect(page.locator(".room-board").get_by_label("Outcome link")).to_have_value('"><b>x</b>')
+            assert page.locator(".room-board b").count() == 0
+    assert [i["state"] for i in store.room_board(patient, room_a["id"])] == ["open"]
+
+
+def test_board_free_text_is_escaped_in_the_panel_the_view_and_the_flash(browser_peer):
+    """Final review I4: names (poster, holder, closer) and a room title that look like tags show as typed and make no
+    elements."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    store.rename_user(patient, "<b>x</b>")
+    store.rename_user(family, "<u>h</u>")
+    room = store.create_room(patient, "<i>Room</i>", [family])
+    store.post_item(patient, room["id"], "spec:held", "Held", "spec")
+    store.claim(family, room["id"], "spec:held", None, 60)
+    store.post_item(patient, room["id"], "spec:gone", "Gone", "spec")
+    store.drop_item(patient, room["id"], "spec:gone")
+    store.post_item(patient, room["id"], "spec:last", "Last", "spec")
+    store.claim(family, room["id"], "spec:last", None, 60)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            expect(panel.locator(".board-item", has_text="spec:held")).to_contain_text("taken by <u>h</u> until")
+            expect(panel.locator(".board-item", has_text="spec:held")).to_contain_text("posted by <b>x</b>")
+            expect(panel.locator(".board-closed .board-item", has_text="spec:gone")).to_contain_text("dropped")
+            expect(panel.locator(".board-closed .board-item", has_text="spec:gone")).to_contain_text("by <b>x</b>")
+            assert panel.locator("b, i, u").count() == 0
+            settle(page)
+            panel.get_by_role("button", name="Release claim on spec:held").click()
+            expect(panel.locator(".board-ask")).to_contain_text("Release <u>h</u>'s claim on spec:held?")
+            assert panel.locator("b, i, u").count() == 0
+            settle(page)
+            panel.get_by_role("button", name="Drop spec:last").click()
+            settle(page)
+            panel.get_by_role("button", name="Yes, drop spec:last").click()
+            flash = page.locator(".notice", has_text="Item dropped.")
+            expect(flash).to_contain_text("<u>h</u>'s claim on it is released.")
+            assert page.locator(".notice b, .notice u").count() == 0
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.get_by_role("heading", name="Board", level=1)).to_be_visible()
+            view = page.locator(".board-room")
+            expect(view.locator("h2")).to_have_text("<i>Room</i>")
+            expect(view).to_contain_text("taken by <u>h</u> until")
+            expect(view).to_contain_text("posted by <b>x</b>")
+            assert page.locator(".board-room b, .board-room i, .board-room u").count() == 0
+
+
+def test_release_is_offered_only_to_the_owner_the_holder_and_the_holders_owner(browser_peer):
+    """Final review M8: a member who is none of those sees no Release, whatever else they can read."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family, doctor = users["patient"]["id"], users["family"]["id"], users["doctor"]["id"]
+    started = store.start_docking("rio-grande", "sam-mac")
+    ship = store.confirm_docking(family, started["id"], started["code"])  # Sam Family's ship
+    room = store.create_room(patient, "City of AI", [family, doctor, ship["id"]])
+    store.post_item(patient, room["id"], "spec:held", "Held", "spec")
+    store.claim(ship["id"], room["id"], "spec:held", None, 60)
+    with sync_playwright() as playwright:
+        for who, offered in (("patient", True), ("family", True), ("doctor", False)):
+            with signed_in_browser(playwright, browser_peer, who) as (page, _):
+                page.goto(f"{base}/#chats/{room['id']}")
+                page.reload()
+                item = page.locator(".room-board .board-item", has_text="spec:held")
+                expect(item).to_contain_text("taken by")
+                expect(item.get_by_role("button", name="Release claim on spec:held")).to_have_count(1 if offered else 0)
+
+
+def test_linked_and_dropped_lines_are_labelled_board(browser_peer):
+    """Final review M8: BOARD_WORDS covers all four fixed first words."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.post_item(patient, room["id"], "spec:l", "Linked one", "spec")
+    store.link_item(patient, room["id"], "spec:l", "commit:1ff0efb")
+    store.drop_item(patient, room["id"], "spec:l")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            for line in ("Posted `spec:l`", "Linked `spec:l`", "Dropped `spec:l`"):
+                expect(page.locator(".message", has_text=line).locator(".message-source")).to_have_text("board")
+
+
+def test_opening_a_room_from_the_chat_list_loads_its_board_and_a_new_room_opens_from_the_board_view(browser_peer):
+    """Final review M8, M5: openChat loads the board; a Board-view link to a room made after the page loaded opens that
+    room, not "Choose a chat"."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "Listed room", [users["family"]["id"]])
+    store.post_item(patient, room["id"], "spec:listed", "From the list", "spec")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Chats", exact=True).click()
+            page.get_by_role("button", name="Listed room").first.click()
+            expect(page.locator(".room-board .board-item", has_text="spec:listed")).to_be_visible()
+            fresh = store.create_room(patient, "Made after load", [users["family"]["id"]])
+            store.post_item(patient, fresh["id"], "spec:fresh", "Fresh work", "spec")
+            page.get_by_role("link", name="Board", exact=True).click()
+            page.get_by_role("link", name="Made after load").click()
+            expect(page.get_by_role("heading", name="Made after load", level=2)).to_be_visible()
+            expect(page.locator(".room-board .board-item", has_text="spec:fresh")).to_be_visible()
+
+
+def test_a_member_reads_the_brief_but_cannot_edit_it(browser_peer):
+    """Break caught: a member who is not the owner can change the brief, or cannot see it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    store.save_brief(users["patient"]["id"], room["id"], "Rio Grande builds the brief.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Rio Grande builds the brief.")
+            expect(page.locator(".room-brief")).to_contain_text("Visible to members on this station only.")
+            expect(page.get_by_role("button", name="Edit brief")).to_have_count(0)
+            expect(page.get_by_label("Edit brief")).to_have_count(0)
+            expect(page.get_by_role("button", name="Save brief")).to_have_count(0)
+
+
+def test_brief_text_is_shown_literally(browser_peer):
+    """Break caught: a brief's text is read as markup in the panel or the dialog."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    hostile = '<b>bold?</b> <img src=x onerror="document.title=\'pwned\'">'
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    store.save_brief(users["patient"]["id"], room["id"], hostile, 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text(hostile)
+            expect(page.locator(".room-brief b, .room-brief img")).to_have_count(0)
+            page.get_by_role("button", name="Change participants").click()
+            expect(page.locator("dialog .carry-brief-text")).to_have_text(hostile)
+            expect(page.locator("dialog b, dialog img")).to_have_count(0)
+            assert page.title() != "pwned"
+
+
+def test_a_save_from_a_stale_tab_keeps_the_text_and_shows_the_newer_brief(browser_peer):
+    """Review focus: another tab saved first. Nothing is overwritten unseen, and the typed text is not lost."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First brief.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("My edit from this tab.")
+            store.save_brief(patient, room["id"], "Saved in another tab.", 1)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status")).to_contain_text("A newer brief was saved while you were editing")
+            expect(page.get_by_label("Edit brief")).to_have_value("My edit from this tab.")
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Saved in another tab.")
+            assert store.get_room(patient, room["id"])["brief"]["body"] == "Saved in another tab."
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("My edit from this tab.")
+    assert store.get_room(patient, room["id"])["brief"]["revision"] == 3
+
+
+def test_a_carry_refused_for_a_newer_brief_shows_it_and_carries_it_on_a_second_tick(browser_peer):
+    """Review: after a 409 the dialog must show the newer brief, unticked, or the owner is stuck on the old revision."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "Plan for everyone.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.locator(".carry-brief-text")).to_have_text("Plan for everyone.")
+            store.save_brief(patient, room["id"], "Plan for everyone, revised.", 1)  # another tab
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(dialog.get_by_role("alert")).to_contain_text("The room brief changed since you opened this.")
+            expect(dialog.locator(".carry-brief-text")).to_have_text("Plan for everyone, revised.")
+            expect(dialog.get_by_role("checkbox", name="Carry the room brief")).not_to_be_checked()
+            expect(dialog.get_by_role("checkbox", name="Dr. Morgan")).to_be_checked()
+            assert store.list_rooms(doctor) == []
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Plan for everyone, revised.")
+    rooms = store.list_rooms(doctor)
+    assert len(rooms) == 1 and store.get_room(doctor, rooms[0]["id"])["brief"]["body"] == "Plan for everyone, revised."
+
+
+def test_a_replaced_room_offers_no_add_and_a_stale_add_says_why(browser_peer):
+    """Work board 8.4 (final review): a room another add replaced takes no more members. A page opened before that add
+    gets the station's 409 in the dialog, not the brief's message, and nothing is added. After a reload the replaced
+    room offers no "Change participants" (its other controls stay), and its replacement does."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "Plan for everyone.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.get_by_role("checkbox", name="Dr. Morgan")).to_be_visible()
+            replacement = store.add_participants(patient, room["id"], [users["organizer"]["id"]])  # another tab
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(dialog.get_by_role("alert")).to_have_text("This room was replaced by a newer linked room; add members there")
+            assert store.list_rooms(doctor) == []
+            dialog.get_by_role("button", name="Cancel").click()
+            page.reload()
+            expect(page.get_by_role("button", name="Remove Sam Family from this room")).to_be_visible()
+            expect(page.get_by_role("button", name="Change participants")).to_have_count(0)
+            page.goto(f"{base}/#chats/{replacement['id']}")
+            page.reload()
+            expect(page.get_by_role("button", name="Change participants")).to_be_visible()
+
+
+def test_the_brief_editor_saves_4000_emoji_and_shows_the_limit_past_it(browser_peer):
+    """Review focus: a browser's maxlength counts UTF-16 units, so the editor has none and shows the station's limit."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("😀" * 4001)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status")).to_have_text("A brief is at most 4,000 characters. Your brief is still here.")
+            expect(page.get_by_label("Edit brief")).to_have_value("😀" * 4001)
+            page.get_by_label("Edit brief").fill("😀" * 4000)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("😀" * 4000)
+    assert store.get_room(patient, room["id"])["brief"]["body"] == "😀" * 4000
+
+
+def test_a_double_click_on_save_brief_saves_once(browser_peer):
+    """Review: a second submit while the first is saving would read as a false "newer brief" conflict."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First brief.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            puts = []
+            page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
+            page.get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("Saved once.")
+            page.get_by_role("button", name="Save brief").dblclick()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("Saved once.")
+            expect(page.get_by_text("A newer brief was saved")).to_have_count(0)
+            assert len(puts) == 1
+    assert store.get_room(patient, room["id"])["brief"]["revision"] == 2
+
+
+def test_a_failed_brief_save_returns_focus_to_the_editor(browser_peer):
+    """Break caught: the 4,000 limit is learned only from the error, and the rerender drops focus to the page."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.locator(".room-brief").get_by_role("button", name="Edit brief").click()
+            page.get_by_label("Edit brief").fill("x" * 4001)
+            page.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status.error")).to_contain_text("4,000")
+            assert page.evaluate("document.activeElement.id") == "brief-body"
+    assert store.get_room(users["patient"]["id"], room["id"])["brief"] is None
+
+
+def test_a_carry_conflict_returns_focus_into_the_dialog(browser_peer):
+    """Break caught: after the 409 the dialog rerenders and focus falls out of it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief into the new room").check()
+            store.save_brief(patient, room["id"], "Second.", 1)  # saved after the dialog opened
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            expect(dialog.get_by_role("alert")).to_contain_text("room brief changed")
+            assert page.evaluate("document.activeElement.closest('dialog') !== null")
+            assert page.evaluate("document.activeElement.name") == "carry-brief"
+
+
+def two_layers(browser_peer):
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    first = store.create_layer(owner, {"title": "Alpha layer", "body": "Alpha body."})
+    second = store.create_layer(owner, {"title": "Beta layer", "body": "Beta body."})
+    return first, second
+
+
+def hold_revisions(page, layer_id):
+    """Hold back the revisions fetch of one layer, so the old editor stays on screen while that layer is opening."""
+    held = []
+    page.route(f"**/api/layers/{layer_id}/revisions", lambda route: held.append(route))
+    return held
+
+
+def test_typing_in_the_old_editor_while_another_layer_opens_stays_with_the_old_layer(browser_peer):
+    """Break caught: while a layer's revisions load the old editor is still on screen but the selection is already the
+    new layer, so the old form's text was filed as the new layer's unsaved edit."""
+    first, second = two_layers(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")  # the old editor, still on screen
+            page.get_by_label("Layer title").fill("Alpha typed")
+            assert held
+            for route in held:
+                route.continue_()
+            title = page.get_by_label("Layer title")
+            expect(title).to_have_value("Beta layer")
+            expect(page.locator("section.editor").get_by_text("Unsaved changes")).to_have_count(0)
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha typed")
+            expect(page.locator("section.editor").get_by_text("Unsaved changes", exact=True)).to_be_visible()
+
+
+def test_save_clicked_while_another_layer_opens_sends_nothing_to_the_new_layer(browser_peer):
+    """Break caught: Save in the switching window PUT the old form's values to the layer being opened."""
+    first, second = two_layers(browser_peer)
+    puts = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            page.get_by_label("Layer title").fill("Alpha typed")
+            page.get_by_role("button", name="Save private draft").click()
+            page.wait_for_timeout(300)
+            for route in held:
+                route.continue_()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            page.wait_for_timeout(300)
+    assert not [url for url in puts if second["id"] in url], puts
+    assert browser_peer["app"].state.store.get_layer(browser_peer["users"]["patient"]["id"], second["id"])["title"] == "Beta layer"
+
+
+def test_new_layer_has_the_same_window_closed(browser_peer):
+    """Break caught: the same switch window exists for "New layer", whose editor opens after one fetch."""
+    first, _ = two_layers(browser_peer)
+    puts = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("request", lambda request: puts.append(request.url) if request.method == "PUT" else None)
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = []
+            page.route("**/api/layers/*/revisions", lambda route: held.append(route))
+            page.get_by_role("button", name="New layer").click()
+            page.wait_for_url(lambda url: "#layers/" in url and first["id"] not in url)
+            page.get_by_label("Layer title").fill("Alpha typed")
+            page.get_by_role("button", name="Save private draft").click()
+            page.wait_for_timeout(300)
+            for route in held:
+                route.continue_()
+            expect(page.get_by_label("Layer title")).to_have_value("Untitled")
+            expect(page.locator("section.editor").get_by_text("Unsaved changes")).to_have_count(0)
+            page.wait_for_timeout(300)
+    assert puts == [], puts
+
+
+def test_turn_off_public_link_in_the_old_editor_during_a_switch_leaves_the_new_layer_public(browser_peer):
+    """Break caught: buttons in the old editor act on selectedLayer(), which is already the layer being opened."""
+    store, owner = browser_peer["app"].state.store, browser_peer["users"]["patient"]["id"]
+    first = store.create_layer(owner, {"title": "Alpha layer", "body": "A.", "public": True})
+    second = store.create_layer(owner, {"title": "Beta layer", "body": "B.", "public": True})
+    store.activate_layer(owner, first["id"], first["version"])
+    store.activate_layer(owner, second["id"], second["version"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="My sharing layers").click()
+            page.get_by_role("button", name="Alpha layer").click()
+            expect(page.get_by_label("Layer title")).to_have_value("Alpha layer")
+            held = hold_revisions(page, second["id"])
+            page.get_by_role("button", name="Beta layer").click()
+            page.wait_for_url(lambda url: second["id"] in url)
+            page.get_by_role("button", name="Turn off public link").click()
+            page.wait_for_timeout(300)
+            for route in held:
+                route.continue_()
+            expect(page.get_by_label("Layer title")).to_have_value("Beta layer")
+            page.wait_for_timeout(300)
+    assert store.active_layer(second["id"], public=True)["body"] == "B."
+    assert store.active_layer(first["id"], public=True)["body"] == "A."
+
+
+def test_an_instructions_layer_switched_back_to_a_note_shows_note_mode(browser_peer):
+    """Break caught: the instructions form has no public input, so reading it when switching back threw."""
+    errors = []
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.get_by_role("link", name="My sharing layers").click()
+            open_new_layer(page)
+            page.get_by_label("Kind").select_option("instructions")
+            expect(page.get_by_label("Kind")).to_have_value("instructions")
+            expect(page.get_by_role("checkbox", name="Anyone with the public link")).to_have_count(0)
+            page.get_by_label("Kind").select_option("note")
+            expect(page.get_by_label("Kind")).to_have_value("note")
+            expect(page.get_by_role("checkbox", name="Anyone with the public link")).to_have_count(1)
+    assert errors == [], errors
+
+
+def test_a_received_room_marks_unverified_words_and_shows_only_this_stations_delivery_state(browser_peer):
+    """Federation follow-ups (spec 2026-10-14-federation-followups-design.md), F1 and F2 in the browser. Words the
+    room's host attributes to the signed-in person without proof read as unverified, never "You". A host's message that
+    carries a delivery state and reuses the client id of the person's own delivered reply shows no delivery text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    here, remote = browser_peer["app"].state.federation, browser_peer["remote"]
+    there, casey, patient = remote["federation"], remote["user"]["id"], users["patient"]["id"]
+    paired = here.pair(users["organizer"]["id"], browser_peer["remote_card"])  # pairing is an admin's act
+    card = Federation(store, endpoint="https://localhost:7435").card(patient)  # this station's identity, an endpoint
+    contact = there.pair(casey, card)
+    room = remote["store"].create_room(casey, "Hosted elsewhere", [contact["id"]])
+    there.sync_once(send=lambda card, prepare: here.receive(prepare()))
+    key = f"{there.identity.peer_id}:{room['id']}"
+    store.send_message(patient, key, "reply-1", "my real words")
+    here.sync_once(send=lambda card, prepare: there.receive(prepare()))  # delivered; the host never echoes it back
+
+    def host_says(message_id, author_id, client_id, body, created, **extra):
+        with remote["store"].transaction() as db:
+            snapshot = there._room_snapshot(db, db.execute("SELECT * FROM rooms WHERE id=?", (room["id"],)).fetchone())
+        message = {"id": message_id, "room_id": room["id"], "author_id": author_id, "client_message_id": client_id,
+                   "body": body, "epoch": 1, "created": created, **extra}
+        assert here.receive(there.identity.envelope(
+            destination=here.identity.peer_id, actor=casey, resource_id=room["id"], revision=1,
+            action="room.message", recipients=[patient], payload={**snapshot, "message": message}))["ok"]
+
+    # Local rooms keep their own delivery text: a plain one has no delivery ("Saved here"); one with a remote member
+    # has a delivery row matching its message, which the page reads.
+    plain = store.create_room(patient, "Only us", [users["family"]["id"]])
+    store.send_message(patient, plain["id"], "plain-1", "kept at home")
+    shared = store.create_room(patient, "Shared out", [paired["id"]])
+    store.send_message(patient, shared["id"], "shared-1", "sent to Casey")
+    here.sync_once(send=lambda card, prepare: there.receive(prepare()))
+
+    host_says("m-forged", f"{here.identity.peer_id}:{patient}", "forged-1", "I approve the merge", 5.0)
+    host_says("m-claims", f"{there.identity.peer_id}:{casey}", "reply-1", "the host's own words", 6.0,
+              state="delivered")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Connections", exact=True).click()
+            # The person's reply is delivered and the page knows it, so a client-id guess would find it.
+            expect(page.locator(".item-main", has_text="Hosted elsewhere").get_by_text("Send reply · Delivered")).to_be_visible()
+            page.goto(f"{base}/#chats/{quote(key, safe='')}")
+            page.reload()
+            forged = page.locator(".message", has_text="I approve the merge")
+            expect(forged.locator(".message-meta").first).to_have_text(
+                "Unverified: the room's host says this is from someone on this station")
+            expect(forged).to_have_class("message unverified")
+            expect(forged).to_have_css("border-top-style", "dashed")
+            expect(forged).to_have_css("border-top-width", "1px")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Delivered")
+            expect(forged.locator(".message-meta").last).not_to_contain_text("Saved here")
+            claims = page.locator(".message", has_text="the host's own words")
+            expect(claims).to_be_visible()
+            expect(claims.locator(".message-meta").first).not_to_contain_text("Unverified")
+            expect(claims).to_have_class("message")
+            expect(claims.locator(".message-meta").last).not_to_contain_text("Delivered")
+            expect(claims.locator(".message-meta").last).not_to_contain_text("Saved here")
+            mine = page.locator(".message", has_text="my real words")
+            expect(mine.locator(".message-meta").first).to_have_text("You")
+            expect(mine.locator(".message-meta").last).to_contain_text("Delivered")
+            page.goto(f"{base}/#chats/{plain['id']}")
+            page.reload()
+            expect(page.locator(".message", has_text="kept at home").locator(".message-meta").last).to_contain_text("Saved here")
+            page.goto(f"{base}/#chats/{shared['id']}")
+            page.reload()
+            expect(page.locator(".message", has_text="sent to Casey").locator(".message-meta").last).to_contain_text("Delivered")
+
+
+def docked_ship(store, owner, name="rio-grande"):
+    started = store.start_docking(name, "pi")
+    return store.confirm_docking(owner, started["id"], started["code"])
+
+
+SHIP_LINE = "Written by Rio Grande, a ship, not the room's owner"
+SHIP_WARNING = "This text was written by Rio Grande, a ship. Saving makes all of it yours, so read it all first."
+
+
+def test_a_ship_written_brief_is_marked_as_a_ships(browser_peer):
+    """Break caught (R10): a ship's revision reads as the owner's under the brief, on a carried brief or in the carry
+    dialog, or a display name decides the mark. Review Focus 3: the editor warns on a carried brief a ship wrote."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_ship_brief(ship["id"], room["id"], "Purpose: a city of AI. Rio Grande keeps this current.", 0)
+    mine = store.create_room(patient, "Quiet room", [users["family"]["id"]])
+    store.save_brief(patient, mine["id"], "The owner's own words.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):  # a member sees the same marks
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            expect(page.locator(".room-brief-author .brief-ship-tag")).to_have_text("Ship")
+            page.goto(f"{base}/#chats/{mine['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text("Written by the room's owner, Alex Patient")
+            expect(page.locator(".brief-ship-tag")).to_have_count(0)
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{mine['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text("Written by you")
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            page.get_by_role("button", name="Change participants").click()
+            dialog = page.locator("dialog")
+            expect(dialog.locator(".carry-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            dialog.get_by_role("checkbox", name="Dr. Morgan").check()
+            dialog.get_by_role("checkbox", name="Carry the room brief into the new room").check()
+            dialog.get_by_role("button", name="Start a new linked chat").click()
+            panel = page.locator(".room-brief")
+            expect(panel).to_contain_text("Carried from the previous room on")
+            expect(panel.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            panel.get_by_role("button", name="Edit brief").click()  # Review Focus 3: the carry kept the ship as author
+            expect(panel.locator(".brief-warning")).to_have_text(SHIP_WARNING)
+            panel.get_by_role("button", name="Cancel").click()
+            with store.transaction() as db:  # a display name can't move the mark
+                db.execute("UPDATE users SET name=? WHERE id=?", ("Alex Patient (room owner)", ship["id"]))
+            page.reload()
+            expect(page.locator(".room-brief-author")).to_have_text(
+                "Ship Written by Alex Patient (room owner), a ship, not the room's owner")
+    [carried_room] = store.list_rooms(users["doctor"]["id"])
+    carried = store.get_room(users["doctor"]["id"], carried_room["id"])["brief"]
+    assert (carried["author_id"], carried["author_kind"], carried["carried_from"]) == (ship["id"], "ship", room["id"])
+
+
+def test_saving_a_ships_text_warns_that_it_becomes_the_owners(browser_peer):
+    """Break caught (R10, R13): the owner saves a ship's text unwarned, by "Edit brief" or by "Use this text", or is
+    warned about his own; after Save the revision and its notice are his."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_brief(patient, room["id"], "The owner's first words.", 0)                  # r1, his
+    store.save_ship_brief(ship["id"], room["id"], "Rio Grande's words, all of them.", 1)  # r2, the ship's
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Edit brief").click()
+            expect(panel.locator(".brief-warning")).to_have_text(SHIP_WARNING)
+            panel.get_by_role("button", name="Cancel").click()
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            rows = panel.locator(".brief-revision")
+            expect(rows).to_have_count(2)
+            rows.filter(has_text="The owner's first words.").get_by_role("button", name="Use this text").click()
+            expect(panel.get_by_label("Edit brief")).to_have_value("The owner's first words.")
+            expect(panel.locator(".brief-warning")).to_have_count(0)  # his own text: no warning
+            rows.filter(has_text="Rio Grande's words").get_by_role("button", name="Use this text").click()
+            expect(panel.get_by_label("Edit brief")).to_have_value("Rio Grande's words, all of them.")
+            expect(panel.locator(".brief-warning")).to_have_text(SHIP_WARNING)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text("Rio Grande's words, all of them.")
+            expect(panel.locator(".room-brief-author")).to_have_text("Written by you")
+    view = store.get_room(patient, room["id"])
+    assert (view["brief"]["revision"], view["brief"]["author_id"], view["brief"]["author_kind"]) == (3, patient, "person")
+    assert view["messages"][-1]["body"] == (
+        "Station notice: the room brief is now revision 3, written by the room's owner: Alex Patient. station_read shows it.")
+
+
+def test_the_owner_restores_an_earlier_revision_from_history(browser_peer):
+    """Break caught (R13, R12): an earlier revision can't be got back, a restore makes anything but a new revision of
+    the owner's, or an old revision's text is read as markup."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    old = "<b>Purpose:</b> the first plan. <img src=x onerror=\"document.title='pwned'\">"
+    store.save_brief(patient, room["id"], old, 0)                                  # r1, the owner's
+    store.save_ship_brief(ship["id"], room["id"], "A ship's later summary.", 1)    # r2
+    store.save_brief(patient, room["id"], "", 2)                                    # r3: removed
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            rows = panel.locator(".brief-revision")
+            expect(rows).to_have_count(3)
+            expect(rows.nth(0)).to_contain_text("Removed")
+            expect(rows.nth(0).get_by_role("button", name="Use this text")).to_have_count(0)
+            expect(rows.nth(1).locator(".brief-ship-tag")).to_have_text("Ship")
+            expect(rows.nth(2).locator(".brief-revision-body")).to_have_text(old)
+            expect(panel.locator(".brief-history b, .brief-history img")).to_have_count(0)
+            rows.nth(2).get_by_role("button", name="Use this text").click()
+            expect(panel.get_by_label("Edit brief")).to_have_value(old)
+            expect(panel.locator(".brief-warning")).to_have_count(0)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text(old)
+            expect(panel.locator(".room-brief-author")).to_have_text("Written by you")
+            assert page.title() != "pwned"
+    view = store.get_room(patient, room["id"])
+    assert (view["brief"]["body"], view["brief"]["revision"], view["brief"]["author_id"]) == (old, 4, patient)
+    assert view["messages"][-1]["body"] == (
+        "Station notice: the room brief is now revision 4, written by the room's owner: Alex Patient. station_read shows it.")
+
+
+def test_a_member_sees_no_history(browser_peer):
+    """Break caught (R12): a member who isn't the owner can open the brief's history, which holds text the owner
+    removed on purpose."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "Removed on purpose: the old plan.", 0)
+    store.save_brief(patient, room["id"], "The plan now.", 1)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "family") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            expect(page.locator(".room-brief .room-brief-body")).to_have_text("The plan now.")
+            expect(page.get_by_role("button", name="Brief history")).to_have_count(0)
+            expect(page.get_by_text("Removed on purpose")).to_have_count(0)
+            status = page.evaluate(f"fetch('/api/chats/{room['id']}/brief/revisions').then((r) => r.status)")
+            assert status == 403  # and the station refuses it too
+
+
+def test_a_ship_saving_while_the_owner_edits_keeps_his_text(browser_peer):
+    """Review Focus 2: the owner opened his own brief; meanwhile his ship saves. His Save gets the 409, the panel shows
+    the ship's newer brief marked as a ship's, and his text stays in the box with no warning. His second Save makes
+    his text the newest revision, his."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_brief(patient, room["id"], "The owner's plan.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill("The owner's plan, revised by him.")
+            store.save_ship_brief(ship["id"], room["id"], "The ship's summary of the plan.", 1)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(page.locator("#brief-status")).to_contain_text("A newer brief was saved while you were editing")
+            expect(panel.locator(".room-brief-body")).to_have_text("The ship's summary of the plan.")
+            expect(panel.locator(".room-brief-author")).to_have_text(f"Ship {SHIP_LINE}")
+            expect(panel.get_by_label("Edit brief")).to_have_value("The owner's plan, revised by him.")
+            expect(panel.locator(".brief-warning")).to_have_count(0)
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text("The owner's plan, revised by him.")
+            expect(panel.locator(".room-brief-author")).to_have_text("Written by you")
+    brief = store.get_room(patient, room["id"])["brief"]
+    assert (brief["revision"], brief["author_id"]) == (3, patient)
+
+
+def test_the_ship_warning_goes_while_the_box_is_blank(browser_peer):
+    """Follow-up from the final reviews: the editor warns that saving makes a ship's text the owner's even when he has
+    emptied the box, though Save then removes the brief. The warning hides while the box is blank (trimmed) and comes
+    back with text."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_ship_brief(ship["id"], room["id"], "Rio Grande's words, all of them.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Edit brief").click()
+            box = panel.get_by_label("Edit brief")
+            expect(panel.locator(".brief-warning")).to_be_visible()
+            box.fill("")
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+            box.fill(" \n\t ")
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+            box.fill("Something again.")
+            expect(panel.locator(".brief-warning")).to_have_text(SHIP_WARNING)
+            box.fill("")
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_count(0)
+    assert store.get_room(patient, room["id"])["brief"] is None
+
+
+def test_the_blank_box_keeps_the_warning_hidden_through_a_re_render(browser_peer):
+    """Fix round 1: the render-time `hidden` matters when the editor re-renders with a blank box: the ask that "Use this
+    text" opens over his blanking, and a failed Save."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    ship = docked_ship(store, patient)
+    room = store.create_room(patient, "City of AI", [users["family"]["id"], ship["id"]])
+    store.save_brief(patient, room["id"], "The owner's first words.", 0)
+    store.save_ship_brief(ship["id"], room["id"], "Rio Grande's words, all of them.", 1)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            expect(panel.locator(".brief-revision")).to_have_count(2)
+            panel.get_by_role("button", name="Edit brief").click()
+            expect(panel.locator(".brief-warning")).to_be_visible()
+            panel.get_by_label("Edit brief").fill("")
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+            panel.locator(".brief-revision").filter(has_text="The owner's first words.").get_by_role("button", name="Use this text").click()
+            expect(panel.locator(".board-ask")).to_be_visible()  # the editor re-rendered, blank
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+            panel.locator(".board-ask").get_by_role("button", name="Cancel").click()
+            page.route("**/api/chats/*/brief", lambda route: route.fulfill(
+                status=500, content_type="application/json", body=json.dumps({"error": "Save is down"}))
+                if route.request.method == "PUT" else route.fallback())
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator("#brief-status")).to_contain_text("Save is down")  # re-rendered after the failure
+            expect(panel.locator(".brief-warning")).to_be_hidden()
+
+
+def test_an_empty_history_says_so(browser_peer):
+    """Follow-up from the final reviews: for a room that never had a brief, "Brief history" showed nothing under its
+    heading."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "Never had a brief", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            expect(panel.locator(".brief-history h4")).to_have_text("Brief history")
+            expect(panel.locator(".brief-history")).to_contain_text("No revisions yet.")
+            expect(panel.locator(".brief-revision")).to_have_count(0)
+
+
+def test_use_this_text_asks_before_replacing_unsaved_typing(browser_peer):
+    """Follow-up from the final reviews: "Use this text" replaced an open editor's typed text silently. When the text
+    differs from what the editor opened with it asks first, inline; Cancel keeps the typing, Yes replaces it. An
+    editor left as it opened is replaced without a question."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First words.", 0)
+    store.save_brief(patient, room["id"], "Second words.", 1)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            rows = panel.locator(".brief-revision")
+            expect(rows).to_have_count(2)
+            panel.get_by_role("button", name="Edit brief").click()
+            box = panel.get_by_label("Edit brief")
+            rows.filter(has_text="First words.").get_by_role("button", name="Use this text").click()
+            expect(box).to_have_value("First words.")  # untouched editor: no question
+            expect(panel.locator(".board-ask")).to_have_count(0)
+            box.fill("My unsaved <b>typing</b>.")
+            rows.filter(has_text="Second words.").get_by_role("button", name="Use this text").click()
+            ask = panel.locator(".board-ask")
+            expect(ask).to_contain_text("Replace your unsaved text with revision 2?")
+            assert page.evaluate("document.activeElement?.textContent") == "Cancel"  # the safe choice, as the board's Drop
+            expect(box).to_have_value("My unsaved <b>typing</b>.")
+            ask.get_by_role("button", name="Cancel").click()
+            expect(panel.locator(".board-ask")).to_have_count(0)
+            expect(box).to_have_value("My unsaved <b>typing</b>.")
+            assert page.evaluate("document.activeElement?.id") == "brief-body"  # back to the typing
+            rows.filter(has_text="Second words.").get_by_role("button", name="Use this text").click()
+            panel.locator(".board-ask").get_by_role("button", name="Yes").click()
+            expect(panel.locator(".board-ask")).to_have_count(0)
+            expect(panel.get_by_label("Edit brief")).to_have_value("Second words.")
+            assert page.evaluate("document.activeElement?.id") == "brief-body"
+
+
+def test_a_failed_reload_after_a_save_keeps_the_history_rows(browser_peer):
+    """Follow-up from the final reviews: when a save succeeds but reloading the open history fails, the rows already
+    shown were replaced by the error. They stay, with the error under them."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [users["family"]["id"]])
+    store.save_brief(patient, room["id"], "First words.", 0)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            expect(panel.locator(".brief-revision")).to_have_count(1)
+            page.route("**/brief/revisions", lambda route: route.fulfill(status=500, content_type="application/json",
+                                                                       body=json.dumps({"error": "History is down"})))
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill("Second words.")
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text("Second words.")
+            history = panel.locator(".brief-history")
+            expect(history.locator(".inline-message.error")).to_have_text("History is down")
+            expect(history.locator(".brief-revision")).to_have_count(1)
+            expect(history.locator(".brief-revision")).to_contain_text("First words.")
+            order = history.evaluate("el => [...el.children].map((c) => c.className || c.tagName)")
+            assert order.index("brief-revisions") < order.index("inline-message error")
+    assert store.get_room(patient, room["id"])["brief"]["revision"] == 2
+
+
+def test_a_failed_first_reload_does_not_say_no_revisions(browser_peer):
+    """Fix round 1: "No revisions yet." was still shown above the error when the open, empty history failed to reload
+    after the first save, though the panel already showed revision 1."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "Never had a brief", [users["family"]["id"]])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-brief")
+            panel.get_by_role("button", name="Brief history", exact=True).click()
+            expect(panel.locator(".brief-history")).to_contain_text("No revisions yet.")
+            page.route("**/brief/revisions", lambda route: route.fulfill(status=500, content_type="application/json",
+                                                                       body=json.dumps({"error": "History is down"})))
+            panel.get_by_role("button", name="Edit brief").click()
+            panel.get_by_label("Edit brief").fill("First words.")
+            panel.get_by_role("button", name="Save brief").click()
+            expect(panel.locator(".room-brief-body")).to_have_text("First words.")
+            expect(panel.locator(".brief-history .inline-message.error")).to_have_text("History is down")
+            expect(panel.locator(".brief-history")).not_to_contain_text("No revisions yet.")
+
+
+def grant_station(browser_peer):
+    """Grants step 3's page (G20-G22): patient owns serenity, in a room with doctor whose title is HTML, and in a room
+    without doctor; doctor's display name is HTML too. (store, users, ship, room, lone)."""
+    store, users = browser_peer["app"].state.store, browser_peer["users"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(users["patient"]["id"], started["id"], started["code"])
+    store.rename_user(users["doctor"]["id"], "<img src=x onerror=alert(1)>")
+    room = store.create_room(users["patient"]["id"], "<b>City</b> of AI", [users["doctor"]["id"], ship["id"]])
+    lone = store.create_room(users["patient"]["id"], "Just me", [ship["id"]])
+    return store, users, ship, room, lone
+
+
+def fill_grant(page, person, *rooms):
+    page.get_by_label("Person").select_option(label=person)
+    page.get_by_label("Serenity").check()
+    for title in rooms:
+        page.get_by_label(title).check()
+
+
+def test_a_grant_is_made_on_the_page_held_by_its_grantee_and_revoked_after_the_ask(browser_peer):
+    """Test 20, G20-G22: the patient makes a grant, choosing from a person list without ships or himself, and sees it
+    under "Given by you"; the doctor sees it under "Held by you", with no Revoke; Revoke asks in place, revokes nothing
+    before the confirm, and then revokes with its reason. A grantee name and a room title written as HTML show as text."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            expect(page.get_by_role("heading", name="Grants", level=1)).to_be_visible()
+            expect(page.get_by_text("Their mentions start builder runs of your ships on your machine. A run can read your "
+                                    "repository and uses your model time, and its reply is posted in the room.")).to_be_visible()
+            assert page.get_by_label("Person").locator("option").all_inner_texts() == [
+                "Choose a person", "<img src=x onerror=alert(1)>", "Sam Family", "Taylor Organizer"]
+            expect(page.get_by_label("How long")).to_have_value("168")
+            expect(page.get_by_label("Builds a day")).to_have_value("5")
+            fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI")
+            expect(page.get_by_label("Just me")).to_have_count(0)  # it doesn't hold the doctor
+            expect(page.get_by_label("These rooms")).to_be_checked()
+            page.get_by_role("button", name="Make grant").click()
+            item = page.locator(".grants-given .grant-item")
+            expect(item).to_have_count(1)
+            made = store.list_grants(patient)[0]
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} made.")).to_be_visible()
+            expect(item).to_contain_text(f"{made['short']} To <img src=x onerror=alert(1)>")
+            expect(item).to_contain_text("Serenity, 20 grant builds left for the ship")
+            expect(item).to_contain_text("Rooms: <b>City</b> of AI")
+            expect(item).to_contain_text("5 of 5 builds left in the last 24 hours")
+            expect(item.locator(".badge")).to_have_text("Valid")
+            assert page.locator("#main-content img, #main-content b").count() == 0
+            assert (made["grantee"]["id"], [r["id"] for r in made["rooms"]], made["expires"] - made["created"], made["budget"]) == (
+                doctor, [room["id"]], 7 * 86400, 5)
+        with signed_in_browser(playwright, browser_peer, "doctor") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            held = page.locator(".grants-held .grant-item")
+            expect(held).to_contain_text(f"{made['short']} From Alex Patient")
+            expect(held.get_by_role("button")).to_have_count(0)
+            expect(page.locator(".grants-given .grant-item")).to_have_count(0)
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            revokes = []
+            page.on("request", lambda request: revokes.append(request.url) if request.method == "POST" and request.url.endswith("/revoke") else None)
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            expect(item).to_contain_text(f"Revoke {made['short']}? Their mentions stop starting builder runs at once")
+            expect(item.get_by_role("button", name="Cancel")).to_be_focused()
+            item.get_by_role("button", name="Cancel").click()  # the safe choice changes nothing (S2 of the plan review)
+            expect(item.locator(".grant-ask")).to_have_count(0)
+            expect(item.get_by_role("button", name=f"Revoke {made['short']}")).to_be_focused()
+            assert revokes == [] and store.list_grants(patient)[0]["valid"] is True
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            assert store.list_grants(patient)[0]["revoked"] is None  # nothing before the confirm
+            item.get_by_label("Reason (optional)").fill("Done for now")
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(item).to_contain_text(f"Not valid Grant {made['short']} was revoked by Alex Patient")
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            expect(item.get_by_role("button")).to_have_count(0)
+            assert len(revokes) == 1
+    assert store.list_grants(patient)[0]["revoke_reason"] == "Done for now"
+
+
+def test_a_double_click_on_make_grant_makes_one_grant(browser_peer):
+    """Plan Review Focus 2: a second submit while the first is on its way would make a second grant, doubling the person's
+    builds; the page sends one write at a time. The POSTs are counted, so a station that refused the second one could
+    not pass for a page that sent one."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            posts = []
+            page.on("request", lambda request: posts.append(request.url) if request.method == "POST" and request.url.endswith("/api/grants") else None)
+            page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_role("button", name="Make grant").click()  # no person yet: the page says so and sends nothing (R19)
+            expect(page.locator(".notice", has_text="Choose a person.")).to_be_visible()
+            assert posts == []
+            fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI")
+            page.get_by_role("button", name="Make grant").dblclick()
+            expect(page.locator(".grants-given .grant-item")).to_have_count(1)
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts
+    assert len(store.list_grants(users["patient"]["id"])) == 1
+
+
+def test_an_admin_is_offered_only_his_own_ships(browser_peer):
+    """Plan Review Focus 3: Andy is the station's admin, and /api/ships gives an admin every ship; the form offers only the
+    ships he owns, since a grant over anyone else's is refused (G8 step 4)."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    started = store.start_docking("defiant", "taylor-pc")
+    store.confirm_docking(users["organizer"]["id"], started["id"], started["code"])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "organizer") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            ships = page.locator("#grant-form input[name='grant-ship']")
+            expect(ships).to_have_count(1)
+            expect(page.get_by_label("Defiant")).to_be_visible()
+            expect(page.get_by_label("Serenity")).to_have_count(0)
+
+
+def test_choosing_another_person_rebuilds_the_rooms_and_drops_the_ones_they_are_not_in(browser_peer):
+    """Plan Review Focus 4: rooms ticked for one person stay only if the next person is in them too, so the page never sends
+    a room the grantee isn't in (G8 step 2 would refuse it); a room both share keeps its tick."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor, family = users["patient"]["id"], users["doctor"]["id"], users["family"]["id"]
+    both = store.create_room(patient, "Both of them", [doctor, family, ship["id"]])
+    old = store.create_room(patient, "Old", [family])
+    store.add_participants(patient, old["id"], [users["organizer"]["id"]])  # a newer "Old" replaces it
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            fill_grant(page, "<img src=x onerror=alert(1)>", "<b>City</b> of AI", "Both of them")
+            page.get_by_label("Person").select_option(label="Sam Family")
+            expect(page.get_by_label("<b>City</b> of AI")).to_have_count(0)
+            expect(page.get_by_label("Both of them")).to_be_checked()
+            expect(page.get_by_label("Old", exact=True)).to_have_count(1)  # the current one only
+            page.get_by_label("Person").select_option(label="<img src=x onerror=alert(1)>")
+            expect(page.get_by_label("<b>City</b> of AI")).not_to_be_checked()  # dropped, not kept for later
+            page.get_by_label("Person").select_option(label="Sam Family")
+            page.get_by_role("button", name="Make grant").click()
+            expect(page.locator(".grants-given .grant-item")).to_contain_text("To Sam Family")
+    made = store.list_grants(patient)[0]
+    assert (made["grantee"]["id"], [r["id"] for r in made["rooms"]]) == (family, [both["id"]])
+
+
+@pytest.mark.parametrize("viewport", [{"width": 1440, "height": 960}, {"width": 390, "height": 844}])
+def test_a_hurried_double_click_on_revoke_only_opens_the_ask(browser_peer, viewport):
+    """G22: the ask takes Revoke's place with its question first, so the second press of a hurried double click lands on
+    text, at desktop and phone widths: the ask stays open and nothing is revoked or cancelled."""
+    base = browser_peer["base_url"]
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport=viewport) as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            revoke = item.get_by_role("button", name=f"Revoke {made['short']}")
+            revoke.scroll_into_view_if_needed()  # mouse clicks go to viewport coordinates
+            double_click_apart(page, revoke)
+            page.wait_for_timeout(600)
+            expect(item).to_contain_text(f"Revoke {made['short']}?")
+    assert store.list_grants(patient)[0]["revoked"] is None
+
+
+def test_any_room_you_share_sends_the_star_and_a_room_made_after_sign_in_is_offered(browser_peer):
+    """G21's "Any room you share with them" sends `rooms: "*"`, and the grant says so (S1 of the plan review). Entering the
+    page reads the rooms again, so a room made after sign-in is offered (R21)."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            sent = []
+            page.on("request", lambda request: sent.append(request.post_data_json) if request.method == "POST" and request.url.endswith("/api/grants") else None)
+            store.create_room(patient, "Made after sign-in", [doctor])
+            page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_label("Person").select_option(label="<img src=x onerror=alert(1)>")
+            expect(page.get_by_label("Made after sign-in")).to_be_visible()
+            page.get_by_label("Serenity").check()
+            page.get_by_label("Any room you share with them").check()
+            page.get_by_role("button", name="Make grant").click()
+            expect(page.locator(".grants-given .grant-item")).to_contain_text("Rooms: Any room you share with them")
+            assert [body["rooms"] for body in sent] == ["*"]
+    assert store.list_grants(patient)[0]["rooms"] == "*"
+
+
+def test_a_second_press_of_yes_revoke_while_the_first_is_on_its_way_sends_nothing(browser_peer):
+    """Section 2 review of merge 3c, minor 4: the revoke path has no guard of its own, only grantWrite's one write at a
+    time. With the first POST held the button is still on screen; a second press must not send a second POST (which the
+    station would answer with a 409 that the page then shows). The POSTs are counted."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            posts, held = [], []
+            page.on("request", lambda request: posts.append(request.url) if request.method == "POST" and request.url.endswith("/revoke") else None)
+            page.route("**/api/grants/*/revoke", lambda route: held.append(route))
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            confirm = item.get_by_role("button", name=f"Yes, revoke {made['short']}")
+            with page.expect_request("**/api/grants/*/revoke"):
+                confirm.click()
+            assert len(held) == 1
+            expect(confirm).to_be_visible()
+            expect(confirm).to_be_enabled()
+            confirm.click()  # the first write is still on its way
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts  # held requests are counted when sent
+            for route in held:
+                route.continue_()
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            page.wait_for_timeout(300)
+            assert len(posts) == 1, posts
+            expect(page.locator(".notice.error")).to_have_count(0)
+    assert store.list_grants(patient)[0]["revoked"] is not None
+
+
+def test_focus_moves_to_given_by_you_only_after_a_revoke_that_worked(browser_peer):
+    """The Mac's final review of 3c, m4: after a revoke that went through the item is gone, so focus goes to the "Given by
+    you" heading; after a refused one the ask stays open with its error and focus returns to its "Yes, revoke" button."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            title = page.locator("#grants-given-title")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            refuse = lambda route: route.fulfill(status=409, content_type="application/json", body='{"error": "Grant is already revoked"}')
+            page.route("**/api/grants/*/revoke", refuse)
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(page.locator(".notice.error", has_text="Grant is already revoked")).to_be_visible()
+            page.wait_for_timeout(300)
+            expect(item.locator(".grant-ask")).to_have_count(1)
+            expect(title).not_to_be_focused()
+            expect(item.get_by_role("button", name=f"Yes, revoke {made['short']}")).to_be_focused()  # the keyboard user keeps their place
+            page.unroute("**/api/grants/*/revoke", refuse)
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(page.locator(".notice", has_text=f"Grant {made['short']} revoked.")).to_be_visible()
+            expect(title).to_be_focused()
+    assert store.list_grants(patient)[0]["revoked"] is not None
+
+
+def test_a_revoke_whose_reload_finds_the_session_ended_shows_the_sign_in(browser_peer):
+    """The Mac's final review of 3c, m4: the revoke went through, then the list's reload answered 401 (the session ended
+    meanwhile). The sign-in prompt shows, not a list that quietly went stale."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient = users["patient"]["id"]
+    made = store.make_grant(patient, users["doctor"]["id"], [ship["id"]], [room["id"]], 24, 5)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            item = page.locator(".grants-given .grant-item")
+            item.get_by_role("button", name=f"Revoke {made['short']}").click()
+            posted = []
+
+            def after_the_post(route):
+                posted.append(route.request.url)  # the reload is answered 401 from here on
+                route.continue_()
+
+            page.route("**/api/grants/*/revoke", after_the_post)
+            page.route("**/api/grants", lambda route: route.fulfill(status=401, content_type="application/json", body='{"error": "Sign in"}')
+                       if posted else route.continue_())
+            item.get_by_role("button", name=f"Yes, revoke {made['short']}").click()
+            expect(page.get_by_text("Your session ended. Sign in again;")).to_be_visible()
+            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+    assert store.list_grants(patient)[0]["revoked"] is not None
+
+
+def test_names_written_as_html_show_as_text_in_a_held_revoked_grant(browser_peer):
+    """Section 2 review of merge 3c, minor 4 (the Mac's m2): the grantee's list shows revoked grants too ("Grant #xxxx was revoked by ..."),
+    so the doctor's view carries the patient's name twice, in the From line and in the reason. Both show as literal text,
+    and no element comes out of them."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    patient, doctor = users["patient"]["id"], users["doctor"]["id"]
+    name = "<i>Pat</i><img src=x onerror=alert(2)>"
+    made = store.make_grant(patient, doctor, [ship["id"]], [room["id"]], 24, 5)
+    store.rename_user(patient, name)
+    store.revoke_grant(patient, made["id"], "Done")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "doctor") as (page, _):
+            page.get_by_role("link", name="Grants", exact=True).click()
+            held = page.locator(".grants-held .grant-item")
+            expect(held).to_have_count(1)
+            expect(held.locator("p").first).to_contain_text(f"{made['short']} From {name}")
+            expect(held).to_contain_text(f"Grant {made['short']} was revoked by {name}")
+            assert page.locator(".grant-list img, .grant-list i").count() == 0
+
+
+def test_the_rooms_offered_for_a_grant_leave_out_breakouts_and_received_rooms(browser_peer):
+    """Section 2 review of merge 3c, minor 4 (the Mac's m2): a breakout or a received room can't be granted (G8 step 1). Real data can't show
+    it, since a breakout holds no person, so the home response is given two such rooms that list the doctor as a member;
+    the form still offers only the real shared room."""
+    store, users, ship, room, lone = grant_station(browser_peer)
+    doctor = users["doctor"]["id"]
+
+    served = []
+
+    def with_extra_rooms(route):
+        served.append(route.request.url)
+        home = route.fetch().json()
+        real = next(chat for chat in home["chats"] if chat["id"] == room["id"])
+        home["chats"] += [dict(real, id="made-up-breakout", title="Made-up breakout", breakout=real["id"], member_ids=[doctor]),
+                          dict(real, id="made-up-received", title="Made-up received", origin="far-station", member_ids=[doctor])]
+        route.fulfill(json=home)
+
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.route("**/api/home", with_extra_rooms)
+            page.get_by_role("link", name="Grants", exact=True).click()
+            page.get_by_label("Person").select_option(label="<img src=x onerror=alert(1)>")
+            expect(page.get_by_label("<b>City</b> of AI")).to_be_visible()
+            expect(page.locator("#grant-form input[name='grant-room']")).to_have_count(1)
+            expect(page.get_by_label("Made-up breakout")).to_have_count(0)
+            expect(page.get_by_label("Made-up received")).to_have_count(0)
+            assert served  # the interception ran, so the two added rooms were in the page's data

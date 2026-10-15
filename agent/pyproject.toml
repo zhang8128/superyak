@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "superyak-agent"
+version = "0.1.0"
+description = "Dock a machine's agent at a Superyak station: room tools, mention watcher and onboarding"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.hatch.build]
+ignore-vcs = true
+
+# Reviewed release inventory: list individual files, never source directories.
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "superyak_agent/__init__.py",
+    "superyak_agent/__main__.py",
+    "superyak_agent/dock.py",
+    "superyak_agent/hook.py",
+    "superyak_agent/install.py",
+    "superyak_agent/mcp.py",
+    "superyak_agent/memos.py",
+    "superyak_agent/runs.py",
+    "superyak_agent/station.py",
+    "superyak_agent/vault.py",
+    "superyak_agent/vault_git.py",
+    "superyak_agent/watch.py",
+    "superyak_agent/wormhole.py",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "../team"]

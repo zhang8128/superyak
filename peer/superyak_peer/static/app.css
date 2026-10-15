@@ -178,6 +178,7 @@ dialog::backdrop { background: rgba(14,31,28,.48); backdrop-filter: blur(2px); }
 .messages { min-height: 280px; display: flex; flex-direction: column; gap: 12px; }
 .message { max-width: min(78%, 620px); padding: 12px 15px; align-self: flex-start; border-radius: 14px 14px 14px 4px; background: var(--paper-deep); }
 .message.mine { align-self: flex-end; border-radius: 14px 14px 4px 14px; background: var(--teal-soft); }
+.message.unverified { border: 1px dashed var(--muted); padding: 11px 14px; }
 .message p { margin: 3px 0; white-space: pre-wrap; }
 .message-meta { color: var(--muted); font-size: 11px; }
 .composer { position: sticky; bottom: 12px; margin-top: 22px; padding: 14px; display: grid; grid-template-columns: 1fr auto; gap: 10px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,248,.96); box-shadow: 0 8px 24px rgba(36,45,42,.08); }
@@ -318,3 +319,29 @@ a.button { display: inline-block; text-decoration: none; }
   .shell { padding-bottom: calc(132px + env(safe-area-inset-bottom)); }
   .editor-actions, .composer { bottom: calc(134px + env(safe-area-inset-bottom)); }
 }
+
+.room-brief { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: #fffefa; }
+.room-brief h3 { margin: 0 0 8px; }
+.room-brief-body, .carry-brief-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.room-board { margin: 0 0 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; }
+.room-board h3 { margin: 0 0 8px; }
+.board-open, .board-closed { list-style: none; margin: 0; padding: 0; }
+.board-item { padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.board-kind { font-size: 0.85em; opacity: 0.75; }
+.board-post, #board-done-form { margin-top: 12px; }
+.board-ask { margin-top: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.board-ask p { margin: 0 0 8px; }
+.carry-board ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
+.grant-list { list-style: none; margin: 0; padding: 0; }
+.grant-item { padding: 10px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.grant-item p { margin: 0 0 6px; }
+.grant-make form { display: grid; gap: 12px; max-width: 720px; }
+.carry-brief-text { max-height: 200px; margin-top: 10px; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+
+.brief-author { margin: 8px 0 0; }
+.brief-ship-tag { margin-right: 6px; }
+.brief-warning { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: var(--amber-soft); color: #74471d; font-weight: 700; }
+.brief-history { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.brief-history h4 { margin: 0 0 8px; }
+.brief-revisions { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.brief-revision-body { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
