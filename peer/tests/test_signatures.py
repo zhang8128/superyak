@@ -171,8 +171,9 @@ def test_a_station_whose_identity_cannot_be_read_does_not_start(tmp_path):
         directory = tmp_path / f'station{index}'
         directory.mkdir(mode=0o700)
         (directory / 'identity.json').write_text(damaged)
-        with pytest.raises(ValueError, match='identity.json'):
+        with pytest.raises(ValueError, match='identity.json.*station-new-identity') as raised:
             Store(directory)
+        assert 'if no copy exists, move the file aside' in str(raised.value)
 
 
 def test_a_dangling_identity_symlink_does_not_start(tmp_path):
@@ -290,3 +291,244 @@ def test_a_notes_revision_has_no_signed_record_and_a_withdrawn_layers_still_does
     assert clients[0].post(f'/api/layers/{law["id"]}/withdraw').status_code == 200
     kept = clients[0].get(f'/api/layers/{law["id"]}/revisions/1/signed')
     assert kept.status_code == 200 and verify_record(card_of(store._station_identity()), kept.json()['record'], kept.json()['signature'])
+
+
+def signed_station(tmp_path):
+    """A station with one signed revision, a person, a room, a waiting docking and the wormhole ship, so each station
+    command below has something to do: (store, owner, ship, room, docking)."""
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    owner = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    ship, _ = docked(store, owner['id'], 'serenity')
+    law = store.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Law', 'body': 'Be kind.', 'audience_users': [ship['id']]})
+    store.activate_layer(owner['id'], law['id'], law['version'])
+    store.create_station_ship('wormhole', 'Wormhole')
+    room = store.create_room(owner['id'], 'Ops', [])
+    return store, owner, ship, room, store.start_docking('defiant', 'bazzite')
+
+
+def run_cli(capsys, *argv):
+    """The CLI's exit code, stdout and stderr."""
+    from superyak_peer.__main__ import main
+    try:
+        main([str(arg) for arg in argv])
+        code = 0
+    except SystemExit as stopped:
+        code = stopped.code
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_the_door_and_the_station_commands_work_while_the_identity_is_damaged(tmp_path, capsys):
+    """G4a, test 4a: a damaged identity.json stops the lighthouse alone. The door takes access requests, and each
+    station command that never signs starts and does its work. A revision left unsigned shows they skip the backfill."""
+    from fastapi.testclient import TestClient
+    from superyak_peer.app import create_app
+    from superyak_peer.db import Store
+    from superyak_peer.door import create_door
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    late = store.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Later', 'body': 'x', 'audience_users': [ship['id']]})
+    store.activate_layer(owner['id'], late['id'], late['version'])
+    with store.transaction() as db:  # unsigned, as from before merge 3a: a backfill here would need the key
+        db.execute('DELETE FROM revision_signatures WHERE layer_id=?', (late['id'],))
+    (store.data_dir / 'identity.json').write_text('not json')
+    with pytest.raises(ValueError, match='identity.json'):
+        Store(store.data_dir)
+    with pytest.raises(ValueError, match='identity.json'):
+        create_app(store.data_dir, allowed_origins=['http://testserver'])
+    door = create_door(store.data_dir)
+    assert getattr(door.state.store, '_identity', None) is None
+    asked = TestClient(door, base_url='https://door.example:8443').post(
+        '/api/access-requests', json={'name': 'Eve', 'contact': 'eve@example.org'})
+    assert asked.status_code == 201, asked.text
+    data = ['--data-dir', store.data_dir]
+    (tmp_path / 'rotation').mkdir()
+    for argv in (['station-pending', *data], ['station-notices', *data],
+                 ['station-notices', *data, '--backup-dir', tmp_path / 'rotation'],  # the branch that lists alerts too
+                 ['station-approve', *data, '--id', docking['id'][:8], '--as', 'andy'],
+                 ['station-deny', *data, '--id', asked.json()['id'][:8], '--as', 'andy'],
+                 ['station-rooms', *data, '--as', 'andy'], ['station-bridge', *data, '--id', room['id'][:8], '--as', 'andy']):
+        code, out, err = run_cli(capsys, *argv)
+        assert code == 0 and 'could not be read' not in err, (argv[0], err)
+    bridged = next(listed for listed in Store(store.data_dir, signing=False).station_rooms('andy') if listed['bridged'])
+    code, out, err = run_cli(capsys, 'station-unbridge', *data, '--id', bridged['id'][:8], '--as', 'andy')
+    assert code == 0, err
+    with Store(store.data_dir, signing=False).transaction() as db:
+        assert db.execute('SELECT count(*) FROM revision_signatures WHERE layer_id=?', (late['id'],)).fetchone()[0] == 0
+
+
+def test_the_door_holds_no_key_even_when_the_identity_is_sound(tmp_path):
+    from superyak_peer.door import create_door
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    assert (store.data_dir / 'identity.json').is_file()
+    assert getattr(create_door(store.data_dir).state.store, '_identity', None) is None
+
+
+def test_a_store_opened_without_signing_still_signs_what_it_writes(tmp_path):
+    """G4a: signing=False holds no key at the start, but an activation through it is still signed, and the first
+    signature on a station with no signed records creates the identity (G4)."""
+    from superyak_peer.db import Store
+    quiet = Store(tmp_path / 'station', signing=False)
+    owner = quiet.create_user('owner', 'Owner', 'long-password')
+    ship, _ = docked(quiet, owner['id'], 'serenity')
+    layer = quiet.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Law', 'body': 'Be kind.', 'audience_users': [ship['id']]})
+    assert not (quiet.data_dir / 'identity.json').exists()
+    quiet.activate_layer(owner['id'], layer['id'], layer['version'])
+    card = card_of(PeerIdentity.load_or_create(quiet.data_dir))
+    assert verify_record(card, stored_record(quiet, layer['id'], 1), signature_rows(quiet)[(layer['id'], 1)])
+
+
+def test_own_peer_id_reads_the_stores_one_identity(tmp_path):
+    """G4a: remote rooms read this station's peer id through _station_identity(), the one loader."""
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    other = PeerIdentity.load_or_create(tmp_path / 'other')
+    store._identity = other  # whatever the store holds is what _own_peer_id answers
+    assert store._own_peer_id() == other.peer_id
+
+
+def test_own_peer_id_inside_a_room_read_does_not_stall(tmp_path):
+    """G4a, test 4c: a remote room's read runs in a transaction and asks for this station's peer id; on a station without
+    an identity that creates it through the caller's connection, never a second BEGIN IMMEDIATE that waits 30 s."""
+    import json
+    import time
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy')
+    peer = 'ab' * 32
+    with store.transaction() as db:
+        db.execute("INSERT INTO peers(peer_id, card, paired) VALUES(?, '{}', 1)", (peer,))
+        db.execute("INSERT INTO inbox(origin, resource_id, kind, recipient, revision, actor, payload) "
+                   "VALUES(?, 'r1', 'room', ?, 1, 'remote-user', ?)", (peer, andy['id'], json.dumps({'title': 'Theirs'})))
+    assert not (store.data_dir / 'identity.json').exists()
+    started = time.monotonic()
+    assert store.get_room(andy['id'], f'{peer}:r1')['title'] == 'Theirs'
+    assert time.monotonic() - started < 10 and (store.data_dir / 'identity.json').is_file()
+
+
+def test_a_lost_identity_is_not_replaced_silently(tmp_path, capsys, monkeypatch):
+    """G4b, test 4b: with a signed revision and identity.json removed, every signing start refuses, naming the file and
+    station-new-identity, and none of them makes a key; a signing=False start still opens."""
+    import uvicorn
+    from superyak_peer.app import create_app
+    from superyak_peer.db import Store
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    (store.data_dir / 'identity.json').unlink()
+    for start in (lambda: Store(store.data_dir), lambda: create_app(store.data_dir, allowed_origins=['http://testserver'])):
+        with pytest.raises(ValueError, match='identity.json.*station-new-identity'):
+            start()
+    served = []
+    monkeypatch.setattr(uvicorn, 'run', lambda *args, **kwargs: served.append(args))  # a start that got this far would serve
+    for argv in (['card', '--data-dir', store.data_dir, '--username', 'andy', '--endpoint', 'https://peer.example:7435'],
+                 ['serve', '--data-dir', store.data_dir, '--peer-tls']):
+        code, out, err = run_cli(capsys, *argv)
+        assert code == 1 and 'identity.json' in err and 'station-new-identity' in err, (argv[0], err)
+    assert served == [] and not (store.data_dir / 'identity.json').exists()  # no new key from any of them
+    Store(store.data_dir, signing=False)
+
+
+def test_a_station_with_no_signed_records_still_creates_its_identity_at_the_first_signature(tmp_path):
+    """G4b keeps G4: a note's revision is not a signed record, so a station holding one and no identity starts, and
+    creates none until it signs."""
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    owner = store.create_user('owner', 'Owner', 'long-password')
+    note = store.create_layer(owner['id'], {'title': 'Note', 'body': 'mine'})
+    store.activate_layer(owner['id'], note['id'], note['version'])
+    Store(store.data_dir)
+    assert not (store.data_dir / 'identity.json').exists()
+
+
+def test_a_store_without_signing_refuses_to_sign_over_a_lost_identity(tmp_path):
+    """G4b's lazy path, test 4a: a signing=False store opens, but an activation through it fails, writing nothing, when
+    the station holds signed records and identity.json is missing."""
+    from superyak_peer.db import Store
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    (store.data_dir / 'identity.json').unlink()
+    quiet = Store(store.data_dir, signing=False)
+    layer = quiet.create_layer(owner['id'], {'kind': 'instructions', 'title': 'More', 'body': 'x', 'audience_users': [ship['id']]})
+    with pytest.raises(ValueError, match='identity.json'):
+        quiet.activate_layer(owner['id'], layer['id'], layer['version'])
+    with quiet.transaction() as db:
+        assert db.execute('SELECT active_revision FROM layers WHERE id=?', (layer['id'],)).fetchone()[0] is None
+        assert db.execute('SELECT count(*) FROM revision_signatures').fetchone()[0] == 1
+    assert not (store.data_dir / 'identity.json').exists()
+
+
+def test_the_peer_tls_check_reads_an_old_or_missing_database_without_changing_it(tmp_path):
+    """G4b, test 4c: `serve --peer-tls` checks before any Store opens, read-only. A database from before merge 3a (no
+    revision_signatures table) and a missing one hold no signed records; neither is created or changed. One that can't
+    be read gives a message naming it, not a traceback (plan review N1)."""
+    import sqlite3
+    from contextlib import closing
+    from superyak_peer.signatures import refuse_a_lost_identity_before_the_store
+    old = tmp_path / 'old'
+    old.mkdir(mode=0o700)
+    with closing(sqlite3.connect(old / 'peer.sqlite3')) as db:
+        db.execute('CREATE TABLE users(id TEXT PRIMARY KEY)')
+        db.commit()
+    before = (old / 'peer.sqlite3').read_bytes()
+    refuse_a_lost_identity_before_the_store(old)
+    assert (old / 'peer.sqlite3').read_bytes() == before and sorted(p.name for p in old.iterdir()) == ['peer.sqlite3']
+    missing = tmp_path / 'missing'
+    refuse_a_lost_identity_before_the_store(missing)
+    assert not missing.exists()
+    junk = tmp_path / 'junk'  # unreadable, with no identity.json: it can't rule out signed records, so it refuses
+    junk.mkdir(mode=0o700)
+    (junk / 'peer.sqlite3').write_bytes(b'not a database, ' * 64)
+    with pytest.raises(ValueError, match='peer.sqlite3'):
+        refuse_a_lost_identity_before_the_store(junk)
+
+
+def test_the_restore_test_passes_on_a_copy_holding_signed_records(tmp_path, monkeypatch, capsys):
+    """G4b, test 4c: the copy holds a signed revision and has no identity file, so served as it is it would refuse to
+    start (exit 22). The restore test gives its scratch directory a throwaway identity, removed with it."""
+    from superyak_peer import backups
+    from test_restore import restore_test as run_restore_test, runtime_dir
+    run = runtime_dir(tmp_path, monkeypatch)
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    store.send_message(owner['id'], room['id'], 'm1', 'hello')
+    rotation = tmp_path / 'backups' / 'station'
+    backups.run_backup(store.data_dir, rotation)
+    assert run_restore_test('--backup-dir', rotation) == 0, capsys.readouterr().err
+    assert capsys.readouterr().out.rstrip().endswith('; users 3, rooms 1, messages 1.')
+    assert list(run.iterdir()) == []  # the scratch directory, and the throwaway identity in it, are gone
+
+
+def test_station_new_identity_is_the_one_deliberate_way_to_a_new_key(tmp_path, capsys, monkeypatch):
+    """G4c, test 4c: refused while identity.json exists, and without --data-dir; with it lost (its TLS files left behind),
+    it moves those aside, creates an identity whose certificate names the endpoint's host, says what changes, leaves the
+    database byte for byte the same, and the station starts."""
+    from cryptography import x509
+    from superyak_peer.db import Store
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    data, identity = store.data_dir, store.data_dir / 'identity.json'
+    kept = identity.read_bytes()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data)
+    assert code == 1 and 'exists' in err and identity.read_bytes() == kept
+    typo = tmp_path / 'lighthose-typo'  # M3: a directory that holds no station gets no key, and is not made
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', typo)
+    assert code == 1 and f'No station database in {typo}; nothing was changed.' in err and not typo.exists()
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', empty)
+    assert code == 1 and 'No station database' in err and list(empty.iterdir()) == []
+    monkeypatch.chdir(tmp_path)  # without --data-dir it refuses; a default would mint a key in the wrong directory
+    code, out, err = run_cli(capsys, 'station-new-identity', '--endpoint', 'https://peer.example:7435')
+    assert code == 2 and '--data-dir' in err and not (tmp_path / '.engram').exists()
+    old_peer = store._station_identity().peer_id
+    identity.unlink()  # lost; peer-cert.pem and peer-key.pem survive, as they usually do
+    database = (data / 'peer.sqlite3').read_bytes()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data, '--endpoint', 'https://peer.example:7435')
+    assert code == 0, err
+    moved = sorted(path.name for path in data.glob('peer-*.pem.lost-*'))
+    assert [name.split('.lost-')[0] for name in moved] == ['peer-cert.pem', 'peer-key.pem']
+    new = PeerIdentity.load_or_create(data)
+    assert new.peer_id != old_peer and new.peer_id in out
+    for words in ('stops verifying', 'pair again', 'unverified', 'stopped'):
+        assert words in out, words
+    names = x509.load_pem_x509_certificate(new.certificate.encode()).extensions.get_extension_for_class(
+        x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+    assert 'peer.example' in names
+    assert (data / 'peer.sqlite3').read_bytes() == database
+    assert Store(data)._station_identity().peer_id == new.peer_id  # the station starts, on the new key

@@ -271,25 +271,105 @@ with (spec A step 3, `docs/superpowers/specs/2026-10-15-grants-step3-design.md`)
 exactly its kind's keys (`identity.RECORD_KEYS`), and its signature is base64 Ed25519 over
 `identity.canonical(record)`. Canonical JSON has its keys sorted, `,` and `:` as separators with no spaces, UTF-8
 output (no `\u` escapes), NaN and Infinity refused, and floats in Python's shortest form, so another implementation
-must write `created` the same way (Python writes `1000000.0` where JavaScript writes `1000000`). Every process that
-opens the store, the public door included, reads `identity.json` at startup when it exists. Merge 3a signs one kind:
+must write `created` the same way (Python writes `1000000.0` where JavaScript writes `1000000`). The lighthouse reads `identity.json` at startup when it exists; the door and the station commands that never sign
+don't (see below). It signs three kinds:
 
 - `instructions-revision`: `{kind, station, layer_id, revision, owner_id, title, body, audience_users, policy, created}`.
   It is written in the transaction that writes a revision whose snapshot has `kind: "instructions"` (an activation or a
   narrowing). `title`, `body` and `audience_users` are the revision's snapshot, `policy` is `null`, and `created` is the
   revision's time. A note's revision is never signed. Revisions written before this release are signed once at the
   next start.
+- `grant`: `{kind, station, id, issuer_id, grantee_id, actions, targets, rooms, expires, budget, depth, confirm,
+  parent_id, charter_layer_id, charter_revision, follow, created}`, with `actions`, `targets` and `rooms` as parsed
+  JSON values. It is signed in the transaction that makes the grant; columns later steps add stay out of it.
+- `grant-revocation`: `{kind, station, grant, revoked, revoked_by, reason}`, signed in the transaction that revokes.
+  A revocation the restore reconcile wrote is signed once at the next start.
 
 `GET /api/layers/{id}/revisions/{n}/signed` (person) returns `{station, record, signature}` to the layer's owner.
 Anyone else, and any revision without a signature, gets 404; a ship key gets 403.
 
+`GET /api/grants/{id}/signed` (person) returns `{station, record, signature}`, plus `revocation: {record, signature}`
+once the grant is revoked, to anyone `GET /api/grants` shows the grant to. Anyone else gets 404; a ship key gets 403.
+
 `identity.verify_record(card, record, signature)` returns True only when the card is valid, the record has exactly its
 kind's keys (`instructions-revision`, `grant` or `grant-revocation`), its `station` is the card's peer id, and the
 signature verifies. It never raises. A card exists only for a station with an HTTPS federation endpoint (`serve
---federation-endpoint`; `card --endpoint` prints one). A station that can't load its identity doesn't start; a new
-station creates it at its first signature, so its first card export still names its host. The nightly copies leave
-out the identity files: a station rebuilt from a copy without its own `identity.json` gets a new key, and its stored
-signatures stop verifying against its new card (the backfill signs only unsigned revisions).
+--federation-endpoint`; `card --endpoint` prints one). A station that can't load its identity doesn't start. A new station creates it at its first signature, so its first
+card export still names its host; but a station that holds signed records (a revision signature or a grant) and has
+lost `identity.json` refuses to start, and so do `card` and `serve --peer-tls`, rather than make a new key (the message
+names the file). The door and the station commands that never sign (`station-pending`, `station-approve`,
+`station-deny`, `station-rooms`, `station-bridge`, `station-unbridge`, `station-notices`) open the store with
+`Store(..., signing=False)`: they load no key at startup, so a damaged identity stops the lighthouse alone. The
+nightly copies leave out the identity files; the restore test gives its scratch copy a throwaway identity. If
+`identity.json` is truly lost, `station-new-identity --data-dir DIR [--endpoint https://HOST:PORT]`, run with the
+lighthouse stopped, is the one way to a new key: it refuses while the file exists, moves the old `peer-cert.pem` and
+`peer-key.pem` aside with a dated suffix, creates the identity (naming the endpoint's host) and changes nothing in the
+database. Every signature made with the lost key then stops verifying, the station's peer id changes so every paired
+peer pairs again, and replies it already sent into remote rooms show as unverified.
+
+## Grants
+
+A grant lets a person direct some of their own ships in some rooms, for some hours, with a daily budget of builds
+(spec A step 3, `docs/superpowers/specs/2026-10-15-grants-step3-design.md`, G7-G14). In this release every grant is a
+root `direct` grant from one person to another, made in the browser; merge 3c lets the grantee's mentions spend it.
+Every `/api/grants` route takes a person session (CSRF on writes), and a ship key gets 403 on each.
+
+| Method/path | Body | Behavior |
+|---|---|---|
+| POST `/api/grants` | `{grantee, targets, rooms, hours, budget}` | 201 with the grant as `GET /api/grants` shows it; the caller is the issuer |
+| GET `/api/grants` | — | The grants the caller issued, holds, or that cover their ships, newest first |
+| POST `/api/grants/{id}/revoke` | `{reason?}` | The revoked grant; for its issuer, an issuer above it, or a target ship's owner |
+| GET `/api/grants/{id}/signed` | — | `{station, record, signature}`, plus `revocation` once revoked (see Signed records) |
+| GET `/api/grants/people` | — | `[{id, name}]`: this station's active people other than the caller, by name |
+
+**Policy.** With no charter (step 4), `Grants._grant_policy` returns spec A's defaults: `max_depth` 3,
+`max_expiry_hours` 720, `agent_grant_default_hours` 24, `builds_per_ship_per_day` 20, `delegable` `["direct"]`, and an
+unrestricted grantee set. Every check reads it there, so a narrower policy takes effect at the next check.
+
+**Making.** Checked in this order; the first failure answers:
+
+1. `rooms` is `"*"` or a list of 1 to 20 room ids, each once (400). Each listed room must be one the caller is in: an
+   unknown id, a remote id (with `:`), a breakout and a room the caller is not in all get the same 404.
+2. Each listed room is current (not replaced by a newer linked room) and has the grantee as a member (400).
+3. `grantee` is an active person on this station, not a ship, the system author or an account awaiting activation, and
+   not the caller (400).
+4. `targets` is a list of 1 to 20 ship ids, each once, every one owned by the caller (400). A resident ship has no
+   owner, and an admin's power doesn't reach another person's ships.
+5. `hours` is a JSON integer from 1 to `max_expiry_hours`; `expires` is now plus that many hours.
+6. `budget` is a JSON integer from 1 to 500.
+
+`true`, `24.0` and `"24"` are not integers. The grant is stored with `actions` `["direct"]`, `depth` 0 and `confirm`
+`none`, and signed in the same transaction.
+
+**Validity.** Checked in this order; the first that fails is the `reason`: not revoked ("Grant #a1b2 was revoked by
+Andy"; "Grant #a1b2 was revoked" when the restore revoked it); not expired (from its `expires` instant on: "Grant #a1b2
+expired 2026-10-20 14:00 UTC"); fits the policy in force now ("Grant #a1b2 lasts longer than the station now allows";
+a chain longer than `max_depth` or a grantee outside the grantee set: "Grant #a1b2 is no longer allowed by the
+station's policy"); fewer than `budget` builds charged in the last 24 hours, where a use exactly 24 hours old no longer
+counts ("Grant #a1b2 has used its 5 builds for the last 24 hours"); and its issuer still owns every target ("Andy no
+longer owns Rio Grande"). `#a1b2` is `#` and the id's first 4 characters. Names in reasons are the station's own, on one
+safe line.
+
+**Reading.** Each grant has `id`, `short`, `issuer` and `grantee` (`{id, name}`), `targets` (`[{id, name,
+ship_builds_left}]`), `rooms` (`"*"`, or for each listed room `{id, title}` plus `current: {id, title}` when newer
+linked rooms have replaced it, following the links forward), `expires`, `budget`, `budget_left`, `created`, `revoked`,
+`revoked_by` (`{id, name}` or null), `revoke_reason`, `valid`, and `reason` only when it is not valid. A room's title is
+shown only to its members; anyone else sees `a room you are not in`. `budget_left` is the budget less the builds charged
+to the grant in the last 24 hours; `ship_builds_left` is `builds_per_ship_per_day` less the ship's grant build tickets
+in the last 24 hours, under every grant. Neither goes below 0. Names and titles come from people; the web app escapes
+them.
+
+**Revoking.** 404 for anyone `GET /api/grants` doesn't show the grant to; 403 for one who sees it but may not revoke it
+(its grantee); 409 when it is already revoked. `reason` is one line of at most 200 characters (400 otherwise); missing,
+null or blank, it is `revoked`. Being an admin gives no power over other people's grants. The revocation is signed in
+the same transaction.
+
+**Restoring.** `station-restore-reconcile` revokes, in the staged copy, each grant revoked in the replaced file (with
+its time, person and reason) and each grant the replaced file lacks (reason `restored`), and adds the replaced file's
+budget uses for grants in both files, matched on `(grant_id, ticket_id)`. Without a usable replaced file it revokes
+every grant with reason `restored` and no person. The report lists each revoked grant by short id, issuer and grantee,
+and why. The station signs those revocations at its next start. A grant made after the copy is gone; its issuer makes
+it again.
 
 ## Files
 
@@ -483,6 +563,9 @@ an exchange payload.
 
 Signatures (spec A step 3): `_sign_revision(db,layer_id,revision)` signs an instructions revision inside the
 transaction that writes it; `revision_signed(actor,key,revision)` returns its signed record to the layer's owner.
+Grants (spec A step 3): `make_grant(actor,grantee,targets,rooms,hours,budget)`, `list_grants(actor)`,
+`revoke_grant(actor,grant_id,reason=None)`, `grant_signed(actor,grant_id)` and `grant_people(actor)` back the routes;
+`_grant_validity(db,grant)` returns `(valid, reason)`, and `_grant_policy(db)` is the policy in force.
 
 Delivery checks must run immediately before output. A bool check followed by
 uncoordinated later send is not an atomic delivery guarantee: the transport task

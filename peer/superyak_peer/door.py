@@ -52,7 +52,7 @@ class DoorBoundary:
 
 def create_door(data_dir, *, clock=time.time):
     app = FastAPI(title='Superyak door', docs_url=None, redoc_url=None, openapi_url=None)
-    store = app.state.store = Store(data_dir, clock=clock)
+    store = app.state.store = Store(data_dir, clock=clock, signing=False)  # G4a: the door keeps no key in memory
 
     @app.exception_handler(Problem)
     async def problem(request, exc):

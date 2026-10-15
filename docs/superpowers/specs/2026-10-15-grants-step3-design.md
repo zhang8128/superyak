@@ -4,7 +4,18 @@ Status: approved. Under the station law (section 3, D8), a fresh reviewer agent 
 and its summary and decisions are posted in "Superyak: city of AI". Andy can veto anything. Revision 1 (6483e3d) was
 reviewed: APPROVE WITH CHANGES, 1 must-fix, 10 should-fix and 11 nits, posted whole in the room (message 75396e96).
 Revision 2 (113f71a) made every one of them ("Review map" at the end says where), and the same reviewer's re-check
-approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9).
+approved it with 3 nits, which this revision 3 makes (G18, Known limits, test 9). Later notes, each narrowing or
+aligning, with no new D8 round: G4 (the identity is created at the first signature; plan review of merge 3a, M1);
+S6, G15 and G19 (the fresh owner mentions spec, approved under D8 at 1faeff8, bounds owner builds the same way, and
+its `_mention_stale` and basis values are shared). G4a, G4b, tests 4a and 4b and the identity Known limit come from
+the section 2 review of merge 3a (findings 1 and 4); their D8 re-check (APPROVE WITH CHANGES: 2 must-fix, 2 should-fix,
+3 nits) added G4c, test 4c, the restore test's throwaway identity, the `serve --peer-tls` check, the lazy path's
+check and `_own_peer_id`'s single loader; its second re-check (APPROVE WITH CHANGES: 0 must-fix, 1 should-fix, 3 nits)
+added G4c's handling of leftover TLS files and its fuller warning, the lazy path's use of the caller's connection, and
+the read-only `serve --peer-tls` check. All are built in merge 3b, and with them G4a-G4c are approved under D8.
+Clarifications from drafting merge 3b's plan, with no new D8 round: G4b counts only signed grant rows; G4a's
+`signing=False` also skips the revocation backfill; G9's expiry instant; G11's visibility of grants below one's own and
+the shape of `revoked_by`.
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
 Serenity as `build:grants`; Rio Grande reviews each merge under section 2.
 Amends: [spec A](2026-10-08-instruction-layers-and-grants-design.md) (approved 2026-10-08), its build order step 3
@@ -58,7 +69,7 @@ Each line is this spec's ruling. A fresh reviewer checks it; Andy can veto any o
 | S3 | `instruct` grants | Moved to step 4 with pins, follow, pending revisions, diffs, caps at grant creation and bracketed titles. | Shares its machinery with charter acceptance. |
 | S4 | Room-scoped grants | Not in step 3, and not in spec A. A grant such as `board` or `brief` (work board spec, ship room briefs spec) scopes a room the issuer owns, not ships, so it needs its own spec. | Different shape. |
 | S5 | Where a grant builds | Only in a room the issuer is in when the ticket is issued, whatever the grant lists. A grant that names room X covers the current room that replaced X, following `linked_room_id` forward, and never a replaced room, X included. | The issuer keeps sight of every build he granted (review M1: any person can open a room with any ship). Adding a member or bridging makes a new room id (`chats.py` `add_participants`; survey 3.2), and the issuer stays a member of the new room. Briefs, open board items and claims already carry forward. Without following forward, Andy bridging a room would silently end every grant in it. |
-| S6 | Old and answered mentions | A grant build needs a mention posted no earlier than the grant was created, at most 24 hours before the ticket, and not yet answered by the ship. Otherwise the ticket is `read`. Owner builds are unchanged. | HANDOFF's parked note: once acts spend build tickets, the station must refuse old or answered messages (survey 3.13). A grant must not reach back to words written before it. |
+| S6 | Old and answered mentions | A grant build needs a mention posted no earlier than the grant was created, at most 24 hours before the ticket, and not yet answered by the ship. Otherwise the ticket is `read`. Owner builds get the same bound from the fresh owner mentions spec (`2026-10-15-owner-mention-fresh-design.md`, approved under D8 at 1faeff8), which amends this line: its `_mention_stale` is the one check both use (G15). | HANDOFF's parked note: once acts spend build tickets, the station must refuse old or answered messages (survey 3.13). A grant must not reach back to words written before it. |
 | S7 | What the station signs | Grant records, revocations and instructions revisions. Each record has a fixed set of keys, including a `kind` and the station's peer id. A revision's record carries its audience. A revocation's signature gets its own column. | Spec A's records name no station or kind for grants and no audience for revisions (survey 3.8). A fixed key set keeps old signatures valid when later steps add columns, and a kind keeps one record from passing as another (review S1, S2). Rows never change except the revocation fields, so the revocation signature needs somewhere to go. |
 | S8 | Policy with no charter | One function returns spec A's no-charter defaults. Validity reads `max_expiry_hours` (720), `max_depth` (3) and the grantee set (unrestricted); tickets read `builds_per_ship_per_day` (20). A root's budget is 1 to 500 builds a day, and its depth is 0. | Step 4 swaps the charter in behind the same function without changing validity. A budget of 0 could never be spent. Depth only matters once delegation exists. |
 | S9 | Restoring a backup | With a usable replaced file, the reconcile revokes every grant revoked there or missing there, and adds the budget uses recorded there. Without one, it revokes every grant, with reason `restored`. | A restored copy must not bring back a revoked grant or a spent budget (backups spec S16, survey 3.14). |
@@ -95,6 +106,52 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   signers can't both create it, and a failed create rolls the signed write back. (Plan review of merge 3a, M1:
   creating the file at every start would fix a new station's certificate before `card --endpoint` can add the
   station's hostname to it.)
+- **G4a. Only the lighthouse holds the key at startup (built in merge 3b; section 2 review of 3a, finding 1).**
+  `Store` takes `signing=True` by default. With `signing=False` it skips G4's startup load, G4b's check, G5's
+  backfill and G12's revocation backfill, and holds no key unless something it does signs, in which case `_station_identity()` still loads or
+  creates the identity inside the signing transaction, so nothing is ever written unsigned. The door
+  (`create_door`) and the station commands that open a store but never sign (`station-pending`, `station-approve`,
+  `station-deny`, `station-rooms`, `station-bridge`, `station-unbridge`, `station-notices`) open it with
+  `signing=False`. So the internet-facing door keeps no private key in memory, and a damaged `identity.json` stops the
+  lighthouse alone: the door keeps taking access requests, Odo's notices keep coming, and Andy can still list and
+  approve what waits. This narrows exposure; it is not a privilege boundary, since the door runs as the same Unix user
+  and could read the file from disk. The lighthouse (`create_app`), `init`, `card`, `bootstrap-super-admin`,
+  `create-ship` and every other opener keep `signing=True`, so a damaged identity blocks them, as intended.
+  `_own_peer_id` (remote rooms) reads the store's identity through `_station_identity()` instead of loading the file
+  itself, so there is one loader and G4 to G4b hold by construction.
+- **G4b. A lost identity is not replaced silently (built in merge 3b; section 2 review of 3a, finding 4).** At a
+  `signing=True` start, if `identity.json` is missing (not a file, not a symlink) while the station holds signed
+  records (a row in `revision_signatures`, or, from merge 3b, a row in `grants` whose `signature` is set, so a grant
+  being signed in the current transaction never counts itself), the store refuses to start with a
+  `ValueError` naming the file: a new identity would void every stored signature. The message says to restore the
+  file, or, if it is truly gone, to run `station-new-identity` (below). A station with no signed records still creates
+  its identity at the first signature (G4), so a new station's first `card --endpoint` still names its host. The same
+  check (the lost-identity check) guards every place that could create an identity:
+  - `card` opens the store with `signing=True`, so it refuses before its own create;
+  - `serve --peer-tls` runs the check before it creates or loads the identity with its hosts (`__main__.py`), so a
+    federating station can't mint a new key on its usual start. It runs before any `Store` opens, so it opens the
+    database read-only (creating and migrating nothing) and treats a missing database file, or a missing
+    `revision_signatures` or `grants` table (a database from before 3a or 3b), as no signed records;
+  - `_station_identity()` creates a missing identity only when the station holds no signed records, and otherwise
+    raises, which rolls the signed write back (so a `signing=False` opener that someday signs can't mint one either).
+    It is called inside write transactions (signing, and `_own_peer_id` within a room read), so it takes the caller's
+    connection and opens a transaction of its own only when it is given none: a second `BEGIN IMMEDIATE` on a new
+    connection would wait out SQLite's timeout, since the dispatch gate is reentrant but SQLite's write lock is not;
+  - `station-restore-test` serves a copy in a scratch directory that has no identity file: it creates a throwaway
+    identity in that directory (mode 0700, removed with it) before it starts the server and reads the counts, so a
+    copy holding signed revisions still passes, and `serve` stays as it is.
+- **G4c. A deliberate new identity (built in merge 3b; D8 re-check of G4a and G4b, S1).** `station-new-identity
+  --data-dir DIR [--endpoint https://HOST:PORT]` is the one supported way to give a station a new identity on purpose,
+  when the old `identity.json` is lost. It refuses if `identity.json` exists. Before it creates anything, it moves
+  any leftover `peer-cert.pem` and `peer-key.pem` aside with a dated suffix (for example `peer-cert.pem.lost-20261015T120000Z`)
+  and says so: `PeerIdentity` refuses to load an identity whose TLS files differ, and those files usually survive when
+  only `identity.json` is lost. It then creates the identity as `PeerIdentity.load_or_create` does, with the
+  endpoint's host beside `localhost` and `127.0.0.1` when an endpoint is given (so plan review M1 holds), and changes
+  nothing in the database. It prints what changes: every signature made with the lost key stops verifying against the
+  new card; the station's peer id changes (it is the key's hash), so every paired peer must pair again with the new
+  card; replies this station already sent into remote rooms carry the old peer id and will show as unverified; and the
+  lighthouse must be stopped first, since a running one keeps signing with the old key it holds until it restarts.
+  The station then starts, and later records are signed with the new key.
 - **G5.** At startup, every revision whose snapshot has `kind: "instructions"` and that has no signature is signed
   once, from its stored snapshot. The active station law (layer c879372542444e4c8f95f2c0db69f8fb) is one of them. A
   second start signs nothing.
@@ -144,7 +201,7 @@ never change, except that revoking fills `revoked`, `revoked_by`, `revoke_reason
   every grant is its own root. A link is valid when all of these hold, checked in this order, and the first that
   fails is the reason:
   1. it is not revoked: "Grant #a1b2 was revoked by Andy";
-  2. it has not expired: "Grant #a1b2 expired 2026-10-20 14:00 UTC";
+  2. it has not expired (a grant is expired from its `expires` instant on): "Grant #a1b2 expired 2026-10-20 14:00 UTC";
   3. it fits the policy in force now, so narrowing the policy later takes effect at the next check: its lifetime
      (`expires − created`) is at most `max_expiry_hours` ("Grant #a1b2 lasts longer than the station now allows"),
      the chain is at most `max_depth` links long, and its grantee is in the grantee set ("... is no longer allowed
@@ -163,7 +220,8 @@ never change, except that revoking fills `revoked`, `revoked_by`, `revoke_reason
   already revoked gets 409. `reason` is optional, one line, at most 200 characters, and defaults to `revoked`. The
   station signs the revocation (G12).
 - **G11. Reading.** `GET /api/grants` (person) lists the grants the caller issued, holds, or that cover their ships,
-  newest first. No one else sees a grant. Each shows:
+  or that lie below a grant the caller issued (so G10's "issuer of any grant above" can see what it may revoke; in
+  step 3 every grant is a root), newest first. No one else sees a grant. `revoked_by` is shown as `{id, name}`. Each shows:
   - `id`, `short`, the issuer and grantee (id and name), the targets (id and name), `expires`, `budget`, `created`,
     the revocation fields, `valid`, and `reason` when it is not valid;
   - `budget_left`: the budget minus the builds charged to the grant in the last 24 hours, shared by all its ships;
@@ -213,14 +271,19 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   - when the ticket is issued, the author, the ship and G's root issuer are all members of R (S5);
   - G is valid now (G9), and no link in its chain says `confirm: each`;
   - G was created no later than the message (equal times count), the message was posted at most 24 hours before the
-    ticket (exactly 24 hours still counts), and the ship has not answered it (S6; `_answered`, whether or not the
+    ticket (exactly 24 hours still counts), and the ship has not answered it (S6; the age and answered parts are the
+    fresh owner mentions spec's `_mention_stale(db, ship_id, message)`, which returns None, `old` or `answered`;
+    `_answered`, whether or not the
     watcher asked for decisions);
   - the ship has had fewer than `builds_per_ship_per_day` grant build tickets in the last 24 hours, under any
     grant. Owner builds are not counted, as in spec A.
 
   When several grants qualify, the oldest one is used (by `created`, then `id`), so the choice never depends on the
   database's row order. A grant that fails a condition, for example one with no budget left, is skipped, and the
-  next oldest is tried.
+  next oldest is tried. When the only thing that keeps a grantee's mention from building is its age or an earlier
+  answer (`_mention_stale` returns `old` or `answered` and a grant would otherwise qualify), the `read` ticket's basis
+  is that value, as for an owner mention under the fresh owner mentions spec, so the labels agree; any other refusal
+  is basis `none`.
 - **G16.** The ticket records basis `grant`, `root_id` as the root's issuer, and `chain` as the grant ids, root
   first. The station inserts one `budget_uses` row per link in the same transaction. One message that mentions two
   ships under one grant charges it once per ship's ticket.
@@ -241,7 +304,9 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   run, and a revoke stops the watcher's retries. A run already under way when the grant
   is revoked runs to its end. Step 5 adds the refusal of acts that carry a revoked chain's `ticket_id`.
 - **G19.** The read-only run prompt (`agent/superyak_agent/watch.py`) says the author "can ask the ship's owner". It
-  now says the author "can ask the ship's owner for a grant, or check the Grants page". `agent/superyak_agent/runs.py`'s
+  now says the author "can ask the ship's owner for a grant, or check the Grants page". The fresh owner mentions spec
+  adds a reason line to the same prompt for `old` and `answered` tickets; whichever lands second keeps both, the
+  reason line first. `agent/superyak_agent/runs.py`'s
   docstring ("builder for the ship's owner") gains "or a person the owner granted". The watcher otherwise needs no
   change: it already runs in the ticket's mode and posts the ticket's footer. An old watcher without tickets keeps
   its local rule, under which only the owner builds, so nothing widens there.
@@ -296,9 +361,12 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   `created` and `expires` the same way.
 - The 24-hour bound on mentions (S6) means a grantee's mention that waits a day for an offline watcher runs
   read-only.
-- The nightly copies leave out the identity files (backups spec). A station rebuilt from a copy without its own
-  `identity.json` gets a new key: its stored signatures stop verifying against its new card, and the startup backfill
-  doesn't sign them again, since they aren't unsigned.
+- The nightly copies leave out the identity files (backups spec). From merge 3b, a station whose `identity.json` is
+  missing while it holds signed records refuses to start (G4b) instead of taking a new key. If the file is truly
+  lost, `station-new-identity` (G4c) gives the station a new one on purpose: every stored signature then stops
+  verifying against the new card, and the backfill doesn't sign them again, since they aren't unsigned. A rebuilt Pi
+  keeps its signatures only if a copy of `identity.json` is kept somewhere safe, which belongs with Andy's pending
+  choice of the off-Pi backup (roadmap 1.2).
 - Checking a signature needs the station's card, which exists only when the station has an HTTPS federation
   endpoint (`identity.py` `validate_card`); the CLI prints one with `--endpoint`. Tests build the card with a
   placeholder endpoint.
@@ -326,6 +394,23 @@ Each test is named, written first, and seen failing first.
 
 **Merge 3b**
 
+4a. The door and the listed station commands start and work with a damaged `identity.json` (not JSON) while the
+    lighthouse refuses to start; the door's store holds no key after starting (`_identity` unset), and an access
+    request through it still works. A `signing=False` store that signs (an activation through it) still writes a
+    signed revision, creating the identity if it is missing on a station with no signed records, and refusing (the
+    activation fails, nothing written) when the station holds signed records and the file is missing. `_own_peer_id`
+    returns the store identity's peer id.
+4b. On a station with a signed revision, removing `identity.json` makes a `signing=True` start refuse with a
+    `ValueError` naming the file and `station-new-identity` (`Store`, `create_app`, `card`, and `serve --peer-tls`,
+    which must not create a key); a `signing=False` start still opens; a station with no signed records and no
+    identity starts and creates none (G4's first-card behavior is unchanged); a dangling symlink still refuses as before.
+4c. `station-restore-test` passes on a copy that holds a signed revision (the copy has no identity file).
+    `station-new-identity` refuses when `identity.json` exists; with it missing (and the old `peer-cert.pem` and
+    `peer-key.pem` still there), it moves those two aside, creates an identity whose certificate names the endpoint's
+    host, prints the warning, leaves the database byte for byte the same, and the station then starts. `serve
+    --peer-tls`'s check opens a database from before 3a (no `revision_signatures` table) and a missing database
+    without creating or changing either. `_own_peer_id` called inside a room read on a station without an identity
+    doesn't stall.
 5. Making a grant, as a table of refusals, each with its status: an unknown, remote or breakout room id or a room
    the caller is not in (404, the same body for each); a replaced room or one without the grantee (400); grantee is
    the caller, a ship, the system author or awaiting activation; a target is another person's ship, a resident ship

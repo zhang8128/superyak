@@ -381,7 +381,10 @@ COMPARED = ('users.id', 'users.is_admin', 'users.is_super_admin', 'users.salt', 
             'ship_keys.revoked', 'rooms.id', 'rooms.title', 'spaces.id', 'spaces.name',
             *(f'{table}.{column}' for table, _, key, member, *_ in MEMBERSHIPS for column in (key, member)),
             'breakouts.room_id', 'breakouts.closed', 'layers.id', 'layers.active_revision', 'layers.draft',
-            'peers.peer_id', 'peers.paired', 'mentions', 'events')
+            'peers.peer_id', 'peers.paired', 'mentions', 'events',
+            # spec A step 3, G13: what the grants steps read from the replaced file
+            'grants.id', 'grants.revoked', 'grants.revoked_by', 'grants.revoke_reason', 'budget_uses.grant_id',
+            'budget_uses.ticket_id', 'budget_uses.created')
 
 
 class ReconcileRefused(ValueError):
@@ -498,6 +501,65 @@ def _revoke_like_replaced(db, old, now, report):
             report['revoked'].append(ship[0])
             count += 1
     report['counts']['ship keys revoked as in the replaced file'] = count
+
+
+GRANT_COMPARED = ('grants.id', 'grants.revoked', 'grants.revoked_by', 'grants.revoke_reason')
+GRANT_NAMED = ('grants.issuer_id', 'grants.grantee_id', 'grants.created')  # read from the copy only, for the report
+
+
+def _grant_line(db, row, how):
+    """G13: how the report names a revoked grant: its short id, its issuer's and grantee's usernames, and why."""
+    def username(user_id):
+        found = db.execute('SELECT username FROM users WHERE id=?', (user_id,)).fetchone()
+        return found[0] if found else user_id[:6]
+    return ('#' + row['id'][:4], username(row['issuer_id']), username(row['grantee_id']), how)
+
+
+def _revoke_every_grant(db, old, now, report):
+    """G13, without a usable replaced file: every grant not yet revoked is revoked now, with reason `restored` and no
+    person. The station signs each of these revocations at its next start (signatures.py): the reconcile works on a
+    staged file and holds no key."""
+    if not _usable(db, None, report, *GRANT_COMPARED, *GRANT_NAMED):
+        return
+    for row in db.execute('SELECT id, issuer_id, grantee_id FROM grants WHERE revoked IS NULL ORDER BY created, id').fetchall():
+        db.execute("UPDATE grants SET revoked=?, revoked_by=NULL, revoke_reason='restored' WHERE id=?", (now, row['id']))
+        report['grants'].append(_grant_line(db, row, 'no usable replaced file'))
+    report['counts']['grants revoked'] = len(report['grants'])
+
+
+def _revoke_grants_like_replaced(db, old, now, report):
+    """G13, with a usable replaced file: a grant revoked there is revoked here with the same time, person and reason; a
+    grant the replaced file lacks is revoked now with reason `restored` and no person (grants are never deleted, so a
+    missing one means damage). Signed at the station's next start, as above."""
+    if not (_usable(db, old, report, *GRANT_COMPARED) and _usable(db, None, report, *GRANT_NAMED)):
+        return
+    there = {row[0]: row[1:] for row in old.execute('SELECT id, revoked, revoked_by, revoke_reason FROM grants')}
+    for row in db.execute('SELECT id, issuer_id, grantee_id FROM grants WHERE revoked IS NULL ORDER BY created, id').fetchall():
+        if row['id'] not in there:
+            values, how = (now, None, 'restored'), 'missing from the replaced file'
+        elif there[row['id']][0] is not None:
+            values, how = there[row['id']], 'as in the replaced file'
+        else:
+            continue
+        db.execute('UPDATE grants SET revoked=?, revoked_by=?, revoke_reason=? WHERE id=?', (*values, row['id']))
+        report['grants'].append(_grant_line(db, row, how))
+    report['counts']['grants revoked'] = len(report['grants'])
+
+
+def _add_budget_uses_like_replaced(db, old, now, report):
+    """G13: each budget use recorded there, for a grant in both files, is added here unless one with its (grant_id,
+    ticket_id) is here already, so a grant's spent budget comes back and a second run adds none."""
+    if not _usable(db, old, report, 'grants.id', 'budget_uses.grant_id', 'budget_uses.ticket_id', 'budget_uses.created'):
+        return
+    both = {row[0] for row in db.execute('SELECT id FROM grants')} & {row[0] for row in old.execute('SELECT id FROM grants')}
+    here = {(row[0], row[1]) for row in db.execute('SELECT grant_id, ticket_id FROM budget_uses')}
+    added = 0
+    for grant_id, ticket_id, created in old.execute('SELECT grant_id, ticket_id, created FROM budget_uses ORDER BY created').fetchall():
+        if grant_id in both and (grant_id, ticket_id) not in here:
+            db.execute('INSERT INTO budget_uses(grant_id, ticket_id, created) VALUES(?, ?, ?)', (grant_id, ticket_id, created))
+            here.add((grant_id, ticket_id))
+            added += 1
+    report['counts']['budget uses added'] = added
 
 
 def _member_name(db, table, member):
@@ -814,7 +876,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
-              'not_compared': []}
+              'not_compared': [], 'grants': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
     try:
@@ -845,9 +907,11 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 step(db, old, now, report)
             if old is None:
                 _revoke_owned_ship_keys(db, old, now, report)
+                _revoke_every_grant(db, old, now, report)
             else:
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
-                             _close_breakouts_like_replaced, _unpair_like_replaced, _report_differences):
+                             _close_breakouts_like_replaced, _revoke_grants_like_replaced, _add_budget_uses_like_replaced,
+                             _unpair_like_replaced, _report_differences):
                     step(db, old, now, report)
             _unpair_named(db, old, named, report)
             _write_mark(db, old, now, db_path)
@@ -886,6 +950,9 @@ def describe_reconcile(report):
             lines.append(f"The {table} sequence was raised from {before} to {after}, so no watcher's saved cursor hides what comes next.")
     if report['revoked']:
         lines.append(f'Ship keys revoked for: {people(sorted(set(report["revoked"])))}.')
+    if report['grants']:
+        lines.append('Grants revoked: ' + '; '.join(f'{short} ({safe_line(issuer)} to {safe_line(grantee)}, {how})'
+                                                   for short, issuer, grantee, how in report['grants']) + '.')
     if report['removed']:
         lines.append('Removed: ' + '; '.join(f'{safe_line(who)} from {kind} {short} {safe_line(title)}'
                                              for who, kind, short, title in report['removed']) + '.')
@@ -1053,6 +1120,8 @@ def restore_test(backup_dir, backup=None):
             reconcile(target)  # S16 without --replaced, before the server's start: the scratch holds no dispatch.lock yet
         except Exception as error:
             raise BackupError(24) from error
+        from .identity import PeerIdentity  # here, as Store is below: backups.py stays standard library when imported
+        PeerIdentity.load_or_create(scratch)  # G4b: a throwaway identity, so a copy holding signed records starts; removed with it
         server, port = _start(scratch)
         from .db import Store  # S7 step 7: the trusted local path; the test never mints a session or holds a password
         with Store(scratch).transaction() as db:

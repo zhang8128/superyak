@@ -486,6 +486,29 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def revision_signed(key: str, revision: int, request: Request):
         return store.revision_signed(actor(request), key, revision)
 
+    @app.get('/api/grants')
+    def grants(request: Request):
+        return store.list_grants(actor(request))  # G14: a person only; current_user gives a ship key 403
+
+    @app.post('/api/grants', status_code=201)
+    async def grant_make(request: Request):
+        who, data = actor(request), await body(request)  # a person with CSRF; a ship key gets 403 (G14)
+        return store.make_grant(who, data.get('grantee'), data.get('targets'), data.get('rooms'), data.get('hours'),
+                                data.get('budget'))
+
+    @app.get('/api/grants/people')
+    def grant_people(request: Request):
+        return store.grant_people(actor(request))
+
+    @app.post('/api/grants/{key}/revoke')
+    async def grant_revoke(key: str, request: Request):
+        who, data = actor(request), await body(request)
+        return store.revoke_grant(who, key, data.get('reason'))
+
+    @app.get('/api/grants/{key}/signed')
+    def grant_signed(key: str, request: Request):
+        return store.grant_signed(actor(request), key)
+
     @app.get('/api/shared/layers')
     def shared(request: Request):
         return store.shared_layers(actor(request))
