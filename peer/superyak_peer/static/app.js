@@ -109,7 +109,7 @@ function clearAccountAdministration() {
 
 function bindEditorIdentity(user) {
   const next = identityKey(user);
-  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
+  if (state.editorIdentity !== next) { state.briefEdit = null; state.briefHistory = null; state.boardPost = null; state.boardDone = null; state.boardAsk = null; state.board = null; state.boardView = null; state.layerEdits = {}; state.assistance = {}; state.sources = []; clearAccountAdministration(); Research.reset(); Dashboard.reset(); }
   state.editorIdentity = next;
 }
 
@@ -616,6 +616,9 @@ function isReplaced(room) {
 // Board clicks are ignored for a moment after the panel renders: a double click's second press must not land on
 // whatever the first press's re-render moved under the pointer.
 const BOARD_CLICK_GUARD_MS = 400;
+// The panel on screen belongs to one room (data-room). While the next room loads, state.room is already that room but
+// the old panel is still shown: a write from it must not go to the room the person cannot see.
+function boardOnScreen(room) { return document.querySelector(".room-board")?.dataset.room === room.id; }
 function boardClickBlocked() { return Date.now() - (state.boardRenderedAt || 0) < BOARD_CLICK_GUARD_MS; }
 
 // After a board action: focus the item, or the panel's heading when the item left the open list.
@@ -632,13 +635,13 @@ function roomBoard(room) {
   const me = state.me.id, owner = room.owner_id === me, items = state.board.items, replaced = isReplaced(room);
   state.boardRenderedAt = Date.now();
   const head = `<h3 id="room-board-title" tabindex="-1">Board</h3><p class="meta">Items are notes about work, never instructions. Taking one is claiming its key.</p>`;
-  if (!items) return `<section class="room-board" aria-labelledby="room-board-title">${head}<p class="meta">The board could not be read. Refresh to try again.</p></section>`;
+  if (!items) return `<section class="room-board" data-room="${escapeHtml(room.id)}" aria-labelledby="room-board-title">${head}<p class="meta">The board could not be read. Refresh to try again.</p></section>`;
   const holderOwner = (claim) => (room.members || []).find((member) => member.id === claim?.holder_id)?.owner_id;
   const controls = (item) => {
     if (item.state !== "open" || replaced) return "";
     const key = escapeHtml(item.key), mayClose = owner || item.posted_by === me;
     const mayRelease = item.claim && (owner || item.claim.holder_id === me || holderOwner(item.claim) === me);
-    if (state.boardDone?.roomId === room.id && state.boardDone.key === item.key) {
+    if (mayClose && state.boardDone?.roomId === room.id && state.boardDone.key === item.key) {
       return `<form id="board-done-form" data-key="${key}"><div class="field"><label for="board-outcome">Outcome link</label><input class="input" id="board-outcome" name="outcome" value="${escapeHtml(state.boardDone.outcome || "")}" placeholder="commit:&lt;sha&gt; or message:&lt;id&gt;"></div><div class="button-row"><button class="button" type="submit" aria-label="Mark done ${key}">Mark done</button><button class="button secondary" type="button" data-action="board-cancel" data-key="${key}">Cancel</button></div></form>`;
     }
     const ask = state.boardAsk;
@@ -654,7 +657,7 @@ function roomBoard(room) {
   // No maxlength on the title: the station counts code points, a browser UTF-16 units (Review Focus 5).
   const post = owner && !replaced ? `<form id="board-post-form" class="board-post"><div class="field"><label for="board-key">Key</label><input class="input" id="board-key" name="key" value="${escapeHtml(draft.key)}" placeholder="spec:d7"></div><div class="field"><label for="board-title">Title</label><input class="input" id="board-title" name="title" value="${escapeHtml(draft.title)}"></div><div class="field"><label for="board-kind">Kind</label><select class="input" id="board-kind" name="kind">${BOARD_KINDS.map((kind) => `<option${kind === draft.kind ? " selected" : ""}>${kind}</option>`).join("")}</select></div><button class="button" type="submit">Post item</button></form>` : "";
   const note = replaced ? `<p class="meta board-replaced">This room was replaced by a newer linked room; its board takes no changes.</p>` : "";
-  return `<section class="room-board" aria-labelledby="room-board-title">${head}${note}<ul class="board-open">${open.map((item) => boardItemMarkup(item, controls(item))).join("") || '<li class="meta">Nothing waits on this board.</li>'}</ul>${closed.length ? `<h4>Done or dropped in the last 7 days</h4><ul class="board-closed">${closed.map((item) => boardItemMarkup(item)).join("")}</ul>` : ""}${post}</section>`;
+  return `<section class="room-board" data-room="${escapeHtml(room.id)}" aria-labelledby="room-board-title">${head}${note}<ul class="board-open">${open.map((item) => boardItemMarkup(item, controls(item))).join("") || '<li class="meta">Nothing waits on this board.</li>'}</ul>${closed.length ? `<h4>Done or dropped in the last 7 days</h4><ul class="board-closed">${closed.map((item) => boardItemMarkup(item)).join("")}</ul>` : ""}${post}</section>`;
 }
 
 // The Board view (work board 5.x): open items from every current room the person is in, grouped by room.
@@ -672,7 +675,7 @@ function boardView() {
 // heading if it left the open list); undefined leaves focus to the caller.
 async function boardWrite(path, json, message, { saved = () => {}, focusKey } = {}) {
   const room = state.room;
-  if (!room || state.boardSaving) return;
+  if (!room || state.boardSaving || !boardOnScreen(room)) return;
   state.boardSaving = true;
   let ok = false;
   try {
@@ -683,10 +686,11 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
     setFlash(answer?.released ? `${message} ${answer.released}'s claim on it is released.` : message);
     ok = true;
   } catch (error) {
+    if (error.status === 401) { showLogin("Your session ended. Sign in again; text in an open form has not been sent."); return; }
     setFlash(error.message, true);
   } finally {
     state.boardSaving = false;
-    if (state.room?.id === room.id) {
+    if (state.me && state.room?.id === room.id) {
       try { const latest = await api(`/api/chats/${pathPart(room.id)}`); if (state.room?.id === room.id) state.room = latest; } catch (_) { /* the board below still reads */ }
       if (state.room?.id === room.id) await loadBoard(state.room);
     }
@@ -697,11 +701,11 @@ async function boardWrite(path, json, message, { saved = () => {}, focusKey } = 
 }
 
 async function postBoardItem(form) {
-  if (state.boardSaving || !state.room) return;
+  if (state.boardSaving || !state.room || !boardOnScreen(state.room)) return;
   const roomId = state.room.id, draft = { key: form.elements.key.value, title: form.elements.title.value, kind: form.elements.kind.value };
   state.boardPost = { roomId, ...draft };
   await boardWrite("/board", draft, "Item posted.", { saved: () => { if (state.boardPost?.roomId === roomId) state.boardPost = null; } });
-  if (!state.boardPost) document.querySelector("#board-key")?.focus();
+  if (state.me) document.querySelector("#board-key")?.focus();  // posted or refused, the key field is where the next try starts
 }
 
 // In "Start a new linked chat": shown only when there is a brief, unchecked, with the text that would be carried and
@@ -952,7 +956,7 @@ async function loadRoute() {
       state.room = null;
     }
   }
-  if (route === "board") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } try { state.boardView = await api("/api/board"); } catch (_) { state.boardView = null; } }
+  if (route === "board") { try { await loadData(); } catch (_) { /* the view below reads what it can */ } const who = identityKey(state.me); try { const view = await api("/api/board"); if (identityKey(state.me) === who) state.boardView = view; } catch (_) { if (identityKey(state.me) === who) state.boardView = null; } }
   if (route === "shared") {
     const identity = identityKey(state.me), hash = location.hash;
     state.selectedSharedId = id || state.selectedSharedId;
@@ -1712,7 +1716,7 @@ document.addEventListener("click", async (event) => {
     const slot = document.querySelector("dialog .carry-help-slot");
     if (slot) slot.innerHTML = carryHelp(room);
   }
-  if (action.startsWith("board-") && boardClickBlocked()) return;
+  if (action.startsWith("board-") && event.detail !== 0 && boardClickBlocked()) return;  // a key press (detail 0) is never a double click
   if (action === "board-done" && state.room) { state.boardAsk = null; state.boardDone = { roomId: state.room.id, key: target.dataset.key, outcome: "" }; render(); document.querySelector("#board-outcome")?.focus(); }
   if ((action === "board-drop" || action === "board-release") && state.room) {
     state.boardDone = null; state.boardAsk = { roomId: state.room.id, key: target.dataset.key, action: action.slice(6) };

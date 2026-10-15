@@ -1883,6 +1883,141 @@ def test_drop_and_release_ask_first_and_a_hurried_double_click_touches_nothing(b
             assert states() == {"spec:a": ("open", True), "spec:b": ("dropped", False), "spec:c": ("open", False)}
 
 
+def test_a_hurried_double_click_at_phone_width_still_touches_nothing(browser_peer):
+    """S-4: at 390 px the Cancel button lands under the pointer after the first press of Release; only the click guard
+    keeps the second press from cancelling or confirming."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    started = store.start_docking("serenity", "andy-mac")
+    ship = store.confirm_docking(patient, started["id"], started["code"])
+    room = store.create_room(patient, "City of AI", [ship["id"]])
+    store.post_item(patient, room["id"], "spec:a", "Item a", "spec")
+    store.claim(ship["id"], room["id"], "spec:a", None, 60)
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient", viewport={"width": 390, "height": 844}) as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            item = page.locator(".room-board .board-item", has_text="spec:a")
+            release = item.get_by_role("button", name="Release claim on spec:a")
+            release.scroll_into_view_if_needed()  # mouse clicks go to viewport coordinates
+            settle(page)
+            double_click_apart(page, release)
+            page.wait_for_timeout(600)
+            expect(item).to_contain_text("Release Serenity's claim on spec:a?")  # the ask is still open: nothing cancelled
+            assert [bool(i["claim"]) for i in store.room_board(patient, room["id"])] == [True]
+
+
+def test_a_key_press_on_an_ask_is_not_swallowed_by_the_click_guard(browser_peer):
+    """The guard is for a double click; Enter on the focused Cancel right after the ask opens closes it."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room = store.create_room(patient, "City of AI", [])
+    store.post_item(patient, room["id"], "spec:a", "Item a", "spec")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            item = page.locator(".room-board .board-item", has_text="spec:a")
+            settle(page)
+            item.get_by_role("button", name="Drop spec:a").click()
+            expect(item.get_by_role("button", name="Cancel")).to_be_focused()
+            page.keyboard.press("Enter")  # at once, inside the guard window
+            expect(item.get_by_role("button", name="Drop spec:a")).to_be_visible()
+            expect(item.locator(".board-ask")).to_have_count(0)
+
+
+def test_a_board_write_made_while_the_next_room_loads_goes_nowhere(browser_peer):
+    """M-1: room B is already state.room while its board loads, but room A's panel is still on screen; a click on A's
+    confirm must not drop B's item."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient = users["patient"]["id"]
+    room_a = store.create_room(patient, "Room A", [users["family"]["id"]])
+    room_b = store.create_room(patient, "Room B", [users["family"]["id"]])
+    for room in (room_a, room_b):
+        store.post_item(patient, room["id"], "spec:same", "Same key", "spec")
+    open_keys = lambda room: [i["key"] for i in store.room_board(patient, room["id"]) if i["state"] == "open"]
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{room_a['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            settle(page)
+            panel.get_by_role("button", name="Drop spec:same").click()
+            held = []
+            page.route(f"**/api/chats/{room_b['id']}/board", lambda route: held.append(route))
+            page.evaluate("id => { location.hash = `chats/${id}`; }", room_b["id"])
+            for _ in range(50):
+                if held:
+                    break
+                page.wait_for_timeout(100)
+            assert held, "room B's board read never started"
+            expect(panel).to_have_attribute("data-room", room_a["id"])  # A's panel is still what is shown
+            settle(page)
+            panel.get_by_role("button", name="Yes, drop spec:same").click()
+            page.wait_for_timeout(400)
+            held[0].continue_()
+            expect(page.get_by_role("heading", name="Room B")).to_be_visible()
+            expect(page.locator(".room-board")).to_have_attribute("data-room", room_b["id"])
+    assert open_keys(room_b) == ["spec:same"]
+    assert open_keys(room_a) == ["spec:same"]
+
+
+def test_an_expired_session_during_a_board_write_shows_the_sign_in_prompt(browser_peer):
+    """S-2: a 401 on a board write leaves the sign-in prompt, not a blank panel."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    room = store.create_room(users["patient"]["id"], "City of AI", [])
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, context):
+            page.goto(f"{base}/#chats/{room['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            panel.get_by_label("Key").fill("spec:late")
+            panel.get_by_label("Title").fill("Typed before it ended")
+            context.clear_cookies()
+            panel.get_by_role("button", name="Post item").click()
+            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            expect(page.get_by_text("Your session ended. Sign in again; text in an open form has not been sent.")).to_be_visible()
+    assert store.room_board(users["patient"]["id"], room["id"]) == []
+
+
+def test_a_board_form_and_view_do_not_follow_a_new_sign_in_in_the_same_tab(browser_peer):
+    """S-3: a started Mark done, a post draft and the Board view belong to the account that made them."""
+    base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
+    patient, family = users["patient"]["id"], users["family"]["id"]
+    mine = store.create_room(patient, "Patient only", [])
+    shared = store.create_room(patient, "Shared room", [family])
+    store.post_item(patient, mine["id"], "spec:mine", "Private to patient", "spec")
+    store.post_item(patient, shared["id"], "spec:shared", "Shared item", "spec")
+    with sync_playwright() as playwright:
+        with signed_in_browser(playwright, browser_peer, "patient") as (page, _):
+            page.goto(f"{base}/#chats/{mine['id']}")
+            page.reload()
+            panel = page.locator(".room-board")
+            settle(page)
+            panel.get_by_role("button", name="Mark done spec:mine").click()
+            panel.get_by_label("Outcome link").fill("commit:abc1234")
+            panel.get_by_label("Key").fill("spec:draft")
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.locator(".board-room")).to_have_count(2)
+            page.get_by_role("button", name="Account and sign out").click()
+            page.get_by_role("button", name="Sign out", exact=True).click()
+            expect(page.get_by_role("heading", name="Sign in to your home")).to_be_visible()
+            page.get_by_label("Username", exact=True).fill("family")
+            page.get_by_label("Password", exact=True).fill(browser_peer["password"])
+            page.get_by_role("button", name="Sign in").click()
+            expect(page.get_by_role("heading", name="Your home", exact=True)).to_be_visible()
+            page.get_by_role("link", name="Board", exact=True).click()
+            expect(page.get_by_role("heading", name="Board", level=1)).to_be_visible()
+            expect(page.locator(".board-room")).to_have_count(1)
+            expect(page.locator(".board-room")).to_contain_text("Shared room")
+            assert "Patient only" not in page.locator("main").inner_text()
+            page.get_by_role("link", name="Shared room").click()  # no reload: what the tab still holds is what is under test
+            fam_panel = page.locator(".room-board")
+            expect(fam_panel.locator(".board-item", has_text="spec:shared")).to_be_visible()
+            assert fam_panel.locator("#board-done-form, #board-post-form").count() == 0
+            assert "commit:abc1234" not in page.content() and "spec:draft" not in page.content()
+
+
 def test_a_replaced_rooms_board_takes_no_changes(browser_peer):
     """Final review I2: a replaced room shows its items but offers no Post form and no item buttons, and says why."""
     base, store, users = browser_peer["base_url"], browser_peer["app"].state.store, browser_peer["users"]
@@ -1938,6 +2073,18 @@ def test_board_drafts_are_kept_per_room_and_a_failed_done_keeps_its_outcome(brow
             panel.get_by_role("button", name="Post item").click()
             expect(page.locator(".notice.error")).to_be_visible()
             expect(panel.get_by_label("Key")).to_have_value("spec:draft")
+            expect(panel.get_by_label("Key")).to_be_focused()  # a refused post leaves focus on the key, as a refused done does on the outcome
+            # S-1: the draft's values are escaped where they are put back (value=), not only in text
+            panel.get_by_label("Key").fill('"><b>x</b>')
+            panel.get_by_label("Title").fill('"><b>y</b>')
+            page.get_by_label("Message", exact=True).fill("again")
+            page.get_by_role("button", name="Send message").click()
+            expect(page.locator(".message", has_text="again")).to_be_visible()  # re-rendered with the draft
+            expect(panel.get_by_label("Key")).to_have_value('"><b>x</b>')
+            expect(panel.get_by_label("Title")).to_have_value('"><b>y</b>')
+            assert panel.locator("b").count() == 0
+            panel.get_by_label("Key").fill("spec:draft")
+            panel.get_by_label("Title").fill("")
             page.goto(f"{base}/#chats/{room_b['id']}")
             expect(page.get_by_role("heading", name="Room B")).to_be_visible()
             expect(page.locator(".room-board").get_by_label("Key")).to_have_value("")
@@ -1952,6 +2099,12 @@ def test_board_drafts_are_kept_per_room_and_a_failed_done_keeps_its_outcome(brow
             outcome = page.locator(".room-board").get_by_label("Outcome link")
             expect(outcome).to_have_value("not a link")
             expect(outcome).to_be_focused()
+            outcome.fill('"><b>x</b>')  # S-1: the outcome is put back through value=
+            with page.expect_response(lambda r: r.url.endswith("/board/done")):
+                page.locator(".room-board").get_by_role("button", name="Mark done spec:x").click()
+            page.wait_for_timeout(500)  # the panel is read again and re-rendered after the refusal
+            expect(page.locator(".room-board").get_by_label("Outcome link")).to_have_value('"><b>x</b>')
+            assert page.locator(".room-board b").count() == 0
     assert [i["state"] for i in store.room_board(patient, room_a["id"])] == ["open"]
 
 
@@ -1978,6 +2131,10 @@ def test_board_free_text_is_escaped_in_the_panel_the_view_and_the_flash(browser_
             expect(panel.locator(".board-item", has_text="spec:held")).to_contain_text("posted by <b>x</b>")
             expect(panel.locator(".board-closed .board-item", has_text="spec:gone")).to_contain_text("dropped")
             expect(panel.locator(".board-closed .board-item", has_text="spec:gone")).to_contain_text("by <b>x</b>")
+            assert panel.locator("b, i, u").count() == 0
+            settle(page)
+            panel.get_by_role("button", name="Release claim on spec:held").click()
+            expect(panel.locator(".board-ask")).to_contain_text("Release <u>h</u>'s claim on spec:held?")
             assert panel.locator("b, i, u").count() == 0
             settle(page)
             panel.get_by_role("button", name="Drop spec:last").click()
