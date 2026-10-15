@@ -216,7 +216,7 @@ def breakout(s):  # row 11: a member ship, who isn't a board writer there either
 
 
 def replaced(s):  # row 12: a non-writer, with a key already used there
-    assert post(s.ship('serenity'), s.room, 'build:x').status_code == 201
+    insert_item(s, s.room, 'build:x', state='done', closed=s.clock[0], outcome='commit:1ff0efb')  # stays in the old room
     add_member(s, s.room)
     return s.ship('defiant'), 'POST', f'/api/chats/{s.room}/board', {'key': 'build:x', 'title': 'Again', 'kind': 'build'}, 409, REPLACED
 
@@ -931,6 +931,8 @@ def test_the_count_route_counts_waiting_and_taken_for_ships(env):
     serenity, rio = s.ship('serenity'), s.ship('rio-grande')
     later, taken_only, closed_only = s.make_room('Later room'), s.make_room('Taken only'), s.make_room('Closed only')
     s.make_room('Quiet')
+    secret = s.store.create_room(s.users[2]['id'], 'Secret room', [s.id('rio-grande')])['id']  # Serenity isn't in it
+    insert_item(s, secret, 'build:secret', created=s.clock[0] - 300)
     insert_item(s, later, 'build:old', created=s.clock[0] - 100)
     insert_item(s, s.room, 'build:a', created=s.clock[0] - 50)
     insert_item(s, s.room, 'build:b', created=s.clock[0] - 60)
@@ -985,6 +987,8 @@ def test_the_board_view_lists_a_persons_current_rooms(env, two_peers):
     assert rooms[0]['items'] == [i for i in board(s.andy, s.room).json() if i['state'] == 'open']
     replacement = add_member(s, second)
     assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [s.room, replacement]
+    insert_item(s, second, 'build:left', created=s.clock[0] - 1)  # an open item left behind in the replaced room
+    assert [r['room_id'] for r in s.andy.get('/api/board').json()['rooms']] == [s.room, replacement]
     assert refused(s.ship('serenity').get('/api/board')) == (403, 'Ship keys cannot use this route')
     assert refused(TestClient(s.app, base_url='http://testserver').get('/api/board')) == (401, 'Sign in required')
     a, b, ca, cb = two_peers
@@ -993,14 +997,29 @@ def test_the_board_view_lists_a_persons_current_rooms(env, two_peers):
     assert b[0].list_rooms(b[1]) and b[0].board_view(b[1]) == {'rooms': []}
 
 
+def within(seconds, call):
+    """Run call in a daemon thread; a call that doesn't finish fails the test instead of hanging it."""
+    import threading
+    box = []
+    thread = threading.Thread(target=lambda: box.append(call()), daemon=True)
+    thread.start()
+    thread.join(seconds)
+    assert box, f'did not finish within {seconds} s'
+    return box[0]
+
+
 def test_a_linked_room_cycle_cannot_hang_the_key_check(env):
-    """Task 5's review: _key_used walks linked_room_id with a seen set, so two rooms that link to each other end the
-    walk instead of looping forever (it returns when it meets a room twice)."""
+    """Task 5's review: _key_used walks linked_room_id with a seen set, so rooms that link in a cycle end the walk
+    instead of looping forever, from the store and from a route in a room that isn't itself replaced."""
     s = Station(env)
-    other = s.make_room('Other room')
+    other, third = s.make_room('Other room'), s.make_room('Third room')
     with s.store.transaction() as db:
         db.execute('UPDATE rooms SET linked_room_id=? WHERE id=?', (other, s.room))
         db.execute('UPDATE rooms SET linked_room_id=? WHERE id=?', (s.room, other))
-    assert post(s.ship('serenity'), other, 'build:cycle').status_code == 409  # both rooms replaced each other
-    with s.store.transaction() as db:
-        assert s.store._key_used(db, s.room, 'build:cycle') is None
+        db.execute('UPDATE rooms SET linked_room_id=? WHERE id=?', (s.room, third))  # leads into the cycle; nothing replaces it
+    assert refused(within(5, lambda: post(s.ship('serenity'), other, 'build:cycle'))) == (409, REPLACED)  # both replaced
+    def used():
+        with s.store.transaction() as db:
+            return s.store._key_used(db, s.room, 'build:cycle')
+    assert within(5, used) is None
+    assert within(5, lambda: post(s.andy, third, 'build:cycle')).status_code == 201
