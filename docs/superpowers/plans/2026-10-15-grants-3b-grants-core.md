@@ -16,14 +16,26 @@ merge 3c.
 **Tech Stack:** Python 3.13, FastAPI, SQLite (`sqlite3`, JSON1), `cryptography` (Ed25519), pytest with FastAPI's
 `TestClient`. Run tests from `peer/` with `PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider <files>`.
 
-**Spec:** `docs/superpowers/specs/2026-10-15-grants-step3-design.md` at grants-spec `ca2c6f9` (merged into grants-3b at
-`1b645da`; approved under D8, revision 3, with G4 amended and G4a-G4c approved by their D8 re-checks): section 1's G4a,
-G4b and G4c, and section 2 (G7-G14), Testing 4a, 4b, 4c and 5-10, with API.md's part of G23. Spec A
+**Spec:** `docs/superpowers/specs/2026-10-15-grants-step3-design.md` at grants-spec `d7a541e` (merged into grants-3b at
+`efaabdb`; approved under D8, revision 3, with G4 amended, G4a-G4c approved by their D8 re-checks, and d7a541e's
+clarifications from drafting this plan): section 1's G4a, G4b and G4c, and section 2 (G7-G14), Testing 4a, 4b, 4c and
+5-10, with API.md's part of G23. Spec A
 (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`) holds where the step 3 spec is silent. The
 survey beside the spec is cited as "survey 3.2" and so on.
 
-**Plan revision 1**, for its fresh review. Every task below was dry-run in a scratch worktree from b8e3db2: each RED
-output is the one seen, each GREEN ran, and each Step 5 mutation was applied alone and failed the test it names.
+**Plan revision 2.** Base: grants-3b at `84ee0f6` (main 57c4322, with 3a's section 2 fixes, and spec d7a541e). The
+fresh review of revision 1 (6942e90: APPROVE WITH CHANGES, 0 must-fix, 2 should-fix, 8 nits; it dry-ran every step at
+84ee0f6, 860 to 899 passed) is answered here: S1 (Task 2: the restore test imports `PeerIdentity` inside the function),
+S2 (Task 3: `--data-dir` required), N1 (Task 2: an unreadable database refuses with its name), N2 (Task 8's mutation),
+N3 (the Task 1 and Task 4 anchors), N4 (R14), N5 (Task 9's runbook line), N6 (G4c is its own Task 3, and later tasks
+moved up one), N7 (these references and Task 9's numbers) and N8 (the test inserts name their columns). Every task was
+dry-run in a scratch worktree: each RED output is the one seen, each GREEN ran, and each Step 5 mutation was applied
+alone and failed the test it names; the steps revision 2 changed were dry-run again at 84ee0f6.
+
+Tasks: 1 G4a (who holds the key at startup); 2 G4b (a lost identity is never replaced silently); 3 G4c
+(`station-new-identity`); 4 the grants table, policy, validity and the grant's signature (G7, G9, G12); 5 reading
+(G11, `/signed`, the people list); 6 making (G8); 7 revoking and the revocation's signature (G10, G12); 8 the restore
+reconcile (G13); 9 API.md, the runbook and the whole suite.
 
 ## Rulings
 
@@ -33,23 +45,23 @@ Andy can veto any.
 | # | Ruling | Why |
 | --- | --- | --- |
 | R1 | `peer/superyak_peer/grants.py` holds a `Grants` mixin and `GRANT_SCHEMA`: making, validity, revoking, reading, the policy and the people list. Signing stays in `signatures.py`: `_grant_record`, `_revocation_record`, `_sign_grant`, `_sign_revocation`, the revocation backfill, and `grant_signed` (the route method, beside 3a's `revision_signed`). | Given. `signatures.py` owns the station's signatures and their routes. |
-| R2 | The grant row is inserted with an empty `signature` and `_sign_grant` fills it from the stored row before the inserting transaction commits. | The column is NOT NULL. One record builder serves both signing and `/signed`, so what was signed and what is served can't drift (a REAL or JSON round trip can't make them differ). Nothing outside the transaction ever sees the empty value; a failed signature rolls the insert back (Task 3 tests it). |
+| R2 | The grant row is inserted with an empty `signature` and `_sign_grant` fills it from the stored row before the inserting transaction commits. | The column is NOT NULL. One record builder serves both signing and `/signed`, so what was signed and what is served can't drift (a REAL or JSON round trip can't make them differ). Nothing outside the transaction ever sees the empty value; a failed signature rolls the insert back (Task 4 tests it). |
 | R3 | The signed record is rebuilt from the row and the station's current peer id, as the spec's table has it; storing each record's bytes beside its signature (3a's final review) is not done. A re-keyed station's old records stop verifying, as the spec's Known limits say for revisions. | Given (decision 2). |
 | R4 | The reconcile writes revocations without a signature; the startup backfill signs them. `POST /api/grants/{id}/revoke` signs in its own transaction. | Given (decision 3). |
-| R5 | G4a-G4c come first, since they change `Store.__init__` and `signatures.py`, which the grants tasks build on: Task 1 is G4a (who holds the key, one loader), Task 2 is G4b and G4c (the lost-identity check everywhere, the restore test's throwaway identity, `station-new-identity`). G4b's signed records are `revision_signatures` rows from Task 2, and Task 3 extends the same list with grants whose `signature` is set. | Coordinator's ruling. The restore test's throwaway identity must land with G4b's start check, which otherwise fails it on any copy holding a signed revision; G4b's message names `station-new-identity`, so G4c lands with it. The grants table only exists from Task 3, so the task that adds it extends the check and tests it. |
-| R6 | G4b's grants clause counts `grants` rows whose `signature != ''`, not every row. | The lazy check reads the caller's connection (spec G4b), which sees the row its own transaction is about to sign: counting it would refuse a new station's first grant as a "lost identity". Task 3 tests the first grant on a new station. |
-| R7 | `signing=False` also skips the revocation backfill (Task 6). | G4a names G5's backfill; the revocation backfill loads the key just the same, and G4a's point is that those openers hold none. |
-| R8 | Task order: identity (1, 2), schema and validity (3), reading (4), making (5), revoking (6), reconcile (7), docs (8). Reading comes before making. | G8 returns "the grant as G11 shows it", so G11's view must exist, tested, before the route that returns it. |
-| R9 | `RECONCILED_TABLES` gains `grants` and `budget_uses` in Task 3, not with the reconcile (Task 7). | `test_every_table_is_either_reconciled_or_named_coordination` fails the moment the schema has a table in neither list (3a hit this: 61d4ccd). |
-| R10 | G11's "issued" includes the issuers of the grants above (a walk), so G10's "issuer of any grant above it" can reach the grant; one Python visibility rule serves the list, revoke and `/signed`. | In step 3 every grant is its own root, so it reads exactly as G11. Without it, G10's rule would always meet G11's 404 first. |
+| R5 | G4a-G4c come first, since they change `Store.__init__` and `signatures.py`, which the grants tasks build on: Task 1 is G4a (who holds the key, one loader), Task 2 is G4b (the lost-identity check everywhere, the restore test's throwaway identity), Task 3 is G4c (`station-new-identity`). G4b's signed records are `revision_signatures` rows from Task 2, and Task 4 extends the same list with grants whose `signature` is set. | Coordinator's ruling. The restore test's throwaway identity must land with G4b's start check, which otherwise fails it on any copy holding a signed revision. G4c is its own task for a smaller review gate (plan review N6); G4b's message names `station-new-identity` one commit early, which is harmless. The grants table only exists from Task 4, so the task that adds it extends the check and tests it. |
+| R6 | G4b's grants clause counts `grants` rows whose `signature != ''`, not every row. | The lazy check reads the caller's connection (spec G4b), which sees the row its own transaction is about to sign: counting it would refuse a new station's first grant as a "lost identity". Task 4 tests the first grant on a new station. Now spec text (G4b, d7a541e). |
+| R7 | `signing=False` also skips the revocation backfill (Task 7). | The revocation backfill loads the key just as G5's does, and G4a's point is that those openers hold none. Now spec text (G4a, d7a541e). |
+| R8 | Task order: identity (1-3), schema and validity (4), reading (5), making (6), revoking (7), reconcile (8), docs (9). Reading comes before making. | G8 returns "the grant as G11 shows it", so G11's view must exist, tested, before the route that returns it. |
+| R9 | `RECONCILED_TABLES` gains `grants` and `budget_uses` in Task 4, not with the reconcile (Task 8). | `test_every_table_is_either_reconciled_or_named_coordination` fails the moment the schema has a table in neither list (3a hit this: 61d4ccd). |
+| R10 | G11's "issued" includes the issuers of the grants above (a walk), so G10's "issuer of any grant above it" can reach the grant; one Python visibility rule serves the list, revoke and `/signed`. | In step 3 every grant is its own root, so it reads exactly as G11. Without it, G10's rule would always meet G11's 404 first. Now spec text (G11, d7a541e). |
 | R11 | `POST /api/grants/{id}/revoke` validates `reason` first (400, which says nothing about the grant), then 404, 403, 409 in the spec's listed order. A missing, `null` or blank reason becomes `revoked`. | The codebase validates input before its transaction; a browser form's empty field must not be a 400. |
-| R12 | A grant is expired from its `expires` instant on (`now >= expires`). Budget and ship windows count `created > now - 86400`. `budget_left` and `ship_builds_left` never go below 0. `reason` is present only when the grant is not valid. `revoked_by` is `{id, name}` or null. `POST /api/grants` answers 201. | The spec doesn't fix these; each is pinned by a test. |
+| R12 | A grant is expired from its `expires` instant on (`now >= expires`). Budget and ship windows count `created > now - 86400`. `budget_left` and `ship_builds_left` never go below 0. `reason` is present only when the grant is not valid. `revoked_by` is `{id, name}` or null. `POST /api/grants` answers 201. | Each is pinned by a test. The expiry instant and `revoked_by`'s shape are now spec text (G9, G11, d7a541e); the rest are this plan's. |
 | R13 | A revocation with no person (the restore) reads `Grant #a1b2 was revoked`, without "by". | The spec's reason names a person; the reconcile records none. |
-| R14 | G8's refusals have one message each (constants in `grants.py`), and its integers are JSON integers only (`true`, `24.0`, `"24"` refused). Step 1's shape check (400) runs before its membership check (404); a grantee that isn't a string reaches step 3's refusal, never a 500. | Distinct messages let the order tests tell which check answered. |
+| R14 | G8's refusals have one message each (constants in `grants.py`), and its integers are JSON integers only (`true`, `24.0`, `"24"` refused). Step 1's shape check (400) runs before its membership check (404); a grantee that isn't a string reaches a 400 (step 2's with listed rooms, step 3's with `"*"`), never a 500. | Distinct messages let the order tests tell which check answered. |
 | R15 | G11's forward walk stops with no `current` at a fork or a cycle. | `add_participants` never forks (work board 8.4); only an older or hand-edited database has one. |
 | R16 | The reconcile report names each revoked grant with why: `as in the replaced file`, `missing from the replaced file` or `no usable replaced file`, and counts `grants revoked` and `budget uses added`. | Andy learns which grants to make again. |
 | R17 | `station-new-identity` refuses an `--endpoint` that isn't `https://HOST...`, and its logic lives in `__main__.py`'s `new_identity_for`. | Its certificate must name a host; the CLI module holds the other station-command helpers. |
-| R18 | `docs/station-restore.md` gains three prose lines: grants in "what a restored copy brings back", step 6's "restore identity.json rather than delete it", and step 7's "make again". | Andy reads the runbook at a restore, not API.md. |
+| R18 | `docs/station-restore.md` gains three prose lines: grants in "what a restored copy brings back", step 6's "restore identity.json rather than delete it, or, if it is truly lost, run `station-new-identity --data-dir DIR`", and step 7's "make again". | Andy reads the runbook at a restore, not API.md. |
 
 ## Global Constraints
 
@@ -76,16 +88,16 @@ Andy can veto any.
 Inputs no spec test names, most likely to bite a person first. Each is pinned by a test in its task.
 
 1. A JSON `true` for `hours` or `budget`: Python's `bool` is an `int`, so `isinstance` would take it as 1 hour or 1
-   build. Refused, as are `24.0` and `"24"` (Task 5, `test_making_a_grant_refuses_each_bad_field_with_its_status`).
+   build. Refused, as are `24.0` and `"24"` (Task 6, `test_making_a_grant_refuses_each_bad_field_with_its_status`).
 2. A new station's first grant, before any `identity.json` exists: the lost-identity check must not count the very row
-   being signed, or the first grant fails as a "lost identity" (Task 3,
+   being signed, or the first grant fails as a "lost identity" (Task 4,
    `test_a_station_holding_grants_does_not_start_without_its_identity`).
-3. The browser sends an empty or all-space revoke reason: it becomes `revoked`, not a 400 (Task 6,
+3. The browser sends an empty or all-space revoke reason: it becomes `revoked`, not a 400 (Task 7,
    `test_a_revoke_reason_is_one_line_of_at_most_200_characters`).
 4. A display name holding a newline and an `@` (`Andy\n@serenity`) in a validity reason: one safe line, no mention
-   (Task 3, `test_a_revoked_grant_names_who_revoked_it_even_once_expired`).
+   (Task 4, `test_a_revoked_grant_names_who_revoked_it_even_once_expired`).
 5. A replaced file without the grants tables (the wrong file, or a damaged one): treated as absent, so every grant is
-   revoked rather than none compared (Task 7, `test_a_replaced_file_without_the_grants_tables_is_treated_as_absent`).
+   revoked rather than none compared (Task 8, `test_a_replaced_file_without_the_grants_tables_is_treated_as_absent`).
 
 ## Known limits (beyond the spec's)
 
@@ -307,10 +319,10 @@ In `peer/superyak_peer/signatures.py`, replace `_station_identity` with:
         return self._identity
 ```
 
-and pass `db` at the module's three calls, each inside a transaction:
-- in `_revision_record`, `'station': self._station_identity().peer_id` becomes `'station': self._station_identity(db).peer_id`;
-- in `_sign_revision`, `self._station_identity().sign_record(record)` becomes `self._station_identity(db).sign_record(record)`;
-- in `revision_signed`, `return {'station': self._station_identity().peer_id,` becomes `return {'station': self._station_identity(db).peer_id,`.
+and pass `db` at the module's three calls, each inside a transaction: every `self._station_identity()` in
+`signatures.py` becomes `self._station_identity(db)`. There are three: `'station': self._station_identity().peer_id`
+occurs twice (in `_revision_record` and in `revision_signed`; change both occurrences), and
+`self._station_identity().sign_record(record)` once (in `_sign_revision`).
 
 In `peer/superyak_peer/peer_store.py`, replace `_own_peer_id` (the method that sets `self._peer_id_cache`) with:
 
@@ -375,24 +387,22 @@ git commit -m "Grants 3b: only the lighthouse holds the station key at startup; 
 
 ---
 
-### Task 2: A lost identity is not replaced silently, and a deliberate new one (G4b, G4c)
+### Task 2: A lost identity is not replaced silently (G4b)
 
 **Files:**
 - Modify: `peer/superyak_peer/signatures.py` (imports, module-level check, `_load_station_identity`, `_station_identity`)
-- Modify: `peer/superyak_peer/__main__.py` (the `serve --peer-tls` branch; a new `station-new-identity` command)
-- Modify: `peer/superyak_peer/backups.py` (an import; one line in `restore_test`)
+- Modify: `peer/superyak_peer/__main__.py` (the `serve --peer-tls` branch)
+- Modify: `peer/superyak_peer/backups.py` (two lines in `restore_test`)
 - Test: `peer/tests/test_signatures.py`
 
 **Interfaces:**
 - Consumes: `Store(..., signing=...)`, `_station_identity(db=None)` (Task 1); `PeerIdentity.load_or_create`.
 - Produces:
-  - `signatures.SIGNED_RECORDS: tuple[tuple[str, str], ...]`, (table, query) pairs; Task 3 adds grants.
+  - `signatures.SIGNED_RECORDS: tuple[tuple[str, str], ...]`, (table, query) pairs; Task 4 adds grants.
   - `signatures.holds_signed_records(db) -> bool`; a table the database lacks holds none.
   - `signatures.refuse_a_lost_identity(data_dir, db) -> None`, raising `ValueError(LOST_IDENTITY...)`.
   - `signatures.refuse_a_lost_identity_before_the_store(data_dir) -> None`: the same, opening `peer.sqlite3` read-only;
-    a missing file holds nothing.
-  - `__main__.new_identity_for(data_dir, endpoint=None) -> str`, and the command
-    `station-new-identity --data-dir DIR [--endpoint https://HOST:PORT]`.
+    a missing file holds nothing, and one that can't be read raises a `ValueError` naming it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -450,7 +460,8 @@ def test_a_store_without_signing_refuses_to_sign_over_a_lost_identity(tmp_path):
 
 def test_the_peer_tls_check_reads_an_old_or_missing_database_without_changing_it(tmp_path):
     """G4b, test 4c: `serve --peer-tls` checks before any Store opens, read-only. A database from before merge 3a (no
-    revision_signatures table) and a missing one hold no signed records; neither is created or changed."""
+    revision_signatures table) and a missing one hold no signed records; neither is created or changed. One that can't
+    be read gives a message naming it, not a traceback (plan review N1)."""
     import sqlite3
     from contextlib import closing
     from superyak_peer.signatures import refuse_a_lost_identity_before_the_store
@@ -465,6 +476,11 @@ def test_the_peer_tls_check_reads_an_old_or_missing_database_without_changing_it
     missing = tmp_path / 'missing'
     refuse_a_lost_identity_before_the_store(missing)
     assert not missing.exists()
+    junk = tmp_path / 'junk'  # unreadable, with no identity.json: it can't rule out signed records, so it refuses
+    junk.mkdir(mode=0o700)
+    (junk / 'peer.sqlite3').write_bytes(b'not a database, ' * 64)
+    with pytest.raises(ValueError, match='peer.sqlite3'):
+        refuse_a_lost_identity_before_the_store(junk)
 
 
 def test_the_restore_test_passes_on_a_copy_holding_signed_records(tmp_path, monkeypatch, capsys):
@@ -480,48 +496,19 @@ def test_the_restore_test_passes_on_a_copy_holding_signed_records(tmp_path, monk
     assert run_restore_test('--backup-dir', rotation) == 0, capsys.readouterr().err
     assert capsys.readouterr().out.rstrip().endswith('; users 3, rooms 1, messages 1.')
     assert list(run.iterdir()) == []  # the scratch directory, and the throwaway identity in it, are gone
-
-
-def test_station_new_identity_is_the_one_deliberate_way_to_a_new_key(tmp_path, capsys):
-    """G4c, test 4c: refused while identity.json exists; with it lost (its TLS files left behind), it moves those aside,
-    creates an identity whose certificate names the endpoint's host, says what changes, leaves the database byte for
-    byte the same, and the station starts."""
-    from cryptography import x509
-    from superyak_peer.db import Store
-    store, owner, ship, room, docking = signed_station(tmp_path)
-    data, identity = store.data_dir, store.data_dir / 'identity.json'
-    kept = identity.read_bytes()
-    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data)
-    assert code == 1 and 'exists' in err and identity.read_bytes() == kept
-    old_peer = store._station_identity().peer_id
-    identity.unlink()  # lost; peer-cert.pem and peer-key.pem survive, as they usually do
-    database = (data / 'peer.sqlite3').read_bytes()
-    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data, '--endpoint', 'https://peer.example:7435')
-    assert code == 0, err
-    moved = sorted(path.name for path in data.glob('peer-*.pem.lost-*'))
-    assert [name.split('.lost-')[0] for name in moved] == ['peer-cert.pem', 'peer-key.pem']
-    new = PeerIdentity.load_or_create(data)
-    assert new.peer_id != old_peer and new.peer_id in out
-    for words in ('stops verifying', 'pair again', 'unverified', 'stopped'):
-        assert words in out, words
-    names = x509.load_pem_x509_certificate(new.certificate.encode()).extensions.get_extension_for_class(
-        x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
-    assert 'peer.example' in names
-    assert (data / 'peer.sqlite3').read_bytes() == database
-    assert Store(data)._station_identity().peer_id == new.peer_id  # the station starts, on the new key
 ```
 
 Two of these pass before this task, as guards: the no-signed-records test (G4 already behaves so) and the restore-test
-test (nothing refuses a start yet). Step 5's mutations show each bites once the check exists.
+test (nothing refuses a start yet). Step 5's mutations show each bites once the check exists. The lost-identity
+message names `station-new-identity`, which Task 3 adds; naming it a commit early is harmless.
 
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_signatures.py`
-Expected: 4 failed. The lost-identity test with `Failed: DID NOT RAISE ValueError` (a start without the file goes
+Expected: 3 failed. The lost-identity test with `Failed: DID NOT RAISE ValueError` (a start without the file goes
 on); the lazy-path test with `AssertionError: Regex pattern did not match` and `Actual message: 'Identity TLS files
-differ from saved identity'` (the activation makes a new key, which the old TLS files then contradict); the
-`--peer-tls` test with `ImportError: cannot import name 'refuse_a_lost_identity_before_the_store'`; and the
-new-identity test with `assert (2 == 1)` (argparse: invalid choice `station-new-identity`).
+differ from saved identity'` (the activation makes a new key, which the old TLS files then contradict); and the
+`--peer-tls` test with `ImportError: cannot import name 'refuse_a_lost_identity_before_the_store'`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -573,11 +560,16 @@ def refuse_a_lost_identity(data_dir, db):
 
 def refuse_a_lost_identity_before_the_store(data_dir):
     """G4b for `serve --peer-tls`, which checks before any Store opens: the database read-only, so nothing is created or
-    migrated; a missing database holds no signed records."""
+    migrated; a missing database holds no signed records. One that can't be read (say, a hot journal a read-only
+    connection can't roll back) refuses with its name, since it can't rule signed records out."""
     database = Path(data_dir).absolute() / 'peer.sqlite3'
     if database.is_file():
-        with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=30)) as db:
-            refuse_a_lost_identity(data_dir, db)
+        try:
+            with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=30)) as db:
+                refuse_a_lost_identity(data_dir, db)
+        except sqlite3.Error as error:
+            raise ValueError(f'{database} could not be read read-only ({type(error).__name__}), so the station cannot tell '
+                             'whether it holds signed records; it will not start until the database can be read') from error
 ```
 
 Replace `_load_station_identity` with:
@@ -617,7 +609,107 @@ In `peer/superyak_peer/__main__.py`, in the `serve` branch's `if args.peer_tls:`
                 refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b: before the identity is loaded or made with its hosts
 ```
 
-Right before `def main(argv=None):`, add:
+(`main` already turns a `ValueError` into exit 1 with its message.)
+
+In `peer/superyak_peer/backups.py`, in `restore_test`, right before `server, port = _start(scratch)`, add:
+
+```python
+        from .identity import PeerIdentity  # here, as Store is below: backups.py stays standard library when imported
+        PeerIdentity.load_or_create(scratch)  # G4b: a throwaway identity, so a copy holding signed records starts; removed with it
+```
+
+The import stays inside the function, as `restore_test`'s `Store` import does: backups.py's docstring and the backups
+spec (S1) keep the module standard library only when it is imported, and `identity.py` imports `cryptography`.
+(`tempfile.mkdtemp` made `scratch` mode 0700, and the `finally` removes it.)
+
+- [ ] **Step 4: Run the tests to see them pass**
+
+Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_signatures.py tests/test_restore.py tests/test_federation.py tests/test_cli.py tests/test_station_cli.py`
+Expected: all pass.
+
+- [ ] **Step 5: Check the tests bite**
+
+Apply each alone, run `tests/test_signatures.py`, see the named test fail, restore:
+- drop the `else:` branch of `_load_station_identity` → `test_a_lost_identity_is_not_replaced_silently`;
+- drop the `refuse_a_lost_identity` line in `_station_identity` → `test_a_store_without_signing_refuses_to_sign_over_a_lost_identity`;
+- drop the `refuse_a_lost_identity_before_the_store` line in `serve` → `test_a_lost_identity_is_not_replaced_silently`
+  (serve makes a key, and the patched `uvicorn.run` records a start);
+- `holds_signed_records` querying without the `table in tables` test → the `--peer-tls` test (the old database's
+  `no such table` becomes a `ValueError`);
+- `if True:` for `if database.is_file():` → the `--peer-tls` test (a read-only connection to a missing file fails,
+  and the `ValueError` it becomes is unexpected there);
+- drop the `except sqlite3.Error` clause → the `--peer-tls` test (`sqlite3.DatabaseError: file is not a database`, not
+  a `ValueError`);
+- `SIGNED_RECORDS` naming `layer_revisions` → `test_a_station_with_no_signed_records_still_creates_its_identity_at_the_first_signature` (and others);
+- `if path.exists():` for `if path.exists() or path.is_symlink():` in `_load_station_identity` → 3a's `test_a_dangling_identity_symlink_does_not_start`;
+- `LOST_IDENTITY` without `run station-new-identity` → `test_a_lost_identity_is_not_replaced_silently`;
+- drop the throwaway identity line in `restore_test` → `test_the_restore_test_passes_on_a_copy_holding_signed_records` (exit 22).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add peer/superyak_peer/signatures.py peer/superyak_peer/__main__.py peer/superyak_peer/backups.py peer/tests/test_signatures.py
+git commit -m "Grants 3b: a lost station identity is never replaced silently (G4b)"
+```
+
+---
+
+### Task 3: A deliberate new identity (G4c)
+
+**Files:**
+- Modify: `peer/superyak_peer/__main__.py` (a helper before `main`; the `station-new-identity` command)
+- Test: `peer/tests/test_signatures.py`
+
+**Interfaces:**
+- Consumes: `PeerIdentity.load_or_create`; `signed_station`, `run_cli` (Task 1's test helpers).
+- Produces: `__main__.new_identity_for(data_dir, endpoint=None) -> str`, and the command
+  `station-new-identity --data-dir DIR [--endpoint https://HOST:PORT]` (`--data-dir` required, no default).
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `peer/tests/test_signatures.py`:
+
+```python
+def test_station_new_identity_is_the_one_deliberate_way_to_a_new_key(tmp_path, capsys, monkeypatch):
+    """G4c, test 4c: refused while identity.json exists, and without --data-dir; with it lost (its TLS files left behind),
+    it moves those aside, creates an identity whose certificate names the endpoint's host, says what changes, leaves the
+    database byte for byte the same, and the station starts."""
+    from cryptography import x509
+    from superyak_peer.db import Store
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    data, identity = store.data_dir, store.data_dir / 'identity.json'
+    kept = identity.read_bytes()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data)
+    assert code == 1 and 'exists' in err and identity.read_bytes() == kept
+    monkeypatch.chdir(tmp_path)  # without --data-dir it refuses; a default would mint a key in the wrong directory
+    code, out, err = run_cli(capsys, 'station-new-identity', '--endpoint', 'https://peer.example:7435')
+    assert code == 2 and '--data-dir' in err and not (tmp_path / '.engram').exists()
+    old_peer = store._station_identity().peer_id
+    identity.unlink()  # lost; peer-cert.pem and peer-key.pem survive, as they usually do
+    database = (data / 'peer.sqlite3').read_bytes()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data, '--endpoint', 'https://peer.example:7435')
+    assert code == 0, err
+    moved = sorted(path.name for path in data.glob('peer-*.pem.lost-*'))
+    assert [name.split('.lost-')[0] for name in moved] == ['peer-cert.pem', 'peer-key.pem']
+    new = PeerIdentity.load_or_create(data)
+    assert new.peer_id != old_peer and new.peer_id in out
+    for words in ('stops verifying', 'pair again', 'unverified', 'stopped'):
+        assert words in out, words
+    names = x509.load_pem_x509_certificate(new.certificate.encode()).extensions.get_extension_for_class(
+        x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+    assert 'peer.example' in names
+    assert (data / 'peer.sqlite3').read_bytes() == database
+    assert Store(data)._station_identity().peer_id == new.peer_id  # the station starts, on the new key
+```
+
+- [ ] **Step 2: Run the test to see it fail**
+
+Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_signatures.py -k new_identity`
+Expected: 1 failed, with `assert (2 == 1)` (argparse: invalid choice `station-new-identity`).
+
+- [ ] **Step 3: Write the implementation**
+
+In `peer/superyak_peer/__main__.py`, right before `def main(argv=None):`, add:
 
 ```python
 NEW_IDENTITY = ('New station identity in {path}; the station\'s peer id is now {peer}. Every signature made with the lost '
@@ -657,7 +749,7 @@ In `main`, right before `notices = commands.add_parser('station-notices', ...)`,
 ```python
     new_identity = commands.add_parser('station-new-identity', help='Trusted local, with the lighthouse stopped: a new station '
                                        'identity on purpose, when identity.json is truly lost; every old signature stops verifying')
-    new_identity.add_argument('--data-dir', type=Path, default=Path('.engram/home'))
+    new_identity.add_argument('--data-dir', type=Path, required=True)  # no default: never a key in the wrong place
     new_identity.add_argument('--endpoint', help='https://HOST:PORT, so the new certificate names the host (as card --endpoint does)')
 ```
 
@@ -668,50 +760,33 @@ and right before `elif args.command == 'demo':`, add:
             print(new_identity_for(args.data_dir, args.endpoint))
 ```
 
-(`main` already turns a `ValueError` or `OSError` into exit 1 with its message.)
-
-In `peer/superyak_peer/backups.py`, after `from .auth import account_role, token_hash`, add
-`from .identity import PeerIdentity`, and in `restore_test`, right before `server, port = _start(scratch)`, add:
-
-```python
-        PeerIdentity.load_or_create(scratch)  # G4b: a throwaway identity, so a copy holding signed records starts; removed with it
-```
-
-(`tempfile.mkdtemp` made `scratch` mode 0700, and the `finally` removes it.)
+(`main` already turns a `ValueError` or `OSError` into exit 1 with its message; argparse exits 2 without `--data-dir`.)
 
 - [ ] **Step 4: Run the tests to see them pass**
 
-Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_signatures.py tests/test_restore.py tests/test_federation.py tests/test_cli.py tests/test_station_cli.py`
+Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_signatures.py tests/test_cli.py tests/test_station_cli.py`
 Expected: all pass.
 
-- [ ] **Step 5: Check the tests bite**
+- [ ] **Step 5: Check the test bites**
 
-Apply each alone, run `tests/test_signatures.py`, see the named test fail, restore:
-- drop the `else:` branch of `_load_station_identity` → `test_a_lost_identity_is_not_replaced_silently`;
-- drop the `refuse_a_lost_identity` line in `_station_identity` → `test_a_store_without_signing_refuses_to_sign_over_a_lost_identity`;
-- drop the `refuse_a_lost_identity_before_the_store` line in `serve` → `test_a_lost_identity_is_not_replaced_silently`
-  (serve makes a key, and the patched `uvicorn.run` records a start);
-- `holds_signed_records` querying without the `table in tables` test → the `--peer-tls` test (`no such table`);
-- `if True:` for `if database.is_file():` → the `--peer-tls` test (connecting read-only to a missing file fails);
-- `SIGNED_RECORDS` naming `layer_revisions` → `test_a_station_with_no_signed_records_still_creates_its_identity_at_the_first_signature` (and others);
-- `if path.exists():` for `if path.exists() or path.is_symlink():` in `_load_station_identity` → 3a's `test_a_dangling_identity_symlink_does_not_start`;
-- `LOST_IDENTITY` without `run station-new-identity` → `test_a_lost_identity_is_not_replaced_silently`;
-- drop the throwaway identity line in `restore_test` → `test_the_restore_test_passes_on_a_copy_holding_signed_records` (exit 22);
-- drop `new_identity_for`'s exists refusal → the new-identity test (it replaces a sound key);
-- `pass` for the `leftover.rename(...)` → the new-identity test (`PeerIdentity` refuses the old TLS files);
-- `hosts=('localhost', '127.0.0.1')` in `new_identity_for` → the new-identity test (no `peer.example` in the certificate);
-- `NEW_IDENTITY` without its re-pairing sentence → the new-identity test.
+Apply each alone, run `tests/test_signatures.py -k new_identity`, see it fail, restore:
+- drop `new_identity_for`'s exists refusal → it replaces a sound key;
+- `default=Path('.engram/home')` for `required=True` on `--data-dir` → the run without `--data-dir` exits 0 and makes
+  `.engram/home/identity.json` under the test's working directory (its `tmp_path`);
+- `pass` for the `leftover.rename(...)` → `PeerIdentity` refuses the old TLS files;
+- `hosts=('localhost', '127.0.0.1')` in `new_identity_for` → no `peer.example` in the certificate;
+- `NEW_IDENTITY` without its re-pairing sentence → the warning check.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add peer/superyak_peer/signatures.py peer/superyak_peer/__main__.py peer/superyak_peer/backups.py peer/tests/test_signatures.py
-git commit -m "Grants 3b: a lost station identity is never replaced silently, and station-new-identity is the deliberate way (G4b, G4c)"
+git add peer/superyak_peer/__main__.py peer/tests/test_signatures.py
+git commit -m "Grants 3b: station-new-identity, the one deliberate way to a new station key (G4c)"
 ```
 
 ---
 
-### Task 3: The grants table, the policy, validity, and the grant's signature (G7, G9, G12's grant record)
+### Task 4: The grants table, the policy, validity, and the grant's signature (G7, G9, G12's grant record)
 
 **Files:**
 - Create: `peer/superyak_peer/grants.py`
@@ -730,7 +805,7 @@ git commit -m "Grants 3b: a lost station identity is never replaced silently, an
   - `Grants._grant_policy(self, db) -> dict` with keys `max_depth`, `max_expiry_hours`, `agent_grant_default_hours`,
     `builds_per_ship_per_day`, `delegable`, `grantees` (None is unrestricted).
   - `Grants._insert_grant(self, db, issuer_id, grantee_id, targets, rooms, hours, budget) -> str` (the grant id; stored
-    and signed in the caller's transaction; the caller has checked every field). Task 5's `make_grant` calls it.
+    and signed in the caller's transaction; the caller has checked every field). Task 6's `make_grant` calls it.
   - `Grants._grant_chain(self, db, grant) -> list[Row]` (the grant first, its root last).
   - `Grants._budget_used(self, db, grant_id, now) -> int`.
   - `Grants._grant_validity(self, db, grant) -> (bool, str | None)`.
@@ -768,7 +843,7 @@ def charge(store, grant_id, *ages):
     """One budget use per age, that many seconds before now, each under its own ticket id."""
     with store.transaction() as db:
         for age in ages:
-            db.execute('INSERT INTO budget_uses VALUES(?,?,?)', (grant_id, uid(), store.clock() - age))
+            db.execute('INSERT INTO budget_uses(grant_id, ticket_id, created) VALUES(?,?,?)', (grant_id, uid(), store.clock() - age))
 
 
 def narrowed(store, monkeypatch, **changes):
@@ -1074,8 +1149,9 @@ SIGNED_RECORDS = (('revision_signatures', 'SELECT 1 FROM revision_signatures LIM
                   ('grants', "SELECT 1 FROM grants WHERE signature!='' LIMIT 1"))
 ```
 
-change the module docstring's last sentence, `Merge 3b adds grants and revocations here.`, to
-`Merge 3b adds grants and revocations here (G12).`, and append to `class Signatures`:
+change the module docstring's last sentence, which spans a line break (`... Merge 3b adds grants` ends the second
+line, and the third is `and revocations here."""`), so that the third line reads `and revocations here (G12)."""`;
+and append to `class Signatures`:
 
 ```python
     def _grant_record(self, db, grant_id):
@@ -1109,7 +1185,7 @@ lists, and `"tests/test_grants.py",` after `"tests/test_federation.py",` in the 
 
 In `peer/tests/test_restore.py`, the last line of `RECONCILED_TABLES` becomes
 `    'account_role_changes', 'room_briefs', 'grants', 'budget_uses'}` (R9: the guard test fails the moment the schema
-has a table in neither list; Task 7 makes the reconcile read and change both).
+has a table in neither list; Task 8 makes the reconcile read and change both).
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -1146,7 +1222,7 @@ git commit -m "Grants 3b: the grants table, the policy, validity and the grant's
 
 ---
 
-### Task 4: Reading grants, their signed records and the people list (G11, G12's route, G21's route, G14)
+### Task 5: Reading grants, their signed records and the people list (G11, G12's route, G21's route, G14)
 
 **Files:**
 - Modify: `peer/superyak_peer/grants.py` (an import, one constant, eight methods at the end of the class)
@@ -1155,15 +1231,15 @@ git commit -m "Grants 3b: the grants table, the policy, validity and the grant's
 - Test: `peer/tests/test_grants.py`
 
 **Interfaces:**
-- Consumes: `_grant_chain`, `_grant_validity`, `_budget_used`, `_grant_policy`, `short_id` (Task 3); `_grant_record`
-  (Task 3); `Ships._person`; `actor()` in `app.py`.
+- Consumes: `_grant_chain`, `_grant_validity`, `_budget_used`, `_grant_policy`, `short_id` (Task 4); `_grant_record`
+  (Task 4); `Ships._person`; `actor()` in `app.py`.
 - Produces:
   - `grants.NOT_IN_ROOM = 'a room you are not in'`.
   - `Grants._owns_a_target(db, actor, grant) -> bool`, `Grants._grant_visible(db, actor, grant) -> bool`,
     `Grants._visible_grant(db, actor, grant_id) -> Row` (404 otherwise), `Grants._room_label(db, actor, room_id) -> str`,
     `Grants._current_room(db, room_id) -> str | None`, `Grants._grant_view(db, actor, grant) -> dict`.
   - `Grants.list_grants(actor) -> list[dict]`, `Grants.grant_people(actor) -> list[{id, name}]`,
-    `Signatures.grant_signed(actor, grant_id) -> {station, record, signature}` (Task 6 adds `revocation`).
+    `Signatures.grant_signed(actor, grant_id) -> {station, record, signature}` (Task 7 adds `revocation`).
   - Routes `GET /api/grants`, `GET /api/grants/people`, `GET /api/grants/{key}/signed`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1308,13 +1384,13 @@ def test_a_ship_key_gets_403_on_every_grants_route(env):
         assert (response.status_code, response.json()) == (403, {'error': 'Ship keys cannot use this route'}), (method, path)
 ```
 
-Tasks 5 and 6 add `POST /api/grants` and `POST /api/grants/{id}/revoke` to that `routes` list.
+Tasks 6 and 7 add `POST /api/grants` and `POST /api/grants/{id}/revoke` to that `routes` list.
 
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_grants.py`
 Expected: the five new tests fail, four with `AssertionError: {"detail":"Not Found"}` / `assert 404 == 200` (no route
-yet) and the ship-key test with `assert (404, {'detail': 'Not Found'}) == (403, {...})`; Task 3's tests pass.
+yet) and the ship-key test with `assert (404, {'detail': 'Not Found'}) == (403, {...})`; Task 4's tests pass.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -1481,7 +1557,7 @@ git commit -m "Grants 3b: reading grants, their signed records and the people li
 
 ---
 
-### Task 5: Making a grant (G8, G14)
+### Task 6: Making a grant (G8, G14)
 
 **Files:**
 - Modify: `peer/superyak_peer/grants.py` (an import, constants, two helpers, four methods at the end of the class)
@@ -1490,7 +1566,7 @@ git commit -m "Grants 3b: reading grants, their signed records and the people li
 
 **Interfaces:**
 - Consumes: `REPLACED_ROOMS` (`common.py`); `Breakouts._breakout`; `Ships._person`; `_grant_policy`, `_insert_grant`
-  (Task 3); `_grant_view` (Task 4).
+  (Task 4); `_grant_view` (Task 5).
 - Produces:
   - `grants.MAX_LISTED = 20`, `grants.MAX_BUDGET = 500`, and one message per refusal: `ROOMS_SHAPE`, `ROOM_NOT_YOURS`,
     `ROOM_REPLACED`, `ROOM_WITHOUT_GRANTEE`, `GRANTEE_NOT_PERSON`, `GRANTEE_IS_YOU`, `TARGETS_SHAPE`, `TARGET_NOT_YOURS`,
@@ -1550,9 +1626,9 @@ def station(env, tmp_path):
     side = store.open_breakout(serenity['id'], 'Side', ['rio-grande'])
     remote = 'ab' * 32 + ':room-1'
     with store.transaction() as db:
-        db.executemany('INSERT INTO room_members VALUES(?,?)', [(side['id'], patient['id']), (side['id'], doctor['id'])])
-        db.execute('INSERT INTO rooms VALUES(?,?,?,1,NULL)', (remote, patient['id'], 'Remote'))
-        db.executemany('INSERT INTO room_members VALUES(?,?)', [(remote, patient['id']), (remote, doctor['id'])])
+        db.executemany('INSERT INTO room_members(room_id, user_id) VALUES(?,?)', [(side['id'], patient['id']), (side['id'], doctor['id'])])
+        db.execute('INSERT INTO rooms(id, owner_id, title, epoch, linked_room_id) VALUES(?,?,?,1,NULL)', (remote, patient['id'], 'Remote'))
+        db.executemany('INSERT INTO room_members(room_id, user_id) VALUES(?,?)', [(remote, patient['id']), (remote, doctor['id'])])
         system = store.system_author_id(db)
     good = {'grantee': doctor['id'], 'targets': [serenity['id']], 'rooms': [shared['id']], 'hours': 24, 'budget': 5}
     return dict(app=app, clients=clients, users=users, clock=clock, store=store, serenity=serenity, rio=rio,
@@ -1801,7 +1877,7 @@ git commit -m "Grants 3b: making a grant, checked in the spec's order (G8, G14)"
 
 ---
 
-### Task 6: Revoking, the revocation's signature and its startup backfill (G10, G12)
+### Task 7: Revoking, the revocation's signature and its startup backfill (G10, G12)
 
 **Files:**
 - Modify: `peer/superyak_peer/grants.py` (one constant; two methods at the end of the class)
@@ -1811,13 +1887,13 @@ git commit -m "Grants 3b: making a grant, checked in the spec's order (G8, G14)"
 - Test: `peer/tests/test_grants.py`
 
 **Interfaces:**
-- Consumes: `_grant_chain` (Task 3); `_owns_a_target`, `_visible_grant`, `_grant_view` (Task 4); `short_id`;
+- Consumes: `_grant_chain` (Task 4); `_owns_a_target`, `_visible_grant`, `_grant_view` (Task 5); `short_id`;
   `_station_identity(db)`; `RECORD_KEYS['grant-revocation']` (3a).
 - Produces:
   - `grants.REASON_SHAPE`; `Grants._may_revoke(db, actor, grant) -> bool`;
     `Grants.revoke_grant(actor, grant_id, reason=None) -> dict` (G11's view); route `POST /api/grants/{key}/revoke`.
   - `Signatures._revocation_record(db, grant_id) -> dict | None`, `Signatures._sign_revocation(db, grant_id) -> None`,
-    `Signatures._backfill_revocation_signatures() -> None` (Task 7's reconcile relies on it);
+    `Signatures._backfill_revocation_signatures() -> None` (Task 8's reconcile relies on it);
     `grant_signed` adds `revocation: {record, signature}` once the grant is revoked.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2084,7 +2160,7 @@ git commit -m "Grants 3b: revoking, the revocation's signature and its startup b
 
 ---
 
-### Task 7: The restore reconcile takes back revoked grants and spent budgets (G13)
+### Task 8: The restore reconcile takes back revoked grants and spent budgets (G13)
 
 **Files:**
 - Modify: `peer/superyak_peer/backups.py` (`COMPARED`; three steps and a helper before `_member_name`; the report
@@ -2093,7 +2169,7 @@ git commit -m "Grants 3b: revoking, the revocation's signature and its startup b
 
 **Interfaces:**
 - Consumes: `_usable`, `COMPARED`, `_not_this_station`, `reconcile`, `describe_reconcile` (`backups.py`); `safe_line`;
-  `_backfill_revocation_signatures`, `_revocation_record` (Task 6); `staged`, `reconcile` from `tests/test_restore.py`.
+  `_backfill_revocation_signatures`, `_revocation_record` (Task 7); `staged`, `reconcile` from `tests/test_restore.py`.
 - Produces: `backups.GRANT_COMPARED`, `backups.GRANT_NAMED`, `_grant_line(db, row, how)`,
   `_revoke_every_grant(db, old, now, report)`, `_revoke_grants_like_replaced(db, old, now, report)`,
   `_add_budget_uses_like_replaced(db, old, now, report)`; `report['grants']` as `(short, issuer, grantee, how)`;
@@ -2239,7 +2315,7 @@ def test_a_replaced_file_without_the_grants_tables_is_treated_as_absent(tmp_path
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider tests/test_grants.py -k "reconcile or replaced"`
-Expected: 3 failed (the `-k` also selects Task 4's replaced-room test, which passes): the replaced-file test with
+Expected: 3 failed (the `-k` also selects Task 5's replaced-room test, which passes): the replaced-file test with
 `assert (None, None, None, None) == (1000063.0, '...s week', None)` at `here[later]` (nothing was revoked), the
 no-replaced test with `assert (None, None, None) == (None, 'restored', None)`, and the absent test with
 `assert 'The replaced file was treated as absent (it lacks tables or columns the copy has: ' in 'Usernames and titles
@@ -2366,7 +2442,8 @@ Apply each alone, run `tests/test_grants.py tests/test_restore.py`, see the name
 - `values = (now, *there[row['id']][1:])` (copy the person and reason, not the time) → the replaced-file test;
 - `if grant_id in both:` (no dedupe) → the replaced-file test (the second run adds 2 more);
 - `if (grant_id, ticket_id) not in here:` (any grant) → the replaced-file test (`newer`'s use comes back);
-- drop `WHERE id=?` in `_revoke_every_grant`'s UPDATE (re-revoke every grant) → the no-replaced test (`done` changes);
+- drop `WHERE revoked IS NULL` from `_revoke_every_grant`'s SELECT (revoke an already revoked grant again) → the
+  no-replaced test (`done` changes);
 - drop the `Grants revoked:` line from `describe_reconcile` → both reconcile tests;
 - drop the grants columns from `COMPARED` → `test_a_replaced_file_without_the_grants_tables_is_treated_as_absent`.
 
@@ -2379,7 +2456,7 @@ git commit -m "Grants 3b: the restore reconcile takes back revoked grants and sp
 
 ---
 
-### Task 8: API.md and the restore runbook (G23's part); the whole suite
+### Task 9: API.md and the restore runbook (G23's part); the whole suite
 
 **Files:**
 - Modify: `peer/API.md` ("## Signed records"; a new "## Grants" section before "## Files"; "## Store interfaces for
@@ -2517,13 +2594,13 @@ In `docs/station-restore.md`:
 - in step 7, after `Tell the owners of ships whose keys were revoked to dock again.`, add
   `Ask the issuers of the grants the report lists as missing from the replaced file, or revoked with no usable replaced file, to make again any still wanted; a grant made after the copy is gone too.`;
 - in step 6, after `The peer identity files stay where they are; nothing here moves them.`, add
-  `A station that holds signed records refuses to start without its identity.json; restore the file rather than delete it.`
+  `A station that holds signed records refuses to start without its identity.json; restore the file rather than delete it. If it is truly lost, station-new-identity --data-dir DIR (API.md, Signed records), run with the lighthouse stopped, gives the station a new key on purpose.`
 
 - [ ] **Step 3: Run the whole peer suite**
 
 Run: `cd peer && PYTHONDONTWRITEBYTECODE=1 uv run --locked python -m pytest -q -p no:cacheprovider`
-Expected: everything passes. b8e3db2 measured 858 passed and 1 skipped; this plan's dry run, with its 39 new tests,
-measured 897 passed and 1 skipped. Report the counts, and any failure by name.
+Expected: everything passes. 84ee0f6 measured 860 passed and 1 skipped; with this plan's 39 new tests (11 in
+test_signatures, 28 in test_grants), about 899 passed and 1 skipped, as the fresh review measured. Report the counts, and any failure by name.
 
 - [ ] **Step 4: Commit**
 
@@ -2549,14 +2626,14 @@ git commit -m "Grants 3b: API.md's Grants and Signed records, and the restore ru
 | Spec | Task and test |
 | --- | --- |
 | G4a, test 4a | 1: door and commands with a damaged identity, the door's `_identity`, signing=False still signs, `_own_peer_id`; 2: the lazy refusal |
-| G4b, test 4b | 2: `Store`, `create_app`, `card`, `serve --peer-tls` refuse; signing=False opens; no signed records starts and creates none; 3a's dangling symlink test; 3: grants count, the first grant creates the identity |
-| G4c, test 4c | 2: restore test on signed records, `station-new-identity`, the `--peer-tls` check on an old or missing database; 1: the room read doesn't stall |
-| Schema, G7 | 3: table and index; the policy narrowed through `_grant_policy` (tests 6) |
-| G8, test 5 | 5: refusal table (404 body the same for four rooms), order pairs, the edges 1/720, 1/500, 20/21, the policy read, the made grant |
-| G9, test 6 | 3: revoked, expired at its instant, lifetime, depth, grantee set, budget at the 24-hour edge, ownership, revoked-and-expired, order pairs |
-| G10, test 7 | 6: issuer, target owner, grantee 403, admin 404, 409, order 404/403/409, the walk, reason rules |
-| G11, test 9 | 4: who sees what, fields, `budget_left`, `ship_builds_left`, titles only to members, the current room twice replaced, a cycle, the people list |
-| G12, test 8 | 3: the grant record and signature and G3's failures; 4: `/signed` and its 404s; 6: the revocation record, signature, `/signed`'s `revocation`, the startup backfill |
-| G13, test 10 | 7: revoked as there, missing revoked, budget uses once, a second run adds none, without a replaced file, the report, next start signs; COMPARED |
-| G14 | 4, 5, 6: one ship-key test over all five routes, checking `current_user`'s own body |
-| G23 (API.md part) | 8 |
+| G4b, test 4b | 2: `Store`, `create_app`, `card`, `serve --peer-tls` refuse; signing=False opens; no signed records starts and creates none; 3a's dangling symlink test; 4: grants count, the first grant creates the identity |
+| G4c, test 4c | 2: restore test on signed records, the `--peer-tls` check on an old, missing or unreadable database; 3: `station-new-identity`; 1: the room read doesn't stall |
+| Schema, G7 | 4: table and index; the policy narrowed through `_grant_policy` (tests 6) |
+| G8, test 5 | 6: refusal table (404 body the same for four rooms), order pairs, the edges 1/720, 1/500, 20/21, the policy read, the made grant |
+| G9, test 6 | 4: revoked, expired at its instant, lifetime, depth, grantee set, budget at the 24-hour edge, ownership, revoked-and-expired, order pairs |
+| G10, test 7 | 7: issuer, target owner, grantee 403, admin 404, 409, order 404/403/409, the walk, reason rules |
+| G11, test 9 | 5: who sees what, fields, `budget_left`, `ship_builds_left`, titles only to members, the current room twice replaced, a cycle, the people list |
+| G12, test 8 | 4: the grant record and signature and G3's failures; 5: `/signed` and its 404s; 7: the revocation record, signature, `/signed`'s `revocation`, the startup backfill |
+| G13, test 10 | 8: revoked as there, missing revoked, budget uses once, a second run adds none, without a replaced file, the report, next start signs; COMPARED |
+| G14 | 5, 6, 7: one ship-key test over all five routes, checking `current_user`'s own body |
+| G23 (API.md part) | 9 |
