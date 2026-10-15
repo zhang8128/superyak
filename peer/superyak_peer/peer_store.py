@@ -1,7 +1,7 @@
 """Remote contacts and received resources never become local accounts."""
 import json
 import re
-from .common import Problem, require, uid, text, ids, encode
+from .common import Problem, require, uid, text, ids, encode, linked_room_ok
 
 # What a received room may carry: federation._room_snapshot's keys plus the message history, and a message's own
 # columns (only those: plus this station's own delivery state and unverified mark, never the origin's). An allowlist, never a denylist (R44).
@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS remote_contacts(id TEXT PRIMARY KEY, peer_id TEXT NOT
 CREATE TABLE IF NOT EXISTS remote_room_members(room_id TEXT NOT NULL REFERENCES rooms(id), contact_id TEXT NOT NULL REFERENCES remote_contacts(id), PRIMARY KEY(room_id,contact_id));
 CREATE TABLE IF NOT EXISTS peer_messages(id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id), author_id TEXT NOT NULL, client_message_id TEXT NOT NULL, body TEXT NOT NULL, epoch INTEGER NOT NULL, created REAL NOT NULL, UNIQUE(room_id,author_id,client_message_id));
 CREATE TABLE IF NOT EXISTS inbox(origin TEXT NOT NULL, resource_id TEXT NOT NULL, kind TEXT NOT NULL, recipient TEXT NOT NULL REFERENCES users(id), revision INTEGER NOT NULL, actor TEXT NOT NULL, payload TEXT, PRIMARY KEY(origin,resource_id,kind,recipient));
+CREATE TABLE IF NOT EXISTS inbox_received(origin TEXT NOT NULL, resource_id TEXT NOT NULL, recipient TEXT NOT NULL, received REAL NOT NULL, PRIMARY KEY(origin,resource_id,recipient));
 CREATE TABLE IF NOT EXISTS receipts(origin TEXT NOT NULL,event_id TEXT NOT NULL,digest TEXT NOT NULL,created REAL NOT NULL, PRIMARY KEY(origin,event_id));
 CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY, event_seq INTEGER NOT NULL, contact_id TEXT NOT NULL, resource_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL, envelope TEXT, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,next_attempt REAL NOT NULL DEFAULT 0, UNIQUE(event_seq,contact_id,action));
 CREATE TABLE IF NOT EXISTS federation_cursor(id INTEGER PRIMARY KEY CHECK(id=1), seq INTEGER NOT NULL);
@@ -85,6 +86,14 @@ class PeerStore:
                              if isinstance(m, dict) and isinstance(m.get('peer'), str) and isinstance(m.get('id'), str)]
         result['messages'] = [{k: m[k] for k in REMOTE_MESSAGE_KEYS if k in m} for m in value.get('messages', []) if _stored_message_ok(m)]
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
+        if not linked_room_ok(result.get('linked_room_id'), row['origin']):  # remote room fields: the backstop for what an older receiver stored
+            result['linked_room_id'] = None
+        claimed = max([result['last_activity']] + [m['created'] for m in result['messages']])
+        arrived = db.execute('SELECT received FROM inbox_received WHERE origin=? AND resource_id=? AND recipient=?',
+                             (row['origin'], row['resource_id'], actor)).fetchone()
+        if arrived is not None:  # remote room fields: the origin's claims count only up to when this station received them
+            claimed = min(claimed, arrived['received'])
+        queued = []
         replies = db.execute("SELECT outbox.metadata,outbox.status FROM outbox JOIN remote_contacts ON contact_id=remote_contacts.id WHERE resource_id=? AND peer_id=? AND action='room.reply'", (row['resource_id'],row['origin'])).fetchall()
         # Every reply this station sent proves its own words, withdrawn ones too: a reply can reach the origin and then
         # be withdrawn here when its acknowledgement was lost (review of e9a6712). Only queued ones are shown below.
@@ -95,11 +104,12 @@ class PeerStore:
                 continue
             local = meta['message']
             if not any(m['author_id']==local['author_id'] and m['client_message_id']==local['client_message_id'] for m in result['messages']):
-                result['messages'].append({**local, 'state':delivery['status']})
+                queued.append({**local, 'state':delivery['status']})
+                result['messages'].append(queued[-1])
         # A stable sort on time alone: the origin's own order and this station's queued replies keep their insertion
         # order when several share an instant (ids are random, so they can't break the tie).
         result['messages'].sort(key=lambda m: m['created'])
-        result['last_activity'] = max([result['last_activity']] + [m['created'] for m in result['messages']])
+        result['last_activity'] = max([claimed] + [m['created'] for m in queued])  # this station's queued replies at their own time
         if not messages:
             result.pop('messages', None)
         return result
