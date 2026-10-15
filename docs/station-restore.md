@@ -162,7 +162,10 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
      if it is not set, and run step 5 if it hasn't made the file. Then run step 6 again; if the failed install left a
      partial file in the data directory, step 6 sends you to the stray case.
 
-   The peer identity files stay where they are; nothing here moves them. A station that holds signed records refuses to start without its identity.json; restore the file rather than delete it. If it is truly lost, station-new-identity --data-dir DIR (API.md, Signed records), run with the lighthouse stopped, gives the station a new key on purpose.
+   The peer identity files stay where they are; nothing here moves them. A station that holds signed records refuses to start without its identity.json; restore the file rather than delete it. If it is truly lost, `station-new-identity` (API.md, Signed records) gives the station a new key on purpose. Run it with the lighthouse stopped; add `--endpoint https://HOST:PORT` when the station federates:
+   ```bash
+   uv run --locked --project peer python -m superyak_peer station-new-identity --data-dir ~/.local/share/superyak/lighthouse
+   ```
 7. **Act on the report.** Change again any password it lists that was changed for a reason. Read each room brief it lists
    ("room briefs that differ"; the report never shows brief text) in the browser, and save again the one you want. Issue again any invitation
    still wanted. Tell the owners of ships whose keys were revoked to dock again. Ask the issuers of the grants the report lists as missing from the replaced file, or revoked with no usable replaced file, to make again any still wanted; a grant made after the copy is gone too. Requests and dockings since the copy

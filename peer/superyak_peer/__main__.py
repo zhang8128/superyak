@@ -188,6 +188,8 @@ def new_identity_for(data_dir, endpoint=None):
     import time
     directory = Path(data_dir).absolute()
     path = directory / 'identity.json'
+    if not (directory / 'peer.sqlite3').is_file():  # a mistyped --data-dir must not get a key
+        raise ValueError(f'No station database in {directory}; nothing was changed.')
     if path.exists() or path.is_symlink():
         raise ValueError(f'{path} exists, so nothing was changed: station-new-identity only replaces a lost identity')
     host = urlsplit(endpoint).hostname if endpoint else None

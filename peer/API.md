@@ -271,8 +271,7 @@ with (spec A step 3, `docs/superpowers/specs/2026-10-15-grants-step3-design.md`)
 exactly its kind's keys (`identity.RECORD_KEYS`), and its signature is base64 Ed25519 over
 `identity.canonical(record)`. Canonical JSON has its keys sorted, `,` and `:` as separators with no spaces, UTF-8
 output (no `\u` escapes), NaN and Infinity refused, and floats in Python's shortest form, so another implementation
-must write `created` the same way (Python writes `1000000.0` where JavaScript writes `1000000`). Every process that
-The lighthouse reads `identity.json` at startup when it exists; the door and the station commands that never sign
+must write `created` the same way (Python writes `1000000.0` where JavaScript writes `1000000`). The lighthouse reads `identity.json` at startup when it exists; the door and the station commands that never sign
 don't (see below). It signs three kinds:
 
 - `instructions-revision`: `{kind, station, layer_id, revision, owner_id, title, body, audience_users, policy, created}`.

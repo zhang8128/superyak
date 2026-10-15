@@ -171,8 +171,9 @@ def test_a_station_whose_identity_cannot_be_read_does_not_start(tmp_path):
         directory = tmp_path / f'station{index}'
         directory.mkdir(mode=0o700)
         (directory / 'identity.json').write_text(damaged)
-        with pytest.raises(ValueError, match='identity.json'):
+        with pytest.raises(ValueError, match='identity.json.*station-new-identity') as raised:
             Store(directory)
+        assert 'if no copy exists, move the file aside' in str(raised.value)
 
 
 def test_a_dangling_identity_symlink_does_not_start(tmp_path):
@@ -505,6 +506,13 @@ def test_station_new_identity_is_the_one_deliberate_way_to_a_new_key(tmp_path, c
     kept = identity.read_bytes()
     code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', data)
     assert code == 1 and 'exists' in err and identity.read_bytes() == kept
+    typo = tmp_path / 'lighthose-typo'  # M3: a directory that holds no station gets no key, and is not made
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', typo)
+    assert code == 1 and f'No station database in {typo}; nothing was changed.' in err and not typo.exists()
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    code, out, err = run_cli(capsys, 'station-new-identity', '--data-dir', empty)
+    assert code == 1 and 'No station database' in err and list(empty.iterdir()) == []
     monkeypatch.chdir(tmp_path)  # without --data-dir it refuses; a default would mint a key in the wrong directory
     code, out, err = run_cli(capsys, 'station-new-identity', '--endpoint', 'https://peer.example:7435')
     assert code == 2 and '--data-dir' in err and not (tmp_path / '.engram').exists()

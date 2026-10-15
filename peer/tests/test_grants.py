@@ -309,6 +309,9 @@ def test_room_titles_show_only_to_members_and_a_replaced_room_shows_the_current_
         {'id': ops['id'], 'title': 'a room you are not in'}, {'id': plans['id'], 'title': 'Plans', 'current': current}]
     assert listed(clients[0])[0]['rooms'] == [
         {'id': ops['id'], 'title': 'Ops'}, {'id': plans['id'], 'title': 'Plans', 'current': current}]
+    gone = clients[0].delete(f'/api/chats/{third["id"]}/participants/{doctor["id"]}')  # M1: doctor leaves the newest room
+    assert gone.status_code == 200, gone.text
+    assert listed(clients[1])[0]['rooms'][1]['current'] == {'id': third['id'], 'title': 'a room you are not in'}
     with store.transaction() as db:  # by hand, so serenity's new owner sees the grant: added later, never in Plans itself
         db.execute('UPDATE users SET owner_id=? WHERE id=?', (family['id'], serenity['id']))
     assert listed(clients[3])[0]['rooms'] == [
@@ -329,6 +332,7 @@ def test_the_people_list_has_active_people_only(env, tmp_path):
     store = app.state.store
     patient, doctor, organizer, family = users
     docked(store, patient['id'], 'serenity')
+    lower, zoe = store.create_user('lower', 'andy', 'long-password-low'), store.create_user('zoe', 'Zoe', 'long-password-zoe')
     store.create_station_ship('odo', 'Odo')  # a resident
     store.bootstrap_super_admin('root', 'Root', tmp_path / 'activation.json')  # awaiting activation
     with store.transaction() as db:
@@ -337,8 +341,9 @@ def test_the_people_list_has_active_people_only(env, tmp_path):
                    ('ab' * 32,))
     people = clients[0].get('/api/grants/people')
     assert people.status_code == 200, people.text
-    assert people.json() == [{'id': doctor['id'], 'name': 'Doctor'}, {'id': family['id'], 'name': 'Family'},
-                             {'id': organizer['id'], 'name': 'Organizer'}]  # by name; no caller, ship, resident, system author
+    assert people.json() == [{'id': lower['id'], 'name': 'andy'}, {'id': doctor['id'], 'name': 'Doctor'},
+                             {'id': family['id'], 'name': 'Family'}, {'id': organizer['id'], 'name': 'Organizer'},
+                             {'id': zoe['id'], 'name': 'Zoe'}]  # by name, ignoring case; no caller, ship, resident, system author
 
 
 def test_a_ship_key_gets_403_on_every_grants_route(env):

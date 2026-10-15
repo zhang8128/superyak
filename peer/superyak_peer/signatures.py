@@ -61,7 +61,8 @@ class Signatures:
                 self._identity = PeerIdentity.load_or_create(self.data_dir)
             except Exception as error:
                 raise ValueError(f'The station identity {path} could not be loaded ({type(error).__name__}); '
-                                 'the station will not start until it is restored') from error
+                                 'the station will not start until it is restored; if no copy exists, move the file aside and run '
+                                 'station-new-identity') from error
         else:
             with self.transaction() as db:
                 refuse_a_lost_identity(self.data_dir, db)  # G4b: a lost identity is not replaced silently

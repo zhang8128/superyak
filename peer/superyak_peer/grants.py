@@ -204,7 +204,7 @@ class Grants:
         with self.transaction() as db:
             self._person(db, actor)
             return [dict(row) for row in db.execute("SELECT id, name FROM users WHERE kind='person' AND activation_pending=0 "
-                                                    'AND id!=? ORDER BY name, id', (actor,))]
+                                                    'AND id!=? ORDER BY name COLLATE NOCASE, id', (actor,))]
 
     def _grant_rooms(self, db, actor, grantee, rooms):
         """G8 steps 1 and 2. Step 1 runs over every listed room before step 2 looks at any, so no answer says anything
