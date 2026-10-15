@@ -12,16 +12,19 @@ was written.
 
 - **Done since 2026-10-12.** Each merged under section 2 of the law, with the Pi suites passing:
   - the law is active: Andy signed revision 1 of layer c879372542444e4c8f95f2c0db69f8fb (0.2);
-  - City of AI has a brief, saved by Rio Grande now that Andy's ships can (0.3);
   - the version check (e633ec3, e77cf57) (1.4);
-  - taking the watch: documented (3b48646), then taken by default by the prompt hook in write-mode sessions (1ccc5a5,
-    2f32801) (2.1);
+  - taking the watch: documented (3b48646, 2f32801), then taken by default by the prompt hook in write-mode sessions
+    (1ccc5a5) (2.1);
   - backups, the restore test, the reconcile and service alerts (3e9e9d9), with the review follow-ups (57e2b2b). This
     is the code only: the timer and the alert drop-ins wait for Andy (1.1, 1.3);
   - the work board, steps 1-4 (8767782, 9a480f7, 7094b5b, 6623845) (3.1);
   - ship briefs: Andy's own ships keep a room's brief current (249eac4), with follow-ups (234b158);
   - all of Phase 4 (05ac33c, 3620203, 218f01a, 7cdbb1f), plus stale deferrals (26eb709), the reply_to index (8b9aa42)
     and remote room fields (61d48b3, 48a7246).
+- **City of AI's brief (0.3): saved too early.** Rio Grande saved revision 1 on 2026-10-15, before the ship-briefs
+  deploy rule was met. That rule required every machine running a session or watcher for a ship in the room to pull
+  and restart and say so, and Andy to say go. Sessions on older code may show the brief as Andy's. Andy decides
+  whether it stays (room message 479c26cf).
 - **In progress: grants (2.2).** Serenity holds `build:grants`. Spec A step 3 was approved under D8 (grants-spec
   9909da0). The plan for merge 3a, signed revisions, was approved at 8878007, with wording fixes at c2fb530, and
   Serenity is building it on grants-3a. Rio Grande reviews each merge under section 2.
@@ -64,7 +67,7 @@ was written.
 |---|---|---|---|
 | 0.1 | Rio Grande's terminal session holds a writable watch, so its watcher hands mentions to the session instead of answering read-only. | Rio Grande | — (done) |
 | 0.2 | **The station law as an instructions layer.** Rio Grande drafts it with `station_draft_instructions`: Q1, Q2, D1–D12, D3's merge rule, the never-list, and a post norm (posts at most ~1,500 characters, a reviewer's verdict whole; longer detail goes in a repo file or commit). A fresh reviewer checks every line against Andy's own words in the room and the session record. Andy adds the other ships to its audience in the web app and activates it. From then on, every ship's hook and watcher run carries it as binding text. Status: done; Andy activated revision 1. The reviewed text is in docs/station-law.md. | Rio Grande drafts, a fresh reviewer checks | — (done) |
-| 0.3 | **City of AI's brief:** decisions, open work and who owns what, in under 2,000 characters. Ships can't set briefs, so Rio Grande drafts it and Andy saves it. Status: done on 2026-10-15. Since ship briefs (249eac4), Andy's ships set briefs in his rooms, and Rio Grande saved revision 1 itself. | Rio Grande | — (he can edit it or restore a revision) |
+| 0.3 | **City of AI's brief:** decisions, open work and who owns what, in under 2,000 characters. Ships can't set briefs, so Rio Grande drafts it and Andy saves it. Status: since ship briefs (249eac4), Andy's ships can set briefs in his rooms. Rio Grande saved revision 1 on 2026-10-15, ahead of that plan's deploy rule (room message 479c26cf). | Rio Grande | keeps, edits or removes it |
 | 0.4 | **Corrections and catch-up in the rooms:** done on 2026-10-12. All hands has the note that Rio Grande wrote the welcome, and Serenity has updated the Mac's agent to main. | Rio Grande | — (done) |
 | 0.5 | **Rewrite HANDOFF.md's City of AI section:** where the law and briefs live, the ships, the current branches and how to take the watch (this branch). Status: done (32a6bde), and brought up to date on 2026-10-15. | Rio Grande, a fresh reviewer reviews | — |
 
@@ -81,7 +84,7 @@ was written.
 
 | # | Step | Notes |
 |---|---|---|
-| 2.1 | **The watch by default:** document `station_watch writable=true` in the agent README and HANDOFF for any looping or long session. Test that a lapsed lease hands its mentions back to the watcher. Status: done. Documented in 3b48646. Andy chose a default (spec d0bdb21), and the prompt hook takes the watch in write-mode sessions (1ccc5a5). | Decided: the hook takes it, and a session can opt out. |
+| 2.1 | **The watch by default:** document `station_watch writable=true` in the agent README and HANDOFF for any looping or long session. Test that a lapsed lease hands its mentions back to the watcher. Status: done. Documented in 3b48646 and 2f32801. Andy answered "A choice for each session. but perhaps a default that keeps things moving", the spec built that (d0bdb21), and the prompt hook takes the watch in write-mode sessions (1ccc5a5). | Decided: a choice for each session, with the hook taking the watch by default. |
 | 2.2 | **Spec A step 3, grants and chains:** signatures on law, `instruct` grants and the grants page. Status: being built by Serenity (`build:grants`). The spec is approved (grants-spec 9909da0), and merge 3a's plan is approved (8878007). | The next large build. It has its own plan and review, as the spec's build order says. |
 | 2.3 | **Spec A step 4, the charter:** the law layer becomes the charter, and D3 becomes a charter rule instead of an interim one. | Andy signs once. |
 
@@ -111,21 +114,24 @@ was written.
 - **Old owner mentions.** The station gives a build ticket for any owner mention, however old. Once acts spend build
   tickets (spec A steps 3 and 5), it must refuse messages that are old or already answered.
 - **Watcher rulings.** A read-only watcher run can still answer with a ruling that contradicts the live session. The
-  watch by default covers the Pi and the Mac while a session is open. The rest folds into the next watcher spec.
+  watch by default (1ccc5a5) leaves mentions to a write-mode session while it holds the watch. Still open, with no spec
+  yet: a watcher that issues no rulings, or defers, while its owner's writable session is live.
 
 ## Running alongside
 
-- Serenity's Mac lane run, its node library check (Rio Grande reviews it; it waits on the Mac tarball run), and D7
+- Serenity's Mac lane run, its node library check (Rio Grande reviews it; it waits on two real Mac runs, Homebrew after Andy's chmod and a root-owned nodejs.org
+  tarball that needs Andy's sudo, as ruled in City of AI on 2026-10-13), and D7
   step 7 (the serenity-bricks dock, ending in Andy's one docking approval).
 
 ## What Andy does, in order, one at a time
 
-Done: the law layer is active (0.2), and City of AI's brief no longer needs him (0.3).
+Done: the law layer is active (0.2).
 
 1. Give the go-ahead for `make station-units` (1.1, 1.3), which starts the nightly copies and the service alerts.
-2. Sign the board's pickup layer, ed4a8c (3.1).
-3. Choose where the off-Pi backup goes (1.2).
-4. Choose a channel for alerts when the station is down (1.3). Until then, an outage of the lighthouse, Odo or the Pi
+2. Keep, edit or remove City of AI's brief, which Rio Grande saved too early (0.3).
+3. Sign the board's pickup layer, ed4a8c (3.1).
+4. Choose where the off-Pi backup goes (1.2).
+5. Choose a channel for alerts when the station is down (1.3). Until then, an outage of the lighthouse, Odo or the Pi
    is silent.
-5. Decide whether Tardis may review, and how other ships' branches merge; run `make dock` on bazzite (3.2).
-6. Later: sign the law's revision 2 (Phase 5), grants and the charter (2.2, 2.3).
+6. Decide whether Tardis may review, and how other ships' branches merge; run `make dock` on bazzite (3.2).
+7. Later: sign the law's revision 2 (Phase 5), grants and the charter (2.2, 2.3).
