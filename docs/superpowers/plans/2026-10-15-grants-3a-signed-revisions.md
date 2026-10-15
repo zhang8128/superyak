@@ -14,8 +14,14 @@ writes.
 **Tech Stack:** Python 3.13, FastAPI, SQLite (`sqlite3`, JSON1), `cryptography` (Ed25519), pytest with FastAPI's
 `TestClient`. Run tests from `peer/` with `uv run --locked python -m pytest -q`.
 
-**Spec:** `docs/superpowers/specs/2026-10-15-grants-step3-design.md` (approved under D8, revision 3), section 1
-(G1-G6), Testing 1-4. Spec A (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`) holds
+**Spec:** `docs/superpowers/specs/2026-10-15-grants-step3-design.md` (approved under D8, revision 3, with G4 amended
+by this plan's review, M1), section 1 (G1-G6), Testing 1-4.
+
+**Plan revision 2.** The fresh plan review of dae961a (APPROVE WITH CHANGES: 2 must-fix, 3 should-fix, 8 nits; it
+dry-ran every task) is answered here: M1 (the identity is created at the first signature, not at every start), M2
+(the bad-card assertion), S1 (creation under the dispatch gate), S2 (title and body from the snapshot), S3 (a second
+start signs nothing), and N1-N7. N8 (passing the store's identity to `Federation`) is left out: federation already
+reads the same file by path, and the startup test checks the two peer ids match. Spec A (`docs/superpowers/specs/2026-10-08-instruction-layers-and-grants-design.md`) holds
 where the step 3 spec is silent.
 
 ## Global Constraints
@@ -31,12 +37,13 @@ where the step 3 spec is silent.
 - Only a revision whose **stored snapshot** has `kind: "instructions"` is signed; never decide from the layer's
   current draft (G2, S3). A note's snapshot has no `kind` key (`peer/API.md`, Instruction layers).
 - `policy` is `null` in step 3 (G2).
-- The store loads the identity file federation uses (`identity.json` in the data directory) at startup, creating it
-  as `PeerIdentity.load_or_create` does; if it can't, the station fails to start (G4).
+- The store loads the identity file federation uses (`identity.json` in the data directory) at startup if it exists;
+  if that load fails, the station fails to start. A missing file is created (as `PeerIdentity.load_or_create` does)
+  only at the first signature, inside the signing transaction (G4 as amended by plan review M1).
 - `GET /api/layers/{id}/revisions/{n}/signed` answers the layer's owner only; anyone else gets 404 (the route never
   says whether a layer exists); a ship key gets 403 (G6).
 - Every test is named, written first and seen failing first (spec, Testing).
-- Repo norms: new modules and test files are listed in `peer/pyproject.toml` (the sdist `include` list and, for
+- Repo norms: new modules and test files are listed in `peer/pyproject.toml` (the sdist `only-include` list and, for
   modules, the wheel `only-include` list); `test_packaging.py` checks the inventory.
 - Superyak's repository only. The merge goes through section 2 of the station law: Rio Grande approves in the room,
   and the Pi suites pass.
@@ -52,6 +59,9 @@ Inputs the spec implies but its four tests don't name, most likely to bite first
 4. A second start right after the first: the backfill writes nothing and changes no signature (Task 2).
 5. A `kind` that is not a string (a list) or a value `canonical()` refuses (NaN): `verify_record` returns False
    instead of raising (Task 1).
+6. A new station: `init`, then the first `card --endpoint https://<host>`. The certificate must still name the host,
+   so opening a store must not create the identity (Task 2).
+7. The owner asks for revision `2**63` (past SQLite's integers): 404, not a 500 (Task 3).
 
 ## File Structure
 
@@ -63,12 +73,13 @@ Inputs the spec implies but its four tests don't name, most likely to bite first
 - Modify `peer/superyak_peer/layers.py`: one call at each of the two `layer_revisions` inserts (lines 128 and 162).
 - Modify `peer/superyak_peer/app.py`: one route beside `/api/layers/{key}/revisions` (line 481).
 - Modify `peer/API.md`: the Instruction layers paragraph and a new "Signed records" section.
-- Modify `peer/pyproject.toml`: `superyak_peer/signatures.py` in both lists, `tests/test_signatures.py` in the sdist list.
+- Modify `peer/pyproject.toml`: `superyak_peer/signatures.py` in both `only-include` lists, `tests/test_signatures.py`
+  in the sdist one.
 - Create `peer/tests/test_signatures.py`: tests 1-4 and the Review Focus cases.
 
 `peer_store.py`'s `_own_peer_id` stays as it is. It reads the identity lazily and does not cache a failure, and
-`test_a_failed_identity_read_is_not_cached` pins that. The new `_station_identity` is a separate cache, loaded at
-startup.
+`test_a_failed_identity_read_is_not_cached` pins that. The new `_station_identity` is a separate cache: loaded at
+startup when the file exists, created at the first signature when it doesn't.
 
 ---
 
@@ -78,7 +89,7 @@ startup.
 - Modify: `peer/superyak_peer/identity.py` (after `validate_card`, around line 72; and a method on `PeerIdentity`
   after `card`, around line 130)
 - Create: `peer/tests/test_signatures.py`
-- Modify: `peer/pyproject.toml` (sdist `include`: add `"tests/test_signatures.py",` after `"tests/test_ships.py",`)
+- Modify: `peer/pyproject.toml` (the sdist `only-include` list: add `"tests/test_signatures.py",` after `"tests/test_ships.py",`)
 
 **Interfaces:**
 - Consumes: `canonical`, `validate_card`, `PeerIdentity` (all in `identity.py`).
@@ -150,7 +161,8 @@ def test_a_bad_card_or_malformed_input_gives_false_and_never_raises(tmp_path):
     identity = PeerIdentity.load_or_create(tmp_path / 'a')
     card, record = card_of(identity), revision_record(identity)
     signature = identity.sign_record(record)
-    assert not verify_record({**card, 'peer_id': '0' * 64}, record, signature)  # peer id isn't the key's hash
+    forged = revision_record(identity, station='0' * 64)  # names the forged id, so only validate_card can refuse it
+    assert not verify_record({**card, 'peer_id': '0' * 64}, forged, raw_sign(identity, forged))  # peer id isn't the key's hash
     for args in ((None, record, signature), (card, None, signature), (card, record, None), (card, record, 'not base64!'),
                  (card, {**record, 'kind': ['instructions-revision']}, signature),
                  (card, revision_record(identity, created=float('nan')), signature), ('card', record, signature)):
@@ -182,7 +194,8 @@ def test_each_record_kind_signs_and_verifies_with_exactly_its_keys(tmp_path):
                                     'charter_revision', 'follow', 'created'}
 ```
 
-Add `"tests/test_signatures.py",` to the sdist `include` list in `peer/pyproject.toml`, after `"tests/test_ships.py",`.
+Add `"tests/test_signatures.py",` to the sdist `only-include` list in `peer/pyproject.toml` (under
+`[tool.hatch.build.targets.sdist]`), after `"tests/test_ships.py",`.
 
 - [ ] **Step 2: Run the tests to see them fail**
 
@@ -205,7 +218,6 @@ RECORD_KEYS = {
     'grant-revocation': frozenset({'kind', 'station', 'grant', 'revoked', 'revoked_by', 'reason'}),
 }
 
-
 def _record_shape_ok(record):
     return (isinstance(record, dict) and isinstance(record.get('kind'), str)
             and RECORD_KEYS.get(record['kind']) == set(record))
@@ -221,7 +233,8 @@ In `class PeerIdentity`, after `card`:
         return base64.b64encode(self.key.sign(canonical(record))).decode()
 ```
 
-At the end of the module (after `verify_envelope` and anything below it):
+At the end of the module (after `verify_envelope` and anything below it), separated by one blank line as the
+module's other top-level definitions are:
 
 ```python
 def verify_record(card, record, signature):
@@ -268,8 +281,8 @@ git commit -m "Grants 3a: a fixed record format, sign_record and verify_record (
 - Modify: `peer/superyak_peer/db.py` (imports, the `Store` bases, the `executescript` list at line 62, two calls at
   the end of `__init__` after `self._backfill_brief_history()`)
 - Modify: `peer/superyak_peer/layers.py:128` (in `activate_layer`) and `:162` (in `revoke_layer_routes`)
-- Modify: `peer/pyproject.toml` (add `"superyak_peer/signatures.py",` after `"superyak_peer/ships.py",` in both the
-  sdist `include` and the wheel `only-include` lists)
+- Modify: `peer/pyproject.toml` (add `"superyak_peer/signatures.py",` after `"superyak_peer/ships.py",` in both
+  `only-include` lists, sdist and wheel)
 - Test: `peer/tests/test_signatures.py`
 
 **Interfaces:**
@@ -277,7 +290,9 @@ git commit -m "Grants 3a: a fixed record format, sign_record and verify_record (
   `Layers._owned_layer`; `common.require`.
 - Produces:
   - `SIGNATURE_SCHEMA: str`
-  - `Signatures._station_identity(self) -> PeerIdentity`
+  - `Signatures._load_station_identity(self) -> None` (startup: loads `identity.json` if it exists; raises if it can't)
+  - `Signatures._station_identity(self) -> PeerIdentity` (the identity; creates the file if missing, so call it only
+    inside a signing transaction, or where a signature already exists)
   - `Signatures._revision_record(self, db, layer_id: str, revision: int) -> dict | None`
   - `Signatures._sign_revision(self, db, layer_id: str, revision: int) -> None`
   - `Signatures._backfill_revision_signatures(self) -> None`
@@ -308,13 +323,17 @@ def test_activation_and_narrowing_sign_each_instructions_revision(env):
     layer = new_layer(clients[0], kind='instructions', title='Règles · 規則', body='Run the tests. ✓',
                       audience_users=[first['id'], second['id']])
     assert activate(clients[0], layer).status_code == 200
+    edited = clients[0].put(f'/api/layers/{layer["id"]}', json={'version': layer['version'], 'title': 'Changed',
+                                                                'body': 'Changed draft'})
+    assert edited.status_code == 200, edited.text  # the draft moves on; the revisions keep what was activated
     narrowed = clients[0].post(f'/api/layers/{layer["id"]}/revoke', json={'revision': 1, 'user_ids': [second['id']]})
     assert narrowed.status_code == 200, narrowed.text
     rows, card = signature_rows(store), card_of(store._station_identity())
     assert set(rows) == {(layer['id'], 1), (layer['id'], 2)}
     for revision, audience in ((1, [first['id'], second['id']]), (2, [first['id']])):
         record = stored_record(store, layer['id'], revision)
-        assert record['audience_users'] == audience and record['title'] == 'Règles · 規則' and record['policy'] is None
+        assert record['audience_users'] == audience and record['policy'] is None
+        assert record['title'] == 'Règles · 規則' and record['body'] == 'Run the tests. ✓'
         assert record['owner_id'] == users[0]['id'] and record['station'] == store._station_identity().peer_id
         assert verify_record(card, record, rows[(layer['id'], revision)])
 
@@ -336,7 +355,7 @@ def test_a_note_is_never_signed_and_the_kind_comes_from_the_revision(env):
     assert stored_record(store, changing['id'], 1) is None and stored_record(store, note['id'], 1) is None
 
 
-def test_startup_signs_each_unsigned_instructions_revision_once(env):
+def test_startup_signs_each_unsigned_instructions_revision_once(env, monkeypatch):
     app, clients, users, clock = env
     store = app.state.store
     ship, _ = docked(store, users[0]['id'], 'serenity')
@@ -352,7 +371,9 @@ def test_startup_signs_each_unsigned_instructions_revision_once(env):
     assert set(rows) == {(law['id'], 1)}
     assert verify_record(card_of(restarted._station_identity()), stored_record(restarted, law['id'], 1), rows[(law['id'], 1)])
     assert restarted._station_identity().peer_id == app.state.federation.identity.peer_id  # the identity federation uses
-    assert signature_rows(Store(store.data_dir)) == rows  # a second start writes and changes nothing
+    signed, real = [], PeerIdentity.sign_record
+    monkeypatch.setattr(PeerIdentity, 'sign_record', lambda self, record: signed.append(record) or real(self, record))
+    assert signature_rows(Store(store.data_dir)) == rows and signed == []  # a second start signs nothing
 
 
 def test_a_station_whose_identity_cannot_be_read_does_not_start(tmp_path):
@@ -361,13 +382,47 @@ def test_a_station_whose_identity_cannot_be_read_does_not_start(tmp_path):
     (tmp_path / 'station' / 'identity.json').write_text('not json')
     with pytest.raises(ValueError):
         Store(tmp_path / 'station')
+
+
+def test_a_new_stations_first_card_still_names_its_host(tmp_path, capsys):
+    """Plan review M1: opening a store creates no identity, so `card --endpoint` (after `init`) can still put the
+    station's host in its certificate, which peers reaching it by hostname check."""
+    import json
+    from cryptography import x509
+    from superyak_peer.__main__ import main
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'state')
+    assert not (store.data_dir / 'identity.json').exists()
+    store.create_user('owner', 'Owner', 'long-password', is_admin=True)
+    main(['card', '--data-dir', str(store.data_dir), '--username', 'owner', '--endpoint', 'https://peer.example:7435'])
+    certificate = x509.load_pem_x509_certificate(json.loads(capsys.readouterr().out)['certificate'].encode())
+    names = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+    assert 'peer.example' in names
+
+
+def test_the_first_signature_creates_a_missing_identity(tmp_path):
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'state')
+    owner = store.create_user('owner', 'Owner', 'long-password')
+    ship, _ = docked(store, owner['id'], 'serenity')
+    layer = store.create_layer(owner['id'], {'kind': 'instructions', 'title': 'Law', 'body': 'Be kind.',
+                                             'audience_users': [ship['id']]})
+    assert not (store.data_dir / 'identity.json').exists()
+    store.activate_layer(owner['id'], layer['id'], layer['version'])
+    assert (store.data_dir / 'identity.json').exists()
+    card = card_of(PeerIdentity.load_or_create(store.data_dir))
+    assert verify_record(card, stored_record(store, layer['id'], 1), signature_rows(store)[(layer['id'], 1)])
 ```
+
+`test_a_new_stations_first_card_still_names_its_host` passes before this task too: it guards today's behaviour, and the
+mutation in Step 5 that creates the identity at every start must fail it.
 
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cd peer && uv run --locked python -m pytest -q -p no:cacheprovider tests/test_signatures.py`
-Expected: the four new tests fail: `sqlite3.OperationalError: no such table: revision_signatures` (or
-`AttributeError: 'Store' object has no attribute '_station_identity'`), and the last with `Failed: DID NOT RAISE`.
+Expected: the narrowing, note, startup and first-signature tests fail with `sqlite3.OperationalError: no such table:
+revision_signatures` (or `AttributeError: 'Store' object has no attribute '_station_identity'`), the identity test
+with `Failed: DID NOT RAISE`; the first-card test passes (see above).
 
 - [ ] **Step 3: Write the implementation**
 
@@ -387,9 +442,17 @@ CREATE TABLE IF NOT EXISTS revision_signatures(layer_id TEXT NOT NULL, revision 
 
 
 class Signatures:
+    def _load_station_identity(self):
+        """G4: at startup, the identity file federation uses is loaded if it exists (a symlink too, which
+        load_or_create refuses), and a store that can't load it doesn't start. A missing one waits for the first
+        signature, so a new station's first `card --endpoint` still names its host (plan review M1)."""
+        path = self.data_dir / 'identity.json'
+        if path.exists() or path.is_symlink():
+            self._identity = PeerIdentity.load_or_create(self.data_dir)
+
     def _station_identity(self):
-        """G4: the identity in the data directory, the one federation uses, loaded at startup and kept. Unlike
-        _own_peer_id's lazy read, a store that can't load it doesn't start, so nothing is written unsigned."""
+        """The identity, created if missing. Only a signing transaction creates it: that holds the dispatch gate, so
+        two processes can't both create it, and a failed create rolls the signed write back (G4)."""
         if getattr(self, '_identity', None) is None:
             self._identity = PeerIdentity.load_or_create(self.data_dir)
         return self._identity
@@ -433,7 +496,7 @@ In `peer/superyak_peer/db.py`:
 - after `self._backfill_brief_history()  # ship briefs S5: after the schema, at every start`, add:
 
 ```python
-        self._station_identity()  # spec A step 3, G4: a station that can't load its identity doesn't start
+        self._load_station_identity()  # spec A step 3, G4: a station that can't load its identity doesn't start
         self._backfill_revision_signatures()  # G5: after the schema, at every start
 ```
 
@@ -466,7 +529,9 @@ Apply each alone, run `tests/test_signatures.py`, see a failure, restore:
 - delete the `_sign_revision` call in `revoke_layer_routes` → the narrowing test fails (no `(layer, 2)` row);
 - in `_revision_record`, read the kind from the layer's draft (`SELECT draft FROM layers`) instead of the snapshot →
   the note-then-instructions test fails (revision 1 gets signed by the backfill or the record isn't None);
-- delete the `self._station_identity()` line in `Store.__init__` → the identity test fails (`DID NOT RAISE`);
+- delete the `self._load_station_identity()` line in `Store.__init__` → the identity test fails (`DID NOT RAISE`);
+- replace that line with `self._station_identity()` (create at every start, the plan's first version) → the
+  first-card test fails (`peer.example` missing from the certificate);
 - delete `self._backfill_revision_signatures()` → the startup test fails.
 
 - [ ] **Step 6: Commit**
@@ -515,7 +580,8 @@ def test_only_the_layers_owner_reads_a_signed_revision(env):
     assert clients[1].get(path).status_code == 404  # owns a ship in the audience, but the layer binds only its owner's
     assert clients[2].get(path).status_code == 404  # an admin with no tie to it
     assert clients[0].get('/api/layers/no-such-layer/revisions/1/signed').status_code == 404
-    assert clients[0].get(f'/api/layers/{layer["id"]}/revisions/7/signed').status_code == 404
+    for missing in (7, 0, 2 ** 63):  # none of them is a revision, and 2**63 is past SQLite's integers
+        assert clients[0].get(f'/api/layers/{layer["id"]}/revisions/{missing}/signed').status_code == 404
     assert ship_client(app, key).get(path).status_code == 403
 
 
@@ -540,7 +606,8 @@ Expected: FAIL, the owner's request gets 404 (no such route), not 200.
 
 - [ ] **Step 3: Write the implementation**
 
-In `peer/superyak_peer/signatures.py`, add to `class Signatures`:
+In `peer/superyak_peer/signatures.py`, change the import to `from .common import Problem, require`, and add to
+`class Signatures`:
 
 ```python
     def revision_signed(self, actor, layer_id, revision):
@@ -548,6 +615,8 @@ In `peer/superyak_peer/signatures.py`, add to `class Signatures`:
         (a note's, or one that doesn't exist), gets 404, so the route never says whether a layer exists."""
         with self.transaction() as db:
             self._owned_layer(db, actor, layer_id)
+            if not 1 <= revision <= 2 ** 63 - 1:  # past SQLite's integers sqlite3 raises OverflowError; no such revision
+                raise Problem(404, 'Not found')
             row = require(db.execute('SELECT signature FROM revision_signatures WHERE layer_id=? AND revision=?',
                                      (layer_id, revision)).fetchone())
             return {'station': self._station_identity().peer_id, 'record': self._revision_record(db, layer_id, revision),
@@ -563,13 +632,26 @@ two lines):
         return store.revision_signed(actor(request), key, revision)
 ```
 
-In `peer/API.md`, in "## Instruction layers", replace
+In `peer/API.md`, in the route table of "## Layers and publications", add after the
+``| GET `/api/layers/{id}/revisions` | — | Immutable revision array; owner only |`` row:
+
+``| GET `/api/layers/{id}/revisions/{n}/signed` | — | `{station, record, signature}` for an instructions revision; owner only (see Signed records) |``
+
+In "## Store interfaces for following tasks", after the paragraph that begins "Trusted transaction helpers:", add:
+
+`Signatures (spec A step 3): `_sign_revision(db,layer_id,revision)` signs an instructions revision inside the
+transaction that writes it; `revision_signed(actor,key,revision)` returns its signed record to the layer's owner.`
+
+In "## Instruction layers", replace
 
 `it labels it with its owner's name (a label, not a cryptographic signature; that comes in a later step).`
 
-with
+with these two lines, wrapped at the paragraph's width:
 
-`it labels it with its owner's name, and the station signs each of its revisions with its Ed25519 key (see Signed records).`
+```
+it labels it with its owner's name, and the station signs each of its revisions with its Ed25519 key (see
+Signed records).
+```
 
 and add this section right before `## Files`:
 
@@ -593,7 +675,10 @@ Anyone else, and any revision without a signature, gets 404; a ship key gets 403
 `identity.verify_record(card, record, signature)` returns True only when the card is valid, the record has exactly its
 kind's keys (`instructions-revision`, `grant` or `grant-revocation`), its `station` is the card's peer id, and the
 signature verifies. It never raises. A card exists only for a station with an HTTPS federation endpoint (`serve
---endpoint`). A station that can't load its identity doesn't start.
+--endpoint`). A station that can't load its identity doesn't start; a new station creates it at its first
+signature, so its first card export still names its host. The nightly copies leave out the identity files: a station
+rebuilt from a copy without its own `identity.json` gets a new key, and its stored signatures stop verifying against
+its new card (the backfill signs only unsigned revisions).
 ```
 
 - [ ] **Step 4: Run the tests to see them pass**
@@ -610,8 +695,9 @@ Apply each alone, run the two new tests, see a failure, restore:
 - [ ] **Step 6: Run the whole peer suite**
 
 Run: `cd peer && uv run --locked python -m pytest -q -p no:cacheprovider`
-Expected: everything passes (main at 6623845 had 807 passed and 1 skipped on the last-activity branch; this merge
-adds the tests above). Report the counts, and any failure by name.
+Expected: everything passes. The plan review measured 813 passed and 1 skipped at dae961a, and 824 passed with the
+plan's first version; this revision adds two tests, so about 826 passed and 1 skipped on that base (more once the
+build branch includes main's newer commits). Report the counts, and any failure by name.
 
 - [ ] **Step 7: Commit**
 
@@ -628,4 +714,5 @@ git commit -m "Grants 3a: the layer's owner reads a revision's signed record; AP
 - Section 2: post the head in "Superyak: city of AI" for Rio Grande; the Pi runs both suites. On merge, the deploy
   restarts the lighthouse; the first start signs the active station law (G5). A live check: as Andy in the browser
   console, `GET /api/layers/c879372542444e4c8f95f2c0db69f8fb/revisions/<active revision>/signed` returns a record that
-  verifies against the station's card (`superyak-peer card --endpoint <the station's https endpoint>`).
+  verifies against the station's card: `uv run --locked --project peer python -m superyak_peer card --data-dir
+"$(STATION_DATA)" --username andy --endpoint https://<the station's host>:<port>` prints it.

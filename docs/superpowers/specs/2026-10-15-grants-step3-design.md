@@ -88,9 +88,13 @@ envelopes. This merge gives the store a signer and signs instructions revisions.
   - the signature verifies over `canonical(record)` with the card's key.
 
   So a federation envelope with its signature taken off never verifies as a record: it has no record kind.
-- **G4.** The store uses the station's identity file in its own data directory, the one federation uses. It loads it
-  at startup, creating it if missing exactly as `PeerIdentity.load_or_create` does today, and keeps it. If the
-  identity can't be loaded, the station fails to start rather than write unsigned records.
+- **G4.** The store uses the station's identity file in its own data directory, the one federation uses. At startup
+  it loads the file if it exists and keeps it; if the file can't be loaded, the station fails to start rather than
+  write unsigned records. A missing file is created, exactly as `PeerIdentity.load_or_create` does today, only when
+  the store first signs, inside the transaction that signs. That transaction holds the dispatch gate, so two
+  processes can't both create it, and a failed create rolls the signed write back. (Plan review of merge 3a, M1:
+  creating the file at every start would fix a new station's certificate before `card --endpoint` can add the
+  station's hostname to it.)
 - **G5.** At startup, every revision whose snapshot has `kind: "instructions"` and that has no signature is signed
   once, from its stored snapshot. The active station law (layer c879372542444e4c8f95f2c0db69f8fb) is one of them. A
   second start signs nothing.
@@ -292,6 +296,9 @@ Spec A section 4 orders the station's decision. Step 3 adds basis `grant` betwee
   `created` and `expires` the same way.
 - The 24-hour bound on mentions (S6) means a grantee's mention that waits a day for an offline watcher runs
   read-only.
+- The nightly copies leave out the identity files (backups spec). A station rebuilt from a copy without its own
+  `identity.json` gets a new key: its stored signatures stop verifying against its new card, and the startup backfill
+  doesn't sign them again, since they aren't unsigned.
 - Checking a signature needs the station's card, which exists only when the station has an HTTPS federation
   endpoint (`identity.py` `validate_card`); the CLI prints one with `--endpoint`. Tests build the card with a
   placeholder endpoint.
@@ -311,7 +318,9 @@ Each test is named, written first, and seen failing first.
 2. A narrowing's new revision is signed with its narrower `audience_users`.
 3. Startup signs each unsigned instructions revision once, and a second start changes nothing. Activating a note
    writes no signature. A layer whose revision 1 is a note and whose revision 2 is instructions has only revision 2
-   signed. A station whose identity file can't be read fails to start.
+   signed. A station whose identity file can't be read fails to start. Opening a store on a new directory creates no identity
+   file, so the first `card --endpoint` still names the station's host in its certificate; the first signature creates
+   it.
 4. The `/signed` route answers the layer's owner. It gives 404 to anyone else, including the owner of a ship in the
    audience and a request for an unknown layer, and 403 to a ship key.
 
