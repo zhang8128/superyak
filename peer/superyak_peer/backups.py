@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 import urllib.request
-from .auth import token_hash
+from .auth import account_role, token_hash
 from .ships import safe_line
 
 STAMP = '%Y%m%dT%H%M%SZ'
@@ -532,18 +532,37 @@ def _remove_members_like_replaced(db, old, now, report):
 
 def _lower_roles_like_replaced(db, old, now, report):
     """With a usable replaced file: is_admin and is_super_admin come down to the replaced file's value where that is
-    lower. Never up. When that leaves no active super admin, the report says so."""
-    lowered_super = False
+    lower. Never up. When that leaves no active super admin, the report says so. Each account lowered is recorded as the
+    station records a role change (auth.py change_account_role): its role_version goes up, to one past the higher of the
+    two files' (so a tab holding a version either file issued is refused), and one account_role_changes row names the old
+    and new role, with the system author as actor (the account itself in a copy that has none). A copy lacking either
+    column or table still has its roles lowered, and the report names what it skipped."""
+    wanted = {}
     for column in ('is_admin', 'is_super_admin'):
         if not _usable(db, old, report, f'users.{column}'):
             continue
         there = dict(old.execute(f'SELECT id, {column} FROM users').fetchall())
-        for row in db.execute(f'SELECT id, username, {column} FROM users ORDER BY username').fetchall():
+        for row in db.execute(f'SELECT id, {column} FROM users ORDER BY username').fetchall():
             if row['id'] in there and there[row['id']] < row[column]:
-                db.execute(f'UPDATE users SET {column}=? WHERE id=?', (there[row['id']], row['id']))
-                lowered_super = lowered_super or column == 'is_super_admin'
-                if row['username'] not in report['lowered']:
-                    report['lowered'].append(row['username'])
+                wanted.setdefault(row['id'], {})[column] = there[row['id']]
+    trace = _usable(db, None, report, 'users.role_version', 'users.is_admin', 'users.is_super_admin', 'account_role_changes')
+    versions = dict(old.execute('SELECT id, role_version FROM users').fetchall()) if _has(old, 'users.role_version') else {}
+    system = db.execute("SELECT value FROM system_meta WHERE key='system_author'").fetchone() if _has(db, 'system_meta.value') else None
+    system = system[0] if system and db.execute('SELECT 1 FROM users WHERE id=?', (system[0],)).fetchone() else None
+    lowered_super = False
+    for user_id, columns in wanted.items():
+        user = db.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+        for column, value in columns.items():
+            db.execute(f'UPDATE users SET {column}=? WHERE id=?', (value, user_id))
+        lowered_super = lowered_super or 'is_super_admin' in columns
+        report['lowered'].append(user['username'])
+        if trace:
+            version = max(user['role_version'] or 0, versions.get(user_id) or 0) + 1
+            after = db.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+            db.execute('UPDATE users SET role_version=? WHERE id=?', (version, user_id))
+            db.execute('INSERT INTO account_role_changes(user_id,actor_id,old_role,new_role,role_version,created) VALUES(?,?,?,?,?,?)',
+                       (user_id, system or user_id, account_role(user), account_role(after), version, now))
+    report['lowered'].sort()
     if lowered_super and _has(db, 'users.activation_pending'):
         report['no_super_admin'] = db.execute('SELECT 1 FROM users WHERE is_super_admin=1 AND activation_pending=0').fetchone() is None
 
@@ -568,7 +587,17 @@ PEER_NEEDS = ('peers.paired', 'remote_contacts.peer_id', 'remote_contacts.name',
               'inbox.origin', 'inbox.payload')
 
 
-def _unpair(db, peer, report):
+def _shown(db, old, peer):
+    """Follow-up 5: how a report line names a peer. The 12-character short id, unless another peer of the copy or the
+    replaced file shares it, when UNPAIR= would refuse the short id: then the full id."""
+    ids = set()
+    for connection in (db, old):
+        if connection is not None and _has(connection, 'peers.peer_id'):
+            ids |= {row[0] for row in connection.execute('SELECT peer_id FROM peers')}
+    return peer if sum(other[:12] == peer[:12] for other in ids | {peer}) > 1 else peer[:12]
+
+
+def _unpair(db, old, peer, report):
     """Exactly Federation.unpair (federation.py:43-45) on the staged copy: paired=0, that peer's contacts' pending and
     failed outbox rows withdrawn (delivered and sent rows stay), its inbox payloads nulled."""
     names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))]
@@ -576,7 +605,7 @@ def _unpair(db, peer, report):
     withdrawn = db.execute("UPDATE outbox SET status='withdrawn' WHERE contact_id IN "
                            "(SELECT id FROM remote_contacts WHERE peer_id=?) AND status IN ('pending','failed')", (peer,)).rowcount
     nulled = db.execute('UPDATE inbox SET payload=NULL WHERE origin=? AND payload IS NOT NULL', (peer,)).rowcount
-    report['unpaired'].append((peer[:12], names))
+    report['unpaired'].append((_shown(db, old, peer), names))
     report['unpaired_full'].append(peer)
     report['unpaired_counts'] = [sum(pair) for pair in zip(report['unpaired_counts'], (withdrawn, nulled))]
 
@@ -591,10 +620,10 @@ def _unpair_like_replaced(db, old, now, report):
     there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
     for peer, paired in db.execute('SELECT peer_id, paired FROM peers ORDER BY peer_id').fetchall():
         if paired and peer in there and not there[peer]:
-            _unpair(db, peer, report)
+            _unpair(db, old, peer, report)
 
 
-def _unpair_named(db, named, report):
+def _unpair_named(db, old, named, report):
     """--unpair PEER (revision 4): the same, for the peers a person names (the only way without a usable replaced file)."""
     if not named:
         return
@@ -602,7 +631,7 @@ def _unpair_named(db, named, report):
         raise UnpairRefused('Refused: this copy lacks the peer tables, so there is nothing to unpair.')
     for peer in named:
         if peer not in report['unpaired_full']:
-            _unpair(db, peer, report)
+            _unpair(db, old, peer, report)
     # a peer named here is no longer one the report calls left paired (N3)
     report['lacked'] = [item for item in report['lacked'] if item[2] not in report['unpaired_full']]
 
@@ -618,6 +647,19 @@ def _resolve_peers(db, names):
                                 'give a peer\'s 12-character id or its full id, as exactly one peer has it.')
         found.append(matches[0])
     return found
+
+
+MARK_KEY = 'restore_reconcile'
+
+
+def _write_mark(db, old, now, path):
+    """Follow-up 1: the proof, inside the staged copy, that the reconcile ran on it. It is a system_meta row (the station's
+    own key/value table, which a copy from before the system author lacks, so it is created here), written in the
+    reconcile's transaction: a rolled-back run leaves none. Runbook step 6 reads it before it installs. It records when
+    the reconcile ran, the staged file's absolute path and whether a replaced file was compared; it holds no account, key or token."""
+    db.execute('CREATE TABLE IF NOT EXISTS system_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    db.execute('INSERT OR REPLACE INTO system_meta(key, value) VALUES(?, ?)',
+               (MARK_KEY, json.dumps({'at': now, 'replaced': old is not None, 'path': os.path.abspath(path)})))
 
 
 def _title(draft):
@@ -639,13 +681,24 @@ def _report_differences(db, old, now, report):
         for layer_id, active, draft in old.execute('SELECT id, active_revision, draft FROM layers ORDER BY id').fetchall():
             if (layer_id in here and here[layer_id] != active) or (layer_id not in here and active is not None):
                 report['layers'].append((layer_id[:6], _title(draft), here.get(layer_id), active))
+    if _usable(db, old, report, 'room_briefs.revision', 'room_briefs.body', 'rooms.title'):
+        # Follow-up 4: a restore brings back a brief the owner changed or removed since the copy (or loses one written since).
+        # By room, for rooms in both files; the text is compared and never printed.
+        def briefs(connection):
+            return {row[0]: (row[1], row[2]) for row in connection.execute('SELECT room_id, revision, body FROM room_briefs')}
+        here, there = briefs(db), briefs(old)
+        both = ({row[0] for row in db.execute('SELECT id FROM rooms')} & {row[0] for row in old.execute('SELECT id FROM rooms')})
+        for room_id in sorted(both):
+            if here.get(room_id) != there.get(room_id):
+                title = db.execute('SELECT title FROM rooms WHERE id=?', (room_id,)).fetchone()[0]
+                report['briefs'].append((room_id[:6], title, here.get(room_id), there.get(room_id)))
     if _usable(db, old, report, 'peers.paired'):  # revision 4: paired here and unpaired there was applied above
         here = dict(db.execute('SELECT peer_id, paired FROM peers').fetchall())
         there = dict(old.execute('SELECT peer_id, paired FROM peers').fetchall())
         def known(peer):
             names = [row[0] for row in db.execute('SELECT name FROM remote_contacts WHERE peer_id=? ORDER BY name', (peer,))] \
                 if _has(db, 'remote_contacts.name') else []
-            return (peer[:12], names, peer)
+            return (_shown(db, old, peer), names, peer)
         report['peers'] = [known(peer) for peer in sorted(there) if there[peer] and not here.get(peer)]
         report['lacked'] = [known(peer) for peer in sorted(here) if here[peer] and peer not in there]
 
@@ -760,7 +813,7 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
     _refuse(db_path, live_data_dir)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
-              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],
+              'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'briefs': [], 'peers': [], 'skipped': [],
               'not_compared': []}
     db = sqlite3.connect(db_path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
@@ -796,7 +849,8 @@ def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=ti
                 for step in (_revoke_like_replaced, _remove_members_like_replaced, _lower_roles_like_replaced,
                              _close_breakouts_like_replaced, _unpair_like_replaced, _report_differences):
                     step(db, old, now, report)
-            _unpair_named(db, named, report)
+            _unpair_named(db, old, named, report)
+            _write_mark(db, old, now, db_path)
             db.execute('COMMIT')
         except BaseException:
             if db.in_transaction:  # SQLite rolls back by itself on some errors (SQLITE_FULL, IOERR); the CLI reports those
@@ -854,6 +908,13 @@ def describe_reconcile(report):
         lines.append('Reported, not applied: law layers whose active revision differs: ' + '; '.join(
             f'{short} {safe_line(title)} (here {_revision(here)}, in the replaced file {_revision(there)})'
             for short, title, here, there in report['layers']) + '. Set them in the browser before the ships start.')
+    if report['briefs']:
+        def brief_state(state):
+            return 'none' if state is None else f'revision {state[0]}' + (', removed' if not state[1] else '')
+        lines.append('Reported, not applied: room briefs that differ from the replaced file: ' + '; '.join(
+            f'{short} {safe_line(title)} (here {brief_state(here)}, in the replaced file {brief_state(there)})'
+            for short, title, here, there in report['briefs']) + '. Their text is not shown. Read them in the browser and '
+            'save again the one you want before the ships start.')
     if report['peers'] or report['lacked']:
         def listed(items):
             return ', '.join(f'{short} ({people(names)})' if names else short for short, names, _ in items)
