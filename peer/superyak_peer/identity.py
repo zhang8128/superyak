@@ -71,6 +71,21 @@ def validate_card(card):
     except (ValueError, TypeError, KeyError, AttributeError):
         raise Problem(400, 'Invalid peer card') from None
 
+# Spec A step 3 (G3, G12): a signed record has exactly its kind's keys and names its station, so no record passes
+# as another kind, as a federation envelope (which has no record kind), or as another station's.
+RECORD_KEYS = {
+    'instructions-revision': frozenset({'kind', 'station', 'layer_id', 'revision', 'owner_id', 'title', 'body',
+                                        'audience_users', 'policy', 'created'}),
+    'grant': frozenset({'kind', 'station', 'id', 'issuer_id', 'grantee_id', 'actions', 'targets', 'rooms', 'expires',
+                        'budget', 'depth', 'confirm', 'parent_id', 'charter_layer_id', 'charter_revision', 'follow',
+                        'created'}),
+    'grant-revocation': frozenset({'kind', 'station', 'grant', 'revoked', 'revoked_by', 'reason'}),
+}
+
+def _record_shape_ok(record):
+    return (isinstance(record, dict) and isinstance(record.get('kind'), str)
+            and RECORD_KEYS.get(record['kind']) == set(record))
+
 class PeerIdentity:
     def __init__(self, path, record):
         self.data_dir = path
@@ -129,6 +144,12 @@ class PeerIdentity:
                               'certificate': self.certificate, 'fingerprint': cert.fingerprint(hashes.SHA256()).hex(),
                               'endpoint': endpoint, 'participant': {k: participant[k] for k in ('id', 'name')}})
 
+    def sign_record(self, record):
+        """G3: this station's signature over one of its own records (RECORD_KEYS), base64."""
+        if not _record_shape_ok(record) or record['station'] != self.peer_id:
+            raise ValueError('Not a record this station signs')
+        return base64.b64encode(self.key.sign(canonical(record))).decode()
+
     def envelope(self, *, destination, actor, resource_id, revision, action, recipients, payload, event_id=None):
         value = {'version': 1, 'event_id': event_id or uid(), 'origin': self.peer_id, 'destination': destination,
                  'actor': {'peer': self.peer_id, 'id': actor}, 'resource_id': resource_id, 'revision': revision,
@@ -164,3 +185,16 @@ def verify_envelope(raw, card, destination):
         return value
     except (ValueError, TypeError, KeyError, InvalidSignature):
         raise Problem(403, 'Peer authentication failed') from None
+
+def verify_record(card, record, signature):
+    """G3: True only for a valid card, a record with exactly its kind's keys that names the card's station, and a
+    signature over its canonical JSON by the card's key. Anything else is False."""
+    try:
+        validate_card(card)
+        if not _record_shape_ok(record) or record['station'] != card['peer_id']:
+            return False
+        key = ed25519.Ed25519PublicKey.from_public_bytes(base64.b64decode(card['signing_key'], validate=True))
+        key.verify(base64.b64decode(signature, validate=True), canonical(record))
+        return True
+    except Exception:  # noqa: BLE001 - a verifier answers False and never raises (G3)
+        return False
