@@ -126,6 +126,7 @@ class Layers:
                     snapshot['audience_notes'].append('Current and future members of ' + space['name'])
             revision = row['resource_version'] + 1
             db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, version, encode(snapshot), self.clock()))
+            self._sign_revision(db, key, revision)  # spec A step 3, G2: an instructions revision is signed as it is written
             db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
             self.emit(db, 'layer.activated', key, revision, {'owner_id': actor, 'draft_version': version})
             return self._active_layer(db, key, actor)
@@ -160,6 +161,7 @@ class Layers:
                 snapshot['public'] = False
             revision = row['resource_version'] + 1
             db.execute('INSERT INTO layer_revisions VALUES(?,?,?,?,?)', (key, revision, active['draft_version'], encode(snapshot), self.clock()))
+            self._sign_revision(db, key, revision)  # G2: the narrowing's new revision, with its narrower audience
             db.execute('UPDATE layers SET active_revision=?,resource_version=? WHERE id=?', (revision, revision, key))
             self.emit(db, 'layer.restricted', key, revision, {'owner_id': actor, 'previous_revision': row['active_revision']})
             return self._active_layer(db, key, actor)
