@@ -403,3 +403,92 @@ def test_own_peer_id_inside_a_room_read_does_not_stall(tmp_path):
     started = time.monotonic()
     assert store.get_room(andy['id'], f'{peer}:r1')['title'] == 'Theirs'
     assert time.monotonic() - started < 10 and (store.data_dir / 'identity.json').is_file()
+
+
+def test_a_lost_identity_is_not_replaced_silently(tmp_path, capsys, monkeypatch):
+    """G4b, test 4b: with a signed revision and identity.json removed, every signing start refuses, naming the file and
+    station-new-identity, and none of them makes a key; a signing=False start still opens."""
+    import uvicorn
+    from superyak_peer.app import create_app
+    from superyak_peer.db import Store
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    (store.data_dir / 'identity.json').unlink()
+    for start in (lambda: Store(store.data_dir), lambda: create_app(store.data_dir, allowed_origins=['http://testserver'])):
+        with pytest.raises(ValueError, match='identity.json.*station-new-identity'):
+            start()
+    served = []
+    monkeypatch.setattr(uvicorn, 'run', lambda *args, **kwargs: served.append(args))  # a start that got this far would serve
+    for argv in (['card', '--data-dir', store.data_dir, '--username', 'andy', '--endpoint', 'https://peer.example:7435'],
+                 ['serve', '--data-dir', store.data_dir, '--peer-tls']):
+        code, out, err = run_cli(capsys, *argv)
+        assert code == 1 and 'identity.json' in err and 'station-new-identity' in err, (argv[0], err)
+    assert served == [] and not (store.data_dir / 'identity.json').exists()  # no new key from any of them
+    Store(store.data_dir, signing=False)
+
+
+def test_a_station_with_no_signed_records_still_creates_its_identity_at_the_first_signature(tmp_path):
+    """G4b keeps G4: a note's revision is not a signed record, so a station holding one and no identity starts, and
+    creates none until it signs."""
+    from superyak_peer.db import Store
+    store = Store(tmp_path / 'station')
+    owner = store.create_user('owner', 'Owner', 'long-password')
+    note = store.create_layer(owner['id'], {'title': 'Note', 'body': 'mine'})
+    store.activate_layer(owner['id'], note['id'], note['version'])
+    Store(store.data_dir)
+    assert not (store.data_dir / 'identity.json').exists()
+
+
+def test_a_store_without_signing_refuses_to_sign_over_a_lost_identity(tmp_path):
+    """G4b's lazy path, test 4a: a signing=False store opens, but an activation through it fails, writing nothing, when
+    the station holds signed records and identity.json is missing."""
+    from superyak_peer.db import Store
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    (store.data_dir / 'identity.json').unlink()
+    quiet = Store(store.data_dir, signing=False)
+    layer = quiet.create_layer(owner['id'], {'kind': 'instructions', 'title': 'More', 'body': 'x', 'audience_users': [ship['id']]})
+    with pytest.raises(ValueError, match='identity.json'):
+        quiet.activate_layer(owner['id'], layer['id'], layer['version'])
+    with quiet.transaction() as db:
+        assert db.execute('SELECT active_revision FROM layers WHERE id=?', (layer['id'],)).fetchone()[0] is None
+        assert db.execute('SELECT count(*) FROM revision_signatures').fetchone()[0] == 1
+    assert not (store.data_dir / 'identity.json').exists()
+
+
+def test_the_peer_tls_check_reads_an_old_or_missing_database_without_changing_it(tmp_path):
+    """G4b, test 4c: `serve --peer-tls` checks before any Store opens, read-only. A database from before merge 3a (no
+    revision_signatures table) and a missing one hold no signed records; neither is created or changed. One that can't
+    be read gives a message naming it, not a traceback (plan review N1)."""
+    import sqlite3
+    from contextlib import closing
+    from superyak_peer.signatures import refuse_a_lost_identity_before_the_store
+    old = tmp_path / 'old'
+    old.mkdir(mode=0o700)
+    with closing(sqlite3.connect(old / 'peer.sqlite3')) as db:
+        db.execute('CREATE TABLE users(id TEXT PRIMARY KEY)')
+        db.commit()
+    before = (old / 'peer.sqlite3').read_bytes()
+    refuse_a_lost_identity_before_the_store(old)
+    assert (old / 'peer.sqlite3').read_bytes() == before and sorted(p.name for p in old.iterdir()) == ['peer.sqlite3']
+    missing = tmp_path / 'missing'
+    refuse_a_lost_identity_before_the_store(missing)
+    assert not missing.exists()
+    junk = tmp_path / 'junk'  # unreadable, with no identity.json: it can't rule out signed records, so it refuses
+    junk.mkdir(mode=0o700)
+    (junk / 'peer.sqlite3').write_bytes(b'not a database, ' * 64)
+    with pytest.raises(ValueError, match='peer.sqlite3'):
+        refuse_a_lost_identity_before_the_store(junk)
+
+
+def test_the_restore_test_passes_on_a_copy_holding_signed_records(tmp_path, monkeypatch, capsys):
+    """G4b, test 4c: the copy holds a signed revision and has no identity file, so served as it is it would refuse to
+    start (exit 22). The restore test gives its scratch directory a throwaway identity, removed with it."""
+    from superyak_peer import backups
+    from test_restore import restore_test as run_restore_test, runtime_dir
+    run = runtime_dir(tmp_path, monkeypatch)
+    store, owner, ship, room, docking = signed_station(tmp_path)
+    store.send_message(owner['id'], room['id'], 'm1', 'hello')
+    rotation = tmp_path / 'backups' / 'station'
+    backups.run_backup(store.data_dir, rotation)
+    assert run_restore_test('--backup-dir', rotation) == 0, capsys.readouterr().err
+    assert capsys.readouterr().out.rstrip().endswith('; users 3, rooms 1, messages 1.')
+    assert list(run.iterdir()) == []  # the scratch directory, and the throwaway identity in it, are gone

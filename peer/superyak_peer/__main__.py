@@ -406,6 +406,8 @@ def main(argv=None):
                 if args.tls_cert or args.tls_key:
                     raise ValueError('Choose generated peer TLS or explicit TLS files')
                 host = urlsplit(args.federation_endpoint).hostname if args.federation_endpoint else args.host
+                from .signatures import refuse_a_lost_identity_before_the_store
+                refuse_a_lost_identity_before_the_store(args.data_dir)  # G4b: before the identity is loaded or made with its hosts
                 identity = PeerIdentity.load_or_create(args.data_dir, hosts=tuple(dict.fromkeys(['localhost','127.0.0.1',host])))
                 args.tls_cert, args.tls_key = identity.cert_path, identity.key_path
             if args.federation_endpoint and not args.peer_tls:

@@ -1053,6 +1053,8 @@ def restore_test(backup_dir, backup=None):
             reconcile(target)  # S16 without --replaced, before the server's start: the scratch holds no dispatch.lock yet
         except Exception as error:
             raise BackupError(24) from error
+        from .identity import PeerIdentity  # here, as Store is below: backups.py stays standard library when imported
+        PeerIdentity.load_or_create(scratch)  # G4b: a throwaway identity, so a copy holding signed records starts; removed with it
         server, port = _start(scratch)
         from .db import Store  # S7 step 7: the trusted local path; the test never mints a session or holds a password
         with Store(scratch).transaction() as db:

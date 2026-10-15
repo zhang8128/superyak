@@ -1,20 +1,57 @@
 """Station signatures (spec A step 3, merge 3a; 2026-10-15-grants-step3-design.md G1-G6): the station's Ed25519
 key signs each instructions revision, so a revision can be checked against the station's card. Merge 3b adds grants
 and revocations here."""
+from contextlib import closing
 import json
+from pathlib import Path
+import sqlite3
 from .common import Problem, require
 from .identity import PeerIdentity
 
 SIGNATURE_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS revision_signatures(layer_id TEXT NOT NULL, revision INTEGER NOT NULL, signature TEXT NOT NULL, PRIMARY KEY(layer_id, revision));
 '''
+# G4b: the records a new identity would void, as (table, query). A table the database lacks (one from before merge 3a
+# or 3b) holds none.
+SIGNED_RECORDS = (('revision_signatures', 'SELECT 1 FROM revision_signatures LIMIT 1'),)
+LOST_IDENTITY = ('The station identity {path} is missing, and this station holds signed records that a new identity would '
+                 'void. Restore the file; if it is truly gone, run station-new-identity. Nothing was signed.')
+
+
+def holds_signed_records(db):
+    """G4b: whether the station holds any record SIGNED_RECORDS names."""
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    return any(table in tables and db.execute(query).fetchone() is not None for table, query in SIGNED_RECORDS)
+
+
+def refuse_a_lost_identity(data_dir, db):
+    """G4b, the lost-identity check: identity.json missing (not a file, not a symlink) while the station holds signed
+    records raises a ValueError naming the file."""
+    path = Path(data_dir).absolute() / 'identity.json'
+    if not path.exists() and not path.is_symlink() and holds_signed_records(db):
+        raise ValueError(LOST_IDENTITY.format(path=path))
+
+
+def refuse_a_lost_identity_before_the_store(data_dir):
+    """G4b for `serve --peer-tls`, which checks before any Store opens: the database read-only, so nothing is created or
+    migrated; a missing database holds no signed records. One that can't be read (say, a hot journal a read-only
+    connection can't roll back) refuses with its name, since it can't rule signed records out."""
+    database = Path(data_dir).absolute() / 'peer.sqlite3'
+    if database.is_file():
+        try:
+            with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=30)) as db:
+                refuse_a_lost_identity(data_dir, db)
+        except sqlite3.Error as error:
+            raise ValueError(f'{database} could not be read read-only ({type(error).__name__}), so the station cannot tell '
+                             'whether it holds signed records; it will not start until the database can be read') from error
 
 
 class Signatures:
     def _load_station_identity(self):
-        """G4: at startup, the identity file federation uses is loaded if it exists (a symlink too, which
+        """G4: at a signing start, the identity file federation uses is loaded if it exists (a symlink too, which
         load_or_create refuses), and a store that can't load it doesn't start. A missing one waits for the first
-        signature, so a new station's first `card --endpoint` still names its host (plan review M1)."""
+        signature, so a new station's first `card --endpoint` still names its host (plan review M1), unless the station
+        holds signed records: then it doesn't start either (G4b)."""
         path = self.data_dir / 'identity.json'
         if path.exists() or path.is_symlink():
             try:
@@ -22,6 +59,9 @@ class Signatures:
             except Exception as error:
                 raise ValueError(f'The station identity {path} could not be loaded ({type(error).__name__}); '
                                  'the station will not start until it is restored') from error
+        else:
+            with self.transaction() as db:
+                refuse_a_lost_identity(self.data_dir, db)  # G4b: a lost identity is not replaced silently
 
     def _station_identity(self, db=None):
         """The station's one identity loader (G4, G4a): loaded once, or created if missing, always inside a transaction
@@ -32,6 +72,7 @@ class Signatures:
             if db is None:
                 with self.transaction() as own:
                     return self._station_identity(own)
+            refuse_a_lost_identity(self.data_dir, db)  # G4b: never a new key over signed records, whoever opened the store
             self._identity = PeerIdentity.load_or_create(self.data_dir)
         return self._identity
 
