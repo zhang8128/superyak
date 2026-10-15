@@ -482,6 +482,10 @@ def create_app(data_dir: Path, *, clock=time.time, allowed_origins=DEFAULT_ORIGI
     def revisions(key: str, request: Request):
         return store.layer_revisions(actor(request), key)
 
+    @app.get('/api/layers/{key}/revisions/{revision}/signed')
+    def revision_signed(key: str, revision: int, request: Request):
+        return store.revision_signed(actor(request), key, revision)
+
     @app.get('/api/shared/layers')
     def shared(request: Request):
         return store.shared_layers(actor(request))
