@@ -737,6 +737,17 @@ def _refuse_live_name(db_path):
                                'are DB= and REPLACED= swapped? Refusing so the set-aside original is never rewritten.')
 
 
+def refuse_misnamed_replaced(replaced):
+    """The coordinator's ruling on the final fix round's finding: the CLI calls this before reconcile(), so before any
+    file is opened. REPLACED= is always the peer.sqlite3 runbook step 4 set aside. A typo naming chosen.sqlite3 (the
+    same content as the staged copy) compared the copy with itself, exited 0 and left every key revoked since the copy
+    working. restored.sqlite3 or a rotation copy is the wrong file in the same way: never what the restore replaced."""
+    if replaced is not None and Path(replaced).name != LIVE_NAME:
+        raise ReconcileRefused(f'Refused: REPLACED= must be the {LIVE_NAME} that runbook step 4 set aside; this file is named '
+                               f'{safe_line(Path(replaced).name, 80)}. Step 5 runs DB="$ASIDE/restored.sqlite3" '
+                               'REPLACED="$ASIDE/peer.sqlite3". Nothing was changed.')
+
+
 def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=time.time, refuse_live_name=False):
     """station-restore-reconcile (S16): on a staged copy, take back what a restore revives. Every step only takes access
     away, all in one transaction: if any step fails it rolls back and the copy is unchanged. Returns the report.

@@ -93,7 +93,8 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    Leave out `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those
    machines dock again, and no peer is unpaired (see the peers paragraph below). It refuses a `DB=` named
    `peer.sqlite3` (the staged copy is always `restored.sqlite3`, so that is the set-aside original, or `DB=` and
-   `REPLACED=` swapped), a staged copy that isn't a station database, a swapped `DB=` and `REPLACED=`, the same file
+   `REPLACED=` swapped), a `REPLACED=` with any other name (`chosen.sqlite3` there would compare the copy with itself
+   and take nothing back), a staged copy that isn't a station database, a swapped `DB=` and `REPLACED=`, the same file
    twice, and a hard link. Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent
    (there is no such file), `REPLACED=` is wrong: stop, set `ASIDE` again as at the top, then run both lines (the first stages the copy again). Don't go on, and don't
    just run the reconcile again on the same file: the first run raised its sequences and a second one is refused as "swapped". If it
