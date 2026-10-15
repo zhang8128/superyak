@@ -351,8 +351,9 @@ longer owns Rio Grande"). `#a1b2` is `#` and the id's first 4 characters. Names 
 safe line.
 
 **Reading.** Each grant has `id`, `short`, `issuer` and `grantee` (`{id, name}`), `targets` (`[{id, name,
-ship_builds_left}]`), `rooms` (`"*"`, or for each listed room `{id, title}` plus `current: {id, title}` when newer
-linked rooms have replaced it, following the links forward), `expires`, `budget`, `budget_left`, `created`, `revoked`,
+ship_builds_left}]`), `rooms` (`"*"`, or for each listed room `{id, title}` plus `current` when newer linked rooms
+have replaced it, following the links forward: `{id, title}` for a member of that room, `{title}` alone for anyone
+else), `expires`, `budget`, `budget_left`, `created`, `revoked`,
 `revoked_by` (`{id, name}` or null), `revoke_reason`, `valid`, and `reason` only when it is not valid. A room's title is
 shown only to its members; anyone else sees `a room you are not in`. `budget_left` is the budget less the builds charged
 to the grant in the last 24 hours; `ship_builds_left` is `builds_per_ship_per_day` less the ship's grant build tickets

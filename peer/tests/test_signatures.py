@@ -480,6 +480,45 @@ def test_the_peer_tls_check_reads_an_old_or_missing_database_without_changing_it
         refuse_a_lost_identity_before_the_store(junk)
 
 
+def hot_journal(directory):
+    """A database left as a crash leaves it: a rollback journal that must be played back before the next read. A writer
+    whose cache holds two pages spills its changes into the file mid-transaction, so the journal is synced and hot;
+    the pair is copied while that transaction is still open."""
+    import shutil
+    import sqlite3
+    from contextlib import closing
+    live = directory.parent / f'{directory.name}-live'
+    live.mkdir(mode=0o700)
+    directory.mkdir(mode=0o700)
+    with closing(sqlite3.connect(live / 'peer.sqlite3')) as db:
+        db.execute('CREATE TABLE revision_signatures(layer_id TEXT NOT NULL, revision INTEGER NOT NULL, signature TEXT NOT NULL)')
+        db.executemany('INSERT INTO revision_signatures(layer_id, revision, signature) VALUES(?, 1, ?)',
+                       [(f'l{n}', 'x' * 500) for n in range(200)])
+        db.commit()
+    with closing(sqlite3.connect(live / 'peer.sqlite3', isolation_level=None)) as db:
+        db.execute('PRAGMA cache_size=2')
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('UPDATE revision_signatures SET signature=?', ('y' * 500,))
+        for name in ('peer.sqlite3', 'peer.sqlite3-journal'):
+            shutil.copyfile(live / name, directory / name)
+        db.execute('ROLLBACK')
+    return {path.name: path.read_bytes() for path in directory.iterdir()}
+
+
+def test_the_peer_tls_check_never_plays_back_a_hot_journal(tmp_path):
+    """3b's section 2 review: the `serve --peer-tls` check opens the database read-only. A read-write connection that
+    only reads changes nothing in a clean database, so test 4c alone can't tell; a hot journal can. Read-only, SQLite
+    may not play it back, so the check refuses, naming the database, and leaves both files exactly as they were. A
+    read-write connection would play the journal back, delete it, and then read the signed rows."""
+    from superyak_peer.signatures import refuse_a_lost_identity_before_the_store
+    crashed = tmp_path / 'crashed'
+    before = hot_journal(crashed)
+    assert sorted(before) == ['peer.sqlite3', 'peer.sqlite3-journal']
+    with pytest.raises(ValueError, match='peer.sqlite3 could not be read read-only'):
+        refuse_a_lost_identity_before_the_store(crashed)
+    assert {path.name: path.read_bytes() for path in crashed.iterdir()} == before
+
+
 def test_the_restore_test_passes_on_a_copy_holding_signed_records(tmp_path, monkeypatch, capsys):
     """G4b, test 4c: the copy holds a signed revision and has no identity file, so served as it is it would refuse to
     start (exit 22). The restore test gives its scratch directory a throwaway identity, removed with it."""

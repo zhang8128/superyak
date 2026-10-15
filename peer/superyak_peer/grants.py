@@ -135,11 +135,16 @@ class Grants:
             raise Problem(404, 'Not found')
         return grant
 
-    def _room_label(self, db, actor, room_id):
-        """G11: a room's title for its members only; anyone else sees NOT_IN_ROOM."""
+    def _member_title(self, db, actor, room_id):
+        """A room's title when the caller is a member of it, else None."""
         row = db.execute('SELECT rooms.title FROM rooms JOIN room_members ON room_members.room_id=rooms.id '
                          'WHERE rooms.id=? AND room_members.user_id=?', (room_id, actor)).fetchone()
-        return row['title'] if row else NOT_IN_ROOM
+        return row['title'] if row else None
+
+    def _room_label(self, db, actor, room_id):
+        """G11: a room's title for its members only; anyone else sees NOT_IN_ROOM."""
+        title = self._member_title(db, actor, room_id)
+        return NOT_IN_ROOM if title is None else title
 
     def _current_room(self, db, room_id):
         """G11: the current room a replaced room now covers, following linked_room_id forward (S5); None for a current
@@ -177,8 +182,9 @@ class Grants:
             listed = []
             for room_id in rooms:
                 entry, current = {'id': room_id, 'title': self._room_label(db, actor, room_id)}, self._current_room(db, room_id)
-                if current is not None:
-                    entry['current'] = {'id': current, 'title': self._room_label(db, actor, current)}
+                if current is not None:  # 3b's section 2 review: no id for a non-member, who has no use for it
+                    title = self._member_title(db, actor, current)
+                    entry['current'] = {'title': NOT_IN_ROOM} if title is None else {'id': current, 'title': title}
                 listed.append(entry)
             rooms = listed
         valid, reason = self._grant_validity(db, grant)
