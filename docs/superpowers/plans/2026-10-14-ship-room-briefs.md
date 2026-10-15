@@ -2839,7 +2839,7 @@ the "Brief history" button.
 
 ```bash
 systemctl --user restart superyak-lighthouse && systemctl --user is-active superyak-lighthouse
-journalctl --user --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'
+journalctl --user-unit superyak-lighthouse --since '-2 min' --no-pager | grep 'version check'
 ```
 
 **Expected:** `active`, then `superyak: version check on: <HEAD 12>, N behind`. On this Pi, `journalctl --user -u`

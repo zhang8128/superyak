@@ -206,7 +206,8 @@ Today:
       `briefMeta` shows only "Carried from…" (app.js:521).
     - **The carry dialog** shows the same author line beside the text it would carry, so the owner sees when he is
       carrying a ship's text. Today it shows the text with no author (app.js:545).
-    - **The editor** shows the warning above when its text is a ship's.
+    - **The editor** shows the warning above when its text is a ship's. The warning hides while the box is blank
+      (trimmed), because Save then removes the brief and nothing becomes the owner's (follow-up from the final reviews; narrows, no new D8 round).
   - **The hook** shows no brief text today (the room-brief spec left it out of scope), and this spec doesn't add it.
     It shows the notice (S6), which names the author the same way.
 - **S5. History, and the owner's revert.**
@@ -233,11 +234,17 @@ Today:
       carried_from}`. A removal has body `''`.
     - `author_name` goes through `safe_line`.
     - The web History list shows every body and name escaped. "Use this text" sets the textarea's value, never HTML.
+    - **Empty and failed lists:** a room that never had a brief shows "No revisions yet." under the heading. When a
+      save succeeds but reloading the open list fails, the rows already shown stay and the error shows under them
+      (follow-up from the final reviews; narrows, no new D8 round).
     - **Why owner only:** history holds text the owner removed on purpose. Members and ships need only the current
       brief, and a ship reading old text could carry injected text forward again.
   - **Revert:** in the web panel's "History" list, the owner's "Use this text" opens the editor with that revision's
     body, at the current revision. Save is the existing PUT, so the result is a new revision by the owner. There is no
     restore route.
+    - When the editor is open and its text differs from what it opened with, "Use this text" asks first, inline, as the
+      board's Drop does: "Replace your unsaved text with revision N?", with Yes and Cancel. Cancel keeps the typing
+      (follow-up from the final reviews; narrows, no new D8 round).
     - **Why:** saving is the owner's act, he sees what he saves, and the editor's warning (S4) tells him when the
       text is a ship's. Restoring a ship's revision this way makes it his, which it is once he saves it.
   - **How a steered ship's bad brief is noticed, undone and stopped:**
