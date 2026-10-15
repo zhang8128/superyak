@@ -723,18 +723,22 @@ def _not_this_station(db, old):
     return None
 
 
-LIVE_NAME = 'peer.sqlite3'
+LIVE_NAME, STAGED_NAME = 'peer.sqlite3', 'restored.sqlite3'
+STEP_5 = 'Step 5 runs DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3".'
 
 
-def _refuse_live_name(db_path):
-    """Final review I1: the live file, the original runbook step 4 sets aside, a rollback's restored-live and a stray
-    are all peer.sqlite3, while the runbook always stages restored.sqlite3. A slip at step 5 (the original as DB=, or
-    DB= and REPLACED= swapped with equal sequences) would otherwise rewrite the rollback target with exit 0 and leave
-    the staged copy unreconciled for step 6."""
-    if db_path.name == LIVE_NAME:
-        raise ReconcileRefused(f'Refused: --db is named {LIVE_NAME}, a live-shaped name: the live file and the original '
-                               'runbook step 4 set aside both have it. DB= is the staged restored.sqlite3 (runbook step 5); '
-                               'are DB= and REPLACED= swapped? Refusing so the set-aside original is never rewritten.')
+def refuse_unstaged_db(db_path):
+    """The coordinator's ruling on the re-review's probe (f), which folds in final review I1's peer.sqlite3 check: the CLI
+    calls this before reconcile(), so before any file is opened. DB= is always the restored.sqlite3 runbook step 5
+    staged. DB="$ASIDE/chosen.sqlite3" rewrote chosen.sqlite3 with exit 0 and left restored.sqlite3 unreconciled for
+    step 6; DB="$ASIDE/peer.sqlite3" (the original, or DB= and REPLACED= swapped) rewrote the rollback target. The
+    restore test calls reconcile() directly on its scratch peer.sqlite3, so it is unaffected."""
+    name = Path(db_path).name
+    if name != STAGED_NAME:
+        swapped = (f" {LIVE_NAME} is the live file's name and the original's that step 4 set aside: are DB= and REPLACED= "
+                   'swapped? Refusing so the set-aside original is never rewritten.') if name == LIVE_NAME else ''
+        raise ReconcileRefused(f'Refused: DB= must be the {STAGED_NAME} that runbook step 5 staged; this file is named '
+                               f'{safe_line(name, 80)}.{swapped} {STEP_5} Nothing was changed.')
 
 
 def refuse_misnamed_replaced(replaced):
@@ -744,19 +748,16 @@ def refuse_misnamed_replaced(replaced):
     working. restored.sqlite3 or a rotation copy is the wrong file in the same way: never what the restore replaced."""
     if replaced is not None and Path(replaced).name != LIVE_NAME:
         raise ReconcileRefused(f'Refused: REPLACED= must be the {LIVE_NAME} that runbook step 4 set aside; this file is named '
-                               f'{safe_line(Path(replaced).name, 80)}. Step 5 runs DB="$ASIDE/restored.sqlite3" '
-                               'REPLACED="$ASIDE/peer.sqlite3". Nothing was changed.')
+                               f'{safe_line(Path(replaced).name, 80)}. {STEP_5} Nothing was changed.')
 
 
-def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=time.time, refuse_live_name=False):
+def reconcile(db_path, *, replaced=None, live_data_dir=None, unpair=(), clock=time.time):
     """station-restore-reconcile (S16): on a staged copy, take back what a restore revives. Every step only takes access
-    away, all in one transaction: if any step fails it rolls back and the copy is unchanged. Returns the report.
-    refuse_live_name: the CLI sets it, so a DB named peer.sqlite3 is refused (final review I1); the restore test's
-    scratch copy has that name and leaves it off."""
+    away, all in one transaction: if any step fails it rolls back and the copy is unchanged. Returns the report. The CLI
+    first refuses a DB not named restored.sqlite3 and a REPLACED not named peer.sqlite3 (refuse_unstaged_db,
+    refuse_misnamed_replaced); the restore test calls this directly on its scratch peer.sqlite3."""
     db_path = Path(db_path).absolute()
     _refuse(db_path, live_data_dir)
-    if refuse_live_name:
-        _refuse_live_name(db_path)
     old, why = _replaced(replaced)
     report = {'replaced': why or 'compared', 'counts': {}, 'sequences': {}, 'revoked': [], 'removed': [], 'lowered': [],
               'no_super_admin': False, 'closed': [], 'unpaired': [], 'unpaired_full': [], 'unpaired_counts': [0, 0], 'lacked': [], 'passwords': [], 'layers': [], 'peers': [], 'skipped': [],

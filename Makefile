@@ -222,7 +222,7 @@ station-restore-test:
 	uv run --locked --project peer python -m superyak_peer station-restore-test --backup-dir "$(STATION_BACKUPS)"$(if $(BACKUP), --backup "$(BACKUP)")
 
 station-restore-reconcile:
-	@test -n "$(DB)" || { echo 'Usage: make station-restore-reconcile DB=<staged copy> [REPLACED=<the replaced peer.sqlite3>] [UNPAIR="<peer id> …"]'; exit 2; }
+	@test -n "$(DB)" || { echo 'Usage: make station-restore-reconcile DB=<the staged restored.sqlite3> [REPLACED=<the set-aside peer.sqlite3>] [UNPAIR="<peer id> …"]'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer station-restore-reconcile --db "$(DB)" --live-data-dir "$(STATION_DATA)"$(if $(REPLACED), --replaced "$(REPLACED)")$(foreach peer,$(UNPAIR), --unpair "$(peer)")
 
 station-alerts:

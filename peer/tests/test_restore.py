@@ -85,23 +85,30 @@ def overwrite_pages(path, first=2):
 
 def test_reconcile_refuses_the_live_data_dir_and_symlinks(tmp_path, capsys):
     """R18: the directory --live-data-dir names, a directory holding dispatch.lock (the live one), a symlink and a copy
-    that fails its check are each refused with exit 1, and the file is unchanged."""
+    that fails its check are each refused with exit 1, each for its own reason, and the file is unchanged. Each is named
+    restored.sqlite3, so the CLI's DB= name guard lets it through to its own refusal; the live file itself is refused by
+    that guard."""
     store = Store(tmp_path / 'lighthouse')
     store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     copy = staged(tmp_path, store)
-    named = tmp_path / 'named'
-    named.mkdir()
-    shutil.copyfile(copy, named / 'peer.sqlite3')
-    link = copy.parent / 'link.sqlite3'
+    named = tmp_path / 'named' / 'restored.sqlite3'
+    named.parent.mkdir()
+    shutil.copyfile(copy, named)
+    in_live = store.data_dir / 'restored.sqlite3'                              # beside dispatch.lock
+    shutil.copyfile(copy, in_live)
+    link = tmp_path / 'linked' / 'restored.sqlite3'
+    link.parent.mkdir()
     link.symlink_to(copy)
     damaged = tmp_path / 'damaged' / 'restored.sqlite3'
     damaged.parent.mkdir()
     shutil.copyfile(copy, damaged)
     overwrite_pages(damaged)
-    for path, extra in [(named / 'peer.sqlite3', ['--live-data-dir', named]), (store.db_path, []), (link, []), (damaged, [])]:
+    for path, extra, why in [(named, ['--live-data-dir', named.parent], 'in a live data directory'),
+                             (in_live, [], 'in a live data directory'), (link, [], 'is a symlink'),
+                             (damaged, [], 'failed its integrity check'), (store.db_path, [], 'this file is named peer.sqlite3')]:
         before = path.read_bytes()
         code, out, err = reconcile(capsys, '--db', path, *extra)
-        assert code == 1 and err.startswith('Refused') and out == '', (path, err)
+        assert code == 1 and err.startswith('Refused') and why in err and out == '', (path, err)
         assert path.read_bytes() == before
 
 
@@ -529,12 +536,12 @@ def test_reconcile_refuses_a_hard_link_and_a_same_or_older_replaced_file(tmp_pat
     newer = staged(tmp_path, store, 'replaced-newer')
     elsewhere = tmp_path / 'elsewhere'
     elsewhere.mkdir()
-    os.link(store.db_path, elsewhere / 'peer-link.sqlite3')
+    os.link(store.db_path, elsewhere / 'restored.sqlite3')                     # a hard link to the live file
     before = older.read_bytes()
     with pytest.raises(backups.ReconcileRefused, match='the staged copy itself'):
         backups.reconcile(older, replaced=older)
     assert older.read_bytes() == before
-    for args, touched, why in [(['--db', elsewhere / 'peer-link.sqlite3'], store.db_path, 'a hard link'),
+    for args, touched, why in [(['--db', elsewhere / 'restored.sqlite3'], store.db_path, 'a hard link'),
                                (['--db', older, '--replaced', older], older, 'this file is named restored.sqlite3'),
                                (['--db', newer, '--replaced', older_named], newer, 'Are DB= and REPLACED= swapped?')]:
         before = touched.read_bytes()
@@ -561,9 +568,9 @@ def test_reconcile_refuses_the_set_aside_original_as_db(tmp_path, capsys):
     """Final review I1: a slip at runbook step 5 that names the set-aside original as DB= is refused, so that file (the
     rollback target) is never rewritten and step 6 never installs a staged copy left unreconciled. (a) The original as
     DB= without REPLACED=. (b) DB= and REPLACED= swapped with no event since the copy, so the events sequences are equal
-    and the swap check can't see it. Each exits 1 and says why, and neither file changes by a byte. The CLI refuses (b)
-    by REPLACED='s name first; the DB= name check refuses it on its own too. Mutation: drop the DB= name check ((a)
-    exits 0 and rewrites the original: its sessions deleted, its owned keys revoked)."""
+    and the swap check can't see it. Each exits 1 and says why, and neither file changes by a byte. The CLI's DB= name
+    guard (DB= must be restored.sqlite3), into which I1's own check was folded, refuses both. Mutation: drop that guard
+    ((a) exits 0 and rewrites the original: its sessions deleted, its owned keys revoked)."""
     store = Store(tmp_path / 'lighthouse')
     andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     docked(store, andy['id'], 'serenity')                                        # an owned key (a) would revoke
@@ -571,18 +578,13 @@ def test_reconcile_refuses_the_set_aside_original_as_db(tmp_path, capsys):
     copy = staged(tmp_path, store)
     original = set_aside(store, copy)
     assert sequences(original) == sequences(copy)                               # (b): no event since the copy
-    for args, why in ((['--db', original, '--live-data-dir', store.data_dir], 'never rewritten'),
-                      (['--db', original, '--replaced', copy, '--live-data-dir', store.data_dir],
-                       'this file is named restored.sqlite3')):
+    for args in (['--db', original, '--live-data-dir', store.data_dir],
+                 ['--db', original, '--replaced', copy, '--live-data-dir', store.data_dir]):
         before = files_beside(original, copy)
         code, out, err = reconcile(capsys, *args)
         assert code == 1 and out == '' and err.startswith('Refused'), (args, err)
-        assert 'peer.sqlite3' in err and 'restored.sqlite3' in err and why in err, err
+        assert 'this file is named peer.sqlite3' in err and 'swapped?' in err and 'never rewritten' in err, err
         assert files_beside(original, copy) == before
-    before = files_beside(original, copy)
-    with pytest.raises(backups.ReconcileRefused, match='never rewritten'):     # (b) without the REPLACED= guard
-        backups.reconcile(original, replaced=copy, live_data_dir=store.data_dir, refuse_live_name=True)
-    assert files_beside(original, copy) == before
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -593,9 +595,10 @@ MAKE_VARIABLES = ('DB', 'REPLACED', 'UNPAIR', 'OUTPUT', 'BACKUP', 'STATION_DATA'
 @pytest.mark.skipif(not (REPO / 'Makefile').is_file() or not shutil.which('make') or not shutil.which('uv'),
                     reason='needs the parent repository Makefile, make and uv')
 def test_make_station_restore_reconcile_refuses_the_runbook_slips(tmp_path):
-    """Final review I1 and the REPLACED= ruling, through the make target and the CLI as Andy runs them: DB= naming the
-    set-aside "$ASIDE/peer.sqlite3", with and without REPLACED=, and REPLACED= naming "$ASIDE/chosen.sqlite3" each exit
-    non-zero, say why, and change no byte."""
+    """Final review I1 and the two name rulings, through the make target and the CLI as Andy runs them: DB= naming the
+    set-aside "$ASIDE/peer.sqlite3", with and without REPLACED=, REPLACED= naming "$ASIDE/chosen.sqlite3", and DB= naming
+    "$ASIDE/chosen.sqlite3" with the right REPLACED= (probe (f)) each exit non-zero, say why, and change no byte. Step 5
+    as written then exits 0."""
     store = Store(tmp_path / 'lighthouse')
     store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     store.login('andy', 'long-password-andy', 'test')
@@ -604,13 +607,18 @@ def test_make_station_restore_reconcile_refuses_the_runbook_slips(tmp_path):
     shutil.copyfile(copy, chosen)
     original = set_aside(store, copy)
     env = {name: value for name, value in os.environ.items() if name not in MAKE_VARIABLES}
-    for db, extra, why in ((original, [], 'never rewritten'), (original, [f'REPLACED={copy}'], 'this file is named restored.sqlite3'),
-                           (copy, [f'REPLACED={chosen}'], 'this file is named chosen.sqlite3')):
+    for db, extra, why in ((original, [], 'this file is named peer.sqlite3'),
+                           (original, [f'REPLACED={copy}'], 'this file is named peer.sqlite3'),
+                           (copy, [f'REPLACED={chosen}'], 'this file is named chosen.sqlite3'),
+                           (chosen, [f'REPLACED={original}'], 'this file is named chosen.sqlite3')):   # probe (f)
         before = files_beside(original, copy, chosen)
         made = subprocess.run(['make', '--no-print-directory', 'station-restore-reconcile', f'DB={db}', *extra,
                                f'STATION_DATA={store.data_dir}'], cwd=REPO, env=env, capture_output=True, text=True, timeout=300)
         assert made.returncode != 0 and 'Refused' in made.stderr and why in made.stderr, made.stderr
         assert files_beside(original, copy, chosen) == before
+    made = subprocess.run(['make', '--no-print-directory', 'station-restore-reconcile', f'DB={copy}', f'REPLACED={original}',
+                           f'STATION_DATA={store.data_dir}'], cwd=REPO, env=env, capture_output=True, text=True, timeout=300)
+    assert made.returncode == 0 and 'Compared with the replaced file.' in made.stdout, made.stderr   # step 5 as written
 
 
 def test_reconcile_refuses_a_replaced_file_not_named_peer_sqlite3(tmp_path, capsys):
@@ -642,6 +650,46 @@ def test_reconcile_refuses_a_replaced_file_not_named_peer_sqlite3(tmp_path, caps
         go_live(copy, tmp_path / 'live').ship_for_key(key)
 
 
+def test_reconcile_refuses_a_db_not_named_restored_sqlite3(tmp_path, capsys):
+    """The coordinator's ruling on the re-review's probe (f): DB="$ASIDE/chosen.sqlite3" with the right REPLACED= compared
+    and rewrote chosen.sqlite3 with exit 0, left restored.sqlite3 unreconciled for step 6, and a key revoked since the
+    copy still worked. DB= must be the restored.sqlite3 step 5 staged: chosen.sqlite3, a hand-made --output copy and the
+    set-aside peer.sqlite3 are each refused with exit 1 before anything opens, and no file changes by a byte. Mutation:
+    drop the guard (probe (f) exits 0)."""
+    store = Store(tmp_path / 'lighthouse')
+    andy = store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
+    serenity, key = docked(store, andy['id'], 'serenity')
+    copy = staged(tmp_path, store)
+    chosen = copy.parent / 'chosen.sqlite3'
+    shutil.copyfile(copy, chosen)
+    by_hand = backups.run_backup(store.data_dir, None, output=tmp_path / 'before-deploy.sqlite3')
+    store.revoke_ship(andy['id'], serenity['id'])                                # taken away after the copy
+    original = set_aside(store, copy)
+    for db in (chosen, by_hand, original):
+        before = files_beside(copy, chosen, by_hand, original)
+        code, out, err = reconcile(capsys, '--db', db, '--replaced', original, '--live-data-dir', store.data_dir)
+        assert code == 1 and out == '' and err.startswith('Refused'), (db, err)
+        assert 'DB= must be the restored.sqlite3 that runbook step 5 staged' in err and f'this file is named {db.name}' in err, err
+        assert files_beside(copy, chosen, by_hand, original) == before
+
+
+def test_the_real_step_5_still_reconciles_with_and_without_replaced(tmp_path, capsys):
+    """The DB= and REPLACED= name guards leave runbook step 5 as written working: DB="$ASIDE/restored.sqlite3" with
+    REPLACED="$ASIDE/peer.sqlite3", and without it, each exit 0, and each takes a second UNPAIR= run on the same staged
+    copy."""
+    store, peers = peer_station(tmp_path)
+    with_replaced = staged(tmp_path, store)
+    without = staged(tmp_path, store, 'replaced-20261017-130000')
+    original = set_aside(store, with_replaced)
+    for copy, replaced, compared in ((with_replaced, ['--replaced', original], 'Compared with the replaced file.'),
+                                     (without, [], 'The replaced file was not given.')):
+        code, out, err = reconcile(capsys, '--db', copy, *replaced, '--live-data-dir', store.data_dir)
+        assert code == 0 and out.splitlines()[1].startswith(compared), (copy, err, out)
+        code, out, err = reconcile(capsys, '--db', copy, *replaced, '--live-data-dir', store.data_dir, '--unpair', peers['kept'][:12])
+        assert code == 0, (copy, err)
+        assert peer_rows(copy)[0][peers['kept']] == 0
+
+
 def test_a_second_unpair_run_is_not_called_swapped_after_an_absent_replaced_file(tmp_path, capsys):
     """Final review M1: the first run treated the replaced file as absent because it lacks an account the copy has, and
     so raised the copy's sequences by 1,000,000. A second run with the same REPLACED= and an UNPAIR= (runbook step 5)
@@ -667,8 +715,9 @@ def test_reconcile_refuses_a_copy_that_is_not_a_station_database(tmp_path, capsy
     something else. Exit 1, and the file is byte for byte unchanged. Mutation: drop the check (exit 0, "Taken back: .")."""
     aside = tmp_path / 'backups' / 'replaced-20261017-120000'
     aside.mkdir(parents=True, mode=0o700)
-    empty, other = aside / 'restored.sqlite3', aside / 'other.sqlite3'
+    empty, other = aside / 'restored.sqlite3', tmp_path / 'other' / 'restored.sqlite3'
     empty.write_bytes(b'')
+    other.parent.mkdir()
     with closing(sqlite3.connect(other)) as db:
         db.execute('CREATE TABLE notes(body TEXT)')
         db.commit()
@@ -822,19 +871,23 @@ def test_reconcile_says_why_the_replaced_file_was_treated_as_absent(tmp_path, ca
 def test_reconcile_refuses_a_copy_in_the_backups_rotation(tmp_path, capsys):
     """Fix round 1 (review minor 4): a copy in the rotation is a checked copy, never the staged one, so reconciling it in
     place is refused: a directory holding the rotation's .lock, and backups/station beside the --live-data-dir. Neither
-    file changes."""
+    file changes. The copy is named restored.sqlite3 so the CLI's DB= name guard lets it through to the rotation
+    refusal; a rotation copy's own name is refused by that guard."""
     store = Store(tmp_path / 'lighthouse')
     store.create_user('andy', 'Andy', 'long-password-andy', is_admin=True)
     store.login('andy', 'long-password-andy', 'test')                           # a session the reconcile would delete
     rotation = backups.default_backup_dir(store.data_dir)
     newest = backups.run_backup(store.data_dir, rotation)
-    for args in (['--db', newest], ['--db', newest, '--live-data-dir', store.data_dir]):
+    in_rotation = rotation / 'restored.sqlite3'
+    shutil.copyfile(newest, in_rotation)
+    for args, why in ((['--db', newest], f'this file is named {newest.name}'), (['--db', in_rotation], 'rotation'),
+                      (['--db', in_rotation, '--live-data-dir', store.data_dir], 'rotation')):
         if '--live-data-dir' in args:
             (rotation / '.lock').unlink()                                        # the rotation's own mark gone
-        before = newest.read_bytes()
+        before = files_beside(newest, in_rotation)
         code, out, err = reconcile(capsys, *args)
-        assert code == 1 and err.startswith('Refused') and 'rotation' in err and out == '', (args, err)
-        assert newest.read_bytes() == before
+        assert code == 1 and err.startswith('Refused') and why in err and out == '', (args, err)
+        assert files_beside(newest, in_rotation) == before
 
 
 def small_station(tmp_path):

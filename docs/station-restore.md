@@ -91,11 +91,12 @@ If `make station-units` has never run, the backup timers don't exist yet, and th
    make station-restore-reconcile DB="$ASIDE/restored.sqlite3" REPLACED="$ASIDE/peer.sqlite3"
    ```
    Leave out `REPLACED=` only when the old file won't open; then every docked ship's keys are revoked, and those
-   machines dock again, and no peer is unpaired (see the peers paragraph below). It refuses a `DB=` named
-   `peer.sqlite3` (the staged copy is always `restored.sqlite3`, so that is the set-aside original, or `DB=` and
-   `REPLACED=` swapped), a `REPLACED=` with any other name (`chosen.sqlite3` there would compare the copy with itself
-   and take nothing back), a staged copy that isn't a station database, a swapped `DB=` and `REPLACED=`, the same file
-   twice, and a hard link. Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent
+   machines dock again, and no peer is unpaired (see the peers paragraph below). It refuses a `DB=` with any name but
+   `restored.sqlite3` (`peer.sqlite3` there is the set-aside original, or `DB=` and `REPLACED=` swapped;
+   `chosen.sqlite3` there would be reconciled while step 6 installs `restored.sqlite3` unreconciled), a `REPLACED=` with
+   any name but `peer.sqlite3` (`chosen.sqlite3` there would compare the copy with itself and take nothing back), a
+   staged copy that isn't a station database, a swapped `DB=` and `REPLACED=`, the same file twice, and a hard link.
+   Read its report. Go on only when it exits 0. If it says the replaced file was treated as absent
    (there is no such file), `REPLACED=` is wrong: stop, set `ASIDE` again as at the top, then run both lines (the first stages the copy again). Don't go on, and don't
    just run the reconcile again on the same file: the first run raised its sequences and a second one is refused as "swapped". If it
    says that for another reason (for example "a hot journal beside it"), the room and space members, admins, law layers

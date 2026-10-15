@@ -332,10 +332,12 @@ The decisions below rest on these facts, each checked on 2026-10-14.
       holds.
     - It refuses a symlink, and a copy that fails `integrity_check` or has no `users` table (a 0-byte file is a valid
       empty database; final review M5).
-    - The command (not the restore test, whose scratch copy has the name) refuses a FILE named `peer.sqlite3`: the
-      runbook always stages `restored.sqlite3`, and the live file and the original runbook step 4 sets aside both
-      have that name, so the set-aside original is never rewritten (final review I1). For the same reason it refuses a
-      `--replaced` FILE with any other name, before anything is opened: REPLACED= is always the `peer.sqlite3` runbook
+    - The command (not the restore test, which calls the reconcile directly on its scratch `peer.sqlite3`) refuses a
+      FILE with any name but `restored.sqlite3`, the name runbook step 5 always stages, before anything is opened.
+      `peer.sqlite3` there is the live file or the original runbook step 4 set aside (final review I1), and
+      `chosen.sqlite3` there would be reconciled while step 6 installs `restored.sqlite3` unreconciled (re-review probe
+      (f), ruled in by the coordinator; it only narrows). For the same reason it refuses a
+      `--replaced` FILE with any name but `peer.sqlite3`, before anything is opened: REPLACED= is always the one runbook
       step 4 set aside, and a typo naming `chosen.sqlite3` (or `restored.sqlite3`, or a rotation copy) would compare
       the copy with itself, exit 0 and leave every key revoked since the copy working (final fix round, ruled in by
       the coordinator; it only narrows).
@@ -453,8 +455,8 @@ The decisions below rest on these facts, each checked on 2026-10-14.
   five existing unit files are not edited.
 - **R17.** `make station-backup [OUTPUT=…]`, `make station-restore-test [BACKUP=…]`, `make station-alerts` and
   `make station-restore-reconcile DB=… [REPLACED=…]` run the same commands by hand.
-- **R18.** `station-restore-reconcile` works as S16 says. It refuses the live data dir, symlinks, a FILE named
-  `peer.sqlite3`, a `--replaced` not named `peer.sqlite3`, a copy without `users` and a copy that fails its check, and
+- **R18.** `station-restore-reconcile` works as S16 says. It refuses the live data dir, symlinks, a FILE not
+  named `restored.sqlite3`, a `--replaced` not named `peer.sqlite3`, a copy without `users` and a copy that fails its check, and
   applies only changes that take access
   away, in one transaction. It prints counts, and the usernames,
   short ids and titles S16 names under the data-not-instructions header, never hashes, keys or tokens. With a usable
@@ -480,7 +482,7 @@ The decisions below rest on these facts, each checked on 2026-10-14.
 | restore test | 24 | `station-restore-reconcile` failed on the scratch copy | "the restore's reconcile step failed" |
 | restore test | 1 | Anything else | "see the log" |
 | alert | 2 | A run outside systemd (no `SERVICE_RESULT` or `--monitor` variables), or an invalid unit | Nothing queued; a usage message |
-| reconcile | 1 | A refused FILE (live data dir, symlink, named `peer.sqlite3`, no `users` table, failed check), a `--replaced` not named `peer.sqlite3`, or any error during the transaction; a missing table or column is skipped and named, never an error | The staged copy is unchanged; go on in the runbook only after exit 0 |
+| reconcile | 1 | A refused FILE (live data dir, symlink, not named `restored.sqlite3`, no `users` table, failed check), a `--replaced` not named `peer.sqlite3`, or any error during the transaction; a missing table or column is skipped and named, never an error | The staged copy is unchanged; go on in the runbook only after exit 0 |
 
 - **Every failing timer run** fails its unit. `OnFailure=` then queues the reason that matches the exit status, or
   S11's words for a systemd result.
