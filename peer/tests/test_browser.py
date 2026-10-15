@@ -3176,10 +3176,11 @@ def test_a_second_press_of_yes_revoke_while_the_first_is_on_its_way_sends_nothin
             item = page.locator(".grants-given .grant-item")
             item.get_by_role("button", name=f"Revoke {made['short']}").click()
             confirm = item.get_by_role("button", name=f"Yes, revoke {made['short']}")
-            confirm.click()
-            page.wait_for_timeout(300)
+            with page.expect_request("**/api/grants/*/revoke"):
+                confirm.click()
             assert len(held) == 1
             expect(confirm).to_be_visible()
+            expect(confirm).to_be_enabled()
             confirm.click()  # the first write is still on its way
             page.wait_for_timeout(300)
             assert len(posts) == 1, posts  # held requests are counted when sent
@@ -3245,7 +3246,7 @@ def test_a_revoke_whose_reload_finds_the_session_ended_shows_the_sign_in(browser
 
 
 def test_names_written_as_html_show_as_text_in_a_held_revoked_grant(browser_peer):
-    """The Mac's final review of 3c, m2: the grantee's list shows revoked grants too ("Grant #xxxx was revoked by ..."),
+    """Section 2 review of merge 3c, minor 4 (the Mac's m2): the grantee's list shows revoked grants too ("Grant #xxxx was revoked by ..."),
     so the doctor's view carries the patient's name twice, in the From line and in the reason. Both show as literal text,
     and no element comes out of them."""
     store, users, ship, room, lone = grant_station(browser_peer)
@@ -3259,18 +3260,22 @@ def test_names_written_as_html_show_as_text_in_a_held_revoked_grant(browser_peer
             page.get_by_role("link", name="Grants", exact=True).click()
             held = page.locator(".grants-held .grant-item")
             expect(held).to_have_count(1)
-            expect(held).to_contain_text(f"{made['short']} From {name} Not valid Grant {made['short']} was revoked by {name}")
+            expect(held.locator("p").first).to_contain_text(f"{made['short']} From {name}")
+            expect(held).to_contain_text(f"Grant {made['short']} was revoked by {name}")
             assert page.locator(".grant-list img, .grant-list i").count() == 0
 
 
 def test_the_rooms_offered_for_a_grant_leave_out_breakouts_and_received_rooms(browser_peer):
-    """The Mac's final review of 3c, m2: a breakout or a received room can't be granted (G8 step 1). Real data can't show
+    """Section 2 review of merge 3c, minor 4 (the Mac's m2): a breakout or a received room can't be granted (G8 step 1). Real data can't show
     it, since a breakout holds no person, so the home response is given two such rooms that list the doctor as a member;
     the form still offers only the real shared room."""
     store, users, ship, room, lone = grant_station(browser_peer)
     doctor = users["doctor"]["id"]
 
+    served = []
+
     def with_extra_rooms(route):
+        served.append(route.request.url)
         home = route.fetch().json()
         real = next(chat for chat in home["chats"] if chat["id"] == room["id"])
         home["chats"] += [dict(real, id="made-up-breakout", title="Made-up breakout", breakout=real["id"], member_ids=[doctor]),
@@ -3286,3 +3291,4 @@ def test_the_rooms_offered_for_a_grant_leave_out_breakouts_and_received_rooms(br
             expect(page.locator("#grant-form input[name='grant-room']")).to_have_count(1)
             expect(page.get_by_label("Made-up breakout")).to_have_count(0)
             expect(page.get_by_label("Made-up received")).to_have_count(0)
+            assert served  # the interception ran, so the two added rooms were in the page's data
