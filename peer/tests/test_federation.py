@@ -866,6 +866,31 @@ def test_a_hand_edited_malformed_member_cannot_break_the_room_list(two_peers):
     assert any(r['id'] == remote_id for r in b[0].list_rooms(b[1]))
 
 
+@pytest.mark.parametrize('stored', ['soon', None, True, ['x'], 'missing', 'created too'])
+def test_a_hand_edited_last_activity_cannot_break_the_room_list(two_peers, stored):
+    """Remote room fields review, N3: receive() checks a room's last_activity, but a hand-edited inbox row reached
+    _remote_room's max() and broke get_room and list_rooms for its recipient. A stored value that is not a number
+    counts as the room's creation, or as nothing when that is no number either."""
+    a, b, ca, cb = two_peers
+    room = a[0].create_room(a[1], 'Edited by hand', [ca['id']])
+    deliver(a, b)
+    remote_id = a[2].identity.peer_id + ':' + room['id']
+    with b[0].transaction() as db:
+        row = db.execute("SELECT rowid, payload FROM inbox WHERE kind='room' AND resource_id=?", (room['id'],)).fetchone()
+        payload = json.loads(row['payload'])
+        created = payload['created']
+        if stored == 'missing':
+            del payload['last_activity']
+        elif stored == 'created too':
+            payload['last_activity'] = payload['created'] = 'x'
+        else:
+            payload['last_activity'] = stored
+        db.execute('UPDATE inbox SET payload=? WHERE rowid=?', (json.dumps(payload), row['rowid']))
+    expected = 0 if stored == 'created too' else created
+    assert b[0].get_room(b[1], remote_id)['last_activity'] == expected
+    assert [r['last_activity'] for r in b[0].list_rooms(b[1]) if r['id'] == remote_id] == [expected]
+
+
 def _roster_with(a, b, room, action='room.roster', **fields):
     """A room event the origin (a) signs (a roster unless `action` says otherwise), with some of its room snapshot's
     fields replaced."""

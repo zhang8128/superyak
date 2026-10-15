@@ -18,6 +18,11 @@ def _stored_message_ok(m):
             and all(isinstance(m.get(k), str) for k in ('id', 'body', 'client_message_id'))
             and type(m.get('created')) in (int, float))
 
+def _stored_time(value, otherwise=0):
+    # The view's backstop for a hand-edited time, beside receive's check (remote room fields review, N3): a bool or
+    # anything else that is not a number counts as `otherwise`.
+    return value if type(value) in (int, float) else otherwise
+
 PEER_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS peers(peer_id TEXT PRIMARY KEY, card TEXT NOT NULL, paired INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS remote_contacts(id TEXT PRIMARY KEY, peer_id TEXT NOT NULL REFERENCES peers(peer_id), user_id TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(peer_id,user_id));
@@ -88,7 +93,8 @@ class PeerStore:
         result.update({'id':key, 'origin':row['origin'], 'epoch':row['revision']})
         if not linked_room_ok(result.get('linked_room_id'), row['origin']):  # remote room fields: the backstop for what an older receiver stored
             result['linked_room_id'] = None
-        claimed = max([result['last_activity']] + [m['created'] for m in result['messages']])
+        stored = _stored_time(result.get('last_activity'), _stored_time(result.get('created')))
+        claimed = max([stored] + [m['created'] for m in result['messages']])
         arrived = db.execute('SELECT received FROM inbox_received WHERE origin=? AND resource_id=? AND recipient=?',
                              (row['origin'], row['resource_id'], actor)).fetchone()
         if arrived is not None:  # remote room fields: the origin's claims count only up to when this station received them
