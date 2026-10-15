@@ -13,7 +13,8 @@ the section 2 review of merge 3a (findings 1 and 4); their D8 re-check (APPROVE 
 check and `_own_peer_id`'s single loader; its second re-check (APPROVE WITH CHANGES: 0 must-fix, 1 should-fix, 3 nits)
 added G4c's handling of leftover TLS files and its fuller warning, the lazy path's use of the caller's connection, and
 the read-only `serve --peer-tls` check. All are built in merge 3b, and with them G4a-G4c are approved under D8.
-Clarifications from drafting merge 3b's plan, with no new D8 round: G4b counts only signed grant rows; G4a's
+G11's current room carries no id for a non-member from merge 3c (merge 3b's section 2 review; narrows, no new D8
+round). Clarifications from drafting merge 3b's plan, with no new D8 round: G4b counts only signed grant rows; G4a's
 `signing=False` also skips the revocation backfill; G9's expiry instant; G11's visibility of grants below one's own and
 the shape of `revoked_by`.
 Base: `main` (6623845). Roadmap item 2.2 (`docs/superpowers/plans/2026-10-12-station-roadmap.md`), claimed by
@@ -229,7 +230,8 @@ never change, except that revoking fills `revoked`, `revoked_by`, `revoke_reason
     hours, under every grant, so a grantee can see when another grant has used the ship's day;
   - the rooms: `"*"`, or for each listed room its id, its title, and, when it has been replaced, the current room it
     now covers (id and title). A title is shown only to that room's members; anyone else sees "a room you are not
-    in".
+    in". From merge 3c, a current room shown to a non-member of it carries no id either (`{title: "a room you are
+    not in"}`): no non-member needs it (Rio Grande's ruling on merge 3b's section 2 review).
 
   Titles and names come from people, so the web app escapes them.
 - **G12. Signatures.** A grant's record has exactly these keys: `{kind: "grant", station, id, issuer_id,
