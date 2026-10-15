@@ -461,7 +461,7 @@ def board_item_lines(item):
     else:
         status = f'waiting, {posted}'
     lines = [f'- `{key}` ({kind}), {status}: {label(item.get("title"), 480)}']
-    links = [label(entry.get('link'), 210) for entry in item.get('links') or [] if isinstance(entry, dict)]
+    links = [label(entry.get('link'), 210) for entry in (item.get('links') or [])[:8] if isinstance(entry, dict)]  # the station caps an item at 8
     if links:
         lines.append('  links: ' + ', '.join(links))
     return '\n'.join(lines)

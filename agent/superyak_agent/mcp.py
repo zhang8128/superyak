@@ -405,8 +405,9 @@ class Tools:
         room_id = resolve_room(self.client, args['room'])
         got = self.client.post_item(room_id, args.get('key'), args.get('title'), args.get('kind'))
         key = label(got['key'], 100)
+        call = f'`station_claim room={room_id} key={key}`' if plain_id(room_id) else 'station_claim on its key'
         return (f'Posted `{key}` ({label(got.get("kind"), 20)}) on the board of room {shown_id(room_id)}; the room has been told. '
-                f'It waits until someone takes it with `station_claim room={shown_id(room_id)} key={key}`.')
+                f'It waits until someone takes it with {call}.')
 
     def station_link_item(self, args):
         room_id = resolve_room(self.client, args['room'])

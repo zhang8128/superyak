@@ -244,7 +244,12 @@ class FakeStation:
         return {'kind': 'run', 'mode': ticket['mode'], 'basis': ticket['basis'], 'root_name': ticket['root_name'], 'answering': ticket['message_id']}
 
     def board_route(self, me, room, method, rest, payload):
-        """The room routes of work board 5.1, as step 1's station answers them, with the refusals the tool tests use."""
+        """The room routes of work board 5.1, as step 1's station answers them, with the refusals the tool tests use.
+        It does NOT refuse what the real station refuses: the writer, done-by and drop-by 403s (WRITER, DONE_BY,
+        DROP_BY); the 400s for kind, title, link and outcome; the 429 limits (open items, posts per hour, links per
+        item); and breakouts, replaced rooms and non-members. It only has the used-key 409, the closed-item 409 and the
+        missing-key 404. The real behaviour is covered by the real-station test in peer/tests/test_ship_agent.py,
+        test_a_ship_works_a_board_item_through_the_real_station."""
         items = self.board.setdefault(room['id'], [])
 
         def answer(value, status=200):

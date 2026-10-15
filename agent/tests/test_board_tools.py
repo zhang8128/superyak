@@ -180,3 +180,34 @@ def test_watcher_runs_have_no_board_tools(tmp_path, monkeypatch):
     install.install_all(config, hook=False, adna=False, service=False, out=lambda *args: None)
     assert registered == [('station', [sys.executable, str(install.RUN_AGENT), 'mcp', '--config', str(config)])]
     assert BOARD_TOOLS <= {name for name, *_ in mcp.TOOLS}
+
+
+def test_an_item_shows_at_most_8_links(station):
+    """The station caps an item at 8 links; a station that broke the cap can't blow the output budget."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    fake.board[room] = [board_item('build:a', links=[f'branch:b{n}' for n in range(20)], room_id=room)]
+    text = call(tools_for(fake), 'station_board', room=room)[0]
+    line = next(l for l in text.splitlines() if l.startswith('  links: '))
+    assert line == '  links: ' + ', '.join(f'branch:b{n}' for n in range(8))
+
+
+def test_a_title_widened_by_at_signs_shows_whole(station):
+    """The station widens a shown title by 3 per at sign, so 120 characters holding 20 at signs come back as 180; the
+    agent's limit is 480, not 120."""
+    fake, andy, jenn, serenity = station
+    room = fake.room('Ops', andy, jenn, serenity)
+    title = '(at)' * 20 + 'y' * 100
+    assert len(title) == 180
+    fake.board[room] = [board_item('build:a', title=title, room_id=room)]
+    assert f': {title}\n' in call(tools_for(fake), 'station_board', room=room)[0] + '\n'
+
+
+def test_post_item_gives_no_copyable_call_for_an_unusual_room_id(station, monkeypatch):
+    fake, andy, jenn, serenity = station
+    tools = tools_for(fake)
+    monkeypatch.setattr(mcp, 'resolve_room', lambda client, room: 'odd room]')
+    monkeypatch.setattr(tools.client, 'post_item', lambda *a: {'key': 'spec:a', 'kind': 'spec'})
+    text, error = call(tools, 'station_post_item', room='x', key='spec:a', title='T', kind='spec')
+    assert not error and 'odd room' not in text and 'station_claim room=' not in text
+    assert text.startswith('Posted `spec:a` (spec) on the board of room (an id with unusual characters); the room has been told.')
