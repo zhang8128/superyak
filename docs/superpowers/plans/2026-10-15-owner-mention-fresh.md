@@ -94,7 +94,7 @@ def test_an_answered_owner_mention_reads_answered_without_decisions(env):
     other, other_key = docked(store, users[0]['id'], name='tardis')
     room = clients[0].post('/api/chats', json={'title': 'Ops', 'member_ids': [ship['id'], other['id']]}).json()['id']
     session, watcher, tardis = ship_client(app, key, **HEADERS), ship_client(app, key), ship_client(app, other_key)
-    first = say(clients[0], room, 'a', '(at)serenity first'.replace('(at)', '@'))
+    first = say(clients[0], room, 'a', '@serenity first')
     reply(tardis, room, 't', 'not me', first['id'])
     with store.transaction() as db:
         mid = uid()
@@ -103,18 +103,17 @@ def test_an_answered_owner_mention_reads_answered_without_decisions(env):
         db.execute('INSERT INTO message_replies VALUES(?, ?)', (mid, first['id']))
         row = db.execute('SELECT * FROM messages WHERE id=?', (first['id'],)).fetchone()
         assert store._mention_stale(db, ship['id'], row) is None
-    second = say(clients[0], room, 'b', '(at)serenity second'.replace('(at)', '@'))
+    second = say(clients[0], room, 'b', '@serenity second')
     reply(session, room, 'r2', 'done already', second['id'])
     got = ask(watcher, second['id'], decisions=False).json()
     assert (got['mode'], got['basis']) == ('read', 'answered')
-    third = say(clients[0], room, 'c', '(at)serenity third'.replace('(at)', '@'))
+    third = say(clients[0], room, 'c', '@serenity third')
     reply(session, room, 'r3', 'on it', third['id'])
     assert ask(watcher, third['id']).json() == {'decision': 'answered', 'message_id': third['id']}
     assert table(store, 'deferrals') == []
 ```
 
-  The `'(at)...'.replace` is only to keep this plan free of at signs; in the test, write the mention plainly. The
-  kind-message insert copies `test_a_system_message_never_starts_a_run_or_counts_as_answered`. Write the rest of the
+  The kind-message insert copies `test_a_system_message_never_starts_a_run_or_counts_as_answered`. Write the rest of the
   spec's tests the same way, named for what they check:
   - test 3: `created` set to `float('inf')`, and to `'abc'`, gives `read`, `old` with status 200;
   - test 4: `created` set to `clock[0] + 90000` gives `read`, `old`, and `clock[0] + 60` still builds;
