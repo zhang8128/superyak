@@ -68,16 +68,18 @@ class Tickets:
             db.execute('DELETE FROM deferrals WHERE ship_id=? AND message_id=?', (actor, message_id))
             key = uid()
             bound = json.dumps([[l['layer_id'], l['revision']] for l in self._binding_layers(db, actor)])
-            db.execute('INSERT INTO tickets(id,ship_id,message_id,mode,basis,root_id,instructions,status,created) VALUES(?,?,?,?,?,?,?,?,?)',
-                       (key, actor, message_id, mode, basis, root, bound, 'running', self.clock()))
-            decided = self._decided(db, db.execute('SELECT * FROM tickets WHERE id=?', (key,)).fetchone(), station, decisions)
-            if decisions and held is not None:  # R37: only the station's own row says this run resolves a deferral
-                decided['first_deferred'] = held['first_deferred']
-            return decided
+            db.execute('INSERT INTO tickets(id,ship_id,message_id,mode,basis,root_id,instructions,status,created,first_deferred) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       (key, actor, message_id, mode, basis, root, bound, 'running', self.clock(), held['first_deferred'] if held is not None else None))
+            return self._decided(db, db.execute('SELECT * FROM tickets WHERE id=?', (key,)).fetchone(), station, decisions)
 
     def _decided(self, db, row, station, decisions):
         ticket = self._ticket_json(db, row, station)
-        return dict(ticket, decision='run') if decisions else ticket
+        if not decisions:
+            return ticket  # R23: an old watcher's answer is exactly today's
+        decided = dict(ticket, decision='run')
+        if row['first_deferred'] is not None:  # F3: on issue and on every re-send, the station's own record (R37)
+            decided['first_deferred'] = row['first_deferred']
+        return decided
 
     def _mode_for(self, db, ship, message):
         """Today's rule, unchanged: the owner's own mention builds; everything else reads."""
@@ -94,6 +96,19 @@ class Tickets:
         return db.execute('''SELECT 1 FROM message_replies JOIN messages ON messages.id=message_replies.message_id
             WHERE message_replies.reply_to=? AND messages.author_id=?
             AND message_replies.message_id NOT IN (SELECT message_id FROM message_kinds)''', (message_id, ship_id)).fetchone() is not None
+
+    def _waiting_deferrals(self, db, ship_id, message_ids):
+        """Stale deferrals spec: of the given mentions, those whose deferral still waits for the session, oldest first.
+        A deferral waits while it is under DEFER_BOUND_SECONDS (the ticket path's >=, below) and the ship hasn't
+        answered the mention (R7). One that no longer waits keeps its row for the watcher's next ask (R24)."""
+        ids = list(dict.fromkeys(message_ids))
+        if not ids:
+            return []
+        now = self.clock()
+        rows = db.execute(f'SELECT message_id, first_deferred FROM deferrals WHERE ship_id=? AND message_id IN '
+                          f'({",".join("?" * len(ids))}) ORDER BY first_deferred', (ship_id, *ids)).fetchall()
+        return [r['message_id'] for r in rows
+                if now - r['first_deferred'] < DEFER_BOUND_SECONDS and not self._answered(db, ship_id, r['message_id'])]
 
     def _defer(self, db, ship, message):
         """S5 step 4: keep or start the deferral. None once it has waited DEFER_BOUND_SECONDS, so the mention runs."""

@@ -138,6 +138,11 @@ anything else is shown as the origin's, marked unverified. Known limit: the orig
 orders and timestamps its own room, so it can drop a reply and show it elsewhere,
 beside a different message; when it holds a replayed copy, it also chooses which
 copy comes first and is shown as the reply. The receiver cannot detect either.
+A received message's delivery state is the receiver's alone: its own reply shows
+delivered once the origin's copy matches its outbox row, a reply still queued
+shows that row's status, and any state the origin sends is ignored. A second copy
+of a verified reply is shown as unverified: it may be a replay, and the receiver
+cannot tell a replay from a forgery.
 
 `room.withdraw`: empty payload. Removes that recipient's hosted room/messages;
 stale/equal events cannot reintroduce them. The same receipt transaction marks

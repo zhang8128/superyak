@@ -559,6 +559,11 @@ that recipient's pending/failed replies to that peer/room as `withdrawn`; cancel
 work cannot be retried or restored by a late acknowledgement. Repeating an
 idempotent send returns the original message ID/body with the current delivery
 state, rather than its originally saved pending state. No claim is made to erase copied plaintext.
+In a received room, the reader's own reply carries `state:"delivered"` once the
+origin's first copy matches what this station sent (a reply still queued carries its
+outbox status), other messages carry no `state`, and a message attributed to one
+of this station's users that this station didn't send is shown with author
+`<origin>:(unverified)` and `unverified: true`.
 
 Worker interface:
 

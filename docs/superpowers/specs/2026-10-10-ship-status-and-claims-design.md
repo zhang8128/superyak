@@ -199,7 +199,7 @@ want of this:
     - It sets `notice_posted`, so it's posted at most once per mention. Being the system author's, with no `reply_to`, it
       can never count as an answer (R7, R11, R32).
   - **What the session on watch sees.** A deferred mention reaches the session through its inbox like any message.
-    Each unread item that is one of this ship's deferred mentions carries `deferred: {author_verified, would_be:
+    Each unread item that is one of this ship's deferred mentions that still waits (under the bound and not yet answered by the ship; stale deferrals spec) carries `deferred: {author_verified, would_be:
     "read"}`: the station-verified author (the same `describe()` the inbox already shows) and the mode the station
     would have given. The hook renders it as "(deferred to you; the station would have given a read-only run)".
     - **The on-watch line.** Whenever the session is on a writable watch and its block holds any item with
@@ -212,7 +212,7 @@ want of this:
     - So the session never takes the text as authority (it knows the station would have answered read-only), and it
       knows how to close the mention (a1fbbe35, point 2).
   - **`reply_to` is the only signal of an answer.** Counting any later post by the ship would swallow unrelated
-    mentions. When `station_post` is called without `reply_to` and this ship has deferred mentions in that room, its
+    mentions. When `station_post` is called without `reply_to` and this ship has deferred mentions in that room that still wait (same qualifier), its
     result adds: "Deferred mentions in this room still waiting for a reply_to: <ids>."
   - **Old MCP servers.** The station's decision reads `message_replies`, never client message ids, so a reply's
     client id can't confuse it. MCP servers older than d82caf4 still use the watcher's `reply-<id>` client ids
@@ -400,10 +400,10 @@ want of this:
 - **R24.** Deferrals live only in `deferrals`. No ticket row exists for a deferred mention, the `tickets` schema is
   unchanged, and a `deferrals` row is deleted when its mention is decided `answered` or `run`.
 - **R25.** A mention whose decided mode would be `build` (an owner's mention) is never deferred.
-- **R26.** An unread item that is one of this ship's deferred mentions carries `deferred: {author_verified, would_be}`,
+- **R26.** An unread item that is one of this ship's deferred mentions that still waits (under the bound and not yet answered by the ship; stale deferrals spec) carries `deferred: {author_verified, would_be}`,
   and the hook renders it. The hook adds the on-watch reply line whenever the session is on a writable watch and its
   block holds any item with `mentions_me`, marked deferred or not. A read-only watch gets no line (137f0a38, minor 4).
-- **R27.** `station_post` without `reply_to` lists this ship's deferred mentions in that room in its result.
+- **R27.** `station_post` without `reply_to` lists this ship's deferred mentions in that room that still wait in its result.
 - **R28.** A client without a real session name sends no session header, so no two sessions share a row.
 - **R29.** The system author exists once: one `users` row created at schema setup, with kind `system`, username
   `_station` and a random id kept in `system_meta`, and it is always found by that id, never by username. No person,
@@ -430,12 +430,13 @@ want of this:
 - **R37.** A re-ask of a deferred mention is exempt from the five-an-hour ship budget only when the station's own
   `deferrals` row exists for that mention (the station's `defer` decision), never because the watcher's state says so.
   The station says so in its answer: a `defer`, and a `run` that resolves a deferral it held, carry that row's
-  `first_deferred`; a run for a mention it never deferred carries none. The budget is the watcher's
-  (watch.py:15, 175), so the watcher spares a re-ask only when the answer carries `first_deferred`, or when the
-  station echoes back the exact ticket id it already issued for that same mention. The station deletes its deferral
-  row when it issues the run ticket, so a retry after a failed run gets that same ticket back without
-  `first_deferred`; the echoed id is still the station's answer, since a watcher can't make the station return an
-  id it never issued for that mention. A run under a new ticket id after a retry is charged (Rio Grande, 7d9dad84).
+  `first_deferred`, including when the station sends that running ticket again; a run for a mention it never deferred
+  carries none. The budget is the watcher's (watch.py:15, 175), so the watcher spares a re-ask only when the answer
+  carries `first_deferred`, or when the station echoes back the exact ticket id it already issued for that same mention.
+  The station deletes its deferral row when it issues the run ticket but records its `first_deferred` on the ticket, so
+  a retry after a failed run gets that same ticket back carrying it; the echoed id is still the station's
+  answer, since a watcher can't make the station return an id it never issued for that mention. A run under a new ticket
+  id after a retry is charged (Rio Grande, 7d9dad84).
 - **R38.** A resident DM reply is recognised by its mention having no `seq`. Every mention from `/api/mentions` carries
   one and the deferred list keeps it, so a room mention can never pass as a DM reply and always gets the read-only
   line in a read run.
@@ -567,7 +568,7 @@ All Pi-safe; the station tests use the existing `env` fixtures and the agent tes
   - `test_a_reask_without_a_station_deferral_is_charged` (R37: listed in the watcher's state only, eight re-asks run
     five and pause the rest, their tickets finished)
   - `test_a_reask_the_station_held_spends_no_budget` (R37: a run carrying `first_deferred`)
-  - `test_a_retry_of_a_held_reask_is_not_charged_again` (R37: the same running ticket, back without `first_deferred`)
+  - `test_a_retry_of_a_held_reask_is_not_charged_again` (R37: the same running ticket, back without `first_deferred`; that is now true only of tickets issued before the migration or while the station runs main's code)
   - `test_a_reask_asks_for_the_ticket_first_and_fetches_the_room_only_to_run` (S5: no room fetch while deferred)
 - **Mutation checks**, run with `PYTHONDONTWRITEBYTECODE=1` and caches cleared, on R1, R3, R5, R6, R7 (the notice
   exclusion), R8, R10 (the full-list path), R11, R13, R15, R18, R20 (422, not 409), R21, R22, R23, R25, R26 (the

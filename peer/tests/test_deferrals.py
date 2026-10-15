@@ -352,3 +352,148 @@ def test_an_old_client_sees_todays_unread_and_post_responses(env):
     assert set(got) == {'cursor', 'position', 'more', 'messages'} and all('deferred' not in m for m in got['messages'])
     posted = say(session, room, 'p', 'a plain post')
     assert set(posted) == {'id', 'room_id', 'author_id', 'client_message_id', 'body', 'epoch', 'created', 'replayed'}
+
+
+def test_a_deferral_past_the_bound_no_longer_counts_as_waiting(env):
+    """Stale deferrals (the ship-status fixes' final review): past DEFER_BOUND_SECONDS the station runs the mention at
+    the watcher's next ask, so it is no longer the session's to answer: no deferred_here and no R26 mark, even when the
+    watcher never asks again and the row lingers."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    clock[0] += 7199
+    assert say(session, room, 'p', 'still thinking')['deferred_here'] == [asked['id']]
+    clock[0] += 1
+    assert 'deferred_here' not in say(session, room, 'q', 'later')
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' not in {m['message_id']: m for m in got['messages']}[asked['id']]
+    assert len(table(store, 'deferrals')) == 1  # read-only: the row is left for the watcher's next ask
+
+
+def test_a_deferral_the_ship_answered_no_longer_counts_as_waiting(env):
+    """Stale deferrals: once the ship has answered the mention with reply_to, it no longer waits, even before the
+    watcher's next ask deletes the row."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    reply(clients[1], room, 'x', 'a person answers it', asked['id'])  # only the ship's own reply answers it (R7)
+    assert say(session, room, 'o', 'thinking')['deferred_here'] == [asked['id']]
+    reply(session, room, 'r', 'the answer', asked['id'])
+    assert 'deferred_here' not in say(session, room, 'p', 'and another thing')
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' not in {m['message_id']: m for m in got['messages']}[asked['id']]
+    assert len(table(store, 'deferrals')) == 1
+
+
+def test_a_ships_kind_message_never_counts_as_its_answer(env):
+    """Stale deferrals, requirement 5 (D8 review of 8e93d0f, should-fix 3): a claim message by the ship with reply_to
+    the mention is not an answer (R7, R32), so the deferral still waits."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    ask(watcher, asked['id'])
+    claim = reply(session, room, 'k', 'claiming it', asked['id'])
+    with store.transaction() as db:
+        db.execute("INSERT INTO message_kinds VALUES(?, 'claim')", (claim['id'],))
+    assert say(session, room, 'p', 'still thinking')['deferred_here'] == [asked['id']]
+    got = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert {m['message_id']: m for m in got['messages']}[asked['id']]['deferred']['would_be'] == 'read'
+
+
+def test_deferred_here_lists_the_oldest_deferral_first(env):
+    """Stale deferrals (plan review of e62be36, should-fix 2): R27 lists waiting deferrals oldest first. The mention
+    whose id sorts last is deferred first, so an order by id would come out the other way on every run."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    one = say(clients[1], room, 'a', '@serenity first question')
+    two = say(clients[1], room, 'b', '@serenity second question')
+    earlier, later = sorted([one['id'], two['id']], reverse=True)
+    on_watch(session)
+    ask(watcher, earlier)
+    clock[0] += 10
+    ask(watcher, later)
+    assert say(session, room, 'p', 'thinking')['deferred_here'] == [earlier, later]
+
+
+def test_deferred_here_lists_only_this_rooms_deferrals(env):
+    """Stale deferrals, final review: R27 is per room. A mention deferred in each of two rooms the ship is in; a post
+    without reply_to in one room lists that room's mention only."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    other = clients[0].post('/api/chats', json={'title': 'Galley', 'member_ids': [ship['id'], users[1]['id']]}).json()['id']
+    here = say(clients[1], room, 'a', '@serenity a question here')
+    there = say(clients[1], other, 'b', '@serenity a question there')
+    on_watch(session)
+    ask(watcher, here['id'])
+    ask(watcher, there['id'])
+    assert say(session, room, 'p', 'thinking')['deferred_here'] == [here['id']]
+    assert say(session, other, 'q', 'thinking')['deferred_here'] == [there['id']]
+
+
+def test_a_deferral_for_another_ship_never_marks_this_ships_unread(env):
+    """Stale deferrals, final review: the deferral is the ship's own. One message mentions two ships and only the
+    second is deferred (only its watch is on, only it asks), so the first ship's unread carries no deferred mark."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    rio, rio_key = docked(store, users[0]['id'], 'rio-grande')
+    both = clients[0].post('/api/chats', json={'title': 'Both', 'member_ids': [ship['id'], rio['id'], users[1]['id']]}).json()['id']
+    asked = say(clients[1], both, 'a', '@serenity @rio-grande a question for you both')
+    on_watch(ship_client(app, rio_key, **HEADERS))
+    assert ask(ship_client(app, rio_key), asked['id']).json()['decision'] == 'defer'
+    assert [(r['ship_id'], r['message_id']) for r in table(store, 'deferrals')] == [(rio['id'], asked['id'])]
+    reply(session, both, 'r', 'serenity answers it', asked['id'])  # another ship's reply never answers it (R7; section 2, S1)
+    mine = session.post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' not in {m['message_id']: m for m in mine['messages']}[asked['id']]
+    theirs = ship_client(app, rio_key, **HEADERS).post('/api/ships/me/unread', json={'cursor': 'session-one'}).json()
+    assert 'deferred' in {m['message_id']: m for m in theirs['messages']}[asked['id']]
+
+
+def test_a_run_from_a_deferral_carries_first_deferred_on_every_resend(env):
+    """Ship-status fixes F3: the station keeps the deferral a run resolved on its ticket, and says so on issue and on
+    every re-send to a watcher asking for decisions, so a retry after a lost answer is spared on the station's word
+    (R37). An old watcher never sees the key (R23)."""
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    on_watch(session)
+    first = ask(watcher, asked['id']).json()['first_deferred']
+    on_watch(session, minutes=0)
+    ran = ask(watcher, asked['id']).json()
+    assert ran['decision'] == 'run' and ran['first_deferred'] == first
+    again = ask(watcher, asked['id']).json()
+    assert again['id'] == ran['id'] and again['first_deferred'] == first
+    assert 'first_deferred' not in ask(watcher, asked['id'], decisions=False).json()
+    assert 'first_deferred' not in watcher.post(f'/api/ships/me/tickets/{ran["id"]}/finish', json={}).json()
+
+
+def test_a_run_never_deferred_carries_no_first_deferred(env):
+    app, clients, users, clock, store, ship, session, watcher, room = setup(env)
+    asked = say(clients[1], room, 'a', '@serenity a question')
+    ran = ask(watcher, asked['id']).json()
+    assert ran['decision'] == 'run' and 'first_deferred' not in ran
+    assert 'first_deferred' not in ask(watcher, asked['id']).json()
+
+
+def test_the_tickets_column_is_added_once(tmp_path):
+    from superyak_peer.db import Store
+    Store(tmp_path / 'p')
+    store = Store(tmp_path / 'p')  # a second start changes nothing
+    with store.transaction() as db:
+        names = [r['name'] for r in db.execute('PRAGMA table_info(tickets)')]
+    assert names.count('first_deferred') == 1
+
+
+def test_answered_searches_replies_by_an_index(tmp_path):
+    """Reply-to index (the stale-deferrals section 2 review, stake 4): `_answered` runs on every read with a waiting
+    deferral and on every re-ask, so message_replies is searched by reply_to through an index, not scanned whole. The
+    index is made at every start, idempotently."""
+    from superyak_peer.db import Store
+    Store(tmp_path / 'peer')
+    store = Store(tmp_path / 'peer')
+    with store.transaction() as db:
+        leading = [db.execute(f"PRAGMA index_info('{r[1]}')").fetchone()[2] for r in db.execute("PRAGMA index_list('message_replies')")]
+        ran = []  # the statement _answered really runs, so the plan checked is its own (D8 review of b1454d2)
+        db.set_trace_callback(ran.append)
+        store._answered(db, 'a-ship', 'a-mention')
+        db.set_trace_callback(None)
+        plan = [tuple(r)[3] for r in db.execute('EXPLAIN QUERY PLAN ' + next(q for q in ran if 'message_replies' in q))]
+    assert leading.count('reply_to') == 1
+    assert any(step.startswith('SEARCH message_replies USING INDEX message_replies_by_reply_to') for step in plan)
