@@ -64,6 +64,9 @@ def client_version(root=CHECKOUT):
         return 'unknown'
 
 
+NO_BOARD = 'This station has no work board yet (it runs older code); the board tools need it updated.'
+
+
 class StationError(Exception):
     def __init__(self, status, message):
         self.status, self.message = status, message
@@ -155,24 +158,34 @@ class StationClient:
     def release(self, room_id, key):
         return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/claims/release', {'key': key})
 
+    def board_request(self, method, path, body=None):
+        """A board route. A 404 or 405 with no `error` field is the framework's unknown-route answer, which every 404 the
+        station sends itself lacks: the station is older than the board."""
+        try:
+            return self.request(method, path, body)
+        except StationError as exc:
+            if exc.status in (404, 405) and exc.message == f'HTTP {exc.status}':
+                raise StationError(404, NO_BOARD) from None
+            raise
+
     def board(self, room_id):
-        return self.request('GET', f'/api/chats/{quote(room_id, safe="")}/board')
+        return self.board_request('GET', f'/api/chats/{quote(room_id, safe="")}/board')
 
     def board_counts(self):
         """Work board 5.1: per room this ship belongs to with open items, how many wait and how many are taken."""
-        return self.request('GET', '/api/ships/me/board')
+        return self.board_request('GET', '/api/ships/me/board')
 
     def post_item(self, room_id, key, title, kind):
-        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board', {'key': key, 'title': title, 'kind': kind})
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board', {'key': key, 'title': title, 'kind': kind})
 
     def link_item(self, room_id, key, link):
-        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board/link', {'key': key, 'link': link})
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board/link', {'key': key, 'link': link})
 
     def done_item(self, room_id, key, outcome):
-        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board/done', {'key': key, 'outcome': outcome})
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board/done', {'key': key, 'outcome': outcome})
 
     def drop_item(self, room_id, key):
-        return self.request('POST', f'/api/chats/{quote(room_id, safe="")}/board/drop', {'key': key})
+        return self.board_request('POST', f'/api/chats/{quote(room_id, safe="")}/board/drop', {'key': key})
 
     def unread(self, cursor, limit=30, wait=0, breakouts=None):
         """breakouts='mentions' (breakouts S6): the station leaves out breakout messages that don't mention this ship and
@@ -443,6 +456,7 @@ def claims_block(room):
     return f'Active claims ({len(lines)})\n' + fence_external('the station (claims in this room)', body, limit=len(body))
 
 
+UNREADABLE_BOARD = "The station's board answer couldn't be read"
 BOARD_SENDER = 'the station (board items in this room)'
 
 
@@ -456,10 +470,11 @@ def board_item_lines(item):
         status = f'done {utc_time(item.get("closed"))} by {label(item.get("closer_name"), 40)}, outcome {label(item.get("outcome"), 210)}'
     elif state == 'dropped':
         status = f'dropped {utc_time(item.get("closed"))} by {label(item.get("closer_name"), 40)}'
-    elif claim is not None:
-        status = f'taken by {label(claim.get("holder_name"), 40)} until {utc_time(claim.get("expires"))}, {posted}'
-    else:
-        status = f'waiting, {posted}'
+    elif state == 'open':
+        status = (f'taken by {label(claim.get("holder_name"), 40)} until {utc_time(claim.get("expires"))}, {posted}'
+                  if claim is not None else f'waiting, {posted}')
+    else:  # a state a later station added: shown as itself, never as waiting
+        status = f'{label(state, 20)}, {posted}'
     lines = [f'- `{key}` ({kind}), {status}: {label(item.get("title"), 480)}']
     links = [label(entry.get('link'), 210) for entry in (item.get('links') or [])[:8] if isinstance(entry, dict)]  # the station caps an item at 8
     if links:
@@ -472,12 +487,14 @@ def board_block(title, room_id, items, budget):
     station, and after the fence the call that takes a waiting item. Items stop at `budget` characters, and a last line
     after the fence counts what was left out. The fixed words sit outside the fence; everything people or ships wrote
     sits inside it, defused."""
-    items = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+    if not isinstance(items, list):
+        raise ValueError(UNREADABLE_BOARD)
+    items = [item for item in items if isinstance(item, dict)]
     if not items:
         return '(nothing on this board)'
     open_items = [item for item in items if item.get('state') == 'open']
     taken = sum(isinstance(item.get('claim'), dict) for item in open_items)
-    head = (f'Board of room {label(title)} ({shown_id(room_id)}): {len(open_items) - taken} waiting, {taken} taken; '
+    head = (f'Board of room "{quoted_title(title)}" ({shown_id(room_id)}): {len(open_items) - taken} waiting, {taken} taken; '
             f'{len(items) - len(open_items)} done or dropped in the last 7 days')
     how = f'`station_claim room={room_id} key=<key>`' if plain_id(room_id) else 'station_claim on its key'
     tail = f'{how} takes a waiting item that is already your work (see above).'

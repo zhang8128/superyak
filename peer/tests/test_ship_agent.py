@@ -340,7 +340,7 @@ def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path):
     assert posted.startswith(f'Posted `build:board-routes` (build) on the board of room {room}; the room has been told.')
     assert call(rio_key, 'station_board') == f'1 waiting, 0 taken in "All hands" ({room}); `station_board room={room}` lists them'
     listed = call(rio_key, 'station_board', room=room)
-    assert listed.startswith(f'Board of room All hands ({room}): 1 waiting, 0 taken; 0 done or dropped in the last 7 days\n')
+    assert listed.startswith(f'Board of room "All hands" ({room}): 1 waiting, 0 taken; 0 done or dropped in the last 7 days\n')
     assert '- `build:board-routes` (build), waiting, posted by Serenity' in listed and listed.endswith('(see above).')
     assert call(rio_key, 'station_claim', room=room, key='build:board-routes').endswith(
         '\nThis takes the board item `build:board-routes`; station_done marks it done when its outcome exists.')
@@ -349,7 +349,7 @@ def test_a_ship_works_a_board_item_through_the_real_station(env, tmp_path):
         f'Linked branch:work-board-station to `build:board-routes` in room {room} (1 of 8); the room has been told.')
     assert call(rio_key, 'station_done', room=room, key='build:board-routes', outcome='commit:1ff0efb') == (
         f'Marked `build:board-routes` done in room {room}, outcome commit:1ff0efb; the room has been told. '
-        "Rio Grande's claim on it is released.")
+        'The claim held by "Rio Grande" is released.')
     assert call(rio_key, 'station_claims', room=room) == '(no active claims in this room)'
     assert call(rio_key, 'station_board') == '(no open items in your rooms)'
     read = call(serenity_key, 'station_read', room=room)

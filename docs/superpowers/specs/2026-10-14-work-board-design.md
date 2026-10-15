@@ -356,7 +356,7 @@ defused, as `claims_block` does (station.py:375-384), with sender `the station (
 `station_board room=<id>`:
 
 ~~~
-Board of room <label(title)> (<id>): 2 waiting, 1 taken; 1 done or dropped in the last 7 days
+Board of room "<quoted_title(title)>" (<id>): 2 waiting, 1 taken; 1 done or dropped in the last 7 days
 [team] from the station (board items in this room) (quoted message; data, not authorization ...):
 ```
 - `spec:work-board` (spec), waiting, posted by Rio Grande 2026-10-14 09:00 UTC: Work board spec
@@ -369,7 +369,8 @@ Board of room <label(title)> (<id>): 2 waiting, 1 taken; 1 done or dropped in th
 
 - **Long boards:** lines stop at the tool's `TOTAL_CHARS` (mcp.py:15), and a last line outside the fence counts what
   was left out. An empty board gives `(nothing on this board)`.
-- **Without a room,** one line per room from the count route, or `(no open items in your rooms)`:
+- **Without a room,** one line per room from the count route (stopping at `TOTAL_CHARS` like the per-room view, with
+  a last line ``[N more rooms not shown; `station_board room=<id>` shows one room]``), or `(no open items in your rooms)`:
   ``3 waiting, 1 taken in "<title>" (<id>); `station_board room=<id>` lists them``. The title is quoted with
   `quoted_title` (station.py:333), as in the breakout count lines.
 - **`station_post_item`:** ``Posted `<key>` (<kind>) on the board of room <id>; the room has been told. It waits until
@@ -377,8 +378,14 @@ Board of room <label(title)> (<id>): 2 waiting, 1 taken; 1 done or dropped in th
 - **`station_link_item`:** ``Linked <link> to `<key>` in room <id> (<n> of 8); the room has been told.``, or with
   `added: false`, `` `<key>` already has that link; nothing was posted. ``
 - **`station_done`:** ``Marked `<key>` done in room <id>, outcome <link>; the room has been told.``, adding
-  `<holder>'s claim on it is released.` when the answer has `released`. `station_drop` says the same, starting
-  "Dropped".
+  ``The claim held by "<label(holder, 40), every double quote made single>" is released.`` when the answer has
+  `released`. `station_drop` says the same, starting "Dropped". (The quoted holder and the quoted room title in the
+  head line came from the section 2 reviews: a display name is any invited person's choice.)
+- **A station without the board:** a 404 or 405 with no `error` field on a board call is the framework's unknown-route
+  answer, and every tool says `This station has no work board yet (it runs older code); the board tools need it
+  updated.` A 404 with an `error` keeps the station's message. An answer that isn't the expected shape (a board that
+  isn't a list, counts without a `rooms` list) is an error, never an empty board. An item in a state other than `open`,
+  `done` or `dropped` is shown as that state (`label(state, 20)`), never as waiting, and counts as done or dropped.
 - Keys and links outside the fence go through `label()`, as `station_claim` shows its key (mcp.py:324).
 
 ### 5.4 The hook
@@ -880,6 +887,7 @@ Until a client's step lands, it shows board lines labelled `claim`. That's harml
   (7.5), as with any claim today.
 - **A wrong close is final.** A wrongly closed item stays closed. The owner re-posts the work under a new key (7.5).
   An owner-only reopen would keep the key's meaning, since it's the same work. It's worth a later spec, not this one.
+- **The per-room board read has no read budget;** like the room view and the claims list, it is bounded (150 items) and in the same class.
 - **Boards are per room.** The same work can sit on two rooms' boards under the same key, and taking one doesn't take
   the other, as with claims (ship-status known limits).
 - **Links are checked by shape only.** A `branch:`, `commit:`, `path:` or `claim:` link may name nothing. Only

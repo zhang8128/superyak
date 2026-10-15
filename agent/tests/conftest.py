@@ -55,6 +55,7 @@ class FakeStation:
         self.ticket_bodies, self.decide = [], {}  # every ticket request's JSON; message id -> its answer when decisions are asked
         self.breakouts = {}  # breakouts: room id -> {creator, created, closed}, as step 1's station keeps them
         self.board = {}  # work board: room id -> its items, as GET /api/chats/{id}/board gives them
+        self.board_missing = None  # a status (404 or 405): every board route answers {"detail": "Not Found"}, as a station without the board does
         self.board_refusal = None  # (status, error): what the count route answers instead, as an older or failing station
 
     def user(self, username, name, kind='person', owner_id=None, key=None):
@@ -273,9 +274,10 @@ class FakeStation:
         if found['state'] != 'open':
             return refuse(409, f'`{key}` is already {found["state"]}')
         if rest == ['link']:
-            if any(entry['link'] == payload['link'] for entry in found['links']):
+            if any(entry['link'] in (payload['link'], payload['link'].lower()) for entry in found['links']):
                 return answer({**found, 'added': False})
-            found['links'].append({'link': payload['link'], 'added_by': me, 'added': self.clock})
+            stored = payload['link'].lower() if payload['link'].startswith('claim:') else payload['link']  # the station lowercases a claim: link
+            found['links'].append({'link': stored, 'added_by': me, 'added': self.clock})
             return answer({**found, 'added': True})
         held = found['claim']
         found.update(state='done' if rest == ['done'] else 'dropped', closed=self.clock, closed_by=me,
@@ -310,6 +312,8 @@ class FakeStation:
 
         def ok(value, status=200):
             return status, json.dumps(value).encode()
+        if self.board_missing and (path == '/api/ships/me/board' or '/board' in path.split('/api/chats/', 1)[-1]):
+            return self.board_missing, b'{"detail": "Not Found"}'
         segments = [unquote(s) for s in path.strip('/').split('/')]
         if method == 'GET' and path == '/api/me':
             return ok(self.users[me])

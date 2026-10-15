@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from superyak_team.teamlib import redact
 from . import claims
-from .station import BREAKOUT_MARK, DEFERRED_MARK, MESSAGE_LIMIT, ON_WATCH_LINE, StationError, authors, breakout_count_lines, breakout_note, brief_block, board_block, claims_block, client_for, client_version, fence_message, label, load_config, plain_id, presence_headers, quoted_title, read_hint, session_key, shown_id, source_label, utc_time, write_private
+from .station import BREAKOUT_MARK, DEFERRED_MARK, MESSAGE_LIMIT, ON_WATCH_LINE, StationError, UNREADABLE_BOARD, authors, breakout_count_lines, breakout_note, brief_block, board_block, claims_block, client_for, client_version, fence_message, label, load_config, plain_id, presence_headers, quoted_title, read_hint, session_key, shown_id, source_label, utc_time, write_private
 
 DEFAULT_CHARS = 2000
 TOTAL_CHARS = 40000  # one tool result, about; one message alone can be longer once quoted
@@ -393,10 +393,23 @@ class Tools:
     def station_board(self, args):
         """Work board 5.3: a room's board, fenced; without a room, how many items wait in each room, from the count route."""
         if not args.get('room'):
+            rows = self.client.board_counts()
+            rows = rows.get('rooms') if isinstance(rows, dict) else None
+            if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+                raise ValueError(UNREADABLE_BOARD)
             lines = [f'{int(r.get("waiting") or 0)} waiting, {int(r.get("taken") or 0)} taken in "{quoted_title(r.get("title"))}" '
                      f'({shown_id(r.get("room_id"))})' + (f'; `station_board room={r["room_id"]}` lists them' if plain_id(r.get('room_id')) else '')
-                     for r in self.client.board_counts().get('rooms') or [] if isinstance(r, dict)]
-            return '\n'.join(lines) or '(no open items in your rooms)'
+                     for r in rows]
+            shown, size = [], 0
+            for line in lines:
+                if shown and size + len(line) + 1 > TOTAL_CHARS - 200:
+                    break
+                shown.append(line)
+                size += len(line) + 1
+            left = len(lines) - len(shown)
+            if left:
+                shown.append(f'[{left} more room{"s" if left > 1 else ""} not shown; `station_board room=<id>` shows one room]')
+            return '\n'.join(shown) or '(no open items in your rooms)'
         room_id = resolve_room(self.client, args['room'])
         title = next((r.get('title') for r in self.client.rooms() if r.get('id') == room_id), None)
         return board_block(title, room_id, self.client.board(room_id), TOTAL_CHARS)
@@ -423,13 +436,13 @@ class Tools:
         got = self.client.done_item(room_id, args.get('key'), args.get('outcome'))
         text = (f'Marked `{label(got["key"], 100)}` done in room {shown_id(room_id)}, outcome {label(got.get("outcome"), 210)}; '
                 'the room has been told.')
-        return text + (f" {label(got['released'], 40)}'s claim on it is released." if got.get('released') else '')
+        return text + (f' The claim held by "{label(got["released"], 40).replace(chr(34), chr(39))}" is released.' if got.get('released') else '')
 
     def station_drop(self, args):
         room_id = resolve_room(self.client, args['room'])
         got = self.client.drop_item(room_id, args.get('key'))
         text = f'Dropped `{label(got["key"], 100)}` in room {shown_id(room_id)}; the room has been told.'
-        return text + (f" {label(got['released'], 40)}'s claim on it is released." if got.get('released') else '')
+        return text + (f' The claim held by "{label(got["released"], 40).replace(chr(34), chr(39))}" is released.' if got.get('released') else '')
 
     def station_mentions(self, args):
         rows, blocks, size = self.client.mentions(int(args.get('after') or 0)), [], 0
