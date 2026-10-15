@@ -24,11 +24,22 @@ DOOR ?= https://smart.tail7db420.ts.net:8443
 DOCK_ARGS ?=
 AGENT_PYTHON ?= python3
 STATION_DATA ?= $(HOME)/.local/share/superyak/lighthouse
+STATION_BACKUPS ?= $(HOME)/.local/share/superyak/backups/station
+SYSTEMD_USER ?= $(HOME)/.config/systemd/user
 WORMHOLE_HOME ?= $(HOME)/.local/share/superyak/wormhole
 STATION_VAULT_REPO ?= $(HOME)/aDNA/Station.aDNA.git
 KEY_FILE ?=
 APPROVER ?= andy
 ID ?=
+OUTPUT ?=
+BACKUP ?=
+DB ?=
+REPLACED ?=
+UNPAIR ?=
+# Spec 2026-10-14 S8, S9: the files make station-units installs, and the services that get the alert drop-in: the five,
+# and any project ship's watcher on this machine (a later one gets it when make station-units runs again).
+STATION_UNITS := superyak-backup.service superyak-backup.timer superyak-restore-test.service superyak-restore-test.timer superyak-alert@.service
+ALERTED_SERVICES = superyak-lighthouse superyak-door superyak-ship superyak-odo superyak-wormhole $(patsubst %.service,%,$(notdir $(wildcard $(SYSTEMD_USER)/superyak-ship-*.service)))
 HOME_DEMO_DATA ?= $(CURDIR)/.engram/home-demo
 HOME_PORT ?= 7435
 HOME_ARGS ?=
@@ -37,7 +48,7 @@ TUNING_EXTRA ?= train
 
 PEER_BUNDLE ?= $(CURDIR)/superyak-peer-source.tar.gz
 
-.PHONY: dock station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
+.PHONY: dock station-share-link station-pending station-approve station-deny station-rooms station-bridge station-unbridge station-backup station-restore-test station-restore-reconcile station-alerts station-units station-units-remove wormhole-personas wormhole-key setup-agent check-agent setup-team check-team setup-tuning check-tuning tuning setup-peer check-peer home home-demo peer-bundle help setup setup-engram setup-lighthouse setup-atlas check check-engram check-lighthouse check-atlas check-integration check-research-tasks atlas atlas-demo chat serve sessions adna status stampede-config stampede-plan stampede-deploy stampede-simulate stampede research-poc research-task lead-probe
 
 help:
 	@echo "make setup-tuning / check-tuning  Install/check clinical and biotech LoRA tools"
@@ -52,6 +63,11 @@ help:
 	@echo "make station-approve ID=… On the Pi: approve one (APPROVER=andy); make station-deny ID=… refuses it"
 	@echo "make station-rooms     On the Pi: list the rooms you own (APPROVER=andy) by short id, and which are bridged"
 	@echo "make station-bridge ID=… On the Pi: bridge a room to Stanley's aDNA lattice (adds Wormhole); make station-unbridge ID=… stops"
+	@echo "make station-backup [OUTPUT=…]  On the Pi: a checked copy of the station database (the rotation, or OUTPUT)"
+	@echo "make station-restore-test [BACKUP=…]  On the Pi: boot a throwaway station from the newest copy (or BACKUP)"
+	@echo "make station-restore-reconcile DB=… [REPLACED=…] [UNPAIR='id …']  On the Pi: runbook step 5 (docs/station-restore.md)"
+	@echo "make station-alerts     On the Pi: show the alert queue and what is held back"
+	@echo "make station-units      On the Pi: install the backup timers and the alert drop-ins; make station-units-remove undoes it"
 	@echo "make wormhole-personas   On the Pi: refresh the aDNA persona map the wormhole bridge relays to"
 	@echo "make wormhole-key KEY_FILE=…  On the Pi: authorize Stanley's sync key (a .pub file) for the station vault only"
 	@echo "make peer-bundle         Create a new allowlisted source archive; PEER_BUNDLE selects output"
@@ -198,6 +214,35 @@ station-rooms:
 station-bridge station-unbridge:
 	@test -n "$(ID)" || { echo 'Usage: make $@ ID=<short id from make station-rooms> [APPROVER=andy]'; exit 2; }
 	uv run --locked --project peer python -m superyak_peer $@ --data-dir "$(STATION_DATA)" --id "$(ID)" --as "$(APPROVER)"
+
+station-backup:
+	uv run --locked --project peer python -m superyak_peer station-backup --data-dir "$(STATION_DATA)" --backup-dir "$(STATION_BACKUPS)"$(if $(OUTPUT), --output "$(OUTPUT)")
+
+station-restore-test:
+	uv run --locked --project peer python -m superyak_peer station-restore-test --backup-dir "$(STATION_BACKUPS)"$(if $(BACKUP), --backup "$(BACKUP)")
+
+station-restore-reconcile:
+	@test -n "$(DB)" || { echo 'Usage: make station-restore-reconcile DB=<the staged restored.sqlite3> [REPLACED=<the set-aside peer.sqlite3>] [UNPAIR="<peer id> …"]'; exit 2; }
+	uv run --locked --project peer python -m superyak_peer station-restore-reconcile --db "$(DB)" --live-data-dir "$(STATION_DATA)"$(if $(REPLACED), --replaced "$(REPLACED)")$(foreach peer,$(UNPAIR), --unpair "$(peer)")
+
+station-alerts:
+	uv run --locked --project peer python -m superyak_peer station-alerts --data-dir "$(STATION_DATA)"
+
+station-units:
+	@test -f "$(STATION_DATA)/peer.sqlite3" || { echo 'No station database at $(STATION_DATA)/peer.sqlite3: make station-units runs on the station host only'; exit 2; }
+	test -d "$(SYSTEMD_USER)" || install -d -m 755 "$(SYSTEMD_USER)"
+	for unit in $(STATION_UNITS); do install -m 644 "peer/systemd/$$unit" "$(SYSTEMD_USER)/$$unit" || exit 1; done
+	for service in $(ALERTED_SERVICES); do d="$(SYSTEMD_USER)/$$service.service.d"; { test -d "$$d" || install -d -m 755 "$$d"; } && install -m 644 peer/systemd/50-alerts.conf "$$d/50-alerts.conf" || exit 1; done
+	systemctl --user daemon-reload
+	systemctl --user enable --now superyak-backup.timer superyak-restore-test.timer
+
+station-units-remove:
+	-systemctl --user disable --now superyak-backup.timer superyak-restore-test.timer
+	-systemctl --user stop superyak-backup.service superyak-restore-test.service
+	-systemctl --user reset-failed superyak-backup.service superyak-restore-test.service 'superyak-alert@*'
+	for unit in $(STATION_UNITS); do rm -f "$(SYSTEMD_USER)/$$unit"; done
+	for service in $(ALERTED_SERVICES); do dir="$(SYSTEMD_USER)/$$service.service.d"; if [ -d "$$dir" ]; then rm -f "$$dir/50-alerts.conf"; rmdir "$$dir" 2>/dev/null || true; fi; done
+	systemctl --user daemon-reload
 
 wormhole-personas:
 	python3 agent/run_agent.py wormhole-personas --out "$(WORMHOLE_HOME)/personas.json"

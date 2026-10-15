@@ -85,5 +85,7 @@ passing. Doc-only branches follow the same rule.
 1. Activate the law layer (0.2).
 2. Optionally, save the City of AI brief (0.3).
 3. Choose where the off-Pi backup goes (1.2).
-4. Decide whether Tardis may review, and run `make dock` on bazzite (3.2).
-5. Later: sign grants and the charter (2.2, 2.3).
+4. Choose a channel for alerts when the station is down (1.3). Until then, an outage of the lighthouse, Odo or the Pi
+   is silent.
+5. Decide whether Tardis may review, and run `make dock` on bazzite (3.2).
+6. Later: sign grants and the charter (2.2, 2.3).
